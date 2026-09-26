@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, onCleanup, type JSX } from "solid-js"
+import { For, Show, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { Link, useRouter } from "../../router/router"
 import { Chip } from "../../ui/chip"
 import { Icon, type IconName } from "../../ui/icon"
@@ -60,7 +60,7 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
 
   const state = () => remote.state()
   const view: RemoteView = views.find((entry) => entry === props.path) ?? "/remote"
-  const activeSession = () => state().sessions.find((session) => session.id === state().activeSessionID)
+  const activeSession = () => state().selectedSessionInfo ?? state().sessions.find((session) => session.id === state().activeSessionID)
   const selected = () => activeSession() !== undefined
   const composition = () => remoteSurfaceComposition(view, selected())
   const viewClass = view === "/remote" ? "conversation" : view.slice("/remote/".length)
@@ -565,7 +565,7 @@ function ConnectionStrip(): JSX.Element {
     const sessions = state().sessions.length
     if (sessions === 0) return undefined
     const waiting = state().view?.requests.length ?? 0
-    const count = `${sessions} ${sessions === 1 ? "session" : "sessions"}`
+    const count = `${sessions} ${sessions === 1 ? "session" : "sessions"} loaded`
     return waiting === 0 ? count : `${count} · ${waiting} waiting for you`
   }
   return (
@@ -603,19 +603,21 @@ function SessionPanel(props: {
   readonly onNavigate?: () => void
 }): JSX.Element {
   const remote = useRemote()
-  const [query, setQuery] = createSignal("")
   const state = () => remote.state()
+  let feed: HTMLDivElement | undefined
+  let detachFeed = () => {}
+  onMount(() => { if (feed) detachFeed = attachSessionFeed(feed, remote.store) })
+  onCleanup(() => detachFeed())
   const deviceName = () => state().devices.find((device) => device.id === state().activeDeviceID)?.name
-  const sessions = () => filterSessions(state().sessions, query())
   const cached = () => cachedSessionsView(state().connection, state().sessions.length)
   const advertised = () => {
     const total = state().sessions.length
     const name = deviceName()
     if (total === 0 || name === undefined) return undefined
-    return `${total} ${total === 1 ? "session" : "sessions"} on ${name}.`
+    return `${total} ${total === 1 ? "session" : "sessions"} loaded from ${name}.`
   }
   return (
-    <div class="pane">
+    <div class="pane" ref={feed}>
       <div class="pane__head pane__head--sessions">
         <p class="pane__title">Sessions</p>
         <NewSessionButton disabled={!props.canCreateSession} onClick={props.onNewSession} />
@@ -643,28 +645,22 @@ function SessionPanel(props: {
           </>
         }
       >
-        <Show when={state().sessions.length > 0} fallback={<NoSessionsState />}>
+        <WorkspaceSelector />
+        <Show when={state().sessionGroups.length > 0 || state().sessionListStatus === "loading"} fallback={<NoSessionsState />}>
           <label class="field">
             <span class="visually-hidden">Filter sessions</span>
             <input
               class="input"
               type="search"
               placeholder="Filter sessions"
-              value={query()}
-              onInput={(event) => setQuery(event.currentTarget.value)}
+              value={state().sessionQuery}
+              disabled={state().transport.kind !== "open" || cached() !== undefined}
+              onInput={(event) => remote.store.searchSessions(event.currentTarget.value)}
             />
           </label>
-          <Show
-            when={sessions().length > 0}
-            fallback={
-              <div class="empty">
-                <p class="empty__title">No session matches that filter</p>
-                <p>The machine has {advertisedCount(state().sessions.length)}; none matches “{query()}”.</p>
-              </div>
-            }
-          >
+          <Show when={state().sessions.length > 0} fallback={<NoSessionsState />}>
             <div class="session-list">
-              <For each={sessions()}>
+              <For each={state().sessions}>
                 {(session) => (
                   <SessionRow
                     session={session}
@@ -676,6 +672,7 @@ function SessionPanel(props: {
             </div>
           </Show>
           <Show when={advertised()}>{(note) => <p class="panel__note">{note()}</p>}</Show>
+          <Show when={state().sessionPageLoading}><p role="status">Loading more sessions…</p></Show>
         </Show>
       </Show>
     </div>
@@ -817,11 +814,11 @@ function useDeviceAvailability() {
 function NoSessionsState(): JSX.Element {
   const remote = useRemote()
   const state = () => remote.state()
-  const availability = () => sessionAvailabilityView(state().connection, state().sessions.length)
+  const availability = () => sessionAvailabilityView(state().connection, state().sessions.length, state().sessionListStatus)
   return (
     <div class="empty">
-      <p class="empty__title">{availability()?.title ?? "No sessions"}</p>
-      <p>{availability()?.body ?? "Start YCoding in your project folder on this machine."}</p>
+      <p class="empty__title">{availability()?.title ?? (state().sessionQuery || state().sessionFilter !== "all" ? "No matching sessions" : "No sessions")}</p>
+      <p>{availability()?.body ?? (state().sessionQuery || state().sessionFilter !== "all" ? "No matching sessions in this workspace." : "Start YCoding in your project folder on this machine.")}</p>
       <Show when={availability()?.note}>{(note) => <p class="panel__note">{note()}</p>}</Show>
     </div>
   )
@@ -837,13 +834,13 @@ function ConversationView(props: {
   const view = () => state().view
   const requests = () => view()?.requests ?? []
   const messages = () => view()?.messages ?? []
-  const selectedSession = () => state().sessions.find((session) => session.id === state().activeSessionID)
+  const selectedSession = () => state().selectedSessionInfo ?? state().sessions.find((session) => session.id === state().activeSessionID)
   const devices = useDeviceAvailability()
   // Without a reachable machine the device state is the page's one explanation.
   const blocked = () => state().activeDeviceID === undefined || state().connection.kind === "offline"
   const availability = () => blocked()
     ? devices()
-    : sessionAvailabilityView(state().connection, state().sessions.length)
+    : sessionAvailabilityView(state().connection, state().sessions.length, state().sessionListStatus)
   return (
     <Show
       when={state().activeSessionID !== undefined}
@@ -941,18 +938,21 @@ function SessionsPage(props: {
   readonly onSelectSession: (sessionID: string) => void
 }): JSX.Element {
   const remote = useRemote()
-  const [query, setQuery] = createSignal("")
-  const [filter, setFilter] = createSignal<SessionFilter>("all")
-  const sessions = () => filterSessions(remote.state().sessions, query(), filter())
+  let feed: HTMLDivElement | undefined
+  let detachFeed = () => {}
+  onMount(() => { if (feed) detachFeed = attachSessionFeed(feed, remote.store) })
+  onCleanup(() => detachFeed())
+  const sessions = () => remote.state().sessions
   const cached = () => cachedSessionsView(remote.state().connection, remote.state().sessions.length)
   return (
-    <div class="pane sessions-page">
+    <div class="pane sessions-page" ref={feed}>
       <h1 class="visually-hidden">Sessions</h1>
       <div class="sessions-page__toolbar">
         <NewSessionButton disabled={!props.canCreateSession} onClick={props.onNewSession} />
       </div>
+      <WorkspaceSelector />
       <Show
-        when={remote.state().sessions.length > 0}
+        when={remote.state().sessionGroups.length > 0 || remote.state().sessionListStatus === "loading"}
         fallback={
           <Show when={remote.state().activeDeviceID !== undefined} fallback={<DeviceEmptyState />}>
             <NoSessionsState />
@@ -967,35 +967,29 @@ function SessionsPage(props: {
               class="input"
               type="search"
               placeholder="Search sessions…"
-              value={query()}
-              onInput={(event) => setQuery(event.currentTarget.value)}
+              value={remote.state().sessionQuery}
+              disabled={remote.state().transport.kind !== "open" || cached() !== undefined}
+              onInput={(event) => remote.store.searchSessions(event.currentTarget.value)}
             />
           </label>
-          <span class="chip">{advertisedCount(sessions().length)}</span>
+          <span class="chip">{advertisedCount(sessions().length)} loaded</span>
         </div>
         <div class="session-filters" role="group" aria-label="Session status">
           <For each={["all", "running", "idle"] as const}>
             {(value) => (
               <button
                 type="button"
-                class={`session-filters__option${filter() === value ? " session-filters__option--active" : ""}`}
-                aria-pressed={filter() === value}
-                onClick={() => setFilter(value)}
+                  class={`session-filters__option${remote.state().sessionFilter === value ? " session-filters__option--active" : ""}`}
+                  aria-pressed={remote.state().sessionFilter === value}
+                  disabled={remote.state().transport.kind !== "open" || cached() !== undefined}
+                  onClick={() => remote.store.searchSessions(remote.state().sessionQuery, value)}
               >
                 {value[0]?.toUpperCase()}{value.slice(1)}
               </button>
             )}
           </For>
         </div>
-        <Show
-          when={sessions().length > 0}
-          fallback={
-            <div class="empty">
-              <p class="empty__title">No session matches that filter</p>
-              <p>The machine has {advertisedCount(remote.state().sessions.length)}; none matches “{query()}”.</p>
-            </div>
-          }
-        >
+        <Show when={sessions().length > 0} fallback={<NoSessionsState />}>
           <div class="sessions-results">
             <div class="sessions-table" role="table" aria-label="Sessions">
               <div class="sessions-table__head" role="row">
@@ -1016,9 +1010,104 @@ function SessionsPage(props: {
             </div>
           </div>
         </Show>
+        <Show when={remote.state().sessionPageLoading}><p role="status">Loading more sessions…</p></Show>
       </Show>
     </div>
   )
+}
+
+function WorkspaceSelector(): JSX.Element {
+  const remote = useRemote()
+  return (
+    <Show when={remote.state().sessionGroups.length > 0}>
+      <label class="field">
+        <span>Workspace / repository</span>
+        <select class="select" value={remote.state().selectedWorkspaceID ?? ""} disabled={remote.state().transport.kind !== "open" || remote.state().connection.kind === "offline"}
+          onChange={(event) => remote.store.selectWorkspace(event.currentTarget.value)}>
+          <For each={remote.state().sessionGroups}>{(group) => (
+            <option value={group.id}>{group.name ?? group.projectID} — {group.directory}{group.workspaceID ? ` · ${group.workspaceID}` : ""}</option>
+          )}</For>
+        </select>
+      </label>
+    </Show>
+  )
+}
+
+function attachSessionFeed(element: HTMLDivElement, store: ReturnType<typeof useRemote>["store"]) {
+  const root = element.closest<HTMLElement>(".workspace__scroll, .workspace__rail") ??
+    (document.scrollingElement instanceof HTMLElement ? document.scrollingElement : undefined)
+  if (!root) return () => {}
+  let direction = 0
+  let gesture = false
+  let lastTop = root.scrollTop
+  let context = `${store.state().activeDeviceID}:${store.state().selectedWorkspaceID}:${store.state().sessionQuery}:${store.state().sessionFilter}`
+  const unsubscribe = store.subscribe(() => {
+    const next = `${store.state().activeDeviceID}:${store.state().selectedWorkspaceID}:${store.state().sessionQuery}:${store.state().sessionFilter}`
+    if (next === context) return
+    context = next
+    gesture = false
+    direction = 0
+    lastTop = root.scrollTop
+  })
+  const check = () => {
+    if (!gesture || direction === 0 || store.state().sessionPageLoading || store.state().sessionListStatus !== "ready") return
+    if (direction > 0 && root.scrollHeight - root.scrollTop - root.clientHeight < 250 && store.state().sessionHasNext) {
+      const before = store.state().sessions[0]?.id
+      const removed = store.state().sessions.length >= 150
+        ? [...element.querySelectorAll<HTMLElement>(".session-row, .sessions-table__row")].slice(0, 50).reduce((height, row) => height + row.offsetHeight, 0)
+        : 0
+      gesture = false
+      direction = 0
+      void store.nextSessionsPage().then(() => requestAnimationFrame(() => {
+        if (removed > 0 && store.state().sessions[0]?.id !== before) root.scrollTop = Math.max(0, root.scrollTop - removed)
+        lastTop = root.scrollTop
+      }))
+    }
+    if (direction < 0 && root.scrollTop < 250 && store.state().sessionHasPrevious) {
+      const before = store.state().sessions[0]?.id
+      gesture = false
+      direction = 0
+      void store.previousSessionsPage().then(() => requestAnimationFrame(() => {
+        if (store.state().sessions[0]?.id !== before) {
+          const added = [...element.querySelectorAll<HTMLElement>(".session-row, .sessions-table__row")].slice(0, 50)
+            .reduce((height, row) => height + row.offsetHeight, 0)
+          root.scrollTop += added
+        }
+        lastTop = root.scrollTop
+      }))
+    }
+  }
+  const wheel = (event: WheelEvent) => { gesture = true; direction = Math.sign(event.deltaY); check() }
+  let touchY = 0
+  const touchStart = (event: TouchEvent) => { gesture = true; touchY = event.changedTouches[0]?.clientY ?? 0 }
+  const touch = (event: TouchEvent) => { direction = Math.sign(touchY - (event.changedTouches[0]?.clientY ?? touchY)); check() }
+  const pointer = () => { gesture = true }
+  const key = (event: KeyboardEvent) => {
+    if (!root.contains(document.activeElement) && document.activeElement !== document.body) return
+    if (["ArrowDown", "PageDown", "End", " "].includes(event.key)) direction = 1
+    if (["ArrowUp", "PageUp", "Home"].includes(event.key)) direction = -1
+    if (direction !== 0) gesture = true
+  }
+  const scroll = () => {
+    if (gesture && root.scrollTop !== lastTop) direction = Math.sign(root.scrollTop - lastTop)
+    lastTop = root.scrollTop
+    check()
+  }
+  root.addEventListener("wheel", wheel, { passive: true })
+  root.addEventListener("touchstart", touchStart, { passive: true })
+  root.addEventListener("touchend", touch, { passive: true })
+  root.addEventListener("pointerdown", pointer, { passive: true })
+  document.addEventListener("keydown", key)
+  root.addEventListener("scroll", scroll, { passive: true })
+  return () => {
+    unsubscribe()
+    root.removeEventListener("wheel", wheel)
+    root.removeEventListener("touchstart", touchStart)
+    root.removeEventListener("touchend", touch)
+    root.removeEventListener("pointerdown", pointer)
+    document.removeEventListener("keydown", key)
+    root.removeEventListener("scroll", scroll)
+  }
 }
 
 function ActivityPage(): JSX.Element {

@@ -98,6 +98,16 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
   ]
 
   const builtInHandler = (request: RemoteRequest): ConcreteResult => {
+      if (request.operation === "workspace.list") {
+        if (request.input?.sessionsOnly !== true) return { ok: true, value: { data: [] } }
+        const data = [...new Map(listedSessions().map((session) => {
+          const item = session as { readonly projectID?: string; readonly location?: { readonly directory?: string } }
+          const projectID = item.projectID ?? "prj_default"
+          const directory = item.location?.directory ?? "/work"
+          return [`${projectID}:${directory}`, { id: `wsp_${projectID}_${directory.replaceAll("/", "_")}`, projectID, directory }] as const
+        })).values()]
+        return { ok: true, value: { data } }
+      }
       if (request.operation === "session.list") {
         return { ok: true, value: { data: listedSessions() } }
       }

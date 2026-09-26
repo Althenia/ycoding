@@ -414,7 +414,7 @@ export const usePages: readonly DocPage[] = [
             kind: "table",
             head: ["Area", "Actions"],
             rows: [
-              ["Sessions", "Create a Session in a previously opened repository, or browse, search, filter, and reopen existing Sessions on the connected machine."],
+              ["Sessions", "Choose a workspace or repository, then browse its Session table. Scroll down to load more; search and status filters apply to the selected group, with pinned Sessions first. Create a Session in a previously opened repository or reopen an existing one."],
               ["Conversation", "Read the transcript, send a prompt with a delivery mode, and interrupt active work. The browser shows at most the first 4,000 characters of tool text; device truncation is labeled separately, and captured shell output can be loaded in pages."],
               ["Requests", "Reply to permission or guardrail asks and answer or cancel pending Forms and questions."],
               ["Activity", "Review reported tool calls, terminal commands, file changes, and pending decisions."],
@@ -422,6 +422,8 @@ export const usePages: readonly DocPage[] = [
             ],
           },
           { kind: "paragraph", text: "On tablets, the Conversation header can hide or show the session sidebar without changing the selected Session. Sessions, Conversation, Activity, and Settings remain available in the navigation." },
+          { kind: "paragraph", text: "The Sessions table and conversation sidebar both load workspace-grouped results as you scroll. They keep a small window of pages instead of rendering the entire machine's inventory; scroll back to retrieve earlier rows. Changing the group or filter does not change the conversation you already opened. A loading state is not an empty Session list." },
+          { kind: "paragraph", text: "Your prompts appear in right-aligned bubbles; YCoding replies appear on the left. A double check with Read appears only after YCoding consumes the prompt, not just when the browser sends it. Reasoning is a compact expandable section with formatted text, and empty reasoning blocks are hidden. Completed compaction hides covered older messages from the browser view without deleting Session history." },
           { kind: "paragraph", text: "New session uses the machine's local agent and model defaults and does not send a prompt until you do. An unknown creation result can be checked or retried explicitly with the same Session identity; check Sessions before dismissing it. The browser cannot choose an arbitrary filesystem path or create a repository." },
           { kind: "paragraph", text: "Unsent drafts stay with each Session while you navigate remote pages or reconnect to the same machine. Switching machines, disconnecting explicitly, signing out, leaving the remote workspace, or reloading the page clears drafts." },
           { kind: "paragraph", text: "Agent execution, shell commands, files, tools, and model calls run on the selected machine. The relay carries a closed set of authenticated operations; it does not provide an arbitrary shell or filesystem browser." },

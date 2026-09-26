@@ -10,6 +10,7 @@ import {
   applySessionEvent,
   canReplyToRequest,
   createSessionView,
+  ephemeralAssistantID,
   ephemeralPartKey,
   mergeFileChanges,
   modelLabel,
@@ -90,6 +91,15 @@ export type RemoteStoreState = {
   readonly activeDeviceID?: string
   readonly advertised: readonly string[]
   readonly sessions: readonly SessionInfoView[]
+  readonly sessionGroups: readonly RemoteWorkspaceInfo[]
+  readonly selectedWorkspaceID?: string
+  readonly sessionQuery: string
+  readonly sessionFilter: "all" | "running" | "idle"
+  readonly sessionListStatus: "idle" | "loading" | "ready" | "error"
+  readonly sessionPageLoading: boolean
+  readonly sessionHasNext: boolean
+  readonly sessionHasPrevious: boolean
+  readonly selectedSessionInfo?: SessionInfoView
   readonly drafts: Readonly<Record<string, string>>
   readonly workspaces: readonly RemoteWorkspaceInfo[]
   readonly workspaceStatus: "idle" | "loading" | "ready" | "error"
@@ -130,6 +140,10 @@ export type RemoteStore = {
   readonly connect: (deviceID: string) => void
   readonly disconnect: () => void
   readonly selectSession: (sessionID: string) => Promise<void>
+  readonly selectWorkspace: (workspaceID: string) => void
+  readonly searchSessions: (query: string, filter?: "all" | "running" | "idle") => void
+  readonly nextSessionsPage: () => Promise<void>
+  readonly previousSessionsPage: () => Promise<void>
   readonly setDraft: (sessionID: string, text: string) => void
   readonly loadWorkspaces: () => Promise<void>
   readonly createSession: (workspaceID: string) => Promise<string | undefined>
@@ -154,6 +168,8 @@ export type RemoteStore = {
 }
 
 const defaultBatchMs = 24
+const sessionPageSize = 50
+const retainedSessionPages = 3
 
 /** One shell-output request reads at most the local default page; the device bounds it again. */
 const shellOutputPageLimit = 65_536
@@ -196,6 +212,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     devices: [],
     advertised: [],
     sessions: [],
+    sessionGroups: [],
+    sessionQuery: "",
+    sessionFilter: "all",
+    sessionListStatus: "idle",
+    sessionPageLoading: false,
+    sessionHasNext: false,
+    sessionHasPrevious: false,
     drafts: {},
     workspaces: [],
     workspaceStatus: "idle",
@@ -212,6 +235,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
    * connection change or Session invalidation starts a new generation.
    */
   let sessionsToken = 0
+  let sessionPages: { readonly rows: readonly SessionInfoView[]; readonly previous?: string; readonly next?: string }[] = []
+  let loadingPageToken: number | undefined
+  let cancelSearch: (() => void) | undefined
   let workspacesToken = 0
   /**
    * Account generation. A `/api/me` read may apply only while the account context it
@@ -226,8 +252,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
    * only valid from the connection that registered it.
    */
   let subscribedSessionID: string | undefined
-  /** Snapshot-covered part keys that stale ephemeral fragments must not append to. */
-  const sealed = new Map<string, Set<string>>()
+  let sealed: { readonly sessionID: string; readonly parts: Set<string>; readonly covered: Set<string> } | undefined
   let hydration: HydrationWindow | undefined
   /**
    * Live file changes that arrive while a ledger read is pending. The read describes
@@ -247,6 +272,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
 
   const setState = (patch: Partial<RemoteStoreState>) => {
+    if (Object.hasOwn(patch, "view") && (patch.view === undefined || patch.view?.id !== state.view?.id)) sealed = undefined
     state = { ...state, ...patch }
     notify()
   }
@@ -273,6 +299,18 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     void owner.request("session.unsubscribe", { sessionID })
   }
 
+  const recordCovered = (before: SessionView, after: SessionView) => {
+    const retained = new Set(after.messages.map((message) => message.id))
+    const removed = before.messages.filter((message) => message.kind === "assistant" && !retained.has(message.id))
+    if (removed.length === 0) return
+    const current = sealed?.sessionID === before.id ? sealed : { sessionID: before.id, parts: new Set<string>(), covered: new Set<string>() }
+    for (const message of removed) {
+      current.covered.add(message.id)
+      for (const key of sealedPartKeys([message])) current.parts.delete(key)
+    }
+    sealed = current
+  }
+
   const flush = () => {
     cancelBatch = undefined
     const batch = queued
@@ -285,11 +323,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (!view || item.sessionID !== view.id) continue
       const sequence = readEventSequence(item.event)
       const aggregate = readAggregateID(item.event)
-      const opened = openedPartKey(item.event)
-      if (opened !== undefined) sealed.get(view.id)?.delete(opened)
-      const key = ephemeralPartKey(item.event)
-      if (key !== undefined && isEphemeralEvent(item.event) && sealed.get(view.id)?.has(key) === true) continue
       if (aggregate !== undefined && aggregate !== view.id) continue
+      const currentSeal = sealed?.sessionID === view.id ? sealed : undefined
+      const opened = openedPartKey(item.event)
+      if (opened !== undefined) currentSeal?.parts.delete(opened)
+      const key = ephemeralPartKey(item.event)
+      if (key !== undefined && isEphemeralEvent(item.event) &&
+        (currentSeal?.parts.has(key) || currentSeal?.covered.has(ephemeralAssistantID(item.event) ?? ""))) continue
       if (sequence.seq !== undefined && view.watermark !== undefined) {
         // Duplicates below the watermark are dropped. The sequence is durable and
         // per aggregate, so a gap means a lost event and forces a re-read.
@@ -302,6 +342,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (category !== undefined) delivery.deliver(category)
       const at = now()
       const next = applySessionEvent(view, item.event, at)
+      if (typeof item.event === "object" && item.event !== null && Reflect.get(item.event, "type") === "session.compaction.ended") recordCovered(view, next)
       unhandled += next.unhandledEvents - view.unhandledEvents
       view = sequence.seq === undefined ? next : { ...next, watermark: sequence.seq }
       const type = typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "type") : undefined
@@ -374,6 +415,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     lastStatusKind = status.kind
     if (status.kind === "closed") subscribedSessionID = undefined
     if (rejected && status.kind === "closed") {
+      sessionPages = []
       // Relay authorization can reject one revoked device while the browser account
       // remains valid. Tear down only that device, then let the authoritative account
       // answer decide whether the browser is truly signed out.
@@ -385,6 +427,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         activeDeviceID: undefined,
         advertised: [],
         sessions: [],
+        sessionGroups: [],
+        selectedWorkspaceID: undefined,
+        sessionListStatus: "idle",
+        sessionPageLoading: false,
+        sessionHasNext: false,
+        sessionHasPrevious: false,
+        selectedSessionInfo: undefined,
         drafts: {},
         workspaces: [],
         workspaceStatus: "idle",
@@ -443,7 +492,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
    * snapshot below the projection's durable watermark, is refused so the visible
    * transcript is never erased or rewound.
    */
-  const applySnapshot = (sessionID: string, payload: unknown, base?: SessionView): SessionView | "invalid" | "stale" => {
+  const applySnapshot = (sessionID: string, payload: unknown, base?: SessionView): { readonly view: SessionView; readonly coveredAssistantIDs: readonly string[] } | "invalid" | "stale" => {
     const snapshot = readSnapshot(payload)
     if (snapshot === undefined) return "invalid"
     if (base?.watermark !== undefined && snapshot.watermark !== undefined && snapshot.watermark < base.watermark) {
@@ -460,17 +509,21 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       watermark: snapshot.watermark,
       ...(snapshot.sourceEpoch === undefined ? {} : { sourceEpoch: snapshot.sourceEpoch }),
     }
-    return view
+    return { view, coveredAssistantIDs: snapshot.coveredAssistantIDs }
   }
 
   const applyEvent = (view: SessionView, event: unknown, replaying: boolean): SessionView => {
     const aggregate = readAggregateID(event)
     if (aggregate !== undefined && aggregate !== view.id) return view
+    const currentSeal = sealed?.sessionID === view.id ? sealed : undefined
     const opened = openedPartKey(event)
-    if (opened !== undefined) sealed.get(view.id)?.delete(opened)
+    if (opened !== undefined) currentSeal?.parts.delete(opened)
     const key = ephemeralPartKey(event)
-    if (!replaying && key !== undefined && isEphemeralEvent(event) && sealed.get(view.id)?.has(key) === true) return view
-    return applySessionEvent(view, event, now())
+    if (key !== undefined && isEphemeralEvent(event) &&
+      (currentSeal?.covered.has(ephemeralAssistantID(event) ?? "") || (!replaying && currentSeal?.parts.has(key)))) return view
+    const next = applySessionEvent(view, event, now())
+    if (typeof event === "object" && event !== null && Reflect.get(event, "type") === "session.compaction.ended") recordCovered(view, next)
+    return next
   }
 
   const loadSessionReads = async (sessionID: string, token: number, notice?: string) => {
@@ -607,10 +660,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         setState({ notice: notice ?? "An older session snapshot arrived and was ignored." })
         return "refused"
       }
-      sealed.set(sessionID, new Set(sealedPartKeys(applied.messages)))
-      let view = applied
+      sealed = { sessionID, parts: new Set(sealedPartKeys(applied.view.messages)), covered: new Set(applied.coveredAssistantIDs) }
+      let view = applied.view
       for (const event of owned.events) view = applyEvent(view, event, true)
-      owned.replayed.forEach((key) => sealed.get(sessionID)?.delete(key))
+      owned.replayed.forEach((key) => sealed?.parts.delete(key))
       setState({ view, ...(notice === undefined ? {} : { notice }) })
       return "applied"
     } finally {
@@ -618,77 +671,106 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
   }
 
-  const readAllSessions = async (owner: RemoteTransport, token: number): Promise<RemoteRequestOutcome | undefined> => {
-    const data: unknown[] = []
-    const seen = new Set<string>()
-    let cursor: string | undefined
-    for (;;) {
-      if (token !== sessionsToken) return undefined
-      const page = await owner.request("session.list", {
-        input: { limit: 200, ...(cursor === undefined ? {} : { cursor }) },
-      })
-      if (page.status !== "ok") return page
-      data.push(...readSessionInfoList(page.value))
-      const value = typeof page.value === "object" && page.value !== null ? page.value : undefined
-      const cursors = value === undefined ? undefined : Reflect.get(value, "cursor")
-      const next = typeof cursors === "object" && cursors !== null ? Reflect.get(cursors, "next") : undefined
-      if (typeof next !== "string" || next.length === 0) return { status: "ok", value: { data } }
-      if (seen.has(next))
-        return {
-          status: "failed",
-          error: { code: "invalid_message", message: "The device repeated a Session list cursor" },
-        }
-      seen.add(next)
-      cursor = next
-    }
-  }
+  const listFailure = (outcome: Exclude<RemoteRequestOutcome, { status: "ok" }>, label: string): Pick<RemoteStoreState, "connection"> =>
+    outcome.status === "failed" && outcome.error.code === "agent_unavailable"
+      ? { connection: { kind: "offline", deviceName: deviceName(state.activeDeviceID ?? "device") } }
+      : { connection: { kind: "error", message: describeOutcome(outcome, label) } }
 
-  /** Reads every authoritative backend page for the generation that requested it. */
-  const loadSessions = async (token: number) => {
+  const recoveredConnection = (owner: RemoteTransport): Partial<Pick<RemoteStoreState, "connection">> =>
+    state.connection.kind === "offline" || state.connection.kind === "error"
+      ? { connection: connectionFor(owner.status(), state.activeDeviceID) }
+      : {}
+
+  const loadSessions = async (token: number, cursor?: string, direction: "next" | "previous" = "next") => {
     const active = transport
-    if (!active) return
+    const workspace = state.selectedWorkspaceID
+    if (!active || workspace === undefined || loadingPageToken === token) return
+    loadingPageToken = token
+    setState({ sessionPageLoading: cursor !== undefined, ...(cursor === undefined ? { sessionListStatus: "loading" as const } : {}) })
     const [listed, activeStatus] = await Promise.all([
-      readAllSessions(active, token),
-      // Optional read: a connection that cannot answer it leaves `running` unknown.
+      active.request("session.list", { input: {
+        workspace,
+        limit: sessionPageSize,
+        order: "pinned",
+        searchFields: "summary",
+        ...(state.sessionQuery.trim() === "" ? {} : { search: state.sessionQuery.trim() }),
+        ...(state.sessionFilter === "all" ? {} : { status: state.sessionFilter }),
+        ...(cursor === undefined ? {} : { cursor }),
+      } }),
       active.request("session.active"),
     ])
-    // A read that settles after its connection was replaced, or after a newer
-    // Session invalidation arrived, describes a list this store no longer shows.
-    if (token !== sessionsToken || !isCurrentConnection(active) || listed === undefined) return
+    if (loadingPageToken === token) loadingPageToken = undefined
+    if (token !== sessionsToken || !isCurrentConnection(active) || workspace !== state.selectedWorkspaceID) return
     if (listed.status !== "ok") {
-      // An open, authenticated browser relay reports this exact structured response
-      // when its selected device has no local agent. Transport failures and every
-      // other failed read remain connection errors, not a claim about device reachability.
-      // The last list stays as the device's read-only record until it answers again.
-      if (listed.status === "failed" && listed.error.code === "agent_unavailable") {
-        setState({ connection: { kind: "offline", deviceName: deviceName(state.activeDeviceID ?? "device") } })
-        return
-      }
-      setState({ connection: { kind: "error", message: describeOutcome(listed, "Session list") } })
+      setState({ ...listFailure(listed, "Session list"), sessionListStatus: "error", sessionPageLoading: false })
       return
     }
     const running = activeStatus.status === "ok" ? readActiveSessions(activeStatus.value) : undefined
-    const sessions = readSessionInfoList(listed.value).flatMap((entry) => {
+    const rows = readSessionInfoList(listed.value).flatMap((entry) => {
       const id = typeof entry === "object" && entry !== null ? (entry as { id?: unknown }).id : undefined
       const info = readSessionInfo(entry, {
         ...(running === undefined || typeof id !== "string" ? {} : { running: running.has(id) }),
       })
       return info ? [info] : []
     })
+    const value = typeof listed.value === "object" && listed.value !== null ? listed.value : undefined
+    const cursors = value === undefined ? undefined : Reflect.get(value, "cursor")
+    const next = typeof cursors === "object" && cursors !== null ? Reflect.get(cursors, "next") : undefined
+    const previous = typeof cursors === "object" && cursors !== null ? Reflect.get(cursors, "previous") : undefined
+    if (cursor !== undefined && (direction === "next" ? next === cursor : previous === cursor)) {
+      setState({ sessionListStatus: "error", sessionPageLoading: false,
+        connection: { kind: "error", message: "The device repeated a Session list cursor." } })
+      return
+    }
+    const page = { rows, ...(typeof next === "string" && next.length > 0 ? { next } : {}),
+      ...(typeof previous === "string" && previous.length > 0 ? { previous } : {}) }
+    sessionPages = cursor === undefined ? [page] : direction === "next"
+      ? [...sessionPages, page].slice(-retainedSessionPages)
+      : [page, ...sessionPages].slice(0, retainedSessionPages)
+    const sessions = sessionPages.flatMap((item) => item.rows)
     setState({
-      ...(state.connection.kind === "offline" || state.connection.kind === "error"
-        ? { connection: connectionFor(active.status(), state.activeDeviceID) }
-        : {}),
+      ...recoveredConnection(active),
       sessions,
       advertised: sessions.map((session) => session.id),
+      selectedSessionInfo: sessions.find((session) => session.id === state.activeSessionID) ?? state.selectedSessionInfo,
+      sessionListStatus: "ready",
+      sessionPageLoading: false,
+      sessionHasPrevious: sessionPages[0]?.previous !== undefined,
+      sessionHasNext: sessionPages.at(-1)?.next !== undefined,
     })
+  }
+
+  const loadSessionGroups = async (token: number) => {
+    const owner = transport
+    if (owner === undefined) return
+    const outcome = await owner.request("workspace.list", { input: { sessionsOnly: true } })
+    if (token !== sessionsToken || !isCurrentConnection(owner)) return
+    if (outcome.status !== "ok") {
+      setState({ ...listFailure(outcome, "Session workspaces"), sessionListStatus: "error" })
+      return
+    }
+    const groups = readWorkspaces(outcome.value)
+    if (groups === undefined) {
+      setState({ sessionListStatus: "error", connection: { kind: "error", message: "The device returned unreadable Session workspaces." } })
+      return
+    }
+    const selectedWorkspaceID = groups.some((group) => group.id === state.selectedWorkspaceID)
+      ? state.selectedWorkspaceID : groups[0]?.id
+    const sameWorkspace = selectedWorkspaceID === state.selectedWorkspaceID
+    if (!sameWorkspace) sessionPages = []
+    setState({ ...recoveredConnection(owner), sessionGroups: groups, selectedWorkspaceID,
+      ...(sameWorkspace ? {} : { sessions: [], advertised: [], sessionHasNext: false, sessionHasPrevious: false }),
+      sessionListStatus: selectedWorkspaceID === undefined ? "ready" : "loading" })
+    if (selectedWorkspaceID !== undefined) await loadSessions(token)
   }
 
   const selectSession = async (sessionID: string) => {
     const active = transport
     // One selection owns the view; a superseded selection never writes state again.
     const token = ++selectionToken
-    setState({ activeSessionID: sessionID, view: createSessionView(sessionID), notice: undefined })
+    setState({ activeSessionID: sessionID, selectedSessionInfo: state.sessions.find((session) => session.id === sessionID) ??
+      (state.selectedSessionInfo?.id === sessionID ? state.selectedSessionInfo : { id: sessionID, title: sessionID, updatedAt: 0, archived: false }),
+      view: createSessionView(sessionID), notice: undefined })
     if (!active) return
     // Subscribe before the snapshot so events during the read are queued and then
     // reconciled against the snapshot watermark instead of being lost.
@@ -729,11 +811,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         setState({ notice: "An older session snapshot arrived and was ignored." })
         return
       }
-      sealed.set(sessionID, new Set(sealedPartKeys(applied.messages)))
-      let view = applied
+      sealed = { sessionID, parts: new Set(sealedPartKeys(applied.view.messages)), covered: new Set(applied.coveredAssistantIDs) }
+      let view = applied.view
       for (const event of owned.events) view = applyEvent(view, event, true)
-      owned.replayed.forEach((key) => sealed.get(sessionID)?.delete(key))
-      setState({ view })
+      owned.replayed.forEach((key) => sealed?.parts.delete(key))
+      setState({ view, selectedSessionInfo: state.selectedSessionInfo?.id === sessionID
+        ? { ...state.selectedSessionInfo, title: view.title ?? state.selectedSessionInfo.title, agent: view.agent ?? state.selectedSessionInfo.agent,
+            model: view.model ?? state.selectedSessionInfo.model, modelLabel: modelLabel(view.model) ?? state.selectedSessionInfo.modelLabel }
+        : state.selectedSessionInfo })
     } finally {
       if (hydration === owned) hydration = undefined
     }
@@ -784,11 +869,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         setState({ sessionCreation: { ...attempt, status: "unknown", message: "The returned session does not match this workspace. Check Sessions before retrying." } })
         return undefined
       }
-      setState({
-        sessions: [session, ...state.sessions.filter((item) => item.id !== session.id)],
-        advertised: [...new Set([...state.advertised, session.id])],
-        sessionCreation: undefined,
-      })
+      setState({ sessionCreation: undefined })
       return session.id
     }
     if (reconcile) {
@@ -866,6 +947,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (selected?.status === "active" && !selected.online) {
         // The disconnect clears the list, so the selected device's last list is restored read-only.
         const sessions = state.sessions
+        const sessionGroups = state.sessionGroups
+        const selectedWorkspaceID = state.selectedWorkspaceID
         const drafts = state.drafts
         const creation = state.sessionCreation
         setState({ owner: { id: me.value.user.id, expiresAt: me.value.session.expiresAt }, devices })
@@ -873,6 +956,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         setState({
           activeDeviceID: selected.id,
           sessions,
+          sessionGroups,
+          selectedWorkspaceID,
+          sessionListStatus: "ready",
+          sessionPageLoading: false,
+          sessionHasNext: false,
+          sessionHasPrevious: false,
           drafts,
           sessionCreation: creation?.status === "creating"
             ? { ...creation, status: "unknown", message: "The machine went offline before creation settled. Check or retry this session explicitly." }
@@ -918,12 +1007,16 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const drafts = state.activeDeviceID === deviceID ? state.drafts : {}
       const creation = state.sessionCreation?.deviceID === deviceID ? state.sessionCreation : undefined
       transport?.close(1000, "switching device")
+      cancelSearch?.()
+      sessionPages = []
       // The new socket starts with no subscriptions, no alerts, and no list of its own.
       subscribedSessionID = undefined
       queued = []
       sessionsToken += 1
       workspacesToken += 1
       setState({ activeDeviceID: deviceID, sessions: [], advertised: [], activeSessionID: undefined, view: undefined, notice: undefined, drafts,
+        sessionGroups: [], selectedWorkspaceID: undefined, selectedSessionInfo: undefined, sessionQuery: "", sessionFilter: "all",
+        sessionListStatus: "idle", sessionPageLoading: false, sessionHasNext: false, sessionHasPrevious: false,
         workspaces: [], workspaceStatus: "idle", workspaceError: undefined,
         sessionCreation: creation?.status === "creating" ? { ...creation, status: "unknown", message: "The connection changed before creation settled. Check or retry this session explicitly." } : creation,
       })
@@ -932,9 +1025,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         onStatus: (status) => handleStatus(created, status),
         onSessions: () => {
           if (!isCurrentConnection(created)) return
+          cancelSearch?.()
+          cancelSearch = undefined
           sessionsToken += 1
-          setState({ advertised: [] })
-          void loadSessions(sessionsToken)
+          setState({ sessionListStatus: "loading" })
+          void loadSessionGroups(sessionsToken)
         },
         onEvent: (sessionID, event) => {
           if (!isCurrentConnection(created)) return
@@ -953,6 +1048,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       // still in flight cannot reconnect a device the user has dropped.
       accountToken += 1
       transport?.close(1000, "disconnected")
+      cancelSearch?.()
+      sessionPages = []
       transport = undefined
       subscribedSessionID = undefined
       queued = []
@@ -962,6 +1059,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         activeDeviceID: undefined,
         advertised: [],
         sessions: [],
+        sessionGroups: [],
+        selectedWorkspaceID: undefined,
+        selectedSessionInfo: undefined,
+        sessionListStatus: "idle",
+        sessionPageLoading: false,
+        sessionHasNext: false,
+        sessionHasPrevious: false,
         drafts: {},
         workspaces: [],
         workspaceStatus: "idle",
@@ -974,6 +1078,35 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       endAlerts()
     },
     selectSession,
+    selectWorkspace: (workspaceID) => {
+      if (state.transport.kind !== "open" || state.connection.kind === "offline") return
+      if (!state.sessionGroups.some((group) => group.id === workspaceID) || state.selectedWorkspaceID === workspaceID) return
+      cancelSearch?.()
+      sessionsToken += 1
+      sessionPages = []
+      setState({ selectedWorkspaceID: workspaceID, sessions: [], advertised: [], sessionListStatus: "loading", sessionHasNext: false, sessionHasPrevious: false })
+      void loadSessions(sessionsToken)
+    },
+    searchSessions: (query, filter = state.sessionFilter) => {
+      if (state.transport.kind !== "open" || state.connection.kind === "offline") return
+      if (state.sessionQuery === query && state.sessionFilter === filter) return
+      cancelSearch?.()
+      sessionsToken += 1
+      sessionPages = []
+      setState({ sessionQuery: query, sessionFilter: filter, sessions: [], advertised: [], sessionListStatus: "loading", sessionHasNext: false, sessionHasPrevious: false })
+      cancelSearch = schedule(() => {
+        cancelSearch = undefined
+        void loadSessions(sessionsToken)
+      }, 250)
+    },
+    nextSessionsPage: async () => {
+      const cursor = sessionPages.at(-1)?.next
+      if (cursor !== undefined && state.sessionListStatus === "ready" && state.transport.kind === "open") await loadSessions(sessionsToken, cursor)
+    },
+    previousSessionsPage: async () => {
+      const cursor = sessionPages[0]?.previous
+      if (cursor !== undefined && state.sessionListStatus === "ready" && state.transport.kind === "open") await loadSessions(sessionsToken, cursor, "previous")
+    },
     setDraft: (sessionID, text) => {
       if (sessionID !== state.activeSessionID) return
       setState({ drafts: { ...state.drafts, [sessionID]: text } })
@@ -1194,7 +1327,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       setState({ view: { ...view, autonomy } })
     },
     dispose: () => {
+      sealed = undefined
+      cancelSearch?.()
       cancelBatch?.()
+      sessionPages = []
       cancelBatch = undefined
       transport?.close(1000, "disposed")
       transport = undefined
@@ -1238,7 +1374,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
 
   async function reloadAfterReconnect(owner: RemoteTransport) {
     const token = selectionToken
-    await loadSessions(sessionsToken)
     // A device switch during the reload leaves a different connection owning the
     // store, so this one must not resubscribe, reload, or report again.
     if (!isCurrentConnection(owner)) return
@@ -1350,8 +1485,9 @@ function readWorkspaces(payload: unknown): readonly RemoteWorkspaceInfo[] | unde
     const projectID = Reflect.get(value, "projectID")
     const directory = Reflect.get(value, "directory")
     const name = Reflect.get(value, "name")
-    if (typeof id !== "string" || id.length === 0 || typeof projectID !== "string" || projectID.length === 0 || typeof directory !== "string" || directory.length === 0 || (name !== undefined && typeof name !== "string")) return []
-    return [{ id, projectID, directory, ...(name === undefined ? {} : { name }) }]
+    const workspaceID = Reflect.get(value, "workspaceID")
+    if (typeof id !== "string" || id.length === 0 || typeof projectID !== "string" || projectID.length === 0 || typeof directory !== "string" || directory.length === 0 || (name !== undefined && typeof name !== "string") || (workspaceID !== undefined && typeof workspaceID !== "string")) return []
+    return [{ id, projectID, directory, ...(workspaceID === undefined ? {} : { workspaceID }), ...(name === undefined ? {} : { name }) }]
   })
   if (workspaces.length !== data.length || new Set(workspaces.map((workspace) => workspace.id)).size !== workspaces.length) return undefined
   return workspaces

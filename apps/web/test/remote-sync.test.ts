@@ -127,6 +127,38 @@ describe("model references", () => {
 })
 
 describe("snapshot synchronization", () => {
+  test("live completed compaction prunes covered rows but a failed job preserves them", async () => {
+    const messages = [
+      { id: "msg_old", type: "assistant", agent: "god", content: [{ type: "text", text: "old" }], time: { created: 1 } },
+      { id: "msg_boundary", type: "assistant", content: [{ type: "text", text: "covered" }], time: { created: 2 } },
+      { id: "msg_new", type: "user", text: "new", time: { created: 3 } },
+    ]
+    let completed = false
+    const test = await harness({ snapshot: (sessionID) => ({
+      sourceEpoch: "epoch_1", session: { id: sessionID },
+      messages: completed ? [...messages.slice(0, 2), { id: "msg_compaction", type: "compaction", jobID: "cmp_done", trigger: "manual", status: "completed", revision: 1, boundary: { messageID: "msg_boundary", seq: 2 }, metrics: { excludedMessages: 2, excludedParts: 1, inputTokens: 10, retainedTokens: 4 }, time: { created: 3 } }, messages[2]] : messages,
+      watermark: { type: "log.synced", aggregateID: sessionID, seq: completed ? 4 : 1 },
+    }) })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      test.relay.pushEvent("ses_a", { type: "session.compaction.failed", data: { sessionID: "ses_a", jobID: "cmp_fail", code: "provider_failed", error: { type: "compaction.failed", message: "failed" } } })
+      await test.runUntil(() => test.store.state().view?.messages.some((message) => message.id === "cmp_fail") === true)
+      expect(test.store.state().view?.messages.map((message) => message.id)).toContain("msg_old")
+      test.relay.pushEvent("ses_a", { type: "session.compaction.ended", data: { sessionID: "ses_a", jobID: "cmp_done", boundary: { messageID: "msg_boundary", seq: 2 }, revision: 1, metrics: { excludedMessages: 2, excludedParts: 1, inputTokens: 10, retainedTokens: 4 } } })
+      await test.runUntil(() => test.store.state().view?.messages.some((message) => message.id === "cmp_done") === true)
+      expect(test.store.state().view?.messages.map((message) => message.id)).toEqual(["msg_new", "cmp_done"])
+      test.relay.pushEvent("ses_a", { type: "session.text.delta", data: { assistantMessageID: "msg_old", ordinal: 0, delta: "late" }, sourceEpoch: "epoch_1" })
+      await test.flush()
+      expect(test.store.state().view?.messages.map((message) => message.id)).toEqual(["msg_new", "cmp_done"])
+      completed = true
+      await test.store.reloadMessages()
+      expect(test.store.state().view?.messages.map((message) => message.id)).toEqual(["msg_compaction", "msg_new"])
+    } finally {
+      await test.stop()
+    }
+  })
   test("rejects a body that is not a session projection", () => {
     expect(readSnapshot({ data: [{ id: "msg_1", type: "user", text: "hi", time: { created: 1 } }] })).toBeUndefined()
     expect(readSnapshot(undefined)).toBeUndefined()
@@ -285,6 +317,82 @@ describe("snapshot synchronization", () => {
       await test.flush()
       expect(textOf(test.store.state().view)).toContain("STREAMED")
     } finally {
+      await test.stop()
+    }
+  })
+
+  test("does not resurrect compacted assistant parts from late ephemeral frames after snapshot or reconnect", async () => {
+    const test = await harness({
+      snapshot: (sessionID) => ({
+        sourceEpoch: "epoch_1",
+        session: { id: sessionID },
+        messages: [
+          { id: "msg_old", type: "assistant", agent: "god", content: [
+            { type: "reasoning", text: "Old thought" }, { type: "text", text: "Old answer" },
+          ], time: { created: 1 } },
+          { id: "msg_boundary", type: "user", text: "Covered", time: { created: 2 } },
+          { id: "msg_compact", type: "compaction", jobID: "cmp_1", trigger: "manual", status: "completed", revision: 1,
+            boundary: { messageID: "msg_boundary", seq: 2 }, metrics: { excludedMessages: 2, excludedParts: 2, inputTokens: 100, retainedTokens: 40 }, time: { created: 3 } },
+          { id: "msg_new", type: "assistant", agent: "god", content: [{ type: "text", text: "Visible" }], time: { created: 4 } },
+        ],
+        watermark: { type: "log.synced", aggregateID: sessionID, seq: 10 },
+      }),
+    })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      expect(test.store.state().view?.messages.map((message) => message.id)).toEqual(["msg_compact", "msg_new"])
+
+      const late = () => {
+        test.relay.pushEvent("ses_a", { type: "session.reasoning.delta", data: { assistantMessageID: "msg_old", ordinal: 0, delta: "LATE THOUGHT" }, sourceEpoch: "epoch_1" })
+        test.relay.pushEvent("ses_a", { type: "session.text.delta", data: { assistantMessageID: "msg_old", ordinal: 0, delta: "LATE ANSWER" }, sourceEpoch: "epoch_1" })
+        test.relay.pushEvent("ses_a", { type: "session.text.delta", data: { assistantMessageID: "msg_old", ordinal: 1, delta: "UNKNOWN OLD PART" }, sourceEpoch: "epoch_1" })
+      }
+      late()
+      await test.flush()
+      expect(test.store.state().view?.messages.map((message) => message.id)).toEqual(["msg_compact", "msg_new"])
+      await test.store.reloadMessages()
+      late()
+      await test.flush()
+      expect(test.store.state().view?.messages.map((message) => message.id)).toEqual(["msg_compact", "msg_new"])
+      expect(textOf(test.store.state().view)).toEqual(["Visible"])
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("does not replay a compacted assistant delta received while its snapshot is in flight", async () => {
+    let release: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const test = await harness({
+      handler: async (request) => {
+        if (request.operation === "session.snapshot") await gate
+        return "default" as const
+      },
+      snapshot: (sessionID) => ({
+        sourceEpoch: "epoch_1", session: { id: sessionID },
+        messages: [
+          { id: "msg_old", type: "assistant", agent: "god", content: [{ type: "text", text: "old" }], time: { created: 1 } },
+          { id: "msg_boundary", type: "user", text: "covered", time: { created: 2 } },
+          { id: "msg_compact", type: "compaction", jobID: "cmp_1", trigger: "manual", status: "completed", revision: 1,
+            boundary: { messageID: "msg_boundary", seq: 2 }, metrics: { excludedMessages: 2, excludedParts: 1, inputTokens: 100, retainedTokens: 40 }, time: { created: 3 } },
+        ],
+        watermark: { type: "log.synced", aggregateID: sessionID, seq: 10 },
+      }),
+    })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      const selection = test.store.selectSession("ses_a")
+      await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.snapshot"))
+      test.relay.pushEvent("ses_a", { type: "session.text.delta", data: { assistantMessageID: "msg_old", ordinal: 0, delta: "LATE" }, sourceEpoch: "epoch_1" })
+      await test.flush()
+      release?.()
+      await selection
+      expect(test.store.state().view?.messages.map((message) => message.id)).toEqual(["msg_compact"])
+    } finally {
+      release?.()
       await test.stop()
     }
   })

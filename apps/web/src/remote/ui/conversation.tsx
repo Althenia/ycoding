@@ -196,33 +196,57 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
  * open reasoning block, and the focus of the control that was used to open it.
  */
 function AssistantParts(props: { readonly parts: () => readonly AssistantPart[] }): JSX.Element {
-  const keys = createMemo(() => props.parts().map(partKey))
-  // A live key was produced by this same list, so it always resolves to a part.
-  const part = (key: string) => props.parts().find((entry) => partKey(entry) === key)!
+  const groups = createMemo(() => props.parts().reduce<{ readonly key: string; readonly parts: readonly AssistantPart[] }[]>((result, part) => {
+    if (part.kind === "reasoning" && !part.text.trim()) return result
+    const previous = result.at(-1)
+    if (part.kind === "reasoning" && previous?.parts[0]?.kind === "reasoning") {
+      result[result.length - 1] = { ...previous, parts: [...previous.parts, part] }
+      return result
+    }
+    result.push({ key: partKey(part), parts: [part] })
+    return result
+  }, []))
+  const keys = createMemo(() => groups().map((group) => group.key))
+  const group = (key: string) => groups().find((entry) => entry.key === key)!
   return (
     <For each={keys()}>
-      {(key) => <PartView part={() => part(key)} />}
+      {(key) => <PartView parts={() => group(key).parts} />}
     </For>
   )
 }
 
-function PartView(props: { readonly part: () => AssistantPart }): JSX.Element {
-  const kind = () => props.part().kind
+function PartView(props: { readonly parts: () => readonly AssistantPart[] }): JSX.Element {
+  const part = () => props.parts()[0]!
+  const reasoning = () => props.parts().map((item) => partText(item)).join("\n\n")
+  const kind = () => part().kind
   return (
     <>
       <Show when={kind() === "text"}>
-        <p class="message__text">{partText(props.part())}</p>
+        <p class="message__text">{partText(part())}</p>
       </Show>
       <Show when={kind() === "reasoning"}>
-        <details class="reasoning">
-          <summary>Reasoning</summary>
-          <p>{partText(props.part())}</p>
-        </details>
+        <ReasoningPart text={reasoning} />
       </Show>
       <Show when={kind() === "tool"}>
-        <ToolPart part={() => toolOf(props.part())!} />
+        <ToolPart part={() => toolOf(part())!} />
       </Show>
     </>
+  )
+}
+
+function ReasoningPart(props: { readonly text: () => string }): JSX.Element {
+  const [open, setOpen] = createSignal(false)
+  return (
+    <details class="reasoning" onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>Reasoning <span class="reasoning__hint">Show details</span></summary>
+      <Show when={open()}>
+        <div class="reasoning__body">{props.text().split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g).filter(Boolean).map((fragment) =>
+          fragment.startsWith("**") && fragment.endsWith("**") ? <strong>{fragment.slice(2, -2)}</strong>
+            : fragment.startsWith("`") && fragment.endsWith("`") ? <code>{fragment.slice(1, -1)}</code>
+            : fragment.startsWith("*") && fragment.endsWith("*") ? <em>{fragment.slice(1, -1)}</em> : fragment,
+        )}</div>
+      </Show>
+    </details>
   )
 }
 
@@ -238,20 +262,19 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
             <Show when={userDelivery(props.message()) === "queue"}>
               <span class="message__hint">queued</span>
             </Show>
-            <Show when={userState(props.message()) === "pending"}>
-              <span class="message__hint">pending</span>
-            </Show>
-            <Show when={userState(props.message()) === "promoted"}>
-              <Icon name="check" size={14} />
-            </Show>
           </div>
           <p class="message__text">{userText(props.message())}</p>
+          <span class="message__receipt" aria-label={userState(props.message()) === "consumed" ? "Read by YCoding" : userState(props.message()) === "pending" ? "Pending delivery" : "Sent, not yet read"}>
+            <Show when={userState(props.message()) === "consumed"} fallback={<Show when={userState(props.message()) === "pending"} fallback={<Icon name="check" size={14} />}><span aria-hidden="true">◷</span></Show>}><span aria-hidden="true">✓✓</span></Show>
+            {userState(props.message()) === "consumed" ? "Read" : userState(props.message()) === "pending" ? "Pending" : "Sent"}
+          </span>
         </Show>
 
         <Show when={kind() === "assistant"}>
           <div class="message__meta">
             <Icon name="terminal" size={14} />
-            <span>{assistantOf(props.message())?.agent ?? "agent"}</span>
+            <span>YCoding</span>
+            <Show when={assistantOf(props.message())?.agent}><span class="message__hint">{assistantOf(props.message())?.agent}</span></Show>
             <Show when={modelLabel(assistantOf(props.message())?.model)}>
               <span class="message__hint">{modelLabel(assistantOf(props.message())?.model)}</span>
             </Show>

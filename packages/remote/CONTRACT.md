@@ -291,14 +291,14 @@ the incremental/paginated read via `after`, and `session.snapshot`
 
 ### 3.4 Operations (closed operation set)
 
-The relay rejects anything outside this list with `unknown_operation`. `input`
-field names below are the local Protocol names; the agent maps them onto the
-corresponding route.
+The relay rejects anything outside this list with `unknown_operation`. The agent
+validates the listed `input` fields and maps them onto local operations; workspace
+grouping and Session-list filters are derived from backend metadata.
 
 | Remote operation | Session-scoped | Local Protocol identifier | Local route | `input` fields |
 | --- | --- | --- | --- | --- |
-| `workspace.list` | no | `v2.session.list`, `v2.project.list`, `v2.project.directories` | `GET /api/session`, `GET /api/project`, `GET /api/project/:projectID/directories` | — |
-| `session.list` | no | `v2.session.list` | `GET /api/session` | `limit?`, `order?`, `search?`, `parentID?`, `cursor?` |
+| `workspace.list` | no | `v2.session.list`, `v2.project.list`, `v2.project.directories` | `GET /api/session`, `GET /api/project`, `GET /api/project/:projectID/directories` | `sessionsOnly?` |
+| `session.list` | no | `v2.session.list`, `v2.session.active` | `GET /api/session`, `GET /api/session/active` | `limit?`, `order?`, `search?`, `searchFields?`, `workspace?`, `status?`, `parentID?`, `cursor?` |
 | `session.active` | no | `v2.session.active` | `GET /api/session/active` | — |
 | `session.get` | yes | `v2.session.get` | `GET /api/session/:sessionID` | — |
 | `session.messages` | yes | `v2.message.list` | `GET /api/session/:sessionID/message` | — |
@@ -323,14 +323,29 @@ corresponding route.
 | `session.goal.stop` | yes | `v2.session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `goal: null` |
 | `session.create` | no | `v2.session.create`, `v2.project.current` | `POST /api/session`, `GET /api/project/current` | `id`, `workspace` |
 
-`workspace.list` has no input and returns `{ data: RemoteWorkspaceInfo[] }`, where
-each item is `{ id, projectID, directory, name? }`. The backend builds this
-inventory from existing Session Locations, persisted ProjectDirectories, and
-non-global Project worktrees, then omits directories that are unavailable.
+`workspace.list` returns `{ data: RemoteWorkspaceInfo[] }`, where each item is
+`{ id, projectID, directory, workspaceID?, name? }`. Without `sessionsOnly: true`,
+the backend builds the creation inventory from existing Session Locations,
+persisted ProjectDirectories, and non-global Project worktrees, then omits
+directories that are unavailable. With `sessionsOnly: true`, it returns groups
+from recorded Session Locations in the connector's inventory, including historical
+directories that are currently unavailable. A Session group is not permission to
+create a Session in an unavailable directory.
 `id` is a deterministic, domain-separated SHA-256 identifier over the exact
 project ID, directory, and optional Location workspace ID tuple; clients treat
 it as opaque and backend-specific. The global Project's worktree is never a
 workspace choice; non-Git directories come from recorded directories and Sessions.
+
+`session.list` applies filters before cursor pagination. `workspace` selects the
+opaque ID of one backend-derived Session group; it never supplies an execution
+Location. `search` matches titles by default; `searchFields: "summary"` also
+matches agent and `provider/model#variant` labels. `status: "running" | "idle"`
+uses current backend activity; archived Sessions are not idle. Omitted status
+includes all states. `order` accepts `"asc"`, `"desc"` (default), or `"pinned"`.
+Pinned order lists pins by ascending pin time, then unpinned Sessions by descending
+update time and ID. Its opaque cursors include the pin sort key and support both
+directions. `limit` defaults to 50 and is capped at 200. Search, group, status,
+and order changes start a new cursor traversal.
 
 `session.create` accepts exactly `{ id, workspace }`. `id` is a client-generated
 Session ID; `workspace` must match an ID in a freshly rederived backend inventory.
@@ -394,11 +409,20 @@ Location from that record, and verifies the Session there before executing the
 operation. Deleted and unknown IDs fail with `session_not_allowed`; moved Sessions
 use their new backend-derived Location. No remote field selects a folder or URL.
 
-The agent sends `{ "type": "sessions" }` after connect and on Session creation,
-movement, or deletion. The relay broadcasts that small frame without persisting an
-inventory or treating it as authorization. A connected client pages `session.list`
-using the existing cursor until exhausted and fences publication by connection and
-list generation.
+The agent sends `{ "type": "sessions" }` after connect and when an inventory
+refresh changes membership or Session metadata used for grouping, filtering, and
+ordering. The relay broadcasts that small frame without persisting an inventory
+or treating it as authorization. List and Session-group reads use the connector's
+current inventory; they do not each trigger a full backend page sweep. Scoped
+operations still verify the addressed Session at its authoritative Location.
+
+The browser groups Sessions by workspace/repository in both the Sessions table and
+the conversation sidebar. It requests 50 rows initially and fetches another cursor
+page only on scroll demand. It retains at most three pages; scrolling back can
+fetch an evicted page. Device, workspace, search, or filter changes invalidate the
+old traversal. Connection and query-generation fences reject late results, and
+only one page request is active for a traversal. Displayed counts describe loaded
+rows, not an unreported backend total.
 
 ### 3.7 Bounds and close codes
 

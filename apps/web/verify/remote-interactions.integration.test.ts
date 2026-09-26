@@ -109,15 +109,33 @@ describe("remote and public product interactions", () => {
 
     const sessions = await remote("session-list", 768)
     try {
-      expect(await sessions.evaluate<number>(`document.querySelectorAll('.sessions-table__select').length`)).toBe(4)
+      const titles = ["Async Auth Token Revocation Migration", "Telemetry Event Buffer Flush Daemon", "Redis Cache Cluster Rebalancing Spec", "Postgres Partition Pruning Worker"]
+      for (const [index, title] of titles.entries()) {
+        await sessions.evaluate(`(() => { const select = document.querySelector('.sessions-page select'); select.selectedIndex = ${index}; select.dispatchEvent(new Event('change', { bubbles: true })); })()`)
+        for (let attempt = 0; attempt < 40; attempt += 1) {
+          if (await sessions.evaluate<boolean>(`document.querySelector('.sessions-table__select')?.textContent?.includes(${JSON.stringify(title)}) ?? false`)) break
+          await Bun.sleep(50)
+        }
+        expect(await sessions.evaluate<string>(`document.querySelector('.sessions-table__select')?.textContent ?? ''`)).toContain(title)
+        expect(await sessions.evaluate<number>(`document.querySelectorAll('.sessions-table__select').length`)).toBe(1)
+      }
+      await sessions.evaluate(`(() => { const select = document.querySelector('.sessions-page select'); select.selectedIndex = 0; select.dispatchEvent(new Event('change', { bubbles: true })); })()`)
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        if (await sessions.evaluate<boolean>(`document.querySelector('.sessions-table__select')?.textContent?.includes('Async Auth Token Revocation Migration') ?? false`)) break
+        await Bun.sleep(50)
+      }
       await sessions.evaluate(`document.querySelectorAll('.session-filters__option')[1]?.click()`)
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        if (await sessions.evaluate<boolean>(`document.querySelector('.sessions-table__status')?.textContent?.includes('Running') ?? false`)) break
+        await Bun.sleep(50)
+      }
       expect(await sessions.evaluate<string>(`document.querySelectorAll('.session-filters__option')[1]?.getAttribute('aria-pressed') ?? ''`)).toBe("true")
       const running = await sessions.evaluate<{ readonly count: number; readonly labeled: boolean }>(`(() => {
         const rows = [...document.querySelectorAll('.sessions-table__row')].filter(row => row.querySelector('.sessions-table__select'));
         return { count: rows.length, labeled: rows.every(row => row.querySelector('.sessions-table__status')?.textContent?.includes('Running')) };
       })()`)
       expect(running.count).toBeGreaterThan(0)
-      expect(running.count).toBeLessThan(4)
+      expect(running.count).toBe(1)
       expect(running.labeled).toBe(true)
     } finally { await sessions.close() }
 

@@ -447,6 +447,10 @@ describe("deviceAvailabilityView", () => {
 })
 
 describe("sessionAvailabilityView", () => {
+  test("keeps a connected empty-looking inventory pending until its first page settles", () => {
+    expect(sessionAvailabilityView({ kind: "connected", deviceName: "Studio Mac" }, 0, "loading")?.title).toBe("Loading sessions")
+    expect(sessionAvailabilityView({ kind: "error", message: "Session list failed" }, 0, "error")?.title).toBe("Session list unavailable")
+  })
   test("keeps connection progress distinct from an empty connected backend", () => {
     expect(sessionAvailabilityView({ kind: "connecting" }, 0)).toEqual({
       title: "Loading sessions",

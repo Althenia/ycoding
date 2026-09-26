@@ -14,11 +14,17 @@ const created = {
   time: { created: 3, updated: 3 },
 }
 
-async function setup(handler?: RelayRequestHandler) {
+async function setup(handler?: RelayRequestHandler, sessionGroups?: () => readonly typeof workspace[]) {
   const relay = await startRelayDouble({
-    handler: (request) => handler?.(request) ?? (request.operation === "workspace.list"
-      ? { ok: true, value: { data: [workspace, other] } }
-      : request.operation === "session.create" ? { ok: true, value: { data: created } } : "default"),
+    handler: (request) => {
+      if (request.operation === "workspace.list" && request.input?.sessionsOnly === true)
+        return sessionGroups ? { ok: true, value: { data: sessionGroups() } } : "default"
+      const result = handler?.(request)
+      if (result !== undefined && result !== "default") return result
+      if (request.operation === "workspace.list") return { ok: true, value: { data: [workspace, other] } }
+      if (request.operation === "session.create") return { ok: true, value: { data: created } }
+      return "default"
+    },
   })
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
@@ -54,7 +60,12 @@ describe("remote workspace session creation", () => {
   })
 
   test("creates in a listed workspace without selecting or sending a prompt until the caller asks", async () => {
-    const h = await setup()
+    let createdVisible = false
+    const h = await setup((request) => request.operation === "session.list" && request.input?.workspace === workspace.id
+      ? { ok: true, value: { data: createdVisible ? [created] : [] } } : "default", () => [
+        { id: "wsp_prj_default__work", projectID: "prj_default", directory: "/work", name: "Current" },
+        ...(createdVisible ? [workspace] : []),
+      ])
     try {
       await h.store.selectSession("ses_a")
       await h.store.loadWorkspaces()
@@ -62,9 +73,16 @@ describe("remote workspace session creation", () => {
       expect(h.store.state().workspaceStatus).toBe("ready")
       expect(await h.store.createSession(workspace.id)).toBe(created.id)
       expect(h.relay.requests.find((request) => request.operation === "session.create")?.input).toEqual({ id: created.id, workspace: workspace.id })
-      expect(h.store.state().sessions.find((session) => session.id === created.id)?.directory).toBe(workspace.directory)
+      expect(h.store.state().sessions.some((session) => session.id === created.id)).toBe(false)
       expect(h.store.state().activeSessionID).toBe("ses_a")
       expect(h.relay.requests.some((request) => request.operation === "session.prompt")).toBe(false)
+      createdVisible = true
+      h.relay.pushSessions([])
+      await waitFor(() => h.store.state().sessionGroups.some((group) => group.id === workspace.id))
+      h.store.selectWorkspace(workspace.id)
+      await waitFor(() => h.store.state().sessions.some((session) => session.id === created.id))
+      expect(h.store.state().sessions[0]?.directory).toBe(workspace.directory)
+      expect(h.store.state().activeSessionID).toBe("ses_a")
       await h.store.selectSession(created.id)
       await h.store.sendPrompt({ text: "Continue on the selected repository", delivery: "steer" })
       expect(h.relay.requests.find((request) => request.operation === "session.prompt")?.sessionID).toBe(created.id)

@@ -114,7 +114,6 @@ export class RemoteAgent {
     this.authRetryWindowMs = options.authRetryWindowMs ?? defaults.authRetryWindowMs
     this.registry = createSessionRegistry({
       local: options.local,
-      now: this.now,
       onChange: () => void this.advertise(),
     })
     this.subscriptions = createSubscriptions()
@@ -154,7 +153,6 @@ export class RemoteAgent {
   async republish(): Promise<void> {
     if (this.state !== "live") return
     await this.registry.refresh()
-    await this.advertise()
   }
 
   private async openConnection() {
@@ -293,7 +291,7 @@ export class RemoteAgent {
     const connection = this.connection
     if (connection === undefined || this.state !== "live") return
     if (isSessionInventoryEvent(event)) {
-      void this.registry.refresh().then(() => this.advertise()).catch((error) =>
+      void this.registry.refresh().catch((error) =>
         this.diagnostic(`could not refresh remote Sessions: ${describe(error)}`),
       )
     }

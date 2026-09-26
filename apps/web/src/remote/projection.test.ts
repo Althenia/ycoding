@@ -11,9 +11,11 @@ import {
   readFileChangeEvent,
   readFileChangeList,
   readMessageList,
+  readSnapshot,
   readForms,
   readShellOutputPage,
   readSnapshotParts,
+  sealedPartKeys,
   shellOutputFetchFor,
   shellOutputFor,
   shellOutputNotice,
@@ -28,6 +30,15 @@ const event = (type: string, data: Record<string, unknown>) => ({ id: `evt_${typ
 
 function apply(view: SessionView, type: string, data: Record<string, unknown>, now = 1) {
   return applySessionEvent(view, event(type, data), now)
+}
+
+function completedCompaction(id: string, jobID: string, messageID: string, seq: number, created: number) {
+  return {
+    id, type: "compaction", jobID, trigger: "manual", status: "completed", revision: 1,
+    boundary: { messageID, seq },
+    metrics: { excludedMessages: seq, excludedParts: 0, inputTokens: 100, retainedTokens: 40 },
+    time: { created },
+  }
 }
 
 describe("assistant streaming", () => {
@@ -226,6 +237,73 @@ describe("unknown and ignored events", () => {
 })
 
 describe("snapshot readers", () => {
+  test("keeps only the latest compaction lifecycle without discarding uncompleted history", () => {
+    const messages = [
+      { id: "msg_before", type: "user", text: "keep", time: { created: 1 } },
+      { id: "msg_failed", type: "compaction", jobID: "cmp_failed", trigger: "manual", status: "failed", code: "provider_failed", error: { type: "compaction.failed", message: "Failed" }, time: { created: 2 } },
+      { id: "msg_pending", type: "compaction", jobID: "cmp_pending", trigger: "manual", status: "pending", time: { created: 3 } },
+    ]
+    expect(readSnapshot({ session: {}, messages })?.messages.map((message) => message.id)).toEqual(["msg_before", "msg_pending"])
+    const initial = { ...createSessionView("ses_a"), messages: readMessageList({ data: messages.slice(0, 2) }) }
+    const admitted = apply(initial, "session.compaction.admitted", { sessionID: "ses_a", jobID: "cmp_pending" })
+    expect(admitted.messages.map((message) => message.id)).toEqual(["msg_before", "cmp_pending"])
+    const failed = apply(admitted, "session.compaction.failed", { sessionID: "ses_a", jobID: "cmp_pending", code: "provider_failed", error: { type: "compaction.failed", message: "Retry failed" } })
+    expect(failed.messages).toMatchObject([{ id: "msg_before" }, { id: "cmp_pending", status: "failed", error: "Retry failed" }])
+  })
+
+  test("keeps only post-boundary content and the latest completed compaction on reconnect", () => {
+    const messages = [
+      { id: "msg_old", type: "assistant", content: [{ type: "text", text: "old" }], time: { created: 1 } },
+      { id: "msg_boundary", type: "user", text: "covered", time: { created: 2 } },
+      completedCompaction("msg_compaction", "cmp_1", "msg_boundary", 2, 3),
+      { id: "msg_new", type: "assistant", content: [{ type: "text", text: "new" }], time: { created: 4 } },
+      completedCompaction("msg_compaction_2", "cmp_2", "msg_new", 4, 5),
+      { id: "msg_after", type: "user", text: "after", time: { created: 6, consumed: 7 } },
+    ]
+    expect(readSnapshot({ session: {}, messages, watermark: { seq: 8 } })?.messages.map((message) => message.id)).toEqual([
+      "msg_compaction_2", "msg_after",
+    ])
+    expect(readSnapshot({ session: {}, messages, watermark: { seq: 8 } })?.messages.at(-1)).toMatchObject({ state: "consumed" })
+  })
+
+  test("retains history when completion has no resident boundary or compaction is pending or failed", () => {
+    const base = [
+      { id: "msg_before", type: "user", text: "keep", time: { created: 1 } },
+      { id: "msg_running", type: "compaction", jobID: "cmp_1", trigger: "manual", status: "running", time: { created: 2 } },
+      { id: "msg_failed", type: "compaction", jobID: "cmp_2", trigger: "manual", status: "failed", code: "provider_failed", error: { type: "compaction.failed", message: "Failed" }, time: { created: 3 } },
+    ]
+    expect(readSnapshot({ session: {}, messages: base })?.messages.map((message) => message.id)).toContain("msg_before")
+    expect(readSnapshot({ session: {}, messages: [...base, completedCompaction("msg_bad", "cmp_3", "msg_missing", 4, 4)] })?.messages.map((message) => message.id)).toContain("msg_before")
+    expect(readSnapshot({ session: {}, messages: [completedCompaction("msg_bad", "cmp_3", "msg_before", 4, 0), ...base] })?.messages.map((message) => message.id)).toContain("msg_before")
+    const live = { ...createSessionView("ses_a"), messages: readMessageList({ data: base }) }
+    expect(apply(live, "session.compaction.ended", { jobID: "cmp_missing", boundary: { messageID: "msg_absent", seq: 4 } }).messages.map((message) => message.id)).toContain("msg_before")
+  })
+
+  test("bounds only successfully covered old content at a large synthetic history", () => {
+    const messages = Array.from({ length: 3_000 }, (_, index) => ({
+      id: `msg_${index}`, type: "assistant", content: [{ type: "reasoning", text: "x".repeat(600) }, { type: "text", text: "y".repeat(600) }], time: { created: index },
+    }))
+    const compacted = [...messages.slice(0, 2_700), completedCompaction("msg_compaction", "cmp_1", "msg_2699", 2_700, 2_700), ...messages.slice(2_700)]
+    const snapshot = readSnapshot({ session: {}, messages: compacted })
+    const retained = snapshot?.messages ?? []
+    expect(retained).toHaveLength(301)
+    expect(retained.filter((message) => message.kind === "assistant").flatMap((message) => message.kind === "assistant" ? message.parts : [])).toHaveLength(600)
+    expect(snapshot?.coveredAssistantIDs).toHaveLength(2_700)
+    expect(snapshot?.coveredAssistantIDs.at(0)).toBe("msg_0")
+    expect(snapshot?.coveredAssistantIDs.at(-1)).toBe("msg_2699")
+    expect(sealedPartKeys(retained)).toHaveLength(600)
+    expect(retained.at(-1)?.id).toBe("msg_2999")
+    const uncompleted = readSnapshot({ session: {}, messages })
+    expect(uncompleted?.messages).toHaveLength(3_000)
+    expect(uncompleted?.coveredAssistantIDs).toHaveLength(0)
+  })
+
+  test("consumed is the only snapshot read receipt; promoted and pending are not read", () => {
+    expect(readMessageList({ data: [
+      { id: "msg_sent", type: "user", text: "sent", time: { created: 1 } },
+      { id: "msg_read", type: "user", text: "read", time: { created: 2, consumed: 3 } },
+    ] }).map((message) => message.kind === "user" ? message.state : undefined)).toEqual(["promoted", "consumed"])
+  })
   test("reads projected messages and rejects unknown shapes", () => {
     const messages = readMessageList({
       data: [

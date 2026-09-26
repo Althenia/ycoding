@@ -130,16 +130,21 @@ describe("remote responsive state behavior", () => {
 
   test("keeps the desktop rail compact and project-oriented", async () => {
     const page = await scenario("conversation-workspace", 1440, "auth_guard.go")
-    const rows = await page.evaluate<readonly { readonly height: number; readonly text: string }[]>(`[...document.querySelectorAll('.session-row')].map(row=>({height:row.getBoundingClientRect().height,text:row.textContent.replace(/\\s+/g,' ').trim()}))`)
-    expect(rows).toHaveLength(3)
-    expect(rows.every((row) => row.height <= 96)).toBe(true)
-    expect(rows[0]?.text).toContain("auth")
-    expect(rows[0]?.text).not.toContain("openai/gpt-6")
+    for (const [project, title] of [["auth", "Token expiry refactor"], ["indexer", "Query batch indexer"], ["mesh", "Mesh peer sync daemon"]] as const) {
+      await selectSessionWorkspace(page, project, title, ".workspace__rail", ".session-row")
+      const rows = await page.evaluate<readonly { readonly height: number; readonly text: string }[]>(`[...document.querySelectorAll('.workspace__rail .session-row')].map(row=>({height:row.getBoundingClientRect().height,text:row.textContent.replace(/\\s+/g,' ').trim()}))`)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.height).toBeLessThanOrEqual(96)
+      expect(rows[0]?.text).toContain(project)
+      expect(rows[0]?.text).toContain(title)
+      expect(rows[0]?.text).not.toContain("openai/gpt-6")
+    }
     await page.close()
   }, 30_000)
 
   test("uses the compact Sessions composition without a redundant page heading", async () => {
-    const page = await scenario("session-list", 768, "Postgres Partition Pruning Worker")
+    const page = await scenario("session-list", 768, "Async Auth Token Revocation Migration")
+    await selectSessionWorkspace(page, "db-pruner", "Postgres Partition Pruning Worker")
     const state = await page.evaluate<{ readonly headingVisible: boolean; readonly columns: number }>(`(() => { const heading=document.querySelector('.sessions-page .page-head'); const grid=document.querySelector('.sessions-table'); return {headingVisible:heading instanceof HTMLElement&&getComputedStyle(heading).display!=='none',columns:grid instanceof HTMLElement?getComputedStyle(grid).gridTemplateColumns.split(' ').length:0} })()`)
     expect(state.headingVisible).toBe(false)
     expect(state.columns).toBe(2)
@@ -147,7 +152,8 @@ describe("remote responsive state behavior", () => {
   }, 30_000)
 
   test("uses available desktop width for the session list without losing rows or targets", async () => {
-    const page = await scenario("session-list", 1440, "Postgres Partition Pruning Worker")
+    const page = await scenario("session-list", 1440, "Async Auth Token Revocation Migration")
+    await selectSessionWorkspace(page, "db-pruner", "Postgres Partition Pruning Worker")
     for (const width of [1280, 1440, 2048] as const) {
       await page.setViewport(width, 900)
       const state = await page.evaluate<{
@@ -176,7 +182,7 @@ describe("remote responsive state behavior", () => {
       })()`)
       expect(state.width).toBeGreaterThanOrEqual(width - 128)
       expect(Math.abs(state.center - state.viewport / 2)).toBeLessThanOrEqual(2)
-      expect(state.rows).toBe(4)
+      expect(state.rows).toBe(1)
       expect(state.columns).toBe(4)
       expect(state.minTargetHeight).toBeGreaterThanOrEqual(44)
       expect(state.overflowing).toBe(false)
@@ -188,7 +194,16 @@ describe("remote responsive state behavior", () => {
     for (const width of [390, 768] as const) {
       for (const theme of ["light", "dark"] as const) {
         const page = await scenario("session-list", width, "Async Auth Token Revocation Migration", theme)
-        const targets = await page.evaluate<readonly { readonly height: number; readonly width: number }[]>(`[...document.querySelectorAll('.sessions-table__select')].map(button => ({ height: button.getBoundingClientRect().height, width: button.getBoundingClientRect().width }))`)
+        const targets: { readonly height: number; readonly width: number }[] = []
+        for (const [directory, title] of [
+          ["auth-gate", "Async Auth Token Revocation Migration"],
+          ["telemetry-daemon", "Telemetry Event Buffer Flush Daemon"],
+          ["cache-redis", "Redis Cache Cluster Rebalancing Spec"],
+          ["db-pruner", "Postgres Partition Pruning Worker"],
+        ] as const) {
+          await selectSessionWorkspace(page, directory, title)
+          targets.push(...await page.evaluate<readonly { readonly height: number; readonly width: number }[]>(`[...document.querySelectorAll('.sessions-table__select')].map(button => ({ height: button.getBoundingClientRect().height, width: button.getBoundingClientRect().width }))`))
+        }
         expect(targets).toHaveLength(4)
         expect(targets.every((target) => target.height >= 44 && target.width >= 44)).toBe(true)
         expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
@@ -232,9 +247,10 @@ describe("remote responsive state behavior", () => {
         expect(state.title).toBe("Async Auth Token Revocation Migration")
         expect(state.project).toBe("auth-gate")
         expect(state.updated).not.toBe("")
-        expect(state.targets).toHaveLength(4)
+        expect(state.targets).toHaveLength(1)
         expect(state.targets.every((height) => height >= 44)).toBe(true)
-        expect(state.rowCount).toBe(4)
+        expect(state.rowCount).toBe(1)
+        expect(await page.evaluate<number>(`document.querySelectorAll('.sessions-page select option').length`)).toBe(4)
         expect(state.overflowing).toBe(false)
         await page.close()
       }
@@ -690,6 +706,21 @@ describe("remote responsive state behavior", () => {
 
 async function scenario(scenarioName: string, width: number, expected: string, theme?: "dark" | "light") {
   return fixture(`scenario=${scenarioName}-${width}`, width, expected, theme)
+}
+
+async function selectSessionWorkspace(page: Awaited<ReturnType<NonNullable<typeof browser>["openPage"]>>, directory: string, expected: string, scope = ".sessions-page", row = ".sessions-table__row") {
+  await page.evaluate(`(() => {
+    const select = document.querySelector(${JSON.stringify(`${scope} select`)});
+    const option = [...select.options].find(item => item.textContent?.includes(${JSON.stringify(directory)}));
+    if (!option) throw new Error('Workspace option missing');
+    select.value = option.value;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`)
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(`${scope} ${row}`)})?.textContent?.includes(${JSON.stringify(expected)}) ?? false`)) return
+    await Bun.sleep(50)
+  }
+  throw new Error(`Session workspace ${directory} did not settle`)
 }
 
 async function fixture(query: string, width: number, expected: string, theme?: "dark" | "light") {

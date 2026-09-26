@@ -316,13 +316,13 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
     ...(viewport === 1440 || viewport === 390 ? { openControl: "device" as const } : {}),
     expectedText: viewport === 390
       ? ["Session bound to Studio Mac in auth.", "Verify non-blocking lock on expiration.", "Select Active Machine", "Studio Mac", "Dev Linux"]
-      : ["Token expiry refactor", "Query batch indexer", "Mesh peer sync daemon", "auth", viewport === 768 ? "Run test suite against auth services." : "auth_guard.go"],
+      : ["Token expiry refactor", "Workspace / repository", "auth", viewport === 768 ? "Run test suite against auth services." : "auth_guard.go"],
   }
   if (name === "session-list") return {
     ...common,
     view: "sessions",
     sessions: sessionListSessions,
-    expectedText: ["Async Auth Token Revocation Migration", "auth-gate", "Telemetry Event Buffer Flush Daemon", "telemetry-daemon", "Redis Cache Cluster Rebalancing Spec", "cache-redis", "Postgres Partition Pruning Worker", "db-pruner"],
+    expectedText: ["Async Auth Token Revocation Migration", "auth-gate", "Workspace / repository"],
   }
   if (name === "conversation-tool-terminal-output") return {
     ...common,

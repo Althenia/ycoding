@@ -71,7 +71,6 @@ async function harness(options: {
   const { local, calls } = fakeLocal(results)
   const registry = createSessionRegistry({
     local,
-    staleMs: 0,
   })
   await registry.refresh()
   // Registry verification is setup, not part of the operation under test.
@@ -134,6 +133,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 describe("backend Session authorization", () => {
+  test("notifies changed metadata when a scoped verification sees it before periodic refresh", async () => {
+    let current = sessionInfo("ses_1", { updated: 1, title: "Initial" })
+    let invalidations = 0
+    const { local } = fakeLocal({ listPage: async () => ({ data: [current] }), getSession: async () => current })
+    const registry = createSessionRegistry({ local, onChange: () => invalidations++ })
+    await registry.refresh()
+    invalidations = 0
+    current = { ...current, title: "Renamed" }
+    await registry.verify("ses_1")
+    expect(invalidations).toBe(1)
+    await registry.refresh()
+    expect(invalidations).toBe(1)
+    current = { ...current, location: { directory: "/work/moved" }, time: { ...current.time, pinned: 2 } }
+    await registry.verify("ses_1")
+    expect(invalidations).toBe(2)
+  })
+
   test("refuses a session absent from the authoritative backend inventory", async () => {
     const { local, registry, subscriptions, calls } = await harness({})
     const outcome = await executeRemoteOperation({
@@ -207,7 +223,7 @@ describe("workspace inventory and Session creation", () => {
         },
       }
       const { local, calls } = fakeLocal(results)
-      const registry = createSessionRegistry({ local, staleMs: 0 })
+      const registry = createSessionRegistry({ local })
       await registry.refresh()
       calls.length = 0
       const subscriptions = createSubscriptions()
@@ -473,6 +489,7 @@ describe("operation mapping", () => {
     })
     expect(valueOf(outcome)).toEqual({ data: { ses_1: { type: "running" } } })
     expect(calls.filter((call) => call.method === "activeSessions")).toHaveLength(1)
+    expect(calls.filter((call) => call.method === "listPage")).toEqual([])
 
     const rejected = await executeRemoteOperation({
       request: request("session.active", { sessionID: "ses_1" }),
@@ -493,7 +510,6 @@ describe("operation mapping", () => {
     const { local, calls } = fakeLocal(results)
     const registry = createSessionRegistry({
       local,
-      staleMs: 0,
     })
     await registry.refresh()
     calls.length = 0
@@ -896,6 +912,56 @@ describe("local endpoint scope", () => {
 })
 
 describe("session list paging", () => {
+  test("distinguishes recorded workspace identities in the same directory", async () => {
+    const first = { ...sessionInfo("ses_one", { updated: 1, directory: "/gone" }), location: { directory: "/gone", workspaceID: "one" } }
+    const second = { ...sessionInfo("ses_two", { updated: 2, directory: "/gone" }), location: { directory: "/gone", workspaceID: "two" } }
+    const test = await harness({ sessions: [first, second], results: { projectList: [] } })
+    const response = valueOf(await executeRemoteOperation({ request: request("workspace.list", { sessionsOnly: true }),
+      local: test.local, sessions: test.registry, subscriptions: test.subscriptions })) as { data: { id: string; workspaceID?: string }[] }
+    expect(response.data.map((group) => group.workspaceID)).toEqual(["one", "two"])
+    expect(response.data[0]?.id).not.toBe(response.data[1]?.id)
+    expect(listPage([first, second], parseListQuery({ workspace: response.data[0]?.id, limit: 10 })).data.map((session) => session.id)).toEqual(["ses_one"])
+  })
+
+  test("pages a selected recorded workspace with summary search, status, and stable pinned order", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "ycoding-inventory-"))
+    try {
+      const first = { ...sessionInfo("ses_first", { updated: 1, title: "First", directory }), agent: "builder",
+        model: { providerID: "test", id: "model", variant: "high" }, time: { created: 1, updated: 1, pinned: 2 } }
+      const second = { ...sessionInfo("ses_second", { updated: 2, title: "Second", directory }), time: { created: 2, updated: 2, pinned: 1 } }
+      const third = sessionInfo("ses_third", { updated: 3, title: "Third", directory })
+      const elsewhere = sessionInfo("ses_elsewhere", { updated: 4, title: "Elsewhere", directory: "/other" })
+      const test = await harness({ sessions: [first, second, third, elsewhere], results: { projectList: [] } })
+      const groups = valueOf(await executeRemoteOperation({
+        request: request("workspace.list", { sessionsOnly: true }), local: test.local, sessions: test.registry, subscriptions: test.subscriptions,
+      })) as { data: { id: string; directory: string }[] }
+      const workspace = groups.data.find((group) => group.directory === directory)
+      expect(workspace).toBeDefined()
+      expect(test.calls.filter((call) => call.method === "listPage")).toEqual([])
+      const wirePage = valueOf(await executeRemoteOperation({ request: request("session.list", { workspace: workspace?.id, order: "pinned", limit: 1 }),
+        local: test.local, sessions: test.registry, subscriptions: test.subscriptions })) as { data: SessionInfo[] }
+      expect(wirePage.data.map((session) => session.id)).toEqual(["ses_second"])
+      expect(test.calls.filter((call) => call.method === "listPage")).toEqual([])
+      const page = listPage([first, second, third, elsewhere], parseListQuery({ workspace: workspace?.id, order: "pinned", limit: 1 }))
+      expect(page.data.map((session) => session.id)).toEqual(["ses_second"])
+      const following = listPage([first, second, third, elsewhere], parseListQuery({ workspace: workspace?.id, order: "pinned", limit: 2, cursor: page.cursor.next }))
+      expect(following.data.map((session) => session.id)).toEqual(["ses_first", "ses_third"])
+      const backwards = listPage([first, second, third, elsewhere], parseListQuery({ workspace: workspace?.id, order: "pinned", limit: 1, cursor: following.cursor.previous }))
+      expect(backwards.data.map((session) => session.id)).toEqual(["ses_second"])
+      const searched = listPage([first, second, third], parseListQuery({ workspace: workspace?.id, search: "builder", searchFields: "summary", limit: 10 }))
+      expect(searched.data.map((session) => session.id)).toEqual(["ses_first"])
+      expect(listPage([first, second], parseListQuery({ workspace: workspace?.id, search: "#high", searchFields: "summary", limit: 10 })).data.map((session) => session.id)).toEqual(["ses_first"])
+      expect(listPage([first, second], parseListQuery({ search: "#high", limit: 10 })).data).toEqual([])
+      const noModel = { ...second, model: undefined }
+      expect(listPage([noModel], parseListQuery({ search: "/", searchFields: "summary", limit: 10 })).data).toEqual([])
+      expect(listPage([first, second, third], parseListQuery({ search: "builder", limit: 10 })).data).toEqual([])
+      const running = listPage([first, second, third], parseListQuery({ workspace: workspace?.id, status: "running", limit: 10 }), new Set(["ses_third"]))
+      expect(running.data.map((session) => session.id)).toEqual(["ses_third"])
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   test("orders, searches, limits, and pages the advertised set without leaking unlisted sessions", () => {
     const sessions = [
       sessionInfo("ses_a", { updated: 1, title: "Alpha" }),

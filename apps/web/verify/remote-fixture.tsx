@@ -98,6 +98,7 @@ const defaultSessions = [
   { id: "ses_child", title: "Child: fix flaky suite", parentID: sessionID, time: { created: ago(30), updated: ago(4) } },
 ]
 const sessions = remoteScenarioData?.sessions ?? defaultSessions
+const inventoryCount = Math.min(15_000, Math.max(0, Number(accountParams.get("inventoryCount") ?? 0) || 0))
 
 const longOutput = Array.from({ length: 60 }, (_, index) => `line ${index + 1}: bun test test/remote-sync.test.ts --filter case-${index}`).join("\n")
 
@@ -375,6 +376,7 @@ type Fixture = {
   readonly stream: () => void
   readonly formRequests: () => readonly { readonly operation: string; readonly input: Readonly<Record<string, unknown>> | undefined }[]
   readonly mutationRequests: () => readonly { readonly operation: string; readonly input: Readonly<Record<string, unknown>> | undefined }[]
+  readonly inventoryRequests: () => number
 }
 
 function createFixtureStore(): Fixture {
@@ -384,6 +386,7 @@ function createFixtureStore(): Fixture {
   let liveReads = 0
   const formRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
   const mutationRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
+  let inventoryRequests = 0
   const workspaces = [
     { id: "workspace_fixture", projectID: "prj_remote", directory: "/workspace/ycoding", name: "YCoding" },
     { id: "workspace_other", projectID: "prj_other", directory: "/workspace/other", name: "Other repository" },
@@ -395,6 +398,14 @@ function createFixtureStore(): Fixture {
     location: { directory: string }
     time: { created: number; updated: number }
   }>()
+  const groupOf = (value: unknown) => {
+    const record = value as { readonly projectID?: string; readonly location?: { readonly directory?: string } }
+    const projectID = record.projectID ?? "prj_remote"
+    const directory = record.location?.directory ?? "/workspace/ycoding"
+    return { id: projectID === "prj_remote" && directory === "/workspace/ycoding"
+      ? "workspace_fixture" : `wsp_${projectID}_${directory.replaceAll("/", "_")}`,
+      projectID, directory, name: directory.split("/").at(-1) ?? projectID }
+  }
   /** Requests this synthetic agent has already answered; a later list read omits them. */
   const answered = new Set<string>()
   const unreplied = <T extends { readonly id: string }>(requests: readonly T[]) => requests.filter((request) => !answered.has(request.id))
@@ -443,11 +454,17 @@ function createFixtureStore(): Fixture {
     input?: Readonly<Record<string, unknown>>,
     targetSessionID = sessionID,
   ): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
+    if (connectionMode === "offline") return { status: "failed", error: { code: "agent_unavailable", message: "No local agent is connected" } }
     if (operation === "session.prompt" || operation === "session.autonomy.set" || operation === "session.guardrail.reply" || operation === "session.create") {
       mutationRequests.push({ operation, input })
     }
     if (operation === "workspace.list") {
-      if (accountParams.get("workspaces") === "error") return { status: "failed", error: { code: "internal_error", message: "Workspace inventory unavailable" } }
+      if (accountParams.get("workspaces") === "error" && input?.sessionsOnly !== true) return { status: "failed", error: { code: "internal_error", message: "Workspace inventory unavailable" } }
+      if (input?.sessionsOnly === true && inventoryCount > 0) return { status: "ok", value: { data: workspaces } }
+      if (input?.sessionsOnly === true) return { status: "ok", value: { data: [...new Map([...(emptyBackend ? [] : sessions), ...createdSessions.values()].map((session) => {
+        const group = groupOf(session)
+        return [group.id, group] as const
+      })).values()] } }
       return { status: "ok", value: { data: accountParams.get("workspaces") === "empty" ? [] : workspaces } }
     }
     if (operation === "session.create") {
@@ -457,6 +474,7 @@ function createFixtureStore(): Fixture {
       const existing = createdSessions.get(input.id)
       const created = existing ?? { id: input.id, title: "New session", projectID: workspace.projectID, location: { directory: workspace.directory }, time: { created: Date.now(), updated: Date.now() } }
       createdSessions.set(created.id, created)
+      if (existing === undefined) setTimeout(() => handlers?.onSessions?.(), 0)
       if (accountParams.get("creation") === "unknown") return { status: "unknown", error: { code: "outcome_unknown", message: "Connection closed before creation settled" } }
       const result: RemoteRequestOutcome = { status: "ok", value: { data: created } }
       const delay = Number(accountParams.get("creationDelay") ?? 0)
@@ -466,10 +484,29 @@ function createFixtureStore(): Fixture {
       const info = createdSessions.get(targetSessionID) ?? sessions.find((item) => item.id === targetSessionID)
       return info ? { status: "ok", value: { data: info } } : { status: "failed", error: { code: "session_not_allowed", message: "Session not found" } }
     }
-    if (connectionMode === "offline" && (operation === "session.list" || operation === "session.active")) {
-      return { status: "failed", error: { code: "agent_unavailable", message: "No local agent is connected" } }
+    if (operation === "session.list") {
+      inventoryRequests += 1
+      if (inventoryCount > 0) {
+        const offset = Number(input?.cursor ?? 0)
+        const limit = Math.min(50, Number(input?.limit ?? 50))
+        const odd = input?.workspace === "workspace_other"
+        const sought = typeof input?.search === "string" ? Number(input.search.match(/\d+$/)?.[0]) : NaN
+        const ids = input?.status === "running" ? [14_000] : typeof input?.search === "string"
+          ? Number.isInteger(sought) && sought >= 0 && sought < inventoryCount && (input.status !== "idle" || sought !== 14_000) ? [sought] : []
+          : undefined
+        const count = ids === undefined ? odd ? Math.floor(inventoryCount / 2) : Math.ceil(inventoryCount / 2)
+          : ids.filter((id) => id % 2 === Number(odd)).length
+        const data = Array.from({ length: Math.min(limit, Math.max(0, count - offset)) }, (_, index) => {
+          const number = ids === undefined ? (offset + index) * 2 + Number(odd) : ids[offset + index]!
+          return { id: `ses_inventory_${number}`, title: `Inventory Session ${number}`, projectID: odd ? "prj_other" : "prj_remote",
+            location: { directory: odd ? "/workspace/other" : "/workspace/ycoding" }, time: { created: number, updated: inventoryCount - number } }
+        })
+        return { status: "ok", value: { data, cursor: { ...(offset > 0 ? { previous: String(Math.max(0, offset - limit)) } : {}),
+          ...(offset + data.length < count ? { next: String(offset + data.length) } : {}) } } }
+      }
+      return { status: "ok", value: { data: [...createdSessions.values(), ...(emptyBackend ? [] : sessions)]
+        .filter((session) => input?.workspace === undefined || groupOf(session).id === input.workspace) } }
     }
-    if (operation === "session.list") return { status: "ok", value: { data: [...createdSessions.values(), ...(emptyBackend ? [] : sessions)] } }
     if (operation === "session.active") return { status: "ok", value: { data: { [sessionID]: { type: "running" } } } }
     if (operation === "session.snapshot") {
       return {
@@ -605,10 +642,13 @@ function createFixtureStore(): Fixture {
     }
   }
 
-  return { store, drop, stream, formRequests: () => formRequests, mutationRequests: () => mutationRequests }
+  return { store, drop, stream, formRequests: () => formRequests, mutationRequests: () => mutationRequests, inventoryRequests: () => inventoryRequests }
 }
 
 const fixture = createFixtureStore()
+Object.assign(window, { remoteInventoryReport: () => ({ requests: fixture.inventoryRequests(), rows: fixture.store.state().sessions.length,
+  groups: fixture.store.state().sessionGroups.length, next: fixture.store.state().sessionHasNext,
+  first: fixture.store.state().sessions[0]?.id, last: fixture.store.state().sessions.at(-1)?.id }) })
 
 /** Picks the device and session a user would pick, so the fixture opens on a live workspace. */
 async function openFixtureWorkspace(store: RemoteStore) {

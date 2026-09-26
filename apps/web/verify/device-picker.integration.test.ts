@@ -46,13 +46,13 @@ async function openPicker(width: number, machineName = "Studio Mac") {
 }
 
 describe("machine picker", () => {
-  test("shows long machine names in a compact picker without viewport overflow", async () => {
+  test("keeps long machine names on one line with ellipsis without viewport overflow", async () => {
     const longName = "build-agent-west-coast-production-07.example.internal"
-    for (const width of [1440, 390, 320]) {
+    for (const width of [1440, 1280, 1024, 768, 390, 320]) {
       const page = await openPicker(width, longName)
       try {
         await page.evaluate(`Promise.all([...document.querySelector('.custom-select__dialog .overlay__surface')?.getAnimations() ?? []].map(animation => animation.finished))`)
-        const result = await page.evaluate<{ readonly text: string; readonly lines: number; readonly fullyVisible: boolean; readonly whiteSpace: string; readonly fontSize: string; readonly triggerFontSize: string; readonly optionText: string; readonly optionLines: number; readonly optionVisible: boolean; readonly surfaceLeft: number; readonly surfaceRight: number; readonly documentOverflow: boolean }>(`(() => {
+        const result = await page.evaluate<{ readonly text: string; readonly lines: number; readonly truncated: boolean; readonly whiteSpace: string; readonly textOverflow: string; readonly fontSize: string; readonly triggerFontSize: string; readonly optionText: string; readonly optionLines: number; readonly optionTextOverflow: string; readonly optionWhiteSpace: string; readonly optionTruncated: boolean; readonly surfaceLeft: number; readonly surfaceRight: number; readonly documentOverflow: boolean }>(`(() => {
           const value = document.querySelector('.custom-select__value');
           const option = document.querySelector('[role="option"] .custom-select__option-body > span');
           const surface = document.querySelector('.custom-select__surface, .custom-select__dialog .overlay__surface');
@@ -60,22 +60,48 @@ describe("machine picker", () => {
           if (!(value instanceof HTMLElement) || !(option instanceof HTMLElement) || bounds === undefined) throw new Error('Machine picker did not render');
           const textRects = element => { const range = document.createRange(); range.selectNodeContents(element); return [...range.getClientRects()]; };
           const lineCount = element => new Set(textRects(element).map(rect => rect.top + ':' + rect.bottom)).size;
-          const fullyVisible = element => { const bounds = element.getBoundingClientRect(); return textRects(element).every(rect => rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1 && rect.top >= bounds.top - 1 && rect.bottom <= bounds.bottom + 1); };
           const selectedStyle = getComputedStyle(value);
           const optionStyle = getComputedStyle(option);
-          return { text: value.textContent, lines: lineCount(value), fullyVisible: fullyVisible(value), whiteSpace: selectedStyle.whiteSpace, fontSize: optionStyle.fontSize, triggerFontSize: selectedStyle.fontSize, optionText: option.textContent, optionLines: lineCount(option), optionVisible: fullyVisible(option), surfaceLeft: bounds.left, surfaceRight: bounds.right, documentOverflow: document.documentElement.scrollWidth > innerWidth };
+          return { text: value.textContent, lines: lineCount(value), truncated: value.scrollWidth > value.clientWidth && selectedStyle.overflowX === 'hidden', whiteSpace: selectedStyle.whiteSpace, textOverflow: selectedStyle.textOverflow, fontSize: optionStyle.fontSize, triggerFontSize: selectedStyle.fontSize, optionText: option.textContent, optionLines: lineCount(option), optionTextOverflow: optionStyle.textOverflow, optionWhiteSpace: optionStyle.whiteSpace, optionTruncated: option.scrollWidth > option.clientWidth && optionStyle.overflowX === 'hidden', surfaceLeft: bounds.left, surfaceRight: bounds.right, documentOverflow: document.documentElement.scrollWidth > innerWidth };
         })()`)
         expect(result.text).toBe(longName)
-        expect(result.lines).toBeGreaterThan(1)
-        expect(result.fullyVisible).toBe(true)
-        expect(result.whiteSpace).toBe("normal")
+        expect(result.whiteSpace).toBe("nowrap")
+        expect(result.textOverflow).toBe("ellipsis")
+        expect(result.lines).toBe(1)
+        expect(result.truncated).toBe(true)
         expect(result.fontSize).toBe(result.triggerFontSize)
         expect(result.optionText).toBe(longName)
-        expect(result.optionLines).toBeGreaterThan(1)
-        expect(result.optionVisible).toBe(true)
+        expect(result.optionWhiteSpace).toBe("nowrap")
+        expect(result.optionTextOverflow).toBe("ellipsis")
+        expect(result.optionLines).toBe(1)
+        expect(result.optionTruncated).toBe(true)
         expect(result.surfaceLeft).toBeGreaterThanOrEqual(0)
         expect(result.surfaceRight).toBeLessThanOrEqual(width)
         expect(result.documentOverflow).toBe(false)
+      } finally {
+        await page.close()
+      }
+    }
+  })
+
+  test("widens the desktop selector and dropdown to fit a typical machine hostname", async () => {
+    for (const width of [1280, 1440]) {
+      const page = await openPicker(width, "Developer-MacBook-Pro.local")
+      try {
+        const result = await page.evaluate<{ readonly valueFits: boolean; readonly optionFits: boolean; readonly surfaceWidth: number; readonly triggerWidth: number; readonly headerHeight: number; readonly expectedHeaderHeight: number }>(`(() => {
+          const value = document.querySelector('.custom-select__value');
+          const option = document.querySelector('[role="option"] .custom-select__option-body > span');
+          const trigger = document.querySelector('[aria-label="Machine"]');
+          const surface = document.querySelector('.custom-select__surface');
+          const header = document.querySelector('.app-header__inner');
+          if (!value || !option || !trigger || !surface || !header) throw new Error('Machine picker did not render');
+          return { valueFits: value.scrollWidth <= value.clientWidth, optionFits: option.scrollWidth <= option.clientWidth, surfaceWidth: surface.getBoundingClientRect().width, triggerWidth: trigger.getBoundingClientRect().width, headerHeight: header.getBoundingClientRect().height, expectedHeaderHeight: parseFloat(getComputedStyle(header).getPropertyValue('--yc-header-h')) };
+        })()`)
+        expect(result.valueFits).toBe(true)
+        expect(result.optionFits).toBe(true)
+        expect(result.triggerWidth).toBeGreaterThan(260)
+        expect(result.surfaceWidth).toBeGreaterThanOrEqual(result.triggerWidth)
+        expect(result.headerHeight).toBe(result.expectedHeaderHeight)
       } finally {
         await page.close()
       }

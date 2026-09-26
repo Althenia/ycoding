@@ -319,13 +319,17 @@ describe("remote bridge", () => {
   })
 
   test("retries the inventory event stream with zero subscriptions and stops retrying after close", async () => {
-    const { bridge, records, streams } = harness({})
+    let created = false
+    const { bridge, records, streams } = harness({ results: {
+      listPage: async () => ({ data: created ? [sessionInfo("ses_1"), sessionInfo("ses_new")] : [sessionInfo("ses_1")] }),
+    } })
     await bridge.connect()
     expect(streams).toHaveLength(1)
     records[0].sent.length = 0
 
     streams[0].stream.onEnd()
     await waitFor(() => (streams.length === 2 ? true : undefined))
+    created = true
     streams[1].stream.onEvent({ type: "session.created", data: { sessionID: "ses_new" } })
     await waitFor(() => (sentFrames(records[0]).some((frame) => frame.type === "sessions") ? true : undefined))
 
@@ -400,6 +404,30 @@ describe("remote bridge", () => {
     expect(sessionsFrame(connection)).toEqual({ type: "sessions" })
     expect(bridge.advertised).toEqual([])
 
+    await bridge.close()
+  })
+
+  test("does not re-advertise unchanged inventory and re-advertises same-ID metadata changes", async () => {
+    let title = "Initial"
+    let pinned: number | undefined
+    let directory = "/work"
+    const { bridge, records } = harness({
+      results: { listPage: async () => ({ data: [{ ...sessionInfo("ses_1", { directory }), title, time: { created: 1, updated: 1, ...(pinned === undefined ? {} : { pinned }) } }] }) },
+    })
+    await bridge.connect()
+    const connection = records[0]
+    connection.sent.length = 0
+    await bridge.republish()
+    expect(connection.sent.filter((frame) => frame.includes('"type":"sessions"'))).toHaveLength(0)
+    title = "Renamed"
+    await bridge.republish()
+    expect(connection.sent.filter((frame) => frame.includes('"type":"sessions"'))).toHaveLength(1)
+    pinned = 2
+    await bridge.republish()
+    expect(connection.sent.filter((frame) => frame.includes('"type":"sessions"'))).toHaveLength(2)
+    directory = "/work/moved"
+    await bridge.republish()
+    expect(connection.sent.filter((frame) => frame.includes('"type":"sessions"'))).toHaveLength(3)
     await bridge.close()
   })
 

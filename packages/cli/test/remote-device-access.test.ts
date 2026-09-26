@@ -18,7 +18,7 @@ test("resolves a real Session beyond 200 backend results across authoritative Lo
       await createSession(server, `ses_${index.toString().padStart(3, "0")}`, index % 2 === 0 ? first : second)
     }
     const local = createLocalServer({ url: server.base, auth: { type: "basic", username: "ycoding", password } })
-    const registry = createSessionRegistry({ local, staleMs: 0 })
+    const registry = createSessionRegistry({ local })
     const request: RemoteRequest = {
       type: "request",
       id: "req_1",
@@ -29,7 +29,8 @@ test("resolves a real Session beyond 200 backend results across authoritative Lo
     const frames = await executeRemoteOperation({ request, sessions: registry, subscriptions: createSubscriptions(), local })
 
     expect(frames).toEqual([{ type: "response", id: "req_1", ok: true, value: { data: [] } }])
-    expect((await registry.list()).map((session) => session.id)).toContain("ses_204")
+    await registry.refresh()
+    expect(registry.snapshot().map((session) => session.id)).toContain("ses_204")
     expect((await registry.get("ses_203"))?.location.directory).toBe(second)
   } finally {
     await server.close()

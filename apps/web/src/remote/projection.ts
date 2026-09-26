@@ -140,6 +140,7 @@ export type RemoteMessageView =
       readonly kind: "compaction"
       readonly id: string
       readonly status: "pending" | "running" | "completed" | "failed"
+      readonly boundaryMessageID?: string
       readonly trigger?: string
       readonly summary?: string
       readonly error?: string
@@ -1082,14 +1083,29 @@ function withCompaction(
   const id = stringField(data.jobID) ?? stringField(data.inputID) ?? `compaction_${view.messages.length}`
   const trigger = stringField(data.reason) ?? stringField(data.trigger)
   const existing = view.messages.find((message) => message.id === id)
+  const boundary = isRecord(data.boundary) ? stringField(data.boundary.messageID) : undefined
   const message: Extract<RemoteMessageView, { kind: "compaction" }> = {
     kind: "compaction",
     id,
     status,
+    ...(status === "completed" && boundary !== undefined ? { boundaryMessageID: boundary } : {}),
     ...(trigger === undefined ? {} : { trigger }),
     ...(error === undefined ? {} : { error }),
   }
-  return existing ? replaceMessage(view, message) : pushMessage(view, message)
+  const updated = existing ? replaceMessage(view, message) : pushMessage(view, message)
+  return { ...updated, messages: visibleTranscript(updated.messages) }
+}
+
+export function visibleTranscript(messages: readonly RemoteMessageView[]): readonly RemoteMessageView[] {
+  const positions = new Map(messages.map((message, index) => [message.id, index]))
+  const boundary = messages.reduce((latest, message, index) => {
+    if (message.kind !== "compaction" || message.status !== "completed" || !message.boundaryMessageID) return latest
+    const position = positions.get(message.boundaryMessageID)
+    return position !== undefined && position < index ? Math.max(latest, position) : latest
+  }, -1)
+  const retained = boundary < 0 ? messages : messages.filter((message, index) => index > boundary || message.kind === "compaction")
+  const latestCompaction = retained.findLast((message) => message.kind === "compaction")?.id
+  return latestCompaction === undefined ? retained : retained.filter((message) => message.kind !== "compaction" || message.id === latestCompaction)
 }
 
 /** Mirrors one tool call into the activity stream so the panel reflects live work. */
@@ -1191,12 +1207,15 @@ function readSnapshotMessage(value: unknown): RemoteMessageView | undefined {
   }
   if (type === "compaction") {
     const status = stringField(value.status)
+    if (status !== "pending" && status !== "running" && status !== "failed" && status !== "completed") return undefined
     const summary = stringField(value.summary)
     const trigger = stringField(value.reason)
+    const boundary = isRecord(value.boundary) ? stringField(value.boundary.messageID) : undefined
     return {
       kind: "compaction",
       id,
-      status: status === "pending" || status === "running" || status === "failed" ? status : "completed",
+      status,
+      ...(status === "completed" && boundary !== undefined ? { boundaryMessageID: boundary } : {}),
       ...(trigger === undefined ? {} : { trigger }),
       ...(summary === undefined ? {} : { summary: boundedText(summary).text }),
     }
@@ -1276,6 +1295,7 @@ function stringList(value: unknown): readonly string[] {
 
 export type SessionSnapshot = {
   readonly messages: readonly RemoteMessageView[]
+  readonly coveredAssistantIDs: readonly string[]
   readonly title?: string
   readonly agent?: string
   readonly model?: ModelRefView
@@ -1297,11 +1317,15 @@ export function readSnapshot(payload: unknown): SessionSnapshot | undefined {
   const sourceEpoch = stringField(payload.sourceEpoch)
   const archived = isRecord(session.time) && numberField(session.time.archived) !== undefined
   const model = readModelRef(session.model)
+  const allMessages = payload.messages.flatMap((item) => {
+    const message = readSnapshotMessage(item)
+    return message ? [message] : []
+  })
+  const messages = visibleTranscript(allMessages)
+  const visibleIDs = new Set(messages.map((message) => message.id))
   return {
-    messages: payload.messages.flatMap((item) => {
-      const message = readSnapshotMessage(item)
-      return message ? [message] : []
-    }),
+    messages,
+    coveredAssistantIDs: allMessages.flatMap((message) => message.kind === "assistant" && !visibleIDs.has(message.id) ? [message.id] : []),
     ...(stringField(session.title) === undefined ? {} : { title: stringField(session.title) }),
     ...(stringField(session.agent) === undefined ? {} : { agent: stringField(session.agent) }),
     ...(model === undefined ? {} : { model }),
@@ -1339,6 +1363,11 @@ export function ephemeralPartKey(payload: unknown): string | undefined {
   const ordinal = numberField(payload.data.ordinal)
   if (ordinal === undefined) return undefined
   return partKey(assistantMessageID, payload.type.startsWith("session.reasoning.") ? "reasoning" : "text", String(ordinal))
+}
+
+export function ephemeralAssistantID(payload: unknown): string | undefined {
+  if (ephemeralPartKey(payload) === undefined || !isRecord(payload) || !isRecord(payload.data)) return undefined
+  return stringField(payload.data.assistantMessageID)
 }
 
 /** Part key that a durable boundary re-opens. */

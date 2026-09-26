@@ -95,6 +95,7 @@ export type RemoteWorkspaceInfo = {
   readonly id: string
   readonly projectID: string
   readonly directory: string
+  readonly workspaceID?: string
   readonly name?: string
 }
 
@@ -323,7 +324,7 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
 }
 
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
-  if (operation === "workspace.list") return input === undefined
+  if (operation === "workspace.list") return input === undefined || (isRecord(input) && input.sessionsOnly === true && Object.keys(input).length === 1)
   if (operation !== "session.create") return true
   if (
     !isRecord(input) ||

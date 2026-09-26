@@ -214,13 +214,20 @@ body:has(.app) {
   font-size: var(--yc-size-xs);
 }
 
-.remote-device__select .custom-select__value {
-  overflow-wrap: anywhere;
-  white-space: normal;
-}
-
 .remote-device__surface .custom-select__option {
   font-size: var(--yc-size-xs);
+}
+
+.remote-device__surface .custom-select__option-body > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (min-width: 1280px) {
+  .remote-device__select {
+    inline-size: 320px;
+  }
 }
 
 .remote-connection {
@@ -594,6 +601,11 @@ body:has(.app) {
   min-inline-size: 0;
 }
 
+.message--assistant {
+  justify-self: start;
+  max-inline-size: 100%;
+}
+
 .message__meta {
   display: flex;
   align-items: center;
@@ -611,10 +623,27 @@ body:has(.app) {
 }
 
 .message--user {
+  justify-self: end;
+  inline-size: fit-content;
+  max-inline-size: min(82%, 48ch);
   padding: var(--yc-space-3) var(--yc-space-4);
-  background: var(--yc-surface);
-  border: var(--yc-border-width) solid var(--yc-border);
+  background: var(--yc-surface-raised);
+  border: var(--yc-border-width) solid var(--yc-border-strong);
   border-radius: var(--yc-radius-lg);
+}
+
+.message--user .message__meta {
+  justify-content: flex-end;
+}
+
+.message__receipt {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--yc-space-1);
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-2xs);
+  color: var(--yc-text-muted);
 }
 
 /* A queued or pending input keeps its state marker inline with the message. */
@@ -652,17 +681,33 @@ body:has(.app) {
 
 .reasoning summary {
   min-block-size: var(--yc-control-h);
-  display: flex;
-  align-items: center;
+  display: list-item;
+  align-content: center;
   font-size: var(--yc-size-xs);
   color: var(--yc-text-muted);
   cursor: pointer;
 }
 
-.reasoning p {
+.reasoning__hint {
+  margin-inline-start: var(--yc-space-2);
+}
+
+.reasoning[open] .reasoning__hint {
+  display: none;
+}
+
+.reasoning__body {
   font-size: var(--yc-size-xs);
   color: var(--yc-text-muted);
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  line-height: var(--yc-leading-md);
+  padding-block-end: var(--yc-space-2);
+}
+
+.reasoning__body code {
+  font-family: var(--yc-font-mono);
+  background: var(--yc-surface-sunken);
 }
 
 /* --- tool and shell cards ----------------------------------------------- */
@@ -1540,6 +1585,8 @@ body:has(.app) {
 
   .app--conversation.app--selected .workspace__rail {
     display: block;
+    overflow-y: auto;
+    min-block-size: 0;
   }
 
   .remote-nav {

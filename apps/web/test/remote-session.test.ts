@@ -180,15 +180,19 @@ describe("remote store integration", () => {
     }
   })
 
-  test("loads every backend Session page beyond the old five-page cap", async () => {
+  test("publishes a bounded first workspace page and loads older Sessions only on demand", async () => {
     const count = 1_205
     const relay = await startRelayDouble({
       handler: (request) => {
+        if (request.operation === "workspace.list") return { ok: true, value: { data: [
+          { id: "wsp_api", projectID: "prj_api", directory: "/work/api" },
+          { id: "wsp_web", projectID: "prj_web", directory: "/work/web" },
+        ] } }
         if (request.operation !== "session.list") return "default"
         const offset = typeof request.input?.cursor === "string" ? Number(request.input.cursor) : 0
         const limit = typeof request.input?.limit === "number" ? request.input.limit : 200
-        const data = Array.from({ length: Math.min(limit, count - offset) }, (_, index) => {
-          const value = offset + index
+        const data = Array.from({ length: Math.min(limit, count / 2 - offset) }, (_, index) => {
+          const value = (offset + index) * 2 + (request.input?.workspace === "wsp_web" ? 1 : 0)
           return {
             id: `ses_${value}`,
             title: `Session ${value}`,
@@ -197,7 +201,7 @@ describe("remote store integration", () => {
             time: { created: value, updated: value },
           }
         })
-        const next = offset + data.length < count ? String(offset + data.length) : undefined
+        const next = offset + data.length < count / 2 ? String(offset + data.length) : undefined
         return { ok: true, value: { data, cursor: { next } } }
       },
     })
@@ -208,22 +212,38 @@ describe("remote store integration", () => {
     })
     try {
       await store.load()
-      await waitFor(() => store.state().sessions.length === count)
+      await waitFor(() => store.state().sessions.length === 50)
       expect(store.state().sessions[0]?.id).toBe("ses_0")
-      expect(store.state().sessions.at(-1)?.id).toBe("ses_1204")
-      expect(store.state().sessions.slice(0, 2)).toMatchObject([
-        { projectID: "prj_api", directory: "/work/api" },
-        { projectID: "prj_web", directory: "/work/web" },
-      ])
-      expect(store.state().sessions.at(-1)).toMatchObject({ projectID: "prj_api", directory: "/work/api" })
-      expect(relay.requests.filter((request) => request.operation === "session.list")).toHaveLength(7)
+      expect(store.state().sessions.at(-1)?.id).toBe("ses_98")
+      expect(relay.requests.filter((request) => request.operation === "session.list")).toHaveLength(1)
+      await store.nextSessionsPage()
+      expect(store.state().sessions[50]?.id).toBe("ses_100")
+      expect(store.state().sessions).toHaveLength(100)
+      store.selectWorkspace("wsp_web")
+      await waitFor(() => store.state().sessions[0]?.id === "ses_1")
+      expect(store.state().sessions.every((session) => session.projectID === "prj_web")).toBe(true)
     } finally {
       store.dispose()
       await relay.stop()
     }
   })
 
-  test("create and delete invalidations supersede in-flight multi-page Session lists", async () => {
+  test("refuses a repeated cursor instead of appending the same Session page indefinitely", async () => {
+    const test = await harness({ handler: (request) => request.operation === "session.list"
+      ? { ok: true, value: { data: [{ id: "ses_a", title: "Alpha", time: { created: 1, updated: 1 } }], cursor: { next: "same" } } }
+      : "default" })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessionHasNext)
+      await test.store.nextSessionsPage()
+      expect(test.store.state().sessionListStatus).toBe("error")
+      expect(test.store.state().sessions.map((session) => session.id)).toEqual(["ses_a"])
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("create and delete invalidations supersede in-flight bounded Session pages", async () => {
     const oldPage = Promise.withResolvers<void>()
     const createdPage = Promise.withResolvers<void>()
     let phase = "initial"
@@ -232,20 +252,15 @@ describe("remote store integration", () => {
     const relay = await startRelayDouble({
       handler: async (request) => {
         if (request.operation !== "session.list") return "default"
-        if (request.input?.cursor === "initial-tail") {
+        if (phase === "initial") {
           await oldPage.promise
-          return { ok: true, value: { data: [row("ses_stable")], cursor: { next: "superseded-tail" } } }
+          return { ok: true, value: { data: [row("ses_deleted")] } }
         }
-        if (request.input?.cursor === "created-tail") {
+        if (phase === "created") {
           await createdPage.promise
-          return { ok: true, value: { data: [row("ses_deleted"), row("ses_stable")], cursor: { next: "superseded-tail" } } }
+          return { ok: true, value: { data: [row("ses_deleted"), row("ses_stable")] } }
         }
-        if (request.input?.cursor === "superseded-tail") return { ok: true, value: { data: [] } }
-        if (request.input?.cursor === "final-tail") return { ok: true, value: { data: [row("ses_stable")] } }
-        return { ok: true, value: {
-          data: [row(phase === "initial" ? "ses_deleted" : "ses_created")],
-          cursor: { next: `${phase === "deleted" ? "final" : phase}-tail` },
-        } }
+        return { ok: true, value: { data: [row("ses_created"), row("ses_stable")] } }
       },
     })
     const store = createRemoteStore({
@@ -263,18 +278,18 @@ describe("remote store integration", () => {
     const unsubscribe = store.subscribe(() => published.push(store.state().sessions.map((session) => session.id)))
     try {
       await store.load()
-      await waitFor(() => relay.requests.some((request) => request.input?.cursor === "initial-tail"))
+      await waitFor(() => relay.requests.filter((request) => request.operation === "session.list").length === 1)
       phase = "created"
       relay.pushSessions([])
-      await waitFor(() => relay.requests.some((request) => request.input?.cursor === "created-tail"))
+      await waitFor(() => relay.requests.filter((request) => request.operation === "session.list").length === 2)
       phase = "deleted"
       relay.pushSessions([])
       await waitFor(() => store.state().sessions.length === 2)
       oldPage.resolve()
       createdPage.resolve()
-      await waitFor(() => settledPages >= 6)
+      await waitFor(() => settledPages >= 3)
       await Bun.sleep(20)
-      expect(relay.requests.filter((request) => request.input?.cursor === "superseded-tail")).toEqual([])
+      expect(relay.requests.filter((request) => request.operation === "session.list")).toHaveLength(3)
       expect(store.state().sessions.map((session) => session.id)).toEqual(["ses_created", "ses_stable"])
       expect(published.filter((ids) => ids.length > 0).every((ids) => ids.join(",") === "ses_created,ses_stable")).toBe(true)
     } finally {
@@ -332,6 +347,52 @@ describe("remote store integration", () => {
     }
   })
 
+  test("reports the device offline when its relay has no local agent for any request", async () => {
+    const test = await harness({ handler: () => ({ ok: false, code: "agent_unavailable", message: "No local agent is connected" }) })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessionListStatus === "error")
+
+      expect(test.store.state().connection).toEqual({ kind: "offline", deviceName: "dev_1" })
+      expect(test.store.state().transport.kind).toBe("open")
+      expect(test.store.state().sessions).toEqual([])
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("keeps the last list while the agent is gone and reconnects when it returns without Sessions", async () => {
+    let agent: "present" | "gone" | "empty" = "present"
+    const test = await harness({
+      handler: (request) => {
+        if (agent === "gone") return { ok: false, code: "agent_unavailable", message: "No local agent is connected" }
+        if (agent === "empty" && (request.operation === "workspace.list" || request.operation === "session.list")) return { ok: true, value: { data: [] } }
+        return "default"
+      },
+    })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length === 2)
+
+      agent = "gone"
+      test.relay.pushSessions([])
+      await test.runUntil(() => test.store.state().connection.kind === "offline")
+      expect(test.store.state().connection).toEqual({ kind: "offline", deviceName: "dev_1" })
+      expect(test.store.state().sessions.map((session) => session.id)).toEqual(["ses_a", "ses_b"])
+
+      agent = "empty"
+      test.relay.pushSessions([])
+      await test.runUntil(() => test.store.state().connection.kind === "connected")
+
+      expect(test.store.state().connection).toEqual({ kind: "connected", deviceName: "dev_1" })
+      expect(test.store.state().sessionListStatus).toBe("ready")
+      expect(test.store.state().sessionGroups).toEqual([])
+      expect(test.store.state().sessions).toEqual([])
+    } finally {
+      await test.stop()
+    }
+  })
+
   test("keeps the last session list when a connected device's agent becomes unavailable", async () => {
     let lists = 0
     const test = await harness({
@@ -369,6 +430,8 @@ describe("remote store integration", () => {
 
       expect(test.store.state().connection).toEqual({ kind: "offline", deviceName: "Studio Mac" })
       expect(test.store.state().activeDeviceID).toBe("dev_1")
+      expect(test.store.state().sessions.map((session) => session.id)).toEqual(["ses_a", "ses_b"])
+      test.store.searchSessions("no match")
       expect(test.store.state().sessions.map((session) => session.id)).toEqual(["ses_a", "ses_b"])
     } finally {
       await test.stop()

@@ -568,16 +568,22 @@ export type SessionAvailabilityView = {
 export function sessionAvailabilityView(
   connection: RemoteConnectionState,
   sessionCount: number,
+  listStatus: "idle" | "loading" | "ready" | "error" = "ready",
 ): SessionAvailabilityView | undefined {
   if (sessionCount > 0) return undefined
-  if (connection.kind === "loading" || connection.kind === "connecting") {
+  if (connection.kind === "loading" || connection.kind === "connecting" || listStatus === "idle" || listStatus === "loading") {
     return {
       title: "Loading sessions",
       body: "Connecting to the selected machine and loading its sessions.",
       loading: true,
     }
   }
-  if (connection.kind === "connected") {
+  if (listStatus === "error") return {
+    title: "Session list unavailable",
+    body: connection.kind === "error" ? connection.message : "The selected machine could not answer the Session list.",
+    loading: false,
+  }
+  if (connection.kind === "connected" && listStatus === "ready") {
     return {
       title: "No sessions",
       body: "Start YCoding in your project folder on this machine.",

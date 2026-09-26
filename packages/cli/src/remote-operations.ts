@@ -114,7 +114,7 @@ export function createSubscriptions(options: { readonly onChange?: () => void } 
 
 export type SessionRegistry = {
   readonly ids: () => readonly string[]
-  readonly list: () => Promise<readonly SessionInfo[]>
+  readonly snapshot: () => readonly SessionInfo[]
   readonly get: (sessionID: string) => Promise<SessionInfo | undefined>
   /** Resolve the Session from the complete backend inventory, then verify its current Location. */
   readonly verify: (sessionID: string) => Promise<SessionInfo | undefined>
@@ -127,14 +127,9 @@ export type SessionRegistry = {
  */
 export function createSessionRegistry(input: {
   readonly local: LocalServer
-  readonly staleMs?: number
-  readonly now?: () => number
   readonly onChange?: () => void
 }): SessionRegistry {
-  const now = input.now ?? Date.now
-  const staleMs = input.staleMs ?? 5_000
   const verified = new Map<string, SessionInfo>()
-  let refreshedAt = Number.NEGATIVE_INFINITY
   let refreshQueue = Promise.resolve<readonly SessionInfo[]>([])
 
   const readAll = async () => {
@@ -151,20 +146,14 @@ export function createSessionRegistry(input: {
   const refresh = () => {
     const run = refreshQueue.then(async () => {
       const sessions = await readAll()
-      const before = [...verified.keys()].sort().join(",")
+      const before = new Map(verified)
       verified.clear()
       for (const session of sessions) verified.set(session.id, session)
-      refreshedAt = now()
-      if ([...verified.keys()].sort().join(",") !== before) input.onChange?.()
+      if (before.size !== sessions.length || sessions.some((session) => sessionInventoryChanged(before.get(session.id), session))) input.onChange?.()
       return sessions
     })
     refreshQueue = run.catch(() => [...verified.values()])
     return run
-  }
-
-  const ensureFresh = async () => {
-    if (now() - refreshedAt < staleMs) return [...verified.values()]
-    return refresh()
   }
 
   const verify = async (sessionID: string) => {
@@ -175,7 +164,9 @@ export function createSessionRegistry(input: {
     }
     try {
       const current = await input.local.getSession(sessionID, locationInfo(info))
+      const changed = sessionInventoryChanged(verified.get(sessionID), current)
       verified.set(sessionID, current)
+      if (changed) input.onChange?.()
       return current
     } catch (cause) {
       if (!(cause instanceof LocalFailure && cause.kind === "not_found")) throw cause
@@ -186,13 +177,24 @@ export function createSessionRegistry(input: {
 
   return {
     ids: () => [...verified.keys()],
-    list: ensureFresh,
+    snapshot: () => [...verified.values()],
     get: verify,
     verify,
     refresh: async () => {
       await refresh()
     },
   }
+}
+
+function sessionInventoryChanged(previous: SessionInfo | undefined, current: SessionInfo) {
+  if (previous === undefined) return true
+  return JSON.stringify([
+    previous.title, previous.agent, previous.model, previous.projectID, previous.location,
+    previous.time.updated, previous.time.archived, previous.time.pinned,
+  ]) !== JSON.stringify([
+    current.title, current.agent, current.model, current.projectID, current.location,
+    current.time.updated, current.time.archived, current.time.pinned,
+  ])
 }
 
 function locationInfo(info: { readonly location: { readonly directory: string; readonly workspaceID?: string } }): LocalLocation {
@@ -207,6 +209,10 @@ type WorkspaceCandidate = {
   readonly location: LocalLocation
 }
 
+function workspaceKey(projectID: string, directory: string, locationWorkspaceID?: string) {
+  return `wsp_${createHash("sha256").update("ycoding.remote.workspace.v1\0").update(JSON.stringify([projectID, directory, locationWorkspaceID ?? null])).digest("hex")}`
+}
+
 async function workspaceInventory(local: LocalServer): Promise<WorkspaceCandidate[]> {
   const [sessions, projects] = await Promise.all([listSessions(local), local.projectList()])
   const projectsByID = new Map(projects.map((project) => [project.id, project]))
@@ -218,9 +224,10 @@ async function workspaceInventory(local: LocalServer): Promise<WorkspaceCandidat
     candidates.set(JSON.stringify(tuple), {
       location,
       info: {
-        id: `wsp_${createHash("sha256").update("ycoding.remote.workspace.v1\0").update(JSON.stringify(tuple)).digest("hex")}`,
+        id: workspaceKey(projectID, directory, workspaceID),
         projectID,
         directory,
+        ...(workspaceID === undefined ? {} : { workspaceID }),
         ...(project?.name === undefined ? {} : { name: project.name }),
       },
     })
@@ -250,6 +257,19 @@ async function workspaceInventory(local: LocalServer): Promise<WorkspaceCandidat
 
 async function workspaceList(local: LocalServer): Promise<readonly RemoteWorkspaceInfo[]> {
   return (await workspaceInventory(local)).map((candidate) => candidate.info)
+}
+
+async function sessionWorkspaces(local: LocalServer, sessions: readonly SessionInfo[]): Promise<readonly RemoteWorkspaceInfo[]> {
+  const projects = new Map((await local.projectList()).map((project) => [project.id, project]))
+  return [...new Map(sessions.map((session) => {
+    const projectID = session.projectID
+    const directory = session.location.directory
+    const id = workspaceKey(projectID, directory, session.location.workspaceID)
+    const name = projects.get(projectID)?.name
+    return [id, { id, projectID, directory,
+      ...(session.location.workspaceID === undefined ? {} : { workspaceID: session.location.workspaceID }),
+      ...(name === undefined ? {} : { name }) } as RemoteWorkspaceInfo] as const
+  })).values()].toSorted((left, right) => left.projectID.localeCompare(right.projectID) || left.directory.localeCompare(right.directory) || left.id.localeCompare(right.id))
 }
 
 async function createRootSession(input: OperationInput, id: string, workspaceID: string): Promise<SessionInfo> {
@@ -323,14 +343,14 @@ async function run(input: OperationInput) {
   // Validation is complete before any local call, so a malformed request never
   // causes local side effects.
   const validated = validate(request)
-  if (validated.kind === "workspace.list") return { data: await workspaceList(input.local) }
+  if (validated.kind === "workspace.list") return { data: validated.sessionsOnly
+    ? await sessionWorkspaces(input.local, input.sessions.snapshot())
+    : await workspaceList(input.local) }
   if (validated.kind === "session.create")
     return { data: await createRootSession(input, validated.id, validated.workspace) }
-  if (validated.kind === "list") return listPage(await input.sessions.list(), validated.query)
+  if (validated.kind === "list") return listPage(input.sessions.snapshot(), validated.query,
+    validated.query.status === undefined ? undefined : activeIDs(await input.local.activeSessions()))
   if (validated.kind === "active") {
-    // The local route is process-wide; retain only IDs present in the current
-    // complete backend inventory.
-    await input.sessions.list()
     const allowed = new Set(input.sessions.ids())
     const active = await input.local.activeSessions()
     return { data: filterActiveSessions(active, allowed) }
@@ -430,7 +450,7 @@ function unknownOperation(): never {
 type Reply = "once" | "always" | "reject"
 
 type Validated =
-  | { readonly kind: "workspace.list" }
+  | { readonly kind: "workspace.list"; readonly sessionsOnly: boolean }
   | { readonly kind: "list"; readonly query: ListQuery }
   | { readonly kind: "active" }
   | { readonly kind: "session.create"; readonly id: string; readonly workspace: string }
@@ -474,7 +494,7 @@ const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
 
 function validate(request: RemoteRequest): Validated {
   const fields = validateFields(request)
-  if (request.operation === "workspace.list") return { kind: "workspace.list" }
+  if (request.operation === "workspace.list") return { kind: "workspace.list", sessionsOnly: fields.sessionsOnly === true }
   if (request.operation === "session.list") return { kind: "list", query: parseListQuery(fields) }
   if (request.operation === "session.active") return { kind: "active" }
   if (request.operation === "session.create")
@@ -603,37 +623,55 @@ export function filterActiveSessions(value: unknown, allowed: ReadonlySet<string
   return Object.fromEntries(Object.entries(value).filter(([sessionID]) => allowed.has(sessionID)))
 }
 
-type Cursor = { readonly id: string; readonly time: number; readonly direction: "next" | "previous" }
+type Cursor = { readonly id: string; readonly time: number; readonly direction: "next" | "previous"; readonly pinned?: number | null }
 
 export type ListQuery = {
-  readonly order: "asc" | "desc"
+  readonly order: "asc" | "desc" | "pinned"
   readonly search?: string
+  readonly searchFields?: "summary"
+  readonly workspace?: string
+  readonly status?: "running" | "idle"
   readonly parentID?: string | null
   readonly limit: number
   readonly anchor?: Cursor
 }
 
 export function parseListQuery(fields: Readonly<Record<string, unknown>>): ListQuery {
+  const order = fields.order === undefined ? "desc" : literal(fields.order, ["asc", "desc", "pinned"], "order")
+  const anchor = fields.cursor === undefined ? undefined : cursor(fields.cursor)
+  if (order === "pinned" && anchor !== undefined && anchor.pinned === undefined)
+    throw new OperationError("invalid_message", "Pinned Session cursor is missing its sort key")
   return {
-    order: fields.order === undefined ? "desc" : literal(fields.order, ["asc", "desc"], "order"),
+    order,
     search: fields.search === undefined ? undefined : requireString(fields.search, "search", 200, { allowEmpty: true }),
+    searchFields: fields.searchFields === undefined ? undefined : literal(fields.searchFields, ["summary"], "searchFields"),
+    workspace: fields.workspace === undefined ? undefined : requireString(fields.workspace, "workspace", 128),
+    status: fields.status === undefined ? undefined : literal(fields.status, ["running", "idle"], "status"),
     parentID: fields.parentID === undefined ? undefined : fields.parentID === null ? null : sessionID(fields.parentID, "parentID"),
     limit: fields.limit === undefined ? 50 : optionalInteger(fields.limit, "limit", 1, RemoteLimits.maxSessionListPage)!,
-    anchor: fields.cursor === undefined ? undefined : cursor(fields.cursor),
+    anchor,
   }
 }
 
 /** Page the complete backend Session list without truncation. */
-export function listPage(sessions: readonly SessionInfo[], query: ListQuery) {
+export function listPage(sessions: readonly SessionInfo[], query: ListQuery, running?: ReadonlySet<string>) {
   const { order, search, parentID, limit, anchor } = query
   const direction = anchor?.direction ?? "next"
-  const effectiveOrder = direction === "previous" ? (order === "asc" ? "desc" : "asc") : order
+  const effectiveOrder = order === "pinned" ? "pinned" : direction === "previous" ? (order === "asc" ? "desc" : "asc") : order
+  const needle = search?.toLowerCase()
   const matching = sessions
-    .filter((session) => (search === undefined ? true : session.title.toLowerCase().includes(search.toLowerCase())))
+    .filter((session) => query.workspace === undefined || workspaceKey(session.projectID, session.location.directory, session.location.workspaceID) === query.workspace)
+    .filter((session) => needle === undefined || (query.searchFields === "summary"
+      ? [session.title, session.agent ?? "", ...(session.model === undefined ? [] : [`${session.model.providerID}/${session.model.id}${session.model.variant === undefined ? "" : `#${session.model.variant}`}`])]
+        .some((value) => value.toLowerCase().includes(needle))
+      : session.title.toLowerCase().includes(needle)))
+    .filter((session) => query.status === undefined || (query.status === "running" ? running?.has(session.id) === true : running?.has(session.id) !== true && session.time.archived === undefined))
     .filter((session) => (parentID === undefined ? true : (session.parentID ?? null) === parentID))
-    .sort(compareSessions)
-  const ordered = effectiveOrder === "asc" ? matching : matching.toReversed()
-  const anchored = anchor === undefined ? ordered : ordered.filter((session) => afterAnchor(session, anchor, effectiveOrder))
+    .sort(order === "pinned" ? comparePinnedSessions : compareSessions)
+  const ordered = effectiveOrder === "asc" || (effectiveOrder === "pinned" && direction === "next") ? matching : matching.toReversed()
+  const anchored = anchor === undefined ? ordered : ordered.filter((session) => effectiveOrder === "pinned"
+    ? comparePinnedSessions(session, { id: anchor.id, time: { updated: anchor.time, pinned: anchor.pinned ?? undefined } }) * (direction === "next" ? 1 : -1) > 0
+    : afterAnchor(session, anchor, effectiveOrder))
   const page = anchored.slice(0, limit)
   const remaining = anchored.length - page.length
   const data = direction === "previous" ? page.toReversed() : page
@@ -642,11 +680,12 @@ export function listPage(sessions: readonly SessionInfo[], query: ListQuery) {
   return {
     data,
     cursor: {
-      previous:
-        direction === "next" && anchor !== undefined && first
-          ? encodeCursor({ id: first.id, time: first.time.updated, direction: "previous" })
-          : undefined,
-      next: remaining > 0 && last ? encodeCursor({ id: last.id, time: last.time.updated, direction: "next" }) : undefined,
+      previous: first && (direction === "next" ? anchor !== undefined : remaining > 0)
+        ? encodeCursor({ id: first.id, time: first.time.updated, direction: "previous", ...(order === "pinned" ? { pinned: first.time.pinned ?? null } : {}) })
+        : undefined,
+      next: last && (direction === "previous" ? anchor !== undefined : remaining > 0)
+        ? encodeCursor({ id: last.id, time: last.time.updated, direction: "next", ...(order === "pinned" ? { pinned: last.time.pinned ?? null } : {}) })
+        : undefined,
     },
   }
 }
@@ -663,15 +702,33 @@ function cursor(value: unknown): Cursor {
     if (typeof parsed !== "object" || parsed === null) throw new Error("shape")
     const record = parsed as Record<string, unknown>
     if (typeof record.id !== "string" || typeof record.time !== "number") throw new Error("shape")
-    return { id: record.id, time: record.time, direction: literal(record.direction, ["next", "previous"], "cursor") }
+    if (record.pinned !== undefined && record.pinned !== null && typeof record.pinned !== "number") throw new Error("shape")
+    return { id: record.id, time: record.time, direction: literal(record.direction, ["next", "previous"], "cursor"),
+      ...(record.pinned === undefined ? {} : { pinned: record.pinned }) }
   } catch {
     throw new OperationError("invalid_message", "Invalid cursor")
   }
 }
 
-function compareSessions(left: SessionInfo, right: SessionInfo) {
+type SessionOrderKey = { readonly id: string; readonly time: { readonly updated: number; readonly pinned?: number | undefined } }
+
+function compareSessions(left: SessionOrderKey, right: SessionOrderKey) {
   if (left.time.updated !== right.time.updated) return left.time.updated - right.time.updated
   return left.id < right.id ? -1 : left.id > right.id ? 1 : 0
+}
+
+function comparePinnedSessions(left: SessionOrderKey, right: SessionOrderKey) {
+  const pinnedLeft = left.time.pinned
+  const pinnedRight = right.time.pinned
+  if (pinnedLeft !== undefined && pinnedRight === undefined) return -1
+  if (pinnedLeft === undefined && pinnedRight !== undefined) return 1
+  if (pinnedLeft !== undefined && pinnedRight !== undefined && pinnedLeft !== pinnedRight) return pinnedLeft - pinnedRight
+  return -compareSessions(left, right)
+}
+
+function activeIDs(value: unknown): ReadonlySet<string> {
+  if (typeof value !== "object" || value === null) return new Set()
+  return new Set(Object.entries(value).filter(([, state]) => typeof state === "object" && state !== null && Reflect.get(state, "type") === "running").map(([id]) => id))
 }
 
 function afterAnchor(session: SessionInfo, anchor: Cursor, order: "asc" | "desc") {
@@ -681,8 +738,8 @@ function afterAnchor(session: SessionInfo, anchor: Cursor, order: "asc" | "desc"
 }
 
 const allowedFields: Readonly<Record<string, readonly string[]>> = {
-  "workspace.list": [],
-  "session.list": ["limit", "order", "search", "parentID", "cursor"],
+  "workspace.list": ["sessionsOnly"],
+  "session.list": ["limit", "order", "search", "searchFields", "parentID", "cursor", "workspace", "status"],
   "session.active": [],
   "session.get": [],
   "session.snapshot": [],

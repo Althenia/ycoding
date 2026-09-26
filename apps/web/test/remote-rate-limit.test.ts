@@ -27,10 +27,13 @@ async function harness(count: number) {
       if (request.operation === "session.interrupt") return
       const offset = Number(request.input?.cursor ?? 0)
       const limit = Number(request.input?.limit ?? RemoteLimits.maxSessionListPage)
-      const data = request.operation === "session.list"
-        ? Array.from({ length: Math.min(limit, count - offset) }, (_, index) => ({
-            id: `ses_${offset + index}`,
-            title: `Session ${offset + index}`,
+      const data = request.operation === "workspace.list"
+        ? [{ id: "wsp_even", projectID: "prj_even", directory: "/work/even" },
+          { id: "wsp_odd", projectID: "prj_odd", directory: "/work/odd" }]
+        : request.operation === "session.list"
+        ? Array.from({ length: Math.min(limit, Math.ceil(count / 2) - offset) }, (_, index) => ({
+            id: `ses_${(offset + index) * 2 + (request.input?.workspace === "wsp_odd" ? 1 : 0)}`,
+            title: `Session ${(offset + index) * 2}`,
             time: { created: 1, updated: 1 },
           }))
         : {}
@@ -40,8 +43,9 @@ async function harness(count: number) {
         ok: true,
         value: {
           data,
-          ...(request.operation === "session.list" && offset + limit < count
-            ? { cursor: { next: String(offset + limit) } }
+          ...(request.operation === "session.list"
+            ? { cursor: { ...(offset > 0 ? { previous: String(Math.max(0, offset - limit)) } : {}),
+              ...(offset + limit < Math.ceil(count / 2) ? { next: String(offset + limit) } : {}) } }
             : {}),
         },
       }))
@@ -108,8 +112,8 @@ async function harness(count: number) {
 }
 
 describe("remote request budget integration", () => {
-  test("loads an inventory larger than one relay request window without reconnecting", async () => {
-    const count = 6_201
+  test("loads a bounded first page of a large inventory and continues only on demand", async () => {
+    const count = 14_501
     const fixture = await harness(count)
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: `http://127.0.0.1:${fixture.server.port}` }),
@@ -120,19 +124,31 @@ describe("remote request budget integration", () => {
     })
     try {
       await store.load()
-      await waitFor(() => store.state().sessions.length === count || fixture.closed.length > 0, 25_000)
+      await waitFor(() => store.state().sessions.length === 50 || fixture.closed.length > 0, 25_000)
       expect(fixture.closed).toEqual([])
       expect(store.state().connection.kind).toBe("connected")
-      expect(store.state().sessions).toHaveLength(count)
-      expect(store.state().sessions.at(-1)?.id).toBe("ses_6200")
-      expect(fixture.requests.filter((request) => request.operation === "session.list")).toHaveLength(32)
+      expect(store.state().sessions).toHaveLength(50)
+      expect(store.state().sessions.at(-1)?.id).toBe("ses_98")
+      expect(fixture.requests.filter((request) => request.operation === "session.list")).toHaveLength(1)
+      expect(store.state().sessionHasNext).toBe(true)
+      await store.nextSessionsPage()
+      expect(store.state().sessions).toHaveLength(100)
+      for (let index = 0; index < 3; index += 1) await store.nextSessionsPage()
+      expect(store.state().sessions).toHaveLength(150)
+      expect(store.state().sessions[0]?.id).toBe("ses_200")
+      await store.previousSessionsPage()
+      expect(store.state().sessions[0]?.id).toBe("ses_100")
+      expect(store.state().sessions).toHaveLength(150)
+      store.selectWorkspace("wsp_odd")
+      await waitFor(() => store.state().sessions[0]?.id === "ses_1")
+      expect(store.state().sessions).toHaveLength(50)
       const initial = store.state().sessions
       fixture.drop()
       await waitFor(() => store.state().sessions !== initial || fixture.closed.length > 0, 25_000)
       expect(fixture.closed).toEqual([])
       expect(store.state().connection.kind).toBe("connected")
       expect(store.state().sessions.map((session) => session.id)).toEqual(initial.map((session) => session.id))
-      expect(fixture.requests.every((request) => request.operation === "session.list" || request.operation === "session.active")).toBe(true)
+      expect(fixture.requests.every((request) => request.operation === "workspace.list" || request.operation === "session.list" || request.operation === "session.active")).toBe(true)
     } finally {
       store.dispose()
       await fixture.server.stop(true)

@@ -59,6 +59,10 @@ describe("remote envelope: request", () => {
       ok: true,
       value: { type: "request", id: "a", operation: "workspace.list" },
     })
+    expect(parseClientMessage('{"type":"request","id":"a","operation":"workspace.list","input":{"sessionsOnly":true}}')).toMatchObject({
+      ok: true,
+      value: { operation: "workspace.list", input: { sessionsOnly: true } },
+    })
     expect(
       parseClientMessage('{"type":"request","id":"a","operation":"session.create","input":{"id":"ses_new","workspace":"wsp_1"}}'),
     ).toMatchObject({
