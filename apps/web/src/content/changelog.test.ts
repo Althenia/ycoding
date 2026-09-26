@@ -5,14 +5,40 @@ const TAGS = ["Added", "Changed", "Fixed"] as const
 
 describe("release entries", () => {
   test("includes the latest TUI release at the top of the public changelog", () => {
-    const latest = RELEASES[0]
-    expect(latest).toMatchObject({
+    expect(RELEASES[0]).toEqual({
+      version: "0.7.3",
+      date: "2026-09-26",
+      title: "Remote sessions and background desktop control",
+      tags: ["Added", "Changed", "Fixed"],
+      changes: [
+        { tag: "Added", text: "Create remote Sessions from previously opened repositories, including directories without a Session; check uncertain creation results with the same Session identity." },
+        { tag: "Added", text: "Control macOS windows in the background and stage supported off-Space windows on a private agent display for pixel input and capture. Unstage restores the frame on the main display's current Space." },
+        { tag: "Added", text: "Control Safari and Chrome tabs through native automation; JavaScript evaluation and Safari history/reload require Allow JavaScript from Apple Events." },
+        { tag: "Added", text: "Control supported Electron windows through a process-owned debug bridge, with explicit debug-enabled relaunch when needed. Relaunch leaves a localhost debug port open until quit; graceful quit preserves unsaved-work prompts." },
+        { tag: "Added", text: "Show a separate YCoding cursor and click ripple for Chrome agent interactions without moving the system pointer." },
+        { tag: "Changed", text: "Breaking Change: local HTTP integrations must use an Authorization: Basic header with username ycoding and the configured password; auth_token query parameters no longer authenticate requests." },
+        { tag: "Changed", text: "Skip guardrail review prompts for browser and desktop actions while preserving explicit denials, tool permissions, and required operating-system or site authorization." },
+        { tag: "Changed", text: "Confirm phone machine changes before switching connections; keep tablet navigation visible and let the conversation sidebar collapse and reopen." },
+        { tag: "Fixed", text: "Open existing remote Sessions directly in Conversation, retain drafts across remote-page navigation and same-machine reconnects, and keep late creation results from changing a dismissed dialog's route." },
+        { tag: "Fixed", text: "Keep Chrome pairing codes visible and recover saved pairings after browser or YCoding restarts without another code; reload the extension after updating." },
+        { tag: "Fixed", text: "Restore Daybreak discovery, show active model state, and apply landing-screen selections before the first prompt or goal." },
+        { tag: "Fixed", text: "Preserve alternative provider tool argument shapes, validate JSON-encoded browser actions, and improve off-Space Electron capture and window placement." },
+        { tag: "Fixed", text: "Enforce read approval for file-search contents, reject search-root symlink escapes, and approve each web-fetch redirect destination with a ten-redirect limit." },
+        { tag: "Fixed", text: "Keep tablet header hit targets separate, contain mobile picker keyboard focus, and align the landing divider with the content grid." },
+        { tag: "Fixed", text: "Click and scroll hidden Chrome tabs with page scripts without activating them. Scripted actions cannot open popups, use the clipboard, or open file pickers." },
+      ],
+    })
+  })
+
+  test("retains the 0.7.2 and earlier release content", () => {
+    const release072 = RELEASES.find((item) => item.version === "0.7.2")
+    expect(release072).toMatchObject({
       version: "0.7.2",
       date: "2026-09-26",
       title: "Provider compaction, remote sign-in, and agent-readable docs",
       tags: ["Added", "Changed", "Fixed"],
     })
-    expect(latest?.changes.map((change) => change.text)).toEqual([
+    expect(release072?.changes.map((change) => change.text)).toEqual([
       "Run provider-native compaction on the owner request with a bounded local fallback; persist private compaction items across model switches; enable Copilot Responses compaction and Claude Chat cache markers.",
       "Ship the ad-hoc signed YCoding Computer Use app beside release executables; resolve desktop windows by CG window ID, probe other Spaces, and request Accessibility/Screen Recording/Automation access. Re-allow the app in Privacy & Security after each update; clear com.apple.quarantine on browser-downloaded archives.",
       "Install and update the paired Chrome extension alongside the CLI release with a fixed manifest public key.",
@@ -65,7 +91,7 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 8)).toEqual(["0.7.2", "0.7.1", "0.7.0", "0.6.10", "0.6.9", "0.6.8", "0.6.7", "0.6.6"])
+    expect(versions.slice(0, 9)).toEqual(["0.7.3", "0.7.2", "0.7.1", "0.7.0", "0.6.10", "0.6.9", "0.6.8", "0.6.7", "0.6.6"])
     expect(new Set(versions).size).toBe(versions.length)
     const sorted = [...versions].sort((a, b) => compare(b, a))
     expect(versions).toEqual(sorted)
