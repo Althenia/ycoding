@@ -144,6 +144,8 @@ The background update check resolves the newest release from the same GitHub Rel
 
 The standalone terminal artifact and the full CLI expose the same remote subcommands and handlers. Remote access does not require a separate full-CLI installation.
 
+In the browser, **New session** selects from existing repositories recorded by that backend. Open a missing repository locally, then use **Refresh repositories**. New Sessions use the selected directory's configured `default_agent` and `model` when no Session-specific selection exists; configure providers and credentials on the machine. The browser does not accept an arbitrary directory or create repositories.
+
 | Command                                                                                 | Purpose                                                                                              |
 | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `ycoding remote enroll <enrollmentID> [--name <name>] [--relay <origin>] [--replace]`   | Enroll this machine with a relay. The one-use enrollment code is read from the terminal, never argv. |

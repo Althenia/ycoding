@@ -5,6 +5,8 @@ import {
   YCoding,
   type FormAnswer,
   type FormInfo,
+  type Project,
+  type ProjectDirectory,
   type SessionInfo,
   type SessionMessageInfo,
   type YCodingClient,
@@ -57,6 +59,10 @@ export type LocalServer = {
     readonly data: readonly SessionInfo[]
     readonly next?: string
   }>
+  readonly projectList: () => Promise<readonly Project[]>
+  readonly projectDirectories: (projectID: string) => Promise<readonly ProjectDirectory[]>
+  readonly projectCurrent: (location: LocalLocation) => Promise<{ readonly id: string; readonly directory: string }>
+  readonly createSession: (id: string, location: LocalLocation) => Promise<SessionInfo>
   readonly getSession: (sessionID: string, location: LocalLocation) => Promise<SessionInfo>
   /** Process-wide running status; the caller filters it to the current inventory. */
   readonly activeSessions: () => Promise<unknown>
@@ -134,6 +140,18 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
         )
         return { data: page.data, next: page.cursor.next ?? undefined }
       }),
+    projectList: () => call(() => client.project.list({ signal: AbortSignal.timeout(timeoutMs) })),
+    projectDirectories: (projectID) =>
+      call(() => client.project.directories({ projectID }, { signal: AbortSignal.timeout(timeoutMs) })),
+    projectCurrent: (location) =>
+      call(() => client.project.current({}, request(location, timeoutMs))),
+    createSession: (id, location) =>
+      call(() =>
+        client.session.create(
+          { id, location } as Parameters<YCodingClient["session"]["create"]>[0],
+          request(location, timeoutMs),
+        ),
+      ),
     getSession: (sessionID, location) =>
       call(async () => {
         const info = await client.session.get({ sessionID }, request(location, timeoutMs))

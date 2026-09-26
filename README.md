@@ -14,7 +14,7 @@ Work on repositories from your terminal, with durable sessions and explicit cont
 
 YCoding is terminal-first—the TUI is the primary surface. The [remote web client](https://ycoding.althenia.app/remote/) lets the signed-in owner of a connected machine control its existing and future local Sessions from desktop, tablet, or mobile.
 
-The remote workspace streams output, sends prompts, and answers permissions, guardrails, questions, and native forms. Form controls preserve typed answers, defaults, conditional fields, and explicit cancellation.
+The remote workspace creates Sessions in previously opened repositories, reopens existing conversations, streams output, sends prompts, and answers permissions, guardrails, questions, and native forms. Form controls preserve typed answers, defaults, conditional fields, and explicit cancellation. The phone machine picker lets you review and confirm a machine change before switching connections.
 
 The agent, repository, filesystem, shell, tools, and model execution remain in the local `ycoding` process. The remote relay authenticates users and enrolled devices and checks device ownership and Session access; it is not a hosted agent runtime. The [public site](https://ycoding.althenia.app/) contains user documentation and the changelog.
 

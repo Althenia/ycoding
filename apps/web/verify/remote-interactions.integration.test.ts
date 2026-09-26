@@ -101,10 +101,10 @@ describe("remote and public product interactions", () => {
     const workspace = await remote("conversation-workspace", 390)
     try {
       expect(await workspace.evaluate<number>(`document.querySelectorAll('[role="listbox"]').length`)).toBe(1)
-      await workspace.evaluate(`document.querySelector('[aria-label="Machine"]')?.focus()`)
-      expect(await workspace.evaluate<string>(`document.activeElement?.getAttribute('aria-label') ?? ''`)).toBe("Machine")
+      expect(await workspace.evaluate<boolean>(`document.querySelector('dialog[aria-label="Select Active Machine"]')?.contains(document.activeElement) === true`)).toBe(true)
       await workspace.pressEscape()
       expect(await workspace.evaluate<number>(`document.querySelectorAll('[role="listbox"]').length`)).toBe(0)
+      expect(await workspace.evaluate<string>(`document.activeElement?.getAttribute('aria-label') ?? ''`)).toBe("Machine")
     } finally { await workspace.close() }
 
     const sessions = await remote("session-list", 768)
@@ -154,7 +154,7 @@ describe("remote and public product interactions", () => {
       expect(await signedOut.evaluate<boolean>(`document.body.innerText.includes('Sign in to your workspace')`)).toBe(true)
       await signedOut.evaluate(`[...document.querySelectorAll('.sign-in__provider')].find(button => button.textContent?.trim() === 'Continue with Google')?.click()`)
       for (let attempt = 0; attempt < 40 && !(await signedOut.evaluate<boolean>(`location.pathname === '/api/auth/google/start'`)); attempt += 1) await Bun.sleep(50)
-      expect(await signedOut.evaluate<string>(`location.pathname + location.search`)).toBe("/api/auth/google/start?redirect_after=%2Fremote")
+      expect(await signedOut.evaluate<string>(`location.pathname + location.search`)).toBe("/api/auth/google/start?redirect_after=%2Fremote%2Fsettings")
     } finally { await signedOut.close() }
 
     const enrollment = await remote("devices-enrollment", 1440)

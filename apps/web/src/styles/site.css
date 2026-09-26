@@ -334,7 +334,6 @@
 
   .marketing .features__grid {
     gap: var(--yc-space-3);
-    margin-block-start: var(--yc-space-10);
   }
 
   .marketing .feature {
@@ -518,6 +517,12 @@
 
 .hero--compact + .features {
   padding-block-start: 0;
+}
+
+.hero--compact + .features .features__grid {
+  border-block-start: var(--yc-border-width) solid var(--yc-border);
+  margin-block-start: 0;
+  padding-block-start: var(--yc-space-6);
 }
 
 .hero--compact .hero__content {

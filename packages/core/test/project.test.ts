@@ -6,7 +6,7 @@ import { Effect, Layer, Schema } from "effect"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { Database } from "@ycoding-ai/core/database/database"
 import { ProjectV2 } from "@ycoding-ai/core/project"
-import { ProjectTable } from "@ycoding-ai/core/project/sql"
+import { ProjectDirectoryTable, ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Hash } from "@ycoding-ai/core/util/hash"
 import { tmpdir } from "./fixture/tmpdir"
@@ -334,6 +334,96 @@ describe("ProjectV2.resolve", () => {
       expect(result.previous).toBe(ProjectV2.ID.make("old-id"))
       expect(result.id).toBe(remoteID("github.com/owner/repo"))
       expect(result.vcs?.type).toBe("git")
+    }),
+  )
+})
+
+describe("ProjectV2.recordOpened", () => {
+  it.live("records an existing opened directory idempotently without changing project metadata", () =>
+    Effect.gen(function* () {
+      const tmp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+      yield* Effect.promise(() => initRepo(tmp.path, { commit: true }))
+      const project = yield* ProjectV2.Service
+      const directory = yield* real(tmp.path)
+      const resolved = yield* project.resolve(directory)
+      const db = (yield* Database.Service).db
+      yield* db.insert(ProjectTable).values({
+        id: resolved.id,
+        worktree: directory,
+        name: "Existing name",
+        sandboxes: [],
+        time_created: 1,
+        time_updated: 2,
+      }).run()
+      yield* db.insert(ProjectDirectoryTable).values({
+        project_id: resolved.id,
+        directory,
+        strategy: "worktree",
+        time_created: 3,
+      }).run()
+
+      yield* project.recordOpened(directory)
+      yield* project.recordOpened(directory)
+
+      expect(yield* project.list()).toEqual([
+        expect.objectContaining({ id: resolved.id, worktree: directory, name: "Existing name", sandboxes: [] }),
+      ])
+      expect(yield* project.directories({ projectID: resolved.id })).toEqual([{ directory, strategy: "worktree" }])
+    }),
+  )
+
+  it.live("records non-Git and linked worktree directories at their actual opened paths", () =>
+    Effect.gen(function* () {
+      const plain = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+      const repo = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+      const worktree = `${repo.path}-opened-worktree`
+      yield* Effect.addFinalizer(() => Effect.promise(() => $`rm -rf ${worktree}`.quiet().nothrow()).pipe(Effect.ignore))
+      yield* Effect.promise(() => initRepo(repo.path, { commit: true }))
+      yield* Effect.promise(() => $`git worktree add ${worktree} -b opened-${Date.now()}`.cwd(repo.path).quiet())
+      const project = yield* ProjectV2.Service
+      const nonGitPath = yield* real(plain.path)
+      const worktreePath = yield* real(worktree)
+
+      yield* project.recordOpened(nonGitPath)
+      yield* project.recordOpened(worktreePath)
+
+      expect(yield* project.directories({ projectID: ProjectV2.ID.make("global") })).toContainEqual({
+        directory: nonGitPath,
+        strategy: undefined,
+      })
+      const repoProject = yield* project.resolve(worktreePath)
+      expect(yield* project.directories({ projectID: repoProject.id })).toContainEqual({
+        directory: worktreePath,
+        strategy: undefined,
+      })
+      expect((yield* project.list()).find((item) => item.id === ProjectV2.ID.make("global"))?.worktree).toBe(
+        abs(path.parse(plain.path).root),
+      )
+    }),
+  )
+
+  it.live("does not record nonexistent directories or make resolve persist project data", () =>
+    Effect.gen(function* () {
+      const tmp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+      const project = yield* ProjectV2.Service
+      const missing = abs(path.join(tmp.path, "missing"))
+
+      yield* project.resolve(abs(tmp.path))
+      yield* project.recordOpened(missing)
+
+      expect(yield* project.list()).toEqual([])
     }),
   )
 })

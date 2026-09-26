@@ -59,6 +59,7 @@ export interface Interface {
   readonly list: () => Effect.Effect<ReadonlyArray<Info>>
   readonly directories: (input: DirectoriesInput) => Effect.Effect<Directories>
   readonly resolve: (input: AbsolutePath) => Effect.Effect<Resolved>
+  readonly recordOpened: (directory: AbsolutePath) => Effect.Effect<void>
   /**
    * Temporary bridge method for writing the resolved project ID to the repo-local cache.
    *
@@ -119,6 +120,29 @@ const layer = Layer.effect(
 
     const directories = Effect.fn("Project.directories")(function* (input: DirectoriesInput) {
       return yield* projectDirectories.list(input.projectID)
+    })
+
+    const recordOpened = Effect.fn("Project.recordOpened")(function* (directory: AbsolutePath) {
+      if (!(yield* fs.isDir(directory))) return
+      const resolved = yield* resolve(directory)
+      yield* db.transaction((tx) =>
+        Effect.gen(function* () {
+          yield* tx
+            .insert(ProjectTable)
+            .values({
+              id: resolved.id,
+              worktree: resolved.directory,
+              vcs: resolved.vcs?.type,
+              sandboxes: [],
+              time_created: Date.now(),
+              time_updated: Date.now(),
+            })
+            .onConflictDoNothing()
+            .run()
+            .pipe(Effect.orDie)
+          yield* projectDirectories.create({ projectID: resolved.id, directory, behavior: "ignore" }, tx)
+        }),
+      ).pipe(Effect.orDie)
     })
 
     const cached = Effect.fnUntraced(function* (dir: string) {
@@ -229,7 +253,7 @@ const layer = Layer.effect(
       yield* fs.writeFileString(path.join(input.store, "ycoding"), input.id).pipe(Effect.ignore)
     })
 
-    return Service.of({ list, directories, resolve, commit })
+    return Service.of({ list, directories, resolve, recordOpened, commit })
   }),
 )
 

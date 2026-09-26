@@ -35,6 +35,7 @@ export const RemoteWebSocketPath = {
 
 /** Operations the relay proxies. Every other operation is rejected. */
 export const remoteOperations = [
+  "workspace.list",
   "session.list",
   "session.active",
   "session.get",
@@ -59,6 +60,7 @@ export const remoteOperations = [
   "session.autonomy.set",
   "session.goal.set",
   "session.goal.stop",
+  "session.create",
 ] as const
 
 /** Operations that address one session and therefore require `sessionID`. */
@@ -88,6 +90,13 @@ export const remoteSessionOperations = [
 ] as const
 
 export type RemoteOperation = (typeof remoteOperations)[number]
+
+export type RemoteWorkspaceInfo = {
+  readonly id: string
+  readonly projectID: string
+  readonly directory: string
+  readonly name?: string
+}
 
 /** Shared bounds. Both sides enforce the same numbers so neither can drift. */
 export const RemoteLimits = {
@@ -297,6 +306,7 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
   if (requireSession(operation) && frame.sessionID === undefined)
     return failRequest("session_required", "Operation requires a session")
   if (frame.input !== undefined && !isRecord(frame.input)) return invalid()
+  if (!validOperationInput(operation, frame.input)) return failRequest("invalid_message", "Input does not match the remote operation")
   return {
     ok: true,
     value:
@@ -310,6 +320,20 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
             input: frame.input,
           },
   }
+}
+
+function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
+  if (operation === "workspace.list") return input === undefined
+  if (operation !== "session.create") return true
+  if (
+    !isRecord(input) ||
+    !isSessionID(input.id) ||
+    typeof input.workspace !== "string" ||
+    input.workspace.length === 0 ||
+    input.workspace.length > 128
+  )
+    return false
+  return Object.keys(input).every((key) => key === "id" || key === "workspace")
 }
 
 function parseResponse(frame: Record<string, unknown>): ParseResult<RemoteResponse> {

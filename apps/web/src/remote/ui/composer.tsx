@@ -2,24 +2,15 @@ import { For, Show, createSignal, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
 import { useRemote } from "../context"
 
-/**
- * Sticky prompt composer.
- *
- * The draft lives in this component, so a reconnect that reloads session history never
- * clears what the user is typing. An in-flight mutation that never settled stays visible
- * and is only resent when the user asks for it. The composer keeps its row while output
- * streams, because it is the last row of the working column and not part of the scroll.
- */
 export function Composer(props: { readonly sessionID?: string; readonly running: boolean; readonly canSend: boolean }): JSX.Element {
   const remote = useRemote()
-  const [drafts, setDrafts] = createSignal<Record<string, string>>({})
   const [delivery, setDelivery] = createSignal<"steer" | "queue">("steer")
 
-  const draft = () => props.sessionID === undefined ? "" : drafts()[props.sessionID] ?? ""
+  const draft = () => props.sessionID === undefined ? "" : remote.state().drafts[props.sessionID] ?? ""
   const setDraft = (text: string) => {
     const sessionID = props.sessionID
     if (sessionID === undefined) return
-    setDrafts((current) => ({ ...current, [sessionID]: text }))
+    remote.store.setDraft(sessionID, text)
   }
   const disabled = () => !props.canSend || props.sessionID === undefined
   const send = () => {

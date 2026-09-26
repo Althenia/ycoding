@@ -35,6 +35,8 @@ describe("remote responsive state behavior", () => {
         skip: document.querySelector('.skip-link')?.getAttribute('href') ?? null,
         current: document.querySelector('.bottom-nav__item--active')?.getAttribute('aria-current') ?? null,
       })`)).toEqual({ main: 1, skip: "#remote-main", current: "page" })
+      await page.pressEscape()
+      expect(await page.evaluate<boolean>(`document.querySelector('.custom-select__dialog')?.hasAttribute('open') ?? false`)).toBe(false)
       await page.evaluate(`document.querySelector('.skip-link')?.focus()`)
       await page.pressKey("Enter", "Enter", 13)
       expect(await page.evaluate<string>(`document.activeElement?.id ?? ''`)).toBe("remote-main")

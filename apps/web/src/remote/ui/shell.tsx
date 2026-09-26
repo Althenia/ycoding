@@ -1,5 +1,5 @@
-import { For, Show, createMemo, createSignal, type JSX } from "solid-js"
-import { Link } from "../../router/router"
+import { For, Show, createMemo, createSignal, onCleanup, type JSX } from "solid-js"
+import { Link, useRouter } from "../../router/router"
 import { Chip } from "../../ui/chip"
 import { Icon, type IconName } from "../../ui/icon"
 import { Modal } from "../../ui/modal"
@@ -35,6 +35,7 @@ import {
   type SessionChip,
 } from "../view-model"
 import { Composer } from "./composer"
+import { NewSessionButton, NewSessionDialog } from "./new-session"
 import { AccountSettings, AppearanceSettings, AutonomySettings, DeviceSettings, NotificationSettings } from "./settings"
 import { ActivityRow, MessageRow, RequestCard } from "./conversation"
 
@@ -46,8 +47,16 @@ const settingsSupport = "Account, devices, appearance, autonomy, and notificatio
 
 export function RemoteShell(props: { readonly path: string }): JSX.Element {
   const remote = useRemote()
+  const router = useRouter()
   const [navOpen, setNavOpen] = createSignal(false)
+  const [railCollapsed, setRailCollapsed] = createSignal(false)
   const [activityOpen, setActivityOpen] = createSignal(false)
+  const [newSessionOpen, setNewSessionOpen] = createSignal(false)
+  const tabletQuery = window.matchMedia("(min-width: 768px) and (max-width: 1023px)")
+  const [tabletLayout, setTabletLayout] = createSignal(tabletQuery.matches)
+  const updateTabletLayout = (event: MediaQueryListEvent) => setTabletLayout(event.matches)
+  tabletQuery.addEventListener("change", updateTabletLayout)
+  onCleanup(() => tabletQuery.removeEventListener("change", updateTabletLayout))
 
   const state = () => remote.state()
   const view: RemoteView = views.find((entry) => entry === props.path) ?? "/remote"
@@ -56,15 +65,39 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
   const composition = () => remoteSurfaceComposition(view, selected())
   const viewClass = view === "/remote" ? "conversation" : view.slice("/remote/".length)
   const entry = () => remoteEntryView(accountReadState({ connection: state().connection, owner: state().owner }))
+  const tabletRailToggle = () => tabletLayout() && composition().showSessionRail
+  const navExpanded = () => tabletRailToggle() ? !railCollapsed() : navOpen()
+  const navLabel = () => tabletRailToggle() ? railCollapsed() ? "Show sessions sidebar" : "Hide sessions sidebar" : "Open sessions"
+  const canCreateSession = () => state().connection.kind === "connected" && state().transport.kind === "open"
+  const openSessionsNavigation = () => {
+    if (tabletRailToggle()) {
+      setRailCollapsed((collapsed) => !collapsed)
+      return
+    }
+    setNavOpen(true)
+  }
+  const openNewSession = () => {
+    if (!canCreateSession()) return
+    setNewSessionOpen(true)
+    void remote.store.loadWorkspaces()
+  }
+  const openSession = (sessionID: string) => {
+    setNewSessionOpen(false)
+    setNavOpen(false)
+    void remote.store.selectSession(sessionID)
+    router.navigate("/remote")
+  }
 
   return (
     <Show when={entry() === "workspace"} fallback={<SignInScreen />}>
-      <div class={`app app--${viewClass}${selected() ? " app--selected" : view === "/remote" ? " app--empty" : ""}`}>
+      <div class={`app app--${viewClass}${selected() ? " app--selected" : view === "/remote" ? " app--empty" : ""}${railCollapsed() ? " app--rail-collapsed" : ""}`}>
         <a class="skip-link" href="#remote-main">Skip to content</a>
         <RemoteHeader
-          navOpen={navOpen()}
+          navExpanded={navExpanded()}
+          navLabel={navLabel()}
+          navControls={tabletRailToggle() ? "session-rail" : undefined}
           activityOpen={activityOpen()}
-          onOpenNav={() => setNavOpen(true)}
+          onOpenNav={openSessionsNavigation}
           onOpenActivity={() => setActivityOpen(true)}
           view={view}
         />
@@ -73,8 +106,8 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
 
         <div class="workspace">
           <Show when={composition().showSessionRail}>
-            <aside class="workspace__rail" aria-label="Sessions">
-              <SessionPanel />
+            <aside id="session-rail" class="workspace__rail" aria-label="Sessions">
+              <SessionPanel canCreateSession={canCreateSession()} onNewSession={openNewSession} />
             </aside>
           </Show>
 
@@ -82,10 +115,18 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
             <div class="workspace__scroll">
               <Notices />
               <Show when={view === "/remote"}>
-                <ConversationView title={activeSession()?.title ?? noSessionTitle} />
+                <ConversationView
+                  title={activeSession()?.title ?? noSessionTitle}
+                  canCreateSession={canCreateSession()}
+                  onNewSession={openNewSession}
+                />
               </Show>
               <Show when={view === "/remote/sessions"}>
-                <SessionsPage />
+                <SessionsPage
+                  canCreateSession={canCreateSession()}
+                  onNewSession={openNewSession}
+                  onSelectSession={openSession}
+                />
               </Show>
               <Show when={view === "/remote/activity"}>
                 <ActivityPage />
@@ -113,7 +154,12 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
 
         <Show when={navOpen()}>
           <Modal class="overlay--slideover" label="Sessions" onClose={() => setNavOpen(false)}>
-            <SessionPanel onNavigate={() => setNavOpen(false)} />
+            <SessionPanel
+              canCreateSession={canCreateSession()}
+              onNewSession={openNewSession}
+              onSelectSession={openSession}
+              onNavigate={() => setNavOpen(false)}
+            />
           </Modal>
         </Show>
 
@@ -121,6 +167,9 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
           <Modal class="overlay--slideover" label="Activity" onClose={() => setActivityOpen(false)}>
             <ActivityPanel onNavigate={() => setActivityOpen(false)} />
           </Modal>
+        </Show>
+        <Show when={newSessionOpen()}>
+          <NewSessionDialog onClose={() => setNewSessionOpen(false)} onCreated={openSession} />
         </Show>
       </div>
     </Show>
@@ -365,7 +414,9 @@ export function queueRowView(request: PendingRequestView): QueueRowView {
 const noSessionTitle = "No session selected"
 
 function RemoteHeader(props: {
-  readonly navOpen: boolean
+  readonly navExpanded: boolean
+  readonly navLabel: string
+  readonly navControls?: string
   readonly activityOpen: boolean
   readonly onOpenNav: () => void
   readonly onOpenActivity: () => void
@@ -383,8 +434,9 @@ function RemoteHeader(props: {
         <button
           type="button"
           class="button button--ghost button--icon app-header__menu"
-          aria-label="Open sessions"
-          aria-expanded={props.navOpen}
+          aria-label={props.navLabel}
+          aria-expanded={props.navExpanded}
+          aria-controls={props.navControls}
           onClick={props.onOpenNav}
         >
           <Icon name="menu" />
@@ -539,7 +591,12 @@ function ConnectionStrip(): JSX.Element {
   )
 }
 
-function SessionPanel(props: { readonly onNavigate?: () => void }): JSX.Element {
+function SessionPanel(props: {
+  readonly canCreateSession: boolean
+  readonly onNewSession: () => void
+  readonly onSelectSession?: (sessionID: string) => void
+  readonly onNavigate?: () => void
+}): JSX.Element {
   const remote = useRemote()
   const [query, setQuery] = createSignal("")
   const state = () => remote.state()
@@ -554,8 +611,9 @@ function SessionPanel(props: { readonly onNavigate?: () => void }): JSX.Element 
   }
   return (
     <div class="pane">
-      <div class="pane__head">
+      <div class="pane__head pane__head--sessions">
         <p class="pane__title">Sessions</p>
+        <NewSessionButton disabled={!props.canCreateSession} onClick={props.onNewSession} />
       </div>
       <Show
         when={
@@ -602,7 +660,13 @@ function SessionPanel(props: { readonly onNavigate?: () => void }): JSX.Element 
           >
             <div class="session-list">
               <For each={sessions()}>
-                {(session) => <SessionRow session={session} onNavigate={props.onNavigate} />}
+                {(session) => (
+                  <SessionRow
+                    session={session}
+                    onSelectSession={props.onSelectSession}
+                    onNavigate={props.onNavigate}
+                  />
+                )}
               </For>
             </div>
           </Show>
@@ -616,6 +680,7 @@ function SessionPanel(props: { readonly onNavigate?: () => void }): JSX.Element 
 function SessionRow(props: {
   readonly session: SessionInfoView
   readonly readOnly?: boolean
+  readonly onSelectSession?: (sessionID: string) => void
   readonly onNavigate?: () => void
 }): JSX.Element {
   const remote = useRemote()
@@ -628,7 +693,8 @@ function SessionRow(props: {
       aria-pressed={active()}
       disabled={props.readOnly}
       onClick={() => {
-        void remote.store.selectSession(props.session.id)
+        if (props.onSelectSession) props.onSelectSession(props.session.id)
+        else void remote.store.selectSession(props.session.id)
         props.onNavigate?.()
       }}
     >
@@ -645,7 +711,11 @@ function SessionRow(props: {
   )
 }
 
-function SessionSummaryRow(props: { readonly session: SessionInfoView; readonly readOnly?: boolean }): JSX.Element {
+function SessionSummaryRow(props: {
+  readonly session: SessionInfoView
+  readonly readOnly?: boolean
+  readonly onSelectSession: (sessionID: string) => void
+}): JSX.Element {
   const remote = useRemote()
   const summary = () => summarizeSession(props.session, remote.state().view)
   const chips = () => sessionChips(props.session, remote.state().view)
@@ -656,7 +726,7 @@ function SessionSummaryRow(props: { readonly session: SessionInfoView; readonly 
           type="button"
           class="sessions-table__select"
           disabled={props.readOnly}
-          onClick={() => void remote.store.selectSession(props.session.id)}
+          onClick={() => props.onSelectSession(props.session.id)}
         >
           {props.session.title}
         </button>
@@ -752,7 +822,11 @@ function NoSessionsState(): JSX.Element {
   )
 }
 
-function ConversationView(props: { readonly title: string }): JSX.Element {
+function ConversationView(props: {
+  readonly title: string
+  readonly canCreateSession: boolean
+  readonly onNewSession: () => void
+}): JSX.Element {
   const remote = useRemote()
   const state = () => remote.state()
   const view = () => state().view
@@ -782,6 +856,7 @@ function ConversationView(props: { readonly title: string }): JSX.Element {
             <Show when={blocked()}>
               <DeviceActions view={devices} />
             </Show>
+            <NewSessionButton disabled={!props.canCreateSession} onClick={props.onNewSession} />
             <Link href="/docs/usage/remote" class="button button--secondary button--small">
               How remote access works
             </Link>
@@ -855,7 +930,11 @@ function RequestCards(props: {
   )
 }
 
-function SessionsPage(): JSX.Element {
+function SessionsPage(props: {
+  readonly canCreateSession: boolean
+  readonly onNewSession: () => void
+  readonly onSelectSession: (sessionID: string) => void
+}): JSX.Element {
   const remote = useRemote()
   const [query, setQuery] = createSignal("")
   const [filter, setFilter] = createSignal<SessionFilter>("all")
@@ -864,6 +943,9 @@ function SessionsPage(): JSX.Element {
   return (
     <div class="pane sessions-page">
       <h1 class="visually-hidden">Sessions</h1>
+      <div class="sessions-page__toolbar">
+        <NewSessionButton disabled={!props.canCreateSession} onClick={props.onNewSession} />
+      </div>
       <Show
         when={remote.state().sessions.length > 0}
         fallback={
@@ -917,7 +999,15 @@ function SessionsPage(): JSX.Element {
                 <span role="columnheader">Status</span>
                 <span role="columnheader">Updated</span>
               </div>
-              <For each={sessions()}>{(session) => <SessionSummaryRow session={session} readOnly={cached() !== undefined} />}</For>
+              <For each={sessions()}>
+                {(session) => (
+                  <SessionSummaryRow
+                    session={session}
+                    readOnly={cached() !== undefined}
+                    onSelectSession={props.onSelectSession}
+                  />
+                )}
+              </For>
             </div>
           </div>
         </Show>
@@ -1055,10 +1145,10 @@ function ActivityList(): JSX.Element {
 
 function BottomNav(props: { readonly view: RemoteView }): JSX.Element {
   const items: readonly { readonly view: RemoteView; readonly label: string; readonly icon: IconName }[] = [
-    { view: "/remote", label: "Chat", icon: "chat" },
-    { view: "/remote/activity", label: "Activity", icon: "activity" },
     { view: "/remote/sessions", label: "Sessions", icon: "sessions" },
-    { view: "/remote/settings", label: "More", icon: "settings" },
+    { view: "/remote", label: "Conversation", icon: "chat" },
+    { view: "/remote/activity", label: "Activity", icon: "activity" },
+    { view: "/remote/settings", label: "Settings", icon: "settings" },
   ]
   return (
     <nav class="bottom-nav" aria-label="Workspace">

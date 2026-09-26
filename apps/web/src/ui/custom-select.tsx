@@ -1,6 +1,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { Portal } from "solid-js/web"
 import { Icon } from "./icon"
+import { Modal } from "./modal"
 import "./custom-select.css"
 
 export type CustomSelectOption = {
@@ -27,6 +28,8 @@ export function CustomSelect(props: {
   const id = `custom-select-${crypto.randomUUID()}`
   const listboxID = `${id}-listbox`
   const [open, setOpen] = createSignal(false)
+  const [compact, setCompact] = createSignal(false)
+  const [pendingValue, setPendingValue] = createSignal<string>()
   const [active, setActive] = createSignal(0)
   const [placement, setPlacement] = createSignal({ left: 0, top: 0, width: 260 })
   const selected = createMemo(() => props.options.findIndex((option) => option.value === props.value))
@@ -40,6 +43,7 @@ export function CustomSelect(props: {
   const openMenu = () => {
     if (props.disabled || props.options.length === 0) return
     setActive(selected() < 0 ? 0 : selected())
+    setPendingValue(props.value)
     setOpen(true)
     queueMicrotask(positionSurface)
     props.onOpen?.()
@@ -51,6 +55,10 @@ export function CustomSelect(props: {
   const choose = (index: number) => {
     const option = props.options[index]
     if (option === undefined) return
+    if (compact()) {
+      setPendingValue(option.value)
+      return
+    }
     props.onChange(option.value)
     closeMenu(true)
   }
@@ -58,14 +66,14 @@ export function CustomSelect(props: {
     if (props.options.length === 0) return
     setActive((index + props.options.length) % props.options.length)
   }
-  const onKeyDown: JSX.EventHandler<HTMLButtonElement, KeyboardEvent> = (event) => {
+  const onKeyDown: JSX.EventHandler<HTMLElement, KeyboardEvent> = (event) => {
     if (props.disabled) return
     if (event.key === "Escape" && open()) {
       event.preventDefault()
       closeMenu(true)
       return
     }
-    if (event.key === "Tab" && open()) {
+    if (event.key === "Tab" && open() && !compact()) {
       closeMenu(false)
       return
     }
@@ -102,13 +110,26 @@ export function CustomSelect(props: {
   }
 
   onMount(() => {
+    const media = window.matchMedia("(max-width: 479px)")
+    setCompact(media.matches)
+    const resize = () => {
+      if (open()) closeMenu(true)
+      setCompact(media.matches)
+    }
+    media.addEventListener("change", resize)
     const outside = (event: PointerEvent) => {
-      if (open() && event.target instanceof Node && !root?.contains(event.target) && !surface?.contains(event.target)) closeMenu(false)
+      if (!open() || !(event.target instanceof Node)) return
+      if (compact()) {
+        if (event.target instanceof HTMLDialogElement && event.target.classList.contains("custom-select__dialog")) closeMenu(true)
+        return
+      }
+      if (!root?.contains(event.target) && !surface?.contains(event.target)) closeMenu(false)
     }
     document.addEventListener("pointerdown", outside)
     window.addEventListener("resize", positionSurface)
     window.addEventListener("scroll", positionSurface, true)
     onCleanup(() => {
+      media.removeEventListener("change", resize)
       document.removeEventListener("pointerdown", outside)
       window.removeEventListener("resize", positionSurface)
       window.removeEventListener("scroll", positionSurface, true)
@@ -130,7 +151,7 @@ export function CustomSelect(props: {
   })
 
   function positionSurface() {
-    if (!open() || surface === undefined || root === undefined) return
+    if (!open() || compact() || surface === undefined || root === undefined) return
     const rootRect = root.getBoundingClientRect()
     const surfaceRect = surface.getBoundingClientRect()
     const width = Math.min(Math.max(rootRect.width, 260), window.innerWidth - 16)
@@ -141,6 +162,47 @@ export function CustomSelect(props: {
     })
   }
 
+  const options = () => (
+    <>
+      <div
+        id={listboxID}
+        class="custom-select__list"
+        role="listbox"
+        aria-label={props.label}
+        tabIndex={compact() ? 0 : -1}
+        aria-activedescendant={compact() ? `${listboxID}-${activeIndex()}` : undefined}
+        onKeyDown={compact() ? onKeyDown : undefined}
+      >
+        <For each={props.options}>
+          {(option, index) => (
+            <button
+              id={`${listboxID}-${index()}`}
+              type="button"
+              class={`custom-select__option${index() === activeIndex() ? " custom-select__option--active" : ""}`}
+              role="option"
+              tabIndex={-1}
+              aria-selected={option.value === (compact() ? pendingValue() : props.value)}
+              onPointerEnter={() => setActive(index())}
+              onClick={() => {
+                setActive(index())
+                choose(index())
+              }}
+            >
+              <span class="custom-select__check" aria-hidden="true">{option.value === (compact() ? pendingValue() : props.value) ? "✓" : ""}</span>
+              <span class="custom-select__option-body">
+                <span>{option.label}</span>
+                <Show when={option.detail}>{(detail) => <small>{detail()}</small>}</Show>
+              </span>
+              <Show when={option.badge}>{(badge) => <span class="custom-select__badge">{badge()}</span>}</Show>
+            </button>
+          )}
+        </For>
+      </div>
+      <Show when={props.footer}>
+        {(footer) => <div class="custom-select__footer" onClick={() => closeMenu(false)}>{footer()}</div>}
+      </Show>
+    </>
+  )
   const label = () => props.options.find((option) => option.value === props.value)?.label ?? props.placeholder
   return (
     <div ref={root} class={`custom-select${open() ? " custom-select--open" : ""}${props.class ? ` ${props.class}` : ""}`}>
@@ -149,12 +211,12 @@ export function CustomSelect(props: {
         id={id}
         type="button"
         class="custom-select__trigger"
-        role="combobox"
+        role={compact() ? undefined : "combobox"}
         aria-label={props.label}
-        aria-controls={listboxID}
+        aria-controls={compact() ? undefined : listboxID}
         aria-expanded={open()}
-        aria-haspopup="listbox"
-        aria-activedescendant={open() ? `${listboxID}-${activeIndex()}` : undefined}
+        aria-haspopup={compact() ? "dialog" : "listbox"}
+        aria-activedescendant={open() && !compact() ? `${listboxID}-${activeIndex()}` : undefined}
         disabled={props.disabled}
         onClick={() => (open() ? closeMenu(false) : openMenu())}
         onKeyDown={onKeyDown}
@@ -164,50 +226,37 @@ export function CustomSelect(props: {
       </button>
       <Show when={open()}>
         <Portal>
-        <button class="custom-select__scrim" type="button" tabIndex={-1} aria-label={`Close ${props.label}`} onClick={() => closeMenu(true)} />
-        <div ref={surface} class="custom-select__surface" style={{
-          "--custom-select-left": `${placement().left}px`,
-          "--custom-select-top": `${placement().top}px`,
-          "--custom-select-width": `${placement().width}px`,
-        }}>
-          <div class="custom-select__sheet-head">
-            <span>
-              <strong>{props.sheetTitle ?? props.label}</strong>
-              <small>{props.sheetSubtitle ?? "Available options"}</small>
-            </span>
-            <button type="button" class="custom-select__close" aria-label={`Close ${props.label}`} onClick={() => closeMenu(true)}>×</button>
-          </div>
-          <div id={listboxID} class="custom-select__list" role="listbox" aria-labelledby={id}>
-            <For each={props.options}>
-              {(option, index) => (
-                <button
-                  id={`${listboxID}-${index()}`}
-                  type="button"
-                  class={`custom-select__option${index() === activeIndex() ? " custom-select__option--active" : ""}`}
-                  role="option"
-                  tabIndex={-1}
-                  aria-selected={option.value === props.value}
-                  onPointerEnter={() => setActive(index())}
-                  onClick={() => choose(index())}
-                >
-                  <span class="custom-select__check" aria-hidden="true">{option.value === props.value ? "✓" : ""}</span>
-                  <span class="custom-select__option-body">
-                    <span>{option.label}</span>
-                    <Show when={option.detail}>{(detail) => <small>{detail()}</small>}</Show>
-                  </span>
-                  <Show when={option.badge}>{(badge) => <span class="custom-select__badge">{badge()}</span>}</Show>
-                </button>
-              )}
-            </For>
-          </div>
-          <Show when={props.footer}>
-            {(footer) => (
-              <div class="custom-select__footer" onClick={() => closeMenu(false)}>
-                {footer()}
+          <Show when={compact()} fallback={
+            <div ref={surface} class="custom-select__surface" style={{
+              "--custom-select-left": `${placement().left}px`,
+              "--custom-select-top": `${placement().top}px`,
+              "--custom-select-width": `${placement().width}px`,
+            }}>
+              <div class="custom-select__sheet-head">
+                <span>
+                  <strong>{props.sheetTitle ?? props.label}</strong>
+                  <small>{props.sheetSubtitle ?? "Available options"}</small>
+                </span>
               </div>
-            )}
+              {options()}
+            </div>
+          }>
+            <Modal class="overlay--sheet custom-select__dialog" label={props.sheetTitle ?? props.label} onClose={() => closeMenu(true)}>
+              <p class="custom-select__subtitle">{props.sheetSubtitle ?? "Available options"}</p>
+              {options()}
+              <button
+                type="button"
+                class="button button--secondary custom-select__confirm"
+                disabled={!props.options.some((option) => option.value === pendingValue())}
+                onClick={() => {
+                  const option = props.options.find((item) => item.value === pendingValue())
+                  if (option === undefined) return
+                  if (option.value !== props.value) props.onChange(option.value)
+                  closeMenu(true)
+                }}
+              >Confirm Selection</button>
+            </Modal>
           </Show>
-        </div>
         </Portal>
       </Show>
     </div>

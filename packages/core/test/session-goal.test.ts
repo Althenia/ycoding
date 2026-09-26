@@ -141,6 +141,7 @@ const projects = Layer.succeed(
     list: () => Effect.succeed([]),
     resolve: (directory) => Effect.succeed({ id: ProjectV2.ID.global, directory }),
     directories: () => Effect.succeed([]),
+    recordOpened: () => Effect.void,
     commit: () => Effect.void,
   }),
 )

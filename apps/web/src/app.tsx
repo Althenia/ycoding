@@ -6,6 +6,7 @@ import { LandingPage, MarketingLayout, NotFoundPage } from "./ui/site"
 import { DocsIndexPage, DocsPage, useDocAnchor } from "./ui/docs"
 import { ChangelogPage } from "./ui/changelog"
 import { RemoteProvider } from "./remote/context"
+import type { RemoteStore } from "./remote/store"
 import { RemoteShell } from "./remote/ui/shell"
 
 const routes = [
@@ -48,7 +49,7 @@ function Outlet(): JSX.Element {
   )
 }
 
-export function App(): JSX.Element {
+export function App(props: { readonly createRemoteStore?: () => RemoteStore }): JSX.Element {
   const router = useRouter()
   // Content entrance is bound to `data-hydrated`, which is set two frames after mount:
   // the pre-hydration paint and a no-script render both show the final state, so no
@@ -72,7 +73,7 @@ export function App(): JSX.Element {
         </MarketingLayout>
       }
     >
-      <RemoteProvider>
+      <RemoteProvider createStore={props.createRemoteStore}>
         <Outlet />
       </RemoteProvider>
     </Show>

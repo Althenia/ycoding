@@ -1,4 +1,4 @@
-import type { CreateEnrollmentResponse, RemoteDeviceInfo, RemoteOperation } from "@ycoding-ai/remote"
+import type { CreateEnrollmentResponse, RemoteDeviceInfo, RemoteOperation, RemoteWorkspaceInfo } from "@ycoding-ai/remote"
 import { signInURL, type RemoteHttp, type RemoteHttpResult, type SignInProvider } from "./http"
 import {
   createNotificationDelivery,
@@ -74,6 +74,14 @@ export type PendingMutation = {
   readonly input: Readonly<Record<string, unknown>>
 }
 
+export type SessionCreation = {
+  readonly id: string
+  readonly deviceID: string
+  readonly workspace: RemoteWorkspaceInfo
+  readonly status: "creating" | "unknown" | "failed"
+  readonly message?: string
+}
+
 export type RemoteStoreState = {
   readonly connection: RemoteConnectionState
   readonly owner?: { readonly id: string; readonly expiresAt: number }
@@ -81,6 +89,11 @@ export type RemoteStoreState = {
   readonly activeDeviceID?: string
   readonly advertised: readonly string[]
   readonly sessions: readonly SessionInfoView[]
+  readonly drafts: Readonly<Record<string, string>>
+  readonly workspaces: readonly RemoteWorkspaceInfo[]
+  readonly workspaceStatus: "idle" | "loading" | "ready" | "error"
+  readonly workspaceError?: string
+  readonly sessionCreation?: SessionCreation
   readonly activeSessionID?: string
   readonly view?: SessionView
   readonly transport: RemoteTransportStatus
@@ -99,6 +112,7 @@ export type RemoteStoreOptions = {
   /** Coalesces stream deltas into one state notification. */
   readonly batchMs?: number
   readonly createMessageID?: () => string
+  readonly createSessionID?: () => string
   readonly deviceName?: (deviceID: string) => string
   /** Alerts for live events; the default reads stored preferences and the browser notification API. */
   readonly notificationDelivery?: NotificationDelivery
@@ -115,6 +129,11 @@ export type RemoteStore = {
   readonly connect: (deviceID: string) => void
   readonly disconnect: () => void
   readonly selectSession: (sessionID: string) => Promise<void>
+  readonly setDraft: (sessionID: string, text: string) => void
+  readonly loadWorkspaces: () => Promise<void>
+  readonly createSession: (workspaceID: string) => Promise<string | undefined>
+  readonly retrySessionCreation: () => Promise<string | undefined>
+  readonly dismissSessionCreation: () => void
   readonly reloadMessages: () => Promise<void>
   readonly loadShellOutputPage: (shellID: string) => Promise<void>
   readonly sendPrompt: (input: { readonly text: string; readonly delivery: "steer" | "queue" }) => Promise<void>
@@ -176,6 +195,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     devices: [],
     advertised: [],
     sessions: [],
+    drafts: {},
+    workspaces: [],
+    workspaceStatus: "idle",
     mutations: [],
     notifications: [],
     transport: { kind: "idle" },
@@ -189,6 +211,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
    * connection change or Session invalidation starts a new generation.
    */
   let sessionsToken = 0
+  let workspacesToken = 0
   /**
    * Account generation. A `/api/me` read may apply only while the account context it
    * was issued for still owns the store, so a read that settles after sign-out, a
@@ -354,12 +377,18 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       // remains valid. Tear down only that device, then let the authoritative account
       // answer decide whether the browser is truly signed out.
       sessionsToken += 1
+      workspacesToken += 1
       setState({
         transport: status,
         connection: deviceConnection(state.devices.filter((device) => device.status === "active" && device.online).length),
         activeDeviceID: undefined,
         advertised: [],
         sessions: [],
+        drafts: {},
+        workspaces: [],
+        workspaceStatus: "idle",
+        workspaceError: undefined,
+        sessionCreation: undefined,
         activeSessionID: undefined,
         view: undefined,
         notice: status.reason,
@@ -715,6 +744,67 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     await reloadSnapshot(sessionID, selectionToken)
   }
 
+  const loadWorkspaces = async () => {
+    const active = transport
+    const token = ++workspacesToken
+    setState({ workspaces: [], workspaceStatus: "loading", workspaceError: undefined })
+    if (active === undefined || state.transport.kind !== "open" || state.connection.kind === "offline") {
+      setState({ workspaceStatus: "error", workspaceError: "Connect to a machine to load its workspaces." })
+      return
+    }
+    const outcome = await active.request("workspace.list")
+    if (!isCurrentConnection(active) || token !== workspacesToken) return
+    if (outcome.status !== "ok") {
+      setState({ workspaceStatus: "error", workspaceError: describeOutcome(outcome, "Workspaces") })
+      return
+    }
+    const workspaces = readWorkspaces(outcome.value)
+    if (workspaces === undefined) {
+      setState({ workspaceStatus: "error", workspaceError: "The device returned an unreadable workspace list." })
+      return
+    }
+    setState({ workspaces, workspaceStatus: "ready" })
+  }
+
+  const createSession = async (attempt: SessionCreation, reconcile: boolean) => {
+    const active = transport
+    if (active === undefined || state.transport.kind !== "open" || state.connection.kind === "offline" || state.activeDeviceID !== attempt.deviceID) {
+      setState({ sessionCreation: { ...attempt, status: attempt.status === "unknown" ? "unknown" : "failed", message: "Connect to the same machine before creating this session." } })
+      return undefined
+    }
+    setState({ sessionCreation: { ...attempt, status: "creating", message: undefined } })
+    const owns = () => isCurrentConnection(active) && state.sessionCreation?.id === attempt.id
+    const accept = (value: unknown) => {
+      const data = typeof value === "object" && value !== null ? Reflect.get(value, "data") : undefined
+      const session = readSessionInfo(data)
+      const parentID = typeof data === "object" && data !== null ? Reflect.get(data, "parentID") : undefined
+      if (!session || session.id !== attempt.id || session.directory !== attempt.workspace.directory || session.projectID !== attempt.workspace.projectID || parentID !== undefined) {
+        setState({ sessionCreation: { ...attempt, status: "unknown", message: "The returned session does not match this workspace. Check Sessions before retrying." } })
+        return undefined
+      }
+      setState({
+        sessions: [session, ...state.sessions.filter((item) => item.id !== session.id)],
+        advertised: [...new Set([...state.advertised, session.id])],
+        sessionCreation: undefined,
+      })
+      return session.id
+    }
+    if (reconcile) {
+      const existing = await active.request("session.get", { sessionID: attempt.id })
+      if (!owns()) return undefined
+      if (existing.status === "ok") return accept(existing.value)
+      if (existing.status !== "failed" || existing.error.code !== "session_not_allowed") {
+        setState({ sessionCreation: { ...attempt, status: "unknown", message: describeOutcome(existing, "Session check") } })
+        return undefined
+      }
+    }
+    const outcome = await active.request("session.create", { input: { id: attempt.id, workspace: attempt.workspace.id } })
+    if (!owns()) return undefined
+    if (outcome.status === "ok") return accept(outcome.value)
+    setState({ sessionCreation: { ...attempt, status: outcome.status === "unknown" ? "unknown" : "failed", message: describeOutcome(outcome, "Session creation") } })
+    return undefined
+  }
+
   const api: RemoteStore = {
     state: () => state,
     subscribe: (listener) => {
@@ -774,11 +864,17 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (selected?.status === "active" && !selected.online) {
         // The disconnect clears the list, so the selected device's last list is restored read-only.
         const sessions = state.sessions
+        const drafts = state.drafts
+        const creation = state.sessionCreation
         setState({ owner: { id: me.value.user.id, expiresAt: me.value.session.expiresAt }, devices })
         api.disconnect()
         setState({
           activeDeviceID: selected.id,
           sessions,
+          drafts,
+          sessionCreation: creation?.status === "creating"
+            ? { ...creation, status: "unknown", message: "The machine went offline before creation settled. Check or retry this session explicitly." }
+            : creation,
           connection: { kind: "offline", deviceName: selected.name },
           transport: { kind: "idle" },
         })
@@ -817,12 +913,18 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return result
     },
     connect: (deviceID) => {
+      const drafts = state.activeDeviceID === deviceID ? state.drafts : {}
+      const creation = state.sessionCreation?.deviceID === deviceID ? state.sessionCreation : undefined
       transport?.close(1000, "switching device")
       // The new socket starts with no subscriptions, no alerts, and no list of its own.
       subscribedSessionID = undefined
       queued = []
       sessionsToken += 1
-      setState({ activeDeviceID: deviceID, sessions: [], advertised: [], activeSessionID: undefined, view: undefined, notice: undefined })
+      workspacesToken += 1
+      setState({ activeDeviceID: deviceID, sessions: [], advertised: [], activeSessionID: undefined, view: undefined, notice: undefined, drafts,
+        workspaces: [], workspaceStatus: "idle", workspaceError: undefined,
+        sessionCreation: creation?.status === "creating" ? { ...creation, status: "unknown", message: "The connection changed before creation settled. Check or retry this session explicitly." } : creation,
+      })
       endAlerts()
       const created = options.createTransport(deviceID, {
         onStatus: (status) => handleStatus(created, status),
@@ -853,10 +955,16 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       subscribedSessionID = undefined
       queued = []
       sessionsToken += 1
+      workspacesToken += 1
       setState({
         activeDeviceID: undefined,
         advertised: [],
         sessions: [],
+        drafts: {},
+        workspaces: [],
+        workspaceStatus: "idle",
+        workspaceError: undefined,
+        sessionCreation: undefined,
         activeSessionID: undefined,
         view: undefined,
         connection: state.owner === undefined ? { kind: "signed-out" } : deviceConnection(state.devices.length),
@@ -864,6 +972,29 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       endAlerts()
     },
     selectSession,
+    setDraft: (sessionID, text) => {
+      if (sessionID !== state.activeSessionID) return
+      setState({ drafts: { ...state.drafts, [sessionID]: text } })
+    },
+    loadWorkspaces,
+    createSession: async (workspaceID) => {
+      if (state.sessionCreation?.status === "creating" || state.sessionCreation?.status === "unknown") return undefined
+      const workspace = state.workspaces.find((item) => item.id === workspaceID)
+      const deviceID = state.activeDeviceID
+      if (!workspace || !deviceID || state.workspaceStatus !== "ready") {
+        setState({ notice: "Select an available workspace from the connected machine." })
+        return undefined
+      }
+      return createSession({ id: options.createSessionID?.() ?? `ses_${crypto.randomUUID().replaceAll("-", "")}`, deviceID, workspace, status: "creating" }, false)
+    },
+    retrySessionCreation: async () => {
+      const attempt = state.sessionCreation
+      if (!attempt || attempt.status === "creating") return undefined
+      return createSession(attempt, true)
+    },
+    dismissSessionCreation: () => {
+      if (state.sessionCreation?.status !== "creating") setState({ sessionCreation: undefined })
+    },
     reloadMessages,
     loadShellOutputPage,
     sendPrompt: async (input) => {
@@ -1066,6 +1197,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       transport?.close(1000, "disposed")
       transport = undefined
       subscribedSessionID = undefined
+      setState({ drafts: {}, workspaces: [], workspaceStatus: "idle", workspaceError: undefined, sessionCreation: undefined })
       endAlerts()
       listeners.clear()
     },
@@ -1203,4 +1335,21 @@ function describeOutcome(outcome: Exclude<RemoteRequestOutcome, { status: "ok" }
 
 function defaultMessageID(): string {
   return `msg_${Date.now().toString(36)}${Math.floor(Math.random() * 1_000_000).toString(36)}`
+}
+
+function readWorkspaces(payload: unknown): readonly RemoteWorkspaceInfo[] | undefined {
+  if (typeof payload !== "object" || payload === null) return undefined
+  const data = Reflect.get(payload, "data")
+  if (!Array.isArray(data)) return undefined
+  const workspaces = data.flatMap((value: unknown) => {
+    if (typeof value !== "object" || value === null) return []
+    const id = Reflect.get(value, "id")
+    const projectID = Reflect.get(value, "projectID")
+    const directory = Reflect.get(value, "directory")
+    const name = Reflect.get(value, "name")
+    if (typeof id !== "string" || id.length === 0 || typeof projectID !== "string" || projectID.length === 0 || typeof directory !== "string" || directory.length === 0 || (name !== undefined && typeof name !== "string")) return []
+    return [{ id, projectID, directory, ...(name === undefined ? {} : { name }) }]
+  })
+  if (workspaces.length !== data.length || new Set(workspaces.map((workspace) => workspace.id)).size !== workspaces.length) return undefined
+  return workspaces
 }

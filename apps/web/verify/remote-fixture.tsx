@@ -11,8 +11,7 @@ import { render } from "solid-js/web"
 import { onMount } from "solid-js"
 import { RouterProvider } from "../src/router/router"
 import { ThemeProvider } from "../src/theme/theme-store"
-import { RemoteProvider } from "../src/remote/context"
-import { RemoteShell } from "../src/remote/ui/shell"
+import { App } from "../src/app"
 import { createRemoteStore, type RemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
 import type { RemoteHttp, RemoteHttpResult } from "../src/remote/http"
@@ -383,6 +382,17 @@ function createFixtureStore(): Fixture {
   let liveReads = 0
   const formRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
   const mutationRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
+  const workspaces = [
+    { id: "workspace_fixture", projectID: "prj_remote", directory: "/workspace/ycoding", name: "YCoding" },
+    { id: "workspace_other", projectID: "prj_other", directory: "/workspace/other", name: "Other repository" },
+  ]
+  const createdSessions = new Map<string, {
+    id: string
+    title: string
+    projectID: string
+    location: { directory: string }
+    time: { created: number; updated: number }
+  }>()
   /** Requests this synthetic agent has already answered; a later list read omits them. */
   const answered = new Set<string>()
   const unreplied = <T extends { readonly id: string }>(requests: readonly T[]) => requests.filter((request) => !answered.has(request.id))
@@ -429,27 +439,49 @@ function createFixtureStore(): Fixture {
   const outcome = (
     operation: RemoteOperation,
     input?: Readonly<Record<string, unknown>>,
+    targetSessionID = sessionID,
   ): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
-    if (operation === "session.prompt" || operation === "session.autonomy.set" || operation === "session.guardrail.reply") {
+    if (operation === "session.prompt" || operation === "session.autonomy.set" || operation === "session.guardrail.reply" || operation === "session.create") {
       mutationRequests.push({ operation, input })
+    }
+    if (operation === "workspace.list") {
+      if (accountParams.get("workspaces") === "error") return { status: "failed", error: { code: "internal_error", message: "Workspace inventory unavailable" } }
+      return { status: "ok", value: { data: accountParams.get("workspaces") === "empty" ? [] : workspaces } }
+    }
+    if (operation === "session.create") {
+      const workspace = workspaces.find((item) => item.id === input?.workspace)
+      if (!workspace || typeof input?.id !== "string") return { status: "failed", error: { code: "invalid_message", message: "Unknown workspace" } }
+      if (accountParams.get("creation") === "failed") return { status: "failed", error: { code: "invalid_message", message: "Workspace directory is unavailable" } }
+      const existing = createdSessions.get(input.id)
+      const created = existing ?? { id: input.id, title: "New session", projectID: workspace.projectID, location: { directory: workspace.directory }, time: { created: Date.now(), updated: Date.now() } }
+      createdSessions.set(created.id, created)
+      if (accountParams.get("creation") === "unknown") return { status: "unknown", error: { code: "outcome_unknown", message: "Connection closed before creation settled" } }
+      const result: RemoteRequestOutcome = { status: "ok", value: { data: created } }
+      const delay = Number(accountParams.get("creationDelay") ?? 0)
+      return delay > 0 ? new Promise((resolve) => setTimeout(() => resolve(result), delay)) : result
+    }
+    if (operation === "session.get") {
+      const info = createdSessions.get(targetSessionID) ?? sessions.find((item) => item.id === targetSessionID)
+      return info ? { status: "ok", value: { data: info } } : { status: "failed", error: { code: "session_not_allowed", message: "Session not found" } }
     }
     if (connectionMode === "offline" && (operation === "session.list" || operation === "session.active")) {
       return { status: "failed", error: { code: "agent_unavailable", message: "No local agent is connected" } }
     }
-    if (operation === "session.list") return { status: "ok", value: { data: emptyBackend ? [] : sessions } }
+    if (operation === "session.list") return { status: "ok", value: { data: [...createdSessions.values(), ...(emptyBackend ? [] : sessions)] } }
     if (operation === "session.active") return { status: "ok", value: { data: { [sessionID]: { type: "running" } } } }
     if (operation === "session.snapshot") {
       return {
         status: "ok",
         value: {
           sourceEpoch: "epoch_fixture",
-          session: sessions[0],
-          messages,
-          watermark: { type: "log.synced", aggregateID: sessionID, seq: 42 },
+          session: createdSessions.get(targetSessionID) ?? sessions.find((item) => item.id === targetSessionID),
+          messages: targetSessionID === sessionID ? messages : [],
+          watermark: { type: "log.synced", aggregateID: targetSessionID, seq: targetSessionID === sessionID ? 42 : 0 },
         },
       }
     }
     if (operation === "session.autonomy.get") {
+      if (createdSessions.has(targetSessionID)) return { status: "ok", value: { data: { mode: "normal", yolo: 0 } } }
       return {
         status: "ok",
         value: {
@@ -461,11 +493,11 @@ function createFixtureStore(): Fixture {
         },
       }
     }
-    if (operation === "session.permission.list") return { status: "ok", value: { data: unreplied(permissions) } }
-    if (operation === "session.guardrail.request.list") return { status: "ok", value: { data: unreplied(guardrails) } }
+    if (operation === "session.permission.list") return { status: "ok", value: { data: targetSessionID === sessionID ? unreplied(permissions) : [] } }
+    if (operation === "session.guardrail.request.list") return { status: "ok", value: { data: targetSessionID === sessionID ? unreplied(guardrails) : [] } }
     if (operation === "session.form.list") return {
       status: "ok",
-      value: remoteScenarioData === undefined
+      value: targetSessionID !== sessionID ? [] : remoteScenarioData === undefined
         ? formMode === "constraints" ? unreplied([constraintsForm]) : unreplied(formMode === "all" ? [form, allForm] : [form])
         : unreplied(remoteScenarioData.forms),
     }
@@ -509,7 +541,7 @@ function createFixtureStore(): Fixture {
     status: (): RemoteTransportStatus => ({ kind: open ? "open" : "closed", code: open ? 1000 : 1006, reason: "", retryable: false }),
     request: async (operation, request) => {
       if (!open) return { status: "unavailable", reason: "not-connected" }
-      return outcome(operation, request?.input)
+      return outcome(operation, request?.input, request?.sessionID)
     },
   }
 
@@ -522,7 +554,7 @@ function createFixtureStore(): Fixture {
         return {
           ...wire,
           request: async (operation, request) => {
-            if (operation !== "session.guardrail.reply" && operation !== "session.shell.output") return outcome(operation, request?.input)
+            if (operation !== "session.guardrail.reply" && operation !== "session.shell.output") return outcome(operation, request?.input, request?.sessionID)
             const result = await wire.request(operation, request)
             if (result.status === "ok" && typeof request?.input?.requestID === "string") answered.add(request.input.requestID)
             return result
@@ -710,6 +742,7 @@ function remoteMutationReport() {
 
 const fixtureView = remoteScenarioData?.view ?? new URLSearchParams(window.location.search).get("view") ?? "chat"
 const fixturePath = fixtureView === "chat" ? "/remote" : `/remote/${fixtureView}`
+window.history.replaceState(null, "", `${fixturePath}${window.location.search}`)
 
 function FixturePage() {
   onMount(() => {
@@ -746,7 +779,7 @@ function FixturePage() {
           Simulate disconnect and reconnect
         </button>
       </div>
-      <RemoteShell path={fixturePath} />
+      <App createRemoteStore={() => fixture.store} />
     </div>
   )
 }
@@ -757,9 +790,7 @@ render(
   () => (
     <RouterProvider>
       <ThemeProvider>
-        <RemoteProvider createStore={() => fixture.store}>
-          <FixturePage />
-        </RemoteProvider>
+        <FixturePage />
       </ThemeProvider>
     </RouterProvider>
   ),

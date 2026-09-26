@@ -1,5 +1,8 @@
 export * as RemoteOperations from "./remote-operations"
 
+import { createHash } from "node:crypto"
+import { stat } from "node:fs/promises"
+import { Project } from "@ycoding-ai/schema/project"
 import type { FormAnswer, SessionInfo } from "@ycoding-ai/client/promise"
 import {
   RemoteLimits,
@@ -11,10 +14,12 @@ import {
   type RemoteOperation,
   type RemoteRequest,
   type RemoteResponse,
+  type RemoteWorkspaceInfo,
 } from "@ycoding-ai/remote"
 import {
   LocalFailure,
   findSession,
+  listSessions,
   type LocalAutonomy,
   type LocalLocation,
   type LocalPrompt,
@@ -22,7 +27,12 @@ import {
 } from "./remote-local"
 
 /** Operations the relay proxies without addressing one session. */
-export const unscopedOperations: ReadonlySet<RemoteOperation> = new Set(["session.list", "session.active"])
+export const unscopedOperations: ReadonlySet<RemoteOperation> = new Set([
+  "workspace.list",
+  "session.list",
+  "session.active",
+  "session.create",
+])
 
 // Authorization and mapping for the closed relay operation set. The local agent
 // resolves every scoped Session against the backend; no remote field can select a
@@ -192,6 +202,94 @@ function locationInfo(info: { readonly location: { readonly directory: string; r
   }
 }
 
+type WorkspaceCandidate = {
+  readonly info: RemoteWorkspaceInfo
+  readonly location: LocalLocation
+}
+
+async function workspaceInventory(local: LocalServer): Promise<WorkspaceCandidate[]> {
+  const [sessions, projects] = await Promise.all([listSessions(local), local.projectList()])
+  const projectsByID = new Map(projects.map((project) => [project.id, project]))
+  const candidates = new Map<string, WorkspaceCandidate>()
+  const add = (projectID: string, directory: string, workspaceID?: string) => {
+    const location = { directory, ...(workspaceID === undefined ? {} : { workspaceID }) }
+    const tuple = [projectID, directory, workspaceID ?? null] as const
+    const project = projectsByID.get(projectID)
+    candidates.set(JSON.stringify(tuple), {
+      location,
+      info: {
+        id: `wsp_${createHash("sha256").update("ycoding.remote.workspace.v1\0").update(JSON.stringify(tuple)).digest("hex")}`,
+        projectID,
+        directory,
+        ...(project?.name === undefined ? {} : { name: project.name }),
+      },
+    })
+  }
+
+  for (const project of projects) {
+    if (project.id !== Project.ID.global && project.worktree !== "/") add(project.id, project.worktree)
+  }
+  for (const [project, directories] of await Promise.all(
+    projects.map(async (project) => [project, await local.projectDirectories(project.id)] as const),
+  )) {
+    for (const directory of directories) add(project.id, directory.directory)
+  }
+  for (const session of sessions)
+    add(session.projectID, session.location.directory, session.location.workspaceID)
+
+  const existing: WorkspaceCandidate[] = []
+  for (const candidate of candidates.values()) {
+    if (await stat(candidate.location.directory).then((value) => value.isDirectory(), () => false)) existing.push(candidate)
+  }
+  return existing.toSorted((left, right) =>
+    left.info.projectID.localeCompare(right.info.projectID) ||
+    left.info.directory.localeCompare(right.info.directory) ||
+    (left.location.workspaceID ?? "").localeCompare(right.location.workspaceID ?? ""),
+  )
+}
+
+async function workspaceList(local: LocalServer): Promise<readonly RemoteWorkspaceInfo[]> {
+  return (await workspaceInventory(local)).map((candidate) => candidate.info)
+}
+
+async function createRootSession(input: OperationInput, id: string, workspaceID: string): Promise<SessionInfo> {
+  const candidate = (await workspaceInventory(input.local)).find((item) => item.info.id === workspaceID)
+  if (candidate === undefined) throw new OperationError("invalid_message", "Workspace is unavailable; refresh the workspace list and reopen it")
+  if (!(await stat(candidate.location.directory).then((value) => value.isDirectory(), () => false)))
+    throw new OperationError("invalid_message", "Workspace is unavailable; refresh the workspace list and reopen it")
+  const currentProject = await input.local.projectCurrent(candidate.location)
+  if (currentProject.id !== candidate.info.projectID)
+    throw new OperationError("invalid_message", "Workspace project changed; refresh the workspace list and reopen it")
+
+  const existing = await findSession(input.local, id)
+  if (existing !== undefined) {
+    assertRootPlacement(existing, id, candidate)
+    const current = await input.local.getSession(id, locationInfo(existing))
+    assertRootPlacement(current, id, candidate)
+    await input.sessions.refresh()
+    return current
+  }
+
+  const created = await input.local.createSession(id, candidate.location)
+  assertRootPlacement(created, id, candidate)
+  await input.sessions.refresh()
+  const verified = await input.sessions.verify(id)
+  if (verified === undefined) throw new OperationError("invalid_message", "Created Session is not available at the selected workspace")
+  assertRootPlacement(verified, id, candidate)
+  return verified
+}
+
+function assertRootPlacement(session: SessionInfo, id: string, candidate: WorkspaceCandidate) {
+  if (
+    session.id !== id ||
+    session.projectID !== candidate.info.projectID ||
+    session.parentID !== undefined ||
+    session.location.directory !== candidate.location.directory ||
+    session.location.workspaceID !== candidate.location.workspaceID
+  )
+    throw new OperationError("invalid_message", "Session ID belongs to a different placement; choose a new Session ID")
+}
+
 class OperationError extends Error {
   constructor(
     readonly code: RemoteErrorCode,
@@ -225,6 +323,9 @@ async function run(input: OperationInput) {
   // Validation is complete before any local call, so a malformed request never
   // causes local side effects.
   const validated = validate(request)
+  if (validated.kind === "workspace.list") return { data: await workspaceList(input.local) }
+  if (validated.kind === "session.create")
+    return { data: await createRootSession(input, validated.id, validated.workspace) }
   if (validated.kind === "list") return listPage(await input.sessions.list(), validated.query)
   if (validated.kind === "active") {
     // The local route is process-wide; retain only IDs present in the current
@@ -329,8 +430,10 @@ function unknownOperation(): never {
 type Reply = "once" | "always" | "reject"
 
 type Validated =
+  | { readonly kind: "workspace.list" }
   | { readonly kind: "list"; readonly query: ListQuery }
   | { readonly kind: "active" }
+  | { readonly kind: "session.create"; readonly id: string; readonly workspace: string }
   | { readonly kind: "get" }
   | { readonly kind: "snapshot" }
   | { readonly kind: "messages" }
@@ -371,8 +474,15 @@ const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
 
 function validate(request: RemoteRequest): Validated {
   const fields = validateFields(request)
+  if (request.operation === "workspace.list") return { kind: "workspace.list" }
   if (request.operation === "session.list") return { kind: "list", query: parseListQuery(fields) }
   if (request.operation === "session.active") return { kind: "active" }
+  if (request.operation === "session.create")
+    return {
+      kind: "session.create",
+      id: sessionID(fields.id, "id"),
+      workspace: requireString(fields.workspace, "workspace", 128),
+    }
   const plain = plainKinds[request.operation]
   if (plain !== undefined) return { kind: plain } as Validated
   switch (request.operation) {
@@ -571,6 +681,7 @@ function afterAnchor(session: SessionInfo, anchor: Cursor, order: "asc" | "desc"
 }
 
 const allowedFields: Readonly<Record<string, readonly string[]>> = {
+  "workspace.list": [],
   "session.list": ["limit", "order", "search", "parentID", "cursor"],
   "session.active": [],
   "session.get": [],
@@ -595,6 +706,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.autonomy.set": ["yolo", "maxNoProgress"],
   "session.goal.set": ["goal", "maxNoProgress"],
   "session.goal.stop": ["goal"],
+  "session.create": ["id", "workspace"],
 }
 
 function validateFields(request: RemoteRequest): Readonly<Record<string, unknown>> {
@@ -606,6 +718,7 @@ function validateFields(request: RemoteRequest): Readonly<Record<string, unknown
 }
 
 const mutations: ReadonlySet<string> = new Set([
+  "session.create",
   "session.prompt",
   "session.interrupt",
   "session.permission.reply",

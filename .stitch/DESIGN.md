@@ -4,7 +4,7 @@
 
 The implemented design system is `apps/web/src/styles/tokens.css` and `apps/web/src/styles/base.css`; surface composition lives in `apps/web/src/styles/site.css`, `apps/web/src/styles/docs.css`, and `apps/web/src/styles/remote.css`. The component and route owners are `apps/web/src/ui` and `apps/web/src/remote/ui`. Product copy and public links come from `apps/web/src/content` and the corresponding live route, not a generated specimen.
 
-Use this guidance for the YCoding remote-workspace and public-site Stitch screens. The selected Stitch “Terminal Slate” preset and its generated HTML are proposals, not the token or behavior authority. The user requires these screens to follow YCoding's implemented design system. The source-to-rebuild direction is repository → Stitch proposal → local review; applying a proposal to production requires a separate, digest-bound visual review.
+Use this guidance for the YCoding remote-workspace and public-site screens in Stitch project `16683752543265506864`. The project screens supply the requested layout and interaction direction; the repository supplies semantic tokens, product content, runtime contracts, and accessibility requirements. Map the selected Stitch “Terminal Slate” compositions into the existing SolidJS components rather than importing generated HTML, fonts, or a competing palette.
 
 ## Tokens and components
 
@@ -16,6 +16,8 @@ Use this guidance for the YCoding remote-workspace and public-site Stitch screen
 - Keep real YCoding identity, supported public links, accessible names, loading/empty/error states, and account/device/Session distinctions. Use bracketed placeholders in design specimens instead of invented account identities, device names, ages, versions, or production statistics. Offline mode does not queue remote mutations.
 - Check light and dark themes, 320/390/768/1024/1440 widths, focus-visible, contrast, reduced motion, touch hit areas, and horizontal containment in the real web application. A Stitch screenshot alone does not verify those behaviors.
 
-## Current conflict and review status
+## Source interpretation
 
-The saved R06, R07, and P14 Stitch previews render with Inter and dark surfaces distinct from the current YCoding token values. Preserve their layout evidence while mapping colors and typography to the implemented tokens in review rebuilds; record the divergence instead of declaring pixel fidelity. R06, R07, and P14 content corrections are saved in Stitch, but their source remains a proposal. The existing `.aphrodite/stitch-review/approval-binding.json` rejects the prior generic-card rebuild, so no new production-UI approval is implied by this file.
+Use the responsive R01–R08 workspace families and P09–P14 public-site families as composition references. Repeated variants provide examples of the same product states, not additional routes. Keep specimen viewport labels, review-board framing, synthetic identities, sample transcript content, and release data out of production.
+
+Retain the repository palette, system fonts, canonical brand assets, and accessible control sizing where the Stitch previews differ. Treat the result as design alignment with these scoped exceptions, not pixel-identical reproduction. Validate the real components and interactions at the relevant viewport and theme; generated previews do not establish runtime behavior.

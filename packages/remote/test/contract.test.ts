@@ -54,6 +54,28 @@ describe("remote envelope: request", () => {
     })
   })
 
+  test("validates the exact workspace inventory and Session creation request shapes", () => {
+    expect(parseClientMessage('{"type":"request","id":"a","operation":"workspace.list"}')).toEqual({
+      ok: true,
+      value: { type: "request", id: "a", operation: "workspace.list" },
+    })
+    expect(
+      parseClientMessage('{"type":"request","id":"a","operation":"session.create","input":{"id":"ses_new","workspace":"wsp_1"}}'),
+    ).toMatchObject({
+      ok: true,
+      value: { operation: "session.create", input: { id: "ses_new", workspace: "wsp_1" } },
+    })
+    for (const frame of [
+      '{"type":"request","id":"a","operation":"workspace.list","input":{}}',
+      '{"type":"request","id":"a","operation":"workspace.list","input":{"directory":"/tmp"}}',
+      '{"type":"request","id":"a","operation":"session.create"}',
+      '{"type":"request","id":"a","operation":"session.create","input":{"id":"ses_new"}}',
+      '{"type":"request","id":"a","operation":"session.create","input":{"id":"bad","workspace":"wsp_1"}}',
+      '{"type":"request","id":"a","operation":"session.create","input":{"id":"ses_new","workspace":"wsp_1","directory":"/tmp"}}',
+      `{"type":"request","id":"a","operation":"session.create","input":{"id":"ses_new","workspace":"${"w".repeat(129)}"}}`,
+    ]) expect(parseClientMessage(frame)).toMatchObject({ ok: false, error: { code: "invalid_message" } })
+  })
+
   test("rejects malformed frames, unknown operations, and unknown keys", () => {
     expect(parseClientMessage("not json")).toEqual({
       ok: false,
@@ -244,6 +266,7 @@ describe("remote envelope: event, advertisement, heartbeat", () => {
 describe("remote operations", () => {
   test("exposes exactly the session operations the relay proxies", () => {
     expect(remoteOperations).toEqual([
+      "workspace.list",
       "session.list",
       "session.active",
       "session.get",
@@ -268,8 +291,11 @@ describe("remote operations", () => {
       "session.autonomy.set",
       "session.goal.set",
       "session.goal.stop",
+      "session.create",
     ])
-    expect(remoteOperations).toEqual(["session.list", "session.active", ...remoteSessionOperations])
+    expect(remoteOperations).toEqual(["workspace.list", "session.list", "session.active", ...remoteSessionOperations, "session.create"])
+    expect(requireSession("workspace.list")).toBe(false)
+    expect(requireSession("session.create")).toBe(false)
     expect(requireSession("session.list")).toBe(false)
     expect(requireSession("session.active")).toBe(false)
     expect(requireSession("session.prompt")).toBe(true)

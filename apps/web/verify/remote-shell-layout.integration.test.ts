@@ -273,7 +273,7 @@ describe("remote shell layout", () => {
 
   test("centers unavailable and empty-state stacks in the usable main column without overflow", async () => {
     for (const width of [2048, 1440, 768, 390] as const) {
-      const page = await fixture("view=conversation&account=unavailable&sessions=empty", width, "Remote access is not available")
+      const page = await fixture("view=chat&account=unavailable&sessions=empty", width, "Remote access is not available")
       const state = await page.evaluate<{
         readonly headingCenter: number
         readonly actionsCenter: number
@@ -358,6 +358,7 @@ describe("remote shell layout", () => {
   test("keeps the mobile machine picker usable over the four-tab conversation workspace", async () => {
     for (const theme of ["dark", "light"] as const) {
       const page = await fixture("scenario=conversation-workspace-390", 390, "Select Active Machine", theme, 620)
+      await page.evaluate(`Promise.all([...document.querySelector('.custom-select__dialog .overlay__surface')?.getAnimations() ?? []].map(animation => animation.finished))`)
       const state = await page.evaluate<{
         readonly brandVisible: boolean
         readonly tabs: readonly string[]
@@ -365,7 +366,7 @@ describe("remote shell layout", () => {
         readonly options: readonly { readonly label: string; readonly height: number }[]
         readonly overflow: boolean
       }>(`(() => {
-        const box=document.querySelector('.custom-select__surface')?.getBoundingClientRect();
+        const box=document.querySelector('.custom-select__dialog .overlay__surface')?.getBoundingClientRect();
         return {
           brandVisible:document.querySelector('.app-header .brand img') instanceof HTMLImageElement && document.querySelector('.app-header .brand img').getBoundingClientRect().width > 0,
           tabs:[...document.querySelectorAll('.bottom-nav__item')].filter(link=>link.getBoundingClientRect().width>0).map(link=>link.textContent.trim()),
@@ -375,15 +376,17 @@ describe("remote shell layout", () => {
         };
       })()`)
       expect(state.brandVisible).toBe(true)
-      expect(state.tabs).toEqual(["Chat", "Activity", "Sessions", "More"])
+      expect(state.tabs).toEqual(["Sessions", "Conversation", "Activity", "Settings"])
       expect(state.sheet.bottom).toBeCloseTo(620, 0)
       expect(state.sheet.top).toBeLessThan(state.sheet.bottom)
       expect(state.options.map((option) => option.label)).toEqual(["Studio Mac", "Dev Linux"])
       expect(state.options.every((option) => option.height >= 44)).toBe(true)
       expect(state.overflow).toBe(false)
       await page.evaluate(`document.querySelector('.custom-select__option[aria-selected="false"]')?.click()`)
+      expect(await page.evaluate<string>(`document.querySelector('[aria-label="Machine"] .custom-select__value')?.textContent?.trim() ?? ''`)).toBe("Studio Mac")
+      await page.evaluate(`document.querySelector('.custom-select__confirm')?.click()`)
       expect(await page.evaluate<string>(`document.querySelector('[aria-label="Machine"] .custom-select__value')?.textContent?.trim() ?? ''`)).toBe("Dev Linux")
-      expect(await page.evaluate<boolean>(`document.querySelector('.custom-select__surface') === null`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.querySelector('.custom-select__dialog') === null`)).toBe(true)
       await page.close()
     }
   }, 30_000)

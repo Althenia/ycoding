@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { describe, expect, test } from "bun:test"
 import type { SessionInfo } from "@ycoding-ai/client/promise"
 import { RemoteLimits, parseChunkedValue, requireSession, type RemoteRequest } from "@ycoding-ai/remote"
@@ -116,6 +119,20 @@ function errorOf(frames: readonly { ok: boolean }[]) {
   return frame.error
 }
 
+function recordOf(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error("expected an object")
+  return value
+}
+
+function arrayOf(value: unknown): readonly unknown[] {
+  if (!Array.isArray(value)) throw new Error("expected an array")
+  return value
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
 describe("backend Session authorization", () => {
   test("refuses a session absent from the authoritative backend inventory", async () => {
     const { local, registry, subscriptions, calls } = await harness({})
@@ -164,6 +181,96 @@ describe("backend Session authorization", () => {
     })
     expect(valueOf(accepted)).toEqual({ data: { id: "msg_1" } })
     expect(calls.at(-1)).toEqual({ method: "prompt", args: ["ses_1", { directory: "/work" }, { text: "hi" }] })
+  })
+})
+
+describe("workspace inventory and Session creation", () => {
+  test("uses backend inventory only, rejects changed project and child-ID reuse, and verifies a root create", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "ycoding-remote-workspace-unit-"))
+    const globalWorktree = await mkdtemp(join(tmpdir(), "ycoding-global-project-worktree-"))
+    try {
+      let sessions = [sessionInfo("ses_seed", { updated: 1, directory })]
+      let currentProjectID = "prj_changed"
+      const results: Partial<Record<keyof LocalServer, unknown>> = {
+        listPage: async () => ({ data: sessions }),
+        getSession: async (sessionID: string) => sessions.find((session) => session.id === sessionID),
+        projectList: async () => [
+          { id: "global", worktree: globalWorktree, time: { created: 1, updated: 1 }, sandboxes: [] },
+          { id: "prj_1", worktree: "/", name: "Test project", time: { created: 1, updated: 1 }, sandboxes: [] },
+        ],
+        projectDirectories: async (projectID: string) => (projectID === "prj_1" ? [{ directory }] : []),
+        projectCurrent: async () => ({ id: currentProjectID, directory: "/" }),
+        createSession: async (id: string, location: { directory: string; workspaceID?: string }) => {
+          const created = { ...sessionInfo(id, { updated: 2, directory }), location }
+          sessions = [...sessions, created]
+          return created
+        },
+      }
+      const { local, calls } = fakeLocal(results)
+      const registry = createSessionRegistry({ local, staleMs: 0 })
+      await registry.refresh()
+      calls.length = 0
+      const subscriptions = createSubscriptions()
+      const inventoryResponse = await executeRemoteOperation({
+        request: request("workspace.list"),
+        sessions: registry,
+        subscriptions,
+        local,
+      })
+      const inventory = arrayOf(recordOf(valueOf(inventoryResponse)).data)
+      expect(inventory).toHaveLength(1)
+      expect(recordOf(inventory[0])).toMatchObject({ projectID: "prj_1", directory, name: "Test project" })
+      expect(inventory.map((workspace) => recordOf(workspace).directory)).not.toContain(globalWorktree)
+      expect(calls.some((call) => call.method === "projectCurrent")).toBe(false)
+      const workspace = recordOf(inventory[0]).id
+      if (typeof workspace !== "string") throw new Error("workspace identifier was missing")
+
+      const changed = await executeRemoteOperation({
+        request: request("session.create", { id: "ses_created", workspace }),
+        sessions: registry,
+        subscriptions,
+        local,
+      })
+      expect(errorOf(changed).code).toBe("invalid_message")
+      expect(calls.some((call) => call.method === "createSession")).toBe(false)
+
+      currentProjectID = "prj_1"
+      const created = await executeRemoteOperation({
+        request: request("session.create", { id: "ses_created", workspace }),
+        sessions: registry,
+        subscriptions,
+        local,
+      })
+      expect(valueOf(created)).toMatchObject({ data: { id: "ses_created", projectID: "prj_1", location: { directory } } })
+      expect(calls.some((call) => call.method === "projectCurrent")).toBe(true)
+      expect(calls.find((call) => call.method === "createSession")).toEqual({
+        method: "createSession",
+        args: ["ses_created", { directory }],
+      })
+
+      sessions = [...sessions, sessionInfo("ses_child_taken", { updated: 3, directory, parentID: "ses_seed" })]
+      const childReuse = await executeRemoteOperation({
+        request: request("session.create", { id: "ses_child_taken", workspace }),
+        sessions: registry,
+        subscriptions,
+        local,
+      })
+      expect(errorOf(childReuse).code).toBe("invalid_message")
+      expect(calls.filter((call) => call.method === "createSession")).toHaveLength(1)
+
+      results.createSession = () => Promise.reject(new LocalFailureClass("transport", "no response"))
+      const uncertain = await executeRemoteOperation({
+        request: request("session.create", { id: "ses_create_uncertain", workspace }),
+        sessions: registry,
+        subscriptions,
+        local,
+      })
+      expect(errorOf(uncertain).code).toBe("outcome_unknown")
+      expect(calls.filter((call) => call.method === "createSession")).toHaveLength(2)
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+      await rm(globalWorktree, { recursive: true, force: true })
+    }
   })
 })
 
@@ -687,6 +794,9 @@ describe("strict validation and error mapping", () => {
       [request("session.goal.stop", { goal: "stop" }), "invalid_message"],
       [request("session.list", { limit: 0 }), "invalid_message"],
       [request("session.list", { order: "sideways" }), "invalid_message"],
+      [request("workspace.list", { directory: "/etc" }), "invalid_message"],
+      [request("session.create", { id: "invalid", workspace: "wsp_1" }), "invalid_message"],
+      [request("session.create", { id: "ses_new", workspace: "wsp_1", directory: "/etc" }), "invalid_message"],
       [request("session.get", { directory: "/etc" }), "invalid_message"],
       [request("session.active", { limit: 1 }), "invalid_message"],
       // A frame outside the shared contract; the relay parser rejects it before this layer.

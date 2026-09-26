@@ -297,6 +297,7 @@ corresponding route.
 
 | Remote operation | Session-scoped | Local Protocol identifier | Local route | `input` fields |
 | --- | --- | --- | --- | --- |
+| `workspace.list` | no | `v2.session.list`, `v2.project.list`, `v2.project.directories` | `GET /api/session`, `GET /api/project`, `GET /api/project/:projectID/directories` | — |
 | `session.list` | no | `v2.session.list` | `GET /api/session` | `limit?`, `order?`, `search?`, `parentID?`, `cursor?` |
 | `session.active` | no | `v2.session.active` | `GET /api/session/active` | — |
 | `session.get` | yes | `v2.session.get` | `GET /api/session/:sessionID` | — |
@@ -320,9 +321,32 @@ corresponding route.
 | `session.autonomy.set` | yes | `v2.session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `yolo`, `maxNoProgress?` |
 | `session.goal.set` | yes | `v2.session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `goal` (non-empty string), `maxNoProgress?` |
 | `session.goal.stop` | yes | `v2.session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `goal: null` |
+| `session.create` | no | `v2.session.create`, `v2.project.current` | `POST /api/session`, `GET /api/project/current` | `id`, `workspace` |
 
-Response `value` is the local route's HTTP JSON body **verbatim**: no reshaping, no
-field renaming, and no second schema. A `204 NoContent` response becomes
+`workspace.list` has no input and returns `{ data: RemoteWorkspaceInfo[] }`, where
+each item is `{ id, projectID, directory, name? }`. The backend builds this
+inventory from existing Session Locations, persisted ProjectDirectories, and
+non-global Project worktrees, then omits directories that are unavailable.
+`id` is a deterministic, domain-separated SHA-256 identifier over the exact
+project ID, directory, and optional Location workspace ID tuple; clients treat
+it as opaque and backend-specific. The global Project's worktree is never a
+workspace choice; non-Git directories come from recorded directories and Sessions.
+
+`session.create` accepts exactly `{ id, workspace }`. `id` is a client-generated
+Session ID; `workspace` must match an ID in a freshly rederived backend inventory.
+Before creation, the backend checks that the directory exists and that
+`project.current` reports the inventory's project ID. A mismatch or unavailable
+workspace is rejected with `invalid_message` and refresh/reopen guidance. The
+Location is derived only from the matched backend inventory; no browser path,
+model, agent, parent, title, URL, method, or header is accepted. Creation uses
+runtime defaults and does not prompt or wake a model. A retry adopts an existing
+root Session only when its project and exact Location match; mismatched placement
+is rejected with `invalid_message`. The returned and re-read Session must match
+the requested ID, project, Location, and root status before success is returned.
+
+For operations mapped to one local route, response `value` is that route's HTTP
+JSON body: no field renaming or second schema. `workspace.list` is the
+agent-derived inventory described above. A `204 NoContent` response becomes
 `{"ok":true,"value":null}`. A local error response becomes
 `{"ok":false,"error":{"code":...,"message":...}}` with a stable contract code.
 Required reconnect reads — `session.snapshot` (the Protocol `SessionProjection`
@@ -346,17 +370,20 @@ parameter. The corresponding identifier is therefore explicit in each mutation's
 
 ### 3.5 Idempotency and indeterminate outcomes
 
-Only `session.prompt` accepts a durable idempotency key: `input.id` is the
-`SessionMessage.ID`, and the local server reconciles an exact retry only when the
-session, prompt, and delivery mode match (`v2.session.prompt` documents this). A
+`session.create` uses its required Session ID to reconcile an exact retry at the
+same root Location; another placement with that ID is rejected. Only
+`session.prompt` accepts a durable prompt idempotency key: `input.id` is the
+`SessionMessage.ID`. That ID belongs to one Session and input kind; its first
+admission wins, including its text and delivery mode. A
 client retrying an indeterminate `session.prompt` must reuse the same `input.id`.
 
-The reply operations carry **no** idempotency key: `PermissionV2.Reply` and
-`Guardrail.Reply` are `"once" | "always" | "reject"`, and `QuestionV2.Reply` is
-`{ answers }`. A retried reply is therefore a new decision, not a reconciliation.
+The reply operations carry **no** idempotency key: permission and guardrail
+replies use `"once" | "always" | "reject"`, and native Form replies carry typed
+answer records. A retried reply is a new decision, not a reconciliation.
 Clients must never automatically replay any request that failed with
-`outcome_unknown` (`session.prompt`, `session.interrupt`, and every reply
-included); they surface the outcome as unknown and let the user decide.
+`outcome_unknown` (`session.create`, `session.prompt`, `session.interrupt`, and
+every reply included); they surface the outcome as unknown and let the user
+decide.
 
 ### 3.6 Session discovery and authorization
 

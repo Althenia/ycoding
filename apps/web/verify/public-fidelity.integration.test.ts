@@ -880,6 +880,27 @@ describe("public routes and design-system behavior", () => {
     await page.close()
   })
 
+  test("aligns the landing divider with the capability grid", async () => {
+    const page = await requireBrowser().openPage()
+    for (const width of [390, 1440]) {
+      await page.setViewport(width, 900)
+      await page.navigate(url("/"))
+      for (const theme of ["light", "dark"] as const) {
+        await page.evaluate<void>(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
+        expect(await page.evaluate<boolean>(`(() => {
+          const grid = document.querySelector(".features__grid")
+          const first = grid?.firstElementChild
+          const last = grid?.lastElementChild
+          if (!(grid instanceof HTMLElement) || !(first instanceof HTMLElement) || !(last instanceof HTMLElement)) throw new Error("landing capabilities missing")
+          const style = getComputedStyle(grid)
+          const box = grid.getBoundingClientRect()
+          return style.borderBlockStartStyle === "solid" && style.borderBlockStartWidth === "1px" && style.borderBlockStartColor !== "transparent" && Math.abs(box.left - first.getBoundingClientRect().left) < 1 && Math.abs(box.right - last.getBoundingClientRect().right) < 1
+        })()`)).toBe(true)
+      }
+    }
+    await page.close()
+  })
+
   test("keeps landing and offline touch controls visible without mobile overflow", async () => {
     const page = await requireBrowser().openPage()
     await page.setViewport(390, 844)

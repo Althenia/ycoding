@@ -73,9 +73,10 @@ let home: string | undefined
 try {
   home = await mkdtemp(join(tmpdir(), "ycoding-real-flow-"))
   const workspace = join(home, "workspace")
+  const openedWorkspace = join(home, "opened-only")
   const serverConfig = join(home, "server-config")
   const persist = join(home, "wrangler-state")
-  await run("mkdir", ["-p", workspace, serverConfig])
+  await run("mkdir", ["-p", workspace, serverConfig, openedWorkspace])
 
   /* -------------------------------------- deterministic local provider stand-in */
 
@@ -132,6 +133,8 @@ try {
   await Bun.write(
     join(serverConfig, "ycoding.json"),
     JSON.stringify({
+      model: `${providerID}/${providerModel}`,
+      default_agent: "flow-approval",
       agents: {
         "flow-approval": {
           description: "Composed-flow approval agent: every shell call asks.",
@@ -226,7 +229,12 @@ try {
   checks.push("real isolated YCoding server created two durable sessions")
 
   const local = createLocalServer({ url: server.base, auth: { type: "basic", username: "ycoding", password } })
+  const opened = await server.request("/api/location", {
+    headers: { "x-ycoding-directory": encodeURIComponent(openedWorkspace) },
+  })
+  expect(opened.status === 200, `opening a workspace returned ${opened.status}`)
   const localSessions = await local.listPage({ limit: 50 })
+  expect(!localSessions.data.some((info) => info.location.directory === openedWorkspace), "opening a directory created a Session")
   expect(
     localSessions.data.some((info) => info.id === sessionID),
     "the real server did not return the created session to the CLI adapter",
@@ -518,6 +526,62 @@ try {
   const hidden = await probeRequest("session.get", { sessionID: hiddenSessionID })
   expect(hidden.status === "ok", `backend Session read failed: ${JSON.stringify(hidden)}`)
   checks.push("a backend Session needs no per-Session allow operation")
+
+  await store.loadWorkspaces()
+  const candidate = store.state().workspaces.find((item) => item.directory === openedWorkspace)
+  if (!candidate) throw new Error("the previously opened directory with no Sessions was not listed")
+  const beforeCreate = providerRequests.length
+  const createdID = await store.createSession(candidate.id)
+  if (!createdID) throw new Error(`remote creation failed: ${JSON.stringify(store.state().sessionCreation)}`)
+  const created = await local.getSession(createdID, { directory: openedWorkspace })
+  expect(created.parentID === undefined && created.projectID === candidate.projectID, "remote creation did not make a root in the selected project")
+  expect(providerRequests.length === beforeCreate, "session creation unexpectedly called the model")
+  const adopted = await probeRequest("session.create", { input: { id: createdID, workspace: candidate.id } })
+  expect(adopted.status === "ok", `idempotent creation failed: ${JSON.stringify(adopted)}`)
+  expect((await local.listPage({ limit: 50 })).data.filter((info) => info.id === createdID).length === 1, "exact creation retry duplicated the Session")
+  await store.selectSession(createdID)
+  expect(store.state().view?.messages.length === 0, "the new Session was not an empty conversation")
+  providerFollowUpText = "Reply in the remotely created Session."
+  providerTurn = { text: providerFollowUpText }
+  await store.sendPrompt({ text: "Start in the previously opened workspace", delivery: "steer" })
+  await waitFor(async () => {
+    const messages = await local.messages(createdID, { directory: openedWorkspace })
+    return JSON.stringify(messages).includes(providerFollowUpText) ? true : undefined
+  }, 30_000, "the remotely created Session did not execute and persist its first prompt")
+  await waitFor(() => JSON.stringify(store.state().view?.messages).includes(providerFollowUpText) ? true : undefined,
+    20_000, "the new Session reply did not reach the browser store")
+  checks.push("previously opened workspace without Sessions created an idle root, adopted an exact retry, and executed its first chat prompt")
+
+  await Bun.sleep(RemoteLimits.clientRateWindowMs + 1)
+  for (const level of [1, 2, 3, 0] as const) {
+    await store.setYolo(level)
+    const autonomy = await local.autonomyGet(createdID, { directory: openedWorkspace })
+    expect(isRecord(autonomy) && autonomy.yolo === level, `YOLO ${level} did not persist on the selected Session`)
+    expect(store.state().view?.autonomy.yolo === level, `YOLO ${level} did not reach the browser store`)
+  }
+  await store.setYolo(2)
+  providerFollowUpText = "Reply after the YOLO-approved shell call."
+  providerTurn = { tool: { id: "call_flow_yolo", name: "shell", input: { command: "touch yolo-approved.txt" } }, text: "" }
+  await store.sendPrompt({ text: "Run the harmless YOLO approval check", delivery: "steer" })
+  await waitFor(() => existsSync(join(openedWorkspace, "yolo-approved.txt")) ? true : undefined,
+    30_000, "YOLO 2 did not automatically approve the ask-permission shell call")
+  await waitFor(async () => JSON.stringify(await local.messages(createdID, { directory: openedWorkspace })).includes(providerFollowUpText) ? true : undefined,
+    30_000, "the YOLO-approved step did not settle")
+  await store.setYolo(0)
+  await store.setGoal("Finish the remote lifecycle verification")
+  expect(store.state().view?.autonomy.mode === "goal" && store.state().view?.autonomy.goal?.status === "active", "goal start did not reach the browser store")
+  await store.stopGoal()
+  const stoppedGoal = await local.autonomyGet(createdID, { directory: openedWorkspace })
+  expect(isRecord(stoppedGoal) && isRecord(stoppedGoal.goal) && stoppedGoal.goal.status === "stopped",
+    `goal stop did not persist: ${JSON.stringify({ autonomy: stoppedGoal, mutations: store.state().mutations, statuses: browserStatuses.slice(-5) })}`)
+  await waitFor(async () => {
+    const active = await local.activeSessions()
+    return isRecord(active) && !(createdID in active) ? true : undefined
+  }, 30_000, "the stopped goal Session did not become idle")
+  checks.push("YOLO 0–3 persisted through the remote store, YOLO 2 approved a real tool call, and goal start/stop reached durable runtime state")
+  await Bun.sleep(RemoteLimits.clientRateWindowMs + 1)
+  providerFollowUpText = providerText
+  providerTurn = { text: providerText }
 
   await store.selectSession(sessionID)
   await waitFor(
@@ -1014,6 +1078,10 @@ try {
 
   for (const line of checks) console.log(`ok - ${line}`)
   console.log("Composed real-flow proof passed")
+} catch (cause) {
+  console.error(`Last completed check: ${checks.at(-1) ?? "none"}`)
+  console.error(cause)
+  throw cause
 } finally {
   for (const dispose of disposals.reverse()) await dispose().catch(() => undefined)
   wrangler?.kill("SIGTERM")
