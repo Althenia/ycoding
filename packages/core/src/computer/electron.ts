@@ -30,7 +30,6 @@ const keyName = (key: string) => namedKeys[key]
 const field = (value: unknown, name: string): unknown =>
   value && typeof value === "object" ? Reflect.get(value, name) : undefined
 
-// A page-target session has no Browser domain, so the renderer reports its own window placement.
 async function pagePlacement(cdp: CDP) {
   const value = await cdp.evaluate("({screenX,screenY,outerWidth,outerHeight,innerWidth,innerHeight})")
   const [x, y, outerWidth, outerHeight, innerWidth, innerHeight] = ["screenX", "screenY", "outerWidth", "outerHeight", "innerWidth", "innerHeight"]
@@ -212,8 +211,6 @@ async function inspectorWork(cdp: CDP, target: MacOSComputer.DesktopTarget, wind
   const info = geometry(await cdp.evaluate(`(()=>{const w=${selector};return w?{bounds:w.getBounds(),content:w.getContentBounds()}:null})()`))
   if (!info || !exact(window.bounds, window.title, info.bounds, window.title)) throw missing()
   const capture = async () => {
-    // A hidden (off-Space) page returns the frame painted before its latest change; the first capture makes it repaint,
-    // and lazily rendered content can take several frames, so return once two captures agree (bounded to ~750 ms).
     await cdp.evaluate(`(async()=>{const w=${selector};if(!w)return null;await w.webContents.capturePage();w.webContents.invalidate();return null})()`)
     const image = await cdp.evaluate(`(async()=>{const w=${selector};if(!w)return null;let last='';for(let i=0;i<5;i++){await new Promise(r=>setTimeout(r,150));const next=(await w.webContents.capturePage()).toDataURL();if(next===last)return next;last=next}return last})()`)
     if (typeof image !== "string") throw missing()
@@ -253,7 +250,6 @@ async function inspectorWork(cdp: CDP, target: MacOSComputer.DesktopTarget, wind
     const point = contentPoint(info.bounds, info.content, before.scale, action.x, action.y)
     await send({ type: "mouseWheel", ...point, deltaX: action.deltaX, deltaY: action.deltaY })
   } else throw unavailable()
-  // Hidden pages run throttled timers, so an input's visible result can lag the first settled capture.
   const changed = async (attempt: number): Promise<boolean> =>
     (await capture()).image !== before.image || (attempt < 3 && changed(attempt + 1))
   return { type: "action", effect: await changed(1) ? "changed" : "unchanged" }

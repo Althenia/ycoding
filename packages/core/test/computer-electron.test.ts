@@ -88,8 +88,6 @@ describe("Electron computer bridge", () => {
     let opened = false
     let closed = false
     let clicked = false
-    // A hidden off-Space page returns the frame painted before its latest change, then paints the current state.
-    // Its throttled timers apply the click only after several capture requests.
     let painted = 100
     let pendingCaptures = 0
     const png = (color: number) => {
@@ -171,7 +169,6 @@ describe("Electron computer bridge", () => {
           changed = true
           dispatched.push({ method: command.method, params: command.params })
         }
-        // A page-target session exposes no Browser domain; window geometry comes from the page itself.
         if (command.method?.startsWith("Browser.")) {
           ws.send(JSON.stringify({ id: command.id, error: { code: -32601, message: `'${command.method}' wasn't found` } }))
           return
