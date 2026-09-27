@@ -153,6 +153,10 @@ try {
           mode: "primary",
           permissions: [{ action: "shell", resource: "*", effect: "allow" }],
         },
+        "flow-child": {
+          description: "Composed-flow managed child for Team controls.",
+          mode: "subagent",
+        },
       },
       providers: {
         [providerID]: {
@@ -560,6 +564,32 @@ try {
   const familyStatus = await probeRequest("session.status")
   expect(familyStatus.status === "ok" && isRecord(familyStatus.value) && Array.isArray(familyStatus.value.running) && Array.isArray(familyStatus.value.attention),
     `family status failed: ${JSON.stringify(familyStatus)}`)
+  const memberActivity = await probeRequest("session.family.activity", { sessionID, input: { sessionIDs: [] } })
+  expect(memberActivity.status === "ok" && isRecord(memberActivity.value) && Array.isArray(memberActivity.value.data) &&
+    memberActivity.value.data.length === 1 && isRecord(memberActivity.value.data[0]) &&
+    memberActivity.value.data[0].sessionID === sessionID && memberActivity.value.data[0].executing === false,
+  `family activity failed: ${JSON.stringify(memberActivity)}`)
+  const sideChatID = "ses_real_flow_btw"
+  const sideChat = await probeRequest("session.side-chat.create", { sessionID, input: { id: sideChatID } })
+  expect(sideChat.status === "ok" && isRecord(sideChat.value) && isRecord(sideChat.value.data) && sideChat.value.data.parentID === sessionID && sideChat.value.data.agent === "btw",
+    `remote side chat creation failed: ${JSON.stringify(sideChat)}`)
+  const sideChats = await probeRequest("session.side-chat.list", { sessionID })
+  expect(sideChats.status === "ok" && isRecord(sideChats.value) && Array.isArray(sideChats.value.data) && sideChats.value.data.some((item) => isRecord(item) && item.id === sideChatID),
+    `remote side chat listing failed: ${JSON.stringify(sideChats)}`)
+  const btwPrompt = await probeRequest("session.prompt", { sessionID: sideChatID, input: { id: "msg_real_flow_btw_prompt", text: "Ask a side question", resume: false } })
+  expect(btwPrompt.status === "ok", `BTW prompt was rejected: ${JSON.stringify(btwPrompt)}`)
+  const shellStarted = await server.request("/api/shell", { method: "POST", headers: { "content-type": "application/json", "x-ycoding-directory": workspace },
+    body: JSON.stringify({ command: "sleep 120", timeout: 120_000, metadata: { sessionID } }) })
+  expect(shellStarted.ok, `family shell did not start: ${shellStarted.status}`)
+  const shellBody: unknown = await shellStarted.json()
+  const shellID = isRecord(shellBody) && isRecord(shellBody.data) ? shellBody.data.id : undefined
+  expect(typeof shellID === "string", `family shell ID missing: ${JSON.stringify(shellBody)}`)
+  const shellPage = await probeRequest("session.team.shell.list", { sessionID })
+  expect(shellPage.status === "ok" && isRecord(shellPage.value) && Array.isArray(shellPage.value.data) &&
+    shellPage.value.data.some((item) => isRecord(item) && item.id === shellID && item.ownerID === sessionID), `family shell was not listed: ${JSON.stringify(shellPage)}`)
+  const shellKilled = await probeRequest("session.team.shell.kill", { sessionID, input: { shellID } })
+  expect(shellKilled.status === "ok", `family shell kill failed: ${JSON.stringify(shellKilled)}`)
+  checks.push("BTW side chat creation, listing, and prompt plus family-owned shell listing and kill crossed the real relay")
   const selectedCatalog = await probeRequest("workspace.catalog", { input: { workspace: candidate.id } })
   expect(selectedCatalog.status === "ok" && isRecord(selectedCatalog.value) && Array.isArray(selectedCatalog.value.agents) &&
     Array.isArray(selectedCatalog.value.models) && !("defaultAgent" in selectedCatalog.value),
@@ -1131,6 +1161,53 @@ try {
     "the interrupted session stayed active",
   )
   checks.push("interrupt stopped the running step through the real local service")
+
+  await Bun.sleep(RemoteLimits.clientRateWindowMs + 1)
+  providerMode = "normal"
+  providerTurn = { tool: { id: "call_real_flow_child_question", name: "subagent_report", input: { action: "question", text: "Which environment should I verify?" } }, text: "" }
+  const launchedQuestion = await server.request(`/api/session/${sessionID}/subagent`, { method: "POST",
+    headers: { "content-type": "application/json", "x-ycoding-directory": workspace },
+    body: JSON.stringify({ parentAssistantMessageID: "msg_real_flow_team_parent", toolCallID: "call_real_flow_team_question", agent: "flow-child",
+      description: "Verify the selected environment", prompt: "Ask which environment to verify", background: true }) })
+  const questionLaunchText = await launchedQuestion.text()
+  expect(launchedQuestion.ok, `managed child launch failed: ${launchedQuestion.status} ${questionLaunchText}`)
+  const questionBody: unknown = JSON.parse(questionLaunchText)
+  const questionChildID = isRecord(questionBody) && isRecord(questionBody.data) ? questionBody.data.sessionID : undefined
+  expect(typeof questionChildID === "string", `managed child ID missing: ${JSON.stringify(questionBody)}`)
+  const waitingChild = await waitFor(async () => {
+    const page = await probeRequest("session.subagent.list", { sessionID })
+    const data = page.status === "ok" && isRecord(page.value) ? page.value.data : undefined
+    return Array.isArray(data) ? data.find((item) => isRecord(item) && item.sessionID === questionChildID && item.state === "waiting" && isRecord(item.question)) : undefined
+  }, 30_000, "the real managed child never raised a parent question")
+  expect(isRecord(waitingChild) && isRecord(waitingChild.question) && typeof waitingChild.question.id === "string", "managed child question ID missing")
+  const answer = await probeRequest("session.subagent.answer", { sessionID, input: { childID: questionChildID, questionID: waitingChild.question.id, text: "staging" } })
+  expect(answer.status === "ok" && isRecord(answer.value) && isRecord(answer.value.data) && answer.value.data.sessionID === questionChildID,
+    `managed child answer did not reach the real runner: ${JSON.stringify(answer)}`)
+  const economics = await probeRequest("session.team.economics", { sessionID, input: { sessionIDs: [questionChildID] } })
+  expect(economics.status === "ok" && isRecord(economics.value) && Array.isArray(economics.value.data) &&
+    economics.value.data.some((item) => isRecord(item) && item.sessionID === questionChildID && isRecord(item.tokens) && typeof item.cost === "number"),
+    `bounded child economics failed: ${JSON.stringify(economics)}`)
+  const foreignEconomics = await probeRequest("session.team.economics", { sessionID, input: { sessionIDs: [hiddenSessionID] } })
+  expect(foreignEconomics.status === "failed" && foreignEconomics.error.code === "forbidden", "unrelated Session economics escaped root-family authority")
+  checks.push("managed child question/answer and bounded economics crossed the real relay; unrelated economics was refused")
+
+  providerMode = "hold"
+  providerTurn = { text: "Child held until cancellation." }
+  const launchedCancel = await server.request(`/api/session/${sessionID}/subagent`, { method: "POST",
+    headers: { "content-type": "application/json", "x-ycoding-directory": workspace },
+    body: JSON.stringify({ parentAssistantMessageID: "msg_real_flow_team_parent", toolCallID: "call_real_flow_team_cancel", agent: "flow-child",
+      description: "Stop a held child", prompt: "Wait for the parent to cancel", background: true }) })
+  const cancelLaunchText = await launchedCancel.text()
+  expect(launchedCancel.ok, `cancellable child launch failed: ${launchedCancel.status} ${cancelLaunchText}`)
+  const cancelBody: unknown = JSON.parse(cancelLaunchText)
+  const cancelChildID = isRecord(cancelBody) && isRecord(cancelBody.data) ? cancelBody.data.sessionID : undefined
+  expect(typeof cancelChildID === "string", `cancellable child ID missing: ${JSON.stringify(cancelBody)}`)
+  const cancelled = await probeRequest("session.subagent.cancel", { sessionID, input: { childID: cancelChildID } })
+  expect(cancelled.status === "ok" && isRecord(cancelled.value) && isRecord(cancelled.value.data) && cancelled.value.data.sessionID === cancelChildID,
+    `managed child cancellation failed: ${JSON.stringify(cancelled)}`)
+  releaseStream?.()
+  providerMode = "normal"
+  checks.push("managed child cancellation reached the real Session orchestration through the relay")
 
   const pixel = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64")
   const annotation = Buffer.from(`Comment\0${"A".repeat(102_400)}`)

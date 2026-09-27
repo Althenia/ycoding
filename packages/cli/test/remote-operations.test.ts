@@ -179,16 +179,17 @@ test("existing global Sessions appear in read-only workspace groups without enab
 const scratch = join(import.meta.dir, "../../../.cache/tmp")
 await mkdir(scratch, { recursive: true })
 
-function sessionInfo(id: string, table: { updated: number; title?: string; directory?: string; parentID?: string }): SessionInfo {
+function sessionInfo(id: string, table: { updated: number; title?: string; directory?: string; parentID?: string; agent?: string }): SessionInfo {
   const directory = table.directory ?? "/work"
   return {
     id,
     ...(table.parentID === undefined ? {} : { parentID: table.parentID }),
+    ...(table.agent === undefined ? {} : { agent: table.agent }),
     projectID: "prj_1",
     // The contract carries a Model.Ref object, never a provider/model string.
     model: { providerID: "test", id: "model" },
-    cost: { amount: 0, currency: "USD" },
-    tokens: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     time: { created: table.updated, updated: table.updated },
     title: table.title ?? id,
     location: { directory, workspaceID: undefined },
@@ -699,6 +700,175 @@ describe("operation mapping", () => {
     const missing = await executeRemoteOperation({ request: { ...request("session.subagent.list"), sessionID: "ses_missing" }, sessions: registry, subscriptions, local })
     expect(errorOf(missing).code).toBe("session_not_allowed")
     expect(calls.some((call) => call.method === "subagentPage")).toBe(false)
+  })
+  test("Team cancel and answer authorize a direct managed child before local mutation", async () => {
+    const sessions = [sessionInfo("ses_root", { updated: 1 }), sessionInfo("ses_child", { updated: 2, parentID: "ses_root", agent: "general" }),
+      sessionInfo("ses_foreign", { updated: 3, parentID: "ses_other", agent: "general" }), sessionInfo("ses_btw", { updated: 4, parentID: "ses_root", agent: "btw" })]
+    const test = await harness({ sessions, results: {
+      subagentCancel: async () => ({ sessionID: "ses_child", state: "cancelling" }),
+      subagentAnswer: async () => ({ sessionID: "ses_child", state: "running" }),
+    } })
+    const run = (operation: RemoteRequest["operation"], input: Record<string, unknown>) => executeRemoteOperation({
+      request: { ...request(operation, input), sessionID: "ses_root" }, sessions: test.registry, subscriptions: test.subscriptions, local: test.local,
+    })
+    expect(valueOf(await run("session.subagent.cancel", { childID: "ses_child" }))).toMatchObject({ data: { state: "cancelling" } })
+    expect(valueOf(await run("session.subagent.answer", { childID: "ses_child", questionID: "qst_1", text: "staging" }))).toMatchObject({ data: { state: "running" } })
+    expect(test.calls.filter((call) => call.method === "subagentCancel" || call.method === "subagentAnswer")).toEqual([
+      { method: "subagentCancel", args: ["ses_root", "ses_child", { directory: "/work" }] },
+      { method: "subagentAnswer", args: ["ses_root", "ses_child", "qst_1", "staging", { directory: "/work" }] },
+    ])
+    test.calls.length = 0
+    for (const childID of ["ses_foreign", "ses_btw", "ses_missing"])
+      expect(errorOf(await run("session.subagent.cancel", { childID })).code).toBe("forbidden")
+    expect(test.calls.some((call) => call.method === "subagentCancel")).toBe(false)
+  })
+
+  test("Team shells expose only root-family owners and kill no foreign or ownerless shell", async () => {
+    const sessions = [sessionInfo("ses_root", { updated: 1 }), sessionInfo("ses_child", { updated: 2, parentID: "ses_root", agent: "general" }),
+      sessionInfo("ses_foreign", { updated: 3 })]
+    const shells = [
+      { id: "sh_root", command: "bun test", status: "running", metadata: { sessionID: "ses_root" }, time: { started: 1 } },
+      { id: "sh_child", command: "bun lint", status: "running", metadata: { sessionID: "ses_child" }, time: { started: 2 } },
+      { id: "sh_foreign", command: "private", status: "running", metadata: { sessionID: "ses_foreign" }, time: { started: 3 } },
+      { id: "sh_unknown", command: "unknown", status: "running", metadata: {}, time: { started: 4 } },
+    ]
+    const test = await harness({ sessions, results: { shellList: async () => shells, shellGet: async (id: string) => shells.find((shell) => shell.id === id), shellRemove: async () => undefined } })
+    const run = (operation: RemoteRequest["operation"], input?: Record<string, unknown>) => executeRemoteOperation({
+      request: { ...request(operation, input), sessionID: "ses_root" }, sessions: test.registry, subscriptions: test.subscriptions, local: test.local,
+    })
+    expect(valueOf(await run("session.team.shell.list"))).toMatchObject({ data: [{ id: "sh_root" }, { id: "sh_child" }] })
+    expect(valueOf(await run("session.team.shell.kill", { shellID: "sh_child" }))).toEqual(null)
+    for (const shellID of ["sh_foreign", "sh_unknown"])
+      expect(errorOf(await run("session.team.shell.kill", { shellID })).code).toBe("forbidden")
+    expect(test.calls.filter((call) => call.method === "shellRemove")).toEqual([{ method: "shellRemove", args: ["sh_child", { directory: "/work" }] }])
+  })
+  test("Team shells resolve a moved direct child's recorded Location instead of borrowing the root header", async () => {
+    const sessions = [sessionInfo("ses_root", { updated: 1 }), sessionInfo("ses_child", { updated: 2, parentID: "ses_root", agent: "general", directory: "/other-work" })]
+    const test = await harness({ sessions, results: {
+      shellList: async (location: LocalLocation) => location.directory === "/other-work" ? [{ id: "sh_moved", command: "bun test", status: "running", metadata: { sessionID: "ses_child" }, time: { started: 1 } }] : [],
+      shellGet: async (id: string, location: LocalLocation) => location.directory === "/other-work" ? { id, metadata: { sessionID: "ses_child" } } : undefined,
+      shellRemove: async () => undefined,
+    } })
+    const run = (operation: RemoteRequest["operation"], input?: Record<string, unknown>) => executeRemoteOperation({ request: { ...request(operation, input), sessionID: "ses_root" },
+      sessions: test.registry, subscriptions: test.subscriptions, local: test.local })
+    expect(valueOf(await run("session.team.shell.list"))).toMatchObject({ data: [{ id: "sh_moved" }] })
+    expect(valueOf(await run("session.team.shell.kill", { shellID: "sh_moved" }))).toBeNull()
+    expect(test.calls.filter((call) => call.method === "shellRemove")).toEqual([{ method: "shellRemove", args: ["sh_moved", { directory: "/other-work" }] }])
+  })
+  test("Team shell listing discloses its 50-row boundary rather than silently dropping family shells", async () => {
+    const test = await harness({ results: { shellList: async () => Array.from({ length: 51 }, (_, index) => ({ id: `sh_${index}`, command: "sleep 10", status: "running", metadata: { sessionID: "ses_1" }, time: { started: 1 } })) } })
+    const result = valueOf(await executeRemoteOperation({ request: request("session.team.shell.list"), sessions: test.registry, subscriptions: test.subscriptions, local: test.local }))
+    expect(isRecord(result) && Array.isArray(result.data) && result.data.length === 50 && result.truncated === true).toBe(true)
+  })
+
+  test("side chats page only BTW children and create one parent-linked BTW Session", async () => {
+    const sessions = [sessionInfo("ses_root", { updated: 1 }), sessionInfo("ses_btw", { updated: 2, parentID: "ses_root", agent: "btw" }),
+      sessionInfo("ses_child", { updated: 3, parentID: "ses_root", agent: "general" })]
+    const test = await harness({ sessions, results: {
+      listChildren: async () => ({ data: sessions.slice(1), cursor: { next: "older" } }),
+      createSideChat: async (id: string, rootID: string) => ({ ...sessionInfo(id, { updated: 4, parentID: rootID, agent: "btw" }) }),
+    } })
+    const run = (operation: RemoteRequest["operation"], input?: Record<string, unknown>) => executeRemoteOperation({
+      request: { ...request(operation, input), sessionID: "ses_root" }, sessions: test.registry, subscriptions: test.subscriptions, local: test.local,
+    })
+    expect(valueOf(await run("session.side-chat.list", { cursor: "opaque" }))).toMatchObject({ data: [{ id: "ses_btw" }] })
+    expect(valueOf(await run("session.side-chat.create", { id: "ses_btw_new" }))).toMatchObject({ data: { id: "ses_btw_new", parentID: "ses_root", agent: "btw" } })
+    expect(test.calls.find((call) => call.method === "createSideChat")?.args).toEqual(["ses_btw_new", "ses_root", { directory: "/work" }])
+  })
+
+  test("Team economics reads a bounded verified page without leaking unrelated Sessions", async () => {
+    const sessions = [sessionInfo("ses_root", { updated: 1 }), sessionInfo("ses_child", { updated: 2, parentID: "ses_root", agent: "general" }),
+      sessionInfo("ses_foreign", { updated: 3 })]
+    const test = await harness({ sessions, results: { diagnostics: async () => ({ data: { cache: { hitRatio: 0.75, readReported: true, writeReported: false }, context: { total: 1_000, limit: 2_000 }, tokens: { cacheRead: 12, cacheWrite: 0 } } }) } })
+    const run = (ids: string[]) => executeRemoteOperation({ request: { ...request("session.team.economics", { sessionIDs: ids }), sessionID: "ses_root" },
+      sessions: test.registry, subscriptions: test.subscriptions, local: test.local })
+    const reported = valueOf(await run(["ses_child"]))
+    expect(reported).toMatchObject({ data: [{ sessionID: "ses_child", cost: 0, tokens: { cache: { read: 0 } }, cacheRead: 12, cacheHitRatio: 0.75, contextTotal: 1_000, contextLimit: 2_000 }] })
+    expect(isRecord(reported) && Array.isArray(reported.data) && isRecord(reported.data[0]) && reported.data[0].cacheWrite === undefined).toBe(true)
+    test.calls.length = 0
+    expect(errorOf(await run(["ses_foreign"])).code).toBe("forbidden")
+    expect(test.calls.some((call) => call.method === "diagnostics")).toBe(false)
+  })
+  test("managed subagents reject remote input and configuration but BTW children can prompt", async () => {
+    const sessions = [sessionInfo("ses_root", { updated: 1 }), sessionInfo("ses_child", { updated: 2, parentID: "ses_root", agent: "general" }), sessionInfo("ses_btw", { updated: 3, parentID: "ses_root", agent: "btw" })]
+    const test = await harness({ sessions, results: { prompt: { id: "msg_1" }, interrupt: undefined } })
+    const send = (operation: RemoteRequest["operation"], fields?: Readonly<Record<string, unknown>>, sessionID = "ses_child") => executeRemoteOperation({
+      request: { ...request(operation, fields), sessionID }, local: test.local, sessions: test.registry, subscriptions: test.subscriptions,
+    })
+    for (const [operation, fields] of [
+      ["session.prompt", { text: "Hello" }], ["session.command", { command: "test" }], ["session.skill", { skill: "review" }],
+      ["session.switchModel", { model: { providerID: "test", id: "model" } }], ["session.switchAgent", { agent: "general" }],
+      ["session.autonomy.set", { yolo: 2 }], ["session.goal.set", { goal: "Write code" }], ["session.goal.stop", { goal: null }],
+    ] as const) expect(errorOf(await send(operation, fields)).code).toBe("subagent_read_only")
+    expect(test.calls.some((call) => ["prompt", "command", "skill", "switchModel", "switchAgent", "autonomySet"].includes(call.method))).toBe(false)
+    expect(valueOf(await send("session.get"))).toMatchObject({ data: { id: "ses_child" } })
+    expect(valueOf(await send("session.interrupt"))).toBeNull()
+    expect(valueOf(await send("session.prompt", { text: "Side chat" }, "ses_btw"))).toEqual({ data: { id: "msg_1" } })
+  })
+  test("reads own executing family activity and never snapshots idle members", async () => {
+    const sessions = [sessionInfo("ses_root", { updated: 1 }), sessionInfo("ses_read", { updated: 2, parentID: "ses_root" }), sessionInfo("ses_shell", { updated: 3, parentID: "ses_root" }), sessionInfo("ses_idle", { updated: 4, parentID: "ses_root" }), sessionInfo("ses_foreign", { updated: 5 })]
+    const test = await harness({ sessions, results: {
+      activeSessions: { ses_read: { type: "running" }, ses_shell: { type: "running" } },
+      snapshot: async (id: string) => ({ messages: [{ id: "msg_1", type: "assistant", time: { created: 1 }, content: [
+        { type: "tool", name: id === "ses_read" ? "read" : "shell", state: { status: "running", input: id === "ses_read" ? { path: "/work/src/store.ts" } : { command: "bun test ./src/remote" } } },
+      ] }] }),
+    } })
+    const run = (sessionIDs: readonly string[]) => executeRemoteOperation({ request: { ...request("session.family.activity", { sessionIDs }), sessionID: "ses_root" }, local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
+    const outcome = await run(["ses_read", "ses_shell", "ses_idle"])
+    expect(valueOf(outcome)).toEqual({ data: [
+      { sessionID: "ses_root", executing: false },
+      { sessionID: "ses_read", executing: true, activity: { kind: "tool", room: "research", text: "Reading store.ts" } },
+      { sessionID: "ses_shell", executing: true, activity: { kind: "tool", room: "qa", text: "Running bun test ./src/remote" } },
+      { sessionID: "ses_idle", executing: false },
+    ] })
+    expect(test.calls.filter((call) => call.method === "snapshot").map((call) => call.args[0])).toEqual(["ses_read", "ses_shell"])
+    expect(test.calls.filter((call) => call.method === "snapshot").every((call) => recordOf(call.args[1]).directory === "/work" && recordOf(call.args[2]).limit === 8)).toBe(true)
+    test.calls.length = 0
+    expect(errorOf(await run(["ses_foreign"])).code).toBe("session_not_allowed")
+    expect(test.calls.some((call) => call.method === "snapshot")).toBe(false)
+    expect(errorOf(await executeRemoteOperation({ request: { ...request("session.family.activity", { sessionIDs: [] }), sessionID: "ses_read" },
+      local: test.local, sessions: test.registry, subscriptions: test.subscriptions })).code).toBe("session_not_allowed")
+  })
+  test("summarizes reasoning and editing without leaking raw inputs", async () => {
+    const sessions = [sessionInfo("ses_root", { updated: 1 }), sessionInfo("ses_think", { updated: 2, parentID: "ses_root" }), sessionInfo("ses_edit", { updated: 3, parentID: "ses_root" })]
+    const test = await harness({ sessions, results: { activeSessions: { ses_think: { type: "running" }, ses_edit: { type: "running" } },
+      snapshot: async (id: string) => ({ messages: [{ type: "assistant", time: { created: 1 }, content: id === "ses_think" ? [{ type: "reasoning", text: "private chain" }]
+        : [{ type: "tool", name: "patch", state: { status: "running", input: { patchText: "*** Update File: src/usage.css\n+TOP_SECRET=" + "x".repeat(300) } } }] }] }),
+    } })
+    const output = valueOf(await executeRemoteOperation({ request: { ...request("session.family.activity", { sessionIDs: ["ses_think", "ses_edit"] }), sessionID: "ses_root" }, local: test.local, sessions: test.registry, subscriptions: test.subscriptions }))
+    expect(output).toEqual({ data: [
+      { sessionID: "ses_root", executing: false },
+      { sessionID: "ses_think", executing: true, activity: { kind: "thinking", room: "hold", text: "Thinking" } },
+      { sessionID: "ses_edit", executing: true, activity: { kind: "tool", room: "developer", text: "Editing usage.css" } },
+    ] })
+    expect(JSON.stringify(output)).not.toContain("TOP_SECRET")
+  })
+  test("bounds search and fetch subjects and never relays a URL path", async () => {
+    const sessions = [sessionInfo("ses_root", { updated: 1 }), sessionInfo("ses_search", { updated: 2, parentID: "ses_root" }), sessionInfo("ses_fetch", { updated: 3, parentID: "ses_root" })]
+    const test = await harness({ sessions, results: { activeSessions: { ses_search: { type: "running" }, ses_fetch: { type: "running" } },
+      snapshot: async (id: string) => ({ messages: [{ type: "assistant", time: { created: 1 }, content: [{ type: "tool", name: id === "ses_search" ? "websearch" : "webfetch", state: { status: "running",
+        input: id === "ses_search" ? { query: "a".repeat(200) } : { url: "https://example.org/private/token" } } }] }] }),
+    } })
+    const output = valueOf(await executeRemoteOperation({ request: { ...request("session.family.activity", { sessionIDs: ["ses_search", "ses_fetch"] }), sessionID: "ses_root" }, local: test.local, sessions: test.registry, subscriptions: test.subscriptions }))
+    expect(output).toMatchObject({ data: [
+      { sessionID: "ses_root", executing: false },
+      { sessionID: "ses_search", activity: { room: "research" } },
+      { sessionID: "ses_fetch", activity: { text: "Fetching example.org" } },
+    ] })
+    const text = recordOf(recordOf(arrayOf(recordOf(output).data)[1]).activity).text
+    expect(typeof text).toBe("string")
+    expect(Array.from(String(text)).length).toBeLessThanOrEqual(80)
+    expect(JSON.stringify(output)).not.toContain("private/token")
+  })
+  test("redacts credential-shaped search subjects rather than forwarding tool input", async () => {
+    const test = await harness({ sessions: [sessionInfo("ses_root", { updated: 1 }), sessionInfo("ses_child", { updated: 2, parentID: "ses_root" })], results: {
+      activeSessions: { ses_child: { type: "running" } },
+      snapshot: { messages: [{ type: "assistant", time: { created: 1 }, content: [{ type: "tool", name: "websearch", state: { status: "running", input: { query: "api_key=sk-sensitive-value" } } }] }] },
+    } })
+    const output = valueOf(await executeRemoteOperation({ request: { ...request("session.family.activity", { sessionIDs: ["ses_child"] }), sessionID: "ses_root" },
+      local: test.local, sessions: test.registry, subscriptions: test.subscriptions }))
+    expect(output).toMatchObject({ data: [{ sessionID: "ses_root", executing: false }, { sessionID: "ses_child", activity: { text: "Searching" } }] })
+    expect(JSON.stringify(output)).not.toContain("sensitive-value")
   })
   test("maps each mutation onto its exact Protocol call and payload", async () => {
     const { local, registry, subscriptions, calls } = await harness({

@@ -59,6 +59,36 @@ test("one-message stream requests accept only an indexed Session message ID", ()
     expect(parseClientMessage(JSON.stringify({ ...frame, input })).ok).toBe(false)
 })
 
+test("Team operations stay root-scoped with bounded child, shell, side-chat, and economics inputs", () => {
+  const request = (operation: string, input?: unknown) => ({ type: "request", id: "team_1", sessionID: "ses_root", operation,
+    ...(input === undefined ? {} : { input }) })
+  for (const [operation, input] of [
+    ["session.subagent.cancel", { childID: "ses_child" }],
+    ["session.subagent.answer", { childID: "ses_child", questionID: "qst_1", text: "staging" }],
+    ["session.team.shell.list", undefined],
+    ["session.team.shell.kill", { shellID: "sh_1" }],
+    ["session.side-chat.list", undefined],
+    ["session.side-chat.list", { cursor: "opaque" }],
+    ["session.side-chat.create", { id: "ses_btw_new" }],
+    ["session.team.economics", { sessionIDs: ["ses_child"] }],
+  ] as const) {
+    expect(parseClientMessage(JSON.stringify(request(operation, input)))).toMatchObject({ ok: true })
+    expect(parseClientMessage(JSON.stringify({ ...request(operation, input), sessionID: undefined })).ok).toBe(false)
+  }
+  for (const [operation, input] of [
+    ["session.subagent.cancel", { childID: "../foreign" }],
+    ["session.subagent.answer", { childID: "ses_child", questionID: "qst_1", text: "" }],
+    ["session.subagent.answer", { childID: "ses_child", questionID: "bad", text: "answer" }],
+    ["session.team.shell.list", { directory: "/private" }],
+    ["session.team.shell.kill", { shellID: "sh_1", sessionID: "ses_foreign" }],
+    ["session.side-chat.list", { cursor: "x".repeat(1_025) }],
+    ["session.side-chat.create", { id: "ses_btw_new", agent: "god" }],
+    ["session.team.economics", { sessionIDs: [] }],
+    ["session.team.economics", { sessionIDs: ["ses_child", "ses_child"] }],
+    ["session.team.economics", { sessionIDs: Array.from({ length: 16 }, (_, index) => `ses_${index}`) }],
+  ] as const) expect(parseClientMessage(JSON.stringify(request(operation, input))).ok).toBe(false)
+})
+
 test("relay-only cancel frames cannot be forged by a browser", () => {
   const frame = JSON.stringify({ type: "cancel", id: "req_message" })
   expect(parseRelayToAgentMessage(frame)).toMatchObject({ ok: true, value: { type: "cancel", id: "req_message" } })
@@ -190,6 +220,11 @@ describe("remote envelope: request", () => {
   test("admits only bounded parent-scoped subagent page inputs", () => {
     expect(parseClientMessage('{"type":"request","id":"a","operation":"session.subagent.list","sessionID":"ses_parent"}')).toMatchObject({ ok: true })
     expect(parseClientMessage('{"type":"request","id":"a","operation":"session.subagent.list","sessionID":"ses_parent","input":{"cursor":"page_2"}}')).toMatchObject({ ok: true })
+    expect(parseClientMessage('{"type":"request","id":"a","operation":"session.family.activity","sessionID":"ses_parent","input":{"sessionIDs":["ses_child"]}}')).toMatchObject({ ok: true })
+    for (const input of [undefined, { sessionIDs: ["ses_child", "ses_child"] }, { sessionIDs: ["ses_parent"] }, { sessionIDs: Array.from({ length: 16 }, (_, i) => `ses_${i}`) }, { sessionIDs: ["../../etc/passwd"] }]) {
+      const frame = { type: "request", id: "a", operation: "session.family.activity", sessionID: "ses_parent", ...(input === undefined ? {} : { input }) }
+      expect(parseClientMessage(JSON.stringify(frame)).ok).toBe(false)
+    }
     for (const raw of [
       '{"type":"request","id":"a","operation":"session.subagent.list"}',
       '{"type":"request","id":"a","operation":"session.subagent.list","sessionID":"ses_parent","input":{"limit":11}}',
@@ -398,6 +433,14 @@ describe("remote operations", () => {
       "session.message.stream",
       "session.todo.list",
       "session.subagent.list",
+      "session.subagent.cancel",
+      "session.subagent.answer",
+      "session.team.economics",
+      "session.team.shell.list",
+      "session.team.shell.kill",
+      "session.side-chat.list",
+      "session.side-chat.create",
+      "session.family.activity",
       "session.log",
       "session.subscribe",
       "session.unsubscribe",
@@ -439,6 +482,8 @@ describe("remote operations", () => {
     expect(requireSession("session.active")).toBe(false)
     expect(requireSession("session.prompt")).toBe(true)
     expect(requireSession("session.subagent.list")).toBe(true)
+    expect(requireSession("session.family.activity")).toBe(true)
+    expect(parseAgentMessage('{"type":"response","id":"r","ok":false,"error":{"code":"subagent_read_only","message":"Managed subagent"}}')).toMatchObject({ ok: true })
     expect(requireSession("session.goal.stop")).toBe(true)
     expect(RemoteProtocolVersion).toBe(3)
     expect(RemoteWebSocketPath).toEqual({ client: "/ws/v3/client", agent: "/ws/v3/agent" })

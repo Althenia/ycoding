@@ -22,6 +22,7 @@ import {
   type SessionMessageInfo,
   type YCodingClient,
 } from "@ycoding-ai/client/promise"
+import { createHash } from "node:crypto"
 import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
 import { RemoteLimits, type RemoteUsageReportInput } from "@ycoding-ai/remote"
 
@@ -94,6 +95,13 @@ export type LocalServer = {
   readonly messageRead: (sessionID: string, location: LocalLocation, messageID: string, signal?: AbortSignal) => Promise<SessionMessageInfo>
   readonly todoList: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly subagentPage: (parentID: string, location: LocalLocation, cursor?: string) => Promise<unknown>
+  readonly subagentCancel: (parentID: string, childID: string, location: LocalLocation) => Promise<unknown>
+  readonly subagentAnswer: (parentID: string, childID: string, questionID: string, text: string, location: LocalLocation) => Promise<unknown>
+  readonly diagnostics: (sessionID: string, location: LocalLocation) => Promise<unknown>
+  readonly listChildren: (parentID: string, location: LocalLocation, cursor?: string) => Promise<{ readonly data: readonly SessionInfo[]; readonly cursor: { readonly next?: string | null; readonly previous?: string | null } }>
+  readonly createSideChat: (id: string, parentID: string, location: LocalLocation) => Promise<SessionInfo>
+  readonly shellList: (location: LocalLocation) => Promise<readonly unknown[]>
+  readonly shellRemove: (shellID: string, location: LocalLocation) => Promise<void>
   readonly messages: (sessionID: string, location: LocalLocation) => Promise<readonly SessionMessageInfo[]>
   readonly log: (sessionID: string, location: LocalLocation, after?: number) => Promise<readonly unknown[]>
   readonly autonomyGet: (sessionID: string, location: LocalLocation) => Promise<unknown>
@@ -217,6 +225,28 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       call(() => client.session.todo.list({ sessionID }, request(location, timeoutMs))),
     subagentPage: (parentID, location, cursor) =>
       call(() => client.session.subagent.list({ parentID, ...(cursor === undefined ? {} : { cursor }) }, request(location, timeoutMs))),
+    subagentCancel: (parentID, childID, location) =>
+      call(() => client.session.subagent.cancel({ parentID, childID }, request(location, timeoutMs))),
+    subagentAnswer: (parentID, childID, questionID, text, location) =>
+      call(() => client.session.subagent.answer({ parentID, childID, questionID, text }, request(location, timeoutMs))),
+    diagnostics: (sessionID, location) => call(() => client.session.diagnostics({ sessionID }, request(location, timeoutMs))),
+    listChildren: (parentID, location, cursor) => call(() => client.session.list({ parentID, limit: 50, order: "desc", ...(cursor === undefined ? {} : { cursor }) }, request(location, timeoutMs))),
+    createSideChat: (id, parentID, location) => call(async () => {
+      const created = await client.session.create({ id, parentID, agent: "btw" } as Parameters<YCodingClient["session"]["create"]>[0], request(location, timeoutMs))
+      if (created.parentID !== parentID || created.agent !== "btw") throw new LocalFailure("conflict", "Session ID belongs to another Session")
+      const snapshot = await client.session.snapshot({ sessionID: parentID, limit: 20 }, request(location, timeoutMs))
+      const recent = snapshot.messages.flatMap((message) => {
+        if (message.type === "user") return [{ role: "User", text: message.text }]
+        if (message.type === "synthetic") return [{ role: "Context", text: message.text }]
+        if (message.type !== "assistant") return []
+        return message.content.filter((part) => part.type === "text").map((part) => ({ role: "Assistant", text: part.text }))
+      }).slice(-12)
+      await client.session.synthetic({ sessionID: id, id: `msg_${createHash("sha256").update(`ycoding.btw.context.v1\0${id}`).digest("hex")}`,
+        text: ["Recent parent session history:", ...recent.map((item) => `${item.role}:\n${item.text}`)].join("\n\n"), description: "Parent session history snapshot", delivery: "steer", resume: false }, request(location, timeoutMs))
+      return created
+    }),
+    shellList: (location) => call(async () => (await client.shell.list({}, request(location, timeoutMs))).data),
+    shellRemove: (shellID, location) => call(async () => { await client.shell.remove({ id: shellID }, request(location, timeoutMs)) }),
     autonomyGet: (sessionID, location) =>
       call(() => client.session.autonomy.get({ sessionID }, request(location, timeoutMs))),
     permissionList: (sessionID, location) =>

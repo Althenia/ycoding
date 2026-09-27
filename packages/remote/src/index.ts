@@ -45,6 +45,14 @@ export const remoteOperations = [
   "session.message.stream",
   "session.todo.list",
   "session.subagent.list",
+  "session.subagent.cancel",
+  "session.subagent.answer",
+  "session.team.economics",
+  "session.team.shell.list",
+  "session.team.shell.kill",
+  "session.side-chat.list",
+  "session.side-chat.create",
+  "session.family.activity",
   "session.log",
   "session.subscribe",
   "session.unsubscribe",
@@ -89,6 +97,14 @@ export const remoteSessionOperations = [
   "session.message.stream",
   "session.todo.list",
   "session.subagent.list",
+  "session.subagent.cancel",
+  "session.subagent.answer",
+  "session.team.economics",
+  "session.team.shell.list",
+  "session.team.shell.kill",
+  "session.side-chat.list",
+  "session.side-chat.create",
+  "session.family.activity",
   "session.log",
   "session.subscribe",
   "session.unsubscribe",
@@ -119,6 +135,16 @@ export const remoteSessionOperations = [
 
 export type RemoteOperation = (typeof remoteOperations)[number]
 
+export type RemoteFamilyActivity = {
+  readonly sessionID: string
+  readonly executing: boolean
+  readonly activity?: {
+    readonly kind: "tool" | "thinking" | "replying"
+    readonly room: "research" | "qa" | "meeting" | "developer" | "hold"
+    readonly text: string
+  }
+}
+
 export type RemoteWorkspaceInfo = {
   readonly id: string
   readonly projectID: string
@@ -140,6 +166,7 @@ export const RemoteLimits = {
   maxPendingRequestsPerClient: 32,
   maxSessionListPage: 200,
   maxStatusSessions: 500,
+  maxFamilyMembers: 16,
   maxSubscriptionsPerClient: 64,
   maxRequestIDChars: 64,
   maxSessionIDChars: 128,
@@ -172,6 +199,7 @@ export type RemoteErrorCode =
   | "unknown_operation"
   | "session_required"
   | "session_not_allowed"
+  | "subagent_read_only"
   | "not_found"
   | "not_subscribed"
   | "rate_limited"
@@ -187,6 +215,7 @@ const remoteErrorCodes: readonly RemoteErrorCode[] = [
   "unknown_operation",
   "session_required",
   "session_not_allowed",
+  "subagent_read_only",
   "not_found",
   "not_subscribed",
   "rate_limited",
@@ -365,6 +394,8 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
     return failRequest("invalid_message", "Global operation does not accept a session")
   if (frame.input !== undefined && !isRecord(frame.input)) return invalid()
   if (!validOperationInput(operation, frame.input)) return failRequest("invalid_message", "Input does not match the remote operation")
+  if (operation === "session.family.activity" && isRecord(frame.input) && Array.isArray(frame.input.sessionIDs) && frame.input.sessionIDs.includes(frame.sessionID))
+    return failRequest("invalid_message", "A family member cannot repeat the parent")
   return {
     ok: true,
     value:
@@ -412,6 +443,17 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
   }
   if (operation === "workspace.list") return input === undefined || (isRecord(input) && input.sessionsOnly === true && Object.keys(input).length === 1)
   if (operation === "session.subagent.list") return input === undefined || (isRecord(input) && typeof input.cursor === "string" && input.cursor.length > 0 && input.cursor.length <= 1_024 && Object.keys(input).length === 1)
+  if (operation === "session.subagent.cancel") return isRecord(input) && isSessionID(input.childID) && Object.keys(input).length === 1
+  if (operation === "session.subagent.answer") return isRecord(input) && isSessionID(input.childID) && typeof input.questionID === "string" && /^qst_[A-Za-z0-9_-]+$/.test(input.questionID) && input.questionID.length <= 128 &&
+    typeof input.text === "string" && input.text.trim().length > 0 && input.text.length <= 8_192 && Object.keys(input).every((key) => key === "childID" || key === "questionID" || key === "text")
+  if (operation === "session.team.economics") return isRecord(input) && Object.keys(input).length === 1 && Array.isArray(input.sessionIDs) && input.sessionIDs.length > 0 && input.sessionIDs.length < RemoteLimits.maxFamilyMembers &&
+    input.sessionIDs.every((id) => isSessionID(id) && id.length <= RemoteLimits.maxSessionIDChars) && new Set(input.sessionIDs).size === input.sessionIDs.length
+  if (operation === "session.team.shell.list") return input === undefined
+  if (operation === "session.team.shell.kill") return isRecord(input) && typeof input.shellID === "string" && /^sh_[A-Za-z0-9_-]+$/.test(input.shellID) && input.shellID.length <= 128 && Object.keys(input).length === 1
+  if (operation === "session.side-chat.list") return input === undefined || isRecord(input) && typeof input.cursor === "string" && input.cursor.length > 0 && input.cursor.length <= 1_024 && Object.keys(input).length === 1
+  if (operation === "session.side-chat.create") return isRecord(input) && isSessionID(input.id) && Object.keys(input).length === 1
+  if (operation === "session.family.activity") return isRecord(input) && Object.keys(input).length === 1 && Array.isArray(input.sessionIDs) && input.sessionIDs.length < RemoteLimits.maxFamilyMembers &&
+    input.sessionIDs.every((id) => isSessionID(id) && id.length <= RemoteLimits.maxSessionIDChars) && new Set(input.sessionIDs).size === input.sessionIDs.length
   if (operation === "session.status" || operation === "session.catalog" || operation === "session.todo.list") return input === undefined
   if (operation === "workspace.catalog") return isRecord(input) && validWorkspace(input.workspace) && Object.keys(input).length === 1
   if (operation === "session.file.find" || operation === "workspace.file.find")

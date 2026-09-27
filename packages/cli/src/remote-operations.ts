@@ -18,6 +18,7 @@ import {
   type RemoteRequest,
   type RemoteResponse,
   type RemoteWorkspaceInfo,
+  type RemoteFamilyActivity,
   type RemoteUsageReportInput,
 } from "@ycoding-ai/remote"
 import {
@@ -575,6 +576,11 @@ async function run(input: OperationInput) {
   const verified = await input.sessions.verify(sessionID)
   if (verified === undefined)
     throw new OperationError("session_not_allowed", "Session is not available at its recorded location")
+  if (verified.parentID !== undefined && verified.agent !== "btw" && [
+    "session.prompt", "session.command", "session.skill", "session.attachment.upload",
+    "session.switchModel", "session.switchAgent", "session.autonomy.set", "session.goal.set", "session.goal.stop",
+  ].includes(request.operation))
+    throw new OperationError("subagent_read_only", "Managed subagents accept input only from their parent Session")
   const location = locationInfo(verified)
   if (validated.kind === "upload") {
     if (!input.uploads) throw new OperationError("invalid_message", "Attachment uploads are unavailable")
@@ -599,6 +605,76 @@ async function run(input: OperationInput) {
       return await input.local.messageRead(sessionID, location, validated.messageID, input.signal)
     case "subagent.list":
       return await input.local.subagentPage(sessionID, location, validated.cursor)
+    case "subagent.cancel": {
+      await requireFamilyMember(input, verified, validated.childID, true)
+      return { data: await input.local.subagentCancel(sessionID, validated.childID, location) }
+    }
+    case "subagent.answer": {
+      await requireFamilyMember(input, verified, validated.childID, true)
+      return { data: await input.local.subagentAnswer(sessionID, validated.childID, validated.questionID, validated.text, location) }
+    }
+    case "team.economics": {
+      const members = await Promise.all(validated.sessionIDs.map((id) => requireFamilyMember(input, verified, id, true)))
+      return { data: await Promise.all(members.map(async (member) => {
+        const raw = await input.local.diagnostics(member.id, locationInfo(member))
+        const data = raw && typeof raw === "object" && "data" in raw ? raw.data : raw
+        const details = data && typeof data === "object" ? data as { context?: { total?: number; limit?: number }; cache?: { hitRatio?: number; readReported?: boolean; writeReported?: boolean }; tokens?: { cacheRead?: number; cacheWrite?: number } } : undefined
+        return { sessionID: member.id, cost: member.cost, tokens: member.tokens,
+          ...(details?.context?.total === undefined ? {} : { contextTotal: details.context.total }),
+          ...(details?.context?.limit === undefined ? {} : { contextLimit: details.context.limit }),
+          ...(details?.cache?.hitRatio === undefined ? {} : { cacheHitRatio: details.cache.hitRatio }),
+          ...(details?.cache?.readReported !== true || details.tokens?.cacheRead === undefined ? {} : { cacheRead: details.tokens.cacheRead }),
+          ...(details?.cache?.writeReported !== true || details.tokens?.cacheWrite === undefined ? {} : { cacheWrite: details.tokens.cacheWrite }) }
+      })) }
+    }
+    case "team.shell.list": {
+      if (verified.parentID !== undefined) throw new OperationError("forbidden", "Team requires a root Session")
+      const locations = await familyLocations(input, verified)
+      const shells = (await Promise.all(locations.map(async (memberLocation) => ({ location: memberLocation, items: await input.local.shellList(memberLocation) })))).flatMap((entry) => entry.items.map((item) => ({ item, location: entry.location })))
+      const owners = new Map<string, SessionInfo>()
+      const visible: { id: string; ownerID: string; command: string; status: string; startedAt: number; completedAt?: number }[] = []
+      for (const { item, location: shellLocation } of shells) {
+        if (!item || typeof item !== "object" || !("metadata" in item) || !("id" in item)) continue
+        const shell = item as { id: unknown; command?: unknown; status?: unknown; metadata: unknown; time?: { started?: number; completed?: number } }
+        const ownerID = shell.metadata && typeof shell.metadata === "object" && "sessionID" in shell.metadata ? shell.metadata.sessionID : undefined
+        if (typeof ownerID !== "string" || typeof shell.id !== "string") continue
+        const owner = owners.get(ownerID) ?? await input.sessions.verify(ownerID)
+        if (!owner || owner.id !== verified.id && owner.parentID !== verified.id || JSON.stringify(locationInfo(owner)) !== JSON.stringify(shellLocation)) continue
+        owners.set(ownerID, owner)
+        if (visible.length === 50) return { data: visible, truncated: true }
+        visible.push({ id: shell.id, ownerID, command: typeof shell.command === "string" ? shell.command.slice(0, 256) : "", status: typeof shell.status === "string" ? shell.status : "exited", startedAt: shell.time?.started ?? 0,
+          ...(shell.time?.completed === undefined ? {} : { completedAt: shell.time.completed }) })
+      }
+      return { data: visible, truncated: false }
+    }
+    case "team.shell.kill": {
+      if (verified.parentID !== undefined) throw new OperationError("forbidden", "Team requires a root Session")
+      for (const memberLocation of await familyLocations(input, verified)) {
+        const shell = await input.local.shellGet(validated.shellID, memberLocation).catch((cause: unknown) => {
+          if (cause instanceof LocalFailure && cause.kind === "not_found") return undefined
+          throw cause
+        })
+        if (shell === undefined) continue
+        const ownerID = typeof shell === "object" && shell !== null && "metadata" in shell && shell.metadata && typeof shell.metadata === "object" && "sessionID" in shell.metadata ? shell.metadata.sessionID : undefined
+        if (typeof ownerID !== "string") throw new OperationError("forbidden", "Shell has no verified family owner")
+        const member = await requireFamilyMember(input, verified, ownerID)
+        if (JSON.stringify(locationInfo(member)) !== JSON.stringify(memberLocation)) throw new OperationError("forbidden", "Shell Location does not match its family owner")
+        await input.local.shellRemove(validated.shellID, memberLocation)
+        return null
+      }
+      throw new OperationError("not_found", "Shell is not available in this family")
+    }
+    case "side-chat.list": {
+      if (verified.parentID !== undefined) throw new OperationError("forbidden", "Side chats require a root Session")
+      const page = await input.local.listChildren(sessionID, location, validated.cursor)
+      return { ...page, data: page.data.filter((child) => child.parentID === sessionID && child.agent === "btw").map((child) => ({ id: child.id, title: child.title, updatedAt: child.time.updated })) }
+    }
+    case "side-chat.create": {
+      if (verified.parentID !== undefined) throw new OperationError("forbidden", "Side chats require a root Session")
+      return { data: await input.local.createSideChat(validated.id, sessionID, location) }
+    }
+    case "family.activity":
+      return { data: await familyActivity(input, verified, validated.sessionIDs) }
     case "catalog":
       return catalog(input.local, location)
     case "file.find":
@@ -719,6 +795,14 @@ type Validated =
   | { readonly kind: "attachment.read"; readonly digest: string }
   | { readonly kind: "message.stream"; readonly messageID: string }
   | { readonly kind: "subagent.list"; readonly cursor?: string }
+  | { readonly kind: "subagent.cancel"; readonly childID: string }
+  | { readonly kind: "subagent.answer"; readonly childID: string; readonly questionID: string; readonly text: string }
+  | { readonly kind: "team.economics"; readonly sessionIDs: readonly string[] }
+  | { readonly kind: "team.shell.list" }
+  | { readonly kind: "team.shell.kill"; readonly shellID: string }
+  | { readonly kind: "side-chat.list"; readonly cursor?: string }
+  | { readonly kind: "side-chat.create"; readonly id: string }
+  | { readonly kind: "family.activity"; readonly sessionIDs: readonly string[] }
   | { readonly kind: "messages" }
   | { readonly kind: "todo.list" }
   | { readonly kind: "autonomy.get" }
@@ -755,6 +839,7 @@ const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
   "session.subscribe": "subscribe",
   "session.unsubscribe": "unsubscribe",
   "session.interrupt": "interrupt",
+  "session.team.shell.list": "team.shell.list",
 }
 
 function validate(request: RemoteRequest): Validated {
@@ -803,6 +888,28 @@ function validate(request: RemoteRequest): Validated {
     return request.operation === "workspace.file.find" ? { kind: "workspace.file.find", workspace: requireString(fields.workspace, "workspace", 128), query, limit } : { kind: "file.find", query, limit }
   }
   if (request.operation === "session.subagent.list") return { kind: "subagent.list", cursor: fields.cursor === undefined ? undefined : requireString(fields.cursor, "cursor", 1_024) }
+  if (request.operation === "session.subagent.cancel") return { kind: "subagent.cancel", childID: sessionID(fields.childID, "childID") }
+  if (request.operation === "session.subagent.answer") {
+    const questionID = requireString(fields.questionID, "questionID", 128)
+    if (!/^qst_[A-Za-z0-9_-]+$/.test(questionID)) throw new OperationError("invalid_message", "Invalid question ID")
+    return { kind: "subagent.answer", childID: sessionID(fields.childID, "childID"), questionID, text: requireString(fields.text, "text", 8_192) }
+  }
+  if (request.operation === "session.team.economics") {
+    if (!Array.isArray(fields.sessionIDs) || fields.sessionIDs.length === 0 || fields.sessionIDs.length >= RemoteLimits.maxFamilyMembers ||
+      fields.sessionIDs.some((id) => typeof id !== "string" || !isSessionID(id)) || new Set(fields.sessionIDs).size !== fields.sessionIDs.length)
+      throw new OperationError("invalid_message", "Invalid economics member list")
+    return { kind: "team.economics", sessionIDs: fields.sessionIDs }
+  }
+  if (request.operation === "session.team.shell.kill") return { kind: "team.shell.kill", shellID: shellID(fields.shellID) }
+  if (request.operation === "session.side-chat.list") return { kind: "side-chat.list", cursor: fields.cursor === undefined ? undefined : requireString(fields.cursor, "cursor", 1_024) }
+  if (request.operation === "session.side-chat.create") return { kind: "side-chat.create", id: sessionID(fields.id, "id") }
+  if (request.operation === "session.family.activity") {
+    if (!Array.isArray(fields.sessionIDs) || fields.sessionIDs.length >= RemoteLimits.maxFamilyMembers ||
+      fields.sessionIDs.some((id) => typeof id !== "string" || !isSessionID(id) || id === request.sessionID) ||
+      new Set(fields.sessionIDs).size !== fields.sessionIDs.length)
+      throw new OperationError("invalid_message", "Invalid family member list")
+    return { kind: "family.activity", sessionIDs: fields.sessionIDs }
+  }
   if (request.operation === "session.create")
     return {
       kind: "session.create",
@@ -938,6 +1045,98 @@ async function requireOwnedForm(
 
 function scopedOperation(operation: RemoteOperation) {
   return !unscopedOperations.has(operation) && requireSession(operation)
+}
+
+async function requireFamilyMember(input: OperationInput, root: SessionInfo, memberID: string, managed = false): Promise<SessionInfo> {
+  if (root.parentID !== undefined) throw new OperationError("forbidden", "Team requires a root Session")
+  if (memberID === root.id && !managed) return root
+  const member = await input.sessions.verify(memberID)
+  if (member?.parentID !== root.id || managed && member.agent === "btw") throw new OperationError("forbidden", "Session is not a direct family member")
+  return member
+}
+
+async function familyLocations(input: OperationInput, root: SessionInfo): Promise<readonly LocalLocation[]> {
+  const locations = new Map<string, LocalLocation>()
+  const add = (location: LocalLocation) => locations.set(JSON.stringify(location), location)
+  add(locationInfo(root))
+  for (const child of input.sessions.snapshot().filter((session) => session.parentID === root.id)) {
+    if (locations.has(JSON.stringify(locationInfo(child)))) continue
+    if (locations.size >= RemoteLimits.maxFamilyMembers) throw new OperationError("message_too_large", "Team spans too many Locations for one shell read")
+    const current = await input.sessions.verify(child.id)
+    if (current?.parentID === root.id) add(locationInfo(current))
+  }
+  return [...locations.values()]
+}
+
+async function familyActivity(input: OperationInput, root: SessionInfo, sessionIDs: readonly string[]): Promise<readonly RemoteFamilyActivity[]> {
+  if (root.parentID !== undefined) throw new OperationError("session_not_allowed", "Family activity requires a root Session")
+  const inventory = new Map(input.sessions.snapshot().map((session) => [session.id, session]))
+  const members = [root, ...sessionIDs.map((id) => {
+    const child = inventory.get(id)
+    if (child?.parentID !== root.id) throw new OperationError("session_not_allowed", "Session is not a direct member of this family")
+    return child
+  })]
+  const executing = activeIDs(await input.local.activeSessions())
+  const output: RemoteFamilyActivity[] = []
+  for (let offset = 0; offset < members.length; offset += 8) {
+    output.push(...await Promise.all(members.slice(offset, offset + 8).map(async (member): Promise<RemoteFamilyActivity> => {
+      if (!executing.has(member.id)) return { sessionID: member.id, executing: false }
+      const snapshot = await input.local.snapshot(member.id, locationInfo(member), { limit: 8 })
+      return { sessionID: member.id, executing: true, activity: summarizeActivity(snapshot) }
+    })))
+  }
+  return output
+}
+
+function summarizeActivity(snapshot: unknown): NonNullable<RemoteFamilyActivity["activity"]> {
+  const messages = field(snapshot, "messages")
+  const assistant = Array.isArray(messages) ? messages.findLast((message) => field(message, "type") === "assistant" && field(field(message, "time"), "completed") === undefined) : undefined
+  const content = field(assistant, "content")
+  const part = Array.isArray(content) ? content.at(-1) : undefined
+  if (field(part, "type") === "reasoning" && field(field(part, "time"), "completed") === undefined)
+    return { kind: "thinking", room: "hold", text: "Thinking" }
+  if (field(part, "type") !== "tool" || !["running", "streaming"].includes(String(field(field(part, "state"), "status"))))
+    return { kind: "replying", room: "developer", text: part === undefined ? "Preparing next step" : "Replying" }
+  const name = field(part, "name")
+  const tool = typeof name === "string" ? name : "tool"
+  const data = field(field(part, "state"), "input")
+  const value = (key: string) => { const result = field(data, key); return typeof result === "string" ? result : "" }
+  const leaf = (path: string) => path.split(/[\\/]/).at(-1)?.replace(/[^\p{L}\p{N}._-]/gu, "") ?? ""
+  const text = (label: string, subject = "") => boundedActivity(`${label}${subject ? ` ${subject}` : ""}`)
+  if (["read", "glob"].includes(tool)) return { kind: "tool", room: "research", text: text(tool === "read" ? "Reading" : "Finding files", leaf(value("path") || value("pattern"))) }
+  if (tool === "grep" || tool === "websearch") {
+    const query = value("query") || value("pattern")
+    const safe = /\b(?:api[_-]?key|token|secret|password|bearer)\b|sk-|[A-Za-z0-9_-]{32,}|@|:\/\//i.test(query) ? "" : boundedActivity(query, 42)
+    return { kind: "tool", room: "research", text: safe ? text("Searching:", safe) : "Searching" }
+  }
+  if (tool === "webfetch") {
+    const host = URL.canParse(value("url")) ? new URL(value("url")).hostname : ""
+    return { kind: "tool", room: "research", text: text("Fetching", host) }
+  }
+  if (["subagent", "subagent_control", "subagent_report", "todowrite"].includes(tool)) return { kind: "tool", room: "meeting", text: tool === "todowrite" ? "Planning tasks" : "Dispatching a subagent" }
+  if (["patch", "write", "edit_image"].includes(tool)) {
+    const patch = value("patchText").match(/^\*\*\* (?:Update|Add) File: ([^\r\n]+)/m)?.[1] ?? ""
+    return { kind: "tool", room: "developer", text: text("Editing", leaf(value("path") || patch)) }
+  }
+  if (tool === "shell") {
+    const command = value("command")
+    const check = command.match(/\b(?:bun|npm|pnpm|yarn) (?:test|run (?:typecheck|lint))\b(?: [./\w-]+)?/i)?.[0]
+    if (check) return { kind: "tool", room: "qa", text: text("Running", check) }
+    if (/\b(?:pytest|vitest|jest|tsc|eslint|oxlint)\b/i.test(command)) return { kind: "tool", room: "qa", text: "Running checks" }
+    if (/\b(?:rg|grep|find|ls|cat)\b/.test(command)) return { kind: "tool", room: "research", text: "Searching files" }
+    return { kind: "tool", room: "developer", text: "Running a command" }
+  }
+  return { kind: "tool", room: "developer", text: text("Using", tool.replace(/[^\p{L}\p{N}_-]/gu, "")) }
+}
+
+function field(value: unknown, key: string): unknown {
+  return typeof value === "object" && value !== null ? Reflect.get(value, key) : undefined
+}
+
+function boundedActivity(value: string, limit = 80): string {
+  const clean = value.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, " ").replace(/\s+/g, " ").trim()
+  const points = Array.from(clean)
+  return points.length <= limit ? clean : `${points.slice(0, limit - 1).join("")}…`
 }
 
 export async function sessionStatus(local: LocalServer, sessions: readonly SessionInfo[], knownAttention?: readonly string[]) {
@@ -1151,6 +1350,14 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.attachment.read": ["digest"],
   "session.message.stream": ["messageID"],
   "session.subagent.list": ["cursor"],
+  "session.subagent.cancel": ["childID"],
+  "session.subagent.answer": ["childID", "questionID", "text"],
+  "session.team.economics": ["sessionIDs"],
+  "session.team.shell.list": [],
+  "session.team.shell.kill": ["shellID"],
+  "session.side-chat.list": ["cursor"],
+  "session.side-chat.create": ["id"],
+  "session.family.activity": ["sessionIDs"],
   "session.messages": [],
   "session.todo.list": [],
   "session.log": ["after"],
@@ -1185,6 +1392,10 @@ function validateFields(request: RemoteRequest): Readonly<Record<string, unknown
 
 const mutations: ReadonlySet<string> = new Set([
   "session.create",
+  "session.subagent.cancel",
+  "session.subagent.answer",
+  "session.team.shell.kill",
+  "session.side-chat.create",
   "session.switchModel",
   "session.switchAgent",
   "session.command",

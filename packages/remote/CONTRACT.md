@@ -356,6 +356,14 @@ grouping and Session-list filters are derived from backend metadata.
 | `session.catalog` | yes | Location-scoped catalog reads | Same routes as `workspace.catalog` at the verified Session Location | — |
 | `session.file.find` | yes | `v2.fs.find` | `GET /api/fs/find` at the verified Session Location | `query`, `limit?` |
 | `session.subagent.list` | yes | `v2.session.subagent.list` | `GET /api/session/:parentID/subagent` | `cursor?` |
+| `session.subagent.cancel` | yes | `v2.session.subagent.cancel` | `POST /api/session/:parentID/subagent/:childID/cancel` | `childID` |
+| `session.subagent.answer` | yes | `v2.session.subagent.answer` | `POST /api/session/:parentID/subagent/:childID/question/:questionID/answer` | `childID`, `questionID`, `text` |
+| `session.team.economics` | yes | `v2.session.get`, `v2.session.diagnostics` | Bounded child reads at each recorded Location | `sessionIDs` (1–15 unique direct managed children) |
+| `session.team.shell.list` | yes | `v2.shell.list` | `GET /api/shell` at up to 16 verified family Locations | — |
+| `session.team.shell.kill` | yes | `v2.shell.get`, `v2.shell.remove` | `GET`, `DELETE /api/shell/:id` at the verified owner Location | `shellID` |
+| `session.side-chat.list` | yes | `v2.session.list` | `GET /api/session?parentID=:rootID` | `cursor?` |
+| `session.side-chat.create` | yes | `v2.session.create`, `v2.session.snapshot`, `v2.session.synthetic` | `POST /api/session`, `GET /api/session/:rootID/snapshot`, `POST /api/session/:id/synthetic` | `id` |
+| `session.family.activity` | yes | `v2.session.active`, `v2.session.snapshot` | `GET /api/session/active`, bounded `GET /api/session/:sessionID/snapshot` for executing members only | `sessionIDs` (zero to 15 unique direct child IDs) |
 | `session.log` | yes | `v2.session.log` | `GET /api/experimental/session/:sessionID/log` | `after?` |
 | `session.subscribe` | yes | `v2.event.subscribe` | `GET /api/event` (SSE) | — |
 | `session.unsubscribe` | yes | — (tears down the agent's `v2.event.subscribe` stream for that session) | — | — |
@@ -419,6 +427,52 @@ larger limit, mutation, or child subscription is accepted. The response keeps
 the Protocol `{ data, summary, cursor }` shape and is chunked if needed. An
 agent without this operation replies `unknown_operation`, which is an
 unsupported team read rather than an empty team.
+
+Team operations address a verified root Session; the connector verifies each
+child at its recorded Location immediately before a child operation. Cancel and
+answer require a direct managed child (not a BTW side chat) and return its
+durable task. Answer accepts a pending question ID and nonempty text of at most
+8,192 characters. An unrelated or moved child is never controlled through a
+browser-selected Location. `session.team.economics` accepts 1–15 distinct direct
+managed child IDs, verifies the entire batch before any diagnostic read, and
+returns reported cost, token counts, context usage and cache read/write/hit
+fields. Unreported cache fields stay absent.
+
+`session.team.shell.list` reads running shells from at most 16 distinct verified
+root-family Locations, returns at most 50 rows with `{ id, ownerID, command,
+status, startedAt, completedAt? }`, and reports truncation. Only shells whose
+metadata identifies a current root or direct child at that shell's Location are
+visible. Kill locates the shell under those family Locations and re-verifies its
+metadata owner before removal; missing or unrelated ownership cannot authorize
+output or removal. Output paging uses `session.shell.output` addressed to the
+verified shell owner. No shell Location comes from the browser.
+
+`session.side-chat.list` pages direct child Sessions at 50 per local page and
+returns BTW rows only, retaining the backend cursor. `session.side-chat.create`
+uses the caller's Session ID to adopt an exact retry under the root with agent
+`btw`, then admits one deterministic-ID synthetic parent-history snapshot with
+`resume: false`. The browser sends a separate prompt to that child. A partially
+settled create is reported as unknown; it is not retried automatically.
+
+`session.family.activity` addresses the verified root Session, and `sessionIDs`
+names at most 15 direct children in the current backend inventory. The local
+agent rejects unrelated IDs, reads process-local execution ownership once, and
+returns `{ data: [{ sessionID, executing, activity? }] }` in requested order,
+root first. `executing` is per Session, not the family's running indicator.
+Only executing members have a bounded eight-message snapshot read at their own
+recorded Location. Their optional `activity` has `kind` (`tool`, `thinking`, or
+`replying`), `room` (`research`, `qa`, `meeting`, `developer`, or `hold`), and a
+sanitized, at-most-80-character `text` summary. Raw input, transcript, tool
+output, paths outside the basename, and reasoning text are not forwarded.
+Idle members have no activity and require no Location message read. A connector
+without this operation yields `unknown_operation`; the browser reports activity
+as unsupported, never as inferred work.
+
+Managed child Sessions (`parentID` set, agent other than `btw`) reject
+`session.prompt`, `session.command`, `session.skill`, attachment upload, model and
+agent switches, autonomy changes, and goal changes with `subagent_read_only`.
+BTW child Sessions remain promptable. Reads, interruption, permission/form/
+guardrail replies, and the owner's root Session are unaffected.
 
 `session.create` accepts `{ id, workspace, agent?, model? }`. `id` is a client-generated
 Session ID; `workspace` must match an ID in a freshly rederived backend inventory.
@@ -552,7 +606,7 @@ replies use `"once" | "always" | "reject"`, and native Form replies carry typed
 answer records. A retried reply is a new decision, not a reconciliation.
 Clients must never automatically replay any request that failed with
 `outcome_unknown` (`session.create`, `session.prompt`, `session.interrupt`, and
-every reply included); they surface the outcome as unknown and let the user
+every Team mutation and reply included); they surface the outcome as unknown and let the user
 decide.
 
 ### 3.6 Session discovery and authorization
