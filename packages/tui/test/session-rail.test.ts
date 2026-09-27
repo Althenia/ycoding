@@ -28,14 +28,6 @@ describe("rail default expansion", () => {
     ])
   })
 
-  test("keeps SHELLS collapsed while its composer surface is active", () => {
-    expect(defaultExpanded({ shellSurface: true, goal: true, autonomy: true })).toEqual([
-      "session",
-      "context",
-      "todo",
-    ])
-  })
-
   test("keeps unrelated sections collapsed without broadening to operational ones", () => {
     expect(defaultExpanded({ allExpanded: true })).toEqual([
       "session",
@@ -54,7 +46,6 @@ describe("rail expandable sections", () => {
       "goal",
       "autonomy",
       "subagents",
-      "shells",
       "skills",
       "mcp",
       "plugins",
@@ -68,7 +59,6 @@ describe("rail expandable sections", () => {
       "goal",
       "autonomy",
       "subagents",
-      "shells",
       "skills",
       "mcp",
       "plugins",

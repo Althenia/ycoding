@@ -343,7 +343,7 @@ test("captures transcript blocks through the real session route", async () => {
       args: { sessionID },
       pluginStatus: [{ id: "audit-tools", source: "file", spec: "audit-tools", target: "audit-tools", enabled: true, active: true }],
       settle: "Claude Opus 5",
-      stable: ["SESSION", "CONTEXT", "TODO LIST", "SUBAGENTS", "SHELLS", "MCP"],
+      stable: ["SESSION", "CONTEXT", "TODO LIST", "SUBAGENTS", "MCP"],
     })
     const text = lines.join("\n")
 

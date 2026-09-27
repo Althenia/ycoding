@@ -81,7 +81,6 @@ test("registers sidebar content in the rail design order", async () => {
     "internal:sidebar-context",
     "internal:sidebar-todo",
     "internal:sidebar-subagents",
-    "internal:sidebar-shells",
     "internal:sidebar-mcp",
   ])
 })
@@ -209,13 +208,12 @@ test("renders a summary on both expanded and collapsed headers", async () => {
 })
 
 test("renders compact operational rail summaries from live component state", async () => {
-  const [{ RailProvider }, { SessionRailContent, AutonomyRailContent }, { TodoRailContent }, { SubagentRailContent }, { ShellRailContent }] =
+  const [{ RailProvider }, { SessionRailContent, AutonomyRailContent }, { TodoRailContent }, { SubagentRailContent }] =
     await Promise.all([
       import("../src/routes/session/rail-section"),
       import("../src/routes/session/sidebar"),
       import("../src/feature-plugins/sidebar/todo"),
       import("../src/feature-plugins/sidebar/subagents"),
-      import("../src/feature-plugins/sidebar/shells"),
     ])
   const autonomy: SessionAutonomyState = { mode: "normal", yolo: true, goal: { text: "Ship summaries", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 },
   }
@@ -235,13 +233,6 @@ test("renders compact operational rail summaries from live component state", asy
             position="top"
             onLoadOlder={() => undefined}
           />
-          <ShellRailContent
-            groups={[
-              { owner: { label: "Main chat" }, shells: [{ id: "running", status: "running" }] },
-              { owner: { label: "Unknown session" }, shells: [{ id: "orphan", status: "failed" }] },
-            ]}
-            terminalCount={1}
-          />
         </RailProvider>
       </box>
     ),
@@ -256,7 +247,6 @@ test("renders compact operational rail summaries from live component state", asy
       ["AUTONOMY", "YOLO"],
       ["TODO LIST", "1/2 open"],
       ["SUBAGENTS", "3/12 running · 2 waiting"],
-      ["SHELLS", "1/2 running · 1 orphaned"],
     ]
     for (const [title, summary] of expectations) {
       const header = frame.split("\n").find((line) => line.includes(title))
@@ -463,7 +453,6 @@ test("renders the CONTEXT design rows and omits unreported cache telemetry", asy
     cache: { ...diagnostics.cache, hitRatio: undefined, readReported: false },
     requests: undefined,
   }
-    expect(frame.split("\n").find((line) => line.includes("Writes"))?.trimEnd()).toMatch(/^ +Writes +7$/)
   const missing = await mount(() => (
     <RailProvider>
       <SidebarCacheContent diagnostics={() => noReadOrPrefix} />
@@ -474,6 +463,7 @@ test("renders the CONTEXT design rows and omits unreported cache telemetry", asy
     const frame = missing.captureCharFrame()
     expect(frame.split("\n").find((line) => line.includes("Cache"))?.trimEnd()).toMatch(/^ +Cache +unreported$/)
     expect(frame).not.toContain("Reads")
+    expect(frame.split("\n").find((line) => line.includes("Writes"))?.trimEnd()).toMatch(/^ +Writes +7$/)
     expect(frame).not.toContain("Prefix")
   } finally {
     missing.renderer.destroy()
@@ -650,13 +640,12 @@ test("expands every section on attention", async () => {
   }
 })
 
-test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS and SHELLS rail rows, and a TODO LIST in the correct order", async () => {
-  const [{ SessionRailContent, AutonomyRailContent }, { TodoRailContent }, { SubagentRailContent }, { ShellRailContent }] =
+test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS rail rows, and a TODO LIST in the correct order", async () => {
+  const [{ SessionRailContent, AutonomyRailContent }, { TodoRailContent }, { SubagentRailContent }] =
     await Promise.all([
       import("../src/routes/session/sidebar"),
       import("../src/feature-plugins/sidebar/todo"),
       import("../src/feature-plugins/sidebar/subagents"),
-      import("../src/feature-plugins/sidebar/shells"),
     ])
   const [themeV2, setThemeV2] = createSignal<ReturnType<typeof useTheme>["themeV2"]>()
   const autonomy: SessionAutonomyState = { mode: "normal", yolo: true, goal: {
@@ -676,7 +665,6 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS and SHELLS rail row
         <AutonomyRailContent autonomy={autonomy} />
         <TodoRailContent list={todos} />
         <SubagentRailContent tasks={[{ sessionID: "ses_docs", description: "docs-sync", state: "running", elapsed: "2m14s" }]} />
-        <ShellRailContent groups={[{ owner: { label: "docs-sync" }, shells: [{ id: "running" }] }]} terminalCount={0} />
       </>
     )
   }, { width: 40, height: 60 })
@@ -693,7 +681,6 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS and SHELLS rail row
       "AUTONOMY",
       "TODO LIST",
       "SUBAGENTS",
-      "SHELLS",
     ]
     const indexes = sectionHeaders.map((label) => frame.indexOf(label))
     expect(indexes.every((index) => index >= 0)).toBe(true)
@@ -714,10 +701,10 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS and SHELLS rail row
     const subagentHeader = frame.split("\n").find((line) => line.includes("SUBAGENTS"))
     expect(subagentHeader).toContain("1/1 running")
     expect(subagentHeader).not.toContain("subagents")
-    expect(rendered.find((item) => item.plainText === "2m14s")?.fg.toInts()).toEqual(
+    expect(rendered.find((item) => item.plainText.includes("2m14s"))?.fg.toInts()).toEqual(
       themeV2()!.text.feedback.info.default.toInts(),
     )
-    expect(rendered.find((item) => item.plainText === "docs-sync")?.fg.toInts()).toEqual(
+    expect(rendered.find((item) => item.plainText.includes("docs-sync"))?.fg.toInts()).toEqual(
       themeV2()!.text.subdued.toInts(),
     )
   } finally {
@@ -903,86 +890,5 @@ test("preserves expand/collapse across Session remounts (main <-> subagent)", as
     expect(next.captureCharFrame()).not.toContain("todo body")
   } finally {
     next.renderer.destroy()
-  }
-})
-
-test("renders accurate shell summaries and expands on orphaned-shell attention", async () => {
-  const [{ RailProvider }, { ShellRailContent }] = await Promise.all([
-    import("../src/routes/session/rail-section"),
-    import("../src/feature-plugins/sidebar/shells"),
-  ])
-  const [orphaned, setOrphaned] = createSignal(false)
-  const app = await mount(() => (
-    <RailProvider>
-      <ShellRailContent
-        groups={
-          orphaned()
-            ? [
-                { owner: { label: "Main chat" }, shells: [{ id: "running" }] },
-                { owner: { label: "Unknown session" }, shells: [{ id: "orphan", status: "failed" }] },
-              ]
-            : [{ owner: { label: "Main chat" }, shells: [{ id: "running" }] }]
-        }
-        terminalCount={1}
-      />
-    </RailProvider>
-  ))
-  await app.waitForFrame((frame) => frame.includes("SHELLS"))
-
-  try {
-    let frame = app.captureCharFrame()
-    expect(frame).toContain("1/2 running")
-    expect(frame).not.toContain("orphaned")
-    expect(frame).not.toContain("Main chat")
-
-    // Orphaned attention expands SHELLS to show its bodies.
-    setOrphaned(true)
-    await app.waitForFrame((value) => value.includes("1 orphaned"))
-    await app.waitForFrame((value) => value.includes("Main chat"))
-    expect(app.captureCharFrame()).toContain("Unknown session 1")
-
-    setOrphaned(false)
-    await app.waitForFrame((value) => !value.includes("orphaned"))
-    await app.waitForFrame((value) => !value.includes("Main chat"))
-    frame = app.captureCharFrame()
-    expect(frame).toContain("1/2 running")
-  } finally {
-    app.renderer.destroy()
-  }
-})
-
-test("expands SHELLS when its header is toggled", async () => {
-  const [{ RailProvider }, { SessionRailContent }, { ShellRailContent }] = await Promise.all([
-    import("../src/routes/session/rail-section"),
-    import("../src/routes/session/sidebar"),
-    import("../src/feature-plugins/sidebar/shells"),
-  ])
-  const app = await mount(() => (
-    <RailProvider shellSurface>
-      <SessionRailContent sessionID="ses_0085fc701234567" title="Provider cache audit" />
-      <ShellRailContent
-        groups={[
-          { owner: { label: "Main chat" }, shells: [{ id: "main" }] },
-          { owner: { label: "docs-sync" }, shells: [{ id: "docs" }] },
-        ]}
-        terminalCount={1}
-      />
-    </RailProvider>
-  ))
-  await app.waitForFrame((frame) => frame.includes("SHELLS"))
-
-  try {
-    expect(app.captureCharFrame()).toContain("SHELLS")
-    expect(app.captureCharFrame()).not.toContain("Main chat")
-    const headingRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("SHELLS"))
-    await app.mockMouse.click(2, headingRow)
-    await app.waitForFrame((frame) => frame.includes("Main chat"))
-    const frame = app.captureCharFrame()
-
-    expect(frame).toContain("SHELLS")
-    expect(frame).toContain("Main chat")
-    expect(frame).toContain("docs-sync")
-  } finally {
-    app.renderer.destroy()
   }
 })

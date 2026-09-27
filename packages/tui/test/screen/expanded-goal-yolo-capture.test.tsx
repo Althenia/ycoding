@@ -194,7 +194,7 @@ test("captures the expanded goal and YOLO session with populated rail fixtures",
       // captured expanded state is produced by the shipped interaction rather than assumed.
       if (viewport.width !== NARROW_VIEWPORT.width) {
         const railStart = viewport.width - railWidth(viewport.width)
-        for (const title of ["GOAL", "AUTONOMY", "SUBAGENTS", "SHELLS"]) {
+        for (const title of ["GOAL", "AUTONOMY", "SUBAGENTS"]) {
           const collapsed = screen
             .lines()
             .findIndex((line) => line.slice(railStart).includes(`+  ${title}`))
@@ -223,9 +223,9 @@ test("captures the expanded goal and YOLO session with populated rail fixtures",
         // The session composer renders no hint row by explicit user instruction.
         expect(lines.some((line) => line.includes("Enter send"))).toBe(false)
         expect(screen.colorOf("─")).toEqual([103, 215, 164, 255])
-        // Verify rail section order: SESSION, GOAL, AUTONOMY, CONTEXT, SUBAGENTS, SHELLS
+        // Verify rail section order: SESSION, GOAL, AUTONOMY, CONTEXT, SUBAGENTS
         const rail = lines.join("\n")
-        const sectionHeaders = ["SESSION", "GOAL", "AUTONOMY", "CONTEXT", "SUBAGENTS", "SHELLS"]
+        const sectionHeaders = ["SESSION", "GOAL", "AUTONOMY", "CONTEXT", "SUBAGENTS"]
         const indexes = sectionHeaders.map((header) => rail.indexOf(header))
         expect(indexes.every((index) => index >= 0)).toBe(true)
         expect(indexes).toEqual([...indexes].toSorted((left, right) => left - right))

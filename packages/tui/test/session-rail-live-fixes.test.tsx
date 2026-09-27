@@ -327,36 +327,22 @@ test("keeps the rail top below the header across autonomy modes and retained goa
   }
 }, 60_000)
 
-test("resolves a shell owner that is not loaded before grouping it instead of flagging it orphaned", async () => {
-  const childID = "ses_child_not_loaded"
-  const owner = Promise.withResolvers<Response>()
-  let ownerRequested = false
+test("does not render a shell rail section for running and just-finished session shells", async () => {
   const app = await mountSidebar({ width: 189, height: 69 }, [], undefined, (url) => {
-    if (url.pathname === "/api/shell") return json({ location, data: [runningShell("sh_child", childID)] })
-    if (url.pathname !== `/api/session/${childID}`) return undefined
-    ownerRequested = true
-    return owner.promise
+    if (url.pathname !== "/api/shell") return undefined
+    return json({
+      location,
+      data: [
+        { id: "sh_running", status: "running", command: "bun test", cwd: directory, shell: "bash", file: "/tmp/sh_running", metadata: { sessionID }, time: { started: 1 } },
+        { id: "sh_finished", status: "success", command: "bun run check", cwd: directory, shell: "bash", file: "/tmp/sh_finished", metadata: { sessionID }, time: { started: 1, completed: 2 } },
+      ],
+    })
   })
   try {
-    await waitFor(() => ownerRequested)
-    expect(app.captureCharFrame()).not.toContain("SHELLS")
-
-    owner.resolve(json({ data: { ...session, id: childID, parentID: sessionID, agent: "docs-sync", title: "Sync docs" } }))
-    await app.waitForFrame((frame) => /SHELLS\s+1\/1 running/.test(frame))
-    expect(app.captureCharFrame()).not.toContain("orphaned")
-  } finally {
-    app.dispose()
-  }
-})
-
-test("flags a shell orphaned when its owner session cannot be resolved", async () => {
-  const app = await mountSidebar({ width: 189, height: 69 }, [], undefined, (url) => {
-    if (url.pathname === "/api/shell") return json({ location, data: [runningShell("sh_gone", "ses_deleted_owner")] })
-    if (url.pathname === "/api/session/ses_deleted_owner") return new Response("not found", { status: 404 })
-    return undefined
-  })
-  try {
-    await app.waitForFrame((frame) => /SHELLS\s+1\/1 running · 1 orphaned/.test(frame))
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("SESSION")
+    expect(frame).toContain("CONTEXT")
+    expect(frame).not.toContain("SHELLS")
   } finally {
     app.dispose()
   }

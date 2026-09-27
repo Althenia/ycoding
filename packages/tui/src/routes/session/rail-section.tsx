@@ -16,7 +16,6 @@ type RailStore = {
   allExpanded: () => boolean
   expanded: (key: RailSectionKey) => boolean
   leftRule: boolean
-  shellSurface: boolean
   showTodo: () => boolean
   toggle: (key: RailSectionKey) => void
   attend: (key: RailSectionKey, needsAttention: boolean) => void
@@ -33,7 +32,7 @@ export function resetRailExpansion() {
 }
 
 export function RailProvider(
-  props: ParentProps<{ goal?: boolean; autonomy?: boolean; shellSurface?: boolean; allExpanded?: boolean; leftRule?: boolean }>,
+  props: ParentProps<{ goal?: boolean; autonomy?: boolean; allExpanded?: boolean; leftRule?: boolean }>,
 ) {
   // Initial expansion is session/context/todo only. The order signal starts from the
   // shared persisted value and writes back to it, so user toggles survive both
@@ -55,7 +54,6 @@ export function RailProvider(
     allExpanded: () => Boolean(props.allExpanded),
     expanded: (key) => order().includes(key),
     leftRule: Boolean(props.leftRule),
-    shellSurface: Boolean(props.shellSurface),
     showTodo: () => true,
     toggle: (key) => {
       setOrder((current) => (current.includes(key) ? collapseSection(current, key) : expandSection(current, key)))

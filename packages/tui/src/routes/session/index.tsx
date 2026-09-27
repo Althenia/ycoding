@@ -1656,7 +1656,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         <Show when={sidebarVisible()}>
           <Switch>
             <Match when={wide()}>
-              <Sidebar sessionID={route.sessionID} autonomy={autonomy()} shellSurface={composer.open} />
+              <Sidebar sessionID={route.sessionID} autonomy={autonomy()} />
             </Match>
             <Match when={!wide()}>
               <box
@@ -1668,7 +1668,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                 alignItems="flex-end"
                 backgroundColor={RGBA.fromInts(0, 0, 0, 70)}
               >
-                <Sidebar sessionID={route.sessionID} autonomy={autonomy()} shellSurface={composer.open} />
+                <Sidebar sessionID={route.sessionID} autonomy={autonomy()} />
               </box>
             </Match>
           </Switch>

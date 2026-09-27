@@ -1,5 +1,5 @@
 import { useData } from "../../context/data"
-import { createEffect, createMemo, For, Show, type JSX } from "solid-js"
+import { createMemo, For, Show, type JSX } from "solid-js"
 import { useTheme } from "../../context/theme"
 import { useConfig } from "../../config"
 import { usePluginRuntime } from "../../plugin/runtime"
@@ -12,7 +12,7 @@ import { autonomyModeLabel, yoloLevel } from "../../util/session-autonomy"
 import { railMetrics, railWidth } from "./rail"
 import { RailProvider, RailRow, RailSection } from "./rail-section"
 
-export function Sidebar(props: { sessionID: string; autonomy: SessionAutonomyState; shellSurface?: boolean; overlay?: boolean }) {
+export function Sidebar(props: { sessionID: string; autonomy: SessionAutonomyState; overlay?: boolean }) {
   const pluginRuntime = usePluginRuntime()
   const data = useData()
   const { themeV2 } = useTheme().contextual("elevated")
@@ -51,7 +51,6 @@ export function Sidebar(props: { sessionID: string; autonomy: SessionAutonomySta
             <RailProvider
               goal={props.autonomy.goal?.status === "active"}
               autonomy={yoloLevel(props.autonomy) > 0 || props.autonomy.goal?.status === "active"}
-              shellSurface={props.shellSurface}
               allExpanded={allExpanded()}
               leftRule
             >
@@ -68,7 +67,7 @@ export function Sidebar(props: { sessionID: string; autonomy: SessionAutonomySta
               <AutonomyRailContent autonomy={props.autonomy} />
               <PluginSlot
                 name="sidebar.content"
-                input={{ sessionID: props.sessionID, shellSurface: () => Boolean(props.shellSurface) }}
+                input={{ sessionID: props.sessionID }}
               />
               <Show when={pluginRuntime.status().length > 0}>
                 <RailSection

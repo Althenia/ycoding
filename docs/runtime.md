@@ -705,11 +705,11 @@ Every rail section can expand. Defaults expand only `session`, `context`, and `t
 
 ### Section keys
 
-The rail supports these section keys: `session`, `context`, `todo`, `goal`, `autonomy`, `subagents`, `shells`, `skills`, `mcp`, `plugins`, `guardrails`, `lsp`.
+The rail supports these section keys: `session`, `context`, `todo`, `goal`, `autonomy`, `subagents`, `skills`, `mcp`, `plugins`, `guardrails`, `lsp`. Running shells are listed in the composer's shell tab, not in the rail.
 
 ### Default expanded sections
 
-The defaults are `session`, `context`, and `todo`. Every other section (`goal`, `autonomy`, `subagents`, `shells`, `skills`, `mcp`, `plugins`, `guardrails`, `lsp`) starts collapsed behind its header summary but can expand via header toggle or attention. Expansion is driven by the rail's own state; provider inputs do not change it.
+The defaults are `session`, `context`, and `todo`. Every other section (`goal`, `autonomy`, `subagents`, `skills`, `mcp`, `plugins`, `guardrails`, `lsp`) starts collapsed behind its header summary but can expand via header toggle or attention. Expansion is driven by the rail's own state; provider inputs do not change it.
 
 ### Independent expansion
 
@@ -723,11 +723,7 @@ Attention-triggered expansion preserves other expanded sections.
 
 ### Attention triggers
 
-The `subagents` section enters attention mode when any subagent has a pending question. The `shells` section enters attention mode when orphaned shells (shells whose owning session is no longer known) are present. The `autonomy` section enters attention mode when YOLO mode is active.
-
-### Shells section
-
-The sidebar shells section (`SHELLS`) summarizes running shells grouped by owner (Main chat, Subagent, Unknown session). The summary shows counts of running, terminal, and orphaned shells. A shell whose owning Session is not loaded in the TUI stays hidden while the TUI fetches that Session, then groups under its resolved owner; it is orphaned only when that fetch fails or the shell records no owner. Orphaned shells trigger the attention state. Each group row shows the owner label and count.
+The `subagents` section enters attention mode when any subagent has a pending question. The `autonomy` section enters attention mode when YOLO mode is active.
 
 ### Subagents section
 

@@ -5,7 +5,6 @@ export type RailSectionKey =
   | "goal"
   | "autonomy"
   | "subagents"
-  | "shells"
   | "skills"
   | "mcp"
   | "plugins"
@@ -26,7 +25,6 @@ export const EXPANDABLE_RAIL_SECTIONS: ReadonlyArray<RailSectionKey> = [
   "goal",
   "autonomy",
   "subagents",
-  "shells",
   "skills",
   "mcp",
   "plugins",
@@ -48,7 +46,6 @@ export const RAIL_SECTION_BAND_HEIGHT = Math.ceil(32 / 11.594)
 export function defaultExpanded(_input?: {
   goal?: boolean
   autonomy?: boolean
-  shellSurface?: boolean
   allExpanded?: boolean
 }): RailSectionKey[] {
   return ["session", "context", "todo"]
