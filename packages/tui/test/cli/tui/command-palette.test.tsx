@@ -34,12 +34,14 @@ test("Escape dismisses the command palette when terminal text is selected", asyn
   function Commands() {
     const dialog = useDialog()
     Keymap.createLayer(() => ({
+      mode: "global",
       commands: [
         {
           id: "command.palette.show",
           title: "Show command palette",
           run: () => dialog.replace(() => <CommandPaletteDialog />),
         },
+        { id: "test.shortcut", title: "Other command", palette: true, bind: "ctrl+o", run: () => {} },
       ],
     }))
     return (
@@ -75,7 +77,8 @@ test("Escape dismisses the command palette when terminal text is selected", asyn
   try {
     await app.waitForFrame((frame) => frame.includes("Ready"))
     app.mockInput.pressKey("p", { ctrl: true })
-    await app.waitForFrame((frame) => frame.includes("Commands"))
+    await app.waitForFrame((frame) => frame.includes("Other command"))
+    expect(app.captureCharFrame().split("\n").find((line) => line.includes("Other command"))).toContain("⌃o")
     app.renderer.startSelection(selectedText, selectedText.x, selectedText.y)
     app.renderer.updateSelection(selectedText, selectedText.x + 4, selectedText.y, { finishDragging: true })
     expect(app.renderer.getSelection()?.getSelectedText()).toBeTruthy()

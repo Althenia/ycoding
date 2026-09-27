@@ -1,8 +1,14 @@
 import { useRenderer } from "@opentui/solid"
-import { createMemo, onCleanup, onMount } from "solid-js"
+import { createMemo, onCleanup, onMount, type JSX } from "solid-js"
 import { DialogSelect, type DialogSelectRef } from "../ui/dialog-select"
 import { useDialog, type DialogContext } from "../ui/dialog"
-import { COMMAND_PALETTE_COMMAND, Keymap } from "../context/keymap"
+import { COMMAND_PALETTE_COMMAND, Keymap, type KeymapCommand } from "../context/keymap"
+
+export type PaletteStatusCommand = KeymapCommand & { readonly paletteStatus: () => JSX.Element }
+
+function hasPaletteStatus(command: KeymapCommand): command is PaletteStatusCommand {
+  return "paletteStatus" in command && typeof command.paletteStatus === "function"
+}
 
 const canonicalPromotions = [
   { id: "session.list", title: "Switch session" },
@@ -43,7 +49,7 @@ export function CommandPaletteDialog() {
         title: command.title ?? command.id,
         description: command.description,
         category: command.group,
-        footer: shortcuts.all(command.id)?.replaceAll("ctrl+", "⌃"),
+        footer: hasPaletteStatus(command) ? command.paletteStatus() : shortcuts.all(command.id)?.replaceAll("ctrl+", "⌃"),
         value: command.id,
         onSelect: (dialog: DialogContext) => {
           dialog.clear()

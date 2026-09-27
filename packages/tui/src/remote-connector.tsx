@@ -6,6 +6,7 @@ import { useToast } from "./ui/toast"
 import { useTheme } from "./context/theme"
 import { useLog } from "./context/log"
 import { createRemotePreferenceRepository } from "./remote-preference"
+import type { PaletteStatusCommand } from "./component/command-palette"
 
 export type RemoteStatus = {
   state: "off" | "connecting" | "on" | "other-process" | "error"
@@ -138,25 +139,39 @@ export function RemoteProvider(props: ParentProps<{
 
 function RemoteCommands() {
   const remote = useRemote()
+  const toast = useToast()
+  const command = {
+    id: "remote.toggle",
+    title: "Remote connection",
+    group: "Remote",
+    palette: true,
+    paletteStatus: () => <RemotePaletteStatus status={remote.status} />,
+    run: () => {
+      const status = remote.status()
+      if (status.state === "other-process") {
+        toast.show({ variant: "info", title: "Remote connection", message: status.message ?? "Remote is on in another process" })
+        return
+      }
+      if (status.state === "on") {
+        void remote.disconnect()
+        return
+      }
+      void remote.connect()
+    },
+  } satisfies PaletteStatusCommand
   Keymap.createLayer(() => ({
     mode: "global",
-    commands: [
-      { id: "remote.connect", title: "Connect remote", group: "Remote", palette: true, run: () => { void remote.connect() } },
-      { id: "remote.disconnect", title: "Disconnect remote", group: "Remote", palette: true, run: () => { void remote.disconnect() } },
-    ],
+    commands: [command],
   }))
   return null
 }
 
-export function RemoteStatusLine() {
-  const remote = useRemote()
-  const { themeV2 } = useTheme()
+function RemotePaletteStatus(props: { status: () => RemoteStatus }) {
+  const { themeV2 } = useTheme().contextual("elevated")
+  const active = () => props.status().state === "on" || props.status().state === "other-process"
   const label = () => {
-    const state = remote.status().state
-    if (state === "other-process") return "remote on elsewhere"
-    return `remote ${state}`
+    const state = props.status().state
+    return state === "other-process" ? "on elsewhere" : state
   }
-  return <box width="100%" height={1} flexShrink={0} paddingLeft={1} paddingRight={1} backgroundColor={themeV2.background.chrome}>
-    <text fg={themeV2.text.subdued} wrapMode="none" truncate>{label()}</text>
-  </box>
+  return <span style={{ fg: active() ? themeV2.text.feedback.success.default : themeV2.text.subdued }}>● {label()}</span>
 }

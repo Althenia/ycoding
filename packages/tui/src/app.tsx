@@ -90,7 +90,7 @@ import { destroyRenderer } from "./util/renderer"
 import { cliErrorMessage, errorFormat, errorMessage } from "./util/error"
 import { writeHeapSnapshot } from "node:v8"
 import { saveCustomEndpoint } from "./custom-endpoint-save"
-import { RemoteProvider, RemoteStatusLine, type RemoteConnectorPort } from "./remote-connector"
+import { RemoteProvider, type RemoteConnectorPort } from "./remote-connector"
 
 const themePerformance = DevTools.register({ id: "theme-performance", title: "Theme performance" })
 
@@ -1229,7 +1229,6 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
           <DevToolsSidebar />
         </Show>
       </box>
-      <RemoteStatusLine />
       <Show when={!startup.skipInitialLoading}>
         <StartupLoading ready={pluginsStarted} />
       </Show>
