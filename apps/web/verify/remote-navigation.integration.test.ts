@@ -146,11 +146,11 @@ describe("remote navigation", () => {
         await page.setViewport(width, height)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=dark`)
         await until(page, `document.querySelector(".session-row--active .live-dot") !== null || document.querySelector(".live-dot") !== null`)
-        expect(await page.evaluate<boolean>(`document.querySelector(".notification-center__badge") === null`)).toBe(true)
+        expect(await page.evaluate<boolean>(`document.querySelector(".yc-notification-center__badge") === null`)).toBe(true)
         await page.evaluate(`window.remoteStatus([], ["ses_fixture", "ses_archived"])`)
-        await until(page, `document.querySelector(".notification-center__badge") !== null`)
-        await page.evaluate(`document.querySelector(".notification-center__trigger").click()`)
-        await until(page, `document.querySelector(".notification-panel") !== null`)
+        await until(page, `document.querySelector(".yc-notification-center__badge") !== null`)
+        await page.evaluate(`document.querySelector(".yc-notification-center__trigger").click()`)
+        await until(page, `document.querySelector(".yc-notification-panel") !== null`)
         const report = await page.evaluate<{
           readonly titles: readonly string[]
           readonly details: readonly string[]
@@ -158,12 +158,12 @@ describe("remote navigation", () => {
           readonly expanded: string | null
           readonly inViewport: boolean
         }>(`(() => {
-          const panel = document.querySelector(".notification-panel").getBoundingClientRect()
+          const panel = document.querySelector(".yc-notification-panel").getBoundingClientRect()
           return {
-            titles: [...document.querySelectorAll(".notification-item__title")].map((title) => title.textContent.trim()),
-            details: [...document.querySelectorAll(".notification-item__detail")].map((detail) => detail.textContent.trim()),
-            badge: document.querySelector(".notification-center__badge") !== null,
-            expanded: document.querySelector(".notification-center__trigger").getAttribute("aria-expanded"),
+            titles: [...document.querySelectorAll(".yc-notification__open strong")].map((title) => title.textContent.trim()),
+            details: [...document.querySelectorAll(".yc-notification__open span")].map((detail) => detail.textContent.trim()),
+            badge: document.querySelector(".yc-notification-center__badge") !== null,
+            expanded: document.querySelector(".yc-notification-center__trigger").getAttribute("aria-expanded"),
             inViewport: panel.left >= 0 && panel.right <= innerWidth && panel.top >= 0,
           }
         })()`)
@@ -176,13 +176,13 @@ describe("remote navigation", () => {
         await capture(page, `notifications-${width}-dark`)
 
         await page.pressEscape()
-        await until(page, `document.querySelector(".notification-panel") === null`)
-        expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector(".notification-center__trigger")`)).toBe(true)
+        await until(page, `document.querySelector(".yc-notification-panel") === null`)
+        expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector(".yc-notification-center__trigger")`)).toBe(true)
 
-        await page.evaluate(`document.querySelector(".notification-center__trigger").click()`)
-        await until(page, `document.querySelector(".notification-panel") !== null`)
-        await page.evaluate(`[...document.querySelectorAll(".notification-item__open")].find((item) => item.textContent.includes("Archived: release notes")).click()`)
-        await until(page, `document.querySelector(".notification-panel") === null && document.querySelector(".conversation-breadcrumb strong")?.textContent.trim() === "Archived: release notes"`)
+        await page.evaluate(`document.querySelector(".yc-notification-center__trigger").click()`)
+        await until(page, `document.querySelector(".yc-notification-panel") !== null`)
+        await page.evaluate(`[...document.querySelectorAll(".yc-notification__open")].find((item) => item.textContent.includes("Archived: release notes")).click()`)
+        await until(page, `document.querySelector(".yc-notification-panel") === null && document.querySelector(".conversation-breadcrumb strong")?.textContent.trim() === "Archived: release notes"`)
       }
     } finally {
       await page.close()
@@ -196,7 +196,7 @@ describe("remote navigation", () => {
         for (const [width, height] of viewports) {
           await page.setViewport(width, height)
           await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=usage&theme=${theme}`)
-          await until(page, `document.querySelectorAll(".usage-provider").length === 3 && document.querySelectorAll(".usage-tile").length > 0 && document.querySelector(".usage-breakdown table") !== null`)
+          await until(page, `document.querySelectorAll(".usage-provider").length === 3 && document.querySelectorAll(".usage-tile").length > 0 && document.querySelector(".usage-breakdown table") !== null && document.querySelectorAll(".usage-distribution__legend li").length > 0`)
           const report = await page.evaluate<{
             readonly heading: string
             readonly providers: readonly string[]
@@ -206,22 +206,26 @@ describe("remote navigation", () => {
             readonly placeholders: readonly string[]
             readonly overflow: boolean
             readonly operations: Readonly<Record<string, number>>
+            readonly distribution: readonly string[]
+            readonly provenanceText: boolean
           }>(`(() => {
             const visible = (element) => element instanceof HTMLElement && getComputedStyle(element).display !== "none" && element.getBoundingClientRect().width > 0
             const card = (label) => [...document.querySelectorAll(".usage-provider")].find((item) => item.querySelector("h3")?.textContent.trim() === label)?.textContent ?? ""
             return {
               heading: document.querySelector(".usage-page h1")?.textContent.trim() ?? "",
               providers: [...document.querySelectorAll(".usage-provider h3")].map((item) => item.textContent.trim()),
-              openRouter: card("OpenRouter · Pay as you go"),
+              openRouter: card("OpenRouter"),
               copilot: card("GitHub Copilot"),
               activeNav: [...document.querySelectorAll('.remote-nav a[aria-current="page"], .bottom-nav a[aria-current="page"]')].filter(visible).map((link) => link.textContent.trim()),
               placeholders: [...document.querySelectorAll(".usage-page *")].filter((element) => element.children.length === 0 && ["-", "_", "—", "–"].includes(element.textContent.trim())).map((element) => element.outerHTML),
               overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
               operations: window.remoteOperationReport().operations,
+              distribution: [...document.querySelectorAll(".usage-distribution__legend .usage-distribution__name")].map((item) => item.textContent.trim()),
+              provenanceText: [...document.querySelectorAll(".usage-provider")].some((card) => /source:|stability:/i.test(card.innerText)),
             }
           })()`)
           expect(report.heading).toBe("Usage")
-          expect(report.providers).toEqual(["Codex", "OpenRouter · Pay as you go", "GitHub Copilot"])
+          expect(report.providers).toEqual(["Codex", "OpenRouter", "GitHub Copilot"])
           expect(report.openRouter).toContain("Balance")
           expect(report.openRouter).toContain("$38.42")
           expect(report.copilot).toContain("AI credits")
@@ -230,7 +234,9 @@ describe("remote navigation", () => {
           expect(report.placeholders).toEqual([])
           expect(report.overflow).toBe(false)
           expect({ providers: report.operations["usage.providers"], summary: report.operations["usage.summary"] }).toEqual({ providers: 1, summary: 1 })
-          expect(report.operations["usage.report"]).toBe(2)
+          expect(report.operations["usage.report"]).toBe(3)
+          expect(report.distribution).toEqual(["Codex", "OpenRouter", "GitHub Copilot"])
+          expect(report.provenanceText).toBe(false)
           if ((width === 390 && theme === "light") || (width === 1440 && theme === "dark")) await capture(page, `usage-${width}-${theme}`)
         }
       }

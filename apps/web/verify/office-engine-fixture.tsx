@@ -10,6 +10,7 @@ import { scenario } from "../src/remote/office/scenarios.test-helper"
 function Fixture() {
   const query = new URLSearchParams(location.search)
   const [state, setState] = createSignal(query.get("state") ?? "idle")
+  const [revision, setRevision] = createSignal(0)
   const [mounted, setMounted] = createSignal(query.get("mounted") !== "0")
   const [normal, setNormal] = createSignal(false)
   const [selected, setSelected] = createSignal("session-a")
@@ -21,9 +22,14 @@ function Fixture() {
     .find((value) => value === query.get("taskState")) ?? "running"))
   const snapshot = createMemo(() => {
     const current = scenario(state())
+    const pulse = revision()
     return projectOffice({
     ...current,
-    sessions: extraSession() ? [...current.sessions, { id: "session-new", parentID: "session-a", title: "New research task", agent: "Researcher", archived: false, running: true }] : current.sessions,
+    ...(query.has("snapshots") && current.selected ? { selected: { ...current.selected, activeTool: undefined, thinking: pulse % 2 === 1 } } : {}),
+    sessions: [
+      ...current.sessions.map((session) => query.has("staleIdle") && session.id === "session-a" ? { ...session, running: true } : session),
+      ...(extraSession() ? [{ id: "session-new", parentID: "session-a", title: "New research task", agent: "Researcher", archived: false, running: true }] : []),
+    ],
     activeSessionID: selected(),
     ...(query.has("team") || query.has("arrival") ? { team: {
       rootID: "session-a", status: "ready" as const,
@@ -48,6 +54,7 @@ function Fixture() {
         <For each={["idle", "tool", "attention", "offline", "thinking", "compacting"]}>{(value) => <option value={value}>{value}</option>}</For>
       </select></label>
       <button type="button" onClick={() => setMounted(!mounted())}>{mounted() ? "Unmount office" : "Mount office"}</button>
+      <Show when={query.has("snapshots")}><button type="button" onClick={() => setRevision((value) => value + 1)}>Refresh snapshot</button></Show>
       <button type="button" onClick={() => setZeroSize(!zeroSize())}>{zeroSize() ? "Restore size" : "Zero size"}</button>
       <button type="button" onClick={() => setPreferences({ ...preferences(), motion: preferences().motion === "system" ? "reduced" : "system" })}>Toggle reduced motion</button>
       <button type="button" onClick={() => setPreferences({ ...preferences(), quality: preferences().quality === "standard" ? "battery" : "standard" })}>Toggle quality</button>

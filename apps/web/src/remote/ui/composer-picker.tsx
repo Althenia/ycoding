@@ -1,5 +1,6 @@
 import { For, Show, createEffect, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { Portal } from "solid-js/web"
+import { Icon, type IconName } from "../../ui/icon"
 
 export type PickerOption = { readonly value: string; readonly label: string; readonly detail?: string; readonly group?: string }
 
@@ -10,6 +11,8 @@ export function ComposerPicker(props: {
   readonly options: readonly PickerOption[]
   readonly disabled?: boolean
   readonly searchable?: boolean
+  readonly icon?: IconName
+  readonly pending?: boolean
   readonly onChange: (value: string) => void
 }): JSX.Element {
   const id = `composer-picker-${crypto.randomUUID()}`
@@ -84,13 +87,13 @@ export function ComposerPicker(props: {
     if (open()) queueMicrotask(() => { reposition(); searchInput?.focus() })
   })
   return <div class="mini-picker">
-    <button ref={trigger} type="button" class="mini-picker__trigger" role="combobox" aria-label={props.label} aria-haspopup="listbox" aria-expanded={open()} aria-controls={`${id}-list`} aria-activedescendant={open() && !props.searchable && filtered().length ? `${id}-${active()}` : undefined} disabled={props.disabled} onKeyDown={keys} onClick={() => { setActive(Math.max(0, filtered().findIndex((option) => option.value === props.value))); setOpen(!open()) }}>
-      <span>{props.options.find((option) => option.value === props.value)?.label ?? props.placeholder}</span><span aria-hidden="true">⌄</span>
+    <button ref={trigger} type="button" class="mini-picker__trigger" classList={{ "mini-picker__trigger--pending": props.pending }} role="combobox" aria-label={props.label} aria-description={props.pending ? "applies with your next send" : undefined} aria-haspopup="listbox" aria-expanded={open()} aria-controls={`${id}-list`} aria-activedescendant={open() && !props.searchable && filtered().length ? `${id}-${active()}` : undefined} disabled={props.disabled} onKeyDown={keys} onClick={() => { setActive(Math.max(0, filtered().findIndex((option) => option.value === props.value))); setOpen(!open()) }}>
+      <Show when={props.icon}><Icon name={props.icon!} /></Show><span>{props.options.find((option) => option.value === props.value)?.label ?? props.placeholder}</span><Icon name="chevron-down" />
     </button>
     <Show when={open()}><Portal>
       <Show when={compact()}><div class="mini-picker__scrim" onClick={() => close()} /></Show>
       <div ref={surface} class={`mini-picker__surface${compact() ? " mini-picker__surface--sheet" : ""}`} style={compact() ? undefined : { left: `${position().left}px`, top: `${position().top}px`, width: `${position().width}px` }} onKeyDown={keys}>
-        <div class="mini-picker__heading"><strong>{props.label}</strong><button type="button" aria-label={`Close ${props.label}`} onClick={() => close(true)}>×</button></div>
+        <div class="mini-picker__heading"><strong>{props.label}</strong><button type="button" aria-label={`Close ${props.label}`} onClick={() => close(true)}><Icon name="close" /></button></div>
         <Show when={props.searchable}><input ref={searchInput} class="mini-picker__search" type="search" role="combobox" aria-label={`Search ${props.label}`} aria-autocomplete="list" aria-expanded="true" aria-controls={`${id}-list`} aria-activedescendant={filtered().length ? `${id}-${active()}` : undefined} placeholder="Search models…" value={query()} onInput={(event) => { setQuery(event.currentTarget.value); setActive(0) }} /></Show>
         <div id={`${id}-list`} role="listbox" aria-label={props.label} aria-activedescendant={filtered().length ? `${id}-${active()}` : undefined} class="mini-picker__list">
           <For each={filtered()}>{(option, index) => <>

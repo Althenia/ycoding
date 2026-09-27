@@ -195,6 +195,7 @@ describe("remote request budget integration", () => {
   }, 60_000)
 
   test("bounds delayed requests, cancels unsent mutations on a drop, and never replays them", async () => {
+    const pacedBudget = 27
     const fixture = await harness(0)
     const transport = createRemoteTransport({
       url: `ws://127.0.0.1:${fixture.server.port}`,
@@ -204,12 +205,12 @@ describe("remote request budget integration", () => {
     try {
       transport.connect()
       await waitFor(() => transport.status().kind === "open")
-      for (let index = 0; index < RemoteLimits.maxClientRequestsPerWindow - 2; index += 1)
+      for (let index = 0; index < pacedBudget - 2; index += 1)
         expect((await transport.request("session.active")).status).toBe("ok")
       fixture.ping()
       await waitFor(() => fixture.pongs === 1)
       const sent = transport.request("session.interrupt", { sessionID: "ses_test" })
-      await waitFor(() => fixture.requests.length === RemoteLimits.maxClientRequestsPerWindow - 1)
+      await waitFor(() => fixture.requests.length === pacedBudget - 1)
       let settled = 0
       const delayed = Array.from({ length: 31 }, () => transport.request("session.prompt", {
         sessionID: "ses_test",
@@ -223,7 +224,7 @@ describe("remote request budget integration", () => {
       await Bun.sleep(20)
       expect(fixture.closed).toEqual([])
       expect(settled).toBe(0)
-      expect(fixture.requests).toHaveLength(RemoteLimits.maxClientRequestsPerWindow - 1)
+      expect(fixture.requests).toHaveLength(pacedBudget - 1)
       fixture.drop()
       expect((await sent).status).toBe("unknown")
       expect(await Promise.all(delayed)).toEqual(Array.from({ length: 31 }, () => ({ status: "unavailable", reason: "not-connected" })))

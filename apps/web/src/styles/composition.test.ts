@@ -158,13 +158,11 @@ describe("responsive contract", () => {
     expect(app["grid-template-columns"]).toBe("minmax(0, 1fr)")
   })
 
-  test("gives the remote workspace terminal geometry and monospace labels", async () => {
+  test("gives the remote workspace the shared rounded geometry and monospace labels", async () => {
     const remote = await readStylesheet("remote.css")
-    expect(base(remote, ".app")).toMatchObject({
-      "--yc-radius-sm": "2px",
-      "--yc-radius-md": "4px",
-      "--yc-radius-lg": "6px",
-    })
+    for (const token of ["--yc-radius-sm", "--yc-radius-md", "--yc-radius-lg", "--yc-radius-xl", "--yc-radius-pill"]) {
+      expect({ token, override: remote.rules.some((rule) => token in rule.declarations) }).toEqual({ token, override: false })
+    }
     for (const selector of [".app .pane__title", ".app .chip", ".remote-nav__link", ".request__header"]) {
       expect({ selector, font: base(remote, selector)["font-family"] }).toEqual({ selector, font: "var(--yc-font-mono)" })
     }

@@ -1,11 +1,14 @@
-import { For, Show, createEffect, createSignal, onCleanup, onMount, type JSX } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, untrack, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
 import { catalogKey, type CatalogTarget, type CatalogView, type FileOption } from "../catalog"
 import { useRemote } from "../context"
 import { defaultComposerModel, readPreferredModel, writePreferredModel } from "../preferences"
 import type { ModelRefView } from "../projection"
-import { applyMention, identityLabel, optionsForTrigger, reconcileMentions, submission, triggerAt, type MentionPart } from "./composer-logic"
+import { applyMention, optionsForTrigger, reconcileMentions, submission, triggerAt, type MentionPart } from "./composer-logic"
 import { ComposerPicker } from "./composer-picker"
+import { attachmentLimit, encodeAttachment, type ComposerAttachment } from "./composer-attachment"
+import { ModelControl } from "./model-control"
+import { ComposerStatus } from "./status-bar"
 import "./composer.css"
 
 export type ComposerSubmission = ReturnType<typeof submission>
@@ -17,67 +20,60 @@ export function MiniComposer(props: {
   readonly disabled?: boolean
   readonly running?: boolean
   readonly allowEmpty?: boolean
-  readonly onSubmit: (value: ComposerSubmission) => void
+  readonly onSubmit: (value: ComposerSubmission) => void | boolean | Promise<void | boolean>
   readonly onInterrupt?: () => void
+  readonly showStatus?: boolean
 }): JSX.Element {
   const remote = useRemote()
   const [agent, setAgent] = createSignal<string>()
   const [model, setModel] = createSignal<ModelRefView>()
   const [delivery, setDelivery] = createSignal<"steer" | "queue">("steer")
+  const [attachments, setAttachments] = createSignal<readonly ComposerAttachment[]>([])
+  const [attachmentError, setAttachmentError] = createSignal<string>()
+  const [reading, setReading] = createSignal(0)
+  const [sending, setSending] = createSignal(false)
+  const [dragging, setDragging] = createSignal(false)
   const [parts, setParts] = createSignal<readonly MentionPart[]>([])
   const [cursor, setCursor] = createSignal(0)
   const [fileResult, setFileResult] = createSignal<readonly FileOption[]>([])
   const [fileError, setFileError] = createSignal<string>()
   const [active, setActive] = createSignal(0)
   const [closed, setClosed] = createSignal(false)
-  const [compact, setCompact] = createSignal(false)
   let input: HTMLTextAreaElement | undefined
+  let fileInput: HTMLInputElement | undefined
   let request = 0
+  let attachmentGeneration = 0
 
-  const targetKey = () => props.target ? catalogKey(props.target) : undefined
+  const targetKey = createMemo(() => props.target ? catalogKey(props.target) : undefined)
   const catalog = (): CatalogView | undefined => targetKey() ? remote.state().catalogs[targetKey()!] : undefined
   const current = () => "sessionID" in (props.target ?? {}) ? remote.state().selectedSessionInfo : undefined
   const selectedAgent = () => agent() ?? current()?.agent
   const selectedModel = () => model() ?? current()?.model ?? defaultComposerModel(catalog(), readPreferredModel())
   const primaryAgents = () => (catalog()?.agents ?? []).filter((item) => item.mode !== "subagent" && !item.hidden)
-  const trigger = () => closed() ? undefined : triggerAt(props.text, cursor())
+  const trigger = createMemo(() => closed() ? undefined : triggerAt(props.text, cursor()))
   const options = () => trigger() ? optionsForTrigger(trigger()!.trigger, trigger()!.query, catalog(), fileResult()) : []
-  const label = () => identityLabel(catalog()?.agents.find((item) => item.id === current()?.agent)?.name ?? current()?.agent, catalog()?.agents.find((item) => item.id === selectedAgent())?.name ?? selectedAgent() ?? "Default agent", current()?.model, selectedModel(), catalog()?.models ?? [])
-  const modelOptions = () => (catalog()?.models ?? []).flatMap((option) => (compact() && option.variants.length ? [option.defaultVariant ?? "", ...option.variants.filter((variant) => variant !== option.defaultVariant)] : [""]).map((variant) => ({
-    value: `${option.providerID}/${option.id}${compact() ? `#${variant}` : ""}`,
-    label: `${option.name}${compact() && variant ? ` · ${variant}` : ""}`,
-    detail: option.id,
-    group: option.providerName ?? option.providerID,
-    model: { providerID: option.providerID, id: option.id, ...(variant || (!compact() && option.defaultVariant) ? { variant: variant || option.defaultVariant } : {}) },
-  })))
-  const modelOption = () => catalog()?.models.find((option) => option.providerID === selectedModel()?.providerID && option.id === selectedModel()?.id)
-
-  onMount(() => {
-    const media = window.matchMedia("(max-width: 767px)")
-    setCompact(media.matches)
-    const resize = () => setCompact(media.matches)
-    media.addEventListener("change", resize)
-    onCleanup(() => media.removeEventListener("change", resize))
-  })
-
   createEffect(() => {
-    const target = props.target
-    if (target) void remote.store.loadCatalog(target)
+    const key = targetKey()
+    attachmentGeneration++
+    if (key) untrack(() => void remote.store.loadCatalog(props.target!))
     setParts([])
     setAgent(undefined)
     setModel(undefined)
     setFileResult([])
+    setAttachments([])
+    setAttachmentError(undefined)
+    onCleanup(() => { attachmentGeneration++ })
   })
   createEffect(() => {
     const match = trigger()
-    const target = props.target
+    const key = targetKey()
     const id = ++request
     setActive(0)
     setFileResult([])
     setFileError(undefined)
-    if (!target || match?.trigger !== "@" || !match.query.trim()) return
+    if (!key || match?.trigger !== "@" || !match.query.trim()) return
     const timer = setTimeout(() => {
-      void remote.store.findFiles(target, match.query, 8).then((result) => {
+      void remote.store.findFiles(props.target!, match.query, 50).then((result) => {
         if (id !== request) return
         if (result.status === "ok") setFileResult(result.files)
         else setFileError(result.message)
@@ -104,21 +100,56 @@ export function MiniComposer(props: {
     setCursor(result.cursor)
     queueMicrotask(() => { input?.focus(); input?.setSelectionRange(result.cursor, result.cursor) })
   }
-  const send = () => {
-    if (props.disabled || (!props.allowEmpty && !props.text.trim())) return
+  const addFiles = async (files: readonly File[]) => {
+    if (props.disabled || sending() || !files.length) return
+    const error = attachmentLimit([...attachments(), ...files])
+    if (error) { setAttachmentError(error); return }
+    const generation = attachmentGeneration
+    setReading((count) => count + 1)
+    try {
+      const encoded = await Promise.all(files.map(encodeAttachment))
+      if (generation !== attachmentGeneration) return
+      const combined = [...attachments(), ...encoded]
+      const invalid = attachmentLimit(combined)
+      if (invalid) { setAttachmentError(invalid); return }
+      setAttachments(combined)
+      setAttachmentError(undefined)
+    } catch (cause) {
+      if (generation === attachmentGeneration) setAttachmentError(cause instanceof Error ? cause.message : "Could not read the attachment.")
+    } finally {
+      setReading((count) => Math.max(0, count - 1))
+    }
+  }
+  const send = async () => {
+    if (props.disabled || reading() || sending() || (!props.allowEmpty && !props.text.trim() && !attachments().length)) return
     const chosenAgent = selectedAgent()
     const chosenModel = selectedModel()
     const pendingAgent = current()?.agent === chosenAgent ? undefined : chosenAgent
     const pendingModel = current()?.model?.id === chosenModel?.id && current()?.model?.providerID === chosenModel?.providerID && current()?.model?.variant === chosenModel?.variant ? undefined : chosenModel
-    props.onSubmit(submission(props.text, parts(), catalog(), delivery(), pendingAgent, pendingModel))
-    setParts([])
-    setClosed(true)
+    const requested = submission(props.text, parts(), catalog(), delivery(), pendingAgent, pendingModel)
+    const files = [...(requested.input.files ?? []), ...attachments().map((item) => ({ uri: item.uri, name: item.name }))]
+    if (files.length > 64) { setAttachmentError("A message can contain at most 64 files. Remove an attachment before sending."); return }
+    const generation = attachmentGeneration
+    setSending(true)
+    try {
+      const accepted = requested.kind === "command"
+        ? await props.onSubmit({ kind: "command", input: { ...requested.input, ...(files.length ? { files } : {}) } })
+        : await props.onSubmit({ kind: "prompt", input: { ...requested.input, ...(files.length ? { files } : {}) } })
+      if (accepted === false || generation !== attachmentGeneration) return
+      setParts([])
+      setAttachments([])
+      setAttachmentError(undefined)
+      setClosed(true)
+    } catch (cause) {
+      if (generation === attachmentGeneration) setAttachmentError(cause instanceof Error ? cause.message : "The attachment could not be sent.")
+    } finally { setSending(false) }
   }
   const keyDown: JSX.EventHandler<HTMLTextAreaElement, KeyboardEvent> = (event) => {
     if (event.isComposing || event.keyCode === 229) return
     if (options().length && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
       event.preventDefault()
       setActive((active() + (event.key === "ArrowDown" ? 1 : -1) + options().length) % options().length)
+      queueMicrotask(() => document.getElementById(`composer-option-${active()}`)?.scrollIntoView({ block: "nearest" }))
       return
     }
     if (options().length && (event.key === "Enter" || event.key === "Tab")) {
@@ -133,46 +164,37 @@ export function MiniComposer(props: {
     }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault()
-      send()
+      void send()
     }
   }
   return <div class="composer">
-    <div class="composer__row">
+    <div class="composer__row" classList={{ "composer__row--dragging": dragging() }} onDragOver={(event) => { if (event.dataTransfer?.types.includes("Files")) { event.preventDefault(); setDragging(true) } }} onDragLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDragging(false) }} onDrop={(event) => { setDragging(false); if (!event.dataTransfer?.files.length) return; event.preventDefault(); void addFiles(Array.from(event.dataTransfer.files)) }}>
       <div class="mini-composer__input-wrap">
         <textarea ref={input} class="composer__input" rows={1} aria-label="Message your agent" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded={options().length > 0} aria-controls="composer-autocomplete" aria-activedescendant={options().length ? `composer-option-${active()}` : undefined}
-          placeholder="Ask anything, / for commands, @ for context…" disabled={props.disabled} value={props.text}
+          placeholder="Ask anything…" disabled={props.disabled || sending()} value={props.text}
           onInput={(event) => edit(event.currentTarget.value, event.currentTarget.selectionStart)}
+          onPaste={(event) => { const files = Array.from(event.clipboardData?.files ?? []); if (!files.length) return; event.preventDefault(); void addFiles(files) }}
           onClick={(event) => { setCursor(event.currentTarget.selectionStart); setClosed(false) }}
           onKeyUp={(event) => { if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) setCursor(event.currentTarget.selectionStart) }} onKeyDown={keyDown} />
-        <Show when={options().length || fileError()}><div class="mini-composer__autocomplete" id="composer-autocomplete" role="listbox" aria-label="Suggestions">
+        <Show when={options().length || fileError()}><div class="mini-composer__autocomplete" id="composer-autocomplete" role="listbox" aria-label="Suggestions" style={{ "--composer-name-width": `${Math.min(20, Math.max(9, ...options().map((item) => item.label.length)))}ch` }}>
           <For each={options()}>{(option, index) => <button id={`composer-option-${index()}`} type="button" role="option" aria-selected={index() === active()} classList={{ "mini-composer__option--active": index() === active() }} onPointerDown={(event) => event.preventDefault()} onClick={() => select(index())}>
-            <span>{option.label}</span><small>{option.description}</small>
+            <span>{option.label}</span><small title={option.description}>{option.description}</small>
           </button>}</For>
           <Show when={fileError()}><p role="status">{fileError()}</p></Show>
         </div></Show>
       </div>
-      <div class="mini-composer__identity" aria-live="polite">{label()}</div>
+      <Show when={attachments().length}><div class="composer__attachments" aria-label="Attachments"><For each={attachments()}>{(item) => <div class="composer__attachment"><Show when={item.mime.startsWith("image/")}><img src={item.uri} alt="" /></Show><span class="composer__attachment-name" title={item.name}>{item.name}</span><span class="composer__attachment-size">{item.size < 1024 ? `${item.size} B` : `${(item.size / 1024).toFixed(1)} KiB`}</span><button type="button" aria-label={`Remove ${item.name}`} onClick={() => { setAttachments((items) => items.filter((entry) => entry.id !== item.id)); setAttachmentError(undefined) }}><Icon name="close" /></button></div>}</For></div></Show>
+      <Show when={attachmentError()}><p class="composer__attachment-error" role="alert">{attachmentError()}</p></Show>
+      <Show when={remote.state().upload && attachments().length}><div class="composer__upload" role="status"><span>Uploading {remote.state().upload?.name} · {remote.state().upload?.percent}%</span><progress value={remote.state().upload?.percent ?? 0} max="100" /><button type="button" onClick={() => remote.store.cancelUpload()}>Cancel upload</button></div></Show>
+      <Show when={!attachmentError() && attachments().length && remote.state().uploadError}><p class="composer__attachment-error" role="alert">{remote.state().uploadError}</p></Show>
       <div class="composer__controls">
-        <ComposerPicker label="Agent" placeholder="Default agent" value={selectedAgent()} options={primaryAgents().map((item) => ({ value: item.id, label: item.name, detail: item.description }))} disabled={props.disabled || catalog()?.status !== "ready"} onChange={setAgent} />
-        <ComposerPicker label="Model" placeholder="Model" searchable value={selectedModel() ? `${selectedModel()!.providerID}/${selectedModel()!.id}${compact() ? `#${selectedModel()!.variant ?? ""}` : ""}` : undefined} options={modelOptions()} disabled={props.disabled || catalog()?.status !== "ready"} onChange={(value) => {
-          const option = modelOptions().find((item) => item.value === value)
-          if (!option) return
-          setModel(option.model)
-          writePreferredModel(undefined, option.model)
-        }} />
-        <Show when={!compact() && modelOption()?.variants.length}><ComposerPicker label="Variant" placeholder="Default" value={selectedModel()?.variant ?? ""} options={[{ value: "", label: "Default" }, ...(modelOption()?.variants ?? []).map((variant) => ({ value: variant, label: variant }))]} disabled={props.disabled} onChange={(variant) => {
-          const selected = selectedModel()
-          if (!selected) return
-          const chosen = { providerID: selected.providerID, id: selected.id, ...(variant ? { variant } : {}) }
-          setModel(chosen)
-          writePreferredModel(undefined, chosen)
-        }} /></Show>
-        <Show when={!props.allowEmpty}><div class="composer__delivery" role="group" aria-label="Delivery">
-          <button type="button" class="composer__delivery-option" aria-pressed={delivery() === "steer"} classList={{ "composer__delivery-option--active": delivery() === "steer" }} onClick={() => setDelivery("steer")}>Steer</button>
-          <button type="button" class="composer__delivery-option" aria-pressed={delivery() === "queue"} classList={{ "composer__delivery-option--active": delivery() === "queue" }} onClick={() => setDelivery("queue")}>Queue</button>
-        </div></Show>
-        <Show when={props.running && props.onInterrupt}><button type="button" class="mini-composer__interrupt" aria-label="Interrupt the running step" onClick={props.onInterrupt}><Icon name="stop" /></button></Show>
-        <button type="button" class="mini-composer__send" aria-label={props.allowEmpty ? "Create session" : "Send prompt"} disabled={props.disabled || (!props.allowEmpty && !props.text.trim())} onClick={send}><Icon name="send" /></button>
+        <ComposerPicker label="Agent" icon="user" placeholder="Default agent" value={selectedAgent()} pending={!!current() && selectedAgent() !== current()?.agent} options={primaryAgents().map((item) => ({ value: item.id, label: item.name, detail: item.description }))} disabled={props.disabled || catalog()?.status !== "ready"} onChange={setAgent} />
+        <ModelControl models={catalog()?.models ?? []} selected={selectedModel()} pending={!!current() && !!selectedModel() && (selectedModel()?.providerID !== current()?.model?.providerID || selectedModel()?.id !== current()?.model?.id || selectedModel()?.variant !== current()?.model?.variant)} disabled={props.disabled || catalog()?.status !== "ready"} onChange={(chosen) => { setModel(chosen); writePreferredModel(undefined, chosen) }} />
+        <Show when={props.showStatus}><ComposerStatus /></Show>
+        <span class="composer__spacer" />
+        <div class="composer__actions"><input ref={fileInput} class="composer__file-input" type="file" multiple aria-label="Choose files" onChange={(event) => { void addFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = "" }} /><button type="button" class="composer__attach" aria-label="Attach files" title="Attach files" disabled={props.disabled || sending() || reading() > 0} onClick={() => fileInput?.click()}><Icon name="plus" /></button><Show when={!props.allowEmpty}><button type="button" class="composer__delivery-toggle" aria-label={delivery() === "steer" ? "Steer mode; switch to Queue" : "Queue mode; switch to Steer"} title={delivery() === "steer" ? "Steer: switch to Queue" : "Queue: switch to Steer"} aria-pressed={delivery() === "queue"} onClick={() => setDelivery(delivery() === "steer" ? "queue" : "steer")}><Icon name={delivery()} /></button></Show>
+          <Show when={props.running && props.onInterrupt}><button type="button" class="mini-composer__interrupt" aria-label="Interrupt the running step" onClick={props.onInterrupt}><Icon name="stop" /></button></Show>
+          <button type="button" class="mini-composer__send" aria-label={props.allowEmpty ? "Create session" : "Send prompt"} disabled={props.disabled || sending() || reading() > 0 || (!props.allowEmpty && !props.text.trim() && !attachments().length)} onClick={() => void send()}><Icon name="send" /></button></div>
       </div>
     </div>
   </div>
@@ -187,11 +209,11 @@ export function Composer(props: { readonly sessionID?: string; readonly running:
       <Show when={mutation.kind === "prompt" && mutation.state !== "sending"}><button class="button button--secondary button--small" onClick={() => void remote.store.retryMutation(mutation.id)}>Send again</button></Show>
       <Show when={mutation.state !== "sending"}><button class="button button--ghost button--small" onClick={() => remote.store.dismissMutation(mutation.id)}>Dismiss</button></Show>
     </div>}</For>
-    <MiniComposer target={props.sessionID ? { sessionID: props.sessionID } : undefined} text={text()} onText={(value) => { if (props.sessionID) remote.store.setDraft(props.sessionID, value) }} disabled={!props.canSend || !props.sessionID} running={props.running} onInterrupt={() => void remote.store.interrupt()} onSubmit={(value) => {
-      if (!props.sessionID) return
-      remote.store.setDraft(props.sessionID, "")
-      if (value.kind === "command") void remote.store.runCommand(value.input)
-      else void remote.store.sendPrompt(value.input)
+    <MiniComposer target={props.sessionID ? { sessionID: props.sessionID } : undefined} text={text()} onText={(value) => { if (props.sessionID) remote.store.setDraft(props.sessionID, value) }} disabled={!props.canSend || !props.sessionID} running={props.running} showStatus onInterrupt={() => void remote.store.interrupt()} onSubmit={async (value) => {
+      if (!props.sessionID) return false
+      const result = value.kind === "command" ? await remote.store.runCommand(value.input) : await remote.store.sendPrompt(value.input)
+      if (result !== false) remote.store.setDraft(props.sessionID, "")
+      return result
     }} />
   </div>
 }

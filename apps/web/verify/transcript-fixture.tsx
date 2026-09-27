@@ -1,7 +1,6 @@
-import { createSignal, For } from "solid-js"
+import { createSignal } from "solid-js"
 import { render } from "solid-js/web"
-import { MessageRow } from "../src/remote/ui/conversation"
-import { SessionStatusBar } from "../src/remote/ui/status-bar"
+import { TranscriptNavigation } from "../src/remote/ui/transcript-nav"
 import { RemoteProvider } from "../src/remote/context"
 import { createRemoteStore } from "../src/remote/store"
 import { createRemoteHttp } from "../src/remote/http"
@@ -25,12 +24,25 @@ const initial: readonly RemoteMessageView[] = [
 ]
 const synthetic = new URLSearchParams(location.search).get("synthetic")
 const toolOutput = new URLSearchParams(location.search).has("tool-output")
+const navigation = new URLSearchParams(location.search).has("navigation")
+const runningStep = new URLSearchParams(location.search).has("running")
+const notification = new URLSearchParams(location.search).has("notification")
 const raw = "first line\n" + "x".repeat(20_000) + "\n... output truncated; full content saved to /private/fixture/tool-output.txt ..."
 const outputMessages: readonly RemoteMessageView[] = [{ kind: "assistant", id: "msg_tool", created: 1, parts: [
   { kind: "tool", callID: "call_store", name: "read", status: "completed", content: [{ kind: "text", text: raw.replace(/\.\.\. output truncated; full content saved to [^\r\n]*/g, "[full output retained on the device]"), sourceTruncated: true }], structured: { truncated: true } },
   { kind: "tool", callID: "call_shell", name: "shell", status: "completed", content: [{ kind: "text", text: "shell result\n[full output retained on the device]", sourceTruncated: true }] },
 ] }]
-const [messages, setMessages] = createSignal(synthetic ? syntheticMessages(synthetic === "compacted") : toolOutput ? outputMessages : initial)
+const navigationMessages: readonly RemoteMessageView[] = Array.from({ length: 12 }, (_, index): readonly RemoteMessageView[] => [
+  { kind: "user", id: `prompt_${index}`, text: `Prompt ${index + 1}: ${"inspect the current work ".repeat(4)}`, state: "consumed", created: index * 2 },
+  { kind: "assistant", id: `answer_${index}`, agent: "god", parts: [{ kind: "text", ordinal: 0, text: `Response ${index + 1}\n\n${"A detailed paragraph of work. ".repeat(12)}` }], created: index * 2 + 1, ...(index === 11 ? {} : { completed: index * 2 + 2 }) },
+]).flat()
+const runningMessages: readonly RemoteMessageView[] = [{ kind: "assistant", id: "running_step", agent: "god", created: 1, parts: [{ kind: "tool", callID: "running_tool", name: "shell", status: "running", input: { command: "bun test" }, content: [], started: 2 }] }]
+const notificationMetadata = { source: "subagent_notification", childID: "ses_child", type: "completed", revision: 3, excerpt: "Tests pass and the repair is verified." }
+const notificationMessages: readonly RemoteMessageView[] = [
+  { kind: "user", id: "msg_ordinary", text: "Check the repair", state: "consumed", created: 1 },
+  { kind: "synthetic", id: "msg_notification", text: `Subagent notification:\n${JSON.stringify(notificationMetadata)}`, description: "Subagent notification", metadata: notificationMetadata, created: 2 },
+]
+const [messages, setMessages] = createSignal(synthetic ? syntheticMessages(synthetic === "compacted") : toolOutput ? outputMessages : navigation ? navigationMessages : runningStep ? runningMessages : notification ? notificationMessages : initial)
 
 function syntheticMessages(compacted: boolean): readonly RemoteMessageView[] {
   const raw = Array.from({ length: 1_200 }, (_, index) => ({ id: `msg_${index}`, type: "assistant", agent: "god", content: [{ type: "reasoning", text: "**Check context** with `code` and *verify the next step*." }, { type: "text", text: `Answer ${index}` }], time: { created: index } }))
@@ -40,8 +52,7 @@ function syntheticMessages(compacted: boolean): readonly RemoteMessageView[] {
 }
 const root = document.getElementById("app")
 if (!root) throw new Error("Missing transcript root")
-const running = { ...createSessionView("ses_a"), status: "running" as const, executionStarted: Date.now() - 46_700, autonomy: { mode: "goal" as const, yolo: 2 as const, goal: { text: "Verify the transcript against the requested states", status: "active" as const, iteration: 3, noProgress: 1, maxNoProgress: 3 } } }
 const store = createRemoteStore({ http: createRemoteHttp({ fetch: Object.assign(async () => new Response(null, { status: 401 }), { preconnect: () => {} }) }), createTransport: () => { throw new Error("Fixture transport must not connect") } })
-const fixtureState = { ...store.state(), view: running, activeSessionID: "ses_a" }
+const fixtureState = { ...store.state(), activeSessionID: "ses_a" }
 Object.defineProperty(store, "state", { value: () => fixtureState })
-render(() => <RemoteProvider createStore={() => store}><main class="transcript-fixture"><div class="transcript-fixture__controls"><button id="admit" onClick={() => setMessages((current) => current.map((message) => message.kind === "user" ? { ...message, state: "promoted" } : message))}>Admit</button><button id="consume" onClick={() => setMessages((current) => applySessionEvent({ ...createSessionView("ses_a"), messages: current }, { type: "session.input.consumed", data: { sessionID: "ses_a", inputIDs: ["msg_user"] } }, 3).messages)}>Consume</button><button id="stream" onClick={() => setMessages((current) => applySessionEvent({ ...createSessionView("ses_a"), messages: current }, { type: "session.reasoning.delta", data: { sessionID: "ses_a", assistantMessageID: "msg_agent", ordinal: 2, delta: "Streamed detail" } }, 4).messages)}>Stream</button></div><ol class="transcript"><For each={messages().map((message) => message.id)}>{(id) => <MessageRow message={() => messages().find((message) => message.id === id)!} />}</For></ol><SessionStatusBar /></main></RemoteProvider>, root)
+render(() => <RemoteProvider createStore={() => store}><main class="transcript-fixture workspace__main"><div class="workspace__scroll"><div class="transcript-fixture__controls"><button id="admit" onClick={() => setMessages((current) => current.map((message) => message.kind === "user" ? { ...message, state: "promoted" } : message))}>Admit</button><button id="consume" onClick={() => setMessages((current) => applySessionEvent({ ...createSessionView("ses_a"), messages: current }, { type: "session.input.consumed", data: { sessionID: "ses_a", inputIDs: ["msg_user"] } }, 3).messages)}>Consume</button><button id="stream" onClick={() => setMessages((current) => applySessionEvent({ ...createSessionView("ses_a"), messages: current }, { type: "session.reasoning.delta", data: { sessionID: "ses_a", assistantMessageID: "msg_agent", ordinal: 2, delta: "Streamed detail" } }, 4).messages)}>Stream</button><button id="append" onClick={() => setMessages((current) => current.map((item) => item.kind === "assistant" && item.id === "answer_11" ? { ...item, parts: item.parts.map((part) => part.kind === "text" ? { ...part, text: `${part.text}\n${"Streaming detail expands this answer. ".repeat(12)}` } : part) } : item))}>Append</button><button id="prune" onClick={() => setMessages((current) => current.slice(-12))}>Prune</button></div><TranscriptNavigation messages={messages} /></div><div class="composer transcript-fixture__composer">Composer preview</div></main></RemoteProvider>, root)

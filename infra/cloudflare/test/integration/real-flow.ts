@@ -25,8 +25,10 @@
 import { spawn } from "bun"
 import { createRequire } from "node:module"
 import { existsSync } from "node:fs"
+import { createHash } from "node:crypto"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { join } from "node:path"
+import { crc32 } from "node:zlib"
 import { createSession, password, startServer } from "../../../../packages/cli/test/remote-harness"
 import { createLocalServer } from "../../../../packages/cli/src/remote-local"
 import { RemoteAgent } from "../../../../packages/cli/src/remote-bridge"
@@ -479,10 +481,13 @@ try {
     "the connected enrolled device is not online in the browser device list",
   )
   store.connect(enrolled.deviceID)
+  const sharedWorkspace = await waitFor(() => store.state().sessionGroups.find((group) => group.directory === workspace), 20_000,
+    "the browser did not list the shared Session workspace")
+  store.selectWorkspace(sharedWorkspace.id)
   await waitFor(
     () => (store.state().advertised.includes(sessionID) ? true : undefined),
     20_000,
-    "the browser never loaded the backend Session inventory",
+    () => `the browser never loaded the backend Session inventory: ${JSON.stringify({ connection: store.state().connection, transport: store.state().transport, list: store.state().sessionListStatus, selectedWorkspace: store.state().selectedWorkspaceID, groups: store.state().sessionGroups.map((group) => group.directory), advertised: store.state().advertised, sessions: store.state().sessions.map((session) => session.id), notice: store.state().notice, statuses: browserStatuses.slice(-5), diagnostics: diagnostics.slice(-5), agent: agent?.currentState })}`,
   )
   expect(
     [sessionID, hiddenSessionID, guardSessionID].every((id) => store.state().advertised.includes(id)),
@@ -633,6 +638,24 @@ try {
     20_000,
     "the store never selected the shared session",
   )
+  const initialTodos = [{ content: "Inspect the remote workspace", status: "pending", priority: "high" }]
+  const savedTodos = await server.request(`/api/session/${sessionID}/todo`, {
+    method: "PUT", headers: { "content-type": "application/json", "x-ycoding-directory": workspace },
+    body: JSON.stringify({ todos: initialTodos }),
+  })
+  expect(savedTodos.ok, `the isolated Session todo update failed: ${savedTodos.status}`)
+  const remoteTodos = await probeRequest("session.todo.list", { sessionID })
+  expect(remoteTodos.status === "ok" && JSON.stringify(remoteTodos.value) === JSON.stringify({ data: initialTodos }),
+    `the scoped remote todo read did not return the Protocol list: ${JSON.stringify(remoteTodos)}`)
+  const liveTodos = [{ content: "Check live todo delivery", status: "in_progress", priority: "medium" }]
+  const liveUpdate = await server.request(`/api/session/${sessionID}/todo`, {
+    method: "PUT", headers: { "content-type": "application/json", "x-ycoding-directory": workspace },
+    body: JSON.stringify({ todos: liveTodos }),
+  })
+  expect(liveUpdate.ok, `the isolated live todo update failed: ${liveUpdate.status}`)
+  await waitFor(() => JSON.stringify(store.state().todos) === JSON.stringify(liveTodos) ? true : undefined,
+    20_000, "the selected remote Session did not receive its todo.updated event")
+  checks.push("verified-Session todo read and subscribed todo.updated event crossed the real relay")
 
   /* --------------------------------- durable exact-id admission (no duplicate) */
 
@@ -1108,6 +1131,47 @@ try {
     "the interrupted session stayed active",
   )
   checks.push("interrupt stopped the running step through the real local service")
+
+  const pixel = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64")
+  const annotation = Buffer.from(`Comment\0${"A".repeat(102_400)}`)
+  const chunkLength = Buffer.alloc(4)
+  chunkLength.writeUInt32BE(annotation.length)
+  const chunkType = Buffer.from("tEXt")
+  const chunkCRC = Buffer.alloc(4)
+  chunkCRC.writeUInt32BE(crc32(Buffer.concat([chunkType, annotation])))
+  const png = Buffer.concat([pixel.subarray(0, pixel.length - 12), chunkLength, chunkType, annotation, chunkCRC, pixel.subarray(pixel.length - 12)])
+  await store.selectSession(sessionID)
+  const imageSent = await store.sendPrompt({ text: "Inspect uploaded PNG", delivery: "steer", files: [{ uri: `data:image/png;base64,${png.toString("base64")}`, name: "capture.png" }] })
+  expect(imageSent === true, `browser image upload failed: ${store.state().uploadError ?? "unknown"}`)
+  const imageMessage = await waitFor(async () => (await local.messages(sessionID, { directory: workspace })).find((message) => message.type === "user" && message.text === "Inspect uploaded PNG"),
+    30_000, "the uploaded image was not admitted into the local Session")
+  if (imageMessage.type !== "user") throw new Error("the uploaded image was not a user message")
+  const imageFile = imageMessage.files?.[0]
+  expect(imageFile !== undefined && imageFile.mime === "image/png" && imageFile.name === "capture.png" && imageFile.content.bytes === png.length &&
+    imageFile.content.digest === createHash("sha256").update(png).digest("hex"), "the local admitted image did not retain the source bytes and MIME")
+  checks.push("100 KiB PNG crossed browser upload chunks, relay, agent, and local attachment materialization")
+
+  const pacedBytes = Buffer.alloc(1_100_000, 42)
+  const pacedStart = performance.now()
+  const statusCount = browserStatuses.length
+  const pacing = store.sendPrompt({ text: "Review paced binary", delivery: "steer", files: [{ uri: `data:application/octet-stream;base64,${pacedBytes.toString("base64")}`, name: "paced.bin" }] })
+  await waitFor(() => store.state().upload?.percent ? true : undefined, 20_000, "the paced attachment never started uploading")
+  await store.loadWorkspaces()
+  expect(store.state().workspaceStatus === "ready" && store.state().upload !== undefined, "a concurrent store read stalled behind the paced upload")
+  const pacedSent = await pacing
+  const pacedDurationMs = Math.round(performance.now() - pacedStart)
+  expect(pacedSent === true, `paced upload failed: ${store.state().uploadError ?? "unknown"}`)
+  expect(store.state().transport.kind === "open" && !browserStatuses.slice(statusCount).some((status) => status.kind === "closed" && status.code === 1008),
+    "the paced upload tripped the relay request window")
+  console.log(`upload-1mib-ms: ${pacedDurationMs}`)
+  checks.push("1 MiB upload stayed paced across the real relay window while another store read settled")
+
+  const refusedUpload = await probeRequest("session.prompt", { sessionID: hiddenSessionID,
+    input: { id: "msg_unknown_upload", text: "Unresolved attachment", files: [{ uri: "ycoding-upload://4ab94d33-6e6b-41a3-a638-f0a6596854a9" }], resume: false } })
+  expect(refusedUpload.status === "failed" && refusedUpload.error.code === "invalid_message", "an unresolved upload reference was admitted")
+  const hiddenPending = await server.request(`/api/session/${hiddenSessionID}/pending`)
+  expect(hiddenPending.ok && !JSON.stringify(await hiddenPending.json()).includes("msg_unknown_upload"), "the invalid upload reached the local Session")
+  checks.push("an unresolved attachment reference failed before local prompt admission")
 
   /* ------------------------------------------------------- logout closes client */
   const logout = await http.logout()

@@ -59,6 +59,7 @@ function OfficeRoster(props: {
 }): JSX.Element {
   const [collapsed, setCollapsed] = createSignal(true)
   const actors = createMemo(() => props.snapshot.actors.filter((actor) => actor.kind !== "task" || !["completed", "cancelled", "failed", "lost"].includes(actor.taskState ?? "") || Object.hasOwn(props.locations, actor.id)))
+  const actorIDs = createMemo(() => actors().map((actor) => actor.id))
   return (
     <aside class="office-roster" classList={{ "office-roster--collapsed": collapsed() }} aria-label="Office agents">
       <div class="office-roster__head">
@@ -67,8 +68,11 @@ function OfficeRoster(props: {
       </div>
       <Show when={actors().length > 0} fallback={<p class="office-roster__empty">No agents in this Session yet.</p>}>
         <ul id="office-roster-list" class="office-roster__list">
-          <For each={actors()}>
-            {(actor) => <OfficeRosterRow actor={actor} room={Object.hasOwn(props.locations, actor.id) ? props.locations[actor.id] : actor.status === "idle" ? "lounge" : actor.homeRoom} onFocusActor={props.onFocusActor} />}
+          <For each={actorIDs()}>
+            {(id) => {
+              const actor = createMemo(() => actors().find((item) => item.id === id)!)
+              return <OfficeRosterRow actor={actor()} room={Object.hasOwn(props.locations, id) ? props.locations[id] : actor().status === "idle" ? "lounge" : actor().homeRoom} onFocusActor={props.onFocusActor} />
+            }}
           </For>
         </ul>
       </Show>

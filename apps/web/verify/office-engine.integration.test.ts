@@ -8,7 +8,7 @@ import { launchBrowser } from "./cdp"
 const browserPath = process.env.YCODING_WEB_CHROME
 if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chrome executable")
 
-const port = 4382
+const port = 45_000 + Math.floor(Math.random() * 10_000)
 const captures = mkdtempSync(join(tmpdir(), "ycoding-office-engine-"))
 let server: ReturnType<typeof Bun.spawn> | undefined
 let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined
@@ -400,6 +400,45 @@ test("roster cards show real sprite, unique name and role, follow selection, and
   await waitFor(page, "document.querySelector('.office-roster__row[data-session-id=\"session-b\"] .office-roster__room')?.textContent==='QA lab'")
   await page.close()
 }, 60_000)
+
+test("a root with a lagging idle detail but a running report stays at its CEO desk with a working bubble", async () => {
+  const page = await requireBrowser().openPage()
+  await page.navigate(url("idle", "&staleIdle=1&inspectEngine=1&workspace=1&team=1&cue=0"))
+  await waitFor(page, "document.querySelectorAll('.office-roster__row').length===2&&window.__officeGame?.scene.getScene('office').latestFrames.length===2")
+  const root = await page.evaluate<{ readonly status: string; readonly room: string; readonly bubble: boolean; readonly desk: boolean }>(`(() => {
+    const scene=window.__officeGame.scene.getScene('office');
+    const frame=scene.latestFrames.find(frame=>frame.actor.sessionID==='session-a');
+    return {status:document.querySelector('.office-roster__row[data-session-id="session-a"] .office-roster__status').textContent,
+      room:frame.room,bubble:scene.objects.get(frame.actor.id).bubble.text==='Working',
+      desk:scene.director.actors.get(frame.actor.id).work.cell.x===Math.floor(frame.position.x/32)&&scene.director.actors.get(frame.actor.id).work.cell.y===Math.floor(frame.position.y/32)};
+  })()`)
+  expect(root).toEqual({ status: "Working", room: "ceo", bubble: true, desk: true })
+  await page.close()
+}, 30_000)
+
+test("repeated ready team snapshots preserve roster row nodes and character sprites", async () => {
+  const page = await requireBrowser().openPage()
+  await page.navigate(url("tool", "&team=1&cue=0&inspectEngine=1&workspace=1&snapshots=1"))
+  await waitFor(page, "document.querySelectorAll('.office-roster__row').length===2&&window.__officeGame?.scene.getScene('office').objects.size===2")
+  const result = await page.evaluate<{ readonly removed: number; readonly updated: number; readonly sameRows: boolean; readonly sameSprites: boolean; readonly rows: number }>(`(async () => {
+    const rows=[...document.querySelectorAll('.office-roster__row')];
+    const scene=window.__officeGame.scene.getScene('office');
+    const sprites=new Map([...scene.objects].map(([id,objects])=>[id,objects.sprite]));
+    let removed=0, updated=0;
+    const observer=new MutationObserver(records=>{for(const record of records)for(const node of record.removedNodes)if(rows.some(row=>node===row||node.contains?.(row)))removed++});
+    observer.observe(document.querySelector('.office-workspace'),{childList:true,subtree:true});
+    for(let index=0;index<12;index++){
+      [...document.querySelectorAll('button')].find(button=>button.textContent==='Refresh snapshot').click();
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      if(document.querySelector('.office-roster__row[data-session-id="session-a"] .office-roster__status')?.textContent===(index%2===0?'Thinking':'Working'))updated++;
+    }
+    observer.disconnect();
+    return {removed,updated,sameRows:rows.every(row=>document.querySelector('.office-roster__row[data-session-id="'+row.dataset.sessionId+'"]')===row),
+      sameSprites:[...sprites].every(([id,sprite])=>scene.objects.get(id)?.sprite===sprite),rows:document.querySelectorAll('.office-roster__row').length};
+  })()`)
+  expect(result).toEqual({ removed: 0, updated: 12, sameRows: true, sameSprites: true, rows: 2 })
+  await page.close()
+}, 30_000)
 
 test("a report cue sends the child beside its supervisor, shows a report emote, and returns", async () => {
   const page = await requireBrowser().openPage()

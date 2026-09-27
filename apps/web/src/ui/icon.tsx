@@ -39,6 +39,12 @@ export type IconName =
   | "sparkles"
   | "cpu"
   | "usage"
+  | "zap"
+  | "reset"
+  | "arrow-down"
+  | "steer"
+  | "queue"
+  | "panel-left"
   | "at"
   | "hash"
   | "slash"
@@ -85,6 +91,12 @@ const paths: Record<IconName, readonly string[]> = {
   hash: ["M5 9h14", "M4 15h14", "M10 4L8 20", "M16 4l-2 16"],
   slash: ["M16 4L8 20"],
   usage: ["M4 17a8 8 0 1 1 16 0", "M12 17l4-5", "M12 17h.01"],
+  zap: ["M13 3L4 14h7l-1 7 9-11h-7z"],
+  reset: ["M4 5v5h5", "M5.2 15a8 8 0 1 0 1.6-8.4L4 10"],
+  "arrow-down": ["M12 5v14", "M6 13l6 6 6-6"],
+  steer: ["M5 4v7a4 4 0 0 0 4 4h10", "M15 11l4 4-4 4"],
+  queue: ["M4 6h12", "M4 11h12", "M4 16h7", "M17 13v7", "M14 17l3 3 3-3"],
+  "panel-left": ["M4 5h16v14H4z", "M9.5 5v14"],
 }
 
 export function Icon(props: { readonly name: IconName; readonly size?: number; readonly class?: string }): JSX.Element {

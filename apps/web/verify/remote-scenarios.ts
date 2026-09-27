@@ -363,14 +363,14 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
   if (name === "usage-quotas") return {
       ...common,
       view: "usage",
-      expectedText: ["Provider quotas", "OpenRouter · Pay as you go", "Balance", "$38.42", "GitHub Copilot", "AI credits", "Breakdown"],
+      expectedText: ["Provider quotas", "OpenRouter\nPay as you go", "Balance", "$38.42", "GitHub Copilot", "AI credits", "Provider distribution", "Breakdown"],
     }
   if (name === "empty-backend") return {
       ...common,
       view: "chat",
       emptyBackend: true,
       sessions: [],
-      expectedText: ["New session", "Choose a previously opened repository and start a conversation."],
+      expectedText: ["New session", "Default agent"],
     }
   if (name === "selected-machine-offline") return {
       ...common,

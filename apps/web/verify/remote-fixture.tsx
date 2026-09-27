@@ -437,15 +437,24 @@ const fixtureUsageProviders = (now: number) => [
 const fixtureUsageReport = (input: Readonly<Record<string, unknown>> | undefined) => {
   const group = typeof input?.group === "string" ? input.group : "model"
   const from = typeof input?.from === "number" ? input.from : Date.now() - 29 * usageDay
+  const today = new Date()
+  if (group === "model" && from === Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)) {
+    const month = [
+      { key: "openai/gpt-6-sol", label: "openai/gpt-6-sol", ...usageMetrics(6, 18.4) },
+      { key: "openrouter/deepseek-v4", label: "openrouter/deepseek-v4", ...usageMetrics(3, 5.2) },
+      { key: "github-copilot/gpt-4o", label: "github-copilot/gpt-4o", ...usageMetrics(1, 2.7) },
+    ]
+    return { data: { group, rows: month, total: usageMetrics(10, 26.3), rowCount: month.length } }
+  }
   const rows = group === "day"
     ? Array.from({ length: 30 }, (_, index) => {
       const key = new Date(from + index * usageDay).toISOString().slice(0, 10)
       return { key, label: key, ...usageMetrics(1 + (index % 5), index % 7 === 0 ? undefined : 0.35 * (1 + (index % 5))) }
     })
     : [
-      { key: `${group}_a`, label: group === "model" ? "openai/gpt-6-sol" : group === "agent" ? "GSD" : group === "project" ? "ycoding" : "Stream remote output safely", ...usageMetrics(6, 18.4) },
-      { key: `${group}_b`, label: group === "model" ? "anthropic/claude-opus-5.5" : group === "agent" ? "explore" : group === "project" ? "db-pruner" : "Async Auth Token Revocation Migration", ...usageMetrics(3, 7.9) },
-      { key: `${group}_c`, label: group === "model" ? "openrouter/deepseek/deepseek-v4" : group === "agent" ? "compaction" : group === "project" ? "mesh" : "Archived: release notes", ...usageMetrics(1) },
+      { key: group === "model" ? "openai/gpt-6-sol" : `${group}_a`, label: group === "model" ? "openai/gpt-6-sol" : group === "agent" ? "GSD" : group === "project" ? "ycoding" : "Stream remote output safely", ...usageMetrics(6, 18.4) },
+      { key: group === "model" ? "anthropic/claude-opus-5.5" : `${group}_b`, label: group === "model" ? "anthropic/claude-opus-5.5" : group === "agent" ? "explore" : group === "project" ? "db-pruner" : "Async Auth Token Revocation Migration", ...usageMetrics(3, 7.9) },
+      { key: group === "model" ? "openrouter/deepseek%2Fdeepseek-v4" : `${group}_c`, label: group === "model" ? "openrouter/deepseek/deepseek-v4" : group === "agent" ? "compaction" : group === "project" ? "mesh" : "Archived: release notes", ...usageMetrics(1) },
     ]
   return { data: { group, rows, total: usageMetrics(10, 26.3), rowCount: rows.length } }
 }

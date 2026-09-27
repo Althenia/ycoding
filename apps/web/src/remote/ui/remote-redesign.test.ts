@@ -3,11 +3,11 @@ import type { AssistantPart, PendingRequestView, SessionView } from "../projecti
 import { readSessionInfo, type SessionInfoView } from "../store"
 import { sessionStateChips } from "../view-model"
 import { partKey, toolPartExpanded } from "./conversation"
+import { notificationAge } from "./notifications"
 import {
   awaitsApproval,
   connectionStripView,
   filterSessions,
-  notificationAge,
   queueRowView,
   reportedEvents,
   sessionChips,

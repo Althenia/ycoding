@@ -1,4 +1,4 @@
-import { modelDisplayLabel, type AgentAttachmentInput, type CatalogView, type FileAttachmentInput, type FileOption, type ModelOption } from "../catalog"
+import { type AgentAttachmentInput, type CatalogView, type FileAttachmentInput, type FileOption } from "../catalog"
 import type { ModelRefView } from "../projection"
 
 export type Trigger = "/" | "@" | "$" | "#"
@@ -7,6 +7,15 @@ export type MentionPart =
   | { readonly kind: "agent"; readonly name: string; readonly mention: { readonly start: number; readonly end: number; readonly text: string } }
   | { readonly kind: "skill"; readonly id: string; readonly mention: { readonly start: number; readonly end: number; readonly text: string } }
 export type ComposerOption = { readonly label: string; readonly description?: string; readonly kind: "command" | "file" | "agent" | "skill"; readonly value: string; readonly uri?: string }
+
+export function orderedVariants(variants: readonly string[]): string[] {
+  const intensity = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+  return [...variants].sort((a, b) => {
+    const left = intensity.indexOf(a.toLowerCase())
+    const right = intensity.indexOf(b.toLowerCase())
+    return (left < 0 ? intensity.length : left) - (right < 0 ? intensity.length : right)
+  })
+}
 
 export function triggerAt(text: string, cursor: number): { trigger: Trigger; start: number; query: string } | undefined {
   const prefix = text.slice(0, cursor)
@@ -49,7 +58,7 @@ export function optionsForTrigger(trigger: Trigger, query: string, catalog: Cata
   return candidates.map((option) => ({ option, score: Math.max(fuzzy(option.value, query), fuzzy(option.description ?? "", query) - 20) }))
     .filter((entry) => entry.score > -Infinity)
     .sort((a, b) => b.score - a.score || a.option.label.localeCompare(b.option.label))
-    .slice(0, 8).map((entry) => entry.option)
+    .map((entry) => entry.option)
 }
 
 export function applyMention(text: string, start: number, end: number, option: ComposerOption, parts: readonly MentionPart[]) {
@@ -92,12 +101,4 @@ export function submission(text: string, parts: readonly MentionPart[], catalog:
   if (command && catalog?.commands.some((item) => item.name === command[1])) return { kind: "command" as const, input: { command: command[1]!, ...(command[2] ? { arguments: command[2] } : {}), ...base } }
   const skills = [...new Set([...parts.filter((part): part is Extract<MentionPart, { kind: "skill" }> => part.kind === "skill").map((part) => part.id), ...[...trimmed.matchAll(/(?:^|\s)\$([^\s]+)/g)].map((match) => match[1]!).filter((id) => catalog?.skills.some((skill) => skill.id === id)), ...(command && catalog?.skills.some((skill) => skill.id === command[1] && skill.slash) ? [command[1]!] : [])])]
   return { kind: "prompt" as const, input: { text: trimmed, ...base, ...(skills.length ? { skills } : {}) } }
-}
-
-export function identityLabel(currentAgent: string | undefined, selectedAgent: string | undefined, currentModel: ModelRefView | undefined, selectedModel: ModelRefView | undefined, models: readonly ModelOption[]) {
-  const agent = currentAgent && selectedAgent && selectedAgent.toLocaleLowerCase() !== currentAgent.toLocaleLowerCase() ? `→ ${selectedAgent}` : currentAgent ?? selectedAgent ?? "Agent"
-  const model = selectedModel ?? currentModel
-  if (!model) return agent
-  const changed = currentModel && selectedModel && (selectedModel.providerID !== currentModel.providerID || selectedModel.id !== currentModel.id || selectedModel.variant !== currentModel.variant)
-  return `${agent} · ${changed ? "→ " : ""}${modelDisplayLabel(model, models)}${model.variant ? ` · ${model.variant}` : ""}`
 }

@@ -1,0 +1,120 @@
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { launchBrowser } from "./cdp"
+
+const port = 4399
+const executable = process.env.YCODING_WEB_CHROME
+if (!executable) throw new Error("Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable.")
+let server: ReturnType<typeof Bun.spawn> | undefined
+let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined
+
+beforeAll(async () => {
+  server = Bun.spawn(["bun", "run", "dev", "--", "--host", "127.0.0.1", "--port", String(port), "--strictPort"], {
+    cwd: new URL("..", import.meta.url).pathname, stdout: "ignore", stderr: "ignore",
+  })
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    if (await fetch(`http://127.0.0.1:${port}/verify/notifications-fixture.html`).then((response) => response.ok, () => false)) {
+      browser = await launchBrowser(executable, 390, 844)
+      return
+    }
+    await Bun.sleep(100)
+  }
+  throw new Error("Notifications fixture did not start")
+})
+afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
+
+async function open(width: number, theme: "light" | "dark", initial = "seeded") {
+  if (!browser) throw new Error("Browser not started")
+  const page = await browser.openPage()
+  await page.setViewport(width, 844)
+  await page.navigate(`http://127.0.0.1:${port}/verify/notifications-fixture.html?theme=${theme}&initial=${initial}`)
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    if (await page.evaluate<boolean>(`document.querySelector('.yc-notification-center__trigger') !== null`)) return page
+    await Bun.sleep(50)
+  }
+  await page.close()
+  throw new Error("Notification center did not mount")
+}
+
+describe("notification center and live toasts", () => {
+  test("renders a bounded panel in light and dark desktop and phone layouts with keyboard and item actions", async () => {
+    for (const width of [390, 1440]) for (const theme of ["light", "dark"] as const) {
+      const page = await open(width, theme)
+      try {
+        expect(await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`)).toBe(0)
+        expect(await page.evaluate<string>(`document.querySelector('.yc-notification-center__trigger').getAttribute('aria-label')`)).toContain("2 unread")
+        await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
+        const result = await page.evaluate<{ count: number; today: boolean; newLabel: string; unread: number; overflow: boolean; left: number; right: number; radius: string; motion: string; theme: string; bodyWidth: number; tonesMatch: boolean }>(`(() => {
+          const panel = document.querySelector('.yc-notification-panel'); const rect = panel.getBoundingClientRect();
+          const item = panel.querySelector('.yc-notification');
+          return { count: panel.querySelectorAll('.yc-notification').length, today: panel.textContent.includes('Today'), newLabel: panel.querySelector('.yc-notification-panel__new')?.textContent ?? '', unread: panel.querySelectorAll('.yc-notification__unread:not([aria-hidden="true"])').length, overflow: document.documentElement.scrollWidth > innerWidth, left: rect.left, right: rect.right, radius: getComputedStyle(panel).borderTopLeftRadius, motion: getComputedStyle(panel).animationName, theme: document.documentElement.dataset.theme, bodyWidth: item.querySelector('.yc-notification__open').getBoundingClientRect().width, tonesMatch: [...panel.querySelectorAll('.yc-notification')].every(row => getComputedStyle(row.querySelector('strong')).color === getComputedStyle(row.querySelector('.yc-notification__icon')).color) };
+        })()`)
+        expect(result).toMatchObject({ count: 2, today: true, newLabel: "2 new", unread: 0, overflow: false, radius: "20px", theme, tonesMatch: true })
+        expect(result.left).toBeGreaterThanOrEqual(0)
+        expect(result.right).toBeLessThanOrEqual(width)
+        expect(result.motion).not.toBe("none")
+        expect(result.bodyWidth).toBeGreaterThan(140)
+        await page.evaluate(`Promise.all([...document.querySelectorAll('.yc-notification-panel, .yc-notification')].flatMap(node => node.getAnimations()).map(animation => animation.finished))`)
+        await Bun.write(new URL(`../../../.cache/tmp/notifications-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        await page.evaluate(`document.querySelector('.yc-notification__dismiss').focus(); document.querySelector('.yc-notification__dismiss').click()`)
+        expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification').length`)).toBe(1)
+        await page.evaluate(`document.querySelector('.yc-notification__open').click()`)
+        expect(await page.evaluate<string[]>(`window.remoteOpened()`)).toEqual(["ses_alpha"])
+        expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel') === null`)).toBe(true)
+        await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
+        await page.evaluate(`document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`)
+        expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel') === null`)).toBe(true)
+        await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
+        await page.evaluate(`document.querySelector('.yc-notification-panel__action:last-child').click()`)
+        expect(await page.evaluate<string>(`document.querySelector('.yc-notification-panel__empty strong')?.textContent ?? ''`)).toBe("You're all caught up")
+        await page.pressEscape()
+        expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.yc-notification-center__trigger') && !document.querySelector('.yc-notification-panel')`)).toBe(true)
+      } finally { await page.close() }
+    }
+  }, 30_000)
+
+  test("shows only new live notices as bounded polite toasts, pauses progress, and keeps center history on dismiss", async () => {
+    const page = await open(390, "dark", "empty")
+    try {
+      await page.evaluate(`window.remoteNotify('approval-requested', 'ses_alpha')`)
+      for (let attempt = 0; attempt < 30 && await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`) !== 1; attempt += 1) await Bun.sleep(30)
+      expect(await page.evaluate<string>(`document.querySelector('.yc-toasts').getAttribute('role')`)).toBe("status")
+      expect(await page.evaluate<boolean>(`document.querySelector('.yc-toast').getBoundingClientRect().top >= document.querySelector('header').getBoundingClientRect().bottom`)).toBe(true)
+      await page.evaluate(`document.querySelector('.yc-toast').dispatchEvent(new MouseEvent('mouseenter'))`)
+      expect(await page.evaluate<boolean>(`document.querySelector('.yc-toast').classList.contains('yc-toast--paused')`)).toBe(true)
+      expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.yc-toast__progress')).animationPlayState`)).toBe("paused")
+      await page.evaluate(`document.querySelector('.yc-toast').dispatchEvent(new MouseEvent('mouseleave'))`)
+      await page.evaluate(`document.querySelector('.yc-toast__open').focus()`)
+      expect(await page.evaluate<boolean>(`document.querySelector('.yc-toast').classList.contains('yc-toast--paused')`)).toBe(true)
+      await Bun.sleep(260)
+      await Bun.write(new URL("../../../.cache/tmp/notifications-toast-390-dark.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      await page.evaluate(`document.querySelector('.yc-toast__open').click()`)
+      await Bun.sleep(260)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`)).toBe(0)
+      expect(await page.evaluate<string[]>(`window.remoteOpened()`)).toEqual(["ses_alpha"])
+      await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification').length`)).toBe(1)
+      await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click(); ['ses_alpha','ses_beta','ses_alpha','ses_beta'].forEach(id => window.remoteNotify('error', id))`)
+      for (let attempt = 0; attempt < 30 && await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`) !== 3; attempt += 1) await Bun.sleep(30)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`)).toBe(3)
+      await page.evaluate(`document.querySelector('.yc-toast__close').click()`)
+      await Bun.sleep(260)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`)).toBe(2)
+      expect(await page.evaluate<number>(`document.documentElement.scrollWidth - innerWidth`)).toBeLessThanOrEqual(0)
+      await Bun.sleep(6_300)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`)).toBe(0)
+      await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification').length`)).toBe(5)
+    } finally { await page.close() }
+  }, 15_000)
+
+  test("exposes a 44px dismiss target without hover on a coarse pointer", async () => {
+    const page = await open(390, "light")
+    try {
+      await page.setCoarsePointer(true)
+      await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
+      await page.evaluate(`Promise.all([...document.querySelector('.yc-notification-panel').getAnimations()].map(animation => animation.finished))`)
+      const result = await page.evaluate<{ size: number; visible: boolean; overflow: boolean }>(`(() => { const button = document.querySelector('.yc-notification__dismiss'); const style = getComputedStyle(button); return { size: button.getBoundingClientRect().width, visible: style.opacity === '1', overflow: document.documentElement.scrollWidth > innerWidth }; })()`)
+      expect(result).toEqual({ size: 44, visible: true, overflow: false })
+    } finally { await page.close() }
+  })
+})

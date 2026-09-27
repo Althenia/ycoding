@@ -44,6 +44,37 @@ async function setup(handler?: RelayRequestHandler, sessionGroups?: () => readon
 }
 
 describe("remote workspace session creation", () => {
+  test("uploads a file after creating the Session and sends its first prompt with the completed reference", async () => {
+    const h = await setup((request) => {
+      if (request.operation !== "session.attachment.upload") return "default"
+      return { ok: true, value: { uri: `ycoding-upload://${String(request.input?.uploadID)}` } }
+    })
+    try {
+      await h.store.loadWorkspaces()
+      expect(await h.store.createSession({ workspaceID: workspace.id, prompt: { text: "Inspect screenshot", files: [{ uri: "data:image/png;base64,AAAA", name: "capture.png" }] } })).toBe(created.id)
+      const operations = h.relay.requests.filter((request) => ["session.create", "session.attachment.upload", "session.prompt"].includes(request.operation))
+      expect(operations.map((request) => request.operation)).toEqual(["session.create", "session.attachment.upload", "session.prompt"])
+      expect(operations[1]?.sessionID).toBe(created.id)
+      expect(operations[2]?.input?.files).toEqual([{ uri: `ycoding-upload://${String(operations[1]?.input?.uploadID)}`, name: "capture.png" }])
+    } finally { await h.stop() }
+  })
+
+  test("failed first-prompt upload retains the created Session ID and attachment for explicit retry", async () => {
+    let failed = true
+    const h = await setup((request) => request.operation === "session.attachment.upload"
+      ? failed ? { ok: false, code: "invalid_message", message: "Upload failed" } : { ok: true, value: { uri: `ycoding-upload://${String(request.input?.uploadID)}` } }
+      : request.operation === "session.get" && request.sessionID === created.id ? { ok: true, value: { data: created } } : "default")
+    try {
+      await h.store.loadWorkspaces()
+      expect(await h.store.createSession({ workspaceID: workspace.id, prompt: { text: "Inspect", files: [{ uri: "data:image/png;base64,AAAA", name: "capture.png" }] } })).toBeUndefined()
+      expect(h.store.state().sessionCreation).toMatchObject({ id: created.id, status: "failed", message: "Upload failed" })
+      expect(h.relay.requests.some((request) => request.operation === "session.prompt")).toBe(false)
+      failed = false
+      expect(await h.store.retrySessionCreation()).toBe(created.id)
+      expect(h.relay.requests.filter((request) => request.operation === "session.create")).toHaveLength(1)
+      expect(h.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(1)
+    } finally { await h.stop() }
+  })
   test("keeps drafts with their Session across selection and same-device reconnect, but not another device", async () => {
     const h = await setup()
     try {

@@ -45,6 +45,7 @@ import {
   type ShellOutputFetch,
 } from "./projection"
 import type { ModelRefView } from "./projection"
+import { assertRemoteRequestSize, uploadAttachments } from "./attachment-upload"
 import type {
   RemoteRequestOutcome,
   RemoteTransport,
@@ -55,6 +56,28 @@ import type { RemoteConnectionState } from "./view-model"
 import { reportKey, type UsageProvider, type UsageReport, type UsageReportInput, type UsageSummary } from "./ui/usage-model"
 
 type UsageRead<T> = { readonly status: "idle" | "loading" | "ready" | "unsupported" | "error"; readonly data?: T; readonly message?: string }
+export type TodoView = { readonly content: string; readonly status: "pending" | "in_progress" | "completed" | "cancelled"; readonly priority: "high" | "medium" | "low" }
+
+function readTodos(value: unknown): readonly TodoView[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const todos = value.map((item: unknown) => {
+    if (typeof item !== "object" || item === null) return undefined
+    const content = Reflect.get(item, "content")
+    const status = Reflect.get(item, "status")
+    const priority = Reflect.get(item, "priority")
+    if (typeof content !== "string" || !["pending", "in_progress", "completed", "cancelled"].includes(status) ||
+      !["high", "medium", "low"].includes(priority)) return undefined
+    return { content, status, priority } as TodoView
+  })
+  return todos.every((item) => item !== undefined) ? todos as readonly TodoView[] : undefined
+}
+
+function eventTodos(event: unknown, sessionID: string): readonly TodoView[] | undefined {
+  if (typeof event !== "object" || event === null || Reflect.get(event, "type") !== "todo.updated") return undefined
+  const data: unknown = Reflect.get(event, "data")
+  if (typeof data !== "object" || data === null || Reflect.get(data, "sessionID") !== sessionID) return undefined
+  return readTodos(Reflect.get(data, "todos"))
+}
 type UsageState = {
   readonly providers: UsageRead<readonly UsageProvider[]>
   readonly summary: UsageRead<UsageSummary>
@@ -148,11 +171,14 @@ export type RemoteStoreState = {
   readonly sessionCreation?: SessionCreation
   readonly activeSessionID?: string
   readonly view?: SessionView
+  readonly todos?: readonly TodoView[]
   readonly team?: TeamView
   readonly teamCues: readonly TeamCue[]
   readonly transport: RemoteTransportStatus
   readonly mutations: readonly PendingMutation[]
   readonly notice?: string
+  readonly upload?: { readonly sessionID: string; readonly name: string; readonly percent: number }
+  readonly uploadError?: string
   readonly notifications: readonly RemoteNotificationView[]
   readonly unhandledEvents: number
 }
@@ -199,8 +225,9 @@ export type RemoteStore = {
   readonly dismissSessionCreation: () => void
   readonly reloadMessages: () => Promise<void>
   readonly loadShellOutputPage: (shellID: string) => Promise<void>
-  readonly sendPrompt: (input: { readonly text: string; readonly delivery: "steer" | "queue"; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[]; readonly skills?: readonly string[]; readonly agent?: string; readonly model?: ModelRefView }) => Promise<void>
-  readonly runCommand: (input: { readonly command: string; readonly arguments?: string; readonly delivery: "steer" | "queue"; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[]; readonly agent?: string; readonly model?: ModelRefView }) => Promise<void>
+  readonly sendPrompt: (input: { readonly text: string; readonly delivery: "steer" | "queue"; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[]; readonly skills?: readonly string[]; readonly agent?: string; readonly model?: ModelRefView }) => Promise<void | boolean>
+  readonly runCommand: (input: { readonly command: string; readonly arguments?: string; readonly delivery: "steer" | "queue"; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[]; readonly agent?: string; readonly model?: ModelRefView }) => Promise<void | boolean>
+  readonly cancelUpload: () => void
   readonly switchModel: (model: ModelRefView) => Promise<boolean>
   readonly switchAgent: (agent: string) => Promise<boolean>
   readonly retryMutation: (id: string) => Promise<void>
@@ -284,6 +311,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     unhandledEvents: 0,
   }
   let transport: RemoteTransport | undefined
+  let activeUpload: AbortController | undefined
   let selectionToken = 0
   let selectionReadyToken: number | undefined
   let selectionFailedToken: number | undefined
@@ -336,6 +364,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
    * issued is newer, so it is re-applied over the read instead of being replaced by it.
    */
   let fileChangeRead: { readonly sessionID: string; readonly live: FileChangeView[] } | undefined
+  let todoRead: { readonly sessionID: string; live?: readonly TodoView[] } | undefined
   const requestReads = new Set<{ readonly sessionID: string; readonly live: { readonly event: unknown; readonly at: number }[] }>()
   let cancelBatch: (() => void) | undefined
   let queued: { readonly sessionID: string; readonly event: unknown }[] = []
@@ -447,6 +476,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       unhandled += next.unhandledEvents - view.unhandledEvents
       view = sequence.seq === undefined ? next : { ...next, watermark: sequence.seq }
       const type = typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "type") : undefined
+      const todos = eventTodos(item.event, item.sessionID)
+      if (todos !== undefined) {
+        state = { ...state, todos }
+        if (todoRead?.sessionID === item.sessionID) todoRead.live = todos
+      }
       if (type === "permission.v2.asked" || type === "permission.v2.replied" ||
         type === "guardrail.asked" || type === "guardrail.replied" ||
         type === "form.created" || type === "form.replied" || type === "form.cancelled") {
@@ -496,14 +530,17 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (token !== selectionToken || !isCurrentConnection(owner) || state.team?.rootID !== rootID || state.transport.kind !== "open") return
     const read = { owner, token, rootID, watchToken }
     teamRead = read
-    setState({ team: { ...state.team, rootID, status: cursor === undefined ? "loading" : state.team.status, pageLoading: cursor !== undefined } })
+    setState({ team: { ...state.team, rootID, status: cursor === undefined && !(refresh && state.team.status === "ready") ? "loading" : state.team.status,
+      pageLoading: cursor !== undefined || refresh } })
     const outcome = await owner.request("session.subagent.list", { sessionID: rootID,
       ...(cursor === undefined ? {} : { input: { cursor } }) })
     if (teamRead === read) teamRead = undefined
     const currentTeam = state.team
     if (teamWatching && watchToken === teamWatchToken && token === selectionToken && isCurrentConnection(owner) &&
       currentTeam?.rootID === rootID && state.transport.kind === "open") {
-      if (outcome.status === "failed" && outcome.error.code === "unknown_operation") {
+      if (refresh && currentTeam.status === "ready" && outcome.status !== "ok") {
+        setState({ team: { ...currentTeam, pageLoading: false } })
+      } else if (outcome.status === "failed" && outcome.error.code === "unknown_operation") {
         setState({ team: { rootID, status: "unsupported", tasks: [], pageLoading: false } })
       } else if (outcome.status !== "ok") {
         setState({ team: { ...currentTeam, status: "error", pageLoading: false } })
@@ -559,11 +596,53 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
    */
   const isCurrentConnection = (owner: RemoteTransport) => transport === owner
 
+  const cancelUpload = (reason = "Attachment upload cancelled. Files were not sent.") => {
+    if (!activeUpload) return
+    activeUpload.abort()
+    activeUpload = undefined
+    setState({ upload: undefined, uploadError: reason })
+  }
+
+  const prepareUploads = async (sessionID: string, files: readonly FileAttachmentInput[] | undefined, token: number) => {
+    if (!files?.some((file) => file.uri.startsWith("data:"))) return files
+    const owner = transport
+    if (!owner || state.transport.kind !== "open" || activeUpload) {
+      setState({ uploadError: activeUpload ? "Wait for the current attachment upload to finish." : "Connect to the machine before uploading attachments." })
+      return undefined
+    }
+    const controller = new AbortController()
+    activeUpload = controller
+    setState({ upload: { sessionID, name: files.find((file) => file.uri.startsWith("data:"))?.name ?? "Attachment", percent: 0 }, uploadError: undefined })
+    try {
+      const uploaded = await uploadAttachments({ sessionID, files, request: owner.request, signal: controller.signal,
+        onProgress: (name, percent) => { if (activeUpload === controller) setState({ upload: { sessionID, name, percent } }) } })
+      if (controller.signal.aborted || !isCurrentConnection(owner) || token !== selectionToken || state.activeSessionID !== sessionID)
+        throw new Error("Attachment upload lost its selected Session or connection. Files were not sent.")
+      return uploaded
+    } catch (cause) {
+      if (activeUpload === controller) setState({ uploadError: cause instanceof Error ? cause.message : "Attachment upload failed. Files were not sent." })
+      return undefined
+    } finally {
+      if (activeUpload === controller) { activeUpload = undefined; setState({ upload: undefined }) }
+    }
+  }
+
+  const requestFits = (operation: "session.prompt" | "session.command", sessionID: string, input: Readonly<Record<string, unknown>>, files: readonly FileAttachmentInput[] | undefined) => {
+    try {
+      assertRemoteRequestSize(operation, sessionID, { ...input, ...(files === undefined ? {} : { files: files.map((file) => file.uri.startsWith("data:") ? { ...file, uri: `ycoding-upload://${"x".repeat(36)}` } : file) }) })
+      return true
+    } catch (cause) {
+      setState({ uploadError: cause instanceof Error ? cause.message : "The remote message is too large to send." })
+      return false
+    }
+  }
+
   const handleStatus = (owner: RemoteTransport, status: RemoteTransportStatus) => {
     // A status from a replaced connection says nothing about the connection that
     // replaced it: it must not overwrite the live transport, clear the live
     // subscription, raise or end the live alerts, or report a rejected credential.
     if (!isCurrentConnection(owner)) return
+    if (status.kind === "closed" || status.kind === "reconnecting") cancelUpload("Attachment upload lost its machine connection. Files were not sent.")
     if (status.kind === "open") {
       cancelStatusReload?.()
       cancelStatusReload = undefined
@@ -700,6 +779,18 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     return next
   }
 
+  const loadTodos = async (owner: RemoteTransport, sessionID: string, token: number) => {
+    const read = { sessionID, live: undefined as readonly TodoView[] | undefined }
+    todoRead = read
+    setState({ todos: undefined })
+    try {
+      const outcome = await owner.request("session.todo.list", { sessionID, timeoutMs: 5_000 }).catch(() => undefined)
+      if (token !== selectionToken || !isCurrentConnection(owner) || state.activeSessionID !== sessionID || todoRead !== read) return
+      const loaded = outcome?.status === "ok" ? readTodos(typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined) : undefined
+      setState({ todos: read.live ?? loaded })
+    } finally { if (todoRead === read) todoRead = undefined }
+  }
+
   const loadSessionReads = async (sessionID: string, token: number, notice?: string) => {
     const active = transport
     if (!active) return
@@ -707,6 +798,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const requestsDuringRead = { sessionID, live: [] as { readonly event: unknown; readonly at: number }[] }
     fileChangeRead = pending
     requestReads.add(requestsDuringRead)
+    void loadTodos(active, sessionID, token)
     try {
       const [autonomy, permissions, guardrails, forms, changes] = await Promise.all([
         active.request("session.autonomy.get", { sessionID }),
@@ -1027,6 +1119,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
 
   const selectSession = async (sessionID: string) => {
+    if (activeUpload) cancelUpload("Attachment upload was cancelled by Session selection. Files were not sent.")
     const active = transport
     // One selection owns the view; a superseded selection never writes state again.
     const token = ++selectionToken
@@ -1037,7 +1130,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const rootID = info.parentID ?? sessionID
     setState({ activeSessionID: sessionID, selectedSessionInfo: info,
       view: createSessionView(sessionID), team: teamWatching ? { rootID, status: "loading", tasks: [], pageLoading: false } : undefined,
-      teamCues: [], notice: undefined })
+      teamCues: [], todos: undefined, notice: undefined })
     if (!active) {
       selectionFailedToken = token
       if (teamWatching) setState({ team: { rootID, status: "error", tasks: [], pageLoading: false } })
@@ -1153,12 +1246,17 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         setState({ sessionCreation: { ...attempt, status: "unknown", message: "The returned session does not match this workspace. Check Sessions before retrying." } })
         return undefined
       }
-      setState({ sessionCreation: undefined })
       await api.selectSession(session.id)
       if (attempt.prompt !== undefined) {
-        if ("command" in attempt.prompt) await api.runCommand({ ...attempt.prompt, delivery: "steer" })
-        if ("text" in attempt.prompt) await api.sendPrompt({ ...attempt.prompt, delivery: "steer" })
+        const sent = "command" in attempt.prompt
+          ? await api.runCommand({ ...attempt.prompt, delivery: "steer" })
+          : await api.sendPrompt({ ...attempt.prompt, delivery: "steer" })
+        if (sent === false) {
+          setState({ sessionCreation: { ...attempt, status: "failed", message: state.uploadError ?? "The first message could not be sent. Retry to submit it to this Session." } })
+          return undefined
+        }
       }
+      setState({ sessionCreation: undefined })
       return session.id
     }
     if (reconcile) {
@@ -1330,7 +1428,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       sessionsToken += 1
       workspacesToken += 1
       setState({ activeDeviceID: deviceID, sessions: [], sessionStatus: undefined, advertised: [], activeSessionID: undefined, view: undefined, notice: undefined, drafts,
-        team: undefined, teamCues: [],
+        team: undefined, teamCues: [], todos: undefined,
         sessionGroups: [], selectedWorkspaceID: undefined, selectedSessionInfo: undefined, sessionQuery: "", sessionFilter: "all",
         sessionListStatus: "idle", sessionPageLoading: false, sessionHasNext: false, sessionHasPrevious: false,
         workspaces: [], workspaceStatus: "idle", workspaceError: undefined,
@@ -1361,6 +1459,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       created.connect()
     },
     disconnect: () => {
+      cancelUpload("Attachment upload was cancelled by disconnection. Files were not sent.")
       // The device choice the account reads describe ends here, so a read that is
       // still in flight cannot reconnect a device the user has dropped.
       accountToken += 1
@@ -1395,7 +1494,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         sessionCreation: undefined,
         activeSessionID: undefined,
         view: undefined,
-        team: undefined,
+        team: undefined, todos: undefined,
         teamCues: [],
         connection: state.owner === undefined ? { kind: "signed-out" } : deviceConnection(state.devices.length),
       })
@@ -1610,15 +1709,18 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const text = input.text.trim()
       if (sessionID === undefined) {
         setState({ notice: "Select a session before sending a prompt." })
-        return
+        return false
       }
-      if (text.length === 0 && !input.files?.length && !input.agents?.length && !input.skills?.length) return
-      if (!await prepareSelection(sessionID, token, input) || token !== selectionToken || state.activeSessionID !== sessionID) return
+      if (text.length === 0 && !input.files?.length && !input.agents?.length && !input.skills?.length) return false
+      if (!requestFits("session.prompt", sessionID, { text, delivery: input.delivery, agents: input.agents }, input.files)) return false
+      const files = await prepareUploads(sessionID, input.files, token)
+      if (input.files !== undefined && files === undefined) return false
+      if (!await prepareSelection(sessionID, token, input) || token !== selectionToken || state.activeSessionID !== sessionID) return false
       for (const skill of input.skills ?? []) {
         const id = createMessageID()
         const outcome = await request({ id, kind: "skill", label: `Load ${skill}`, state: "sending", sessionID,
           operation: "session.skill", input: { id, skill, resume: false } }, { sessionID })
-        if (outcome.status !== "ok" || token !== selectionToken || state.activeSessionID !== sessionID) return
+        if (outcome.status !== "ok" || token !== selectionToken || state.activeSessionID !== sessionID) return false
       }
       const messageID = createMessageID()
       const view = state.view ?? createSessionView(sessionID)
@@ -1642,13 +1744,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
             sessionID,
             operation: "session.prompt",
             input: { id: messageID, text, delivery: input.delivery,
-              ...(input.files === undefined ? {} : { files: input.files }), ...(input.agents === undefined ? {} : { agents: input.agents }),
+              ...(input.files === undefined ? {} : { files }), ...(input.agents === undefined ? {} : { agents: input.agents }),
               ...(input.skills?.length ? { resume: false } : {}) },
           },
         ],
       })
       const promptInput = { id: messageID, text, delivery: input.delivery,
-        ...(input.files === undefined ? {} : { files: input.files }), ...(input.agents === undefined ? {} : { agents: input.agents }),
+        ...(input.files === undefined ? {} : { files }), ...(input.agents === undefined ? {} : { agents: input.agents }),
         ...(input.skills?.length ? { resume: false } : {}) }
       const outcome = await request(
         {
@@ -1662,22 +1764,28 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         },
         { sessionID },
       )
-      if (!input.skills?.length || outcome.status !== "ok" || token !== selectionToken || state.activeSessionID !== sessionID) return
+      if (!input.skills?.length || outcome.status !== "ok" || token !== selectionToken || state.activeSessionID !== sessionID) return true
       await request({ id: messageID, kind: "prompt", label: "Wake prompt", state: "sending", sessionID,
         operation: "session.prompt", input: { ...promptInput, resume: true } }, { sessionID })
+      return true
     },
     runCommand: async (input) => {
       const sessionID = state.activeSessionID
       const token = selectionToken
-      if (sessionID === undefined || !input.command.trim()) return
-      if (!await prepareSelection(sessionID, token, input) || token !== selectionToken || state.activeSessionID !== sessionID) return
+      if (sessionID === undefined || !input.command.trim()) return false
+      if (!requestFits("session.command", sessionID, { command: input.command, arguments: input.arguments, delivery: input.delivery, agents: input.agents }, input.files)) return false
+      const files = await prepareUploads(sessionID, input.files, token)
+      if (input.files !== undefined && files === undefined) return false
+      if (!await prepareSelection(sessionID, token, input) || token !== selectionToken || state.activeSessionID !== sessionID) return false
       const id = createMessageID()
       await request({ id, kind: "command", label: `/${input.command}`, state: "sending", sessionID, operation: "session.command",
         input: { id, command: input.command, delivery: input.delivery,
           ...(input.arguments === undefined ? {} : { arguments: input.arguments }),
-          ...(input.files === undefined ? {} : { files: input.files }), ...(input.agents === undefined ? {} : { agents: input.agents }) },
+          ...(input.files === undefined ? {} : { files }), ...(input.agents === undefined ? {} : { agents: input.agents }) },
       }, { sessionID })
+      return true
     },
+    cancelUpload: () => cancelUpload(),
     retryMutation: async (id) => {
       const mutation = state.mutations.find((entry) => entry.id === id)
       if (!mutation) return
@@ -1835,6 +1943,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       setState({ view: { ...view, autonomy } })
     },
     dispose: () => {
+      cancelUpload("Attachment upload was cancelled by workspace disposal. Files were not sent.")
       clearCatalogs()
       clearUsage()
       teamWatching = false

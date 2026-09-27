@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { optionsForTrigger, applyMention, reconcileMentions, submission, triggerAt, identityLabel } from "./composer-logic"
+import { optionsForTrigger, applyMention, reconcileMentions, submission, triggerAt, orderedVariants } from "./composer-logic"
 import type { CatalogView } from "../catalog"
 
 const catalog: CatalogView = {
@@ -14,6 +14,14 @@ const catalog: CatalogView = {
 }
 
 describe("composer input semantics", () => {
+  test("orders reasoning stops by intensity while retaining unknown catalog order", () => {
+    expect(orderedVariants(["max", "custom-b", "low", "xhigh", "none", "custom-a", "medium", "minimal", "high"])).toEqual(["none", "minimal", "low", "medium", "high", "xhigh", "max", "custom-b", "custom-a"])
+  })
+  test("returns the full ranked catalog for bare skill and command triggers", () => {
+    const large = { ...catalog, skills: Array.from({ length: 63 }, (_, index) => ({ id: `skill-${index}`, name: `Skill ${index}`, slash: true })), commands: Array.from({ length: 24 }, (_, index) => ({ name: `command-${index}` })) }
+    expect(optionsForTrigger("$", "", large, [])).toHaveLength(63)
+    expect(optionsForTrigger("/", "", large, [])).toHaveLength(87)
+  })
   test("detects a trigger adjacent to the caret without matching prose or later text", () => {
     expect(triggerAt("/pla", 4)).toEqual({ trigger: "/", start: 0, query: "pla" })
     expect(triggerAt("hello @rev later", 10)).toEqual({ trigger: "@", start: 6, query: "rev" })
@@ -51,7 +59,4 @@ describe("composer input semantics", () => {
     expect(submission("/unknown", [], catalog, "steer").kind).toBe("prompt")
   })
 
-  test("shows pending agent and model identity relative to current session", () => {
-    expect(identityLabel("GSD", "gsd", { providerID: "openai", id: "gpt", variant: "high" }, { providerID: "openai", id: "gpt", variant: "medium" }, catalog.models)).toBe("GSD · → openai/Gpt · medium")
-  })
 })

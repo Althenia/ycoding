@@ -1,7 +1,7 @@
 /**
  * Remote workspace: application frame, header rows, session rail, transcript, tool
- * and shell cards, request cards, activity and approvals queue, composer, compact
- * navigation, and settings.
+ * and shell cards, request cards, activity and approvals queue, compact navigation,
+ * and settings. The composer's own styles live in `remote/ui/composer.css`.
  *
  * Every class here is the interface the remote components author against. Geometry
  * that must not move with state — the status strip, bar row, and composer — keeps a
@@ -20,10 +20,6 @@
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   block-size: 100dvh;
   overflow: hidden;
-  /* Terminal geometry: every workspace component draws near-square corners. */
-  --yc-radius-sm: 2px;
-  --yc-radius-md: 4px;
-  --yc-radius-lg: 6px;
   /* The selected conversation reads as one centered column. */
   --remote-column: 880px;
 }
@@ -44,12 +40,9 @@ body:has(.app) {
 
 /* --- sign-in ------------------------------------------------------------
    A signed-out browser sees one centered panel with the OAuth providers. It shares
-   the workspace's terminal geometry but none of its chrome. */
+   the workspace's geometry but none of its chrome. */
 
 .sign-in {
-  --yc-radius-sm: 2px;
-  --yc-radius-md: 4px;
-  --yc-radius-lg: 6px;
   display: grid;
   place-items: center;
   min-block-size: 100dvh;
@@ -295,6 +288,7 @@ body:has(.app) {
 }
 
 .workspace__main {
+  position: relative;
   min-inline-size: 0;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
@@ -1142,31 +1136,6 @@ body:has(.app) {
   color: var(--yc-text-muted);
 }
 
-/* --- composer ----------------------------------------------------------- */
-
-.composer {
-  border-block-start: var(--yc-border-width) solid var(--yc-border);
-  background: var(--yc-bg);
-  padding: var(--yc-space-3) var(--yc-gutter);
-  padding-block-end: max(var(--yc-space-3), env(safe-area-inset-bottom));
-}
-
-/* The composer is one terminal box at every width: the field spans the box and a
-   footer bar holds delivery on the start edge and the actions on the end edge, so a
-   narrow screen never trades field width for controls. Focus moves to the box. */
-.composer__row {
-  display: flex;
-  flex-direction: column;
-  border: var(--yc-border-width) solid var(--yc-border-strong);
-  border-radius: var(--yc-radius-md);
-  background: var(--yc-surface-raised);
-}
-
-.composer__row:has(.composer__input:focus-visible) {
-  border-color: var(--yc-focus);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--yc-focus) 24%, transparent);
-}
-
 /* --- screen compositions ---------------------------------------------- */
 
 .app--sessions .workspace__main,
@@ -1784,92 +1753,6 @@ body:has(.app) {
   }
 }
 
-.composer__field {
-  flex: 1;
-  min-inline-size: 0;
-}
-
-.composer__input {
-  inline-size: 100%;
-  min-block-size: 52px;
-  max-block-size: 180px;
-  field-sizing: content;
-  resize: none;
-}
-
-.composer__input,
-.composer__input:hover,
-.composer__input:focus-visible {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.composer__controls {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--yc-space-2);
-  padding: var(--yc-space-2);
-  border-block-start: var(--yc-border-width) solid var(--yc-border);
-  background: var(--yc-surface-sunken);
-}
-
-.composer__delivery {
-  flex: none;
-  margin-inline-end: auto;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  inline-size: 152px;
-  border: var(--yc-border-width) solid var(--yc-border-strong);
-  border-radius: var(--yc-radius-md);
-  overflow: hidden;
-}
-
-.composer__delivery-option {
-  min-block-size: var(--yc-control-h-dense);
-  padding-inline: var(--yc-space-2);
-  border: 0;
-  background: var(--yc-surface-raised);
-  color: var(--yc-text-muted);
-  font-family: var(--yc-font-mono);
-  font-size: var(--yc-size-xs);
-  cursor: pointer;
-}
-
-/* Footer actions are dense on a fine pointer; the dense token restores 44px on touch. */
-.composer__controls .button--icon {
-  inline-size: var(--yc-control-h-dense);
-  min-block-size: var(--yc-control-h-dense);
-}
-
-.composer__delivery-option + .composer__delivery-option {
-  border-inline-start: var(--yc-border-width) solid var(--yc-border);
-}
-
-.composer__delivery-option--active {
-  background: var(--yc-green-soft);
-  color: var(--yc-green-strong);
-  font-weight: var(--yc-weight-semibold);
-}
-
-.composer__note {
-  font-size: var(--yc-size-2xs);
-  color: var(--yc-text-subtle);
-  margin-block-start: var(--yc-space-2);
-}
-
-@media (max-width: 479px) {
-  .composer__input {
-    min-block-size: var(--yc-hit-min);
-  }
-
-  .composer__controls {
-    padding: var(--yc-space-1);
-  }
-}
-
 .mutation {
   display: flex;
   flex-wrap: wrap;
@@ -2373,217 +2256,8 @@ body:has(.app) {
   inset-inline-end: -4px;
 }
 
-.notification-center {
-  position: relative;
-}
-
-.notification-center__trigger {
-  position: relative;
-}
-
-.notification-center__badge {
-  position: absolute;
-  inset-block-start: 2px;
-  inset-inline-end: 2px;
-  display: grid;
-  place-items: center;
-  min-inline-size: 18px;
-  block-size: 18px;
-  padding-inline: 4px;
-  border-radius: var(--yc-radius-pill);
-  background: var(--yc-yellow-strong);
-  color: var(--yc-bg);
-  font-family: var(--yc-font-mono);
-  font-size: var(--yc-size-2xs);
-  font-weight: var(--yc-weight-bold);
-  line-height: 1;
-}
-
-.notification-panel {
-  position: fixed;
-  z-index: var(--yc-z-overlay);
-  inset-block-start: calc(var(--yc-header-h) + var(--yc-space-2));
-  inset-inline: var(--yc-space-2);
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  max-block-size: min(70dvh, 560px);
-  border: var(--yc-border-width) solid var(--yc-border);
-  border-radius: var(--yc-radius-lg);
-  background: var(--yc-surface-raised);
-  box-shadow: var(--yc-shadow-lg);
-  overflow: hidden;
-}
-
-.notification-panel__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--yc-space-2);
-  padding: var(--yc-space-3) var(--yc-space-4);
-  border-block-end: var(--yc-border-width) solid var(--yc-border);
-}
-
-.notification-panel__title {
-  margin: 0;
-  font-size: var(--yc-size-sm);
-  font-weight: var(--yc-weight-semibold);
-}
-
-.notification-panel__empty {
-  margin: 0;
-  padding: var(--yc-space-5) var(--yc-space-4);
-  color: var(--yc-text-muted);
-  font-size: var(--yc-size-sm);
-}
-
-.notification-panel__list {
-  margin: 0;
-  padding: var(--yc-space-1);
-  overflow-y: auto;
-  list-style: none;
-  overscroll-behavior: contain;
-}
-
-.notification-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  border-radius: var(--yc-radius-md);
-}
-
-.notification-item + .notification-item {
-  margin-block-start: 2px;
-}
-
-.notification-item__open {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
-  gap: var(--yc-space-3);
-  min-block-size: var(--yc-hit-min);
-  padding: var(--yc-space-2) var(--yc-space-3);
-  border: 0;
-  border-radius: var(--yc-radius-md);
-  background: transparent;
-  color: var(--yc-text);
-  font: inherit;
-  text-align: start;
-  cursor: pointer;
-  transition: background-color var(--yc-dur-quick) var(--yc-ease-standard);
-}
-
-.notification-item__open:disabled {
-  cursor: default;
-}
-
-.notification-item__open:hover:not(:disabled) {
-  background: var(--yc-surface-sunken);
-}
-
-.notification-item__open:focus-visible {
-  outline: none;
-  box-shadow: var(--yc-focus-ring);
-}
-
-.notification-item__icon {
-  display: grid;
-  place-items: center;
-  inline-size: 28px;
-  block-size: 28px;
-  border-radius: var(--yc-radius-pill);
-  background: var(--yc-surface-sunken);
-  color: var(--yc-text-muted);
-}
-
-.notification-item--approval-requested .notification-item__icon {
-  background: var(--yc-yellow-soft);
-  color: var(--yc-yellow-strong);
-}
-
-.notification-item--agent-completed .notification-item__icon {
-  background: var(--yc-green-soft);
-  color: var(--yc-green-strong);
-}
-
-.notification-item--error .notification-item__icon,
-.notification-item--guardrail-blocked .notification-item__icon {
-  background: var(--yc-danger-soft);
-  color: var(--yc-danger);
-}
-
-.notification-item__body {
-  display: grid;
-  gap: 2px;
-  min-inline-size: 0;
-}
-
-.notification-item__title {
-  font-size: var(--yc-size-sm);
-  font-weight: var(--yc-weight-semibold);
-}
-
-.notification-item__detail {
-  overflow: hidden;
-  color: var(--yc-text-muted);
-  font-size: var(--yc-size-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.notification-item__time {
-  color: var(--yc-text-subtle);
-  font-family: var(--yc-font-mono);
-  font-size: var(--yc-size-2xs);
-  white-space: nowrap;
-}
-
-.notification-item__dismiss {
-  align-self: center;
-}
-
-@media (min-width: 768px) {
-  .notification-panel {
-    position: absolute;
-    inset-block-start: calc(100% + var(--yc-space-2));
-    inset-inline: auto 0;
-    inline-size: 380px;
-  }
-}
-
 @media (prefers-reduced-motion: no-preference) {
   .live-dot {
     animation: yc-pulse 1.6s var(--yc-ease-standard) infinite;
-  }
-
-  .notification-panel {
-    animation: yc-sheet-in var(--yc-dur-base) var(--yc-ease-entrance) both;
-  }
-
-  .notification-center__trigger--unread svg {
-    animation: yc-bell-ring 1.2s var(--yc-ease-standard) 1;
-    transform-origin: 50% 10%;
-  }
-}
-
-@keyframes yc-bell-ring {
-  0%,
-  100% {
-    rotate: 0deg;
-  }
-
-  20% {
-    rotate: 14deg;
-  }
-
-  40% {
-    rotate: -12deg;
-  }
-
-  60% {
-    rotate: 8deg;
-  }
-
-  80% {
-    rotate: -4deg;
   }
 }

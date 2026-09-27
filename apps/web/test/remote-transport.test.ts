@@ -1,9 +1,30 @@
 import { describe, expect, test } from "bun:test"
 import { RemoteLimits, serializeResponse } from "@ycoding-ai/remote"
-import { createRemoteTransport, type RemoteTransportStatus } from "../src/remote/transport"
+import { clientFrameDelay, createRemoteTransport, type RemoteTransportStatus } from "../src/remote/transport"
 import { startRelayDouble, waitFor } from "./relay-double"
 
 describe("remote transport integration", () => {
+  test("paced requests and heartbeats stay inside the relay's fixed window under arrival jitter", () => {
+    const sentAt: number[] = []
+    const arrivals: { readonly at: number; readonly kind: "request" | "ping" }[] = []
+    let now = 0
+    for (let index = 0; index < 90; index++) {
+      now += clientFrameDelay(sentAt, now)
+      sentAt.push(now)
+      arrivals.push({ at: now + (index === 0 ? 400 : 0), kind: index % 17 === 0 ? "ping" : "request" })
+      now += 1
+    }
+    let windowStart = -1
+    let count = 0
+    let maximum = 0
+    for (const frame of arrivals.toSorted((left, right) => left.at - right.at)) {
+      if (windowStart < 0 || frame.at - windowStart >= RemoteLimits.clientRateWindowMs) { windowStart = frame.at; count = 0 }
+      count++
+      maximum = Math.max(maximum, count)
+    }
+    expect(arrivals.some((frame) => frame.kind === "ping")).toBe(true)
+    expect(maximum).toBeLessThanOrEqual(RemoteLimits.maxClientRequestsPerWindow)
+  })
   test("reports the session advertisement and round-trips a request", async () => {
     const relay = await startRelayDouble({ advertisedSessions: ["ses_a"] })
     let invalidations = 0

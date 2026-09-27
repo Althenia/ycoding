@@ -38,6 +38,22 @@ test("hydrates directly into unique home work spots and same destination status 
   expect(frame(director, first.id).position).toEqual(initial.position)
 })
 
+test("a running root leaves the lounge for its reserved CEO desk, including while thinking", () => {
+  const layout = officeLayout()
+  const director = new OfficeDirector(layout)
+  const root = actor("root", { kind: "session", homeRoom: "ceo", status: "idle" })
+  director.sync(snapshot([root]))
+  expect(frame(director, root.id).room).toBe("lounge")
+  for (const status of ["working", "thinking"] as const) {
+    director.sync(snapshot([{ ...root, status, bubble: status === "thinking" ? "Thinking" : "Working" }]))
+    for (let step = 0; step < 500 && frame(director, root.id).moving; step++) run(director)
+    const current = frame(director, root.id)
+    expect(current.room).toBe("ceo")
+    expect(current.position).toEqual(center(layout.work.ceo[0]!.cell))
+    expect(current.actor.bubble).toBe(status === "thinking" ? "Thinking" : "Working")
+  }
+})
+
 test("work and lounge transitions route on walkable cells and return to the reserved work spot", () => {
   const layout = officeLayout()
   const director = new OfficeDirector(layout)

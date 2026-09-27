@@ -15,7 +15,6 @@ import {
   type RemoteMessageView,
   type SessionView,
 } from "../projection"
-import type { NotificationCategory } from "../preferences"
 import type { SessionInfoView } from "../store"
 import type { RemoteTransportStatus } from "../transport"
 import {
@@ -53,8 +52,10 @@ import {
   OfficeSettings,
   moveRadio,
 } from "./settings"
-import { ActivityRow, MessageRow, RequestCard } from "./conversation"
-import { SessionStatusBar } from "./status-bar"
+import { ActivityRow, RequestCard } from "./conversation"
+import { TranscriptNavigation } from "./transcript-nav"
+import { NotificationCenter, NotificationToasts } from "./notifications"
+import { TodoPanel } from "./todo-panel"
 
 const views = ["/remote", "/remote/sessions", "/remote/activity", "/remote/usage", "/remote/settings"] as const
 
@@ -209,22 +210,26 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
               </Show>
             </div>
             <Show when={composition().showComposer && !officeShown() && !newSessionOpen()}>
-              <SessionStatusBar />
-              <Composer
-                sessionID={state().activeSessionID}
-                running={state().view?.status === "running"}
-                canSend={
-                  state().transport.kind === "open" &&
-                  state().connection.kind !== "offline" &&
-                  state().activeSessionID !== undefined
-                }
-              />
+              <>
+                <TodoPanel todos={state().todos} />
+                <Composer
+                  sessionID={state().activeSessionID}
+                  running={state().view?.status === "running"}
+                  canSend={
+                    state().transport.kind === "open" &&
+                    state().connection.kind !== "offline" &&
+                    state().activeSessionID !== undefined
+                  }
+                />
+              </>
             </Show>
           </main>
 
         </div>
 
         <BottomNav view={view} />
+
+        <NotificationToasts onOpenSession={openSession} />
 
         <Show when={navOpen()}>
           <Modal class="overlay--slideover" label="Sessions" onClose={() => setNavOpen(false)}>
@@ -610,126 +615,6 @@ function AttentionMark(props: { readonly show: boolean }): JSX.Element {
     <Show when={props.show}>
       <span class="attention-dot" aria-hidden="true" />
     </Show>
-  )
-}
-
-const notificationKinds: Record<NotificationCategory, { readonly icon: IconName; readonly label: string }> = {
-  "agent-completed": { icon: "check", label: "Stopped running" },
-  "approval-requested": { icon: "shield", label: "Waiting for your decision" },
-  "guardrail-blocked": { icon: "alert", label: "Guardrail review" },
-  error: { icon: "alert", label: "Step failed" },
-  "device-disconnected": { icon: "devices", label: "Machine disconnected" },
-}
-
-export function notificationAge(at: number, now: number): string {
-  const minutes = Math.floor((now - at) / 60_000)
-  if (minutes < 1) return "now"
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h`
-  return new Date(at).toLocaleDateString()
-}
-
-function NotificationCenter(props: { readonly onOpenSession: (sessionID: string) => void }): JSX.Element {
-  const remote = useRemote()
-  const [open, setOpen] = createSignal(false)
-  const notifications = () => remote.state().notifications
-  const unread = () => notifications().filter((notification) => !notification.read).length
-  let root: HTMLDivElement | undefined
-  let trigger: HTMLButtonElement | undefined
-  const close = (restoreFocus: boolean) => {
-    setOpen(false)
-    if (restoreFocus) trigger?.focus()
-  }
-  const toggle = () => {
-    if (open()) return close(false)
-    setOpen(true)
-    remote.store.markNotificationsRead()
-  }
-  const pointer = (event: PointerEvent) => {
-    if (open() && event.target instanceof Node && !root?.contains(event.target)) close(false)
-  }
-  const key = (event: KeyboardEvent) => {
-    if (event.key === "Escape" && open()) close(true)
-  }
-  document.addEventListener("pointerdown", pointer)
-  document.addEventListener("keydown", key)
-  onCleanup(() => {
-    document.removeEventListener("pointerdown", pointer)
-    document.removeEventListener("keydown", key)
-  })
-  return (
-    <div class="notification-center" ref={root}>
-      <button
-        ref={trigger}
-        type="button"
-        class={`button button--ghost button--icon notification-center__trigger${unread() > 0 ? " notification-center__trigger--unread" : ""}`}
-        aria-label={unread() > 0 ? `Notifications, ${unread()} unread` : "Notifications"}
-        aria-expanded={open()}
-        aria-controls="notification-panel"
-        onClick={toggle}
-      >
-        <Icon name="bell" />
-        <Show when={unread() > 0}>
-          <span class="notification-center__badge" aria-hidden="true">{unread() > 9 ? "9+" : unread()}</span>
-        </Show>
-      </button>
-      <Show when={open()}>
-        <section id="notification-panel" class="notification-panel" aria-label="Notifications">
-          <header class="notification-panel__head">
-            <h2 class="notification-panel__title">Notifications</h2>
-            <Show when={notifications().length > 0}>
-              <button type="button" class="button button--ghost button--small" onClick={() => remote.store.clearNotifications()}>
-                Clear all
-              </button>
-            </Show>
-          </header>
-          <Show
-            when={notifications().length > 0}
-            fallback={<p class="notification-panel__empty">Approvals, questions, finished work, and failures appear here.</p>}
-          >
-            <ul class="notification-panel__list">
-              <For each={notifications()}>
-                {(notification) => (
-                  <li class={`notification-item notification-item--${notification.category}`}>
-                    <button
-                      type="button"
-                      class="notification-item__open"
-                      disabled={notification.sessionID === undefined}
-                      onClick={() => {
-                        const sessionID = notification.sessionID
-                        if (sessionID === undefined) return
-                        close(false)
-                        props.onOpenSession(sessionID)
-                      }}
-                    >
-                      <span class="notification-item__icon" aria-hidden="true">
-                        <Icon name={notificationKinds[notification.category].icon} size={16} />
-                      </span>
-                      <span class="notification-item__body">
-                        <span class="notification-item__title">{notificationKinds[notification.category].label}</span>
-                        <span class="notification-item__detail">{notification.sessionTitle ?? notification.body}</span>
-                      </span>
-                      <time class="notification-item__time" datetime={new Date(notification.at).toISOString()}>
-                        {notificationAge(notification.at, Date.now())}
-                      </time>
-                    </button>
-                    <button
-                      type="button"
-                      class="button button--ghost button--icon notification-item__dismiss"
-                      aria-label={`Dismiss ${notificationKinds[notification.category].label}`}
-                      onClick={() => remote.store.dismissNotification(notification.id)}
-                    >
-                      <Icon name="close" size={14} />
-                    </button>
-                  </li>
-                )}
-              </For>
-            </ul>
-          </Show>
-        </section>
-      </Show>
-    </div>
   )
 }
 
@@ -1121,7 +1006,7 @@ function ConversationView(props: {
             </div>
           }
         >
-          <Transcript messages={messages} />
+          <TranscriptNavigation messages={messages} />
         </Show>
         <Show when={requests().length > 0}>
           <div id="pending-requests" class="requests" tabindex="-1" aria-label="Pending requests">
@@ -1206,17 +1091,6 @@ function OfficePresentation(props: { readonly office: OfficeSettingsStore }): JS
  * so the row identity comes from the message ID alone: that is what keeps an open tool
  * body, an expanded output page, and the focus of the control that opened it.
  */
-function Transcript(props: { readonly messages: () => readonly RemoteMessageView[] }): JSX.Element {
-  const ids = createMemo(() => props.messages().map((message) => message.id))
-  // A live ID was produced by this same list, so it always resolves to a message.
-  const message = (id: string) => props.messages().find((entry) => entry.id === id)!
-  return (
-    <ol class="transcript">
-      <For each={ids()}>{(id) => <MessageRow message={() => message(id)} />}</For>
-    </ol>
-  )
-}
-
 /** Request cards keyed by request ID, so a reply draft survives a projection update. */
 function RequestCards(props: {
   readonly requests: () => readonly PendingRequestView[]

@@ -173,7 +173,7 @@ function statusFor(connection: OfficeInput["connection"], selected: SelectedSess
   if (selected.requestCount > 0) return "attention"
   if (selected.status === "failed") return "failed"
   if (selected.status === "interrupted") return "interrupted"
-  if (selected.status === "idle") return "idle"
+  if (selected.status === "idle" && running !== true) return "idle"
   if (selected.compacting) return "compacting"
   if (selected.activeTool) return "tool"
   if (selected.thinking) return "thinking"

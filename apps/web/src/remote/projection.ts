@@ -125,6 +125,7 @@ export type RemoteMessageView =
       readonly text: string
       readonly description?: string
       readonly source?: string
+      readonly metadata?: Readonly<Record<string, unknown>>
       readonly created: number
     }
   | {
@@ -353,6 +354,28 @@ export function toolTone(part: Extract<AssistantPart, { kind: "tool" }>): "succe
   if (part.status === "completed") return "success"
   if (part.status === "streaming" || part.status === "running") return "running"
   return /abort|cancel|interrupt|kill/i.test(part.error ?? "") ? "attention" : "error"
+}
+
+export function classifySyntheticNotice(message: RemoteMessageView):
+  | { readonly kind: "subagent"; readonly label: string; readonly status: "completed" | "failed" | "waiting" | "updated"; readonly excerpt?: string }
+  | { readonly kind: "completion"; readonly label: string; readonly status: string; readonly description: string }
+  | { readonly kind: "goal"; readonly text: string }
+  | undefined {
+  if (message.kind !== "synthetic") return undefined
+  const metadata = message.metadata
+  if (metadata?.source === "subagent_notification") {
+    const type = metadata.type
+    const status = type === "completed" || type === "failed" || type === "waiting" ? type : "updated"
+    const label = typeof metadata.agent === "string" ? metadata.agent : typeof metadata.childID === "string" ? metadata.childID : "Subagent"
+    return { kind: "subagent", label, status, ...(typeof metadata.excerpt === "string" && metadata.excerpt.trim() ? { excerpt: metadata.excerpt } : {}) }
+  }
+  if (metadata?.source === "subagent" || metadata?.source === "shell") {
+    const label = metadata.source === "shell" ? "Shell" : typeof metadata.agent === "string" ? metadata.agent : "Subagent"
+    const status = metadata.state === "completed" ? "finished" : metadata.state === "error" ? "failed" : metadata.state === "cancelled" ? "cancelled" : typeof metadata.state === "string" ? metadata.state : "finished"
+    return { kind: "completion", label, status, description: message.description ?? "" }
+  }
+  if (isRecord(metadata?.autonomy) && metadata.autonomy.goal === true) return { kind: "goal", text: message.text }
+  return undefined
 }
 
 export function noticeSummary(source: string | undefined, text: string): string | undefined {
@@ -797,6 +820,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         id: event.id ?? `synthetic_${view.messages.length}`,
         text: stringField(data.text) ?? "",
         ...(stringField(data.description) === undefined ? {} : { description: stringField(data.description) }),
+        ...(recordField(data.metadata) === undefined ? {} : { metadata: recordField(data.metadata) }),
         ...(isRecord(data.metadata) && stringField(data.metadata.contextSource) ? { source: stringField(data.metadata.contextSource) } : {}),
         created: now,
       })
@@ -1042,6 +1066,19 @@ function applyAdmitted(view: SessionView, data: Record<string, unknown>, now: nu
   // `session.input.admitted` carries `SessionPending.Message`: `{ type, data, delivery }`.
   const pending = isRecord(data.input) ? data.input : {}
   const payload = isRecord(pending.data) ? pending.data : pending
+  if (pending.type === "synthetic") {
+    const metadata = recordField(payload.metadata)
+    const message: RemoteMessageView = {
+      kind: "synthetic",
+      id,
+      text: stringField(payload.text) ?? "",
+      ...(stringField(payload.description) ? { description: stringField(payload.description) } : {}),
+      ...(metadata === undefined ? {} : { metadata }),
+      ...(metadata && stringField(metadata.contextSource) ? { source: stringField(metadata.contextSource) } : {}),
+      created: existing?.kind === "synthetic" ? existing.created : now,
+    }
+    return existing ? replaceMessage(view, message) : pushMessage(view, message)
+  }
   const text = stringField(payload.text) ?? (existing?.kind === "user" ? existing.text : "")
   const message: RemoteMessageView = {
     kind: "user",
@@ -1321,7 +1358,7 @@ function readSnapshotMessage(value: unknown): RemoteMessageView | undefined {
   if (type === "synthetic") {
     const description = stringField(value.description)
     const metadata = recordField(value.metadata)
-    return { kind: "synthetic", id, text: stringField(value.text) ?? "", ...(description === undefined ? {} : { description }), ...(metadata && stringField(metadata.contextSource) ? { source: stringField(metadata.contextSource) } : {}), created }
+    return { kind: "synthetic", id, text: stringField(value.text) ?? "", ...(description === undefined ? {} : { description }), ...(metadata === undefined ? {} : { metadata }), ...(metadata && stringField(metadata.contextSource) ? { source: stringField(metadata.contextSource) } : {}), created }
   }
   if (type === "agent-switched") {
     return { kind: "notice", id, notice: "agent-switched", text: `Agent: ${stringField(value.agent) ?? "unknown"}`, created }

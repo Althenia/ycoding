@@ -406,7 +406,7 @@ describe("remote shell layout", () => {
           height:composer?.getBoundingClientRect().height ?? 0,
           input:composer?.querySelector('.composer__input')?.getBoundingClientRect().height ?? 0,
           actions:[...composer?.querySelectorAll('button') ?? []].map(button=>({label:button.getAttribute('aria-label') ?? button.textContent.trim(),height:button.getBoundingClientRect().height})),
-          messages:document.querySelectorAll('.transcript > .transcript-message').length,
+          messages:document.querySelectorAll('.transcript > .transcript-navigation__item > .transcript-message').length,
           overflow:document.documentElement.scrollWidth > innerWidth,
         };
       })()`)
@@ -418,8 +418,8 @@ describe("remote shell layout", () => {
       expect(state.overflow).toBe(false)
       await page.setCoarsePointer(true)
       expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.composer button')].every(button => button.getBoundingClientRect().height >= 44)`)).toBe(true)
-      await page.evaluate(`document.querySelector('.composer__delivery-option:nth-child(2)')?.click()`)
-      expect(await page.evaluate<boolean>(`document.querySelector('.composer__delivery-option:nth-child(2)')?.getAttribute('aria-pressed') === 'true'`)).toBe(true)
+      await page.evaluate(`document.querySelector('.composer__delivery-toggle')?.click()`)
+      expect(await page.evaluate<string | null>(`document.querySelector('.composer__delivery-toggle')?.getAttribute('aria-pressed') ?? null`)).toBe("true")
       await page.close()
     }
   }, 30_000)
@@ -468,7 +468,7 @@ describe("remote shell layout", () => {
         const conversation = await fixture("scenario=conversation-tool-terminal-output-390", width, "Run sanity checks on worker threads.", theme, 901)
         const conversationState = await conversation.evaluate<{ readonly overflow: boolean; readonly messages: number; readonly input: number; readonly inputWidth: number; readonly send: number }>(`(() => ({
           overflow:document.documentElement.scrollWidth > innerWidth,
-          messages:document.querySelectorAll('.transcript > .transcript-message').length,
+          messages:document.querySelectorAll('.transcript > .transcript-navigation__item > .transcript-message').length,
           input:document.querySelector('.composer__input')?.getBoundingClientRect().height ?? 0,
           inputWidth:document.querySelector('.composer__input')?.getBoundingClientRect().width ?? 0,
           send:document.querySelector('[aria-label="Send prompt"]')?.getBoundingClientRect().height ?? 0,

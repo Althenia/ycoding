@@ -40,6 +40,13 @@ function office(team: TeamInput | undefined, patch: Partial<OfficeInput> = {}) {
 const actorID = (sessionID: string) => JSON.stringify(["dev_1", sessionID])
 
 describe("office team projection", () => {
+  test("retains the same member ids across ready refresh inputs", () => {
+    const members = [member("ses_child", "running"), member("ses_new", "running")]
+    const first = office(ready(members))
+    const refreshed = office(ready(members.map((item) => ({ ...item }))))
+    expect(refreshed.actors.map((actor) => actor.id)).toEqual(first.actors.map((actor) => actor.id))
+    expect(refreshed.actors.filter((actor) => actor.kind === "task").map((actor) => actor.sessionID)).toEqual(["ses_child", "ses_new"])
+  })
   test("shows each real child task of the team root once, with its reported state", () => {
     const snapshot = office(ready([member("ses_child", "running"), member("ses_done", "completed"), member("ses_foreign", "failed", "ses_other")], [], 2))
     expect(snapshot.actors.map((actor) => [actor.sessionID, actor.kind, actor.status, actor.statusText, actor.teamRootSessionID])).toEqual([

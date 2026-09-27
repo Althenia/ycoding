@@ -664,10 +664,10 @@ describe("remote responsive state behavior", () => {
     await workspace.pressEscape()
     expect(await workspace.evaluate<boolean>(`document.querySelector('[aria-label="Machine"]')?.getAttribute('aria-expanded') === 'false' && document.activeElement?.getAttribute('aria-label') === 'Machine'`)).toBe(true)
 
-    await workspace.evaluate(`document.querySelector('.composer__delivery-option:nth-child(2)')?.focus()`)
-    expect(await workspace.evaluate<boolean>(`document.activeElement?.textContent?.trim() === 'Queue'`)).toBe(true)
+    await workspace.evaluate(`document.querySelector('.composer__delivery-toggle')?.focus()`)
+    expect(await workspace.evaluate<string | null>(`document.activeElement?.getAttribute('aria-label') ?? null`)).toBe("Steer mode; switch to Queue")
     await workspace.pressKey(" ", "Space", 32)
-    expect(await workspace.evaluate<boolean>(`document.querySelector('.composer__delivery-option:nth-child(2)')?.getAttribute('aria-pressed') === 'true'`)).toBe(true)
+    expect(await workspace.evaluate<{ readonly pressed: string | null; readonly label: string | null }>(`(() => { const toggle = document.querySelector('.composer__delivery-toggle'); return { pressed: toggle?.getAttribute('aria-pressed') ?? null, label: toggle?.getAttribute('aria-label') ?? null } })()`)).toEqual({ pressed: "true", label: "Queue mode; switch to Steer" })
 
     await workspace.evaluate(`document.querySelector('button[aria-label="Open activity"]')?.focus()`)
     await workspace.pressKey(" ", "Space", 32)

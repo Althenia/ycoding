@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { launchBrowser } from "./cdp"
 
-const port = 4386
+const port = 45_000 + Math.floor(Math.random() * 10_000)
 const browserPath = process.env.YCODING_WEB_CHROME
 if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable.")
 const captures = mkdtempSync(join(tmpdir(), "ycoding-office-workspace-"))
@@ -93,7 +93,7 @@ describe("remote Office presentation", () => {
   test("updates the office from the stream and retains the transcript in Conversation", async () => {
     const page = await openRemote("scenario=conversation-tool-terminal-output-1440&presentation=office")
     try {
-      expect(await until(page, `document.querySelector('.office-roster__row[aria-current="true"] .office-roster__status')?.textContent === 'Idle' && document.querySelectorAll('.office-workspace canvas').length === 1`, 150)).toBe(true)
+      expect(await until(page, `document.querySelector('.office-roster__row[aria-current="true"] .office-roster__status')?.textContent === 'Working' && document.querySelectorAll('.office-workspace canvas').length === 1`, 150)).toBe(true)
       const before = await page.evaluate<OperationReport>(`remoteOperationReport()`)
       await page.evaluate(`[...document.querySelectorAll('.fixture__controls button')].find((button) => button.textContent.includes('Simulate streaming step')).click()`)
 

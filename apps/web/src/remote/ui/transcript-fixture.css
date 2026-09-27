@@ -1,5 +1,7 @@
-.transcript-fixture { max-inline-size:840px; margin-inline:auto; padding:var(--yc-space-4); min-inline-size:0; }
+.transcript-fixture { inline-size:100%; min-inline-size:0; block-size:100vh; position:relative; }
+.transcript-fixture .workspace__scroll { padding:var(--yc-space-4); }
+.transcript-fixture .transcript-navigation,.transcript-fixture__composer { inline-size:min(100%,840px); margin-inline:auto; }
 .transcript-fixture .transcript { padding:0; margin:0; list-style:none; }
-.transcript-fixture__controls { display:flex; gap:var(--yc-space-2); margin-block-end:var(--yc-space-3); }
+.transcript-fixture__controls { display:flex; flex-wrap:wrap; gap:var(--yc-space-2); margin-block-end:var(--yc-space-3); }
 .transcript-fixture__controls button { min-block-size:44px; }
-.transcript-fixture .session-status { margin-block-start:var(--yc-space-4); }
+.transcript-fixture__composer { min-block-size:100px; display:grid; place-items:center; border:1px solid var(--yc-border); border-radius:var(--yc-radius-xl); background:var(--yc-surface-raised); }

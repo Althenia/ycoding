@@ -37,7 +37,10 @@ async function harness(options: { readonly handler?: RequestHandler } = {}): Pro
   })
   const timers: (() => void)[] = []
   const schedule = (callback: () => void, ms = 0) => {
-    if (ms >= 1_000) return () => {}
+    if (ms >= 1_000) {
+      const timer = setTimeout(callback, ms)
+      return () => clearTimeout(timer)
+    }
     timers.push(callback)
     return () => {
       const index = timers.indexOf(callback)
@@ -355,7 +358,7 @@ describe("paged shell output", () => {
       gate.release()
       await test.stop()
     }
-  })
+  }, 30_000)
 
   test("does not write a page that settles after the connection was replaced", async () => {
     const gate = deferred()

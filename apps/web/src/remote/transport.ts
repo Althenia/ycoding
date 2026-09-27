@@ -60,6 +60,12 @@ export type RemoteTransportOptions = {
 const defaultTimeoutMs = 30_000
 const defaultMaxInFlight = 32
 
+export function clientFrameDelay(sentAt: number[], now: number): number {
+  while (sentAt[0] !== undefined && now - sentAt[0] >= RemoteLimits.clientRateWindowMs) sentAt.shift()
+  return sentAt.length < RemoteLimits.maxClientRequestsPerWindow - 3
+    ? 0 : Math.max(1, Math.ceil(RemoteLimits.clientRateWindowMs - (now - sentAt[0]!)))
+}
+
 export function createRemoteTransport(options: RemoteTransportOptions): RemoteTransport {
   const handlers = options.handlers ?? {}
   const createSocket = options.createSocket ?? ((url: string) => new WebSocket(url))
@@ -176,19 +182,14 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
     cancelOutbound?.()
     cancelOutbound = undefined
     if (socket === undefined || socket.readyState !== 1) return
-    const now = performance.now()
-    while (sentAt[0] !== undefined && now - sentAt[0] >= RemoteLimits.clientRateWindowMs) sentAt.shift()
-    while (outbound.length > 0 && sentAt.length < RemoteLimits.maxClientRequestsPerWindow) {
+    while (outbound.length > 0 && clientFrameDelay(sentAt, performance.now()) === 0) {
       const entry = outbound.shift()!
       entry.onSend?.()
       socket.send(JSON.stringify(entry.frame))
       sentAt.push(performance.now())
     }
     if (outbound.length > 0)
-      cancelOutbound = schedule(
-        flushOutbound,
-        Math.max(1, Math.ceil(RemoteLimits.clientRateWindowMs - (performance.now() - sentAt[0]!))),
-      )
+      cancelOutbound = schedule(flushOutbound, clientFrameDelay(sentAt, performance.now()))
   }
 
   const send = (frame: unknown, onSend?: () => void): boolean => {

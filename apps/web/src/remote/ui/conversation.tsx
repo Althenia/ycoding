@@ -1,9 +1,10 @@
-import { For, Show, createMemo, createSignal, type JSX } from "solid-js"
+import { For, Show, createMemo, createSignal, onCleanup, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
 import { catalogKey, modelDisplayLabel } from "../catalog"
 import { useRemote } from "../context"
 import {
   formatPartDuration,
+  classifySyntheticNotice,
   noticeSummary,
   previewText,
   shellOutputNotice,
@@ -27,6 +28,16 @@ import "./transcript.css"
 
 type ToolPartView = Extract<AssistantPart, { kind: "tool" }>
 type AssistantMessageView = Extract<RemoteMessageView, { kind: "assistant" }>
+
+function SyntheticNotice(props: { readonly notice: NonNullable<ReturnType<typeof classifySyntheticNotice>> }): JSX.Element {
+  const notice = props.notice
+  if (notice.kind === "goal") return <div class="transcript-notice transcript-notice--goal"><strong>Goal · steer</strong><p>{notice.text}</p></div>
+  if (notice.kind === "completion") return <p class={`transcript-notice transcript-notice--${notice.status}`}><strong>{notice.label} {notice.status}</strong><Show when={notice.description}> · {notice.description}</Show></p>
+  const heading = <><span class="transcript-notice__mark" aria-hidden="true">◦</span><strong>Subagent · {notice.label}</strong><span class="transcript-notice__status">{notice.status}</span></>
+  return <Show when={notice.excerpt} fallback={<p class={`transcript-notice transcript-notice--${notice.status}`}>{heading}</p>}>
+    {(excerpt) => <details class={`transcript-notice transcript-notice--${notice.status}`}><summary aria-label={`Subagent ${notice.label} ${notice.status}`}>{heading}<Icon name="chevron-right" size={16} /></summary><p class="transcript-notice__excerpt">{excerpt()}</p></details>}
+  </Show>
+}
 
 /**
  * A part's identity inside one message. A tool call keeps the call ID the device
@@ -112,6 +123,10 @@ function ShellOutputSection(props: {
 function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
   const [touched, setTouched] = createSignal(false)
   const [manual, setManual] = createSignal(false)
+  const [rendered, setRendered] = createSignal(false)
+  const [closing, setClosing] = createSignal(false)
+  let closeTimer: ReturnType<typeof setTimeout> | undefined
+  onCleanup(() => clearTimeout(closeTimer))
   const output = createMemo(() => {
     let remaining = 4_000
     const content = props.part().content.flatMap((block): readonly ToolContentBlock[] => {
@@ -149,6 +164,18 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
             const next = !expanded()
             setManual(next)
             setTouched(true)
+            clearTimeout(closeTimer)
+            if (next) {
+              setRendered(true)
+              setClosing(false)
+              return
+            }
+            if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+              setRendered(false)
+              return
+            }
+            setClosing(true)
+            closeTimer = setTimeout(() => setRendered(false), 220)
           }}
         >
           <span class="transcript-tool__tag" aria-label={toolTone(props.part()) === "success" ? "Completed" : toolTone(props.part()) === "error" ? "Failed" : toolTone(props.part()) === "attention" ? "Needs attention" : "Running"}>{toolTone(props.part()) === "success" ? "✓" : toolTone(props.part()) === "attention" ? "Ⅱ" : toolTone(props.part()) === "error" ? "!" : <DotTrail />}</span>
@@ -157,8 +184,8 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
           <Icon name={expanded() ? "chevron-down" : "chevron-right"} size={16} />
         </button>
       </header>
-      <Show when={expanded()}>
-        <div class="transcript-tool__body">
+      <Show when={rendered()}>
+        <div class="transcript-tool__body" classList={{ "transcript-tool__body--closing": closing() }} aria-hidden={closing()} inert={closing()}>
         <Show when={props.part().input !== undefined || props.part().inputText !== undefined}>
           <pre class="output" tabindex="0">
             <code>{props.part().inputText ?? JSON.stringify(props.part().input, null, 2)}</code>
@@ -239,6 +266,33 @@ function PartView(props: { readonly parts: () => readonly AssistantPart[] }): JS
 
 function ReasoningPart(props: { readonly text: () => string; readonly parts: () => readonly AssistantPart[] }): JSX.Element {
   const [open, setOpen] = createSignal(false)
+  const [rendered, setRendered] = createSignal(false)
+  const [closing, setClosing] = createSignal(false)
+  let details: HTMLDetailsElement | undefined
+  let closeTimer: ReturnType<typeof setTimeout> | undefined
+  onCleanup(() => clearTimeout(closeTimer))
+  const toggle = (event: MouseEvent) => {
+    event.preventDefault()
+    clearTimeout(closeTimer)
+    if (!open()) {
+      if (details) details.open = true
+      setRendered(true)
+      setClosing(false)
+      setOpen(true)
+      return
+    }
+    setOpen(false)
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      if (details) details.open = false
+      setRendered(false)
+      return
+    }
+    setClosing(true)
+    closeTimer = setTimeout(() => {
+      if (details) details.open = false
+      setRendered(false)
+    }, 220)
+  }
   const duration = () => {
     const items = props.parts().filter((item) => item.kind === "reasoning")
     const first = items[0]
@@ -246,10 +300,10 @@ function ReasoningPart(props: { readonly text: () => string; readonly parts: () 
     return first?.started !== undefined && last?.completed !== undefined ? ` · ${formatPartDuration(last.completed - first.started)}` : ""
   }
   return (
-    <details class="transcript-reasoning" onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary aria-expanded={open()}><span class="transcript-reasoning__tag" aria-label={duration() ? "Completed" : "Thinking"}>{duration() ? "✓" : <DotTrail />}</span><span>Thought{duration()}</span><span class="transcript-reasoning__hint">{open() ? "Hide" : "Show"} details</span></summary>
-      <Show when={open()}>
-        <div class="transcript-reasoning__body"><Markdown text={props.text()} /></div>
+    <details class="transcript-reasoning" ref={details}>
+      <summary aria-expanded={open()} onClick={toggle}><span class="transcript-reasoning__tag" aria-label={duration() ? "Completed" : "Thinking"}>{duration() ? "✓" : <DotTrail />}</span><span>Thought{duration()}</span><span class="transcript-reasoning__hint">{open() ? "Hide" : "Show"} details</span></summary>
+      <Show when={rendered()}>
+        <div class="transcript-reasoning__body" classList={{ "transcript-reasoning__body--closing": closing() }} aria-hidden={closing()} inert={closing()}><Markdown text={props.text()} /></div>
       </Show>
     </details>
   )
@@ -269,6 +323,11 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
     const message = props.message()
     return message.kind === "synthetic" || message.kind === "system" ? noticeSummary(message.source, message.text) : undefined
   }
+  const syntheticNotice = () => classifySyntheticNotice(props.message())
+  const fallbackText = () => {
+    const message = props.message()
+    return message.kind === "synthetic" && message.description ? message.description : systemText(message)
+  }
   return (
     <Show when={kind() !== "notice"} fallback={<p class="notice">{noticeText(props.message())}</p>}>
       <article class={`transcript-message transcript-message--${kind()}`}>
@@ -282,14 +341,16 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
         </Show>
 
         <Show when={kind() === "assistant"}>
-          <h3 class="transcript-message__agent">{agent()}<Show when={assistantOf(props.message())?.completed === undefined && !assistantOf(props.message())?.error}> <DotTrail /></Show></h3>
+          <h3 class="transcript-message__agent">{agent()}</h3>
           <AssistantParts parts={() => assistantOf(props.message())?.parts ?? []} />
           <Show when={assistantOf(props.message())?.error}><p class="transcript-message__error" role="status">{assistantOf(props.message())?.error}</p></Show>
           <footer class="transcript-message__footer">{agent()}<Show when={assistantOf(props.message())?.model}>{(model) => <> · {modelDisplayLabel(model(), models())}<Show when={model().variant}> · {model().variant}</Show></>}</Show><Show when={assistantOf(props.message())?.completed}>{(end) => <> · {formatPartDuration(end() - (assistantOf(props.message())?.created ?? end()))}</>}</Show></footer>
         </Show>
 
         <Show when={kind() === "system" || kind() === "synthetic"}>
-          <Show when={observation()} fallback={<p class="transcript-message__system">{systemText(props.message())}</p>}>{(summary) => <details class="transcript-message__observation"><summary>{summary()}</summary><pre tabindex="0">{systemText(props.message())}</pre></details>}</Show>
+          <Show when={syntheticNotice()} fallback={<Show when={observation()} fallback={<p class="transcript-message__system">{fallbackText()}</p>}>{(summary) => <details class="transcript-message__observation"><summary>{summary()}</summary><pre tabindex="0">{systemText(props.message())}</pre></details>}</Show>}>
+            {(notice) => <SyntheticNotice notice={notice()} />}
+          </Show>
         </Show>
 
         <Show when={kind() === "shell"}>

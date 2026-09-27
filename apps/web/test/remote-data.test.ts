@@ -18,6 +18,84 @@ async function setup(handler?: (request: { operation: string; input?: Readonly<R
 }
 
 describe("remote data", () => {
+  test("uploads a large attachment in bounded acknowledged chunks before prompt admission", async () => {
+    const uploads: { index: number; last: boolean; data: string; uploadID: string }[] = []
+    const test = await setup((request) => {
+      if (request.operation !== "session.attachment.upload") return "default"
+      const fields = request.input
+      if (typeof fields?.index !== "number" || typeof fields.last !== "boolean" || typeof fields.data !== "string" || typeof fields.uploadID !== "string") throw new Error("Invalid upload request")
+      const chunk = { index: fields.index, last: fields.last, data: fields.data, uploadID: fields.uploadID }
+      uploads.push(chunk)
+      return { ok: true, value: chunk.last ? { uri: `ycoding-upload://${chunk.uploadID}` } : { received: chunk.data.length } }
+    })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length === 2)
+      await test.store.selectSession("ses_a")
+      const data = Buffer.alloc(120_000, 42).toString("base64")
+      await test.store.sendPrompt({ text: "Review", delivery: "steer", files: [{ uri: `data:image/png;base64,${data}`, name: "capture.png" }] })
+      expect(uploads.length).toBeGreaterThan(1)
+      expect(uploads.map((chunk) => chunk.data).join("")).toBe(data)
+      expect(uploads.every((chunk, index) => chunk.index === index)).toBe(true)
+      expect(test.relay.requests.find((request) => request.operation === "session.prompt")?.input?.files).toEqual([{ uri: `ycoding-upload://${uploads[0]!.uploadID}`, name: "capture.png" }])
+      expect(test.store.state().upload).toBeUndefined()
+    } finally { await test.stop() }
+  })
+  test("uploads a command attachment and forwards only the completed reference", async () => {
+    const test = await setup((request) => request.operation === "session.attachment.upload"
+      ? { ok: true, value: { uri: `ycoding-upload://${String(request.input?.uploadID)}` } } : "default")
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length === 2)
+      await test.store.selectSession("ses_a")
+      await test.store.runCommand({ command: "plan", delivery: "queue", files: [{ uri: "data:text/plain;base64,aGVsbG8=", name: "notes.txt" }] })
+      const upload = test.relay.requests.find((request) => request.operation === "session.attachment.upload")
+      expect(upload?.sessionID).toBe("ses_a")
+      expect(test.relay.requests.find((request) => request.operation === "session.command")?.input).toMatchObject({ command: "plan", files: [{ uri: `ycoding-upload://${String(upload?.input?.uploadID)}`, name: "notes.txt" }] })
+    } finally { await test.stop() }
+  })
+
+  test("failed or cancelled upload never admits a prompt and surfaces its reason", async () => {
+    const test = await setup((request) => request.operation === "session.attachment.upload"
+      ? { ok: false, code: "message_too_large", message: "Attachment rejected" } : "default")
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length === 2)
+      await test.store.selectSession("ses_a")
+      await test.store.sendPrompt({ text: "Review", delivery: "steer", files: [{ uri: "data:image/png;base64,AAAA", name: "capture.png" }] })
+      expect(test.relay.requests.some((request) => request.operation === "session.prompt")).toBe(false)
+      expect(test.store.state().uploadError).toContain("Attachment rejected")
+    } finally { await test.stop() }
+  })
+  test("rejects a message exceeding the relay frame before uploading any file", async () => {
+    const test = await setup()
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length === 2)
+      await test.store.selectSession("ses_a")
+      expect(await test.store.sendPrompt({ text: "x".repeat(32_768), delivery: "steer", files: [{ uri: "data:image/png;base64,AAAA", name: "capture.png" }] })).toBe(false)
+      expect(test.store.state().uploadError).toContain("32,768")
+      expect(test.relay.requests.some((request) => request.operation === "session.attachment.upload" || request.operation === "session.prompt")).toBe(false)
+    } finally { await test.stop() }
+  })
+  test("cancel stops a multi-chunk upload after its acknowledged chunk without admitting a prompt", async () => {
+    const test = await setup((request) => {
+      if (request.operation !== "session.attachment.upload") return "default"
+      return { ok: true, value: { received: 21_000 } }
+    })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length === 2)
+      await test.store.selectSession("ses_a")
+      const unsubscribe = test.store.subscribe(() => { if (test.store.state().upload?.percent) test.store.cancelUpload() })
+      const sent = await test.store.sendPrompt({ text: "Review", delivery: "steer", files: [{ uri: `data:image/png;base64,${Buffer.alloc(100_000, 42).toString("base64")}` }] })
+      unsubscribe()
+      expect(sent).toBe(false)
+      expect(test.relay.requests.filter((request) => request.operation === "session.attachment.upload")).toHaveLength(1)
+      expect(test.relay.requests.some((request) => request.operation === "session.prompt")).toBe(false)
+      expect(test.store.state().uploadError).toContain("cancelled")
+    } finally { await test.stop() }
+  })
   test("a frame before the initial list remains the status baseline after the later read", async () => {
     let release: (() => void) | undefined
     const gate = new Promise<void>((resolve) => { release = resolve })

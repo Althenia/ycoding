@@ -23,6 +23,6 @@ export function scenario(kind: string): OfficeInput {
   if (kind === "failed") return { ...base, selected: { ...selected, status: "failed" } }
   if (kind === "interrupted") return { ...base, selected: { ...selected, status: "interrupted" } }
   if (kind === "unknown-outcome") return { ...base, selected: { ...selected, unknownOutcome: true } }
-  if (kind === "idle") return { ...base, selected: { ...selected, status: "idle", assistantExcerpt: "Example task finished. This is synthetic text, not a live agent result." } }
+  if (kind === "idle") return { ...base, sessions: base.sessions.map((session) => session.id === "session-a" ? { ...session, running: false } : session), selected: { ...selected, status: "idle", assistantExcerpt: "Example task finished. This is synthetic text, not a live agent result." } }
   return base
 }

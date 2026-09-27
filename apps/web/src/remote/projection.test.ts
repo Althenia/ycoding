@@ -7,6 +7,7 @@ import {
   sessionStatusTimed,
   toolSummary,
   toolTone,
+  classifySyntheticNotice,
   appendShellOutputPage,
   applySessionEvent,
   boundedText,
@@ -103,6 +104,25 @@ test("summarizes runtime observations without exposing raw JSON inline", () => {
   expect(snapshot[0]).toMatchObject({ kind: "system", source: "session-state" })
   const synthetic = apply(createSessionView("ses_a"), "session.synthetic", { text: session, metadata: { contextSource: "session-state" } })
   expect(synthetic.messages[0]).toMatchObject({ source: "session-state" })
+})
+
+test("keeps synthetic notification identity and metadata across admission and snapshot hydration", () => {
+  const metadata = { source: "subagent_notification", childID: "ses_child", type: "completed", revision: 2, excerpt: "Verified the repair" }
+  const text = `Subagent notification:\n${JSON.stringify(metadata)}`
+  const admitted = apply(createSessionView("ses_a"), "session.input.admitted", { inputID: "msg_notify", input: { type: "synthetic", data: { text, description: "Subagent notification", metadata }, delivery: "steer" } })
+  expect(admitted.messages[0]).toMatchObject({ kind: "synthetic", metadata, description: "Subagent notification" })
+  expect(classifySyntheticNotice(admitted.messages[0]!)).toEqual({ kind: "subagent", label: "ses_child", status: "completed", excerpt: "Verified the repair" })
+  const hydrated = readMessageList({ data: [{ id: "msg_notify", type: "synthetic", text, description: "Subagent notification", metadata, time: { created: 1 } }] })
+  expect(classifySyntheticNotice(hydrated[0]!)).toEqual({ kind: "subagent", label: "ses_child", status: "completed", excerpt: "Verified the repair" })
+  expect(apply(createSessionView("ses_a"), "session.input.admitted", { inputID: "msg_user", input: { type: "user", data: { text: "Ordinary prompt" } } }).messages[0]).toMatchObject({ kind: "user", text: "Ordinary prompt" })
+})
+
+test("classifies terminal synthetic statuses without inventing raw-text user messages", () => {
+  for (const [type, status] of [["completed", "completed"], ["failed", "failed"], ["waiting", "waiting"], ["unrecognized", "updated"]] as const) {
+    expect(classifySyntheticNotice({ kind: "synthetic", id: "n", text: "raw", metadata: { source: "subagent_notification", type, childID: "ses_1" }, created: 1 })).toEqual({ kind: "subagent", label: "ses_1", status })
+  }
+  expect(classifySyntheticNotice({ kind: "synthetic", id: "n", text: "done", description: "Background finished", metadata: { source: "shell", state: "completed" }, created: 1 })).toEqual({ kind: "completion", label: "Shell", status: "finished", description: "Background finished" })
+  expect(classifySyntheticNotice({ kind: "synthetic", id: "n", text: "Keep going", metadata: { autonomy: { goal: true } }, created: 1 })).toEqual({ kind: "goal", text: "Keep going" })
 })
 
 test("uses tool-specific one-line input summaries", () => {
