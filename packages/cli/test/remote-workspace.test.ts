@@ -1,15 +1,17 @@
 import { expect, test } from "bun:test"
 import { parseAgentMessage, type RemoteResponse } from "@ycoding-ai/remote"
-import { mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { RemoteAgent, type ConnectionInput, type RelayConnection } from "../src/remote-bridge"
 import { createLocalServer } from "../src/remote-local"
 import { createSession, password, startServer } from "./remote-harness"
 
+const scratch = join(import.meta.dir, "../../../.cache/tmp")
+await mkdir(scratch, { recursive: true })
+
 test("lists existing backend Locations and creates, adopts, lists, and prompts a root Session", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "ycoding-remote-workspace-"))
-  const secondDirectory = await mkdtemp(join(tmpdir(), "ycoding-remote-workspace-second-"))
+  const directory = await mkdtemp(join(scratch, "ycoding-remote-workspace-"))
+  const secondDirectory = await mkdtemp(join(scratch, "ycoding-remote-workspace-second-"))
   const server = await startServer(directory)
   const sessionID = "ses_remote_workspace_created"
   const existingID = "ses_remote_workspace_existing"

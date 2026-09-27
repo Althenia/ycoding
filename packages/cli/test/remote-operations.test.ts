@@ -1,4 +1,4 @@
-import { mkdtemp, rm, symlink } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { describe, expect, test } from "bun:test"
@@ -15,6 +15,9 @@ import {
   sessionStatus,
   successFrames,
 } from "../src/remote-operations"
+
+const scratch = join(import.meta.dir, "../../../.cache/tmp")
+await mkdir(scratch, { recursive: true })
 
 function sessionInfo(id: string, table: { updated: number; title?: string; directory?: string; parentID?: string }): SessionInfo {
   const directory = table.directory ?? "/work"
@@ -256,8 +259,8 @@ describe("workspace inventory and Session creation", () => {
   })
 
   test("uses backend inventory only, rejects changed project and child-ID reuse, and verifies a root create", async () => {
-    const directory = await mkdtemp(join(import.meta.dir, "../../../.cache/tmp/ycoding-remote-workspace-unit-"))
-    const globalWorktree = await mkdtemp(join(import.meta.dir, "../../../.cache/tmp/ycoding-global-project-worktree-"))
+    const directory = await mkdtemp(join(scratch, "ycoding-remote-workspace-unit-"))
+    const globalWorktree = await mkdtemp(join(scratch, "ycoding-global-project-worktree-"))
     try {
       let sessions = [sessionInfo("ses_seed", { updated: 1, directory })]
       let currentProjectID = "prj_changed"
@@ -471,7 +474,7 @@ describe("operation mapping", () => {
   })
 
   test("refuses a file URL whose symlink escapes the Session Location", async () => {
-    const directory = await mkdtemp(join(import.meta.dir, "../../../.cache/tmp/ycoding-attachment-"))
+    const directory = await mkdtemp(join(scratch, "ycoding-attachment-"))
     try {
       await symlink("/etc/passwd", join(directory, "escape.txt"))
       const test = await harness({ sessions: [sessionInfo("ses_1", { updated: 1, directory })], results: { prompt: { id: "msg_1" },
@@ -1150,7 +1153,7 @@ describe("session list paging", () => {
   })
 
   test("pages a selected recorded workspace with summary search, status, and stable pinned order", async () => {
-    const directory = await mkdtemp(join(import.meta.dir, "../../../.cache/tmp/ycoding-inventory-"))
+    const directory = await mkdtemp(join(scratch, "ycoding-inventory-"))
     try {
       const first = { ...sessionInfo("ses_first", { updated: 1, title: "First", directory }), agent: "builder",
         model: { providerID: "test", id: "model", variant: "high" }, time: { created: 1, updated: 1, pinned: 2 } }

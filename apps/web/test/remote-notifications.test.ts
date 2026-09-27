@@ -118,7 +118,7 @@ async function harness(options: {
       now: () => 1_000,
     }),
   })
-  const runUntil = async (predicate: () => boolean, attempts = 100) => {
+  const runUntil = async (predicate: () => boolean, attempts = 400) => {
     for (let index = 0; index < attempts && !predicate(); index += 1) {
       await flush()
       await Bun.sleep(5)

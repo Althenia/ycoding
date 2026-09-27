@@ -9,7 +9,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 
 const input = { providerID: ProviderV2.ID.make("opencode-go"), label: "OpenCode Go", updatedAt: 100 }
 
-describe("OpenCodeUsage", () => {
+describe("GoUsage", () => {
   test("maps account-wide Go session, weekly, and monthly percent windows", () => {
     const snapshot = GoUsage.normalize({ ...input, response: { usage: {
       rolling: { percent: 12, resetsAt: "2026-09-28T00:00:00Z" },
