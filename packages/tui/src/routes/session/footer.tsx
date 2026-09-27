@@ -64,17 +64,20 @@ export function Footer(props: {
         <text fg={themeV2.text.subdued} wrapMode="none" truncate flexShrink={1}>
           shells {shells()}
         </text>
-        <text fg={themeV2.text.action.primary.default} wrapMode="none" flexShrink={0} onMouseUp={openUsage}>
-          <Show when={usageShortcut()}>{(shortcut) => `${shortcut().replaceAll("ctrl+", "⌃")} `}</Show>usage
-        </text>
       </box>
-      <Show when={paletteShortcut()}>
-        {(shortcut) => (
-          <text fg={themeV2.text.default} wrapMode="none" flexShrink={0}>
-            {shortcut().replaceAll("ctrl+", "⌃")} <span style={{ fg: themeV2.text.subdued }}>commands</span>
-          </text>
-        )}
-      </Show>
+      <box flexDirection="row" gap={3} flexShrink={0}>
+        <text fg={themeV2.text.default} wrapMode="none" flexShrink={0} onMouseUp={openUsage}>
+          <Show when={usageShortcut()}>{(shortcut) => `${shortcut().replaceAll("ctrl+", "⌃")} `}</Show>
+          <span style={{ fg: themeV2.text.subdued }}>usage</span>
+        </text>
+        <Show when={paletteShortcut()}>
+          {(shortcut) => (
+            <text fg={themeV2.text.default} wrapMode="none" flexShrink={0}>
+              {shortcut().replaceAll("ctrl+", "⌃")} <span style={{ fg: themeV2.text.subdued }}>commands</span>
+            </text>
+          )}
+        </Show>
+      </box>
     </box>
   )
 }

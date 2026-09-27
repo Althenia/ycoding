@@ -35,7 +35,7 @@ export type TerminalInspectorRoute = {
 
 export type ProviderUsageRoute = {
   type: "provider-usage"
-  sessionID: string
+  sessionID?: string
 }
 
 export type Route = HomeRoute | SessionRoute | PluginRoute | ShellOutputRoute | TerminalInspectorRoute | ProviderUsageRoute

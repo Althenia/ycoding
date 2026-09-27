@@ -109,7 +109,7 @@ export function ProviderUsageScreen() {
     backendUsageGuard.invalidate()
   })
 
-  const back = () => router.navigate({ type: "session", sessionID: route.sessionID })
+  const back = () => router.navigate(route.sessionID ? { type: "session", sessionID: route.sessionID } : { type: "home" })
   return (
     <ProviderUsageScreenContent
       snapshots={snapshots}
@@ -182,7 +182,7 @@ export function ProviderUsageScreenContent(props: {
   Keymap.createLayer(() => ({
     mode: "base",
     commands: [
-      { id: "provider-usage.back", title: "Back to session", group: "Provider usage", bind: "escape", run: back },
+      { id: "provider-usage.back", title: "Back", group: "Provider usage", bind: "escape", run: back },
       { id: "provider-usage.refresh", title: "Refresh provider usage", group: "Provider usage", bind: "r", run: refresh },
       { id: "provider-usage.view.previous", title: "Previous usage view", group: "Provider usage", bind: "left", run: () => moveView(-1) },
       { id: "provider-usage.view.next", title: "Next usage view", group: "Provider usage", bind: "right", run: () => moveView(1) },

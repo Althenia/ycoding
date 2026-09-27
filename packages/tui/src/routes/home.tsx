@@ -2,7 +2,7 @@ import { Prompt, type PromptRef } from "../component/prompt"
 import { createEffect, createMemo, createSignal, onMount, Show, type JSX } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import { useArgs } from "../context/args"
-import { useRouteData } from "../context/route"
+import { useRoute, useRouteData } from "../context/route"
 import { usePromptRef } from "../context/prompt"
 import { useLocal } from "../context/local"
 import { usePluginRuntime } from "../plugin/runtime"
@@ -19,6 +19,8 @@ import { Header, headerModelLabel } from "./session/header"
 import { useClient } from "../context/client"
 import { BrandMark } from "../component/logo"
 import { useToast } from "../ui/toast"
+import { DialogChromeConnection } from "../component/dialog-session-browser"
+import { errorMessage } from "../util/error"
 import type { ModelDaybreak, SessionAutonomyState } from "@ycoding-ai/client"
 
 let once = false
@@ -64,6 +66,14 @@ export function LandingMark(props: { overlay: boolean; children: JSX.Element }) 
 export function LandingFooter(props: { autonomy?: SessionAutonomyState }) {
   const { themeV2 } = useTheme()
   const shortcut = Keymap.useShortcut("command.palette.show")
+  const usageShortcut = Keymap.useShortcut("home.provider-usage.open")
+  const route = useRoute()
+  const openUsage = () => route.navigate({ type: "provider-usage" })
+  Keymap.createLayer(() => ({
+    mode: "global",
+    commands: [{ id: "home.provider-usage.open", title: "Open provider usage", group: "Session", bind: "<leader>shift+u", run: openUsage }],
+    bindings: ["home.provider-usage.open"],
+  }))
 
   return (
     <box
@@ -82,9 +92,15 @@ export function LandingFooter(props: { autonomy?: SessionAutonomyState }) {
         <ModeChips autonomy={props.autonomy} />
         <text fg={themeV2.text.subdued}>subagents 0</text>
       </box>
-      <Show when={shortcut()}>
-        {(value) => <text fg={themeV2.text.feedback.info.default}>{value().replaceAll("ctrl+", "⌃")} commands</text>}
-      </Show>
+      <box flexDirection="row" gap={3} flexShrink={0}>
+        <text fg={themeV2.text.default} wrapMode="none" onMouseUp={openUsage}>
+          <Show when={usageShortcut()}>{(value) => `${value().replaceAll("ctrl+", "⌃")} `}</Show>
+          <span style={{ fg: themeV2.text.subdued }}>usage</span>
+        </text>
+        <Show when={shortcut()}>
+          {(value) => <text fg={themeV2.text.default} wrapMode="none">{value().replaceAll("ctrl+", "⌃")} <span style={{ fg: themeV2.text.subdued }}>commands</span></text>}
+        </Show>
+      </box>
     </box>
   )
 }
@@ -106,6 +122,23 @@ export function Home() {
   const [landingYolo, setLandingYolo] = createSignal(false)
   const [landingGoal, setLandingGoal] = createSignal<string | undefined>(undefined)
   const [landingDaybreak, setLandingDaybreak] = createSignal<ModelDaybreak>()
+  Keymap.createLayer(() => ({
+    mode: "global",
+    commands: [{
+      id: "home.browser.chrome",
+      title: "Connect Chrome",
+      group: "Session",
+      palette: true,
+      bind: false,
+      run: () => {
+        const existing = data.session.list().find((item) => item.location.directory === data.location.default().directory)
+        const session = existing ? Promise.resolve(existing) : client.api.session.create({ location: { directory: data.location.default().directory } })
+        void session
+          .then((item) => dialog.replace(() => <DialogChromeConnection sessionID={item.id} />))
+          .catch((error) => toast.show({ title: "Could not connect Chrome", message: errorMessage(error), variant: "error" }))
+      },
+    }],
+  }))
   const landingAutonomy = createMemo(() => ({ mode: "normal" as const, yolo: landingYolo(), goal: landingGoal() ? { text: landingGoal()!, status: "active" as const, iteration: 0, noProgress: 0, maxNoProgress: 3 } : undefined }) as SessionAutonomyState)
   // Global MCP elicitations can arrive without a session route, so keep them reachable from Home.
   const forms = createMemo(() => data.session.form.list("global", data.location.default()) ?? [])

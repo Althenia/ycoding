@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
-import { json } from "../fixture/tui-client"
+import { json, type FetchHandler } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE } from "../viewport"
 import { renderScreen } from "./harness"
 
@@ -98,6 +98,97 @@ function sessionRoute(url: URL) {
 }
 
 describe("screen chrome colour probes", () => {
+  test("keeps the landing footer usage and command hints visible at narrow widths", async () => {
+    for (const width of [80, 60]) {
+      const screen = await renderScreen({ width, height: 40, route: landingRoute, settle: "Message YCoding…" })
+      try {
+        const footer = screen.lines()[38] ?? ""
+        expect(footer).toContain("usage")
+        expect(footer.indexOf("usage")).toBeLessThan(footer.indexOf("commands"))
+      } finally {
+        await screen.dispose()
+      }
+    }
+  }, 30_000)
+
+  test("offers Chrome connection from the landing command palette", async () => {
+    const requests: string[] = []
+    const route: FetchHandler = (url, request) => {
+      if (url.pathname === "/api/session" && request.method === "POST") {
+        requests.push("create")
+        return json({ data: session })
+      }
+      if (url.pathname === `/api/session/${sessionID}/browser`) {
+        requests.push("status")
+        return json({ data: { state: "unavailable", paired: false } })
+      }
+      return landingRoute(url)
+    }
+    const screen = await renderScreen({ width: 100, height: 40, route, settle: "Message YCoding…" })
+    try {
+      screen.input.pressKey("p", { ctrl: true })
+      await waitFor(screen, "Commands")
+      await screen.input.typeText("Connect Chrome")
+      await waitFor(screen, "Connect Chrome")
+      screen.input.pressEnter()
+      await waitFor(screen, "Chrome connection")
+      expect(requests).toEqual(["create", "status"])
+    } finally {
+      await screen.dispose()
+    }
+  }, 30_000)
+
+  test("landing Chrome pairing reuses a Session in the current Location", async () => {
+    const requests: string[] = []
+    const route: FetchHandler = (url, request) => {
+      if (url.pathname === "/api/session" && request.method === "GET") return json({ data: [session], cursor: {} })
+      if (url.pathname === "/api/session" && request.method === "POST") requests.push("create")
+      if (url.pathname === `/api/session/${sessionID}/browser`) {
+        requests.push("status")
+        return json({ data: { state: "unavailable", paired: false } })
+      }
+      return landingRoute(url)
+    }
+    const screen = await renderScreen({ width: 100, height: 40, route, settle: "Message YCoding…" })
+    try {
+      screen.input.pressKey("p", { ctrl: true })
+      await waitFor(screen, "Commands")
+      await screen.input.typeText("Connect Chrome")
+      screen.input.pressEnter()
+      await waitFor(screen, "Chrome connection")
+      expect(requests).toEqual(["status"])
+    } finally {
+      await screen.dispose()
+    }
+  }, 30_000)
+
+  test("opens provider usage from the landing footer and returns home without creating a session", async () => {
+    const requests: string[] = []
+    const route: FetchHandler = (url, request) => {
+      if (url.pathname === "/api/session" && request.method === "POST") requests.push("create")
+      if (url.pathname === "/api/usage") return json({ data: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } } })
+      if (url.pathname === "/api/provider/usage") return json({ data: [] })
+      return landingRoute(url)
+    }
+    const screen = await renderScreen({ width: 100, height: 40, route, settle: "Message YCoding…" })
+    try {
+      const row = screen.lines().findIndex((line) => line.includes("⌃p commands"))
+      const column = screen.lines()[row]?.indexOf("usage") ?? -1
+      expect(column).toBeGreaterThan(0)
+      await screen.mouse.click(column, row)
+      await waitFor(screen, "YCODING BACKEND")
+      await waitFor(screen, "refresh")
+      await screen.mouse.click(screen.lines()[1]?.indexOf("back") ?? -1, 1)
+      await waitFor(screen, "Message YCoding…")
+      screen.input.pressKey("x", { ctrl: true })
+      screen.input.pressKey("u", { shift: true })
+      await waitFor(screen, "YCODING BACKEND")
+      expect(requests).toEqual([])
+    } finally {
+      await screen.dispose()
+    }
+  }, 30_000)
+
   test("probes the landing header and footer at canonical viewports", async () => {
     for (const viewport of viewports) {
       const screen = await renderScreen({ ...viewport, route: landingRoute, settle: "Claude Opus 5" })
@@ -112,6 +203,13 @@ describe("screen chrome colour probes", () => {
         expect(screen.colorOf("▌▐")).toEqual(accent)
         expect(screen.colorOf("ready")).toEqual(subdued)
         expect(screen.colorOf("subagents 0")).toEqual(subdued)
+        const footer = screen.lines().find((line) => line.includes("⌃p commands")) ?? ""
+        expect(footer).toContain("usage")
+        expect(footer.indexOf("usage")).toBeLessThan(footer.indexOf("⌃p commands"))
+        expect(footer.indexOf("usage")).toBeGreaterThan(viewport.width - 50)
+        expect(screen.colorOf("commands")).toEqual(subdued)
+        expect(screen.colorOf("usage")).toEqual(subdued)
+        expect(screen.colorOf("⌃p ")).not.toEqual(subdued)
       } finally {
         await screen.dispose()
       }
@@ -137,6 +235,12 @@ describe("screen chrome colour probes", () => {
         expect(ruleSpan.fg.toInts()).toEqual(border)
         expect(screen.frame()).not.toContain("YCoding v")
         expect(screen.colorOf("SESSION")).toEqual(accent)
+        const footer = screen.lines().find((line) => line.includes("⌃p commands")) ?? ""
+        expect(footer).toContain("usage")
+        expect(footer.indexOf("usage")).toBeLessThan(footer.indexOf("⌃p commands"))
+        expect(footer.indexOf("usage")).toBeGreaterThan(viewport.width - 50)
+        expect(screen.colorOf("usage")).toEqual(subdued)
+        expect(screen.colorOf("commands")).toEqual(subdued)
       } finally {
         await screen.dispose()
       }

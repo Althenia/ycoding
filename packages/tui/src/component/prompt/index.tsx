@@ -2339,6 +2339,26 @@ export function Prompt(props: PromptProps) {
       DialogSessionGoal.show(dialog, sessionID, undefined, (state) => props.onAutonomyUpdated?.(sessionID, state))
       return true
     }
+    if (action.type === "replace" || action.type === "resume") {
+      const pending = local.model.pendingTarget(sessionID)
+      if (pending) {
+        const model = { providerID: pending.providerID, id: pending.modelID, variant: pending.variant }
+        const current = data.session.get(sessionID)?.model
+        if (
+          current?.providerID !== model.providerID ||
+          current?.id !== model.id ||
+          normalizeModelVariant(current?.variant) !== normalizeModelVariant(model.variant)
+        ) {
+          try {
+            await client.api.session.switchModel({ sessionID, model })
+          } catch (error) {
+            toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" })
+            return false
+          }
+        }
+        local.model.commitPending(sessionID, model)
+      }
+    }
     try {
       const payload =
         action.type === "stop"

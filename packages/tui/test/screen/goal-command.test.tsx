@@ -40,6 +40,9 @@ let autonomySets: Array<Record<string, unknown>> = []
 let promptRequests: Array<{ id: string; text: string; resume?: boolean }> = []
 let failNextAutonomySet = false
 let modelSwitchStarted = false
+let failNextModelSwitch = false
+let switchRequests: unknown[] = []
+let requestOrder: string[] = []
 let landingCreates = 0
 
 function resetFixture(state: SessionAutonomyState) {
@@ -48,6 +51,9 @@ function resetFixture(state: SessionAutonomyState) {
   promptRequests = []
   failNextAutonomySet = false
   modelSwitchStarted = false
+  failNextModelSwitch = false
+  switchRequests = []
+  requestOrder = []
   landingCreates = 0
 }
 
@@ -71,6 +77,7 @@ const route: FetchHandler = async (url, request) => {
   if (url.pathname === `/api/session/${sessionID}/autonomy`) {
     if (request.method === "PUT") {
       const body = (await request.json()) as Record<string, unknown>
+      requestOrder.push("goal")
       autonomySets.push(body)
       if (failNextAutonomySet) {
         failNextAutonomySet = false
@@ -82,6 +89,14 @@ const route: FetchHandler = async (url, request) => {
   }
   if (url.pathname === `/api/session/${sessionID}/model` && request.method === "POST") {
     modelSwitchStarted = true
+    requestOrder.push("model")
+    const body: unknown = await request.json()
+    if (!body || typeof body !== "object" || !("model" in body)) throw new Error("missing model")
+    switchRequests.push(body.model)
+    if (failNextModelSwitch) {
+      failNextModelSwitch = false
+      return json({ error: "simulated model switch failure" }, { status: 500 })
+    }
     return new Response(null, { status: 204 })
   }
   if (url.pathname === `/api/session/${sessionID}/prompt` && request.method === "POST") {
@@ -291,7 +306,7 @@ test("keeps the draft and attachment and reports an error when goal calculation 
   }
 }, 30_000)
 
-test("keeps a model selection pending while an explicit /goal changes autonomy", async () => {
+test("switches the selected variant before an explicit /goal activates its steer", async () => {
   resetFixture(goalState("active", "Old objective"))
   const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
   try {
@@ -307,9 +322,41 @@ test("keeps a model selection pending while an explicit /goal changes autonomy",
     await screen.input.typeText("/goal replace the migration plan")
     await submit(screen)
     await waitFor(() => autonomySets.length > 0, "the goal replacement")
+    expect(requestOrder).toEqual(["model", "goal"])
+    expect(switchRequests).toEqual([{ providerID: "openai", id: "gpt-5.6-terra", variant: "low" }])
     expect(autonomySets).toEqual([{ goal: "replace the migration plan" }])
-    expect(modelSwitchStarted).toBe(false)
     expect(promptRequests).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("a rejected selected variant keeps /goal editable and does not activate a steer", async () => {
+  resetFixture(goalState("active", "Old objective"))
+  failNextModelSwitch = true
+  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+  try {
+    await focusComposer(screen)
+    await screen.input.typeText("/variants")
+    await submit(screen)
+    await waitFor(() => screen.frame().includes("Select variant"), "the variant dialog")
+    screen.input.pressKey("ARROW_DOWN")
+    screen.input.pressEnter()
+    await waitFor(() => screen.frame().includes("Message YCoding…"), "the composer after selection")
+
+    await screen.input.typeText("/goal replace the migration plan")
+    await submit(screen)
+    await waitFor(() => screen.frame().includes("Model switch needs attention"), "model rejection")
+    expect(switchRequests).toEqual([{ providerID: "openai", id: "gpt-5.6-terra", variant: "low" }])
+    expect(requestOrder).toEqual(["model"])
+    expect(autonomySets).toEqual([])
+    expect(promptRequests).toEqual([])
+    expect(screen.frame()).toContain("replace the migration plan")
+
+    await submit(screen)
+    await waitFor(() => autonomySets.length > 0, "the retried goal replacement")
+    expect(requestOrder).toEqual(["model", "model", "goal"])
+    expect(switchRequests).toHaveLength(2)
   } finally {
     await screen.dispose()
   }

@@ -39,7 +39,7 @@ export function SessionIsolatedBrowserCommand(props: Props) {
   return null
 }
 
-function DialogChromeConnection(props: { sessionID: string }) {
+export function DialogChromeConnection(props: { sessionID: string }) {
   const client = useClient()
   const dialog = useDialog()
   const { themeV2 } = useTheme().contextual("elevated")
