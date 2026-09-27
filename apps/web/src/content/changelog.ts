@@ -22,6 +22,23 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.7.7",
+    date: "2026-09-27",
+    title: "Remote attachments, todo list, and notifications",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Attach files to remote prompts by pasting, choosing, or dropping them on the composer, up to 20 MiB each, with previews, upload progress, and cancel." },
+      { tag: "Added", text: "See the selected Session's todo list above the remote composer, collapsed to a progress summary until you expand it." },
+      { tag: "Added", text: "Keep reading while a remote reply streams, return with Jump to latest, and move between your prompts from a rail on wide screens." },
+      { tag: "Added", text: "Get new in-app notices as brief toasts, and sort through a notification center grouped by day with read marks, Mark all read, and Clear all." },
+      { tag: "Changed", text: "Use a floating remote composer with agent, model, effort, status, and Steer or Queue controls, and rounded controls throughout the remote workspace." },
+      { tag: "Changed", text: "Show subagent notices as compact rows, and redesign the Usage page with quota cards, spend tiles, charts, and a sortable breakdown." },
+      { tag: "Changed", text: "Make motion on the public site, documentation, and changelog more noticeable while respecting reduced motion." },
+      { tag: "Fixed", text: "Show running Sessions as running when a machine keeps Sessions from deleted folders, name workspaces by folder instead of “..”, and stop the Office list from flickering or losing subagents." },
+      { tag: "Fixed", text: "List every remote autocomplete match, keep TUI autocomplete scrolling in place, and keep the remote composer's height steady on hover and focus." },
+    ],
+  },
+  {
     version: "0.7.6",
     date: "2026-09-27",
     title: "Remote usage, composer, and push alerts",
