@@ -25,8 +25,7 @@
 import { spawn } from "bun"
 import { createRequire } from "node:module"
 import { existsSync } from "node:fs"
-import { mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { createSession, password, startServer } from "../../../../packages/cli/test/remote-harness"
 import { createLocalServer } from "../../../../packages/cli/src/remote-local"
@@ -39,6 +38,8 @@ import {
   RemoteCredentials,
 } from "../../../../packages/cli/src/remote-credentials"
 import { createRemoteHttp } from "../../../../apps/web/src/remote/http"
+import { createPushHttp } from "../../../../apps/web/src/remote/http"
+import { generateVapidKeys } from "../../script/vapid-keys"
 import { createRemoteStore } from "../../../../apps/web/src/remote/store"
 import { createRemoteTransport, type RemoteTransportStatus } from "../../../../apps/web/src/remote/transport"
 import { base64UrlEncode } from "../../src/auth/crypto"
@@ -71,12 +72,14 @@ let disposals: (() => Promise<void>)[] = []
 let home: string | undefined
 
 try {
-  home = await mkdtemp(join(tmpdir(), "ycoding-real-flow-"))
+  await mkdir(join(repositoryRoot, ".cache/tmp"), { recursive: true })
+  home = await mkdtemp(join(repositoryRoot, ".cache/tmp/ycoding-real-flow-"))
   const workspace = join(home, "workspace")
   const openedWorkspace = join(home, "opened-only")
   const serverConfig = join(home, "server-config")
   const persist = join(home, "wrangler-state")
   await run("mkdir", ["-p", workspace, serverConfig, openedWorkspace])
+  await Bun.write(join(openedWorkspace, "find-this.txt"), "Catalog file search")
 
   /* -------------------------------------- deterministic local provider stand-in */
 
@@ -254,6 +257,7 @@ try {
     },
   })
   const googleOrigin = `http://127.0.0.1:${google.port}`
+  const vapid = await generateVapidKeys()
 
   await run(wranglerBin, ["d1", "migrations", "apply", "ycoding-prod-db", "--local", "--config", configPath, "--persist-to", persist])
   // Refuse to silently reuse a stale dev server on this port: the proof must run
@@ -289,6 +293,9 @@ try {
       `GOOGLE_TOKEN_ENDPOINT:${googleOrigin}/token`,
       "--var",
       `GOOGLE_JWKS_URI:${googleOrigin}/certs`,
+      "--var", `VAPID_PUBLIC_KEY:${vapid.VAPID_PUBLIC_KEY}`,
+      "--var", `VAPID_PRIVATE_KEY:${vapid.VAPID_PRIVATE_KEY}`,
+      "--var", "VAPID_SUBJECT:mailto:push@example.invalid",
     ],
     { cwd: repositoryRoot, stdout: "inherit", stderr: "inherit" },
   )
@@ -332,6 +339,20 @@ try {
   cookie = cookiePair(callback, "yc_session")
   expect(cookie.includes("yc_session="), "Google sign-in did not issue a browser session")
   checks.push("browser signed in through the real relay with a Google stand-in")
+
+  const pushHttp = createPushHttp({ baseURL: workerOrigin, fetch: browserFetch })
+  const pushKey = await pushHttp.key()
+  expect(pushKey.ok && pushKey.value.publicKey === vapid.VAPID_PUBLIC_KEY, "the authenticated push key route did not return this deployment's public key")
+  const receiver = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"])
+  if (!(receiver instanceof Object) || !("publicKey" in receiver)) throw new Error("ECDH pair unavailable")
+  const endpoint = "https://fcm.googleapis.com/fcm/send/flow-local-only"
+  const registeredPush = await pushHttp.subscribe({ endpoint, keys: {
+    p256dh: base64UrlEncode(new Uint8Array(await crypto.subtle.exportKey("raw", receiver.publicKey))),
+    auth: base64UrlEncode(crypto.getRandomValues(new Uint8Array(16))),
+  } })
+  expect(registeredPush.ok, `the authenticated push subscription was not stored in local D1: ${JSON.stringify(registeredPush)}`)
+  expect((await pushHttp.remove(endpoint)).ok, "the authenticated push subscription was not removed")
+  checks.push("push key, subscription, and removal reached the real Worker and local D1")
 
   /* --------------------------------------------------- real browser store */
 
@@ -530,8 +551,31 @@ try {
   await store.loadWorkspaces()
   const candidate = store.state().workspaces.find((item) => item.directory === openedWorkspace)
   if (!candidate) throw new Error("the previously opened directory with no Sessions was not listed")
+  await Bun.sleep(RemoteLimits.clientRateWindowMs + 1)
+  const familyStatus = await probeRequest("session.status")
+  expect(familyStatus.status === "ok" && isRecord(familyStatus.value) && Array.isArray(familyStatus.value.running) && Array.isArray(familyStatus.value.attention),
+    `family status failed: ${JSON.stringify(familyStatus)}`)
+  const selectedCatalog = await probeRequest("workspace.catalog", { input: { workspace: candidate.id } })
+  expect(selectedCatalog.status === "ok" && isRecord(selectedCatalog.value) && Array.isArray(selectedCatalog.value.agents) &&
+    Array.isArray(selectedCatalog.value.models) && !("defaultAgent" in selectedCatalog.value),
+    `workspace catalog failed: ${JSON.stringify(selectedCatalog)}`)
+  const found = await probeRequest("workspace.file.find", { input: { workspace: candidate.id, query: "find-this", limit: 5 } })
+  expect(found.status === "ok" && isRecord(found.value) && Array.isArray(found.value.files) &&
+    found.value.files.some((file) => isRecord(file) && file.path === "find-this.txt" && file.kind === "file"),
+    `workspace file search failed: ${JSON.stringify(found)}`)
+  checks.push("family status, location catalog, and bounded file search crossed the real relay")
+  const quotas = await probeRequest("usage.providers")
+  expect(quotas.status === "ok" && isRecord(quotas.value) && Array.isArray(quotas.value.data) && !("location" in quotas.value),
+    `normalized provider usage leaked placement or failed: ${JSON.stringify(quotas)}`)
+  const summary = await probeRequest("usage.summary")
+  expect(summary.status === "ok" && isRecord(summary.value) && isRecord(summary.value.data),
+    `backend usage summary failed: ${JSON.stringify(summary)}`)
+  const report = await probeRequest("usage.report", { input: { group: "model", limit: 2 } })
+  expect(report.status === "ok" && isRecord(report.value) && isRecord(report.value.data) && report.value.data.group === "model",
+    `backend usage report failed: ${JSON.stringify(report)}`)
+  checks.push("normalized provider quotas, retained summary, and grouped report crossed the real relay")
   const beforeCreate = providerRequests.length
-  const createdID = await store.createSession(candidate.id)
+  const createdID = await store.createSession({ workspaceID: candidate.id })
   if (!createdID) throw new Error(`remote creation failed: ${JSON.stringify(store.state().sessionCreation)}`)
   const created = await local.getSession(createdID, { directory: openedWorkspace })
   expect(created.parentID === undefined && created.projectID === candidate.projectID, "remote creation did not make a root in the selected project")

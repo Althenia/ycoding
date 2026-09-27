@@ -1,7 +1,10 @@
 export * as RemoteOperations from "./remote-operations"
 
 import { createHash } from "node:crypto"
-import { stat } from "node:fs/promises"
+import { realpath, stat } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { basename, relative, resolve, sep } from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { Project } from "@ycoding-ai/schema/project"
 import type { FormAnswer, SessionInfo } from "@ycoding-ai/client/promise"
 import {
@@ -15,6 +18,7 @@ import {
   type RemoteRequest,
   type RemoteResponse,
   type RemoteWorkspaceInfo,
+  type RemoteUsageReportInput,
 } from "@ycoding-ai/remote"
 import {
   LocalFailure,
@@ -29,8 +33,14 @@ import {
 /** Operations the relay proxies without addressing one session. */
 export const unscopedOperations: ReadonlySet<RemoteOperation> = new Set([
   "workspace.list",
+  "workspace.catalog",
+  "workspace.file.find",
   "session.list",
   "session.active",
+  "session.status",
+  "usage.providers",
+  "usage.summary",
+  "usage.report",
   "session.create",
 ])
 
@@ -43,6 +53,10 @@ const maxLogReadItems = 2_000
 // One shell-output request returns one page at most: the local default page, so a
 // remote reader pages explicitly instead of asking the device for unbounded output.
 const maxShellOutputPage = 65_536
+
+const catalogLimit = { agents: 100, models: 500, commands: 200, skills: 200, references: 200, resources: 200 }
+type ModelSelection = NonNullable<Parameters<LocalServer["createSession"]>[3]>
+type CommandInput = Parameters<LocalServer["command"]>[2]
 
 /** A response too large for one agent frame is chunked, never truncated. */
 export function successFrames(id: string, value: unknown): readonly RemoteResponse[] {
@@ -218,6 +232,7 @@ async function workspaceInventory(local: LocalServer): Promise<WorkspaceCandidat
   const projectsByID = new Map(projects.map((project) => [project.id, project]))
   const candidates = new Map<string, WorkspaceCandidate>()
   const add = (projectID: string, directory: string, workspaceID?: string) => {
+    if (projectID === Project.ID.global) return
     const location = { directory, ...(workspaceID === undefined ? {} : { workspaceID }) }
     const tuple = [projectID, directory, workspaceID ?? null] as const
     const project = projectsByID.get(projectID)
@@ -228,7 +243,7 @@ async function workspaceInventory(local: LocalServer): Promise<WorkspaceCandidat
         projectID,
         directory,
         ...(workspaceID === undefined ? {} : { workspaceID }),
-        ...(project?.name === undefined ? {} : { name: project.name }),
+        name: project?.name ?? basename(directory),
       },
     })
   }
@@ -245,8 +260,11 @@ async function workspaceInventory(local: LocalServer): Promise<WorkspaceCandidat
     add(session.projectID, session.location.directory, session.location.workspaceID)
 
   const existing: WorkspaceCandidate[] = []
+  const allowed = new Map<string, boolean>()
   for (const candidate of candidates.values()) {
-    if (await stat(candidate.location.directory).then((value) => value.isDirectory(), () => false)) existing.push(candidate)
+    const directory = candidate.location.directory
+    if (!allowed.has(directory)) allowed.set(directory, await allowedWorkspaceDirectory(directory))
+    if (allowed.get(directory)) existing.push(candidate)
   }
   return existing.toSorted((left, right) =>
     left.info.projectID.localeCompare(right.info.projectID) ||
@@ -261,18 +279,106 @@ async function workspaceList(local: LocalServer): Promise<readonly RemoteWorkspa
 
 async function sessionWorkspaces(local: LocalServer, sessions: readonly SessionInfo[]): Promise<readonly RemoteWorkspaceInfo[]> {
   const projects = new Map((await local.projectList()).map((project) => [project.id, project]))
-  return [...new Map(sessions.map((session) => {
+  const directories = [...new Set(sessions.filter((session) => session.projectID !== Project.ID.global).map((session) => session.location.directory))]
+  const permitted = new Set((await Promise.all(directories.map(async (directory) => await allowedWorkspaceDirectory(directory) ? directory : undefined)))
+    .filter((directory): directory is string => directory !== undefined))
+  return [...new Map(sessions.filter((session) => session.projectID !== Project.ID.global && permitted.has(session.location.directory)).map((session) => {
     const projectID = session.projectID
     const directory = session.location.directory
     const id = workspaceKey(projectID, directory, session.location.workspaceID)
-    const name = projects.get(projectID)?.name
+    const name = projects.get(projectID)?.name ?? basename(directory)
     return [id, { id, projectID, directory,
       ...(session.location.workspaceID === undefined ? {} : { workspaceID: session.location.workspaceID }),
-      ...(name === undefined ? {} : { name }) } as RemoteWorkspaceInfo] as const
+      name } as RemoteWorkspaceInfo] as const
   })).values()].toSorted((left, right) => left.projectID.localeCompare(right.projectID) || left.directory.localeCompare(right.directory) || left.id.localeCompare(right.id))
 }
 
-async function createRootSession(input: OperationInput, id: string, workspaceID: string): Promise<SessionInfo> {
+async function allowedWorkspaceDirectory(directory: string): Promise<boolean> {
+  const canonical = await realpath(directory).catch(() => undefined)
+  if (canonical === undefined || !(await stat(canonical).then((value) => value.isDirectory(), () => false))) return false
+  const temporary = await realpath(tmpdir()).catch(() => tmpdir())
+  if ([temporary, "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"].some((root) => contained(root, canonical))) return false
+  return !/^\/(?:private\/)?var\/folders\/[^/]+\/[^/]+\/T(?:\/|$)/.test(canonical)
+}
+
+function contained(root: string, target: string): boolean {
+  const path = relative(root, target)
+  return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !path.startsWith(sep) && !path.startsWith("/"))
+}
+
+async function catalog(local: LocalServer, location: LocalLocation) {
+  const [agents, models, model, providers, commands, skills, references, resources] = await Promise.all([
+    local.agentList(location), local.modelList(location), local.modelDefault(location), local.providerList(location),
+    local.commandList(location), local.skillList(location), local.referenceList(location), local.resourceCatalog(location),
+  ])
+  for (const [items, limit] of [
+    [agents, catalogLimit.agents], [models, catalogLimit.models], [commands, catalogLimit.commands],
+    [skills, catalogLimit.skills], [references, catalogLimit.references], [resources.resources, catalogLimit.resources],
+  ] as const) if (items.length > limit) throw new OperationError("message_too_large", "Catalog exceeds its bounded list size")
+  if (providers.length > 500 || models.some((item) => item.variants.length > 50))
+    throw new OperationError("message_too_large", "Catalog exceeds its bounded list size")
+  const connected = new Map(providers.filter((provider) => provider.disabled !== true).map((provider) => [provider.id, provider.name]))
+  return {
+    agents: agents.map((agent) => ({ id: agent.id, name: agent.name, ...(agent.description === undefined ? {} : { description: agent.description }),
+      mode: agent.mode, hidden: agent.hidden, ...(agent.model === undefined ? {} : { model: agent.model }) })),
+    models: models.filter((item) => connected.has(item.providerID) && item.enabled).map((item) => ({
+      providerID: item.providerID, providerName: connected.get(item.providerID), id: item.id, name: item.name,
+      variants: item.variants.map((variant) => variant.id),
+    })),
+    ...(model === null ? {} : { defaultModel: { providerID: model.providerID, id: model.id } }),
+    commands: commands.map((command) => ({ name: command.name, ...(command.description === undefined ? {} : { description: command.description }) })),
+    skills: skills.map((skill) => ({ id: skill.id, name: skill.name,
+      ...(skill.description === undefined ? {} : { description: skill.description }), slash: skill.slash === true })),
+    references: references.filter((reference) => reference.hidden !== true).map((reference) => ({ name: reference.name,
+      uri: pathToFileURL(reference.path).href, ...(reference.description === undefined ? {} : { description: reference.description }) })),
+    resources: resources.resources.map((resource) => ({ name: resource.name, uri: resource.uri,
+      ...(resource.description === undefined ? {} : { description: resource.description }) })),
+  }
+}
+
+async function findFiles(local: LocalServer, location: LocalLocation, query: string, limit: number) {
+  const entries = await local.fileFind(location, query, limit)
+  if (entries.length > limit) throw new OperationError("message_too_large", "File search exceeded the requested limit")
+  return { files: entries.map((entry) => {
+    const target = resolve(location.directory, entry.path)
+    if (!contained(location.directory, target) || target === location.directory)
+      throw new OperationError("invalid_message", "File search returned an invalid relative path")
+    return { path: entry.path.split(sep).join("/"), uri: pathToFileURL(target).href, kind: entry.type }
+  }) }
+}
+
+async function requireFileAttachments(local: LocalServer, location: LocalLocation, files: LocalPrompt["files"]) {
+  if (files === undefined || files.length === 0) return
+  const fileURIs = files.map((file) => typeof file === "object" && file !== null ? Reflect.get(file, "uri") : undefined)
+  const root = fileURIs.some((uri) => typeof uri === "string" && uri.startsWith("file:"))
+    ? await realpath(location.directory).catch(() => undefined) : undefined
+  const catalogRequired: string[] = []
+  for (const uri of fileURIs) {
+    if (typeof uri !== "string") throw new OperationError("invalid_message", "Invalid attachment URI")
+    if (!uri.startsWith("file:")) {
+      catalogRequired.push(uri)
+      continue
+    }
+    const target = await Promise.resolve().then(() => fileURLToPath(uri)).then((path) => realpath(path), () => undefined).catch(() => undefined)
+    if (root === undefined || target === undefined || !contained(root, target)) catalogRequired.push(uri)
+  }
+  if (catalogRequired.length === 0) return
+  const available = await catalog(local, location)
+  const permitted = new Set([...available.references, ...available.resources].map((resource) => resource.uri))
+  if (catalogRequired.some((uri) => !permitted.has(uri))) throw new OperationError("invalid_message", "Attachment is outside the Session Location and current catalog")
+}
+
+function modelSelection(value: unknown): ModelSelection {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new OperationError("invalid_message", "Invalid model")
+  if (Object.keys(value).some((key) => !["providerID", "id", "variant"].includes(key))) throw new OperationError("invalid_message", "Invalid model")
+  const providerID = Reflect.get(value, "providerID")
+  const id = Reflect.get(value, "id")
+  const variant = Reflect.get(value, "variant")
+  return { providerID: requireString(providerID, "providerID", 128), id: requireString(id, "model.id", 128),
+    ...(variant === undefined ? {} : { variant: requireString(variant, "variant", 128) }) }
+}
+
+async function createRootSession(input: OperationInput, id: string, workspaceID: string, agent?: string, model?: { readonly providerID: string; readonly id: string; readonly variant?: string }): Promise<SessionInfo> {
   const candidate = (await workspaceInventory(input.local)).find((item) => item.info.id === workspaceID)
   if (candidate === undefined) throw new OperationError("invalid_message", "Workspace is unavailable; refresh the workspace list and reopen it")
   if (!(await stat(candidate.location.directory).then((value) => value.isDirectory(), () => false)))
@@ -290,7 +396,7 @@ async function createRootSession(input: OperationInput, id: string, workspaceID:
     return current
   }
 
-  const created = await input.local.createSession(id, candidate.location)
+  const created = await input.local.createSession(id, candidate.location, agent, model)
   assertRootPlacement(created, id, candidate)
   await input.sessions.refresh()
   const verified = await input.sessions.verify(id)
@@ -346,15 +452,26 @@ async function run(input: OperationInput) {
   if (validated.kind === "workspace.list") return { data: validated.sessionsOnly
     ? await sessionWorkspaces(input.local, input.sessions.snapshot())
     : await workspaceList(input.local) }
+  if (validated.kind === "workspace.catalog" || validated.kind === "workspace.file.find") {
+    const candidate = (await workspaceInventory(input.local)).find((item) => item.info.id === validated.workspace)
+    if (candidate === undefined) throw new OperationError("invalid_message", "Workspace is unavailable")
+    const current = await input.local.projectCurrent(candidate.location)
+    if (current.id !== candidate.info.projectID) throw new OperationError("invalid_message", "Workspace project changed")
+    return validated.kind === "workspace.catalog" ? catalog(input.local, candidate.location) : findFiles(input.local, candidate.location, validated.query, validated.limit)
+  }
   if (validated.kind === "session.create")
-    return { data: await createRootSession(input, validated.id, validated.workspace) }
+    return { data: await createRootSession(input, validated.id, validated.workspace, validated.agent, validated.model) }
   if (validated.kind === "list") return listPage(input.sessions.snapshot(), validated.query,
-    validated.query.status === undefined ? undefined : activeIDs(await input.local.activeSessions()))
+    validated.query.status === undefined && validated.query.order !== "active" ? undefined : activeIDs(await input.local.activeSessions()))
   if (validated.kind === "active") {
     const allowed = new Set(input.sessions.ids())
     const active = await input.local.activeSessions()
     return { data: filterActiveSessions(active, allowed) }
   }
+  if (validated.kind === "status") return sessionStatus(input.local, input.sessions.snapshot())
+  if (validated.kind === "usage.providers") return { data: (await input.local.providerUsageList(validated.refresh)).data }
+  if (validated.kind === "usage.summary") return { data: await input.local.usageSummary() }
+  if (validated.kind === "usage.report") return { data: await input.local.usageReport(validated.input) }
   if (!scopedOperation(request.operation)) return unknownOperation()
   const sessionID = request.sessionID
   if (sessionID === undefined) throw new OperationError("session_required", "Operation requires a session")
@@ -371,6 +488,22 @@ async function run(input: OperationInput) {
       return await input.local.snapshot(sessionID, location)
     case "subagent.list":
       return await input.local.subagentPage(sessionID, location, validated.cursor)
+    case "catalog":
+      return catalog(input.local, location)
+    case "file.find":
+      return findFiles(input.local, location, validated.query, validated.limit)
+    case "switchModel":
+      await input.local.switchModel(sessionID, location, validated.model)
+      return null
+    case "switchAgent":
+      await input.local.switchAgent(sessionID, location, validated.agent)
+      return null
+    case "command":
+      await requireFileAttachments(input.local, location, validated.input.files)
+      return { data: await input.local.command(sessionID, location, validated.input) }
+    case "skill":
+      await input.local.skill(sessionID, location, validated.input)
+      return null
     case "messages":
       return { data: await input.local.messages(sessionID, location) }
     case "autonomy.get":
@@ -409,6 +542,7 @@ async function run(input: OperationInput) {
     case "unsubscribe":
       return null
     case "prompt":
+      await requireFileAttachments(input.local, location, validated.input.files)
       return { data: await input.local.prompt(sessionID, location, validated.input) }
     case "interrupt":
       await input.local.interrupt(sessionID, location)
@@ -455,7 +589,19 @@ type Validated =
   | { readonly kind: "workspace.list"; readonly sessionsOnly: boolean }
   | { readonly kind: "list"; readonly query: ListQuery }
   | { readonly kind: "active" }
-  | { readonly kind: "session.create"; readonly id: string; readonly workspace: string }
+  | { readonly kind: "status" }
+  | { readonly kind: "usage.providers"; readonly refresh?: boolean }
+  | { readonly kind: "usage.summary" }
+  | { readonly kind: "usage.report"; readonly input: RemoteUsageReportInput }
+  | { readonly kind: "session.create"; readonly id: string; readonly workspace: string; readonly agent?: string; readonly model?: ModelSelection }
+  | { readonly kind: "workspace.catalog"; readonly workspace: string }
+  | { readonly kind: "workspace.file.find"; readonly workspace: string; readonly query: string; readonly limit: number }
+  | { readonly kind: "catalog" }
+  | { readonly kind: "file.find"; readonly query: string; readonly limit: number }
+  | { readonly kind: "switchModel"; readonly model: ModelSelection }
+  | { readonly kind: "switchAgent"; readonly agent: string }
+  | { readonly kind: "command"; readonly input: CommandInput }
+  | { readonly kind: "skill"; readonly input: { readonly id?: string; readonly skill: string; readonly resume?: boolean } }
   | { readonly kind: "get" }
   | { readonly kind: "snapshot" }
   | { readonly kind: "subagent.list"; readonly cursor?: string }
@@ -483,6 +629,7 @@ type Validated =
 const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
   "session.get": "get",
   "session.snapshot": "snapshot",
+  "session.catalog": "catalog",
   "session.messages": "messages",
   "session.autonomy.get": "autonomy.get",
   "session.permission.list": "permission.list",
@@ -500,16 +647,56 @@ function validate(request: RemoteRequest): Validated {
   if (request.operation === "workspace.list") return { kind: "workspace.list", sessionsOnly: fields.sessionsOnly === true }
   if (request.operation === "session.list") return { kind: "list", query: parseListQuery(fields) }
   if (request.operation === "session.active") return { kind: "active" }
+  if (request.operation === "session.status") return { kind: "status" }
+  if (request.operation === "usage.providers") return { kind: "usage.providers",
+    ...(fields.refresh === undefined ? {} : { refresh: requireBoolean(fields.refresh, "refresh") }) }
+  if (request.operation === "usage.summary") return { kind: "usage.summary" }
+  if (request.operation === "usage.report") {
+    const group = literal(fields.group, ["model", "hour", "day", "month", "session", "project", "agent"], "group")
+    const from = optionalInteger(fields.from, "from", 0, Number.MAX_SAFE_INTEGER)
+    const to = optionalInteger(fields.to, "to", 0, Number.MAX_SAFE_INTEGER)
+    if (from !== undefined && to !== undefined && from >= to) throw new OperationError("invalid_message", "Usage report from must precede to")
+    return { kind: "usage.report", input: { group,
+      ...(from === undefined ? {} : { from }), ...(to === undefined ? {} : { to }),
+      ...(fields.offset === undefined ? {} : { offset: optionalInteger(fields.offset, "offset", 0, Number.MAX_SAFE_INTEGER)! }),
+      ...(fields.limit === undefined ? {} : { limit: optionalInteger(fields.limit, "limit", 1, 200)! }),
+      ...(fields.sort === undefined ? {} : { sort: literal(fields.sort, ["key", "tokens", "cost", "steps", "input", "output", "reasoning", "cacheRead", "cacheWrite"], "sort") }),
+      ...(fields.order === undefined ? {} : { order: literal(fields.order, ["asc", "desc"], "order") }),
+    } }
+  }
+  if (request.operation === "workspace.catalog") return { kind: "workspace.catalog", workspace: requireString(fields.workspace, "workspace", 128) }
+  if (request.operation === "workspace.file.find" || request.operation === "session.file.find") {
+    const query = requireString(fields.query, "query", 200)
+    const limit = optionalInteger(fields.limit, "limit", 1, 50) ?? 20
+    return request.operation === "workspace.file.find" ? { kind: "workspace.file.find", workspace: requireString(fields.workspace, "workspace", 128), query, limit } : { kind: "file.find", query, limit }
+  }
   if (request.operation === "session.subagent.list") return { kind: "subagent.list", cursor: fields.cursor === undefined ? undefined : requireString(fields.cursor, "cursor", 1_024) }
   if (request.operation === "session.create")
     return {
       kind: "session.create",
       id: sessionID(fields.id, "id"),
       workspace: requireString(fields.workspace, "workspace", 128),
+      ...(fields.agent === undefined ? {} : { agent: requireString(fields.agent, "agent", 128) }),
+      ...(fields.model === undefined ? {} : { model: modelSelection(fields.model) }),
     }
   const plain = plainKinds[request.operation]
   if (plain !== undefined) return { kind: plain } as Validated
   switch (request.operation) {
+    case "session.switchModel": return { kind: "switchModel", model: modelSelection(fields.model) }
+    case "session.switchAgent": return { kind: "switchAgent", agent: requireString(fields.agent, "agent", 128) }
+    case "session.command": return { kind: "command", input: {
+      ...(fields.id === undefined ? {} : { id: messageID(fields.id) }),
+      command: requireString(fields.command, "command", 256),
+      ...(fields.arguments === undefined ? {} : { arguments: requireString(fields.arguments, "arguments", 8_192, { allowEmpty: true }) }),
+      ...(fields.files === undefined ? {} : { files: fileAttachments(fields.files) }),
+      ...(fields.agents === undefined ? {} : { agents: agentAttachments(fields.agents) }),
+      ...(fields.delivery === undefined ? {} : { delivery: delivery(fields.delivery) }),
+    } }
+    case "session.skill": return { kind: "skill", input: {
+      ...(fields.id === undefined ? {} : { id: messageID(fields.id) }),
+      skill: requireString(fields.skill, "skill", 128),
+      ...(fields.resume === undefined ? {} : { resume: requireBoolean(fields.resume, "resume") }),
+    } }
     case "session.log":
       return { kind: "log", after: optionalInteger(fields.after, "after", 0, Number.MAX_SAFE_INTEGER) }
     case "session.shell.output": {
@@ -621,16 +808,63 @@ function scopedOperation(operation: RemoteOperation) {
   return !unscopedOperations.has(operation) && requireSession(operation)
 }
 
+export async function sessionStatus(local: LocalServer, sessions: readonly SessionInfo[], knownAttention?: readonly string[]) {
+  const byID = new Map(sessions.map((session) => [session.id, session]))
+  const active = activeIDs(await local.activeSessions())
+  const running = new Set([...active].flatMap((id) => {
+    const session = byID.get(id)
+    const root = session && rootSessionID(session, byID)
+    return root === undefined ? [] : [root]
+  }))
+  if (running.size > RemoteLimits.maxStatusSessions || (knownAttention !== undefined && knownAttention.length > RemoteLimits.maxStatusSessions))
+    throw new OperationError("message_too_large", "Session status exceeds the bounded root count")
+  if (knownAttention !== undefined) return { running: [...running].sort(), attention: knownAttention }
+  const attention = new Set<string>()
+  for (let offset = 0; offset < sessions.length; offset += 8) {
+    await Promise.all(sessions.slice(offset, offset + 8).map(async (session) => {
+      const rootID = rootSessionID(session, byID)
+      if (rootID === undefined) return
+      const [permissions, forms, reviews] = await Promise.all([
+        local.permissionList(session.id, locationInfo(session)), local.formList(session.id, locationInfo(session)),
+        session.id === rootID ? local.guardrailRequestList(rootID, locationInfo(session)) : Promise.resolve([]),
+      ])
+      if (!Array.isArray(permissions) || !Array.isArray(forms) || !Array.isArray(reviews))
+        throw new OperationError("internal_error", "The local Session request listing was unreadable")
+      if (permissions.some((item) => typeof item === "object" && item !== null && Reflect.get(item, "sessionID") === session.id) ||
+        forms.some((form) => form.sessionID === session.id) ||
+        reviews.some((item) => {
+          const reviewSession = typeof item === "object" && item !== null ? byID.get(Reflect.get(item, "sessionID")) : undefined
+          return reviewSession !== undefined && rootSessionID(reviewSession, byID) === rootID
+        })) attention.add(rootID)
+    }))
+  }
+  if (attention.size > RemoteLimits.maxStatusSessions)
+    throw new OperationError("message_too_large", "Session status exceeds the bounded root count")
+  return { running: [...running].sort(), attention: [...attention].sort() }
+}
+
+function rootSessionID(session: SessionInfo, byID: ReadonlyMap<string, SessionInfo>): string | undefined {
+  const seen = new Set<string>()
+  let current = session
+  while (current.parentID !== undefined && !seen.has(current.id)) {
+    seen.add(current.id)
+    const parent = byID.get(current.parentID)
+    if (parent === undefined) return undefined
+    current = parent
+  }
+  return current.parentID === undefined ? current.id : undefined
+}
+
 /** Running status is only ever reported for Sessions the user shared. */
 export function filterActiveSessions(value: unknown, allowed: ReadonlySet<string>) {
   if (typeof value !== "object" || value === null) return {}
   return Object.fromEntries(Object.entries(value).filter(([sessionID]) => allowed.has(sessionID)))
 }
 
-type Cursor = { readonly id: string; readonly time: number; readonly direction: "next" | "previous"; readonly pinned?: number | null }
+type Cursor = { readonly id: string; readonly time: number; readonly direction: "next" | "previous"; readonly pinned?: number | null; readonly running?: boolean }
 
 export type ListQuery = {
-  readonly order: "asc" | "desc" | "pinned"
+  readonly order: "asc" | "desc" | "pinned" | "active"
   readonly search?: string
   readonly searchFields?: "summary"
   readonly workspace?: string
@@ -641,10 +875,12 @@ export type ListQuery = {
 }
 
 export function parseListQuery(fields: Readonly<Record<string, unknown>>): ListQuery {
-  const order = fields.order === undefined ? "desc" : literal(fields.order, ["asc", "desc", "pinned"], "order")
+  const order = fields.order === undefined ? "desc" : literal(fields.order, ["asc", "desc", "pinned", "active"], "order")
   const anchor = fields.cursor === undefined ? undefined : cursor(fields.cursor)
   if (order === "pinned" && anchor !== undefined && anchor.pinned === undefined)
     throw new OperationError("invalid_message", "Pinned Session cursor is missing its sort key")
+  if (order === "active" && anchor !== undefined && (anchor.pinned === undefined || anchor.running === undefined))
+    throw new OperationError("invalid_message", "Active Session cursor is missing its sort key")
   return {
     order,
     search: fields.search === undefined ? undefined : requireString(fields.search, "search", 200, { allowEmpty: true }),
@@ -661,7 +897,11 @@ export function parseListQuery(fields: Readonly<Record<string, unknown>>): ListQ
 export function listPage(sessions: readonly SessionInfo[], query: ListQuery, running?: ReadonlySet<string>) {
   const { order, search, parentID, limit, anchor } = query
   const direction = anchor?.direction ?? "next"
-  const effectiveOrder = order === "pinned" ? "pinned" : direction === "previous" ? (order === "asc" ? "desc" : "asc") : order
+  const effectiveOrder = order === "pinned" || order === "active" ? order : direction === "previous" ? (order === "asc" ? "desc" : "asc") : order
+  const byID = new Map(sessions.map((session) => [session.id, session]))
+  const runningRoots = new Set(sessions.filter((session) => running?.has(session.id)).map((session) => rootSessionID(session, byID)).filter((id): id is string => id !== undefined))
+  const activeKey = (session: SessionInfo) => ({ id: session.id, time: session.time,
+    running: session.parentID === undefined && runningRoots.has(session.id) })
   const needle = search?.toLowerCase()
   const matching = sessions
     .filter((session) => query.workspace === undefined || workspaceKey(session.projectID, session.location.directory, session.location.workspaceID) === query.workspace)
@@ -671,11 +911,13 @@ export function listPage(sessions: readonly SessionInfo[], query: ListQuery, run
       : session.title.toLowerCase().includes(needle)))
     .filter((session) => query.status === undefined || (query.status === "running" ? running?.has(session.id) === true : running?.has(session.id) !== true && session.time.archived === undefined))
     .filter((session) => (parentID === undefined ? true : (session.parentID ?? null) === parentID))
-    .sort(order === "pinned" ? comparePinnedSessions : compareSessions)
-  const ordered = effectiveOrder === "asc" || (effectiveOrder === "pinned" && direction === "next") ? matching : matching.toReversed()
-  const anchored = anchor === undefined ? ordered : ordered.filter((session) => effectiveOrder === "pinned"
-    ? comparePinnedSessions(session, { id: anchor.id, time: { updated: anchor.time, pinned: anchor.pinned ?? undefined } }) * (direction === "next" ? 1 : -1) > 0
-    : afterAnchor(session, anchor, effectiveOrder))
+    .sort(order === "active" ? (left, right) => compareActiveSessions(activeKey(left), activeKey(right)) : order === "pinned" ? comparePinnedSessions : compareSessions)
+  const ordered = effectiveOrder === "asc" || ((effectiveOrder === "pinned" || effectiveOrder === "active") && direction === "next") ? matching : matching.toReversed()
+  const anchored = anchor === undefined ? ordered : ordered.filter((session) => effectiveOrder === "active"
+    ? compareActiveSessions(activeKey(session), { id: anchor.id, time: { updated: anchor.time, pinned: anchor.pinned ?? undefined }, running: anchor.running === true }) * (direction === "next" ? 1 : -1) > 0
+    : effectiveOrder === "pinned"
+      ? comparePinnedSessions(session, { id: anchor.id, time: { updated: anchor.time, pinned: anchor.pinned ?? undefined } }) * (direction === "next" ? 1 : -1) > 0
+      : afterAnchor(session, anchor, effectiveOrder))
   const page = anchored.slice(0, limit)
   const remaining = anchored.length - page.length
   const data = direction === "previous" ? page.toReversed() : page
@@ -685,10 +927,10 @@ export function listPage(sessions: readonly SessionInfo[], query: ListQuery, run
     data,
     cursor: {
       previous: first && (direction === "next" ? anchor !== undefined : remaining > 0)
-        ? encodeCursor({ id: first.id, time: first.time.updated, direction: "previous", ...(order === "pinned" ? { pinned: first.time.pinned ?? null } : {}) })
+        ? encodeCursor({ id: first.id, time: first.time.updated, direction: "previous", ...(order === "pinned" || order === "active" ? { pinned: first.time.pinned ?? null } : {}), ...(order === "active" ? { running: activeKey(first).running } : {}) })
         : undefined,
       next: last && (direction === "previous" ? anchor !== undefined : remaining > 0)
-        ? encodeCursor({ id: last.id, time: last.time.updated, direction: "next", ...(order === "pinned" ? { pinned: last.time.pinned ?? null } : {}) })
+        ? encodeCursor({ id: last.id, time: last.time.updated, direction: "next", ...(order === "pinned" || order === "active" ? { pinned: last.time.pinned ?? null } : {}), ...(order === "active" ? { running: activeKey(last).running } : {}) })
         : undefined,
     },
   }
@@ -707,8 +949,9 @@ function cursor(value: unknown): Cursor {
     const record = parsed as Record<string, unknown>
     if (typeof record.id !== "string" || typeof record.time !== "number") throw new Error("shape")
     if (record.pinned !== undefined && record.pinned !== null && typeof record.pinned !== "number") throw new Error("shape")
+    if (record.running !== undefined && typeof record.running !== "boolean") throw new Error("shape")
     return { id: record.id, time: record.time, direction: literal(record.direction, ["next", "previous"], "cursor"),
-      ...(record.pinned === undefined ? {} : { pinned: record.pinned }) }
+      ...(record.pinned === undefined ? {} : { pinned: record.pinned }), ...(record.running === undefined ? {} : { running: record.running }) }
   } catch {
     throw new OperationError("invalid_message", "Invalid cursor")
   }
@@ -730,6 +973,16 @@ function comparePinnedSessions(left: SessionOrderKey, right: SessionOrderKey) {
   return -compareSessions(left, right)
 }
 
+function compareActiveSessions(left: SessionOrderKey & { readonly running: boolean }, right: SessionOrderKey & { readonly running: boolean }) {
+  if (left.running !== right.running) return left.running ? -1 : 1
+  const pinnedLeft = left.time.pinned
+  const pinnedRight = right.time.pinned
+  if (pinnedLeft !== undefined && pinnedRight === undefined) return -1
+  if (pinnedLeft === undefined && pinnedRight !== undefined) return 1
+  if (pinnedLeft !== undefined && pinnedRight !== undefined && pinnedLeft !== pinnedRight) return pinnedRight - pinnedLeft
+  return -compareSessions(left, right)
+}
+
 function activeIDs(value: unknown): ReadonlySet<string> {
   if (typeof value !== "object" || value === null) return new Set()
   return new Set(Object.entries(value).filter(([, state]) => typeof state === "object" && state !== null && Reflect.get(state, "type") === "running").map(([id]) => id))
@@ -745,6 +998,18 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "workspace.list": ["sessionsOnly"],
   "session.list": ["limit", "order", "search", "searchFields", "parentID", "cursor", "workspace", "status"],
   "session.active": [],
+  "usage.providers": ["refresh"],
+  "usage.summary": [],
+  "usage.report": ["group", "from", "to", "offset", "limit", "sort", "order"],
+  "session.status": [],
+  "session.catalog": [],
+  "workspace.catalog": ["workspace"],
+  "session.file.find": ["query", "limit"],
+  "workspace.file.find": ["workspace", "query", "limit"],
+  "session.switchModel": ["model"],
+  "session.switchAgent": ["agent"],
+  "session.command": ["id", "command", "arguments", "files", "agents", "delivery"],
+  "session.skill": ["id", "skill", "resume"],
   "session.get": [],
   "session.snapshot": [],
   "session.subagent.list": ["cursor"],
@@ -768,7 +1033,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.autonomy.set": ["yolo", "maxNoProgress"],
   "session.goal.set": ["goal", "maxNoProgress"],
   "session.goal.stop": ["goal"],
-  "session.create": ["id", "workspace"],
+  "session.create": ["id", "workspace", "agent", "model"],
 }
 
 function validateFields(request: RemoteRequest): Readonly<Record<string, unknown>> {
@@ -781,6 +1046,10 @@ function validateFields(request: RemoteRequest): Readonly<Record<string, unknown
 
 const mutations: ReadonlySet<string> = new Set([
   "session.create",
+  "session.switchModel",
+  "session.switchAgent",
+  "session.command",
+  "session.skill",
   "session.prompt",
   "session.interrupt",
   "session.permission.reply",
@@ -808,6 +1077,8 @@ function localError(cause: LocalFailure, request: RemoteRequest): readonly [Remo
     case "not_found":
       if (reviewReplies.has(request.operation))
         return ["invalid_message", "That request is no longer pending; reload before replying"]
+      if (request.operation === "session.command" || request.operation === "session.skill")
+        return ["invalid_message", "The command or skill is not available at this Location"]
       // A shell reference is scoped to one session read; a gone shell is a stale
       // reference, not a Session that moved.
       if (request.operation === "session.shell.output")

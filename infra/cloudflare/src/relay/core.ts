@@ -25,7 +25,9 @@ import {
   type RemoteErrorCode,
   type RemoteOperation,
   type RemoteResponse,
+  type RemoteStatus,
 } from "../../../../packages/remote/src/index"
+import type { PushEvent } from "../push/send"
 export type RelayConnection = {
   readonly connectionID: string
   readonly role: "agent" | "client"
@@ -54,6 +56,7 @@ export type RelayDeps = {
    * expiry during event delivery.
    */
   readonly authorityTtlMs: number
+  readonly notifyPush?: (accountID: string, event: PushEvent) => void
 }
 
 export type Relay = ReturnType<typeof createRelay>
@@ -71,6 +74,7 @@ type ClientState = {
 
 type AgentState = {
   readonly connectionID: string
+  readonly ownerID: string
   readonly deviceID: string
   readonly credentialExpiresAt: number
   violations: number
@@ -108,6 +112,10 @@ const policyMessage = "Agent violated the relay policy"
 
 export function createRelay(deps: RelayDeps) {
   const clients = new Map<string, ClientState>()
+  let latestStatus: string | undefined
+  let previousStatus: RemoteStatus | undefined
+  let pushWindowStart = deps.now()
+  let pushWindowCount = 0
   const pending = new Map<string, PendingRequest>()
   let agent: AgentState | undefined
 
@@ -183,6 +191,8 @@ export function createRelay(deps: RelayDeps) {
     if (!agent) return
     const connectionID = agent.connectionID
     agent = undefined
+    latestStatus = undefined
+    previousStatus = undefined
     failAllPending("outcome_unknown", outcomeUnknownMessage)
     deps.close(connectionID, code, reason)
   }
@@ -265,12 +275,15 @@ export function createRelay(deps: RelayDeps) {
         if (agent && agent.connectionID !== connection.connectionID) detachAgent(RemoteCloseCode.serviceRestart, "Agent connection replaced")
         agent = {
           connectionID: connection.connectionID,
+          ownerID: connection.ownerID,
           deviceID: connection.deviceID,
           credentialExpiresAt: connection.credentialExpiresAt,
           violations: 0,
           windowStart: deps.now(),
           windowCount: 0,
         }
+        latestStatus = undefined
+        previousStatus = undefined
         for (const client of Array.from(clients.values())) {
           if (deps.now() >= client.credentialExpiresAt) {
             removeClient(client.connectionID, RemoteCloseCode.unauthorized, sessionUnauthorizedMessage)
@@ -321,6 +334,7 @@ export function createRelay(deps: RelayDeps) {
       }
       clients.set(client.connectionID, client)
       deps.send(client.connectionID, serializeSessions({ type: "sessions" }))
+      if (latestStatus !== undefined) deps.send(client.connectionID, latestStatus)
       sendSubscriptionSnapshot(client.connectionID, client.subscriptions)
       if (connection.pending.length > 0) {
         for (const entry of connection.pending)
@@ -405,6 +419,27 @@ export function createRelay(deps: RelayDeps) {
       if (message.type === "sessions") {
         for (const client of clients.values())
           deps.send(client.connectionID, serializeSessions({ type: "sessions" }))
+        return
+      }
+      if (message.type === "status") {
+        latestStatus = raw
+        for (const client of clients.values()) deps.send(client.connectionID, raw)
+        const before = previousStatus
+        previousStatus = message
+        if (before !== undefined && deps.notifyPush !== undefined) {
+          const oldAttention = new Set(before.attention)
+          const running = new Set(message.running)
+          const events: PushEvent[] = [
+            ...message.attention.filter((sessionID) => !oldAttention.has(sessionID)).map((sessionID) => ({ category: "approval-requested" as const, sessionID, deviceID: current.deviceID })),
+            ...before.running.filter((sessionID) => !running.has(sessionID)).map((sessionID) => ({ category: "agent-completed" as const, sessionID, deviceID: current.deviceID })),
+          ]
+          if (deps.now() - pushWindowStart >= 60_000) { pushWindowStart = deps.now(); pushWindowCount = 0 }
+          for (const event of events) {
+            if (pushWindowCount >= 20) break
+            pushWindowCount++
+            try { deps.notifyPush(current.ownerID, event) } catch {}
+          }
+        }
         return
       }
       if (message.type === "event") {

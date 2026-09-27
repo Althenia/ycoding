@@ -16,9 +16,11 @@ The relay wire contract is specified in [`packages/remote/CONTRACT.md`](../packa
 | D1 binding     | `DB` → database `ycoding-prod-db` (`database_id` `3384fc56-42d6-40a1-af04-5a75bd391132`)                                               |
 | Static assets  | `ASSETS` from `apps/web/dist`, `not_found_handling: single-page-application`                                                           |
 | Cron trigger   | `17 * * * *`, the bounded cleanup sweep                                                                                                |
-| Secrets        | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_ALLOWED_EMAILS`, set with `wrangler secret put` and never stored in the repository |
+| Secrets        | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_ALLOWED_EMAILS`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`, set with `wrangler secret put` and never stored in the repository |
 
 `GOOGLE_ALLOWED_EMAILS` fails closed: a missing or empty value denies every Google sign-in, and the value is never returned to a client or logged.
+
+Web Push uses one VAPID key pair. Generate it locally with `bun infra/cloudflare/script/vapid-keys.ts`, keep the private value private, and set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` (an operator-owned `mailto:` or `https:` URI) as Worker secrets. While any of them is missing or invalid, `GET /api/push/key` answers `503`, browsers report push as unavailable, and the relay sends no pushes. Rotating the pair invalidates existing browser subscriptions until each browser subscribes again. Apply `0002_push.sql` with the migration procedure below before deploying a Worker that stores subscriptions; the release workflow builds and deploys but does not apply D1 migrations.
 
 Commands below run from the repository root and target the committed configuration with `--config infra/cloudflare/wrangler.jsonc`. Wrangler is pinned to 4.133.0; `bunx wrangler` resolves that local version.
 
@@ -30,7 +32,7 @@ Perform a coordinated release in this order: stop existing `ycoding remote conne
 
 ## Stored metadata and retention
 
-D1 stores authentication and device metadata only. It never stores transcripts, message projections, streaming deltas, tool output, Session contents, or file contents; Session data stays on the user's machine and crosses the relay as live WebSocket frames.
+D1 stores authentication and device metadata and Web Push subscriptions only. It never stores transcripts, message projections, streaming deltas, tool output, Session contents, or file contents; Session data stays on the user's machine and crosses the relay as live WebSocket frames.
 
 Authenticated `GET /api/devices` and `GET /api/me` return each retained device with `online: boolean`. The Worker reads that value from the owner/device Durable Object's current authenticated agent connection; a revoked device and any failed presence read report `false`. `status`, `lastSeenAt`, and enrollment alone never mark a device online. Revoked and offline devices remain in these Settings-facing lists, while a connectable-device picker must select only `status: "active"` entries whose `online` value is `true`.
 
@@ -42,10 +44,11 @@ Authenticated `GET /api/devices` and `GET /api/me` return each retained device w
 | `device_credential`              | Hashed access and refresh credentials with expiry and revocation markers.                                      |
 | `enrollment`, `device_challenge` | Short-lived, single-use enrollment and challenge rows.                                                         |
 | `oauth_transaction`              | Google OIDC transaction state, nonce, code verifier, and redirect target.                                      |
+| `push_subscription`              | Web Push endpoint, owning account, the browser's P-256 and auth keys, creation time, and a failure count.      |
 
 Single-use rows contain plaintext values required by the protocol: `oauth_transaction.nonce` and `code_verifier` (10-minute lifetime) and `device_challenge.nonce` (2-minute lifetime). The OAuth nonce travels in the Google authorization redirect; the verifier stays server-side. The device challenge nonce is returned to the enrolling agent. Do not log these values.
 
-The bounded sweep deletes expired rows from `oauth_transaction`, `device_challenge`, `enrollment`, `browser_session`, and `device_credential` seven days after expiry, at most 500 rows per table per pass. It runs hourly by cron and at most once per hour per isolate during request handling. `user`, `identity`, and `device` rows have no deletion path: revoking a device revokes its credentials and closes its sockets but does not remove the stored identity, and there is no in-product account-deletion operation. No other retention period is promised.
+The bounded sweep deletes expired rows from `oauth_transaction`, `device_challenge`, `enrollment`, `browser_session`, and `device_credential` seven days after expiry, at most 500 rows per table per pass. It runs hourly by cron and at most once per hour per isolate during request handling. `user`, `identity`, and `device` rows have no deletion path: revoking a device revokes its credentials and closes its sockets but does not remove the stored identity, and there is no in-product account-deletion operation. An account keeps at most 10 push subscriptions; subscribing again evicts the oldest. A subscription is deleted when the browser unsubscribes, when its push service answers `404` or `410`, after five other consecutive delivery failures, or with its account. No other retention period is promised.
 
 No user-facing privacy policy is published from this repository. The durable data-handling contract is the header of [`0001_auth.sql`](../infra/cloudflare/migrations/0001_auth.sql) and the comments in [`env.ts`](../infra/cloudflare/src/env.ts); a public privacy notice is a web-lane product artifact.
 
@@ -65,7 +68,7 @@ Verify the account's logging settings before relying on persistence or retention
 
 ### Privacy rules for logging
 
-- Never log, copy, or retain the Google client secret, the `GOOGLE_ALLOWED_EMAILS` value, `yc_session` or `yc_oauth` cookie tokens, enrollment codes, challenge nonces, device access or refresh credentials, or D1 export contents.
+- Never log, copy, or retain the Google client secret, the `GOOGLE_ALLOWED_EMAILS` value, `yc_session` or `yc_oauth` cookie tokens, enrollment codes, challenge nonces, device access or refresh credentials, the VAPID private key, push subscription endpoints or keys, or D1 export contents.
 - Do not add request-body logging to `/api/auth/*` or `/api/devices/*`.
 - Real-time log events can contain `cookie` and `authorization` request headers and full query strings. Treat raw tail output as sensitive: do not paste it into Git, an issue, a chat, or a CI artifact. Keep only the method, an allowlisted route path without query strings, and outcome; omit headers and credentials from every excerpt.
 

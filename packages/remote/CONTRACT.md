@@ -20,6 +20,9 @@ vocabulary changes the contract for all three at once.
 | `POST` | `/api/auth/logout` | browser session | same-origin required | Revoke the browser session and close its relay sockets |
 | `GET` | `/api/me` | browser session | not required | Owner, session expiry, and device list (read-only, no `Set-Cookie`) |
 | `GET` | `/api/devices` | browser session | not required | `{ devices: RemoteDeviceInfo[] }` (pinned `DevicesResponse`) |
+| `GET` | `/api/push/key` | browser session | not required | `{ publicKey }`; `503` if VAPID is unavailable |
+| `POST` | `/api/push/subscriptions` | browser session | same-origin required | Upsert `{ endpoint, keys: { p256dh, auth } }` for this account |
+| `DELETE` | `/api/push/subscriptions` | browser session | same-origin required | Remove `{ endpoint }` for this account |
 | `POST` | `/api/devices/enrollments` | browser session | same-origin required | Mint a one-use enrollment code |
 | `POST` | `/api/devices/enroll` | enrollment code | none (native agent) | Register a device public key |
 | `POST` | `/api/devices/challenge` | none (rate limited) | none (native agent) | Mint a one-use device challenge |
@@ -214,6 +217,7 @@ One JSON object per WebSocket frame, discriminated by `type`.
 | `response` | agent → relay → client | `{ type:"response", id, ok:true, value, chunk? }` or `{ type:"response", id, ok:false, error:{ code, message } }` |
 | `event` | agent → relay → clients | `{ type:"event", sessionID, event }` |
 | `sessions` | agent → relay → clients | `{ type:"sessions" }` |
+| `status` | agent → relay → clients | `{ type:"status", running:[rootSessionID,...], attention:[rootSessionID,...] }` |
 | `subscriptions` | relay → agent | `{ type:"subscriptions", clientID, sessionIDs:[...] }` |
 | `ping` | either direction | `{ type:"ping" }` |
 | `pong` | either direction | `{ type:"pong" }` |
@@ -237,6 +241,15 @@ Relay rules:
   rereading the Session groups and the selected group's first `session.list` page.
   The agent sends it for membership and list-metadata changes, not for activity
   that only advances a Session's updated time.
+- `status` is the complete current set of running root families and root families
+  with unresolved human requests. Each list contains unique Session IDs and at
+  most 500 entries. The agent sends it on connection and coalesces changed
+  execution/request state to at most one later frame per 250 ms. The relay
+  validates and broadcasts it unchanged to each device client; a new client
+  receives the latest frame from the live agent. Execution-only changes read
+  process activity without rescanning pending requests; request transitions and
+  inventory changes refresh the pending-request set before publishing.
+
 - The client's registered subscription is updated when a `session.subscribe` or
   `session.unsubscribe` response succeeds.
 - The relay is the only per-client subscription authority. After each successful
@@ -257,6 +270,28 @@ Relay rules:
   validate backend Session access but do not mutate an independent local refcount.
 - In-flight requests per client are capped; a client disconnect drops its pending
   requests, and the client must treat those outcomes as unknown.
+
+Web Push subscribes only through cookie-authenticated, same-origin HTTP writes.
+Endpoints must use HTTPS on `fcm.googleapis.com`,
+`updates.push.services.mozilla.com`, `web.push.apple.com`, a subdomain of
+`push.apple.com`, or a subdomain of `notify.windows.com`; URL credentials,
+nonstandard ports, and fragments are rejected. `p256dh` is an uncompressed
+65-byte P-256 public point and `auth` is 16 bytes, both unpadded base64url.
+An account retains at most ten subscriptions; a new one evicts the oldest.
+The relay stores only endpoint, browser encryption keys, account owner,
+created time, and consecutive failures. It deletes a 404/410 endpoint or one
+that reaches five other failed deliveries.
+
+The first `status` frame after agent connect or Durable Object restore is a
+silent push baseline. Later newly attentive roots emit `approval-requested`;
+roots leaving the running set emit `agent-completed`. The push plaintext has
+only `{ category, sessionID, deviceID }`, encrypted using RFC 8291
+`aes128gcm` and authenticated using RFC 8292 ES256 VAPID. The JWT audience is
+the endpoint origin and expires within twelve hours. Approval uses TTL 3600
+and high urgency; stopped-work uses TTL 600 and normal urgency. A Topic of at
+most 32 base64url characters derived from Session ID and category collapses
+repeats. The relay drops pushes beyond twenty events per device per minute and
+never waits for delivery before forwarding status frames.
 
 Frames from one connection are processed strictly in arrival order. A frame that
 awaits an authority check cannot let a later frame from the same peer overtake it,
@@ -300,16 +335,28 @@ grouping and Session-list filters are derived from backend metadata.
 | Remote operation | Session-scoped | Local Protocol identifier | Local route | `input` fields |
 | --- | --- | --- | --- | --- |
 | `workspace.list` | no | `v2.session.list`, `v2.project.list`, `v2.project.directories` | `GET /api/session`, `GET /api/project`, `GET /api/project/:projectID/directories` | `sessionsOnly?` |
+| `workspace.catalog` | no | Location-scoped catalog reads | `GET /api/agent`, `/api/model`, `/api/model/default`, `/api/provider`, `/api/command`, `/api/skill`, `/api/reference`, `/api/mcp/resource` | `workspace` |
+| `workspace.file.find` | no | `v2.fs.find` | `GET /api/fs/find` | `workspace`, `query`, `limit?` |
 | `session.list` | no | `v2.session.list`, `v2.session.active` | `GET /api/session`, `GET /api/session/active` | `limit?`, `order?`, `search?`, `searchFields?`, `workspace?`, `status?`, `parentID?`, `cursor?` |
 | `session.active` | no | `v2.session.active` | `GET /api/session/active` | — |
+| `usage.providers` | no | `v2.providerUsage.list` | `GET /api/provider/usage` | `refresh?` boolean |
+| `usage.summary` | no | `v2.usage.get` | `GET /api/usage` | — |
+| `usage.report` | no | `v2.usage.report` | `GET /api/usage/report` | `group`, `from?`, `to?`, `offset?`, `limit?`, `sort?`, `order?` |
+| `session.status` | no | `v2.session.active`, pending Session permission/form/guardrail reads | Local active and pending-request GET routes | — |
 | `session.get` | yes | `v2.session.get` | `GET /api/session/:sessionID` | — |
 | `session.messages` | yes | `v2.message.list` | `GET /api/session/:sessionID/message` | — |
 | `session.snapshot` | yes | `v2.session.snapshot` | `GET /api/session/:sessionID/snapshot` | — |
+| `session.catalog` | yes | Location-scoped catalog reads | Same routes as `workspace.catalog` at the verified Session Location | — |
+| `session.file.find` | yes | `v2.fs.find` | `GET /api/fs/find` at the verified Session Location | `query`, `limit?` |
 | `session.subagent.list` | yes | `v2.session.subagent.list` | `GET /api/session/:parentID/subagent` | `cursor?` |
 | `session.log` | yes | `v2.session.log` | `GET /api/experimental/session/:sessionID/log` | `after?` |
 | `session.subscribe` | yes | `v2.event.subscribe` | `GET /api/event` (SSE) | — |
 | `session.unsubscribe` | yes | — (tears down the agent's `v2.event.subscribe` stream for that session) | — | — |
 | `session.prompt` | yes | `v2.session.prompt` | `POST /api/session/:sessionID/prompt` | `id?`, `text`, `files?`, `agents?`, `delivery?`, `resume?` |
+| `session.command` | yes | `v2.session.command` | `POST /api/session/:sessionID/command` | `id?`, `command`, `arguments?`, `files?`, `agents?`, `delivery?` |
+| `session.skill` | yes | `v2.session.skill` | `POST /api/session/:sessionID/skill` | `id?`, `skill`, `resume?` |
+| `session.switchModel` | yes | `v2.session.switchModel` | `POST /api/session/:sessionID/model` | `model` |
+| `session.switchAgent` | yes | `v2.session.switchAgent` | `POST /api/session/:sessionID/agent` | `agent` |
 | `session.interrupt` | yes | `v2.session.interrupt` | `POST /api/session/:sessionID/interrupt` | — |
 | `session.permission.list` | yes | `v2.session.permission.list` | `GET /api/session/:sessionID/permission` | — |
 | `session.permission.reply` | yes | `v2.session.permission.reply` | `POST /api/session/:sessionID/permission/:requestID/reply` | `requestID`, `reply`, `message?` |
@@ -324,16 +371,19 @@ grouping and Session-list filters are derived from backend metadata.
 | `session.autonomy.set` | yes | `v2.session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `yolo`, `maxNoProgress?` |
 | `session.goal.set` | yes | `v2.session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `goal` (non-empty string), `maxNoProgress?` |
 | `session.goal.stop` | yes | `v2.session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `goal: null` |
-| `session.create` | no | `v2.session.create`, `v2.project.current` | `POST /api/session`, `GET /api/project/current` | `id`, `workspace` |
+| `session.create` | no | `v2.session.create`, `v2.project.current` | `POST /api/session`, `GET /api/project/current` | `id`, `workspace`, `agent?`, `model?` |
 
 `workspace.list` returns `{ data: RemoteWorkspaceInfo[] }`, where each item is
 `{ id, projectID, directory, workspaceID?, name? }`. Without `sessionsOnly: true`,
 the backend builds the creation inventory from existing Session Locations,
 persisted ProjectDirectories, and non-global Project worktrees, then omits
 directories that are unavailable. With `sessionsOnly: true`, it returns groups
-from recorded Session Locations in the connector's inventory, including historical
-directories that are currently unavailable. A Session group is not permission to
-create a Session in an unavailable directory.
+from recorded Session Locations in the connector's inventory when their
+directories exist. Both reads exclude the global project and directories inside
+system temporary locations after realpath resolution: `os.tmpdir()`, `/tmp`,
+`/private/tmp`, `/var/tmp`, and the per-user `var/folders/.../T` directories.
+Every item has the project name when reported or the directory basename.
+A Session group is not permission to create a Session in an unavailable directory.
 `id` is a deterministic, domain-separated SHA-256 identifier over the exact
 project ID, directory, and optional Location workspace ID tuple; clients treat
 it as opaque and backend-specific. The global Project's worktree is never a
@@ -344,10 +394,14 @@ opaque ID of one backend-derived Session group; it never supplies an execution
 Location. `search` matches titles by default; `searchFields: "summary"` also
 matches agent and `provider/model#variant` labels. `status: "running" | "idle"`
 uses current backend activity; archived Sessions are not idle. Omitted status
-includes all states. `order` accepts `"asc"`, `"desc"` (default), or `"pinned"`.
+includes all states. `order` accepts `"asc"`, `"desc"` (default), `"pinned"`, or `"active"`.
 Pinned order lists pins by ascending pin time, then unpinned Sessions by descending
 update time and ID. Its opaque cursors include the pin sort key and support both
-directions. `limit` defaults to 50 and is capped at 200. Search, group, status,
+directions. Active order places running root families first, then pins by
+descending pin time, then Sessions by descending update time and ID. Its cursors
+carry the running, pin, update, and ID sort keys in both directions; running
+membership is evaluated on each request. `limit` defaults to 50 and is capped
+at 200. Search, group, status,
 and order changes start a new cursor traversal.
 
 `session.subagent.list` reads one existing Protocol task page (at most 10 direct
@@ -358,17 +412,54 @@ the Protocol `{ data, summary, cursor }` shape and is chunked if needed. An
 agent without this operation replies `unknown_operation`, which is an
 unsupported team read rather than an empty team.
 
-`session.create` accepts exactly `{ id, workspace }`. `id` is a client-generated
+`session.create` accepts `{ id, workspace, agent?, model? }`. `id` is a client-generated
 Session ID; `workspace` must match an ID in a freshly rederived backend inventory.
 Before creation, the backend checks that the directory exists and that
 `project.current` reports the inventory's project ID. A mismatch or unavailable
 workspace is rejected with `invalid_message` and refresh/reopen guidance. The
 Location is derived only from the matched backend inventory; no browser path,
-model, agent, parent, title, URL, method, or header is accepted. Creation uses
-runtime defaults and does not prompt or wake a model. A retry adopts an existing
+parent, title, URL, method, or header is accepted. `agent` is an explicit choice;
+omitting it uses the runtime configured default. `model` is a validated
+`{ providerID, id, variant? }` reference; omitting it uses the runtime default.
+Creation does not prompt or wake a model. A retry adopts an existing
 root Session only when its project and exact Location match; mismatched placement
 is rejected with `invalid_message`. The returned and re-read Session must match
 the requested ID, project, Location, and root status before success is returned.
+
+Catalog reads use only Location-scoped local reads and fail rather than return
+partial data when a source fails. Output lists are capped at 100 agents, 500
+models, 200 commands, 200 skills, 200 references, and 200 MCP resources;
+source providers and each model's variant list are capped at 500 and 50;
+oversized lists fail with `message_too_large`. Models belong to connected,
+enabled providers. The Catalog includes agent ID/name/mode/hidden/description/
+model, model provider ID/name/model ID/name/variant IDs, an available default
+model reference, command name/description, skill ID/name/description/slash,
+reference name/file URI/description, and resource name/URI/description. It
+contains no credentials, provider headers, or raw provider payloads. The local
+API does not expose a configured default agent or model default variant, so
+neither field appears.
+
+The three global usage reads expose the local Protocol responses without raw
+provider credentials or account data. `usage.providers` uses the backend's
+default Location and accepts only an optional boolean `refresh`; its response
+is `{ data: ProviderUsage.Snapshot[] }` with the Location wrapper removed and
+each normalized snapshot unchanged. `usage.summary`
+returns `{ data: ProviderRequest.Summary }`. `usage.report` accepts the
+`ProviderRequest.ReportInput` groups `model`, `hour`, `day`, `month`, `session`,
+`project`, or `agent`, optional nonnegative UTC `from`/`to` with `from < to`,
+nonnegative `offset`, `limit` 1–200, and the Protocol sort/order values. It
+returns `{ data: ProviderRequest.Report }`; no browser-selected Location is
+accepted.
+
+File search accepts a nonempty query of at most 200 characters and a limit 1–50
+(default 20). It returns `{ files: [{ path, uri, kind }] }` with Location-relative
+forward-slash paths, file URLs, and file/directory kinds. Prompt and command
+attachments use `{ uri, name?, description?, mention? }` only when a file URL
+resolves inside the Session Location after realpath or exactly matches a current
+reference/resource Catalog URI. Other attachments fail `invalid_message` before
+a local mutation. `session.command` returns `{ data: SessionPending.User }`;
+successful `session.skill`, `session.switchModel`, and `session.switchAgent`
+NoContent operations return `null`.
 
 For operations mapped to one local route, response `value` is that route's HTTP
 JSON body: no field renaming or second schema. `workspace.list` is the

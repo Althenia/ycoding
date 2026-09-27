@@ -20,6 +20,12 @@ export function base64UrlDecode(value: string): Uint8Array | undefined {
   }
 }
 
+export function cryptoBytes(value: Uint8Array) {
+  const bytes = new Uint8Array(value.length)
+  bytes.set(value)
+  return bytes
+}
+
 /** Opaque credential material. Stored as a hash, never in plaintext. */
 export function randomToken(byteLength = 32): string {
   return base64UrlEncode(crypto.getRandomValues(new Uint8Array(byteLength)))
@@ -63,7 +69,7 @@ export async function verifyP256Signature(
       false,
       ["verify"],
     )
-    return await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, bytes, new TextEncoder().encode(payload))
+    return await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, cryptoBytes(bytes), new TextEncoder().encode(payload))
   } catch {
     return false
   }
@@ -84,7 +90,7 @@ export async function verifyRs256(
       false,
       ["verify"],
     )
-    return await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, signature, new TextEncoder().encode(signingInput))
+    return await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, cryptoBytes(signature), new TextEncoder().encode(signingInput))
   } catch {
     return false
   }

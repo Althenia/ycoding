@@ -12,6 +12,8 @@ import {
   parseEnrollRequest,
   parseChunkedValue,
   parsePublicKey,
+  parsePushSubscription,
+  parsePushRemoval,
   parseRelayToAgentMessage,
   remoteError,
   remoteOperations,
@@ -23,6 +25,37 @@ import {
   serializeSessions,
   type RemoteOperation,
 } from "../src/index"
+
+test("push subscription input admits only bounded known push services and key shapes", () => {
+  const input = { endpoint: "https://fcm.googleapis.com/fcm/send/abc", keys: { p256dh: "BA" + "A".repeat(85), auth: "A".repeat(22) } }
+  expect(parsePushSubscription(input)).toMatchObject({ ok: true, value: input })
+  expect(parsePushRemoval({ endpoint: input.endpoint })).toMatchObject({ ok: true, value: { endpoint: input.endpoint } })
+  for (const endpoint of ["https://updates.push.services.mozilla.com/wpush/abc", "https://web.push.apple.com/Q", "https://foo.push.apple.com/Q", "https://foo.notify.windows.com/WNS"])
+    expect(parsePushSubscription({ ...input, endpoint }).ok).toBe(true)
+  for (const endpoint of ["http://fcm.googleapis.com/send", "https://fcm.googleapis.com.evil.example/send",
+    "https://evil.example/send", "https://user@fcm.googleapis.com/send", "https://fcm.googleapis.com:8443/send"])
+    expect(parsePushSubscription({ ...input, endpoint }).ok).toBe(false)
+  for (const invalid of [
+    { ...input, keys: { ...input.keys, auth: "short" } },
+    { ...input, keys: { ...input.keys, p256dh: "short" } },
+    { ...input, extra: "untrusted" },
+  ]) expect(parsePushSubscription(invalid).ok).toBe(false)
+})
+
+test("usage operations are global and validate refresh and bounded ReportInput", () => {
+  for (const [operation, input] of [
+    ["usage.providers", { refresh: true }], ["usage.providers", {}], ["usage.providers", undefined],
+    ["usage.summary", undefined],
+    ["usage.report", { group: "model", from: 0, to: 100, offset: 0, limit: 200, sort: "cost", order: "desc" }],
+  ] as const) expect(parseClientMessage(JSON.stringify({ type: "request", id: "r", operation, ...(input === undefined ? {} : { input }) }))).toMatchObject({ ok: true })
+  for (const [operation, input] of [
+    ["usage.providers", { refresh: "true" }], ["usage.providers", { refresh: true, raw: true }],
+    ["usage.summary", {}], ["usage.report", {}], ["usage.report", { group: "model", limit: 201 }],
+    ["usage.report", { group: "hour", from: 10, to: 10 }], ["usage.report", { group: "model", sort: "secret" }],
+  ] as const) expect(parseClientMessage(JSON.stringify({ type: "request", id: "r", operation, input }))).toMatchObject({ ok: false, error: { code: "invalid_message" } })
+  for (const operation of ["usage.providers", "usage.summary", "usage.report"])
+    expect(parseClientMessage(JSON.stringify({ type: "request", id: "r", operation, sessionID: "ses_1", input: operation === "usage.report" ? { group: "model" } : undefined })).ok).toBe(false)
+})
 
 const jwk = {
   kty: "EC",
@@ -78,6 +111,31 @@ describe("remote envelope: request", () => {
       '{"type":"request","id":"a","operation":"session.create","input":{"id":"ses_new","workspace":"wsp_1","directory":"/tmp"}}',
       `{"type":"request","id":"a","operation":"session.create","input":{"id":"ses_new","workspace":"${"w".repeat(129)}"}}`,
     ]) expect(parseClientMessage(frame)).toMatchObject({ ok: false, error: { code: "invalid_message" } })
+  })
+
+  test("validates catalog, file find, model and agent operation inputs", () => {
+    for (const [operation, input, sessionID] of [
+      ["workspace.catalog", { workspace: "wsp_1" }],
+      ["workspace.file.find", { workspace: "wsp_1", query: "src", limit: 50 }],
+      ["session.catalog", undefined, "ses_1"],
+      ["session.file.find", { query: "src", limit: 1 }, "ses_1"],
+      ["session.switchModel", { model: { providerID: "openai", id: "gpt", variant: "high" } }, "ses_1"],
+      ["session.switchAgent", { agent: "build" }, "ses_1"],
+      ["session.command", { command: "test", files: [{ uri: "file:///work/a.ts" }] }, "ses_1"],
+      ["session.skill", { skill: "test", resume: false }, "ses_1"],
+      ["session.create", { id: "ses_new", workspace: "wsp_1", agent: "build", model: { providerID: "openai", id: "gpt" } }],
+      ["session.prompt", { text: "test", files: [{ uri: "file:///work/a.ts" }], agents: [{ name: "build" }], resume: false }, "ses_1"],
+    ] as const) {
+      const request = { type: "request", id: "a", operation, ...(sessionID === undefined ? {} : { sessionID }), ...(input === undefined ? {} : { input }) }
+      expect(parseClientMessage(JSON.stringify(request))).toMatchObject({ ok: true })
+    }
+    for (const [operation, input] of [
+      ["workspace.catalog", { workspace: "" }],
+      ["workspace.catalog", { workspace: "wsp_1", directory: "/work" }],
+      ["workspace.file.find", { workspace: "wsp_1", query: "" }],
+      ["workspace.file.find", { workspace: "wsp_1", query: "x", limit: 51 }],
+      ["session.create", { id: "ses_new", workspace: "wsp_1", model: { providerID: "a", id: "b", secret: "x" } }],
+    ] as const) expect(parseClientMessage(JSON.stringify({ type: "request", id: "a", operation, input }))).toMatchObject({ ok: false, error: { code: "invalid_message" } })
   })
 
   test("admits only bounded parent-scoped subagent page inputs", () => {
@@ -308,8 +366,20 @@ describe("remote operations", () => {
       "session.goal.set",
       "session.goal.stop",
       "session.create",
+      "session.status",
+      "session.catalog",
+      "workspace.catalog",
+      "session.file.find",
+      "workspace.file.find",
+      "session.switchModel",
+      "session.switchAgent",
+      "session.command",
+      "session.skill",
+      "usage.providers",
+      "usage.summary",
+      "usage.report",
     ])
-    expect(remoteOperations).toEqual(["workspace.list", "session.list", "session.active", ...remoteSessionOperations, "session.create"])
+    expect(remoteOperations.filter(requireSession)).toEqual([...remoteSessionOperations])
     expect(requireSession("workspace.list")).toBe(false)
     expect(requireSession("session.create")).toBe(false)
     expect(requireSession("session.list")).toBe(false)
@@ -320,6 +390,19 @@ describe("remote operations", () => {
     expect(RemoteProtocolVersion).toBe(3)
     expect(RemoteWebSocketPath).toEqual({ client: "/ws/v3/client", agent: "/ws/v3/agent" })
     expect(parseClientMessage('{"type":"request","id":"r","operation":"session.question.list","sessionID":"ses_1"}').ok).toBe(false)
+  })
+
+  test("validates a complete bounded unique status frame on the agent surface", () => {
+    expect(RemoteLimits.maxStatusSessions).toBe(500)
+    const status = { type: "status" as const, running: ["ses_a"], attention: ["ses_b"] }
+    expect(parseAgentMessage(JSON.stringify(status))).toEqual({ ok: true, value: status })
+    expect(parseClientMessage(JSON.stringify(status)).ok).toBe(false)
+    for (const frame of [
+      { type: "status", running: ["ses_a", "ses_a"], attention: [] },
+      { type: "status", running: ["ses_a"], attention: ["not-session"] },
+      { type: "status", running: [], attention: [], secret: "x" },
+      { type: "status", running: Array.from({ length: 501 }, (_, index) => `ses_${index}`), attention: [] },
+    ]) expect(parseAgentMessage(JSON.stringify(frame)).ok).toBe(false)
   })
 
   test("admits every reconnect read operation and requires a session for it", () => {

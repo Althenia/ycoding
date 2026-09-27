@@ -8,6 +8,7 @@ import {
   type RemoteRequest,
   serializeResponse,
   serializeSessions,
+  serializeStatus,
 } from "@ycoding-ai/remote"
 import { DeviceAuthorizationError } from "./remote-credentials"
 import { agentURL } from "./remote-config"
@@ -15,6 +16,7 @@ import {
   createSessionRegistry,
   createSubscriptions,
   executeRemoteOperation,
+  sessionStatus,
   type SessionRegistry,
   type SubscriptionRegistry,
 } from "./remote-operations"
@@ -98,6 +100,12 @@ export class RemoteAgent {
   private lastAuthAttempt = Number.NEGATIVE_INFINITY
   private refreshTimer?: ReturnType<typeof setTimeout>
   private retryTimer?: ReturnType<typeof setTimeout>
+  private statusTimer?: ReturnType<typeof setTimeout>
+  private statusReading?: RelayConnection
+  private statusDirty = false
+  private lastStatus?: string
+  private attentionStatus?: readonly string[]
+  private attentionGeneration = 0
   private eventStop?: () => Promise<void>
   private eventStarting = false
   private eventStreamGeneration = 0
@@ -114,7 +122,7 @@ export class RemoteAgent {
     this.authRetryWindowMs = options.authRetryWindowMs ?? defaults.authRetryWindowMs
     this.registry = createSessionRegistry({
       local: options.local,
-      onChange: () => void this.advertise(),
+      onChange: () => { void this.advertise(); this.attentionStatus = undefined; this.attentionGeneration++; this.scheduleStatus() },
     })
     this.subscriptions = createSubscriptions()
   }
@@ -164,6 +172,14 @@ export class RemoteAgent {
       onOpen: () => {
         this.subscriptions.clear()
         void this.advertise()
+        this.lastStatus = undefined
+        this.attentionStatus = undefined
+        this.attentionGeneration++
+        if (this.statusTimer !== undefined) clearTimeout(this.statusTimer)
+        this.statusTimer = undefined
+        this.statusReading = undefined
+        this.statusDirty = false
+        void this.sendStatus()
         this.syncEventStream()
       },
       onClose: (code) => this.onConnectionClosed(code),
@@ -222,6 +238,50 @@ export class RemoteAgent {
   private async advertise() {
     if (this.state !== "live") return
     await this.send(serializeSessions({ type: "sessions" }))
+  }
+
+  private scheduleStatus() {
+    if (this.state !== "live") return
+    if (this.statusReading === this.connection) {
+      this.statusDirty = true
+      return
+    }
+    if (this.statusTimer !== undefined) return
+    this.statusTimer = setTimeout(() => {
+      this.statusTimer = undefined
+      void this.sendStatus()
+    }, 250)
+  }
+
+  private async sendStatus() {
+    const connection = this.connection
+    if (connection === undefined || this.state !== "live") return
+    if (this.statusReading === connection) {
+      this.statusDirty = true
+      return
+    }
+    this.statusReading = connection
+    const generation = this.attentionGeneration
+    try {
+      const status = await sessionStatus(this.options.local, this.registry.snapshot(), this.attentionStatus)
+      if (this.connection !== connection || this.state !== "live") return
+      if (generation === this.attentionGeneration) this.attentionStatus = status.attention
+      const frame = serializeStatus({ type: "status", ...status })
+      if (frame !== this.lastStatus) {
+        await this.send(frame, connection)
+        this.lastStatus = frame
+      }
+    } catch (error) {
+      this.diagnostic(`could not read remote Session status: ${describe(error)}`)
+    } finally {
+      if (this.statusReading === connection) {
+        this.statusReading = undefined
+        if (this.statusDirty) {
+          this.statusDirty = false
+          this.scheduleStatus()
+        }
+      }
+    }
   }
 
   private syncEventStream() {
@@ -290,6 +350,17 @@ export class RemoteAgent {
   private forwardEvent(event: unknown, streamGeneration: number) {
     const connection = this.connection
     if (connection === undefined || this.state !== "live") return
+    if (typeof event === "object" && event !== null) {
+      const type = Reflect.get(event, "type")
+      if (typeof type === "string" && (type.startsWith("session.step.") || type.startsWith("session.execution.") ||
+        type.startsWith("permission.v2.") || type.startsWith("form.") || type.startsWith("guardrail."))) {
+        if (type.startsWith("permission.v2.") || type.startsWith("form.") || type.startsWith("guardrail.")) {
+          this.attentionStatus = undefined
+          this.attentionGeneration++
+        }
+        this.scheduleStatus()
+      }
+    }
     if (isSessionInventoryEvent(event)) {
       void this.registry.refresh().catch((error) =>
         this.diagnostic(`could not refresh remote Sessions: ${describe(error)}`),
@@ -432,8 +503,10 @@ export class RemoteAgent {
   private clearTimers() {
     if (this.refreshTimer) clearTimeout(this.refreshTimer)
     if (this.retryTimer) clearTimeout(this.retryTimer)
+    if (this.statusTimer) clearTimeout(this.statusTimer)
     this.refreshTimer = undefined
     this.retryTimer = undefined
+    this.statusTimer = undefined
   }
 
   private diagnostic(message: string) {

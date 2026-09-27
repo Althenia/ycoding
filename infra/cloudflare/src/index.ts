@@ -20,6 +20,7 @@ import { createAuthService } from "./auth/service"
 import type { WorkerEnv } from "./env"
 import { DeviceRelay } from "./relay/durable-object"
 import { boundedCleanupInterval, createRouter } from "./router"
+import { createD1PushStore } from "./push/d1-store"
 
 export { DeviceRelay }
 
@@ -35,6 +36,8 @@ export default {
       cleanupEveryMs: boundedCleanupInterval(env.CLEANUP_INTERVAL_MS),
       // Bind to a local: workerd rejects calling the global fetch as a member reference.
       fetch: (input, init) => globalThis.fetch(input, init),
+      push: { store: createD1PushStore(env.DB), publicKey: env.VAPID_PUBLIC_KEY,
+        privateKey: env.VAPID_PRIVATE_KEY, subject: env.VAPID_SUBJECT },
       ...(env.ASSETS === undefined ? {} : { assets: env.ASSETS }),
     })
     return router(request)

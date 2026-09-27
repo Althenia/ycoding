@@ -84,6 +84,7 @@ function harness(options: {
       ),
     }),
     getSession: async (sessionID: string) => sessionInfo(sessionID),
+    activeSessions: {}, permissionList: [], formList: [], guardrailRequestList: [],
     ...options.results,
   })
   const records: ConnectionRecord[] = []
@@ -169,6 +170,60 @@ function requestFrame(operation: string, sessionID?: string, input?: Record<stri
 }
 
 describe("remote bridge", () => {
+  test("execution-only status changes read active state without rescanning pending requests", async () => {
+    let active: unknown = {}
+    const sessions = Array.from({ length: 100 }, (_, index) => ({ sessionID: `ses_${index}`, directory: "/work", title: "Session" }))
+    const test = harness({ sessions, results: { activeSessions: () => active } })
+    await test.bridge.connect()
+    try {
+      await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status"), 1_000)
+      test.calls.length = 0
+      active = { ses_1: { type: "running" } }
+      test.streams[0].stream.onEvent({ type: "session.step.started", data: { sessionID: "ses_1" } })
+      await waitFor(() => sentFrames(test.records[0]).some((frame) => frame.type === "status" && frame.running.includes("ses_1")) ? true : undefined, 1_000)
+      expect(test.calls.map((call) => call.method)).toEqual(["activeSessions"])
+    } finally { await test.bridge.close() }
+  })
+
+  test("a replaced connection sends its initial status while its predecessor read is held", async () => {
+    const held = Promise.withResolvers<unknown>()
+    let first = true
+    const test = harness({ results: { activeSessions: () => first ? held.promise : {} } })
+    await test.bridge.connect()
+    try {
+      first = false
+      test.records[0].input.onClose(RemoteCloseCode.unauthorized)
+      await waitFor(() => test.records[1], 1_000)
+      await waitFor(() => sentFrames(test.records[1]).find((frame) => frame.type === "status"), 200)
+      expect(sentFrames(test.records[1]).filter((frame) => frame.type === "status")).toEqual([{ type: "status", running: [], attention: [] }])
+    } finally { held.resolve({}); await test.bridge.close() }
+  })
+
+  test("sends an initial family status and coalesces transition bursts to the latest frame", async () => {
+    let active: unknown = {}
+    let permissions: unknown[] = []
+    const test = harness({ results: {
+      activeSessions: () => active,
+      permissionList: () => permissions,
+    } })
+    await test.bridge.connect()
+    try {
+      await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status"))
+      expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status")).toEqual([{ type: "status", running: [], attention: [] }])
+      const stream = test.streams[0].stream
+      for (let index = 0; index < 30; index += 1) {
+        active = index % 2 === 0 ? { ses_1: { type: "running" } } : {}
+        permissions = index === 29 ? [{ id: "per_1", sessionID: "ses_1" }] : []
+        stream.onEvent({ type: index % 2 === 0 ? "session.step.started" : "permission.v2.asked", data: { sessionID: "ses_1" } })
+      }
+      await waitFor(() => sentFrames(test.records[0]).filter((frame) => frame.type === "status").length === 2 ? true : undefined, 1_000)
+      expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status")).toEqual([
+        { type: "status", running: [], attention: [] },
+        { type: "status", running: [], attention: ["ses_1"] },
+      ])
+    } finally { await test.bridge.close() }
+  })
+
   test("invalidates Session lists on connect and refuses backend-unknown IDs", async () => {
     const { bridge, records, calls, diagnostics } = harness({})
     await bridge.connect()

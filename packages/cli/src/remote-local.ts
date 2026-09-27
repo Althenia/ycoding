@@ -5,6 +5,17 @@ import {
   YCoding,
   type FormAnswer,
   type FormInfo,
+  type AgentInfo,
+  type ModelInfo,
+  type ProviderV2Info,
+  type CommandInfo,
+  type SkillInfo,
+  type ReferenceInfo,
+  type McpResourceCatalog,
+  type FileSystemEntry,
+  type ProviderUsageListOutput,
+  type UsageGetOutput,
+  type UsageReportOutput,
   type Project,
   type ProjectDirectory,
   type SessionInfo,
@@ -12,7 +23,7 @@ import {
   type YCodingClient,
 } from "@ycoding-ai/client/promise"
 import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
-import { RemoteLimits } from "@ycoding-ai/remote"
+import { RemoteLimits, type RemoteUsageReportInput } from "@ycoding-ai/remote"
 
 // The bridge's only view of the local YCoding server: the same Protocol routes
 // the TUI uses, addressed with a Location derived from the backend inventory.
@@ -62,10 +73,22 @@ export type LocalServer = {
   readonly projectList: () => Promise<readonly Project[]>
   readonly projectDirectories: (projectID: string) => Promise<readonly ProjectDirectory[]>
   readonly projectCurrent: (location: LocalLocation) => Promise<{ readonly id: string; readonly directory: string }>
-  readonly createSession: (id: string, location: LocalLocation) => Promise<SessionInfo>
+  readonly createSession: (id: string, location: LocalLocation, agent?: string, model?: { readonly providerID: string; readonly id: string; readonly variant?: string }) => Promise<SessionInfo>
   readonly getSession: (sessionID: string, location: LocalLocation) => Promise<SessionInfo>
   /** Process-wide running status; the caller filters it to the current inventory. */
   readonly activeSessions: () => Promise<unknown>
+  readonly providerUsageList: (refresh?: boolean) => Promise<ProviderUsageListOutput>
+  readonly usageSummary: () => Promise<UsageGetOutput>
+  readonly usageReport: (input: RemoteUsageReportInput) => Promise<UsageReportOutput>
+  readonly agentList: (location: LocalLocation) => Promise<readonly AgentInfo[]>
+  readonly modelList: (location: LocalLocation) => Promise<readonly ModelInfo[]>
+  readonly modelDefault: (location: LocalLocation) => Promise<ModelInfo | null>
+  readonly providerList: (location: LocalLocation) => Promise<readonly ProviderV2Info[]>
+  readonly commandList: (location: LocalLocation) => Promise<readonly CommandInfo[]>
+  readonly skillList: (location: LocalLocation) => Promise<readonly SkillInfo[]>
+  readonly referenceList: (location: LocalLocation) => Promise<readonly ReferenceInfo[]>
+  readonly resourceCatalog: (location: LocalLocation) => Promise<McpResourceCatalog>
+  readonly fileFind: (location: LocalLocation, query: string, limit: number) => Promise<readonly FileSystemEntry[]>
   readonly snapshot: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly subagentPage: (parentID: string, location: LocalLocation, cursor?: string) => Promise<unknown>
   readonly messages: (sessionID: string, location: LocalLocation) => Promise<readonly SessionMessageInfo[]>
@@ -85,6 +108,10 @@ export type LocalServer = {
     input: { readonly cursor?: number; readonly limit: number },
   ) => Promise<unknown>
   readonly prompt: (sessionID: string, location: LocalLocation, input: LocalPrompt) => Promise<unknown>
+  readonly switchModel: (sessionID: string, location: LocalLocation, model: { readonly providerID: string; readonly id: string; readonly variant?: string }) => Promise<void>
+  readonly switchAgent: (sessionID: string, location: LocalLocation, agent: string) => Promise<void>
+  readonly command: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly command: string; readonly arguments?: string; readonly files?: LocalPrompt["files"]; readonly agents?: LocalPrompt["agents"]; readonly delivery?: LocalPrompt["delivery"] }) => Promise<unknown>
+  readonly skill: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly skill: string; readonly resume?: boolean }) => Promise<void>
   readonly interrupt: (sessionID: string, location: LocalLocation) => Promise<void>
   readonly permissionReply: (
     sessionID: string,
@@ -146,10 +173,10 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       call(() => client.project.directories({ projectID }, { signal: AbortSignal.timeout(timeoutMs) })),
     projectCurrent: (location) =>
       call(() => client.project.current({}, request(location, timeoutMs))),
-    createSession: (id, location) =>
+    createSession: (id, location, agent, model) =>
       call(() =>
         client.session.create(
-          { id, location } as Parameters<YCodingClient["session"]["create"]>[0],
+          { id, location, ...(agent === undefined ? {} : { agent }), ...(model === undefined ? {} : { model }) } as Parameters<YCodingClient["session"]["create"]>[0],
           request(location, timeoutMs),
         ),
       ),
@@ -163,6 +190,18 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     messages: (sessionID, location) =>
       call(() => client.message.list({ sessionID }, request(location, timeoutMs))),
     activeSessions: () => call(() => client.session.active({ signal: AbortSignal.timeout(timeoutMs) })),
+    providerUsageList: (refresh) => call(() => client.providerUsage.list({ ...(refresh === undefined ? {} : { refresh }) }, { signal: AbortSignal.timeout(timeoutMs) })),
+    usageSummary: () => call(() => client.usage.get({ signal: AbortSignal.timeout(timeoutMs) })),
+    usageReport: (input) => call(() => client.usage.report(input, { signal: AbortSignal.timeout(timeoutMs) })),
+    agentList: (location) => call(async () => (await client.agent.list({}, request(location, timeoutMs))).data),
+    modelList: (location) => call(async () => (await client.model.list({}, request(location, timeoutMs))).data),
+    modelDefault: (location) => call(async () => (await client.model.default({}, request(location, timeoutMs))).data),
+    providerList: (location) => call(async () => (await client.provider.list({}, request(location, timeoutMs))).data),
+    commandList: (location) => call(async () => (await client.command.list({}, request(location, timeoutMs))).data),
+    skillList: (location) => call(async () => (await client.skill.list({}, request(location, timeoutMs))).data),
+    referenceList: (location) => call(async () => (await client.reference.list({}, request(location, timeoutMs))).data),
+    resourceCatalog: (location) => call(async () => (await client.mcp.resource.catalog({}, request(location, timeoutMs))).data),
+    fileFind: (location, query, limit) => call(async () => (await client.file.find({ query, limit }, request(location, timeoutMs))).data),
     snapshot: (sessionID, location) =>
       call(() => client.session.snapshot({ sessionID }, request(location, timeoutMs))),
     subagentPage: (parentID, location, cursor) =>
@@ -222,6 +261,16 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
           request(location, timeoutMs),
         ),
       ),
+    switchModel: (sessionID, location, model) => call(async () => {
+      await client.session.switchModel({ sessionID, model }, request(location, timeoutMs))
+    }),
+    switchAgent: (sessionID, location, agent) => call(async () => {
+      await client.session.switchAgent({ sessionID, agent }, request(location, timeoutMs))
+    }),
+    command: (sessionID, location, input) => call(() => client.session.command({ sessionID, ...input } as Parameters<YCodingClient["session"]["command"]>[0], request(location, timeoutMs))),
+    skill: (sessionID, location, input) => call(async () => {
+      await client.session.skill({ sessionID, ...input }, request(location, timeoutMs))
+    }),
     interrupt: (sessionID, location) =>
       call(async () => {
         await client.session.interrupt({ sessionID }, request(location, timeoutMs))
@@ -308,9 +357,11 @@ function classify(cause: unknown, timeoutMs: number): LocalFailure {
     tag === "GuardrailRequestNotFoundError" ||
     tag === "QuestionNotFoundError" ||
     tag === "SkillNotFoundError" ||
+    tag === "CommandNotFoundError" ||
     tag === "ShellNotFoundError"
   )
     return new LocalFailure("not_found", "Session is not available on this device", { cause })
+  if (tag === "CommandEvaluationError") return new LocalFailure("invalid", "Local server rejected the command", { cause })
   if (tag === "ConflictError" || tag === "SessionBusyError" || tag === "ModelSwitchBlockedError")
     return new LocalFailure("conflict", "Local server rejected the request", { cause })
   return new LocalFailure("server", `Local server failed the request after ${timeoutMs}ms timeout policy`, { cause })

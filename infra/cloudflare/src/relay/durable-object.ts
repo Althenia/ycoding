@@ -11,6 +11,8 @@ import { randomToken } from "../auth/crypto"
 import { createD1AuthStore } from "../auth/d1-store"
 import { createAuthService } from "../auth/service"
 import type { WorkerEnv } from "../env"
+import { createD1PushStore } from "../push/d1-store"
+import { sendPushToOwner } from "../push/send"
 import { createRelay, type RelayAuthority, type RelayConnection } from "./core"
 
 type Attachment = {
@@ -47,6 +49,14 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
       toAuthority(await this.#service.authorizeClientCommand(sessionID, deviceID)),
     authorizeAgentCommand: async (deviceID) => toAuthority(await this.#service.authorizeAgentCommand(deviceID)),
     authorityTtlMs: authorityTtlMs,
+    notifyPush: (accountID, event) => {
+      const publicKey = this.env.VAPID_PUBLIC_KEY
+      const privateKey = this.env.VAPID_PRIVATE_KEY
+      const subject = this.env.VAPID_SUBJECT
+      if (!publicKey || !privateKey || !subject) return
+      this.ctx.waitUntil(sendPushToOwner({ store: createD1PushStore(this.env.DB), accountID, event,
+        publicKey, privateKey, subject, now: Date.now, fetch: (input, init) => globalThis.fetch(input, init) }).catch(() => undefined))
+    },
   })
   readonly #attached = new Set<string>()
   #lastDeadline: number | undefined

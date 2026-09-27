@@ -62,6 +62,18 @@ export const remoteOperations = [
   "session.goal.set",
   "session.goal.stop",
   "session.create",
+  "session.status",
+  "session.catalog",
+  "workspace.catalog",
+  "session.file.find",
+  "workspace.file.find",
+  "session.switchModel",
+  "session.switchAgent",
+  "session.command",
+  "session.skill",
+  "usage.providers",
+  "usage.summary",
+  "usage.report",
 ] as const
 
 /** Operations that address one session and therefore require `sessionID`. */
@@ -89,6 +101,12 @@ export const remoteSessionOperations = [
   "session.autonomy.set",
   "session.goal.set",
   "session.goal.stop",
+  "session.catalog",
+  "session.file.find",
+  "session.switchModel",
+  "session.switchAgent",
+  "session.command",
+  "session.skill",
 ] as const
 
 export type RemoteOperation = (typeof remoteOperations)[number]
@@ -107,6 +125,7 @@ export const RemoteLimits = {
   maxAgentMessageChars: 262_144,
   maxPendingRequestsPerClient: 32,
   maxSessionListPage: 200,
+  maxStatusSessions: 500,
   maxSubscriptionsPerClient: 64,
   maxRequestIDChars: 64,
   maxSessionIDChars: 128,
@@ -192,6 +211,7 @@ export type RemoteResponse = RemoteSucceededResponse | RemoteFailedResponse
 export type RemoteEvent = { readonly type: "event"; readonly sessionID: string; readonly event: unknown }
 /** Bounded invalidation: clients page the authoritative backend list after receipt. */
 export type RemoteSessions = { readonly type: "sessions" }
+export type RemoteStatus = { readonly type: "status"; readonly running: readonly string[]; readonly attention: readonly string[] }
 export type RemoteSubscriptions = {
   readonly type: "subscriptions"
   readonly clientID: string
@@ -202,9 +222,9 @@ export type RemoteHeartbeat = { readonly type: "ping" } | { readonly type: "pong
 /** Frames accepted from a browser connection. */
 export type RemoteClientMessage = RemoteRequest | RemoteHeartbeat
 /** Frames accepted from a local agent connection. */
-export type RemoteAgentMessage = RemoteResponse | RemoteEvent | RemoteSessions | RemoteHeartbeat
+export type RemoteAgentMessage = RemoteResponse | RemoteEvent | RemoteSessions | RemoteStatus | RemoteHeartbeat
 /** Frames the relay sends to a browser connection. */
-export type RemoteRelayToClient = RemoteResponse | RemoteEvent | RemoteSessions | RemoteHeartbeat
+export type RemoteRelayToClient = RemoteResponse | RemoteEvent | RemoteSessions | RemoteStatus | RemoteHeartbeat
 /** Frames the relay sends to a local agent connection. */
 export type RemoteRelayToAgent = RemoteRequest | RemoteSubscriptions | RemoteHeartbeat
 
@@ -239,6 +259,10 @@ export function serializeEvent(event: RemoteEvent): string {
 
 export function serializeSessions(sessions: RemoteSessions): string {
   return JSON.stringify(sessions)
+}
+
+export function serializeStatus(status: RemoteStatus): string {
+  return JSON.stringify(status)
 }
 
 export function serializeSubscriptions(subscriptions: RemoteSubscriptions): string {
@@ -292,6 +316,7 @@ function parseAgentFrame(frame: unknown): ParseResult<RemoteAgentMessage> {
   if (frame.type === "response") return parseResponse(frame)
   if (frame.type === "event") return parseEvent(frame)
   if (frame.type === "sessions") return parseSessions(frame)
+  if (frame.type === "status") return parseStatus(frame)
   return invalid()
 }
 
@@ -308,6 +333,9 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
   if (frame.sessionID !== undefined && !isSessionID(frame.sessionID)) return invalid()
   if (requireSession(operation) && frame.sessionID === undefined)
     return failRequest("session_required", "Operation requires a session")
+  if ((operation === "session.status" || operation === "workspace.catalog" || operation === "workspace.file.find" ||
+    operation === "usage.providers" || operation === "usage.summary" || operation === "usage.report") && frame.sessionID !== undefined)
+    return failRequest("invalid_message", "Global operation does not accept a session")
   if (frame.input !== undefined && !isRecord(frame.input)) return invalid()
   if (!validOperationInput(operation, frame.input)) return failRequest("invalid_message", "Input does not match the remote operation")
   return {
@@ -326,18 +354,61 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
 }
 
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
+  if (operation === "usage.summary") return input === undefined
+  if (operation === "usage.providers") return input === undefined || (isRecord(input) &&
+    Object.keys(input).every((key) => key === "refresh") && (input.refresh === undefined || typeof input.refresh === "boolean"))
+  if (operation === "usage.report") {
+    if (!isRecord(input) || typeof input.group !== "string" || !["model", "hour", "day", "month", "session", "project", "agent"].includes(input.group) ||
+      Object.keys(input).some((key) => !["group", "from", "to", "offset", "limit", "sort", "order"].includes(key))) return false
+    const integer = (value: unknown, minimum: number, maximum: number) => value === undefined ||
+      (typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum)
+    return integer(input.from, 0, Number.MAX_SAFE_INTEGER) && integer(input.to, 0, Number.MAX_SAFE_INTEGER) &&
+      integer(input.offset, 0, Number.MAX_SAFE_INTEGER) && integer(input.limit, 1, 200) &&
+      (input.from === undefined || input.to === undefined || (typeof input.from === "number" && typeof input.to === "number" && input.from < input.to)) &&
+      (input.sort === undefined || (typeof input.sort === "string" && ["key", "tokens", "cost", "steps", "input", "output", "reasoning", "cacheRead", "cacheWrite"].includes(input.sort))) &&
+      (input.order === undefined || input.order === "asc" || input.order === "desc")
+  }
   if (operation === "workspace.list") return input === undefined || (isRecord(input) && input.sessionsOnly === true && Object.keys(input).length === 1)
   if (operation === "session.subagent.list") return input === undefined || (isRecord(input) && typeof input.cursor === "string" && input.cursor.length > 0 && input.cursor.length <= 1_024 && Object.keys(input).length === 1)
+  if (operation === "session.status" || operation === "session.catalog") return input === undefined
+  if (operation === "workspace.catalog") return isRecord(input) && validWorkspace(input.workspace) && Object.keys(input).length === 1
+  if (operation === "session.file.find" || operation === "workspace.file.find")
+    return isRecord(input) && (operation !== "workspace.file.find" || validWorkspace(input.workspace)) &&
+      typeof input.query === "string" && input.query.length > 0 && input.query.length <= 200 &&
+      (input.limit === undefined || (typeof input.limit === "number" && Number.isInteger(input.limit) && input.limit >= 1 && input.limit <= 50)) &&
+      Object.keys(input).every((key) => key === "query" || key === "limit" || (operation === "workspace.file.find" && key === "workspace"))
+  if (operation === "session.switchModel") return isRecord(input) && validModel(input.model) && Object.keys(input).length === 1
+  if (operation === "session.switchAgent") return isRecord(input) && validName(input.agent) && Object.keys(input).length === 1
+  if (operation === "session.skill") return isRecord(input) && validName(input.skill) &&
+    (input.id === undefined || (typeof input.id === "string" && /^msg_[A-Za-z0-9_-]+$/.test(input.id) && input.id.length <= 128)) &&
+    (input.resume === undefined || typeof input.resume === "boolean") &&
+    Object.keys(input).every((key) => key === "skill" || key === "id" || key === "resume")
+  if (operation === "session.command") return isRecord(input) && typeof input.command === "string" && input.command.length > 0 &&
+    Object.keys(input).every((key) => ["id", "command", "arguments", "files", "agents", "delivery"].includes(key))
   if (operation !== "session.create") return true
   if (
     !isRecord(input) ||
     !isSessionID(input.id) ||
-    typeof input.workspace !== "string" ||
-    input.workspace.length === 0 ||
-    input.workspace.length > 128
+    !validWorkspace(input.workspace) ||
+    (input.agent !== undefined && !validName(input.agent)) ||
+    (input.model !== undefined && !validModel(input.model))
   )
     return false
-  return Object.keys(input).every((key) => key === "id" || key === "workspace")
+  return Object.keys(input).every((key) => key === "id" || key === "workspace" || key === "agent" || key === "model")
+}
+
+function validWorkspace(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0 && value.length <= 128
+}
+
+function validName(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0 && value.length <= 128
+}
+
+function validModel(value: unknown): boolean {
+  return isRecord(value) && validName(value.providerID) && validName(value.id) &&
+    (value.variant === undefined || validName(value.variant)) &&
+    Object.keys(value).every((key) => key === "providerID" || key === "id" || key === "variant")
 }
 
 function parseResponse(frame: Record<string, unknown>): ParseResult<RemoteResponse> {
@@ -397,6 +468,16 @@ function parseEvent(frame: Record<string, unknown>): ParseResult<RemoteEvent> {
 
 function parseSessions(frame: Record<string, unknown>): ParseResult<RemoteSessions> {
   return withOnlyKeys(frame, ["type"], { type: "sessions" })
+}
+
+function parseStatus(frame: Record<string, unknown>): ParseResult<RemoteStatus> {
+  const keys = withOnlyKeys(frame, ["type", "running", "attention"], frame.type)
+  if (!keys.ok) return keys
+  if (!Array.isArray(frame.running) || !Array.isArray(frame.attention) ||
+    frame.running.length > RemoteLimits.maxStatusSessions || frame.attention.length > RemoteLimits.maxStatusSessions ||
+    !frame.running.every(isSessionID) || !frame.attention.every(isSessionID) ||
+    new Set(frame.running).size !== frame.running.length || new Set(frame.attention).size !== frame.attention.length) return invalid()
+  return { ok: true, value: { type: "status", running: frame.running, attention: frame.attention } }
 }
 
 function parseSubscriptions(frame: Record<string, unknown>): ParseResult<RemoteSubscriptions> {
@@ -556,6 +637,79 @@ export type DeviceTokenResponse = {
 }
 
 export type ApiErrorResponse = { readonly error: RemoteError }
+
+export type PushSubscriptionInput = {
+  readonly endpoint: string
+  readonly keys: { readonly p256dh: string; readonly auth: string }
+}
+
+export type PushRemovalInput = { readonly endpoint: string }
+
+export type PushKeyResponse = { readonly publicKey: string }
+
+export type RemoteUsageTokens = { readonly input: number; readonly output: number; readonly reasoning: number;
+  readonly cache: { readonly read: number; readonly write: number } }
+export type RemoteUsageProvider = { readonly providerID: string; readonly label: string; readonly profile?: string;
+  readonly status: "available" | "stale" | "unsupported" | "unauthorized" | "error";
+  readonly source: "provider_api" | "local_client_rpc" | "response_headers" | "provider_internal_api" | "local_session";
+  readonly stability: "stable" | "client_contract" | "observed" | "best_effort"; readonly updatedAt: number;
+  readonly windows: readonly { readonly id: string; readonly label: string; readonly unit: "percent" | "usd" | "requests" | "tokens" | "count";
+    readonly used?: number; readonly limit?: number; readonly remaining?: number; readonly unlimited?: boolean;
+    readonly resetAt?: number; readonly periodSeconds?: number }[]; readonly message?: string }
+export type RemoteUsageProvidersValue = { readonly data: readonly RemoteUsageProvider[] }
+export type RemoteUsageMetrics = { readonly logical: number; readonly physical: number; readonly helpers: number;
+  readonly continued: number; readonly fallback: number; readonly tokens: RemoteUsageTokens;
+  readonly cost?: number; readonly costProvenance?: "recorded" | "current_catalog"; readonly cacheReadReported?: boolean }
+export type RemoteUsageSummaryValue = { readonly data: RemoteUsageMetrics & {
+  readonly models?: readonly { readonly model: { readonly providerID: string; readonly id: string; readonly variant?: string };
+    readonly requests: number; readonly tokens: RemoteUsageTokens; readonly cacheReadReported?: boolean;
+    readonly cost?: number; readonly costProvenance?: "recorded" | "current_catalog" }[];
+  readonly latestInvalidation?: string; readonly latestNamespace?: string;
+  readonly latestTiming?: { readonly promptEvalDurationNs?: number; readonly generationDurationNs?: number; readonly loadDurationNs?: number } } }
+export type RemoteUsageGroup = "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+export type RemoteUsageReportInput = { readonly group: RemoteUsageGroup; readonly from?: number; readonly to?: number;
+  readonly offset?: number; readonly limit?: number;
+  readonly sort?: "key" | "tokens" | "cost" | "steps" | "input" | "output" | "reasoning" | "cacheRead" | "cacheWrite";
+  readonly order?: "asc" | "desc" }
+export type RemoteUsageReportValue = { readonly data: { readonly group: RemoteUsageGroup;
+  readonly rows: readonly (RemoteUsageMetrics & { readonly key: string; readonly label: string })[];
+  readonly total: RemoteUsageMetrics; readonly rowCount: number; readonly nextOffset?: number } }
+
+export function parsePushSubscription(value: unknown): ParseResult<PushSubscriptionInput> {
+  if (!isRecord(value) || !isRecord(value.keys)) return invalidBody()
+  if (!withOnlyKeys(value, ["endpoint", "keys"], value).ok ||
+    !withOnlyKeys(value.keys, ["p256dh", "auth"], value.keys).ok) return invalidBody()
+  if (!isPushEndpoint(value.endpoint) || !isPushKey(value.keys.p256dh, 65, 87, 4) || !isPushKey(value.keys.auth, 16, 22)) return invalidBody()
+  return { ok: true, value: { endpoint: value.endpoint, keys: { p256dh: value.keys.p256dh, auth: value.keys.auth } } }
+}
+
+export function parsePushRemoval(value: unknown): ParseResult<PushRemovalInput> {
+  if (!isRecord(value) || !withOnlyKeys(value, ["endpoint"], value).ok || !isPushEndpoint(value.endpoint)) return invalidBody()
+  return { ok: true, value: { endpoint: value.endpoint } }
+}
+
+function isPushEndpoint(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 2_048) return false
+  try {
+    const url = new URL(value)
+    if (url.protocol !== "https:" || url.username || url.password || url.port || url.hash) return false
+    return url.hostname === "fcm.googleapis.com" || url.hostname === "updates.push.services.mozilla.com" ||
+      url.hostname === "web.push.apple.com" || url.hostname.endsWith(".push.apple.com") ||
+      url.hostname.endsWith(".notify.windows.com")
+  } catch {
+    return false
+  }
+}
+
+function isPushKey(value: unknown, bytes: number, chars: number, first?: number): value is string {
+  if (typeof value !== "string" || value.length !== chars || !isBase64Url(value)) return false
+  try {
+    const decoded = atob(value.replaceAll("-", "+").replaceAll("_", "/"))
+    return decoded.length === bytes && (first === undefined || decoded.charCodeAt(0) === first)
+  } catch {
+    return false
+  }
+}
 
 export const deviceNameLimit = 100
 

@@ -11,6 +11,7 @@ function harness(options: { readonly sessions?: readonly string[]; readonly auth
   let idSequence = 0
   const sent: Sent[] = []
   const closed: Closed[] = []
+  const pushed: { accountID: string; category: string; sessionID: string; deviceID: string }[] = []
   const storedSubscriptions = new Map<string, readonly string[]>()
   const storedPending = new Map<string, readonly { relayID: string; clientID: string }[]>()
   let advertisement: readonly string[] = options.sessions ?? ["ses_a"]
@@ -32,6 +33,7 @@ function harness(options: { readonly sessions?: readonly string[]; readonly auth
     },
     authorizeAgentCommand: async () => agentAuthority,
     authorityTtlMs: options.authorityTtlMs ?? 0,
+    notifyPush: (accountID, event) => { pushed.push({ accountID, ...event }) },
   }
 
   const relay = createRelay(deps)
@@ -39,6 +41,7 @@ function harness(options: { readonly sessions?: readonly string[]; readonly auth
     relay,
     sent,
     closed,
+    pushed,
     storedSubscriptions,
     storedPending,
     advance: (milliseconds: number) => {
@@ -125,6 +128,45 @@ async function attachBoth(h: ReturnType<typeof harness>) {
 }
 
 describe("relay core: role separation", () => {
+  test("status diff emits only new decisions and stopped roots after a silent baseline, capped per minute", async () => {
+    const h = harness()
+    await attachBoth(h)
+    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: ["ses_a"], attention: [] }))
+    expect(h.pushed).toEqual([])
+    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: ["ses_b"] }))
+    expect(h.pushed).toEqual([
+      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_b", deviceID: "dev_1" },
+      { accountID: "usr_1", category: "agent-completed", sessionID: "ses_a", deviceID: "dev_1" },
+    ])
+    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: ["ses_b"] }))
+    expect(h.pushed).toHaveLength(2)
+    for (let index = 0; index < 30; index += 1)
+      await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: ["ses_b", `ses_${index}`] }))
+    expect(h.pushed).toHaveLength(20)
+    h.advance(60_001)
+    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: ["ses_new"] }))
+    expect(h.pushed).toHaveLength(21)
+  })
+
+  test("validates and broadcasts complete status to each device client and a late joiner", async () => {
+    const h = harness()
+    await attachBoth(h)
+    await h.relay.attach(client("client-2"))
+    h.reset()
+    const frame = JSON.stringify({ type: "status", running: ["ses_a"], attention: ["ses_other"] })
+    await h.relay.handleAgentMessage("agent-1", frame)
+    expect(h.sent).toEqual([
+      { connectionID: "client-1", message: frame },
+      { connectionID: "client-2", message: frame },
+    ])
+    await h.relay.attach(client("client-3"))
+    expect(h.messagesTo("client-3")).toContainEqual({ type: "status", running: ["ses_a"], attention: ["ses_other"] })
+    h.reset()
+    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: ["ses_a", "ses_a"], attention: [] }))
+    expect(h.sent).toEqual([])
+    expect(h.closed).toEqual([{ connectionID: "agent-1", code: 1003, reason: "Frame is not valid for this connection" }])
+  })
+
   test("closes a client that sends agent-only frames and an agent that sends requests", async () => {
     const h = harness()
     await attachBoth(h)

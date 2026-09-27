@@ -1,6 +1,6 @@
-import { mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdtemp, rm, symlink } from "node:fs/promises"
 import { join } from "node:path"
+import { pathToFileURL } from "node:url"
 import { describe, expect, test } from "bun:test"
 import type { SessionInfo } from "@ycoding-ai/client/promise"
 import { RemoteLimits, parseChunkedValue, requireSession, type RemoteRequest } from "@ycoding-ai/remote"
@@ -12,6 +12,7 @@ import {
   executeRemoteOperation,
   listPage,
   parseListQuery,
+  sessionStatus,
   successFrames,
 } from "../src/remote-operations"
 
@@ -217,9 +218,46 @@ describe("backend Session authorization", () => {
 })
 
 describe("workspace inventory and Session creation", () => {
+  test("passes explicit agent and model choices to the local Session create", async () => {
+    const directory = process.cwd()
+    const sessions = [sessionInfo("ses_seed", { updated: 1, directory })]
+    const test = await harness({ sessions, results: {
+      projectList: [{ id: "prj_1", worktree: directory }], projectDirectories: [], projectCurrent: { id: "prj_1", directory },
+      createSession: (id: string) => {
+        const created = sessionInfo(id, { updated: 2, directory })
+        sessions.push(created)
+        return created
+      },
+    } })
+    const workspaces = arrayOf(recordOf(valueOf(await executeRemoteOperation({ request: request("workspace.list"), local: test.local,
+      sessions: test.registry, subscriptions: test.subscriptions }))).data)
+    const model = { providerID: "test", id: "model", variant: "high" }
+    const outcome = await executeRemoteOperation({ request: request("session.create", { id: "ses_chosen", workspace: recordOf(workspaces[0]).id,
+      agent: "build", model }), local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
+    expect(valueOf(outcome)).toMatchObject({ data: { id: "ses_chosen" } })
+    expect(test.calls.find((call) => call.method === "createSession")?.args).toEqual(["ses_chosen", { directory }, "build", model])
+  })
+
+  test("hides temporary and global workspaces and names unnamed repositories by directory", async () => {
+    const directory = process.cwd()
+    const sessions = [sessionInfo("ses_allowed", { updated: 1, directory }),
+      { ...sessionInfo("ses_global", { updated: 2, directory }), projectID: "global" },
+      sessionInfo("ses_temp", { updated: 3, directory: "/tmp" })]
+    const test = await harness({ sessions, results: {
+      projectList: [{ id: "global", worktree: directory }, { id: "prj_1", worktree: directory }],
+      projectDirectories: async () => [{ directory }, { directory: "/tmp" }],
+    } })
+    for (const input of [undefined, { sessionsOnly: true }]) {
+      const value = arrayOf(recordOf(valueOf(await executeRemoteOperation({ request: request("workspace.list", input), local: test.local,
+        sessions: test.registry, subscriptions: test.subscriptions }))).data)
+      expect(value).toHaveLength(1)
+      expect(value[0]).toMatchObject({ projectID: "prj_1", directory, name: "cli" })
+    }
+  })
+
   test("uses backend inventory only, rejects changed project and child-ID reuse, and verifies a root create", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "ycoding-remote-workspace-unit-"))
-    const globalWorktree = await mkdtemp(join(tmpdir(), "ycoding-global-project-worktree-"))
+    const directory = await mkdtemp(join(import.meta.dir, "../../../.cache/tmp/ycoding-remote-workspace-unit-"))
+    const globalWorktree = await mkdtemp(join(import.meta.dir, "../../../.cache/tmp/ycoding-global-project-worktree-"))
     try {
       let sessions = [sessionInfo("ses_seed", { updated: 1, directory })]
       let currentProjectID = "prj_changed"
@@ -307,6 +345,144 @@ describe("workspace inventory and Session creation", () => {
 })
 
 describe("operation mapping", () => {
+  test("maps global usage reads to their exact local Protocol bodies without a browser Location", async () => {
+    const providers = { location: { directory: "/work", project: { id: "prj_1", directory: "/work" } }, data: [{ providerID: "test", status: "available", source: "provider_api", stability: "stable", windows: [] }] }
+    const summary = { logical: 1, physical: 1, tokens: { input: 2, output: 1, reasoning: 0, cache: { read: 0, write: 0 } } }
+    const report = { group: "model", rows: [], total: summary, rowCount: 0 }
+    const test = await harness({ results: { providerUsageList: providers, usageSummary: summary, usageReport: report } })
+    const runUsage = (operation: RemoteRequest["operation"], input?: Record<string, unknown>) => executeRemoteOperation({
+      request: request(operation, input), local: test.local, sessions: test.registry, subscriptions: test.subscriptions,
+    })
+    expect(valueOf(await runUsage("usage.providers", { refresh: true }))).toEqual({ data: providers.data })
+    expect(valueOf(await runUsage("usage.summary"))).toEqual({ data: summary })
+    expect(valueOf(await runUsage("usage.report", { group: "model", from: 0, to: 10, limit: 2, sort: "cost", order: "desc" }))).toEqual({ data: report })
+    expect(test.calls.filter((call) => ["providerUsageList", "usageSummary", "usageReport"].includes(call.method))).toEqual([
+      { method: "providerUsageList", args: [true] }, { method: "usageSummary", args: [] },
+      { method: "usageReport", args: [{ group: "model", from: 0, to: 10, limit: 2, sort: "cost", order: "desc" }] },
+    ])
+    test.calls.length = 0
+    expect(errorOf(await runUsage("usage.report", { group: "model", limit: 201 })).code).toBe("invalid_message")
+    expect(test.calls.some((call) => call.method === "usageReport")).toBe(false)
+  })
+
+  test("a cached-attention status still refuses more than 500 running roots", async () => {
+    const sessions = Array.from({ length: RemoteLimits.maxStatusSessions + 1 }, (_, index) => sessionInfo(`ses_${index}`, { updated: index }))
+    const { local } = fakeLocal({ activeSessions: Object.fromEntries(sessions.map((session) => [session.id, { type: "running" }])) })
+    const failure = await sessionStatus(local, sessions, []).then(() => undefined, (cause: unknown) => cause)
+    expect(failure instanceof Error ? failure.message : undefined).toBe("Session status exceeds the bounded root count")
+  })
+
+  test("status folds active descendants and unresolved requests to unique root IDs", async () => {
+    const sessions = [sessionInfo("ses_root", { updated: 1 }), sessionInfo("ses_child", { updated: 2, parentID: "ses_root" }), sessionInfo("ses_other", { updated: 3 })]
+    const { local, registry, subscriptions } = await harness({ sessions, results: {
+      activeSessions: { ses_child: { type: "running" } },
+      permissionList: async (id: string) => id === "ses_child" ? [{ id: "per_1", sessionID: id }] : [],
+      formList: async (id: string) => id === "ses_other" ? [formInfo("frm_1", id)] : [],
+      guardrailRequestList: async (id: string) => id === "ses_root" ? [{ id: "grq_1", sessionID: "ses_child", rootSessionID: id }] : [],
+    } })
+    const outcome = await executeRemoteOperation({ request: request("session.status"), local, sessions: registry, subscriptions })
+    expect(valueOf(outcome)).toEqual({ running: ["ses_root"], attention: ["ses_other", "ses_root"] })
+  })
+
+  test("catalog and file finder read only the verified Location and project workspace", async () => {
+    const directory = process.cwd()
+    const session = sessionInfo("ses_1", { updated: 1, directory })
+    const results: Partial<Record<keyof LocalServer, unknown>> = {
+      projectList: [{ id: "prj_1", worktree: directory, name: "Project", time: { created: 1, updated: 1 }, sandboxes: [] }],
+      projectDirectories: [],
+      projectCurrent: { id: "prj_1", directory },
+      agentList: [{ id: "build", name: "Builder", mode: "primary", hidden: false, description: "Build", model: { providerID: "test", id: "model" }, permissions: [], request: {} }],
+      providerList: [{ id: "test", name: "Test", package: "test" }, { id: "off", name: "Off", disabled: true, package: "off" }],
+      modelList: [{ providerID: "test", id: "model", name: "Model", enabled: true, variants: [{ id: "high" }] }, { providerID: "off", id: "hidden", name: "Hidden", enabled: true, variants: [] }],
+      modelDefault: { providerID: "test", id: "model" },
+      commandList: [{ name: "test", template: "example", description: "Test" }],
+      skillList: [{ id: "skill", name: "Skill", description: "Help", slash: true, content: "secret" }],
+      referenceList: [{ name: "Readme", path: join(directory, "README.md"), source: { type: "file" } }],
+      resourceCatalog: { resources: [{ name: "Docs", uri: "mcp://docs" }], templates: [] },
+      fileFind: [{ path: "package.json", type: "file" }],
+    }
+    const { local, registry, subscriptions, calls } = await harness({ sessions: [session], results })
+    const catalog = valueOf(await executeRemoteOperation({ request: request("session.catalog"), local, sessions: registry, subscriptions }))
+    expect(catalog).toEqual({ agents: [{ id: "build", name: "Builder", mode: "primary", hidden: false, description: "Build", model: { providerID: "test", id: "model" } }],
+      models: [{ providerID: "test", providerName: "Test", id: "model", name: "Model", variants: ["high"] }],
+      defaultModel: { providerID: "test", id: "model" }, commands: [{ name: "test", description: "Test" }],
+      skills: [{ id: "skill", name: "Skill", description: "Help", slash: true }],
+      references: [{ name: "Readme", uri: pathToFileURL(join(directory, "README.md")).href }], resources: [{ name: "Docs", uri: "mcp://docs" }] })
+    const workspace = recordOf(arrayOf(recordOf(valueOf(await executeRemoteOperation({ request: request("workspace.list"), local, sessions: registry, subscriptions }))).data)[0]).id
+    expect(workspace).toBeDefined()
+    const same = valueOf(await executeRemoteOperation({ request: request("workspace.catalog", { workspace }), local, sessions: registry, subscriptions }))
+    expect(same).toEqual(catalog)
+    const files = valueOf(await executeRemoteOperation({ request: request("session.file.find", { query: "package", limit: 1 }), local, sessions: registry, subscriptions }))
+    expect(files).toEqual({ files: [{ path: "package.json", uri: pathToFileURL(join(directory, "package.json")).href, kind: "file" }] })
+    expect(calls.filter((call) => call.method === "fileFind").at(-1)?.args).toEqual([{ directory }, "package", 1])
+    expect(errorOf(await executeRemoteOperation({ request: request("workspace.catalog", { workspace: "wsp_missing" }), local, sessions: registry, subscriptions })).code).toBe("invalid_message")
+  })
+
+  test("fails a catalog read on a missing source or oversized list instead of publishing partial or sensitive data", async () => {
+    const results: Partial<Record<keyof LocalServer, unknown>> = {
+      agentList: [], modelList: [], modelDefault: null, providerList: [], commandList: [], skillList: [],
+      referenceList: [], resourceCatalog: { resources: [], templates: [] },
+    }
+    const test = await harness({ results })
+    results.modelList = new LocalFailureClass("server", "Provider unavailable")
+    expect(errorOf(await executeRemoteOperation({ request: request("session.catalog"), local: test.local,
+      sessions: test.registry, subscriptions: test.subscriptions })).code).toBe("internal_error")
+    results.modelList = Array.from({ length: 501 }, (_, index) => ({ id: `m${index}`, providerID: "test", name: "Model", variants: [] }))
+    expect(errorOf(await executeRemoteOperation({ request: request("session.catalog"), local: test.local,
+      sessions: test.registry, subscriptions: test.subscriptions })).code).toBe("message_too_large")
+  })
+
+  test("switches model and agent, admits commands and skills, and passes explicit create choices", async () => {
+    const { local, registry, subscriptions, calls } = await harness({ results: {
+      switchModel: undefined, switchAgent: undefined, command: { id: "msg_command" }, skill: undefined,
+    } })
+    const invoke = (operation: RemoteRequest["operation"], payload: Record<string, unknown>) => executeRemoteOperation({ request: request(operation, payload), local, sessions: registry, subscriptions })
+    expect(valueOf(await invoke("session.switchModel", { model: { providerID: "test", id: "model" } }))).toBeNull()
+    expect(valueOf(await invoke("session.switchAgent", { agent: "build" }))).toBeNull()
+    expect(valueOf(await invoke("session.command", { command: "test", arguments: "--x" }))).toEqual({ data: { id: "msg_command" } })
+    expect(valueOf(await invoke("session.skill", { skill: "skill" }))).toBeNull()
+    expect(calls.filter((call) => ["switchModel", "switchAgent", "command", "skill"].includes(call.method))).toEqual([
+      { method: "switchModel", args: ["ses_1", { directory: "/work" }, { providerID: "test", id: "model" }] },
+      { method: "switchAgent", args: ["ses_1", { directory: "/work" }, "build"] },
+      { method: "command", args: ["ses_1", { directory: "/work" }, { command: "test", arguments: "--x" }] },
+      { method: "skill", args: ["ses_1", { directory: "/work" }, { skill: "skill" }] },
+    ])
+  })
+
+  test("refuses file attachments outside the real Session root before a mutation", async () => {
+    const directory = process.cwd()
+    const session = sessionInfo("ses_1", { updated: 1, directory })
+    const { local, registry, subscriptions, calls } = await harness({ sessions: [session], results: {
+      prompt: { id: "msg_1" }, command: { id: "msg_2" }, referenceList: [{ name: "Shared", path: "/shared/ref.md" }], resourceCatalog: { resources: [], templates: [] },
+      agentList: [], modelList: [], modelDefault: null, providerList: [], commandList: [], skillList: [],
+    } })
+    const invoke = (operation: "session.prompt" | "session.command", uri: string) => executeRemoteOperation({
+      request: request(operation, { ...(operation === "session.prompt" ? { text: "hi" } : { command: "test" }), files: [{ uri }] }),
+      local, sessions: registry, subscriptions,
+    })
+    expect(valueOf(await invoke("session.prompt", pathToFileURL(join(directory, "package.json")).href))).toEqual({ data: { id: "msg_1" } })
+    expect(valueOf(await invoke("session.command", "file:///shared/ref.md"))).toEqual({ data: { id: "msg_2" } })
+    calls.length = 0
+    expect(errorOf(await invoke("session.prompt", "file:///etc/passwd")).code).toBe("invalid_message")
+    expect(calls.some((call) => call.method === "prompt")).toBe(false)
+    for (const uri of ["https://example.com/a", "file:///etc/passwd", "file:///work/../etc/passwd", "mcp://unknown"])
+      expect(errorOf(await invoke("session.command", uri)).code).toBe("invalid_message")
+    expect(calls.filter((call) => call.method === "command")).toEqual([])
+  })
+
+  test("refuses a file URL whose symlink escapes the Session Location", async () => {
+    const directory = await mkdtemp(join(import.meta.dir, "../../../.cache/tmp/ycoding-attachment-"))
+    try {
+      await symlink("/etc/passwd", join(directory, "escape.txt"))
+      const test = await harness({ sessions: [sessionInfo("ses_1", { updated: 1, directory })], results: { prompt: { id: "msg_1" },
+        agentList: [], modelList: [], modelDefault: null, providerList: [], commandList: [], skillList: [], referenceList: [],
+        resourceCatalog: { resources: [], templates: [] } } })
+      const outcome = await executeRemoteOperation({ request: request("session.prompt", { text: "Read it", files: [{ uri: pathToFileURL(join(directory, "escape.txt")).href }] }),
+        sessions: test.registry, subscriptions: test.subscriptions, local: test.local })
+      expect(errorOf(outcome).code).toBe("invalid_message")
+      expect(test.calls.some((call) => call.method === "prompt")).toBe(false)
+    } finally { await rm(directory, { recursive: true, force: true }) }
+  })
   test("reads the bounded direct-child task page at the verified parent Location", async () => {
     const page = { data: [{ sessionID: "ses_child", parentID: "ses_1", state: "running", revision: 1 }], summary: { total: 1, active: 1, running: 1, waiting: 0 }, cursor: { next: "opaque" } }
     const { local, registry, subscriptions, calls } = await harness({ results: { subagentPage: async () => page } })
@@ -332,6 +508,8 @@ describe("operation mapping", () => {
         formCancel: async () => undefined,
         autonomySet: async () => ({ mode: "yolo" }),
         guardrailRequestList: async () => [{ id: "grq_1", sessionID: "ses_1", rootSessionID: "ses_1" }],
+        agentList: [], modelList: [], modelDefault: null, providerList: [], commandList: [], skillList: [], referenceList: [],
+        resourceCatalog: { resources: [{ name: "Accepted", uri: "mcp://accepted" }], templates: [] },
       },
     })
 
@@ -339,7 +517,7 @@ describe("operation mapping", () => {
       request: request("session.prompt", {
         id: "msg_1",
         text: "hello",
-        files: [{ uri: "file:///a.ts", name: "a.ts" }],
+        files: [{ uri: "mcp://accepted", name: "a.ts" }],
         agents: [{ name: "build" }],
         delivery: "queue",
         resume: false,
@@ -357,7 +535,7 @@ describe("operation mapping", () => {
         {
           id: "msg_1",
           text: "hello",
-          files: [{ uri: "file:///a.ts", name: "a.ts" }],
+          files: [{ uri: "mcp://accepted", name: "a.ts" }],
           agents: [{ name: "build" }],
           delivery: "queue",
           resume: false,
@@ -944,19 +1122,35 @@ describe("local endpoint scope", () => {
 })
 
 describe("session list paging", () => {
+  test("active order ranks running families before pins and pages both directions when running membership changes", () => {
+    const root = { ...sessionInfo("ses_root", { updated: 2 }), time: { created: 2, updated: 2 } }
+    const child = sessionInfo("ses_child", { updated: 5, parentID: "ses_root" })
+    const pinned = { ...sessionInfo("ses_pinned", { updated: 3 }), time: { created: 3, updated: 3, pinned: 9 } }
+    const recent = sessionInfo("ses_recent", { updated: 4 })
+    const sessions = [root, child, pinned, recent]
+    const running = new Set(["ses_child"])
+    const page = listPage(sessions, parseListQuery({ order: "active", parentID: null, limit: 1 }), running)
+    expect(page.data.map((session) => session.id)).toEqual(["ses_root"])
+    const after = listPage(sessions, parseListQuery({ order: "active", parentID: null, limit: 2, cursor: page.cursor.next }), new Set(["ses_child", "ses_recent"]))
+    expect(after.data.map((session) => session.id)).toEqual(["ses_pinned"])
+    const previous = listPage(sessions, parseListQuery({ order: "active", parentID: null, limit: 1, cursor: after.cursor.previous }), running)
+    expect(previous.data.map((session) => session.id)).toEqual(["ses_root"])
+    expect(() => parseListQuery({ order: "active", cursor: Buffer.from(JSON.stringify({ id: "ses_root", time: 2, direction: "next" })).toString("base64url") })).toThrow()
+  })
+
   test("distinguishes recorded workspace identities in the same directory", async () => {
-    const first = { ...sessionInfo("ses_one", { updated: 1, directory: "/gone" }), location: { directory: "/gone", workspaceID: "one" } }
-    const second = { ...sessionInfo("ses_two", { updated: 2, directory: "/gone" }), location: { directory: "/gone", workspaceID: "two" } }
+    const first = { ...sessionInfo("ses_one", { updated: 1, directory: process.cwd() }), location: { directory: process.cwd(), workspaceID: "one" } }
+    const second = { ...sessionInfo("ses_two", { updated: 2, directory: process.cwd() }), location: { directory: process.cwd(), workspaceID: "two" } }
     const test = await harness({ sessions: [first, second], results: { projectList: [] } })
     const response = valueOf(await executeRemoteOperation({ request: request("workspace.list", { sessionsOnly: true }),
       local: test.local, sessions: test.registry, subscriptions: test.subscriptions })) as { data: { id: string; workspaceID?: string }[] }
-    expect(response.data.map((group) => group.workspaceID)).toEqual(["one", "two"])
+    expect(response.data.map((group) => group.workspaceID).toSorted((a, b) => (a ?? "").localeCompare(b ?? ""))).toEqual(["one", "two"])
     expect(response.data[0]?.id).not.toBe(response.data[1]?.id)
-    expect(listPage([first, second], parseListQuery({ workspace: response.data[0]?.id, limit: 10 })).data.map((session) => session.id)).toEqual(["ses_one"])
+    expect(listPage([first, second], parseListQuery({ workspace: response.data.find((group) => group.workspaceID === "one")?.id, limit: 10 })).data.map((session) => session.id)).toEqual(["ses_one"])
   })
 
   test("pages a selected recorded workspace with summary search, status, and stable pinned order", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "ycoding-inventory-"))
+    const directory = await mkdtemp(join(import.meta.dir, "../../../.cache/tmp/ycoding-inventory-"))
     try {
       const first = { ...sessionInfo("ses_first", { updated: 1, title: "First", directory }), agent: "builder",
         model: { providerID: "test", id: "model", variant: "high" }, time: { created: 1, updated: 1, pinned: 2 } }

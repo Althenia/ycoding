@@ -14,17 +14,22 @@ import {
   parseDeviceRefreshRequest,
   parseDeviceTokenRequest,
   parseEnrollRequest,
+  parsePushSubscription,
+  parsePushRemoval,
   type ChallengeResponse,
   type CreateEnrollmentResponse,
   type DeviceTokenResponse,
   type DevicesResponse,
   type EnrollResponse,
   type MeResponse,
+  type PushKeyResponse,
 } from "../../../packages/remote/src/index"
+import type { PushStore } from "./push/store"
 import type { AuthRejection, AuthService } from "./auth/service"
 import { browserSessionTtlMs, oauthTransactionTtlMs } from "./auth/service"
 import type { GoogleEndpoints } from "./auth/google"
 import { isIdentityAllowed } from "./auth/allowlist"
+import { base64UrlDecode } from "./auth/crypto"
 import { authorizationUrl, exchangeCode, verifyIdToken } from "./auth/google"
 import { createJwksCache, type JwksCache } from "./auth/jwks"
 import {
@@ -63,6 +68,7 @@ export type RouterDeps = {
   readonly cleanupEveryMs?: number
   /** Static asset binding for landing, docs, and SPA routes owned by the web lane. */
   readonly assets?: { readonly fetch: (request: Request) => Promise<Response> }
+  readonly push?: { readonly store: PushStore; readonly publicKey?: string; readonly privateKey?: string; readonly subject?: string }
 }
 
 /** Expired authentication metadata is swept at most once per hour per isolate. */
@@ -136,6 +142,15 @@ export function createRouter(deps: RouterDeps) {
     if (url.pathname === "/api/devices") {
       if (request.method !== "GET") return methodNotAllowed()
       return listDevices(deps, request)
+    }
+    if (url.pathname === "/api/push/key") {
+      if (request.method !== "GET") return methodNotAllowed()
+      return pushKey(deps, request)
+    }
+    if (url.pathname === "/api/push/subscriptions") {
+      if (request.method === "POST") return subscribePush(deps, request, now())
+      if (request.method === "DELETE") return unsubscribePush(deps, request)
+      return methodNotAllowed()
     }
     if (url.pathname === "/api/devices/enrollments") {
       if (request.method !== "POST") return methodNotAllowed()
@@ -312,6 +327,51 @@ async function listDevices(deps: RouterDeps, request: Request): Promise<Response
   const devices = await deps.service.listDevices(authenticated.session.userID)
   const body: DevicesResponse = { devices: await withPresence(deps, authenticated.session.userID, devices) }
   return jsonResponse(body)
+}
+
+function pushAvailable(push: RouterDeps["push"]): push is NonNullable<RouterDeps["push"]> & { publicKey: string; privateKey: string; subject: string } {
+  if (push === undefined || typeof push.publicKey !== "string" || typeof push.privateKey !== "string" || typeof push.subject !== "string") return false
+  const point = base64UrlDecode(push.publicKey)
+  const scalar = base64UrlDecode(push.privateKey)
+  return point?.length === 65 && point[0] === 4 && scalar?.length === 32 &&
+    (push.subject.startsWith("mailto:") || push.subject.startsWith("https:"))
+}
+
+async function pushKey(deps: RouterDeps, request: Request): Promise<Response> {
+  const authenticated = await requireSession(deps, request)
+  if (!authenticated.ok) return authenticated.response
+  if (!pushAvailable(deps.push)) return apiError(503, "internal_error", "Web Push is unavailable")
+  const body: PushKeyResponse = { publicKey: deps.push.publicKey }
+  return jsonResponse(body)
+}
+
+async function subscribePush(deps: RouterDeps, request: Request, now: number): Promise<Response> {
+  const guarded = requireMutationGuard(request)
+  if (guarded) return guarded
+  const authenticated = await requireSession(deps, request)
+  if (!authenticated.ok) return authenticated.response
+  if (!pushAvailable(deps.push)) return apiError(503, "internal_error", "Web Push is unavailable")
+  const parsed = parsePushSubscription(await readJsonBody(request))
+  if (!parsed.ok) return apiError(400, parsed.error.code, parsed.error.message)
+  try {
+    await crypto.subtle.importKey("raw", Uint8Array.from(atob(parsed.value.keys.p256dh.replaceAll("-", "+").replaceAll("_", "/")), (character) => character.charCodeAt(0)),
+      { name: "ECDH", namedCurve: "P-256" }, false, [])
+  } catch {
+    return apiError(400, "invalid_message", "Push subscription key is invalid")
+  }
+  await deps.push.store.upsert(authenticated.session.userID, parsed.value, now)
+  return jsonResponse({ subscribed: true })
+}
+
+async function unsubscribePush(deps: RouterDeps, request: Request): Promise<Response> {
+  const guarded = requireMutationGuard(request)
+  if (guarded) return guarded
+  const authenticated = await requireSession(deps, request)
+  if (!authenticated.ok) return authenticated.response
+  const parsed = parsePushRemoval(await readJsonBody(request))
+  if (!parsed.ok) return apiError(400, parsed.error.code, parsed.error.message)
+  if (deps.push) await deps.push.store.remove(authenticated.session.userID, parsed.value.endpoint)
+  return jsonResponse({ removed: true })
 }
 
 async function createEnrollment(deps: RouterDeps, request: Request): Promise<Response> {

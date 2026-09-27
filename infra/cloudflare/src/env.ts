@@ -19,4 +19,7 @@ export type WorkerEnv = {
   readonly GOOGLE_AUTHORIZATION_ENDPOINT?: string
   readonly GOOGLE_TOKEN_ENDPOINT?: string
   readonly GOOGLE_JWKS_URI?: string
+  readonly VAPID_PUBLIC_KEY?: string
+  readonly VAPID_PRIVATE_KEY?: string
+  readonly VAPID_SUBJECT?: string
 }
