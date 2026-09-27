@@ -69,6 +69,7 @@ import { ShellOutput } from "./routes/shell-output"
 import { SessionTerminalInspector } from "./routes/terminal-inspector"
 import { ProviderUsageScreen } from "./routes/session/provider-usage"
 import { SessionContextScreen } from "./routes/session/context-breakdown"
+import { WorkspacesScreen } from "./routes/workspaces"
 import { PromptHistoryProvider } from "./component/prompt/history"
 import { FrecencyProvider } from "./component/prompt/frecency"
 import { PromptStashProvider } from "./component/prompt/stash"
@@ -642,6 +643,19 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
           dialog.clear()
         },
       },
+      {
+        name: "workspace.manage",
+        title: "Manage workspaces",
+        category: "Session",
+        slash: { name: "workspaces" },
+        run: () => {
+          route.navigate({
+            type: "workspaces",
+            sessionID: route.data.type === "session" ? route.data.sessionID : undefined,
+          })
+          dialog.clear()
+        },
+      },
       ...Array.from({ length: 9 }, (_, i) => ({
         name: `session.quick_switch.${i + 1}`,
         title: `Switch to session in quick slot ${i + 1}`,
@@ -820,6 +834,25 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
           ))
         },
         category: "Integration",
+      },
+      {
+        name: "provider.refresh",
+        title: "Refresh models and providers",
+        category: "Integration",
+        run: () => {
+          dialog.clear()
+          const target = location.current ?? data.location.default()
+          const ref = { directory: target.directory, workspaceID: target.workspaceID }
+          void client.api.provider
+            .refresh({ location: { directory: ref.directory, workspace: ref.workspaceID } })
+            .then(() => {
+              data.location.model.invalidate(ref)
+              data.location.provider.invalidate(ref)
+              return Promise.all([data.location.model.sync(ref), data.location.provider.sync(ref)])
+            })
+            .then(() => toast.show({ variant: "success", message: "Models and providers refreshed" }))
+            .catch(toast.error)
+        },
       },
       {
         name: "ycoding.settings",
@@ -1180,6 +1213,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
                 </Match>
                 <Match when={route.data.type === "session-context"}>
                   <SessionContextScreen />
+                </Match>
+                <Match when={route.data.type === "workspaces"}>
+                  <WorkspacesScreen />
                 </Match>
               </Switch>
             </box>

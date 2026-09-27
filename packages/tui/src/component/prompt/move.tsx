@@ -7,6 +7,7 @@ import { useClient } from "../../context/client"
 import { useToast } from "../../ui/toast"
 import { DialogMoveSession, type MoveSessionSelection } from "../dialog-move-session"
 import { useData } from "../../context/data"
+import { useRoute } from "../../context/route"
 
 function moveReminderText(directory: string) {
   return `<system-reminder>The user has changed the current working directory to "${directory}". This is still the same project but at a possibly new location; take this into account when working with any files from now on.</system-reminder>`
@@ -18,10 +19,15 @@ export function usePromptMove(input: { projectID: () => string | undefined; sess
   const toast = useToast()
   const data = useData()
   const paths = useTuiPaths()
+  const route = useRoute()
   const [creating, setCreating] = createSignal(false)
   const [creatingDots, setCreatingDots] = createSignal(3)
   const [progress, setProgress] = createSignal<string>()
-  const [destination, setDestination] = createSignal<MoveSessionSelection>()
+  const [destination, setDestination] = createSignal<MoveSessionSelection | undefined>(
+    route.data.type === "home" && route.data.directory && !input.sessionID()
+      ? { type: "directory", directory: route.data.directory, subdirectory: false }
+      : undefined,
+  )
 
   async function create(name: string) {
     const projectID = await resolveProjectID()

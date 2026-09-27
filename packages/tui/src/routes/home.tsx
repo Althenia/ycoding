@@ -143,7 +143,9 @@ export function Home() {
   // Global MCP elicitations can arrive without a session route, so keep them reachable from Home.
   const forms = createMemo(() => data.session.form.list("global", data.location.default()) ?? [])
   const overlay = createMemo(() => dialog.stack.length > 0 || promptOverlay())
-  const homeLocation = createMemo(() => data.location.default())
+  const homeLocation = createMemo(() =>
+    route.directory ? { ...data.location.default(), directory: route.directory } : data.location.default(),
+  )
   const landingModelInfo = createMemo(() => {
     const current = local.model.current()
     if (!current) return undefined
@@ -165,7 +167,7 @@ export function Home() {
   const [branch, setBranch] = createSignal<string>()
   let sent = false
 
-  createEffect(() => location.set(data.location.default()))
+  createEffect(() => location.set(homeLocation()))
 
   createEffect(() => {
     const target = homeLocation()

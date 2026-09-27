@@ -130,7 +130,7 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver }>
             route.navigate(destination)
           },
           current() {
-            if (route.data.type === "provider-usage")
+            if (route.data.type === "provider-usage" || route.data.type === "workspaces")
               return route.data.sessionID
                 ? { type: "session" as const, sessionID: route.data.sessionID }
                 : { type: "home" as const }

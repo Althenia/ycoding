@@ -26,6 +26,15 @@ Automatic retention deletion is not performed. Standalone and managed processes 
 
 SQLite can still reclaim pages freed by explicit deletion without deleting additional records; see [automatic SQLite space reclamation](./configuration.md#automatic-sqlite-space-reclamation) for startup conversion and disk-space constraints.
 
+### Workspaces
+
+The command palette's **Manage workspaces** command (`/workspaces`) opens a full-screen list of every directory YCoding knows across all projects: recorded project directories and every directory that holds a Session. Rows are grouped by project and loaded 50 at a time as the selection nears the end; the search field filters by directory path or project name on the server. Each row shows `●` for the current directory, `✓` for an existing directory, or `○` for a missing one, its kind (`main`, `copy`, `subdir`, `checkout`, or `folder` for directories outside any repository), its Session count, and its last activity. At 120 columns or wider a details pane also lists up to three recent root Sessions.
+
+- `enter` opens the directory on the home screen so the next new Session is created there; a missing directory cannot be opened.
+- `ctrl+d` twice deletes a project copy (not the current directory); a copy with file changes asks before forcing deletion.
+- `ctrl+x` forgets a directory other than the current one after confirmation: it permanently deletes every Session of that project in the directory, including their child Sessions, and removes the directory record. Files on disk are not touched.
+- `ctrl+r` reloads the list; `esc` returns to the previous screen.
+
 ### Daybreak access program
 
 Daybreak is OpenAI's Trusted Access for Cyber program with the access levels `daybreak_blue` and `daybreak_red`. A Session stores its selection in `session.daybreak`; an absent value is off and requests keep standard safeguards. Every change appends the durable `session.daybreak.set` event containing the Session ID and the optional selected program, where an absent program means off.

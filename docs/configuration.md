@@ -1214,6 +1214,8 @@ Agent, command, plugin, and skill files inside watched `.ycoding` or global conf
 
 Ecosystem skill roots such as `~/.claude/skills` and `~/.agents/skills` are not watched. Skill files are re-read whenever skills are listed so edits and deletions are still reflected.
 
+Project `ycoding.json`, `ycoding.jsonc`, and `.ycoding` entries are watched only when they existed at the last discovery, so one created afterwards is not detected automatically. The TUI command palette's **Refresh models and providers** command calls `POST /api/provider/refresh` for the current Location. The server rediscovers every configuration source, publishes `config.updated` even when the document list is unchanged, and reruns provider model discovery such as `openai-models` catalogs; the refreshed catalog arrives through `catalog.updated`, and the TUI then reloads that Location's model and provider lists. Environment variables are read by the running server process and do not change through a refresh.
+
 CLI/TUI `cli.json` updates are serialized, written atomically through a temporary file, and preserve existing JSONC comments.
 
 ## Troubleshooting

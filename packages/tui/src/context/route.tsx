@@ -6,6 +6,7 @@ import { useTuiStartup } from "./runtime"
 export type HomeRoute = {
   type: "home"
   prompt?: PromptInfo
+  directory?: string
 }
 
 export type SessionRoute = {
@@ -38,12 +39,25 @@ export type ProviderUsageRoute = {
   sessionID?: string
 }
 
+export type WorkspacesRoute = {
+  type: "workspaces"
+  sessionID?: string
+}
+
 export type SessionContextRoute = {
   type: "session-context"
   sessionID: string
 }
 
-export type Route = HomeRoute | SessionRoute | PluginRoute | ShellOutputRoute | TerminalInspectorRoute | ProviderUsageRoute | SessionContextRoute
+export type Route =
+  | HomeRoute
+  | SessionRoute
+  | PluginRoute
+  | ShellOutputRoute
+  | TerminalInspectorRoute
+  | ProviderUsageRoute
+  | WorkspacesRoute
+  | SessionContextRoute
 
 export const { use: useRoute, provider: RouteProvider } = createSimpleContext({
   name: "Route",

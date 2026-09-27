@@ -66,6 +66,16 @@ function graphemesOf(value: string): string[] {
   return Array.from(graphemeSegmenter.segment(value), (item) => item.segment)
 }
 
+export function relativeTime(updated: number, now: number) {
+  const minutes = Math.max(0, Math.floor((now - updated) / 60_000))
+  if (minutes < 60) return `${minutes} min ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} hr ago`
+  const days = Math.floor(hours / 24)
+  if (days === 1) return "yesterday"
+  return `${days} days ago`
+}
+
 export function truncate(str: string, len: number): string {
   const segments = graphemesOf(str)
   if (segments.length <= len) return str

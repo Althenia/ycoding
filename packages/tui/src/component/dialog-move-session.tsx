@@ -12,10 +12,9 @@ import { abbreviateHome } from "../runtime"
 import { useTuiPaths } from "../context/runtime"
 import { Locale } from "../util/locale"
 import { errorMessage } from "../util/error"
-import { isRecord } from "../util/record"
 import { useToast } from "../ui/toast"
 import { Spinner } from "./spinner"
-import { DialogWorkspaceFileChanges } from "./dialog-workspace-file-changes"
+import { removeProjectCopy } from "./project-copy-remove"
 import type { ProjectDirectoriesOutput } from "@ycoding-ai/client"
 import { useRoute } from "../context/route"
 import { DialogProjectCopyName } from "./dialog-project-copy-name"
@@ -235,70 +234,24 @@ export function DialogMoveSession(props: DialogMoveSessionProps) {
     setToDelete(undefined)
     setRemoving(selected.directory)
     setWorking(true)
-    const error = await client.api.projectCopy
-      .remove({
-        projectID: props.projectID,
-        location: { directory: location()?.directory || paths.cwd },
-        directory: selected.directory,
-        force: false,
-      })
-      .then(
-        () => undefined,
-        (error) => error,
-      )
-    if (error) {
-      setRemoving(undefined)
-      setWorking(false)
-      if (isRecord(error) && isRecord(error.data) && error.data.forceRequired === true) {
-        const status = await client.api.vcs
-          .status({ location: { directory: selected.directory } })
-          .catch(() => undefined)
-        const choice = await DialogWorkspaceFileChanges.show(dialog, status?.data ?? [], {
-          title: "Delete working copy?",
-          message: "This working copy has file changes. Do you want to delete it anyway?",
-        })
-        if (choice !== "yes") {
-          reopen()
-          return
-        }
-        reopen(selected.directory)
-        const forcedError = await client.api.projectCopy
-          .remove({
-            projectID: props.projectID,
-            location: { directory: location()?.directory || paths.cwd },
-            directory: selected.directory,
-            force: true,
-          })
-          .then(
-            () => undefined,
-            (error) => error,
-          )
-        if (forcedError) {
-          toast.show({
-            variant: "error",
-            title: "Failed to delete project copy",
-            message: errorMessage(forcedError),
-          })
-          reopen()
-          return
-        }
-        setRemoving(undefined)
-        setWorking(false)
-        if (await removedCurrent(deletingCurrent)) return
-        reopen()
-        return
-      }
-      toast.show({
-        variant: "error",
-        title: "Failed to delete project copy",
-        message: errorMessage(error),
-      })
+    const result = await removeProjectCopy({
+      client: client.api,
+      dialog,
+      toast,
+      projectID: props.projectID,
+      location: location()?.directory || paths.cwd,
+      directory: selected.directory,
+      onForce: () => reopen(selected.directory),
+    })
+    if (result.prompted) {
+      if (result.removed && (await removedCurrent(deletingCurrent))) return
+      reopen()
       return
     }
-    await refetch()
+    if (result.removed) await refetch()
     setRemoving(undefined)
     setWorking(false)
-    if (await removedCurrent(deletingCurrent)) return
+    if (result.removed) await removedCurrent(deletingCurrent)
   }
 
   async function create() {
