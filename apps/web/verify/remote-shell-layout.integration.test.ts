@@ -397,6 +397,7 @@ describe("remote shell layout", () => {
       const state = await page.evaluate<{
         readonly height: number
         readonly input: number
+        readonly mobileTrigger: number
         readonly actions: readonly { readonly label: string; readonly height: number }[]
         readonly messages: number
         readonly overflow: boolean
@@ -405,19 +406,21 @@ describe("remote shell layout", () => {
         return {
           height:composer?.getBoundingClientRect().height ?? 0,
           input:composer?.querySelector('.composer__input')?.getBoundingClientRect().height ?? 0,
-          actions:[...composer?.querySelectorAll('button') ?? []].map(button=>({label:button.getAttribute('aria-label') ?? button.textContent.trim(),height:button.getBoundingClientRect().height})),
+          mobileTrigger:document.querySelector('.composer__mobile-trigger')?.getBoundingClientRect().height ?? 0,
+          actions:[...composer?.querySelectorAll('button') ?? []].filter(button=>button.getBoundingClientRect().width>0).map(button=>({label:button.getAttribute('aria-label') ?? button.textContent.trim(),height:button.getBoundingClientRect().height})),
           messages:document.querySelectorAll('.transcript > .transcript-navigation__item > .transcript-message').length,
           overflow:document.documentElement.scrollWidth > innerWidth,
         };
       })()`)
       expect(state.height).toBeLessThanOrEqual(160)
       expect(state.input).toBeGreaterThanOrEqual(44)
+      expect(state.mobileTrigger).toBeGreaterThanOrEqual(44)
       expect(state.actions.map((action) => action.label)).toContain("Send prompt")
       expect(state.actions.every((action) => action.height >= 36), JSON.stringify(state.actions)).toBe(true)
       expect(state.messages).toBe(2)
       expect(state.overflow).toBe(false)
       await page.setCoarsePointer(true)
-      expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.composer button')].every(button => button.getBoundingClientRect().height >= 44)`)).toBe(true)
+      expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.composer button,.composer__mobile-trigger')].filter(button => button.getBoundingClientRect().width > 0).every(button => button.getBoundingClientRect().height >= 44)`)).toBe(true)
       await page.evaluate(`document.querySelector('.composer__delivery-toggle')?.click()`)
       expect(await page.evaluate<string | null>(`document.querySelector('.composer__delivery-toggle')?.getAttribute('aria-pressed') ?? null`)).toBe("true")
       await page.close()

@@ -11,6 +11,7 @@ import {
   toolShellID,
   toolSummary,
   toolTone,
+  transcriptPartVisible,
   type ActivityItem,
   type AssistantPart,
   type FileChangeView,
@@ -24,6 +25,7 @@ import { shellOutputPaging } from "../view-model"
 import { FormRequest } from "./form-request"
 import { Markdown } from "./markdown"
 import { DotTrail } from "./dot-trail"
+import { ImagePreview, UserImage } from "./image"
 import "./transcript.css"
 
 type ToolPartView = Extract<AssistantPart, { kind: "tool" }>
@@ -197,6 +199,8 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
               <pre class="output" tabindex="0">
                 <code>{block.text}</code>
               </pre>
+            ) : block.kind === "image" ? (
+              <ImagePreview src={block.uri} name={block.name ?? "Image"} />
             ) : (
               <p class="transcript-tool__note">
                 {block.type} content: {block.summary}
@@ -227,7 +231,7 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
  */
 function AssistantParts(props: { readonly parts: () => readonly AssistantPart[] }): JSX.Element {
   const groups = createMemo(() => props.parts().reduce<{ readonly key: string; readonly parts: readonly AssistantPart[] }[]>((result, part) => {
-    if (part.kind === "reasoning" && !part.text.trim()) return result
+    if (!transcriptPartVisible(part)) return result
     const previous = result.at(-1)
     if (part.kind === "reasoning" && previous?.parts[0]?.kind === "reasoning") {
       result[result.length - 1] = { ...previous, parts: [...previous.parts, part] }
@@ -324,6 +328,8 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
     return message.kind === "synthetic" || message.kind === "system" ? noticeSummary(message.source, message.text) : undefined
   }
   const syntheticNotice = () => classifySyntheticNotice(props.message())
+  const attachments = () => { const message = props.message(); return message.kind === "user" ? message.attachments ?? [] : [] }
+  const oversized = () => { const message = props.message(); return message.kind === "oversized" ? message : undefined }
   const fallbackText = () => {
     const message = props.message()
     return message.kind === "synthetic" && message.description ? message.description : systemText(message)
@@ -331,8 +337,17 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
   return (
     <Show when={kind() !== "notice"} fallback={<p class="notice">{noticeText(props.message())}</p>}>
       <article class={`transcript-message transcript-message--${kind()}`}>
+        <Show when={kind() === "oversized"}>
+          <p class="transcript-message__unavailable" role="status">{oversized()?.state === "error" ? "Content too large or unavailable" : oversized()?.state === "pending" ? "Waiting for content" : "Loading content"}</p>
+          <Show when={oversized()?.state === "error"}><button type="button" class="button button--ghost button--small" onClick={() => void remote.store.loadOversizedMessage(props.message().id)}>Retry full content</button></Show>
+        </Show>
         <Show when={kind() === "user"}>
           <p class="transcript-message__bubble">{userText(props.message())}</p>
+          <For each={attachments()}>{(attachment) =>
+            attachment.mime === "image/png" || attachment.mime === "image/jpeg" || attachment.mime === "image/gif" || attachment.mime === "image/webp"
+              ? <UserImage name={attachment.name} mime={attachment.mime} digest={attachment.digest} deviceID={remote.state().activeDeviceID ?? ""} sessionID={remote.state().activeSessionID ?? ""} />
+              : <span class="transcript-file">{attachment.name} · {attachment.bytes < 1_024 ? `${attachment.bytes} B` : `${(attachment.bytes / 1_024).toFixed(1)} KB`}</span>
+          }</For>
           <span class="transcript-message__receipt" aria-label={userState(props.message()) === "consumed" ? "Read by YCoding" : userState(props.message()) === "pending" ? "Pending delivery" : "Sent, not yet read"}>
             <Show when={userState(props.message()) === "consumed"} fallback={<Show when={userState(props.message()) === "pending"} fallback={<Icon name="check" size={14} />}><span aria-hidden="true">◷</span></Show>}><span aria-hidden="true">✓✓</span></Show>
             {userState(props.message()) === "consumed" ? "Read" : userState(props.message()) === "pending" ? "Pending" : "Sent"}

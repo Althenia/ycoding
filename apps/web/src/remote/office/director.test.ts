@@ -38,18 +38,18 @@ test("hydrates directly into unique home work spots and same destination status 
   expect(frame(director, first.id).position).toEqual(initial.position)
 })
 
-test("a running root leaves the lounge for its reserved CEO desk, including while thinking", () => {
+test("a running root leaves the lounge for a Developer desk and stays there while thinking", () => {
   const layout = officeLayout()
   const director = new OfficeDirector(layout)
-  const root = actor("root", { kind: "session", homeRoom: "ceo", status: "idle" })
+  const root = actor("root", { kind: "session", homeRoom: "developer", status: "idle" })
   director.sync(snapshot([root]))
   expect(frame(director, root.id).room).toBe("lounge")
   for (const status of ["working", "thinking"] as const) {
     director.sync(snapshot([{ ...root, status, bubble: status === "thinking" ? "Thinking" : "Working" }]))
     for (let step = 0; step < 500 && frame(director, root.id).moving; step++) run(director)
     const current = frame(director, root.id)
-    expect(current.room).toBe("ceo")
-    expect(current.position).toEqual(center(layout.work.ceo[0]!.cell))
+    expect(current.room).toBe("developer")
+    expect(current.position).toEqual(center(layout.work.developer[0]!.cell))
     expect(current.actor.bubble).toBe(status === "thinking" ? "Thinking" : "Working")
   }
 })
@@ -76,6 +76,39 @@ test("work and lounge transitions route on walkable cells and return to the rese
   expect(frame(director, initialActor.id).position).toEqual(center(layout.work.developer[0]!.cell))
 })
 
+test("selected research and QA verification roam their stations while implementation types and coordination meets", () => {
+  for (const [activity, room] of [["research", "research"], ["verify", "qa"]] as const) {
+    const layout = officeLayout()
+    const director = new OfficeDirector(layout)
+    const active = actor(`selected-${activity}`, { selected: true, homeRoom: "developer", activity })
+    director.sync(snapshot([active]))
+    const visited = new Set<string>()
+    for (let step = 0; step < 1300; step++) {
+      const current = run(director).find((item) => item.actor.id === active.id)!
+      if (current.room === room && !current.moving) visited.add(JSON.stringify(current.position))
+    }
+    expect(visited.size, activity).toBeGreaterThanOrEqual(2)
+    expect(frame(director, active.id).room).toBe(room)
+    director.sync(snapshot([{ ...active, activity: "hold" }]))
+    for (let step = 0; step < 200 && frame(director, active.id).moving; step++) run(director)
+    const held = frame(director, active.id).position
+    for (let step = 0; step < 200; step++) run(director)
+    expect(frame(director, active.id).position).toEqual(held)
+  }
+  const director = new OfficeDirector(officeLayout())
+  const builder = actor("builder", { activity: "implement", homeRoom: "developer", selected: true })
+  director.sync(snapshot([builder]))
+  expect(frame(director, builder.id)).toMatchObject({ room: "developer", pose: "type" })
+  director.sync(snapshot([{ ...builder, activity: "coordinate" }]))
+  for (let step = 0; step < 500 && frame(director, builder.id).moving; step++) run(director)
+  expect(frame(director, builder.id).room).toBe("meeting")
+  const reduced = new OfficeDirector(officeLayout())
+  reduced.sync(snapshot([actor("quiet", { selected: true, activity: "research", homeRoom: "research" })]))
+  const start = reduced.tick(0, true)[0]!.position
+  for (let step = 0; step < 1000; step++) reduced.tick(50, true)
+  expect(reduced.tick(0, true)[0]!.position).toEqual(start)
+})
+
 test("newly reported actors enter from the door with a 400 ms opacity ramp", () => {
   const layout = officeLayout()
   const director = new OfficeDirector(layout)
@@ -98,7 +131,7 @@ test("a newly reported child enters from the lobby and leaves after completion o
   for (const taskState of ["completed", "cancelled"] as const) {
     const layout = officeLayout()
     const director = new OfficeDirector(layout)
-    const root = actor("root", { kind: "session", homeRoom: "ceo" })
+    const root = actor("root", { kind: "session", homeRoom: "developer" })
     const child = actor("child", { kind: "task", teamRootSessionID: root.sessionID, homeRoom: "qa", taskState: "running" })
     const team = { status: "ready" as const, rootActorID: root.id, total: 1, shown: 1, more: false }
     director.sync(snapshot([root], { team: { ...team, total: 0, shown: 0 } }))
@@ -118,7 +151,7 @@ test("a newly reported child enters from the lobby and leaves after completion o
 test("a terminal child reports to the supervisor before exiting and cannot reappear from the same report", () => {
   const layout = officeLayout()
   const director = new OfficeDirector(layout)
-  const root = actor("root", { homeRoom: "ceo" })
+  const root = actor("root", { homeRoom: "developer" })
   const child = actor("child", { kind: "task", teamRootSessionID: root.id, taskState: "running" })
   const team = { status: "ready" as const, rootActorID: root.id, total: 1, shown: 1, more: false }
   director.sync(snapshot([root, child], { team }))
@@ -146,7 +179,7 @@ test("a terminal child reports to the supervisor before exiting and cannot reapp
 test("a terminal update during delegation keeps the child headed to the meeting before departure", () => {
   const layout = officeLayout()
   const director = new OfficeDirector(layout)
-  const root = actor("root", { homeRoom: "ceo" })
+  const root = actor("root", { homeRoom: "developer" })
   const child = actor("child", { kind: "task", teamRootSessionID: root.id, homeRoom: "developer", taskState: "running" })
   const team = { status: "ready" as const, rootActorID: root.id, total: 1, shown: 1, more: false }
   director.sync(snapshot([root, child], { team }))
@@ -213,7 +246,7 @@ test("departures walk to the entrance, reappearance cancels leaving, and scope/r
 test("delegate choreography meets, talks, and returns both actors within the bound", () => {
   const layout = officeLayout()
   const director = new OfficeDirector(layout)
-  const supervisor = actor("supervisor", { homeRoom: "ceo" })
+  const supervisor = actor("supervisor", { homeRoom: "developer" })
   const child = actor("child", { kind: "task", homeRoom: "developer" })
   director.sync(snapshot([supervisor, child]))
   expect(director.playCue({ id: "briefing", kind: "delegate", fromActorID: supervisor.id, toActorID: child.id })).toBe(true)
@@ -228,14 +261,14 @@ test("delegate choreography meets, talks, and returns both actors within the bou
   expect(speech).toBe(true)
   expect(childSpeech).toBe(true)
   expect(director.cueActive(supervisor.id)).toBe(false)
-  expect(frame(director, supervisor.id).position).toEqual(center(layout.work.ceo[0]!.cell))
-  expect(frame(director, child.id).position).toEqual(center(layout.work.developer[0]!.cell))
+  expect(frame(director, supervisor.id).position).toEqual(center(layout.work.developer[0]!.cell))
+  expect(frame(director, child.id).position).toEqual(center(layout.work.developer[1]!.cell))
 })
 
 test("report choreography returns an idle child to the lounge; cue refusal is truthful", () => {
   const layout = officeLayout()
   const director = new OfficeDirector(layout)
-  const supervisor = actor("supervisor", { homeRoom: "ceo" })
+  const supervisor = actor("supervisor", { homeRoom: "developer" })
   const child = actor("child", { kind: "task", status: "idle", homeRoom: "developer" })
   director.sync(snapshot([supervisor, child]))
   expect(director.playCue({ id: "report", kind: "report", fromActorID: child.id, toActorID: supervisor.id })).toBe(true)
@@ -358,7 +391,7 @@ test("retargeting mid-walk keeps every interpolated position walkable", () => {
 
 test("concurrent delegate cues share the supervisor briefing and reserve separate meeting spots", () => {
   const director = new OfficeDirector(officeLayout())
-  const supervisor = actor("supervisor", { homeRoom: "ceo" })
+  const supervisor = actor("supervisor", { homeRoom: "developer" })
   const first = actor("first", { kind: "task" })
   const second = actor("second", { kind: "task", homeRoom: "research" })
   director.sync(snapshot([supervisor, first, second]))
@@ -378,7 +411,7 @@ test("concurrent delegate cues share the supervisor briefing and reserve separat
 
 test("real-office far routes reach their talk phases and destinations within 45 simulated seconds", async () => {
   const { officeLayout } = await import("./map")
-  const homes = ["ceo", "developer", "research", "qa"] as const
+  const homes = ["developer", "research", "qa"] as const
   for (const homeRoom of homes) {
     const spots = officeLayout.work[homeRoom]
     const target = spots.reduce((farthest, spot, index) => {
@@ -399,7 +432,7 @@ test("real-office far routes reach their talk phases and destinations within 45 
     expect(frame(director, traveler.id).position).toEqual(center(target.spot.cell))
   }
 
-  for (const [homeRoom, childRoom] of [["ceo", "qa"], ["qa", "ceo"]] as const) {
+  for (const [homeRoom, childRoom] of [["developer", "qa"], ["qa", "developer"]] as const) {
     const director = new OfficeDirector(officeLayout)
     const supervisor = actor(`supervisor-${homeRoom}`, { homeRoom })
     const child = actor(`child-${childRoom}`, { homeRoom: childRoom })
@@ -423,7 +456,7 @@ test("real-office far routes reach their talk phases and destinations within 45 
 
   const director = new OfficeDirector(officeLayout)
   const child = actor("research-report", { homeRoom: "research" })
-  const supervisor = actor("ceo-report", { homeRoom: "ceo" })
+  const supervisor = actor("developer-report", { homeRoom: "developer" })
   director.sync(snapshot([child, supervisor]))
   expect(director.playCue({ id: "research-report", kind: "report", fromActorID: child.id, toActorID: supervisor.id })).toBe(true)
   let reported = false
@@ -436,5 +469,5 @@ test("real-office far routes reach their talk phases and destinations within 45 
   expect(reported).toBe(true)
   expect(elapsed).toBeLessThanOrEqual(45_000)
   expect(frame(director, child.id).position).toEqual(center(officeLayout.work.research[0]!.cell))
-  expect(frame(director, supervisor.id).position).toEqual(center(officeLayout.work.ceo[0]!.cell))
+  expect(frame(director, supervisor.id).position).toEqual(center(officeLayout.work.developer[0]!.cell))
 })

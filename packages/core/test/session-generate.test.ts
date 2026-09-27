@@ -43,6 +43,8 @@ import { SkillInstructions } from "@ycoding-ai/core/skill/instructions"
 import { Money } from "@ycoding-ai/schema/money"
 import { asc, eq } from "drizzle-orm"
 import { Effect, Layer, Schema, Stream } from "effect"
+import { chmod, writeFile } from "fs/promises"
+import { AttachmentStore } from "@ycoding-ai/core/attachment-store"
 import { testEffect } from "./lib/effect"
 
 const requests: LLMRequest[] = []
@@ -114,6 +116,7 @@ const it = testEffect(
       InstructionBuiltIns.node,
       PluginHooks.node,
       SessionGenerateNode.node,
+      AttachmentStore.node,
     ]),
     [
       [llmClient, client],
@@ -217,6 +220,39 @@ it.effect("executes the provider for transient generation without durable mutati
     expect(result).toBe("Transient answer")
     expect(requests).toHaveLength(1)
     expect(yield* durableState(db, sessionID)).toEqual(before)
+  }),
+)
+
+it.effect("generates when a stored attachment in history was modified outside YCoding", () =>
+  Effect.gen(function* () {
+    reset()
+    instruction = "Initial context"
+    const { db, events, instructions } = yield* setup
+    yield* InstructionState.prepare(db, events, instructions, sessionID)
+    const store = yield* AttachmentStore.Service
+    const content = yield* store.import(Buffer.from("original notes\n"))
+    yield* Effect.promise(() => chmod(store.absolutePath(content), 0o600))
+    yield* Effect.promise(() => writeFile(store.absolutePath(content), "notes edited by a tool\n"))
+    const inputID = SessionMessage.ID.create()
+    yield* events.publish(SessionEvent.InputAdmitted, {
+      sessionID,
+      inputID,
+      input: {
+        type: "user",
+        data: { text: "Update the notes", files: [{ content, mime: "text/plain", name: "notes.txt" }] },
+        delivery: "steer",
+      },
+    })
+    yield* events.publish(SessionEvent.InputPromoted, { sessionID, inputID })
+
+    const result = yield* SessionGenerate.Service.use((service) =>
+      service.generate({ sessionID, prompt: "Summarize privately" }),
+    )
+
+    expect(result).toBe("Transient answer")
+    const text = userTexts(requests[0]!).join("\n")
+    expect(text).toContain(`Attached file unavailable: notes.txt\nMIME: text/plain\nSHA-256: ${content.digest}`)
+    expect(text).not.toContain(store.absolutePath(content))
   }),
 )
 

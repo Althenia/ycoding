@@ -112,6 +112,7 @@ export class RemoteAgent {
   private eventStarting = false
   private eventStreamGeneration = 0
   private readonly pendingEvents: PendingEvent[] = []
+  private readonly inFlight = new Map<string, AbortController>()
   private eventDraining = false
   private eventRetryAttempt = 0
   private terminalReason?: string
@@ -154,6 +155,7 @@ export class RemoteAgent {
     this.state = "closed"
     this.clearTimers()
     this.pendingEvents.splice(0)
+    this.abortRequests()
     this.uploads.clear()
     await this.stopEventStream()
     await this.connection?.disconnect(code, reason)
@@ -218,21 +220,37 @@ export class RemoteAgent {
       this.subscriptions.apply(parsed.value.clientID, parsed.value.sessionIDs)
       return
     }
+    if (parsed.value.type === "cancel") { this.inFlight.get(parsed.value.id)?.abort(); return }
     if (parsed.value.type !== "request") return
-    void this.handleRequest(parsed.value)
+    const controller = new AbortController()
+    this.inFlight.set(parsed.value.id, controller)
+    void this.handleRequest(parsed.value, controller)
   }
 
-  private async handleRequest(request: RemoteRequest) {
+  private async handleRequest(request: RemoteRequest, controller: AbortController) {
     const owner = this.connection
-    const frames = await executeRemoteOperation({
-      request,
-      uploads: this.uploads,
-      sessions: this.registry,
-      subscriptions: this.subscriptions,
-      local: this.options.local,
-    })
-    if (this.connection !== owner) return
-    for (const frame of frames) await this.send(serializeResponse(frame), owner)
+    try {
+      const frames = await executeRemoteOperation({
+        request,
+        signal: controller.signal,
+        uploads: this.uploads,
+        sessions: this.registry,
+        subscriptions: this.subscriptions,
+        local: this.options.local,
+      })
+      if (this.connection !== owner || controller.signal.aborted) return
+      for (const frame of frames) {
+        if (controller.signal.aborted) return
+        await this.send(serializeResponse(frame), owner)
+      }
+    } finally {
+      if (this.inFlight.get(request.id) === controller) this.inFlight.delete(request.id)
+    }
+  }
+
+  private abortRequests() {
+    for (const controller of this.inFlight.values()) controller.abort()
+    this.inFlight.clear()
   }
 
   private async send(frame: string, connection = this.connection) {
@@ -352,12 +370,6 @@ export class RemoteAgent {
     }, delay)
   }
 
-  /**
-   * One event frame per local event, in arrival order. Events for sessions that
-   * are not subscribed are never forwarded, and a frame that
-   * cannot fit the agent bound closes the connection so the client reconciles
-   * instead of silently losing a projection update.
-   */
   private forwardEvent(event: unknown, streamGeneration: number) {
     const connection = this.connection
     if (connection === undefined || this.state !== "live") return
@@ -415,8 +427,24 @@ export class RemoteAgent {
       return
     const frame = serializeEvent({ type: "event", sessionID, event: pending.event })
     if (frame.length > RemoteLimits.maxAgentMessageChars) {
-      this.diagnostic(`refusing to send an oversized ${sessionID} event frame; closing for client reconciliation`)
-      await this.recycleConnection("Remote event exceeded the agent frame bound")
+      const data = typeof pending.event === "object" && pending.event !== null ? Reflect.get(pending.event, "data") : undefined
+      const originalID = typeof pending.event === "object" && pending.event !== null ? Reflect.get(pending.event, "id") : undefined
+      const eventID = typeof originalID === "string" && /^evt_[A-Za-z0-9_-]+$/.test(originalID) && originalID.length <= 128 ? originalID : undefined
+      const candidates = data && typeof data === "object" ? [Reflect.get(data, "messageID"), Reflect.get(data, "assistantMessageID"), Reflect.get(data, "inputID")] : []
+      const messageID = candidates.find((value): value is string => typeof value === "string" && /^msg_[A-Za-z0-9_-]+$/.test(value) && value.length <= 128)
+      const durable = typeof pending.event === "object" && pending.event !== null ? Reflect.get(pending.event, "durable") : undefined
+      const seq: unknown = durable && typeof durable === "object" ? Reflect.get(durable, "seq") : undefined
+      const version: unknown = durable && typeof durable === "object" ? Reflect.get(durable, "version") : undefined
+      const markerDurable = durable && typeof durable === "object" && Reflect.get(durable, "aggregateID") === sessionID &&
+        typeof seq === "number" && Number.isSafeInteger(seq) && typeof version === "number" && Number.isSafeInteger(version)
+        ? { aggregateID: sessionID, seq, version }
+        : undefined
+      this.diagnostic(`forwarding a bounded invalidation for an oversized ${sessionID} event frame`)
+      await this.send(serializeEvent({ type: "event", sessionID, event: {
+        type: "session.remote.oversized", ...(eventID === undefined ? {} : { id: eventID }),
+        ...(markerDurable === undefined ? {} : { durable: markerDurable }),
+        data: { sessionID, ...(messageID === undefined ? {} : { messageID }), truncated: true, omittedChars: frame.length },
+      } }), pending.connection)
       return
     }
     await this.send(frame, pending.connection)
@@ -435,6 +463,7 @@ export class RemoteAgent {
     if (this.state !== "live") return
     this.subscriptions.clear()
     this.uploads.clear()
+    this.abortRequests()
     if (code !== undefined && terminalCloseCodes.includes(code)) void this.rotateConnection()
   }
 
@@ -449,6 +478,7 @@ export class RemoteAgent {
     this.connection = undefined
     this.uploads.clear()
     this.pendingEvents.splice(0)
+    this.abortRequests()
     try {
       await previous?.disconnect(RemoteCloseCode.tooLarge, reason)
     } catch (error) {
@@ -478,6 +508,7 @@ export class RemoteAgent {
     this.connection = undefined
     this.uploads.clear()
     this.pendingEvents.splice(0)
+    this.abortRequests()
     try {
       await previous?.disconnect(RemoteCloseCode.normal, "Rotating the device credential")
     } catch (error) {
@@ -497,6 +528,7 @@ export class RemoteAgent {
     this.clearTimers()
     this.pendingEvents.splice(0)
     this.uploads.clear()
+    this.abortRequests()
     void this.stopEventStream().catch((error) =>
       this.diagnostic(`could not stop the local event stream: ${describe(error)}`),
     )

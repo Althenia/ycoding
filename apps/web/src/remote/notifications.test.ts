@@ -117,12 +117,12 @@ function deliveryWith(options: {
 
 describe("notificationCategory", () => {
   test("maps each live event the workspace receives to one category", () => {
-    expect(notificationCategory({ type: "session.execution.succeeded", data: {} })).toBe("agent-completed")
+    expect(notificationCategory({ type: "session.execution.succeeded", data: {} })).toBeUndefined()
     expect(notificationCategory({ type: "session.execution.failed", data: { error: { code: "x", message: "y" } } })).toBe("error")
     expect(notificationCategory({ type: "session.step.failed", data: { assistantMessageID: "msg_1" } })).toBe("error")
-    expect(notificationCategory({ type: "permission.v2.asked", data: { id: "per_1" } })).toBe("approval-requested")
-    expect(notificationCategory({ type: "form.created", data: { form: { id: "frm_1", sessionID: "ses_a" } } })).toBe("approval-requested")
-    expect(notificationCategory({ type: "guardrail.asked", data: { id: "grq_1", hardReview: true } })).toBe("guardrail-blocked")
+    expect(notificationCategory({ type: "permission.v2.asked", data: { id: "per_1" } })).toBeUndefined()
+    expect(notificationCategory({ type: "form.created", data: { form: { id: "frm_1", sessionID: "ses_a" } } })).toBeUndefined()
+    expect(notificationCategory({ type: "guardrail.asked", data: { id: "grq_1", hardReview: true } })).toBeUndefined()
   })
 
   test("treats only a blocking guardrail decision as a guardrail alert", () => {

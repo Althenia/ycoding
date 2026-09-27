@@ -1,9 +1,10 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, untrack } from "solid-js"
 import { useRemote } from "../context"
-import { dailySpend, donutGeometry, modelIdentity, money, providerDistribution, providerHeading, quotaWindow, relativeFreshness, reportKey, spendMetrics, tokenCount, visibleProviders, type UsageProvider, type UsageReportInput, type UsageReportRow, type UsageWindow } from "./usage-model"
+import { dailySpend, donutGeometry, modelIdentity, money, providerDistribution, providerHeading, quotaWindow, relativeFreshness, reportKey, spendMetrics, tokenCount, visibleProviders, type SpendDay, type UsageProvider, type UsageReport, type UsageReportInput, type UsageReportRow, type UsageWindow } from "./usage-model"
 import "./usage.css"
 
 const groups = ["model", "session", "project", "agent"] as const
+type BreakdownInput = UsageReportInput & { readonly group: (typeof groups)[number] }
 const names = { model: "Model", session: "Session", project: "Project", agent: "Agent" }
 const day = 86_400_000
 const columns = [
@@ -24,16 +25,24 @@ export function UsagePage() {
   const [distributionTableOpen, setDistributionTableOpen] = createSignal(false)
   const [breakdownTableOpen, setBreakdownTableOpen] = createSignal(false)
   const [distributionMetric, setDistributionMetric] = createSignal<"spend" | "tokens">("spend")
+  const [shownBreakdown, setShownBreakdown] = createSignal<{ readonly report: UsageReport; readonly input: BreakdownInput }>()
+  const [minimumRowsHeight, setMinimumRowsHeight] = createSignal(0)
+  const [activeDay, setActiveDay] = createSignal<SpendDay>()
+  const [activeProvider, setActiveProvider] = createSignal<string>()
+  let mobileRows: HTMLDivElement | undefined
   const connected = createMemo(() => remote.state().transport.kind === "open")
   const today = Math.floor(Date.now() / day) * day
   const range = { from: today - 29 * day, to: today + day }
   const dailyInput: UsageReportInput = { group: "day", ...range, limit: 30, sort: "key", order: "asc" }
   const month = new Date()
   const monthlyInput: UsageReportInput = { group: "model", from: Date.UTC(month.getUTCFullYear(), month.getUTCMonth(), 1), to: Date.now(), limit: 200, sort: "cost", order: "desc" }
-  const breakdownInput = createMemo<UsageReportInput>(() => ({ group: group(), ...range, offset: offset(), limit: 25, sort: sort(), order: order() }))
+  const breakdownInput = createMemo<BreakdownInput>(() => ({ group: group(), ...range, offset: offset(), limit: 25, sort: sort(), order: order() }))
   const daily = () => remote.state().usage.reports[reportKey(dailyInput)]
   const monthly = () => remote.state().usage.reports[reportKey(monthlyInput)]
   const breakdown = () => remote.state().usage.reports[reportKey(breakdownInput())]
+  const displayed = () => shownBreakdown()?.report
+  const updating = () => shownBreakdown() !== undefined && (breakdown() === undefined || breakdown()?.status === "loading")
+  const holdRows = () => setMinimumRowsHeight(Math.max(minimumRowsHeight(), mobileRows?.offsetHeight ?? 0))
   const providers = createMemo(() => visibleProviders(remote.state().usage.providers.data ?? []))
   const latest = createMemo(() => providers().length ? Math.max(...providers().map((provider) => provider.updatedAt)) : undefined)
   const machine = () => {
@@ -42,6 +51,8 @@ export function UsagePage() {
   }
   const distribution = createMemo(() => providerDistribution(monthly()?.data, remote.state().usage.providers.data ?? [], distributionMetric()))
   const arcs = createMemo(() => donutGeometry(distribution().segments, 72))
+  const providerCosts = createMemo(() => new Map(providerDistribution(monthly()?.data, remote.state().usage.providers.data ?? [], "spend").segments.map((segment) => [segment.providerID, segment.value])))
+  const activeSegment = () => arcs().find((segment) => segment.providerID === activeProvider())
   const days = createMemo(() => dailySpend(daily()?.data, now()))
   const tiles = createMemo(() => [
     { title: "Today", value: spendMetrics(days().slice(-1)) },
@@ -54,6 +65,7 @@ export function UsagePage() {
     return costs.map((cost, index) => `${(index / 29 * 96).toFixed(1)},${(28 - cost / highest * 24).toFixed(1)}`).join(" ")
   })
   const selectGroup = (next: (typeof groups)[number]) => {
+    holdRows()
     setGroup(next)
     setOffset(0)
     setSort("cost")
@@ -61,6 +73,7 @@ export function UsagePage() {
     void remote.store.loadUsageReport({ group: next, ...range, offset: 0, limit: 25, sort: "cost", order: "desc" })
   }
   const setSorting = (next: NonNullable<UsageReportInput["sort"]>) => {
+    holdRows()
     const direction = sort() === next && order() === "desc" ? "asc" : "desc"
     setSort(next)
     setOrder(direction)
@@ -68,19 +81,32 @@ export function UsagePage() {
     void remote.store.loadUsageReport({ group: group(), ...range, offset: 0, limit: 25, sort: next, order: direction })
   }
   const nextPage = () => {
-    const next = breakdown()?.data?.nextOffset
-    if (next === undefined) return
+    const next = displayed()?.nextOffset
+    if (next === undefined || updating()) return
+    holdRows()
     setOffset(next)
     void remote.store.loadUsageReport({ ...breakdownInput(), offset: next })
   }
   const previousPage = () => {
-    const next = Math.max(0, offset() - 25)
+    if (updating()) return
+    holdRows()
+    const next = Math.max(0, (shownBreakdown()?.input.offset ?? 0) - 25)
     setOffset(next)
     void remote.store.loadUsageReport({ ...breakdownInput(), offset: next })
   }
   createEffect(() => {
     if (!connected() || remote.state().usage.providers.status !== "idle") return
     untrack(() => { void Promise.all([remote.store.loadUsage(), remote.store.loadUsageReport(dailyInput), remote.store.loadUsageReport(breakdownInput()), remote.store.loadUsageReport(monthlyInput)]) })
+  })
+  createEffect(() => {
+    if (!connected() || remote.state().usage.providers.status === "idle") {
+      setShownBreakdown(undefined)
+      setMinimumRowsHeight(0)
+      return
+    }
+    const result = breakdown()
+    if (result?.status === "ready" && result.data && (shownBreakdown()?.report !== result.data || shownBreakdown()?.input !== breakdownInput()))
+      setShownBreakdown({ report: result.data, input: breakdownInput() })
   })
   onMount(() => {
     const clock = setInterval(() => setNow(Date.now()), 60_000)
@@ -122,9 +148,13 @@ export function UsagePage() {
               <line x1="0" y1="156" x2="900" y2="156" class="usage-chart__axis" />
               <For each={days()}>{(entry, index) => {
                 const height = () => entry.cost === 0 ? 2 : Math.max(4, entry.cost / Math.max(1, ...days().map((item) => item.cost)) * 138)
-                return <rect x={index() * 30 + 7} y={156 - height()} width="16" height={height()} rx="2" class={index() === 29 ? "usage-chart__bar usage-chart__bar--today" : "usage-chart__bar"}><title>{entry.key}: {money(entry.cost)}</title></rect>
+                return <rect x={index() * 30 + 7} y={156 - height()} width="16" height={height()} rx="2" class={index() === 29 ? "usage-chart__bar usage-chart__bar--today" : "usage-chart__bar"}
+                  tabindex="0" role="img" aria-label={`${entry.key}: estimated cost ${money(entry.cost)}, ${count(entry.requests)} requests, ${count(entry.tokens)} tokens`}
+                  onPointerEnter={(event) => { if (event.pointerType !== "touch") setActiveDay(entry) }} onPointerLeave={(event) => { if (event.pointerType !== "touch") setActiveDay(undefined) }}
+                  onFocus={() => setActiveDay(entry)} onBlur={() => setActiveDay(undefined)} onClick={() => setActiveDay(entry)} />
               }}</For>
             </svg>
+            <Show when={activeDay()}>{(entry) => <div class="usage-chart__tooltip" role="status"><strong>{entry().key}</strong><span>Estimated cost {money(entry().cost)}</span><span>{count(entry().requests)} requests · {count(entry().tokens)} tokens</span></div>}</Show>
             <div class="usage-chart__labels"><span>{days()[0]?.label}</span><span>{days()[14]?.label}</span><span>Today</span></div>
             <Show when={tableOpen()}><div id="usage-daily-table" class="usage-table-wrap"><table><caption>Daily usage, last 30 UTC days</caption><thead><tr><th scope="col">Day</th><th scope="col">Cost</th><th scope="col">Tokens</th><th scope="col">Requests</th></tr></thead><tbody><For each={[...days()].reverse()}>{(entry) => <tr><th scope="row">{entry.key}</th><td>{money(entry.cost)}</td><td>{count(entry.tokens)}</td><td>{count(entry.requests)}</td></tr>}</For></tbody></table></div></Show>
           </Show>
@@ -144,12 +174,14 @@ export function UsagePage() {
               <svg class="usage-donut" viewBox="0 0 200 200" role="img" aria-label={`${distributionMetric() === "spend" ? "Estimated spend" : "Tokens"} by provider this UTC month; exact values are available in the table`}>
                 <circle class="usage-donut__track" cx="100" cy="100" r="72" fill="none" stroke-width="26" />
                 <For each={arcs()}>{(segment, index) => <circle class="usage-donut__arc" cx="100" cy="100" r="72" fill="none" stroke-width="26"
-                  style={{ stroke: distributionColors[index() % distributionColors.length], "--usage-dash": `${segment.length} ${segment.circumference - segment.length}`, "--usage-circumference": segment.circumference, "stroke-dashoffset": segment.offset }}>
-                  <title>{segment.label}: {distributionMetric() === "spend" ? money(segment.value) : count(segment.value)} ({Math.round(segment.share * 100)}%)</title>
-                </circle>}</For>
+                  style={{ stroke: distributionColors[index() % distributionColors.length], "--usage-dash": `${segment.length} ${segment.circumference - segment.length}`, "--usage-circumference": segment.circumference, "stroke-dashoffset": segment.offset }}
+                  tabindex="0" role="img" aria-label={`${segment.label}: estimated cost ${money(providerCosts().get(segment.providerID) ?? 0)}, ${Math.round(segment.share * 100)}% share${distributionMetric() === "tokens" ? `, ${count(segment.value)} tokens` : ""}`}
+                  onPointerEnter={(event) => { if (event.pointerType !== "touch") setActiveProvider(segment.providerID) }} onPointerLeave={(event) => { if (event.pointerType !== "touch") setActiveProvider(undefined) }}
+                  onFocus={() => setActiveProvider(segment.providerID)} onBlur={() => setActiveProvider(undefined)} onClick={() => setActiveProvider(segment.providerID)} />}</For>
                 <text x="100" y="96" class="usage-donut__total">{distributionMetric() === "spend" ? money(distribution().total) : count(distribution().total)}</text>
                 <text x="100" y="120" class="usage-donut__caption">{distributionMetric() === "spend" ? "estimated USD" : "tokens"}</text>
               </svg>
+              <Show when={activeSegment()}>{(segment) => <div class="usage-distribution__tooltip" role="status"><strong>{segment().label}</strong><span>Estimated cost {money(providerCosts().get(segment().providerID) ?? 0)} · {Math.round(segment().share * 100)}% share</span><Show when={distributionMetric() === "tokens"}><span>{count(segment().value)} tokens</span></Show></div>}</Show>
               <ul class="usage-distribution__legend"><For each={distribution().segments}>{(segment, index) => <li>
                 <span class="usage-distribution__swatch" style={{ background: distributionColors[index() % distributionColors.length] }} aria-hidden="true" />
                 <span class="usage-distribution__name">{segment.label}</span><span>{Math.round(segment.share * 100)}%</span><strong>{distributionMetric() === "spend" ? money(segment.value) : count(segment.value)}</strong>
@@ -162,7 +194,7 @@ export function UsagePage() {
     </section>
 
     <section class="usage-breakdown-section" aria-labelledby="usage-breakdown-title">
-      <div class="usage-breakdown__head"><h2 id="usage-breakdown-title">Breakdown</h2><Show when={breakdown()?.data?.rows.length}><span class="usage-breakdown__summary">Showing {offset() + 1}–{offset() + (breakdown()?.data?.rows.length ?? 0)} of {count(breakdown()?.data?.rowCount ?? 0)} {names[group()].toLowerCase()}s</span></Show>
+      <div class="usage-breakdown__head"><h2 id="usage-breakdown-title">Breakdown</h2><Show when={displayed()?.rows.length}><span class="usage-breakdown__summary">Showing {(shownBreakdown()?.input.offset ?? 0) + 1}–{(shownBreakdown()?.input.offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)} {names[shownBreakdown()?.input.group ?? group()].toLowerCase()}s</span></Show>
       <div class="usage-tabs" role="tablist" aria-label="Breakdown group" onKeyDown={(event) => {
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") return
         event.preventDefault()
@@ -170,23 +202,24 @@ export function UsagePage() {
         selectGroup(groups[index]!)
         event.currentTarget.querySelectorAll<HTMLButtonElement>("button")[index]?.focus()
       }}><For each={groups}>{(item) => <button id={`usage-tab-${item}`} role="tab" type="button" aria-selected={group() === item} aria-controls="usage-breakdown-panel" tabindex={group() === item ? 0 : -1} onClick={() => selectGroup(item)}>{names[item]}</button>}</For></div></div>
-      <div id="usage-breakdown-panel" role="tabpanel" aria-labelledby={`usage-tab-${group()}`} class="usage-breakdown">
-        <Show when={remote.state().transport.kind === "open" && (breakdown()?.status === "loading" || breakdown() === undefined)}><p class="usage-message" role="status">Loading breakdown…</p></Show>
-        <Show when={breakdown()?.status === "unsupported"}><p class="usage-message" role="status">Update YCoding on this machine to see usage.</p></Show>
-        <Show when={breakdown()?.status === "error"}><p class="usage-message" role="alert">{breakdown()?.message}</p></Show>
-        <Show when={breakdown()?.status === "ready"}><Show when={(breakdown()?.data?.rows.length ?? 0) > 0} fallback={<p class="usage-message">No requests in this period.</p>}>
-          <div class="usage-breakdown__mobile"><For each={breakdown()?.data?.rows}>{(row: UsageReportRow) => {
-            const identity = () => group() === "model" ? modelIdentity(row.key, remote.state().usage.providers.data ?? []) : undefined
+      <div id="usage-breakdown-panel" role="tabpanel" aria-labelledby={`usage-tab-${group()}`} class="usage-breakdown" aria-busy={updating() ? "true" : "false"}>
+        <Show when={!displayed() && remote.state().transport.kind === "open" && (breakdown()?.status === "loading" || breakdown() === undefined)}><p class="usage-message" role="status">Loading breakdown…</p></Show>
+        <Show when={!displayed() && breakdown()?.status === "unsupported"}><p class="usage-message" role="status">Update YCoding on this machine to see usage.</p></Show>
+        <Show when={!displayed() && breakdown()?.status === "error"}><p class="usage-message" role="alert">{breakdown()?.message}</p></Show>
+        <Show when={displayed()}><Show when={(displayed()?.rows.length ?? 0) > 0} fallback={<p class="usage-message">No requests in this period.</p>}>
+          <div class="usage-breakdown__mobile" ref={mobileRows} style={{ "min-height": `${minimumRowsHeight()}px` }}><For each={displayed()?.rows}>{(row: UsageReportRow) => {
+            const identity = () => shownBreakdown()?.input.group === "model" ? modelIdentity(row.key, remote.state().usage.providers.data ?? []) : undefined
             return <article class="usage-mobile-row"><div class="usage-mobile-row__top"><div><strong>{identity()?.model ?? row.label}</strong><Show when={identity()}><span class="usage-provider-chip">{identity()?.provider}</span></Show></div><b>{money(row.cost ?? 0)}</b></div>
               <p>{count(row.physical)} requests · {count(row.tokens.input)} in / {count(row.tokens.output)} out<Show when={row.tokens.cache.read > 0}> · {count(row.tokens.cache.read)} cache read</Show></p>
             </article>
           }}</For></div>
           <button class="usage-breakdown__table-toggle" type="button" aria-expanded={breakdownTableOpen()} aria-controls="usage-breakdown-table" onClick={() => setBreakdownTableOpen(!breakdownTableOpen())}>{breakdownTableOpen() ? "Hide table" : "View table"}</button>
-          <div id="usage-breakdown-table" class="usage-table-wrap usage-breakdown__table" classList={{ "usage-breakdown__table--open": breakdownTableOpen() }}><table><caption>{names[group()]} by usage</caption><thead><tr><th scope="col"><button type="button" aria-label={`Sort by ${names[group()]}`} onClick={() => setSorting("key")}>{names[group()]} {sort() === "key" ? order() === "asc" ? "↑" : "↓" : "↕"}</button></th><For each={columns}>{(column) => <th scope="col"><button type="button" aria-label={`Sort by ${column.label}`} onClick={() => setSorting(column.key)}>{column.label} {sort() === column.key ? order() === "asc" ? "↑" : "↓" : "↕"}</button></th>}</For></tr></thead><tbody><For each={breakdown()?.data?.rows}>{(row: UsageReportRow) => {
-            const identity = () => group() === "model" ? modelIdentity(row.key, remote.state().usage.providers.data ?? []) : undefined
+          <div id="usage-breakdown-table" class="usage-table-wrap usage-breakdown__table" classList={{ "usage-breakdown__table--open": breakdownTableOpen() }}><table><caption>{names[shownBreakdown()?.input.group ?? group()]} by usage</caption><thead><tr><th scope="col"><button type="button" aria-label={`Sort by ${names[group()]}`} onClick={() => setSorting("key")}>{names[group()]} {sort() === "key" ? order() === "asc" ? "↑" : "↓" : "↕"}</button></th><For each={columns}>{(column) => <th scope="col"><button type="button" aria-label={`Sort by ${column.label}`} onClick={() => setSorting(column.key)}>{column.label} {sort() === column.key ? order() === "asc" ? "↑" : "↓" : "↕"}</button></th>}</For></tr></thead><tbody><For each={displayed()?.rows}>{(row: UsageReportRow) => {
+            const identity = () => shownBreakdown()?.input.group === "model" ? modelIdentity(row.key, remote.state().usage.providers.data ?? []) : undefined
             return <tr><th scope="row"><span>{identity()?.model ?? row.label}</span><Show when={identity()}><span class="usage-provider-chip">{identity()?.provider}</span></Show></th><td>{count(row.logical)}</td><td>{count(tokenCount(row.tokens))}</td><td>{count(row.tokens.input)}</td><td>{count(row.tokens.output)}</td><td>{count(row.tokens.reasoning)}</td><td>{count(row.tokens.cache.read)}</td><td class="usage-table__cost">{money(row.cost ?? 0)}<Show when={row.costProvenance === "current_catalog"}><small>estimate</small></Show></td></tr>
           }}</For></tbody></table></div>
-          <div class="usage-pagination"><span>Showing {offset() + 1}–{offset() + (breakdown()?.data?.rows.length ?? 0)} of {count(breakdown()?.data?.rowCount ?? 0)}</span><div><button type="button" disabled={offset() === 0} onClick={previousPage}>Previous</button><button type="button" disabled={breakdown()?.data?.nextOffset === undefined} onClick={nextPage}>Next</button></div></div>
+          <div class="usage-breakdown__feedback" aria-live="polite"><Show when={updating()}><span role="status">Loading {names[group()].toLowerCase()} report…</span></Show><Show when={breakdown()?.status === "error"}><span role="alert">{breakdown()?.message} <button type="button" onClick={() => void remote.store.loadUsageReport(breakdownInput())}>Retry</button></span></Show></div>
+          <div class="usage-pagination"><span>Showing {(shownBreakdown()?.input.offset ?? 0) + 1}–{(shownBreakdown()?.input.offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)}</span><div><button type="button" disabled={updating() || (shownBreakdown()?.input.offset ?? 0) === 0} onClick={previousPage}>Previous</button><button type="button" disabled={updating() || displayed()?.nextOffset === undefined} onClick={nextPage}>Next</button></div></div>
         </Show></Show>
       </div>
     </section>

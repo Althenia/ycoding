@@ -17,9 +17,9 @@ function base(art: Painter, x: number, y: number, width: number, height: number,
   art.rect(x + 3, y + height - 11, width - 6, 2, dark)
 }
 
-function monitor(art: Painter, x: number, y: number, style: "code" | "chart" | "test" | "executive") {
+function monitor(art: Painter, x: number, y: number, style: "code" | "chart" | "test") {
   art.rect(x, y + 2, 30, 20, "#303a50")
-  art.rect(x + 2, y + 3, 26, 15, style === "executive" ? "#315d76" : "#304d69")
+  art.rect(x + 2, y + 3, 26, 15, "#304d69")
   art.rect(x + 4, y + 5, 21, 2, "#88c8d1")
   if (style === "chart") {
     art.line(x + 5, y + 15, x + 10, y + 11, "#f0bc78")
@@ -41,7 +41,6 @@ function monitor(art: Painter, x: number, y: number, style: "code" | "chart" | "
     art.line(x + 5, y + 16, x + 8, y + 18, "#a7505f")
     art.line(x + 8, y + 16, x + 5, y + 18, "#a7505f")
   }
-  if (style === "executive") art.rect(x + 5, y + 10, 18, 4, "#b0d6c3")
   art.rect(x + 14, y + 22, 3, 4, "#465161")
   art.rect(x + 9, y + 26, 13, 2, "#566478")
   art.rect(x + 3, y, 24, 1, "#8395a5")
@@ -56,15 +55,14 @@ function chair(art: Painter, x: number, y: number, color = "#64788e") {
   art.rect(x + 4, y + 18, 18, 2, "#3b4b5c")
 }
 
-function workstation(style: "executive" | "code" | "chart" | "test"): PixelArt {
-  const executive = style === "executive"
-  return piece(executive ? 128 : 96, 76, (art) => {
+function workstation(style: "code" | "chart" | "test"): PixelArt {
+  return piece(96, 76, (art) => {
     const width = art.width
-    base(art, 1, 15, width - 2, 46, executive ? "#55445c" : "#6e778d", executive ? "#926d61" : "#f0edf1", executive ? "#c79677" : "#ffffff")
-    art.rect(5, 56, 9, 10, executive ? "#72565a" : "#b4bbca")
-    art.rect(width - 14, 56, 9, 10, executive ? "#72565a" : "#b4bbca")
-    monitor(art, executive ? 47 : 15, 8, style)
-    if (!executive) monitor(art, 50, 10, style)
+    base(art, 1, 15, width - 2, 46, "#6e778d", "#f0edf1", "#ffffff")
+    art.rect(5, 56, 9, 10, "#b4bbca")
+    art.rect(width - 14, 56, 9, 10, "#b4bbca")
+    monitor(art, 15, 8, style)
+    monitor(art, 50, 10, style)
     art.rect(width / 2 - 20, 43, 40, 5, "#455365")
     art.rect(width / 2 - 18, 44, 36, 3, "#aeb9c7")
     for (let key = 0; key < 32; key += 4) art.pixel(width / 2 - 16 + key, 45, "#53637a")
@@ -72,7 +70,7 @@ function workstation(style: "executive" | "code" | "chart" | "test"): PixelArt {
     art.rect(9, 22, 3, 18, "#596475")
     art.ellipse(3, 16, 16, 9, "#f6d8a2")
     art.rect(9, 40, 8, 2, "#3d4e5b")
-    art.rect(width - 31, 25, 14, 9, executive ? "#f7e5c4" : "#d8e6ed")
+    art.rect(width - 31, 25, 14, 9, "#d8e6ed")
     art.rect(width - 29, 27, 10, 1, style === "test" ? "#d58487" : "#97a9ba")
     art.rect(width - 29, 30, 7, 1, "#97a9ba")
     art.rect(width - 13, 32, 7, 8, "#58728a")
@@ -91,14 +89,7 @@ function workstation(style: "executive" | "code" | "chart" | "test"): PixelArt {
       art.ellipse(72, 37, 9, 9, "#dfc995")
       art.ellipse(74, 39, 5, 5, "#84bcae")
     }
-    if (executive) {
-      art.rect(18, 34, 19, 12, "#d5bc91")
-      art.rect(19, 35, 17, 9, "#f5e2bc")
-      art.rect(21, 38, 12, 1, "#b18f80")
-      art.rect(94, 28, 16, 3, "#dcb993")
-      art.rect(95, 32, 12, 2, "#f2e0bd")
-    }
-    chair(art, width / 2 - 13, 54, executive ? "#7a5260" : "#778ca8")
+    chair(art, width / 2 - 13, 54, "#778ca8")
   })
 }
 
@@ -237,7 +228,6 @@ function beanBag(back: string, cushion: string, light: string): PixelArt {
 
 export function environmentFurniture(): Record<OfficeFurniture, PixelArt> {
   return {
-    executiveDesk: workstation("executive"),
     developerDesk: workstation("code"),
     researchDesk: workstation("chart"),
     qaDesk: workstation("test"),
@@ -258,7 +248,6 @@ export function environmentFurniture(): Record<OfficeFurniture, PixelArt> {
       art.ellipse(119, 48, 19, 12, "#738b9c")
       art.ellipse(122, 50, 13, 7, "#b4d2d0")
     }),
-    sofa: sofa("#8e7196", "#b296b1", "#a386a2", "#5d4d6d"),
     sofaPeach: sofa("#e4a38e", "#ffd2ae", "#f5b59a", "#985d63"),
     sofaOrange: sofa("#dc8b5f", "#f5bd82", "#e9a16d", "#925858"),
     coffeeTable: piece(96, 40, (art) => {
@@ -362,26 +351,6 @@ export function environmentFurniture(): Record<OfficeFurniture, PixelArt> {
     plantBamboo: plant("bamboo"),
     plantSucculent: plant("succulent"),
     plantFlowers: plant("flowers"),
-    aquarium: piece(96, 80, (art) => {
-      art.ellipse(3, 69, 90, 8, "#26304755")
-      base(art, 1, 13, 94, 60, "#425469", "#698a9c", "#a7bdc4")
-      art.rect(5, 15, 86, 45, "#32667c")
-      art.rect(7, 17, 82, 40, "#82c4cd")
-      art.rect(8, 18, 7, 37, "#b7e5e3")
-      art.rect(19, 19, 2, 28, "#d0f4ef")
-      for (const [x, y, color] of [[26, 34, "#f4c583"], [63, 27, "#d695a8"], [52, 43, "#e8d69d"]] as const) {
-        art.ellipse(x, y, 11, 6, color)
-        art.line(x, y + 3, x - 4, y, color)
-        art.line(x, y + 3, x - 4, y + 6, color)
-        art.pixel(x + 7, y + 2, "#364a5a")
-      }
-      for (let stem = 0; stem < 5; stem++) {
-        const x = 12 + stem * 16
-        art.line(x, 56, x + stem % 2 * 4, 39, "#4c998b")
-        art.ellipse(x - 3, 42, 7, 4, "#69b49d")
-      }
-      art.rect(5, 59, 86, 5, "#556f80")
-    }),
     globe: piece(32, 64, (art) => {
       art.ellipse(4, 57, 24, 5, "#26304755")
       art.ellipse(4, 5, 24, 25, "#5f83a2")
@@ -471,20 +440,6 @@ export function environmentFurniture(): Record<OfficeFurniture, PixelArt> {
       art.rect(25, 20, 15, 5, "#f1e5d0")
       art.rect(27, 21, 11, 1, "#8499a4")
       art.ellipse(48, 16, 8, 7, "#a8c9bd")
-    }),
-    rug: piece(128, 96, (art) => {
-      art.roundRect(0, 0, 128, 96, "#6c6286")
-      art.roundRect(3, 3, 122, 90, "#9c88a7")
-      art.roundRect(7, 7, 114, 82, "#b19cb5")
-      for (let y = 10; y < 86; y += 7) for (let x = 10; x < 119; x += 7) {
-        art.pixel(x + (y % 14 ? 2 : 0), y, "#c6b3c5")
-        art.pixel(x + 3, y + 3, "#806f97")
-      }
-      art.ellipse(43, 25, 43, 46, "#9c89a7")
-      art.ellipse(49, 31, 31, 34, "#cfbbca")
-      art.ellipse(55, 36, 19, 24, "#a489ae")
-      art.ellipse(60, 41, 9, 14, "#dcc8d4")
-      for (const [x, y] of [[15, 15], [105, 15], [15, 72], [105, 72]] as const) art.ellipse(x, y, 10, 9, "#d5c1d3")
     }),
     blueRug: piece(128, 96, (art) => {
       art.roundRect(0, 0, 128, 96, "#3d6575")

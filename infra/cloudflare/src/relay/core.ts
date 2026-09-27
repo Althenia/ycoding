@@ -20,6 +20,7 @@ import {
   parseClientMessage,
   serializeError,
   serializeRequest,
+  serializeCancel,
   serializeSessions,
   serializeSubscriptions,
   type RemoteErrorCode,
@@ -48,6 +49,8 @@ export type RelayDeps = {
   readonly close: (connectionID: string, code: number, reason: string) => void
   readonly saveSubscriptions: (connectionID: string, subscriptions: readonly string[]) => void
   readonly savePending: (connectionID: string, pending: readonly { relayID: string; clientID: string }[]) => void
+  readonly loadStatus: () => Promise<RemoteStatus | undefined>
+  readonly saveStatus: (status: RemoteStatus) => Promise<void>
   readonly authorizeClientCommand: (sessionID: string, deviceID: string) => Promise<RelayAuthority>
   readonly authorizeAgentCommand: (deviceID: string) => Promise<RelayAuthority>
   /**
@@ -145,7 +148,10 @@ export function createRelay(deps: RelayDeps) {
   }
 
   const dropPendingForConnection = (connectionID: string) => {
-    for (const [relayID, entry] of Array.from(pending)) if (entry.connectionID === connectionID) pending.delete(relayID)
+    for (const [relayID, entry] of Array.from(pending)) if (entry.connectionID === connectionID) {
+      pending.delete(relayID)
+      if (agent) deps.send(agent.connectionID, serializeCancel(relayID))
+    }
   }
 
   const failPendingForConnection = (connectionID: string, code: RemoteErrorCode, message: string) => {
@@ -283,7 +289,9 @@ export function createRelay(deps: RelayDeps) {
           windowCount: 0,
         }
         latestStatus = undefined
-        previousStatus = undefined
+        const storedStatus = await deps.loadStatus()
+        if (agent?.connectionID !== connection.connectionID) return
+        previousStatus = storedStatus
         for (const client of Array.from(clients.values())) {
           if (deps.now() >= client.credentialExpiresAt) {
             removeClient(client.connectionID, RemoteCloseCode.unauthorized, sessionUnauthorizedMessage)
@@ -422,9 +430,10 @@ export function createRelay(deps: RelayDeps) {
         return
       }
       if (message.type === "status") {
+        const before = previousStatus
+        await deps.saveStatus(message)
         latestStatus = raw
         for (const client of clients.values()) deps.send(client.connectionID, raw)
-        const before = previousStatus
         previousStatus = message
         if (before !== undefined && deps.notifyPush !== undefined) {
           const oldAttention = new Set(before.attention)

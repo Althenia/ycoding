@@ -119,7 +119,7 @@ export function Home() {
   const client = useClient()
   const toast = useToast()
   const [promptOverlay, setPromptOverlay] = createSignal(false)
-  const [landingYolo, setLandingYolo] = createSignal(false)
+  const [landingYolo, setLandingYolo] = createSignal<0 | 1 | 2 | 3>(0)
   const [landingGoal, setLandingGoal] = createSignal<string | undefined>(undefined)
   const [landingDaybreak, setLandingDaybreak] = createSignal<ModelDaybreak>()
   Keymap.createLayer(() => ({

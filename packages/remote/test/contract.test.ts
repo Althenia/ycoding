@@ -38,6 +38,34 @@ test("scoped attachment chunks stay within the client frame and require ordered 
   expect(parseClientMessage(JSON.stringify({ ...frame, sessionID: undefined })).ok).toBe(false)
 })
 
+test("windowed snapshot and managed attachment reads admit only scoped bounded inputs", () => {
+  const snapshot = { type: "request", id: "req_window", operation: "session.snapshot", sessionID: "ses_1", input: { limit: 200, before: "cursor_1" } }
+  expect(parseClientMessage(JSON.stringify(snapshot))).toMatchObject({ ok: true, value: snapshot })
+  for (const input of [{ limit: 0 }, { limit: 201 }, { limit: 1.5 }, { before: "cursor" }, { limit: 1, before: "x".repeat(257) }, { limit: 1, extra: true }])
+    expect(parseClientMessage(JSON.stringify({ ...snapshot, input })).ok).toBe(false)
+  expect(parseClientMessage(JSON.stringify({ ...snapshot, input: undefined })).ok).toBe(true)
+  const attachment = { ...snapshot, operation: "session.attachment.read", input: { digest: "a".repeat(64) } }
+  expect(parseClientMessage(JSON.stringify(attachment))).toMatchObject({ ok: true, value: attachment })
+  for (const input of [{ digest: "A".repeat(64) }, { digest: "../x" }, { digest: "a".repeat(64), path: "file:///secret" }, {}])
+    expect(parseClientMessage(JSON.stringify({ ...attachment, input })).ok).toBe(false)
+  expect(parseClientMessage(JSON.stringify({ ...attachment, sessionID: undefined })).ok).toBe(false)
+  expect(requireSession("session.attachment.read" as typeof remoteOperations[number])).toBe(true)
+})
+
+test("one-message stream requests accept only an indexed Session message ID", () => {
+  const frame = { type: "request", id: "req_message", operation: "session.message.stream", sessionID: "ses_1", input: { messageID: "msg_1" } }
+  expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
+  for (const input of [{ messageID: "../x" }, { messageID: "msg_1", offset: 1 }, { messageID: "msg_1", path: "/private" }])
+    expect(parseClientMessage(JSON.stringify({ ...frame, input })).ok).toBe(false)
+})
+
+test("relay-only cancel frames cannot be forged by a browser", () => {
+  const frame = JSON.stringify({ type: "cancel", id: "req_message" })
+  expect(parseRelayToAgentMessage(frame)).toMatchObject({ ok: true, value: { type: "cancel", id: "req_message" } })
+  expect(parseClientMessage(frame).ok).toBe(false)
+  expect(parseRelayToAgentMessage(JSON.stringify({ type: "cancel", id: "bad!" })).ok).toBe(false)
+})
+
 test("push subscription input admits only bounded known push services and key shapes", () => {
   const input = { endpoint: "https://fcm.googleapis.com/fcm/send/abc", keys: { p256dh: "BA" + "A".repeat(85), auth: "A".repeat(22) } }
   expect(parsePushSubscription(input)).toMatchObject({ ok: true, value: input })
@@ -366,6 +394,8 @@ describe("remote operations", () => {
       "session.get",
       "session.messages",
       "session.snapshot",
+      "session.attachment.read",
+      "session.message.stream",
       "session.todo.list",
       "session.subagent.list",
       "session.log",

@@ -9,6 +9,22 @@ const selected = model("catalog-label", { worker: "ollama", baseURL: "https://ap
 const request = LLM.request({ model: selected, system: "Be brief", prompt: "Hello", generation: { temperature: 0.4, maxTokens: 24 } })
 
 describe("Runpod Ollama /runsync", () => {
+  it.effect("describes unsupported historical files in text-only requests", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare(LLM.request({ model: selected, messages: [
+        Message.user({ type: "media", mediaType: "image/png", data: "AAEC", filename: "input.png" }),
+        Message.assistant([ToolCallPart.make({ id: "call_1", name: "read", input: {} })]),
+        Message.tool({ id: "call_1", name: "read", resultType: "content", result: [
+          { type: "file", uri: "data:image/png;base64,AAEC", mime: "image/png", name: "output.png" },
+        ] }),
+      ] }))
+      expect(prepared.body).toMatchObject({ input: { messages: [
+        { role: "user", content: "File input.png (image/png) omitted: runpod-ollama supports text only" },
+        { role: "assistant" },
+        { role: "tool", content: "File output.png (image/png) omitted: runpod-ollama supports text only" },
+      ] } })
+    }),
+  )
   it.effect("keeps chronological instruction updates in place without sending a late system role", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(LLM.request({ model: selected, system: "Initial", messages: [
@@ -219,6 +235,23 @@ describe("Runpod Ollama /runsync", () => {
 
 describe("Runpod vLLM /runsync", () => {
   const selected = model("catalog-label", { worker: "vllm", baseURL: "https://api.runpod.ai/v2/endpoint", apiKey: "fixture-key" })
+
+  it.effect("describes historical user and tool files before Chat lowering", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare(LLM.request({ model: selected, messages: [
+        Message.user({ type: "media", mediaType: "image/png", data: "AAEC", filename: "input.png" }),
+        Message.assistant([ToolCallPart.make({ id: "call_1", name: "read", input: {} })]),
+        Message.tool({ id: "call_1", name: "read", resultType: "content", result: [
+          { type: "file", uri: "data:image/png;base64,AAEC", mime: "image/png", name: "output.png" },
+        ] }),
+      ] }))
+      expect(prepared.body).toMatchObject({ input: { body: { messages: [
+        { role: "user", content: "File input.png (image/png) omitted: runpod-vllm supports text only" },
+        { role: "assistant" },
+        { role: "tool", content: "File output.png (image/png) omitted: runpod-vllm supports text only" },
+      ] } } })
+    }),
+  )
   const request = LLM.request({ model: selected, system: "Be brief", prompt: "Hello", generation: {
     temperature: 0.3, topP: 0.8, topK: 4, maxTokens: 24, seed: 7, stop: ["END"],
     frequencyPenalty: 0.2, presencePenalty: 0.1,

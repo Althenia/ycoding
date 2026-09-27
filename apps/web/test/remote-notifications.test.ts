@@ -156,18 +156,45 @@ async function harness(options: {
   }
 }
 
+async function stopRoot(test: Harness, sessionID = "ses_a") {
+  await test.runUntil(() => test.store.state().sessionStatus !== undefined)
+  test.relay.pushStatus([sessionID], [])
+  await test.runUntil(() => test.store.state().sessionStatus?.running.has(sessionID) === true)
+  test.relay.pushStatus([], [])
+  await test.runUntil(() => test.store.state().sessionStatus?.running.size === 0)
+}
+
+async function needDecision(test: Harness, sessionID = "ses_a") {
+  await test.runUntil(() => test.store.state().sessionStatus !== undefined)
+  test.relay.pushStatus([], [sessionID])
+  await test.runUntil(() => test.store.state().sessionStatus?.attention.has(sessionID) === true)
+}
+
 describe("remote notification delivery", () => {
-  test("raises one notice and one desktop alert for one completed event", async () => {
+  test("one root stop published as an event and a status transition raises one notice", async () => {
     const test = await harness()
     try {
       await test.openSession()
+      await test.runUntil(() => test.store.state().sessionStatus !== undefined)
+      test.relay.pushStatus(["ses_a"], [])
+      await test.runUntil(() => test.store.state().sessionStatus?.running.has("ses_a") === true)
       test.relay.pushEvent("ses_a", durable("session.execution.succeeded", 6))
       await test.flush()
+      test.relay.pushStatus([], [])
+      await test.runUntil(() => test.store.state().sessionStatus?.running.size === 0)
+      expect(test.store.state().notifications.map((entry) => [entry.category, entry.sessionID])).toEqual([["agent-completed", "ses_a"]])
+      expect(test.alerts).toHaveLength(1)
+    } finally { await test.stop() }
+  })
+  test("raises one notice and one desktop alert for one root stop", async () => {
+    const test = await harness()
+    try {
+      await test.openSession()
+      await stopRoot(test)
       expect(test.store.state().notifications.map((entry) => entry.category)).toEqual(["agent-completed"])
       expect(test.store.state().notifications[0]?.body).toBe("A session stopped running.")
       expect(test.alerts).toHaveLength(1)
 
-      // The same durable event again is a duplicate, not a second alert.
       test.relay.pushEvent("ses_a", durable("session.execution.succeeded", 6))
       await test.flush()
       expect(test.store.state().notifications).toHaveLength(1)
@@ -177,13 +204,16 @@ describe("remote notification delivery", () => {
     }
   })
 
-  test("raises approval, guardrail, and failure categories from the live event stream", async () => {
+  test("uses status attention, blocking guardrail decisions, and live failures as distinct alerts", async () => {
     const test = await harness()
     try {
       await test.openSession()
       test.relay.pushEvent("ses_a", { id: "evt_20", type: "permission.v2.asked", data: { id: "per_1", action: "shell" } })
       await test.flush()
       test.relay.pushEvent("ses_a", { id: "evt_21", type: "guardrail.asked", data: { id: "grq_1", hardReview: true } })
+      await test.flush()
+      await needDecision(test)
+      test.relay.pushEvent("ses_a", { id: "evt_denied", type: "guardrail.decided", data: { decision: "deny" } })
       await test.flush()
       test.relay.pushEvent("ses_a", { id: "evt_22", type: "session.step.failed", durable: { aggregateID: "ses_a", seq: 6, version: 1 }, data: {} })
       await test.flush()
@@ -195,7 +225,7 @@ describe("remote notification delivery", () => {
       ])
       expect(test.alerts.map((alert) => alert.title)).toEqual([
         "YCoding — approval needed",
-        "YCoding — guardrail review",
+        "YCoding — guardrail blocked",
         "YCoding — session failure",
       ])
       expect(test.alerts.every((alert) => !alert.body.includes("per_1") && !alert.body.includes("grq_1"))).toBe(true)
@@ -227,15 +257,13 @@ describe("remote notification delivery", () => {
     try {
       await test.openSession()
       test.togglePreference("agent-completed", "desktop")
-      test.relay.pushEvent("ses_a", durable("session.execution.succeeded", 6))
-      await test.flush()
+      await stopRoot(test)
       expect(test.store.state().notifications.map((entry) => entry.category)).toEqual(["agent-completed"])
       expect(test.alerts).toHaveLength(0)
 
       // Turning the channel back on needs no new store; the next event is delivered.
       test.togglePreference("agent-completed", "desktop")
-      test.relay.pushEvent("ses_a", durable("session.execution.succeeded", 7))
-      await test.flush()
+      await stopRoot(test)
       expect(test.alerts).toHaveLength(1)
     } finally {
       await test.stop()
@@ -309,8 +337,7 @@ describe("remote notification delivery", () => {
     const test = await harness()
     try {
       await test.openSession()
-      test.relay.pushEvent("ses_a", { id: "evt_20", type: "permission.v2.asked", data: { id: "per_1", action: "shell" } })
-      await test.flush()
+      await needDecision(test)
       expect(test.openAlerts()).toHaveLength(1)
 
       test.store.disconnect()
@@ -322,8 +349,7 @@ describe("remote notification delivery", () => {
       expect(test.openAlerts()).toHaveLength(0)
 
       await test.openSession()
-      test.relay.pushEvent("ses_a", { id: "evt_21", type: "permission.v2.asked", data: { id: "per_2", action: "shell" } })
-      await test.flush()
+      await needDecision(test)
       expect(test.openAlerts()).toHaveLength(1)
 
       await test.store.logout()
@@ -339,8 +365,7 @@ describe("remote notification delivery", () => {
     const test = await harness()
     try {
       await test.openSession()
-      test.relay.pushEvent("ses_a", durable("session.execution.succeeded", 6))
-      await test.flush()
+      await stopRoot(test)
       expect(test.store.state().notifications.map((entry) => entry.category)).toEqual(["agent-completed"])
       expect(test.openAlerts()).toHaveLength(1)
 
@@ -351,8 +376,7 @@ describe("remote notification delivery", () => {
 
       // The delivery stays usable: the next connection raises its own alerts.
       await test.openSession()
-      test.relay.pushEvent("ses_a", durable("session.execution.succeeded", 6))
-      await test.flush()
+      await stopRoot(test)
       expect(test.openAlerts()).toHaveLength(1)
       expect(test.alerts).toHaveLength(2)
     } finally {
@@ -364,8 +388,7 @@ describe("remote notification delivery", () => {
     const test = await harness()
     try {
       await test.openSession()
-      test.relay.pushEvent("ses_a", { id: "evt_20", type: "permission.v2.asked", data: { id: "per_1", action: "shell" } })
-      await test.flush()
+      await needDecision(test)
       expect(test.openAlerts()).toHaveLength(1)
 
       test.relay.setMe({ error: { code: "unauthorized", message: "Sign in required" } }, 401)
@@ -376,8 +399,7 @@ describe("remote notification delivery", () => {
       expect(test.disposals()).toBeGreaterThanOrEqual(1)
 
       await test.openSession()
-      test.relay.pushEvent("ses_a", { id: "evt_21", type: "permission.v2.asked", data: { id: "per_2", action: "shell" } })
-      await test.flush()
+      await needDecision(test)
       expect(test.openAlerts()).toHaveLength(1)
       expect(test.alerts).toHaveLength(2)
     } finally {
@@ -394,8 +416,7 @@ describe("remote notification delivery", () => {
     })
     try {
       await test.openSession()
-      test.relay.pushEvent("ses_a", durable("session.execution.succeeded", 6))
-      await test.flush()
+      await stopRoot(test)
       expect(test.openAlerts()).toHaveLength(1)
 
       await test.connect("dev_2")
@@ -407,8 +428,7 @@ describe("remote notification delivery", () => {
       // The new machine's events raise their own alert.
       await test.store.selectSession("ses_a")
       await test.flush()
-      test.relay.pushEvent("ses_a", durable("session.execution.succeeded", 6))
-      await test.flush()
+      await stopRoot(test)
       expect(test.openAlerts()).toHaveLength(1)
       expect(test.alerts).toHaveLength(2)
     } finally {
@@ -416,14 +436,14 @@ describe("remote notification delivery", () => {
     }
   })
 
-  test("keeps separately actionable repeated notices newest first", async () => {
+  test("keeps separately actionable status transitions newest first", async () => {
     const test = await harness()
     try {
       await test.openSession()
-      test.relay.pushEvent("ses_a", { id: "evt_30", type: "permission.v2.asked", data: { id: "per_1", action: "shell" } })
-      await test.flush()
-      test.relay.pushEvent("ses_a", { id: "evt_31", type: "permission.v2.asked", data: { id: "per_2", action: "write" } })
-      await test.flush()
+      await needDecision(test)
+      test.relay.pushStatus([], [])
+      await test.runUntil(() => test.store.state().sessionStatus?.attention.size === 0)
+      await needDecision(test)
       expect(test.store.state().notifications.map((entry) => entry.category)).toEqual(["approval-requested", "approval-requested"])
       expect(new Set(test.store.state().notifications.map((entry) => entry.id)).size).toBe(2)
       expect(test.alerts).toHaveLength(2)
@@ -436,9 +456,8 @@ describe("remote notification delivery", () => {
     const test = await harness()
     try {
       await test.openSession()
-      test.relay.pushEvent("ses_a", durable("session.execution.succeeded", 6))
-      test.relay.pushEvent("ses_a", { id: "evt_32", type: "permission.v2.asked", data: { id: "per_1", action: "shell" } })
-      await test.flush()
+      await stopRoot(test)
+      await needDecision(test)
       expect(test.store.state().notifications.map((entry) => entry.category)).toEqual(["approval-requested", "agent-completed"])
 
       const completedID = test.store.state().notifications.find((entry) => entry.category === "agent-completed")?.id

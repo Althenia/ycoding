@@ -2,11 +2,11 @@ import { expect, test } from "bun:test"
 import { props } from "./map"
 import { environmentFurniture, environmentTiles, wallTiles } from "../../../script/office-art/environment"
 
-test("original environment sheets cover every authored prop and seven distinct 32px floors", () => {
+test("original environment sheets cover every authored prop and six distinct 32px floors", () => {
   const floors = environmentTiles()
   const walls = wallTiles()
   const furniture = environmentFurniture()
-  expect(floors.width).toBe(7 * 32)
+  expect(floors.width).toBe(6 * 32)
   expect(floors.height).toBe(32)
   expect(walls.width).toBe(4 * 32)
   expect(walls.height).toBe(32)
@@ -32,15 +32,15 @@ test("the research stripe tile does not inherit QA diamond pixels from its neigh
     }
     return false
   }
-  expect(contains(3, [248, 244, 250])).toBe(false)
-  expect(contains(4, [248, 244, 250])).toBe(true)
+  expect(contains(2, [248, 244, 250])).toBe(false)
+  expect(contains(3, [248, 244, 250])).toBe(true)
 })
 
 test("meeting tiles read cool, lounge planks read warm, and lounge seating has distinct hues", () => {
   const tiles = environmentTiles()
   const average = (frame: number, channel: number) => Array.from({ length: 32 * 32 }, (_, index) => tiles.pixels[((Math.floor(index / 32) * tiles.width) + frame * 32 + index % 32) * 4 + channel]!).reduce((sum, value) => sum + value, 0) / (32 * 32)
-  expect(average(5, 2)).toBeGreaterThan(average(5, 0))
-  expect(average(6, 0) - average(6, 2)).toBeGreaterThan(20)
+  expect(average(4, 2)).toBeGreaterThan(average(4, 0))
+  expect(average(5, 0) - average(5, 2)).toBeGreaterThan(20)
   const furniture: Record<string, { readonly width: number; readonly pixels: Uint8Array }> = environmentFurniture()
   const channel = (kind: string, x: number, y: number, color: number) => {
     const image = furniture[kind]

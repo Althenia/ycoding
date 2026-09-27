@@ -8,6 +8,7 @@
 
 import { DurableObject } from "cloudflare:workers"
 import { randomToken } from "../auth/crypto"
+import { isSessionID, parseAgentMessage } from "../../../../packages/remote/src/index"
 import { createD1AuthStore } from "../auth/d1-store"
 import { createAuthService } from "../auth/service"
 import type { WorkerEnv } from "../env"
@@ -31,20 +32,38 @@ const webSocketOpen = 1
 const authorityTtlMs = 5_000
 const heartbeatRequest = '{"type":"ping"}'
 const heartbeatResponse = '{"type":"pong"}'
+const streamIdleTimeoutMs = 30_000
+
+type MessageStream = {
+  readonly resolve: (response: Response) => void
+  readonly controller: ReadableStreamDefaultController<Uint8Array>
+  readonly body: ReadableStream<Uint8Array>
+  readonly signal: AbortSignal
+  readonly abort: () => void
+  timeout: ReturnType<typeof setTimeout>
+  started: boolean
+}
 
 export class DeviceRelay extends DurableObject<WorkerEnv> {
   readonly #service = createAuthService(createD1AuthStore(this.env.DB))
+  readonly #messageStreams = new Map<string, MessageStream>()
   readonly #relay = createRelay({
     now: () => Date.now(),
     newID: () => randomToken(9),
     send: (connectionID, message) => {
+      if (this.#messageStreams.has(connectionID)) { this.#streamFrame(connectionID, message); return }
       const socket = this.#socketFor(connectionID)
       if (socket && socket.readyState === webSocketOpen) socket.send(message)
     },
-    close: (connectionID, code, reason) => this.#socketFor(connectionID)?.close(code, reason),
+    close: (connectionID, code, reason) => {
+      if (this.#messageStreams.has(connectionID)) { this.#finishMessageStream(connectionID, code === 4401 ? 401 : code === 4403 ? 403 : 503); return }
+      this.#socketFor(connectionID)?.close(code, reason)
+    },
     saveSubscriptions: (connectionID, subscriptions) =>
       this.#patchAttachment(connectionID, (attachment) => ({ ...attachment, subscriptions })),
     savePending: (connectionID, pending) => this.#patchAttachment(connectionID, (attachment) => ({ ...attachment, pending })),
+    loadStatus: () => this.ctx.storage.get("lastStatus"),
+    saveStatus: (status) => this.ctx.storage.put("lastStatus", status),
     authorizeClientCommand: async (sessionID, deviceID) =>
       toAuthority(await this.#service.authorizeClientCommand(sessionID, deviceID)),
     authorizeAgentCommand: async (deviceID) => toAuthority(await this.#service.authorizeAgentCommand(deviceID)),
@@ -129,6 +148,8 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
   async #internal(url: URL, request: Request): Promise<Response> {
     if (request.headers.get("x-ycoding-internal") !== "1") return new Response("Not found", { status: 404 })
     await this.#restoreConnections()
+    if (url.pathname === "/_ycoding/stream-message" || url.pathname === "/_ycoding/stream-attachment")
+      return this.#streamContent(request, url.pathname === "/_ycoding/stream-message")
     if (url.pathname === "/_ycoding/close-device") this.#relay.closeDevice()
     if (url.pathname === "/_ycoding/presence")
       return new Response(JSON.stringify({ online: this.#relay.agentConnected() }), {
@@ -141,6 +162,82 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     }
     await this.#armAlarm()
     return new Response(null, { status: 204 })
+  }
+
+  async #streamContent(request: Request, message: boolean): Promise<Response> {
+    if (request.signal.aborted) return new Response(null, { status: 503 })
+    const sessionID = request.headers.get("x-ycoding-target-session") ?? ""
+    const item = request.headers.get(message ? "x-ycoding-target-message" : "x-ycoding-target-digest") ?? ""
+    const ownerID = request.headers.get("x-ycoding-owner") ?? ""
+    const deviceID = request.headers.get("x-ycoding-device") ?? ""
+    const browserSessionID = request.headers.get("x-ycoding-browser-session") ?? ""
+    const expiresAt = Number(request.headers.get("x-ycoding-credential-expires-at"))
+    if (!isSessionID(sessionID) || sessionID.length > 128 || !/^[A-Za-z0-9_-]{1,128}$/.test(ownerID) ||
+      !/^[A-Za-z0-9_-]{1,64}$/.test(deviceID) || browserSessionID.length === 0 || !Number.isSafeInteger(expiresAt) ||
+      (message ? !/^msg_[A-Za-z0-9_-]+$/.test(item) || item.length > 128 : !/^[0-9a-f]{64}$/.test(item)))
+      return new Response("Invalid stream target", { status: 400 })
+    if (!this.#relay.agentConnected()) return new Response("Local agent unavailable", { status: 503 })
+    const connectionID = `http_${crypto.randomUUID()}`
+    let controller!: ReadableStreamDefaultController<Uint8Array>
+    const body = new ReadableStream<Uint8Array>({
+      start: (value) => { controller = value },
+      cancel: () => { this.#finishMessageStream(connectionID, 503, true) },
+    })
+    let resolve!: (response: Response) => void
+    const ready = new Promise<Response>((settle) => { resolve = settle })
+    const abort = () => this.#finishMessageStream(connectionID, 503)
+    const timeout = setTimeout(abort, streamIdleTimeoutMs)
+    this.#messageStreams.set(connectionID, { resolve, controller, body, signal: request.signal, abort, timeout, started: false })
+    request.signal.addEventListener("abort", abort, { once: true })
+    try {
+      await this.#relay.attach({ connectionID, role: "client", ownerID, deviceID, browserSessionID,
+        credentialExpiresAt: expiresAt, subscriptions: [], pending: [] })
+      if (!this.#messageStreams.has(connectionID)) return ready
+      await this.#relay.handleClientMessage(connectionID, JSON.stringify({ type: "request", id: "stream", sessionID,
+        operation: message ? "session.message.stream" : "session.attachment.read", input: message ? { messageID: item } : { digest: item } }))
+    } catch {
+      this.#finishMessageStream(connectionID, 503)
+    }
+    return ready
+  }
+
+  #streamFrame(connectionID: string, raw: string): void {
+    const parsed = parseAgentMessage(raw)
+    if (!parsed.ok || parsed.value.type !== "response") return
+    const state = this.#messageStreams.get(connectionID)
+    if (!state) return
+    clearTimeout(state.timeout)
+    state.timeout = setTimeout(state.abort, streamIdleTimeoutMs)
+    const response = parsed.value
+    if (!response.ok) {
+      const status = response.error.code === "not_found" || response.error.code === "session_not_allowed" ? 404
+        : response.error.code === "invalid_message" ? 400
+        : response.error.code === "message_too_large" ? 413 : 503
+      this.#finishMessageStream(connectionID, status, false, response.error.code)
+      return
+    }
+    if (response.chunk && typeof response.value !== "string") { this.#finishMessageStream(connectionID, 503); return }
+    if (!state.started) {
+      state.started = true
+      state.resolve(new Response(state.body, { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } }))
+    }
+    const text = response.chunk ? response.value : JSON.stringify(response.value)
+    state.controller.enqueue(new TextEncoder().encode(String(text)))
+    if (!response.chunk || response.chunk.last) this.#finishMessageStream(connectionID)
+  }
+
+  #finishMessageStream(connectionID: string, status = 200, cancelled = false, code?: string): void {
+    const state = this.#messageStreams.get(connectionID)
+    if (!state) return
+    this.#messageStreams.delete(connectionID)
+    clearTimeout(state.timeout)
+    state.signal.removeEventListener("abort", state.abort)
+    this.#relay.detach(connectionID)
+    if (!state.started) state.resolve(new Response(code === undefined ? null : JSON.stringify({ error: { code } }), {
+      status, headers: code === undefined ? undefined : { "content-type": "application/json", "cache-control": "no-store" },
+    }))
+    if (state.started && status === 200) state.controller.close()
+    if (state.started && status !== 200 && !cancelled) state.controller.error(new Error("Remote stream did not complete"))
   }
 
   async #restoreConnections(): Promise<void> {

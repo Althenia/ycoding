@@ -101,6 +101,22 @@ describe("office adapter", () => {
     expect(selected({ view: selectedView("ses_a", [{ kind: "compaction", id: "cmp_1", status: "failed" }]) })?.compacting).toBe(false)
   })
 
+  test("classifies the projected running tool and shell command without inferring from transcript text", () => {
+    const activity = (name: string, command?: string) => selected({
+      view: selectedView("ses_a", [assistant("msg_tool", [{ ...tool(name, "running"), ...(command === undefined ? {} : { input: { command } }) }])]),
+    })?.activity
+    expect(activity("read")).toBe("research")
+    expect(activity("grep")).toBe("research")
+    expect(activity("subagent_control")).toBe("coordinate")
+    expect(activity("todowrite")).toBe("coordinate")
+    expect(activity("patch")).toBe("implement")
+    expect(activity("shell", "bun test ./src")).toBe("verify")
+    expect(activity("shell", "bun run typecheck && bun run lint")).toBe("verify")
+    expect(activity("shell", "rg -n foo src")).toBe("research")
+    expect(activity("shell", "bun run build")).toBe("implement")
+    expect(activity("shell")).toBe("implement")
+  })
+
   test("takes the excerpt from the latest completed assistant text only", () => {
     const messages = [
       assistant("msg_1", [{ kind: "reasoning", ordinal: 0, text: "private chain" }, tool("bash", "completed"), { kind: "text", ordinal: 2, text: "Tests pass." }], 5),
@@ -131,7 +147,7 @@ describe("office adapter", () => {
     }))
     expect(input.sessions.map((item) => [item.id, item.parentID])).toEqual([["ses_a", undefined], ["ses_c", "ses_a"]])
     expect(projectOffice(input, defaultOfficePreferences).actors.map((actor) => [actor.sessionID, actor.homeRoom]))
-      .toEqual([["ses_a", "ceo"]])
+      .toEqual([["ses_a", "developer"]])
   })
 
   test("maps connection state without claiming readiness it does not have", () => {
@@ -170,7 +186,7 @@ describe("office adapter", () => {
       defaultOfficePreferences,
     )
     expect(snapshot.actors.map((actor) => [actor.sessionID, actor.status, actor.source, actor.bubble])).toEqual([
-      ["ses_a", "tool", "projection", "Running a tool"],
+      ["ses_a", "tool", "projection", "Implementing"],
     ])
   })
 })

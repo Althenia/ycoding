@@ -1,8 +1,9 @@
-import { and, asc, desc, eq, gte, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gte, lt, sql } from "drizzle-orm"
+import { createHash } from "node:crypto"
 import { DateTime, Effect, Schema } from "effect"
 import { Database } from "../database/database"
 import { Token } from "../util/token"
-import { MessageDecodeError } from "./error"
+import { InvalidCursorError, MessageDecodeError } from "./error"
 import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
 import { Instructions } from "../instructions/index"
@@ -78,6 +79,45 @@ const messageEntries = Effect.fnUntraced(function* (db: DatabaseService, session
 
 export const load = Effect.fn("SessionHistory.load")(function* (db: DatabaseService, sessionID: SessionSchema.ID) {
   return (yield* messageEntries(db, sessionID)).map((entry) => entry.message)
+})
+
+const cursorOwner = (sessionID: SessionSchema.ID) => createHash("sha256").update(sessionID).digest("hex").slice(0, 16)
+
+export const snapshotCursor = Effect.fn("SessionHistory.snapshotCursor")(function* (sessionID: SessionSchema.ID, value: string) {
+  if (value.length === 0 || value.length > 256 || !/^[A-Za-z0-9_-]+$/.test(value)) return yield* new InvalidCursorError()
+  const decoded = Buffer.from(value, "base64url").toString("utf8")
+  if (Buffer.from(decoded).toString("base64url") !== value) return yield* new InvalidCursorError()
+  const [owner, sequence, extra] = decoded.split(":")
+  const number = Number(sequence)
+  if (owner !== cursorOwner(sessionID) || extra !== undefined || !/^(0|[1-9][0-9]*)$/.test(sequence ?? "") || !Number.isSafeInteger(number))
+    return yield* new InvalidCursorError()
+  return number
+})
+
+export const snapshotWindow = Effect.fn("SessionHistory.snapshotWindow")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  limit: number,
+  before?: number,
+) {
+  const compaction = yield* latestCompaction(db, sessionID)
+  const rows = yield* db
+    .select()
+    .from(SessionMessageTable)
+    .where(and(
+      eq(SessionMessageTable.session_id, sessionID),
+      compaction ? gte(SessionMessageTable.seq, compaction.seq) : undefined,
+      before === undefined ? undefined : lt(SessionMessageTable.seq, before),
+    ))
+    .orderBy(desc(SessionMessageTable.seq))
+    .limit(limit + 1)
+    .all()
+    .pipe(Effect.orDie)
+  const page = rows.slice(0, limit)
+  return {
+    messages: yield* Effect.forEach(page.toReversed(), decodeMessageRow),
+    ...(rows.length > limit && page.length > 0 ? { before: Buffer.from(`${cursorOwner(sessionID)}:${page.at(-1)!.seq}`).toString("base64url") } : {}),
+  }
 })
 
 export function visibleForModel<T extends { readonly seq: number; readonly message: SessionMessage.Info }>(

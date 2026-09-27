@@ -21,18 +21,18 @@ function task(sessionID: string, description: string, agent?: string): TeamMembe
 }
 
 describe("office responsibility rooms", () => {
-  test("only the family root, including a placeholder parent, works in the CEO office", () => {
+  test("only the family root, including a placeholder parent, works in the Developer room", () => {
     expect(rooms({
       sessions: [
         { id: "ses_root", title: "Plan the release", agent: "build", archived: false, running: true },
         { id: "ses_review", title: "Review the parser", agent: "reviewer", archived: false, running: false },
       ],
-    })).toEqual({ ses_root: "ceo" })
+    })).toEqual({ ses_root: "developer" })
     expect(rooms({
       sessions: [],
       activeSessionID: "ses_worker",
       team: { rootID: "ses_root", status: "ready", more: false, cues: [], members: [task("ses_worker", "Fix the parser")] },
-    })).toEqual({ ses_root: "ceo", ses_worker: "developer" })
+    })).toEqual({ ses_root: "developer", ses_worker: "developer" })
   })
 
   test("only reported child tasks work where their agent name places them", () => {
@@ -41,7 +41,7 @@ describe("office responsibility rooms", () => {
         task("ses_qa", "Tidy the parser", "code-reviewer"), task("ses_research", "Tidy the parser", "explore"),
         task("ses_dev", "Tidy the parser", "zeus"), task("ses_titled", "Investigate relay drops"),
       ] },
-    })).toEqual({ ses_root: "ceo", ses_qa: "qa", ses_research: "research", ses_dev: "developer", ses_titled: "research" })
+    })).toEqual({ ses_root: "developer", ses_qa: "qa", ses_research: "research", ses_dev: "developer", ses_titled: "research" })
   })
 
   test("subagent tasks use their agent name first, then the leading words of their task", () => {
@@ -59,7 +59,7 @@ describe("office responsibility rooms", () => {
         ],
       },
     })).toEqual({
-      ses_root: "ceo",
+      ses_root: "developer",
       ses_agent_wins: "qa",
       ses_review: "qa",
       ses_investigate: "research",

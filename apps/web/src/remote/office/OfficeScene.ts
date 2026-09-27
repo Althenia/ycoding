@@ -108,7 +108,8 @@ export class OfficeScene extends Phaser.Scene {
           frameRate: speed, repeat: -1 })
       }
     }
-    this.cameras.main.setZoom(this.resolution)
+    this.desiredZoom = Math.max(this.resolution, this.minimumZoom())
+    this.cameras.main.setZoom(this.desiredZoom)
     this.boundCamera()
     this.cameras.main.centerOn(worldWidth / 2, worldHeight / 2)
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
@@ -135,7 +136,7 @@ export class OfficeScene extends Phaser.Scene {
   fit(): void {
     if (!this.ready) return
     this.followSuspended = true
-    this.desiredZoom = Math.min(this.scale.width / worldWidth, this.scale.height / worldHeight)
+    this.desiredZoom = this.minimumZoom()
     this.cameras.main.setZoom(this.desiredZoom)
     this.boundCamera()
     this.cameras.main.centerOn(worldWidth / 2, worldHeight / 2)
@@ -143,20 +144,21 @@ export class OfficeScene extends Phaser.Scene {
 
   zoomBy(factor: number): void {
     if (!this.ready) return
-    this.desiredZoom = Phaser.Math.Clamp(this.cameras.main.zoom * factor, this.resolution * 0.2, this.resolution * 2)
+    this.desiredZoom = Phaser.Math.Clamp(this.cameras.main.zoom * factor, this.minimumZoom(), Math.max(this.minimumZoom(), this.resolution * 2))
     this.cameras.main.setZoom(this.desiredZoom)
     this.boundCamera()
   }
 
   resize(): void {
     if (!this.ready) return
+    this.desiredZoom = Math.max(this.desiredZoom, this.minimumZoom())
     this.cameras.main.setZoom(this.desiredZoom)
     this.boundCamera()
   }
 
   defaultView(): void {
     if (!this.ready) return
-    this.desiredZoom = this.resolution
+    this.desiredZoom = Math.max(this.resolution, this.minimumZoom())
     this.cameras.main.setZoom(this.desiredZoom)
     this.boundCamera()
     this.followSuspended = false
@@ -191,14 +193,16 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   private boundCamera(): void {
-    const camera = this.cameras.main
-    const marginX = Math.max(0, (camera.width / camera.zoom - worldWidth) / 2)
-    const marginY = Math.max(0, (camera.height / camera.zoom - worldHeight) / 2)
-    camera.setBounds(-marginX, -marginY, worldWidth + marginX * 2, worldHeight + marginY * 2)
+    this.cameras.main.setBounds(0, 0, worldWidth, worldHeight)
+  }
+
+  private minimumZoom(): number {
+    return Math.max(this.scale.width / worldWidth, this.scale.height / worldHeight)
   }
 
   override update(time: number, delta: number): void {
     if (!this.ready) return
+    this.desiredZoom = Math.max(this.desiredZoom, this.minimumZoom())
     if (this.cameras.main.zoom !== this.desiredZoom) {
       this.cameras.main.setZoom(this.desiredZoom)
       this.boundCamera()

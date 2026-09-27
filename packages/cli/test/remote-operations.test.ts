@@ -83,6 +83,73 @@ test("small uploads cannot exhaust the agent through unbounded buffer entries", 
   } finally { uploads.clear() }
 })
 
+test("window snapshots forward the opaque cursor and managed reads retain scoped not-found and size errors", async () => {
+  const digest = "a".repeat(64)
+  const test = await harness({ results: {
+    snapshot: async (_id: string, _location: LocalLocation, options?: { limit?: number; before?: string }) => ({ sourceEpoch: "epoch_1", session: sessionInfo("ses_1", { updated: 1 }), messages: [], watermark: { seq: 4 }, before: options?.before }),
+    attachmentRead: async (_id: string, _location: LocalLocation, value: string) => {
+      if (value === "b".repeat(64)) throw new LocalFailureClass("not_found", "unreferenced")
+      if (value === "c".repeat(64)) throw new LocalFailureClass("too_large", "oversized")
+      return { mime: "image/png", bytes: 3, data: "YWJj" }
+    },
+  } })
+  const run = (operation: RemoteRequest["operation"], input?: Record<string, unknown>) => executeRemoteOperation({ request: request(operation, input), local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
+  expect(valueOf(await run("session.snapshot", { limit: 2, before: "opaque_cursor" }))).toMatchObject({ before: "opaque_cursor", watermark: { seq: 4 } })
+  expect(test.calls.at(-1)).toEqual({ method: "snapshot", args: ["ses_1", { directory: "/work" }, { limit: 2, before: "opaque_cursor" }] })
+  expect(errorOf(await run("session.snapshot", { before: "opaque_cursor" })).code).toBe("invalid_message")
+  expect(valueOf(await run("session.attachment.read", { digest }))).toEqual({ mime: "image/png", bytes: 3, data: "YWJj" })
+  expect(test.calls.at(-1)).toEqual({ method: "attachmentRead", args: ["ses_1", { directory: "/work" }, digest] })
+  expect(errorOf(await run("session.attachment.read", { digest: "../wrong" })).code).toBe("invalid_message")
+  expect(errorOf(await run("session.attachment.read", { digest: "b".repeat(64) })).code).toBe("not_found")
+  expect(errorOf(await run("session.attachment.read", { digest: "c".repeat(64) })).code).toBe("message_too_large")
+})
+
+test("windowed snapshots shrink under the relay chunk cap and fail a single oversized message", async () => {
+  const messages = [{ id: "msg_old", text: "x".repeat(9 * 1024 * 1024) }, { id: "msg_new", text: "y".repeat(9 * 1024 * 1024) }]
+  const test = await harness({ results: { snapshot: async (_id: string, _location: LocalLocation, options?: { limit?: number }) => ({
+    sourceEpoch: "epoch_1", session: sessionInfo("ses_1", { updated: 1 }), messages: messages.slice(-(options?.limit ?? 2)),
+    watermark: { seq: 4 }, ...(options?.limit === 1 ? { before: "older" } : {}),
+  }) } })
+  const frames = await executeRemoteOperation({ request: request("session.snapshot", { limit: 2 }), sessions: test.registry, subscriptions: test.subscriptions, local: test.local })
+  expect(frames.length).toBeGreaterThan(1)
+  expect(frames.length).toBeLessThanOrEqual(RemoteLimits.maxChunksPerResponse)
+  const value = parseChunkedValue(frames.map((frame) => frame.ok ? String(frame.value) : ""))
+  expect(value).toMatchObject({ ok: true, value: { before: "older", messages: [{ id: "msg_new" }] } })
+  expect(test.calls.filter((call) => call.method === "snapshot").map((call) => call.args[2])).toEqual([{ limit: 2 }, { limit: 1 }])
+
+  const oversized = await harness({ results: { snapshot: async () => ({ messages: [{ id: "msg_large", text: "z".repeat(17 * 1024 * 1024) }] }) } })
+  expect(errorOf(await executeRemoteOperation({ request: request("session.snapshot", { limit: 1 }), sessions: oversized.registry, subscriptions: oversized.subscriptions, local: oversized.local })).code).toBe("message_too_large")
+})
+
+test("a 10 MiB managed attachment fits the bounded relay response without wasting half of each frame", () => {
+  const frames = successFrames("req_attachment", { mime: "image/png", bytes: 10 * 1024 * 1024, data: Buffer.alloc(10 * 1024 * 1024).toString("base64") })
+  expect(frames.length).toBeGreaterThan(1)
+  expect(frames.length).toBeLessThanOrEqual(RemoteLimits.maxChunksPerResponse)
+  expect(frames.every((frame) => frame.ok)).toBe(true)
+})
+
+test("streamed JSON chunks preserve Unicode across their UTF-8 byte boundary", () => {
+  for (const prefix of ["", "p", "pp", "ppp"]) {
+    const message = { id: "msg_emoji", text: prefix + "😀".repeat(180_000) }
+    const frames = successFrames("req_emoji", message)
+    expect(frames.length).toBeGreaterThan(1)
+    const bytes = Buffer.concat(frames.map((frame) => Buffer.from(new TextEncoder().encode(String(frame.ok ? frame.value : "")))))
+    expect(JSON.parse(bytes.toString("utf8"))).toEqual(message)
+  }
+})
+
+test("one-message stream carries a large indexed projection in bounded frames", async () => {
+  const message = { id: "msg_long", type: "user", text: "long result ".repeat(200_000) }
+  const test = await harness({ results: { messageRead: async () => message } })
+  const run = (input: Record<string, unknown>) => executeRemoteOperation({ request: request("session.message.stream", input), sessions: test.registry, subscriptions: test.subscriptions, local: test.local })
+  const frames = await run({ messageID: "msg_long" })
+  expect(frames.length).toBeGreaterThan(1)
+  expect(frames.length).toBeLessThanOrEqual(RemoteLimits.maxChunksPerResponse)
+  expect(parseChunkedValue(frames.map((frame) => frame.ok ? String(frame.value) : ""))).toMatchObject({ ok: true, value: message })
+  expect(errorOf(await run({ messageID: "msg_long", offset: 1 })).code).toBe("invalid_message")
+  expect(test.calls.filter((call) => call.method === "messageRead").every((call) => call.args[0] === "ses_1" && recordOf(call.args[1]).directory === "/work")).toBe(true)
+})
+
 test("repeated references cannot expand one upload beyond the local admission byte budget", async () => {
   const test = await harness({ results: { prompt: { id: "msg_1" } } })
   const uploads = createAttachmentUploads()

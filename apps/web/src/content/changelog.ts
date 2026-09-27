@@ -22,6 +22,23 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.7.8",
+    date: "2026-09-27",
+    title: "Paged remote history, images, and TUI remote toggle",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Turn remote access on and off from the TUI command palette, with an always-visible remote status line." },
+      { tag: "Added", text: "Load long remote conversations in pages as you scroll up, and open attached and tool images as thumbnails with a full-size view." },
+      { tag: "Added", text: "See every running Session from all workspaces at the top of the remote Sessions page, and exact values on the Usage charts." },
+      { tag: "Changed", text: "Move Office characters to the room for their current work, send idle characters to the Lounge, and fill the canvas with the office." },
+      { tag: "Changed", text: "Widen the remote transcript with Jump to top and Jump to latest on its edge, and fit phones with a one-row icon bar, a bottom Sessions sheet, and an agent and model row above the composer." },
+      { tag: "Changed", text: "Hide completed todo lists and Session-state notices as the TUI does, keep Usage rows in place while pages load, and list local Today spend after provider quotas in the TUI." },
+      { tag: "Fixed", text: "Keep Sessions usable when an attached file's stored copy changes, a file's format is unsupported by the provider, or a plugin hook fails." },
+      { tag: "Fixed", text: "Carry the landing screen's YOLO level and goal into the new Session, and load long remote conversations without disconnecting." },
+      { tag: "Fixed", text: "Show one notice per stopped Session, catch up on alerts missed while disconnected, keep push alerts working, and fix pending-prompt alignment and the blank Office on phones." },
+    ],
+  },
+  {
     version: "0.7.7",
     date: "2026-09-27",
     title: "Remote attachments, todo list, and notifications",

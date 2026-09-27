@@ -17,6 +17,88 @@ beforeAll(async () => {
 })
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
+test("in-flight prompts do not mount a transient composer row; unresolved outcomes remain actionable", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    await wait(page, `document.querySelector('.mini-composer__mount .composer__row') !== null`)
+    await page.evaluate(`window.composerSetMutation('sending')`)
+    expect(await page.evaluate<number>(`document.querySelectorAll('.mini-composer__mount .mutation').length`)).toBe(0)
+    for (const status of ["failed", "unknown"]) {
+      await page.evaluate(`window.composerSetMutation(${JSON.stringify(status)})`)
+      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .mutation')?.className`)).toContain(`mutation--${status}`)
+      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .mutation__detail')?.textContent`)).toBe(status === "failed" ? "Failed" : "Outcome unknown")
+      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.mini-composer__mount .mutation button')].map(button => button.textContent.trim())`)).toEqual(["Send again", "Dismiss"])
+      await page.evaluate(`document.querySelector('.mini-composer__mount .mutation button')?.click()`)
+      expect(await page.evaluate<string>(`window.composerRequests().at(-1)?.operation`)).toBe("retry")
+    }
+    await page.evaluate(`document.querySelector('.mini-composer__mount .mutation button:last-child')?.click()`)
+    expect(await page.evaluate<number>(`document.querySelectorAll('.mini-composer__mount .mutation').length`)).toBe(0)
+  } finally { await page.close() }
+}, 30_000)
+
+test("phone tool-running status text stays inside its pill and footer", async () => {
+  for (const theme of ["light", "dark"]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(390, 844)
+      await page.setCoarsePointer(true)
+      await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+      await wait(page, `document.querySelector('.mini-composer__mount .session-status__slot') !== null`)
+      await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; window.composerSetStatus('tool')`)
+      const bounds = await page.evaluate<{ text: string; clipped: boolean; inside: boolean; footerInside: boolean }>(`(() => { const slot=document.querySelector('.mini-composer__mount .session-status__slot'), text=slot.querySelector('.session-status__mobile'), row=document.querySelector('.mini-composer__mount .composer__row'), sr=slot.getBoundingClientRect(), tr=text.getBoundingClientRect(), rr=row.getBoundingClientRect(), style=getComputedStyle(text); return { text:text.textContent, clipped:getComputedStyle(slot).overflowX === 'hidden' && style.overflowX === 'hidden' && style.textOverflow === 'ellipsis', inside:tr.right <= sr.right + 1, footerInside:sr.right <= rr.right + 1 }; })()`)
+      expect(bounds.text).toBe("tool running")
+      expect(bounds.clipped).toBe(true)
+      expect(bounds.inside).toBe(true)
+      expect(bounds.footerInside).toBe(true)
+      await Bun.write(new URL(`../../../.cache/tmp/composer-tool-390-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+    } finally { await page.close() }
+  }
+}, 30_000)
+
+test("phone selection lives above the card while its footer stays on one line", async () => {
+  for (const [width, height] of [[360, 780], [390, 844], [430, 932], [820, 1180]]) for (const theme of ["light", "dark"]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width!, height!)
+      if (width! <= 430) await page.setCoarsePointer(true)
+      await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+      await wait(page, `document.querySelector('.mini-composer__mount .composer__row') !== null`)
+      await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; window.composerSetStatus('tool')`)
+      await Bun.sleep(600)
+      const layout = await page.evaluate<{ first: string; visible: boolean; label: string; pillVisible: boolean; oneLine: boolean; aligned: boolean; ellipsis: boolean; overflow: boolean }>(`(() => { const mount=document.querySelector('.mini-composer__mount'), selector=mount.querySelector('.composer__mobile-identity'), button=selector?.querySelector('button'), controls=mount.querySelector('.composer__controls'), rects=[...controls.querySelectorAll('button,.session-status__slot')].map(item=>item.getBoundingClientRect()).filter(rect=>rect.width>0 && rect.height>0), trigger=button?.getBoundingClientRect(), card=mount.querySelector('.composer__row').getBoundingClientRect(); return { first:mount.firstElementChild?.className ?? '', visible:!!selector && getComputedStyle(selector).display!=='none', label:button?.textContent ?? '', pillVisible:[...controls.querySelectorAll('.mini-picker,.model-control')].some(item=>getComputedStyle(item).display!=='none'), oneLine:rects.every(rect=>Math.abs(rect.top-rects[0].top)<=1), aligned:!!trigger && Math.abs(trigger.left-card.left)<=1 && Math.abs(trigger.right-card.right)<=1, ellipsis:getComputedStyle(button?.querySelector('span')).textOverflow==='ellipsis', overflow:document.documentElement.scrollWidth>innerWidth }; })()`)
+      if (width! <= 430) {
+        expect(layout.first).toContain("composer__mobile-identity")
+        expect(layout.visible).toBe(true)
+        expect(layout.label).toContain("GSD")
+        expect(layout.label).toContain("GPT-6 Sol")
+        expect(layout.label).toContain("high")
+        expect(layout.pillVisible).toBe(false)
+        expect(layout.oneLine).toBe(true)
+        expect(layout.aligned).toBe(true)
+        expect(layout.ellipsis).toBe(true)
+      } else {
+        expect(layout.visible).toBe(false)
+        expect(layout.pillVisible).toBe(true)
+      }
+      expect(layout.overflow).toBe(false)
+      await Bun.write(new URL(`../../../.cache/tmp/composer-selection-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      if (width! <= 430) {
+        await page.evaluate(`document.querySelector('.composer__mobile-trigger')?.click()`)
+        await wait(page, `document.querySelector('.composer__selection-sheet') !== null`)
+        const sheet = await page.evaluate<{ visible: boolean; modal: string; targetHeight: number; focused: string }>(`(() => { const dialog=document.querySelector('.composer__selection-sheet'), rect=dialog.getBoundingClientRect(); return { visible:rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight, modal:dialog.getAttribute('aria-modal'), targetHeight:document.querySelector('.composer__mobile-trigger').getBoundingClientRect().height, focused:document.activeElement?.getAttribute('aria-label') ?? '' }; })()`)
+        expect(sheet.visible).toBe(true)
+        expect(sheet.modal).toBe("true")
+        expect(sheet.targetHeight).toBeGreaterThanOrEqual(44)
+        expect(sheet.focused).toBe("Agent")
+        await Bun.write(new URL(`../../../.cache/tmp/composer-selection-sheet-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        await page.pressEscape()
+        expect(await page.evaluate<string>(`document.activeElement?.className`)).toBe("composer__mobile-trigger")
+      }
+    } finally { await page.close() }
+  }
+}, 90_000)
+
 test("status stays inside a fixed-height composer and pending picks survive unrelated updates", async () => {
   const page = await browser!.openPage()
   try {
@@ -208,13 +290,14 @@ test("composer states and effort surface retain layout at four sizes in both the
       if (state === "waiting") expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount .session-status__slot')?.classList.contains('session-status__slot--attention')`)).toBe(true)
       expect(await page.evaluate<number>(`document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect().height`)).toBe(idle)
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`)).toBe(true)
-      expect(await page.evaluate<boolean>(`(() => { const row = document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect(); return [...document.querySelectorAll('.mini-composer__mount .composer__controls button, .mini-composer__mount .session-status__slot')].filter(item => getComputedStyle(item).display !== 'none' && getComputedStyle(item).visibility !== 'hidden').every(item => { const rect = item.getBoundingClientRect(); return rect.left >= row.left - 1 && rect.right <= row.right + 1 }) })()`)).toBe(true)
-      const overlaps = await page.evaluate<string[]>(`(() => { const controls = [...document.querySelectorAll('.mini-composer__mount .composer__controls button, .mini-composer__mount .session-status__slot')].filter(item => getComputedStyle(item).display !== 'none' && getComputedStyle(item).visibility !== 'hidden'); return controls.flatMap((a, index) => controls.slice(index + 1).flatMap(b => { const x = a.getBoundingClientRect(), y = b.getBoundingClientRect(); return x.right <= y.left || y.right <= x.left || x.bottom <= y.top || y.bottom <= x.top ? [] : [a.className + ' / ' + b.className] })) })()`)
+      expect(await page.evaluate<boolean>(`(() => { const row = document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect(); return [...document.querySelectorAll('.mini-composer__mount .composer__controls button, .mini-composer__mount .session-status__slot')].filter(item => item.getBoundingClientRect().width > 0 && getComputedStyle(item).visibility !== 'hidden').every(item => { const rect = item.getBoundingClientRect(); return rect.left >= row.left - 1 && rect.right <= row.right + 1 }) })()`)).toBe(true)
+      const overlaps = await page.evaluate<string[]>(`(() => { const controls = [...document.querySelectorAll('.mini-composer__mount .composer__controls button, .mini-composer__mount .session-status__slot')].filter(item => item.getBoundingClientRect().width > 0 && getComputedStyle(item).visibility !== 'hidden'); return controls.flatMap((a, index) => controls.slice(index + 1).flatMap(b => { const x = a.getBoundingClientRect(), y = b.getBoundingClientRect(); return x.right <= y.left || y.right <= x.left || x.bottom <= y.top || y.bottom <= x.top ? [] : [a.className + ' / ' + b.className] })) })()`)
       expect(overlaps).toEqual([])
       await Bun.sleep(240)
       await Bun.write(new URL(`../../../.cache/tmp/composer-${state}-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
       }
-      await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.click()`)
+      if (width! < 480) await page.evaluate(`document.querySelector('.composer__mobile-trigger')?.click()`)
+      await page.evaluate(`document.querySelector(${JSON.stringify(width! < 480 ? '.composer__selection-sheet button[aria-label="Model"]' : '.mini-composer__mount .composer__controls button[aria-label="Model"]')})?.click()`)
       await wait(page, `document.querySelector('.model-control__surface') !== null`)
       await Bun.write(new URL(`../../../.cache/tmp/composer-effort-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
     } finally { await page.close() }
@@ -255,13 +338,19 @@ test("keyboard and mouse autocomplete, pending identity, and creation work acros
           await Bun.sleep(420)
           expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount .mini-composer__autocomplete')?.textContent?.includes('slow.txt') ?? false`)).toBe(false)
         }
-        await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Agent"]')?.click()`)
+        if (width! < 480) {
+          await page.evaluate(`document.querySelector('.composer__mobile-trigger')?.click()`)
+          expect(await page.evaluate<boolean>(`document.querySelector('.composer__selection-sheet[role="dialog"]') !== null`)).toBe(true)
+        }
+        await page.evaluate(`document.querySelector(${JSON.stringify(width! < 480 ? '.composer__selection-sheet button[aria-label="Agent"]' : '.mini-composer__mount .composer__controls button[aria-label="Agent"]')})?.click()`)
         await wait(page, `document.querySelector('.mini-picker__surface [role="option"]') !== null`)
+        if (width! < 480) expect(await page.evaluate<boolean>(`(() => { const item=[...document.querySelectorAll('.mini-picker__surface [role="option"]')].find(node=>node.textContent.includes('architect')), rect=item.getBoundingClientRect(); return item.contains(document.elementFromPoint((rect.left+rect.right)/2,(rect.top+rect.bottom)/2)); })()`)).toBe(true)
         expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.mini-picker__surface [role="option"]')].map(item => item.textContent.trim())`)).toEqual(["GSD", "architect"])
         expect(await page.evaluate<boolean>(`document.querySelector('.mini-picker__surface')?.classList.contains('mini-picker__surface--sheet')`)).toBe(width! < 768)
         await page.evaluate(`[...document.querySelectorAll('.mini-picker__surface [role="option"]')].find(item => item.textContent.includes('architect'))?.click()`)
-        await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.click()`)
+        await page.evaluate(`document.querySelector(${JSON.stringify(width! < 480 ? '.composer__selection-sheet button[aria-label="Model"]' : '.mini-composer__mount .composer__controls button[aria-label="Model"]')})?.click()`)
         await wait(page, `document.querySelector('.model-control__switch') !== null`)
+        if (width! < 480) expect(await page.evaluate<boolean>(`(() => { const item=document.querySelector('.model-control__switch'), rect=item.getBoundingClientRect(); return item.contains(document.elementFromPoint((rect.left+rect.right)/2,(rect.top+rect.bottom)/2)); })()`)).toBe(true)
         await page.evaluate(`document.querySelector('.model-control__switch')?.click()`)
         await wait(page, `document.querySelector('.mini-picker__search') !== null`)
         expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.mini-picker__group')].map(item => item.textContent.trim())`)).toEqual(["Anthropic", "OpenAI"])
@@ -272,6 +361,13 @@ test("keyboard and mouse autocomplete, pending identity, and creation work acros
         await page.pressKey("End", "End", 35)
         expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("max")
         await page.evaluate(`document.querySelector('.model-control__heading-actions button[aria-label="Close model picker"]')?.click()`)
+        if (width! < 480) {
+          expect(await page.evaluate<string>(`document.querySelector('.composer__mobile-trigger')?.textContent`)).toContain("architect · Claude Opus 5.5 · max")
+          expect(await page.evaluate<boolean>(`document.querySelector('.composer__mobile-trigger')?.classList.contains('composer__mobile-trigger--pending')`)).toBe(true)
+          expect(await page.evaluate<string>(`document.querySelector('.composer__mobile-trigger')?.getAttribute('aria-description')`)).toBe("applies with your next send")
+          await page.evaluate(`document.querySelector('button[aria-label="Close agent and model picker"]')?.click()`)
+          expect(await page.evaluate<boolean>(`document.querySelector('.composer__selection-sheet') === null`)).toBe(true)
+        }
         await type(page, input, "Review $audit")
         await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Send prompt"]')?.click()`)
         expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)?.input`)).toMatchObject({ text: "Review $audit", skills: ["audit"], agent: "architect", model: { id: "claude-opus-5-5", variant: "max" } })
@@ -292,7 +388,7 @@ test("keyboard and mouse autocomplete, pending identity, and creation work acros
         await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Create session"]')?.click()`)
         await wait(page, `document.querySelector('output')?.textContent?.includes('ses_created') === true`)
         expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)?.input`)).toMatchObject({ workspaceID: "work_two", model: { providerID: "anthropic", id: "claude-opus-5-5", variant: "max" }, prompt: { text: "Use @apps/web/src/remote/ui/composer.tsx", files: [{ uri: "file:///workspace/ycoding/apps/web/src/remote/ui/composer.tsx", mention: { start: 4, text: "@apps/web/src/remote/ui/composer.tsx" } }] } })
-        const layout = await page.evaluate<{ overflow: boolean; controlsInside: boolean; touchTargets: boolean }>(`(() => { const rows = [...document.querySelectorAll('.composer__row')]; const controls = [...document.querySelectorAll('.composer__controls button')]; return { overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth, controlsInside: rows.every(row => [...row.querySelectorAll('.composer__controls button')].every(button => button.getBoundingClientRect().right <= row.getBoundingClientRect().right + 1)), touchTargets: controls.every(button => button.getBoundingClientRect().width >= 44 && button.getBoundingClientRect().height >= 44) }; })()`)
+        const layout = await page.evaluate<{ overflow: boolean; controlsInside: boolean; touchTargets: boolean }>(`(() => { const rows = [...document.querySelectorAll('.composer__row')]; const controls = [...document.querySelectorAll('.composer__controls button')].filter(button=>button.getBoundingClientRect().width>0); return { overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth, controlsInside: rows.every(row => [...row.querySelectorAll('.composer__controls button')].every(button => button.getBoundingClientRect().right <= row.getBoundingClientRect().right + 1)), touchTargets: controls.every(button => button.getBoundingClientRect().width >= 44 && button.getBoundingClientRect().height >= 44) }; })()`)
         expect(layout.overflow).toBe(false)
         expect(layout.controlsInside).toBe(true)
         if (width! < 768) expect(layout.touchTargets).toBe(true)

@@ -170,6 +170,22 @@ function requestFrame(operation: string, sessionID?: string, input?: Record<stri
 }
 
 describe("remote bridge", () => {
+  test("relay cancellation aborts the local indexed message read", async () => {
+    let signal: AbortSignal | undefined
+    let aborted = false
+    const test = harness({ results: { messageRead: async (_id: string, _location: unknown, _messageID: string, current: AbortSignal) => {
+      signal = current
+      return new Promise((_, reject) => current.addEventListener("abort", () => { aborted = true; reject(new Error("aborted")) }, { once: true }))
+    } } })
+    await test.bridge.connect()
+    try {
+      test.records[0].deliver(requestFrame("session.message.stream", "ses_1", { messageID: "msg_large" }))
+      await waitFor(() => signal)
+      test.records[0].deliver({ type: "cancel", id: "req_1" })
+      await waitFor(() => aborted ? true : undefined)
+      expect(sentFrames(test.records[0]).some((frame) => frame.type === "response" && frame.id === "req_1")).toBe(false)
+    } finally { await test.bridge.close() }
+  })
   test("unknown future operation returns an immediate error on the same connection", async () => {
     const test = harness({})
     await test.bridge.connect()
@@ -469,20 +485,25 @@ describe("remote bridge", () => {
     expect(stops).toBe(2)
   })
 
-  test("closes the connection for an oversized event frame and reconnects instead of truncating", async () => {
+  test("invalidates an oversized event without closing the connection or forwarding its payload", async () => {
     const { bridge, records, streams, diagnostics } = harness({})
     await bridge.connect()
     records[0].deliver({ type: "subscriptions", clientID: "client-1", sessionIDs: ["ses_1"] })
     await Bun.sleep(5)
     const before = records.length
 
-    streams[0].stream.onEvent({ type: "message.updated", data: { sessionID: "ses_1", text: "x".repeat(300_000) } })
+    streams[0].stream.onEvent({ id: "evt_big", type: "session.tool.progress", durable: { aggregateID: "ses_1", seq: 7, version: 2 }, data: { sessionID: "ses_1", assistantMessageID: "msg_large", text: "x".repeat(300_000) } })
     await Bun.sleep(10)
 
-    expect(sentFrames(records[0]).filter((frame) => frame.type === "event")).toHaveLength(0)
-    expect(records[0].disconnected).toBe(true)
-    expect(records.length).toBe(before + 1)
-    expect(sessionsFrame(records[1])).toEqual({ type: "sessions" })
+    expect(sentFrames(records[0]).filter((frame) => frame.type === "event")).toMatchObject([{ type: "event", sessionID: "ses_1", event: { id: "evt_big", type: "session.remote.oversized", durable: { aggregateID: "ses_1", seq: 7, version: 2 }, data: { sessionID: "ses_1", messageID: "msg_large", truncated: true } } }])
+    const replacement = sentFrames(records[0]).find((frame) => frame.type === "event")
+    const data = replacement?.type === "event" && typeof replacement.event === "object" && replacement.event !== null ? Reflect.get(replacement.event, "data") : undefined
+    const omitted: unknown = data && typeof data === "object" ? Reflect.get(data, "omittedChars") : undefined
+    expect(typeof omitted).toBe("number")
+    if (typeof omitted !== "number") throw new Error("Oversized marker lacks an omitted character count")
+    expect(omitted).toBeGreaterThan(262_144)
+    expect(records[0].disconnected).toBe(false)
+    expect(records.length).toBe(before)
     expect(diagnostics.some((message) => message.includes("oversized"))).toBe(true)
 
     await bridge.close()

@@ -6,6 +6,26 @@ const TAGS = ["Added", "Changed", "Fixed"] as const
 describe("release entries", () => {
   test("includes the latest TUI release at the top of the public changelog", () => {
     expect(RELEASES[0]).toEqual({
+      version: "0.7.8",
+      date: "2026-09-27",
+      title: "Paged remote history, images, and TUI remote toggle",
+      tags: ["Added", "Changed", "Fixed"],
+      changes: [
+        { tag: "Added", text: "Turn remote access on and off from the TUI command palette, with an always-visible remote status line." },
+        { tag: "Added", text: "Load long remote conversations in pages as you scroll up, and open attached and tool images as thumbnails with a full-size view." },
+        { tag: "Added", text: "See every running Session from all workspaces at the top of the remote Sessions page, and exact values on the Usage charts." },
+        { tag: "Changed", text: "Move Office characters to the room for their current work, send idle characters to the Lounge, and fill the canvas with the office." },
+        { tag: "Changed", text: "Widen the remote transcript with Jump to top and Jump to latest on its edge, and fit phones with a one-row icon bar, a bottom Sessions sheet, and an agent and model row above the composer." },
+        { tag: "Changed", text: "Hide completed todo lists and Session-state notices as the TUI does, keep Usage rows in place while pages load, and list local Today spend after provider quotas in the TUI." },
+        { tag: "Fixed", text: "Keep Sessions usable when an attached file's stored copy changes, a file's format is unsupported by the provider, or a plugin hook fails." },
+        { tag: "Fixed", text: "Carry the landing screen's YOLO level and goal into the new Session, and load long remote conversations without disconnecting." },
+        { tag: "Fixed", text: "Show one notice per stopped Session, catch up on alerts missed while disconnected, keep push alerts working, and fix pending-prompt alignment and the blank Office on phones." },
+      ],
+    })
+  })
+
+  test("retains the 0.7.7 release content", () => {
+    expect(RELEASES.find((item) => item.version === "0.7.7")).toEqual({
       version: "0.7.7",
       date: "2026-09-27",
       title: "Remote attachments, todo list, and notifications",
@@ -173,7 +193,7 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 10)).toEqual(["0.7.7", "0.7.6", "0.7.5", "0.7.4", "0.7.3", "0.7.2", "0.7.1", "0.7.0", "0.6.10", "0.6.9"])
+    expect(versions.slice(0, 10)).toEqual(["0.7.8", "0.7.7", "0.7.6", "0.7.5", "0.7.4", "0.7.3", "0.7.2", "0.7.1", "0.7.0", "0.6.10"])
     expect(new Set(versions).size).toBe(versions.length)
     const sorted = [...versions].sort((a, b) => compare(b, a))
     expect(versions).toEqual(sorted)

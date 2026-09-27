@@ -173,6 +173,9 @@
   }
 
   .custom-select__dialog .overlay__body {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
+    overflow: hidden;
     padding-inline: var(--yc-gutter);
   }
 
@@ -188,6 +191,9 @@
   }
 
   .custom-select__list {
+    min-block-size: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
     margin-block-start: var(--yc-space-2);
     gap: var(--yc-space-2);
   }
@@ -202,9 +208,17 @@
     background: var(--yc-green-soft);
   }
 
+  .custom-select__confirm-footer {
+    position: sticky;
+    inset-block-end: 0;
+    z-index: 1;
+    padding-block-start: var(--yc-space-2);
+    border-block-start: var(--yc-border-width) solid var(--yc-border);
+    background: var(--yc-surface-raised);
+  }
+
   .custom-select__confirm {
     inline-size: 100%;
-    margin-block-start: var(--yc-space-3);
   }
 }
 

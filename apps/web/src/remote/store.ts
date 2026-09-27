@@ -1,4 +1,4 @@
-import type { CreateEnrollmentResponse, RemoteDeviceInfo, RemoteOperation, RemoteWorkspaceInfo } from "@ycoding-ai/remote"
+import { RemoteLimits, type CreateEnrollmentResponse, type RemoteDeviceInfo, type RemoteOperation, type RemoteWorkspaceInfo } from "@ycoding-ai/remote"
 import { catalogKey, readCatalog, readFileFind, type AgentAttachmentInput, type CatalogTarget, type CatalogView, type FileAttachmentInput, type FileFindResult } from "./catalog"
 import { signInURL, type RemoteHttp, type RemoteHttpResult, type SignInProvider } from "./http"
 import {
@@ -26,6 +26,7 @@ import {
   sealedPartKeys,
   readGuardrailRequests,
   readPermissionRequests,
+  readProjectedMessage,
   readFormRequests,
   readSessionInfoList,
   readSnapshot,
@@ -36,6 +37,7 @@ import {
   shellOutputFor,
   withShellOutputFetch,
   withShellOutputPage,
+  visibleTranscript,
   type FileChangeView,
   type PendingRequestView,
   type RemoteMessageView,
@@ -91,6 +93,7 @@ export type SessionInfoView = {
   readonly title: string
   readonly projectID?: string
   readonly directory?: string
+  readonly workspaceID?: string
   readonly agent?: string
   readonly model?: ModelRefView
   readonly modelLabel?: string
@@ -152,6 +155,7 @@ export type RemoteStoreState = {
   readonly activeDeviceID?: string
   readonly advertised: readonly string[]
   readonly sessions: readonly SessionInfoView[]
+  readonly runningSessions?: readonly (SessionInfoView & { readonly workspaceName: string })[]
   readonly sessionStatus?: { readonly running: ReadonlySet<string>; readonly attention: ReadonlySet<string> }
   readonly catalogs: Readonly<Record<string, CatalogView>>
   readonly usage: UsageState
@@ -171,6 +175,7 @@ export type RemoteStoreState = {
   readonly sessionCreation?: SessionCreation
   readonly activeSessionID?: string
   readonly view?: SessionView
+  readonly history?: { readonly status: "idle" | "loading" | "error"; readonly before?: string; readonly error?: string }
   readonly todos?: readonly TodoView[]
   readonly team?: TeamView
   readonly teamCues: readonly TeamCue[]
@@ -185,6 +190,7 @@ export type RemoteStoreState = {
 
 export type RemoteStoreOptions = {
   readonly http: RemoteHttp
+  readonly fetch?: (input: string, init?: RequestInit) => Promise<Response>
   readonly createTransport: (deviceID: string, handlers: RemoteTransportHandlers) => RemoteTransport
   readonly schedule?: (callback: () => void, ms: number) => () => void
   readonly now?: () => number
@@ -224,6 +230,8 @@ export type RemoteStore = {
   readonly retrySessionCreation: () => Promise<string | undefined>
   readonly dismissSessionCreation: () => void
   readonly reloadMessages: () => Promise<void>
+  readonly loadOlderMessages: () => Promise<void>
+  readonly loadOversizedMessage: (messageID: string) => Promise<void>
   readonly loadShellOutputPage: (shellID: string) => Promise<void>
   readonly sendPrompt: (input: { readonly text: string; readonly delivery: "steer" | "queue"; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[]; readonly skills?: readonly string[]; readonly agent?: string; readonly model?: ModelRefView }) => Promise<void | boolean>
   readonly runCommand: (input: { readonly command: string; readonly arguments?: string; readonly delivery: "steer" | "queue"; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[]; readonly agent?: string; readonly model?: ModelRefView }) => Promise<void | boolean>
@@ -250,6 +258,7 @@ export type RemoteStore = {
 const defaultBatchMs = 24
 const sessionPageSize = 25
 const retainedSessionPages = 3
+const historyPageSize = 100
 
 /** One shell-output request reads at most the local default page; the device bounds it again. */
 const shellOutputPageLimit = 65_536
@@ -277,6 +286,7 @@ function isEphemeralEvent(payload: unknown): boolean {
 }
 
 export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
+  const fetchContent = options.fetch ?? fetch
   const schedule = options.schedule ?? ((callback, ms) => {
     const handle = setTimeout(callback, ms)
     return () => clearTimeout(handle)
@@ -292,6 +302,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     devices: [],
     advertised: [],
     sessions: [],
+    runningSessions: [],
     catalogs: {},
     usage: emptyUsage(),
     sessionGroups: [],
@@ -311,6 +322,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     unhandledEvents: 0,
   }
   let transport: RemoteTransport | undefined
+  let olderMessageIDs = new Set<string>()
+  const oversizedReads = new Map<string, AbortController>()
   let activeUpload: AbortController | undefined
   let selectionToken = 0
   let selectionReadyToken: number | undefined
@@ -336,8 +349,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   const fileTokens = new Map<string, number>()
   let statusFrameRevision = 0
   let statusBaseline = false
+  let reconnectStatus: { readonly owner: RemoteTransport; readonly status: NonNullable<RemoteStoreState["sessionStatus"]> } | undefined
+  let reconnectingSameDevice = false
   let statusReloading = false
   let statusReloadTrailing = false
+  let statusReloadLocal = false
+  let statusReloadRunning = false
+  let runningStatusRevision = 0
   let lastStatusReload = -Infinity
   let cancelStatusReload: (() => void) | undefined
   let cancelSearch: (() => void) | undefined
@@ -440,6 +458,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     let teamCues = state.teamCues
     let refreshTeam = false
     let gap = false
+    const oversizedIDs = new Set<string>()
     for (const item of batch) {
       if (!view || item.sessionID !== view.id) continue
       const sequence = readEventSequence(item.event)
@@ -456,6 +475,31 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         // per aggregate, so a gap means a lost event and forces a re-read.
         if (sequence.seq <= view.watermark) continue
         if (sequence.seq > view.watermark + 1) gap = true
+      }
+      const type = typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "type") : undefined
+      if (type === "session.remote.oversized") {
+        const data = typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "data") : undefined
+        const candidate = data && typeof data === "object" && Reflect.get(data, "sessionID") === view.id ? Reflect.get(data, "messageID") : undefined
+        const messageID = typeof candidate === "string" && /^msg_[A-Za-z0-9_-]+$/.test(candidate) && candidate.length <= 128 ? candidate : undefined
+        if (messageID === undefined) gap = true
+        if (messageID !== undefined) {
+          const previous = view.messages.find((message) => message.id === messageID)
+          const marker: RemoteMessageView = { kind: "oversized", id: messageID, projected: previous?.kind === "oversized" ? previous.projected : previous !== undefined && (previous.kind !== "user" || previous.state !== "pending"), state: "loading" }
+          view = { ...view, messages: view.messages.some((message) => message.id === messageID)
+            ? view.messages.map((message) => message.id === messageID ? marker : message)
+            : [...view.messages, marker] }
+          oversizedIDs.add(messageID)
+        }
+        if (sequence.seq !== undefined) view = { ...view, watermark: sequence.seq }
+        continue
+      }
+      if (type === "session.input.promoted") {
+        const data = typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "data") : undefined
+        const inputID = data && typeof data === "object" ? Reflect.get(data, "inputID") : undefined
+        if (typeof inputID === "string" && view.messages.some((message) => message.kind === "oversized" && message.id === inputID)) {
+          view = { ...view, messages: view.messages.map((message) => message.kind === "oversized" && message.id === inputID ? { ...message, projected: true, state: "loading" } : message) }
+          oversizedIDs.add(inputID)
+        }
       }
       if (teamWatching && hydration === undefined && state.activeSessionID === item.sessionID && subscribedSessionID === item.sessionID &&
         state.team?.rootID === item.sessionID) {
@@ -475,7 +519,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (typeof item.event === "object" && item.event !== null && Reflect.get(item.event, "type") === "session.compaction.ended") recordCovered(view, next)
       unhandled += next.unhandledEvents - view.unhandledEvents
       view = sequence.seq === undefined ? next : { ...next, watermark: sequence.seq }
-      const type = typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "type") : undefined
       const todos = eventTodos(item.event, item.sessionID)
       if (todos !== undefined) {
         state = { ...state, todos }
@@ -509,7 +552,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       teamCues,
     }
     notify()
-    if (gap) void reloadSnapshot(state.activeSessionID, selectionToken, "Events were missed, so history was reloaded.")
+    if (gap) void reloadSnapshot(state.activeSessionID, selectionToken)
+    oversizedIDs.forEach((id) => {
+      oversizedReads.get(id)?.abort()
+      oversizedReads.delete(id)
+      void loadOversizedMessage(id)
+    })
     if (refreshTeam && state.team?.status !== "unsupported" && state.team !== undefined && transport !== undefined)
       void loadTeam(transport, selectionToken, state.team.rootID, undefined, true)
   }
@@ -643,15 +691,21 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     // subscription, raise or end the live alerts, or report a rejected credential.
     if (!isCurrentConnection(owner)) return
     if (status.kind === "closed" || status.kind === "reconnecting") cancelUpload("Attachment upload lost its machine connection. Files were not sent.")
+    if (status.kind === "reconnecting") reconnectingSameDevice = true
     if (status.kind === "open") {
+      reconnectStatus = reconnectingSameDevice && state.sessionStatus !== undefined ? { owner, status: state.sessionStatus } : undefined
+      reconnectingSameDevice = false
       cancelStatusReload?.()
       cancelStatusReload = undefined
       statusReloadTrailing = false
+      statusReloadLocal = false
+      statusReloadRunning = false
+      runningStatusRevision += 1
       lastStatusReload = -Infinity
       statusReadOwner = undefined
       statusFrameRevision += 1
       statusBaseline = false
-      setState({ sessionStatus: undefined })
+      setState({ sessionStatus: undefined, runningSessions: [] })
       if (lastStatusKind !== "idle" && lastStatusKind !== "connecting") { clearCatalogs(); clearUsage() }
     }
     const rejected = status.kind === "closed" && (status.code === 4401 || status.code === 4403)
@@ -745,16 +799,20 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
    * snapshot below the projection's durable watermark, is refused so the visible
    * transcript is never erased or rewound.
    */
-  const applySnapshot = (sessionID: string, payload: unknown, base?: SessionView): { readonly view: SessionView; readonly coveredAssistantIDs: readonly string[]; readonly parentID?: string } | "invalid" | "stale" => {
+  const applySnapshot = (sessionID: string, payload: unknown, base?: SessionView): { readonly view: SessionView; readonly before?: string; readonly coveredAssistantIDs: readonly string[]; readonly parentID?: string } | "invalid" | "stale" => {
     const snapshot = readSnapshot(payload)
-    if (snapshot === undefined) return "invalid"
+    if (snapshot === undefined || snapshot.watermark === undefined) return "invalid"
     if (base?.watermark !== undefined && snapshot.watermark !== undefined && snapshot.watermark < base.watermark) {
       return "stale"
     }
+    const combined = base === undefined ? snapshot.messages : [
+      ...base.messages.filter((message) => (olderMessageIDs.has(message.id) || message.kind === "oversized" && message.state === "pending") && !snapshot.messages.some((fresh) => fresh.id === message.id)),
+      ...snapshot.messages,
+    ]
     const view: SessionView = {
       ...(base ?? createSessionView(sessionID)),
       id: sessionID,
-      messages: snapshot.messages,
+      messages: visibleTranscript(combined),
       ...(snapshot.title === undefined ? {} : { title: snapshot.title }),
       ...(snapshot.agent === undefined ? {} : { agent: snapshot.agent }),
       ...(snapshot.model === undefined ? {} : { model: snapshot.model }),
@@ -762,7 +820,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       watermark: snapshot.watermark,
       ...(snapshot.sourceEpoch === undefined ? {} : { sourceEpoch: snapshot.sourceEpoch }),
     }
-    return { view, coveredAssistantIDs: snapshot.coveredAssistantIDs, parentID: snapshot.parentID }
+    return { view, before: snapshot.before, coveredAssistantIDs: [...new Set([
+      ...snapshot.coveredAssistantIDs,
+      ...combined.flatMap((message) => message.kind === "assistant" && !view.messages.some((retained) => retained.id === message.id) ? [message.id] : []),
+    ])], parentID: snapshot.parentID }
   }
 
   const applyEvent = (view: SessionView, event: unknown, replaying: boolean): SessionView => {
@@ -894,16 +955,90 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
    * failure or applies the snapshot after verifying that the selection that opened
    * this read still owns the view.
    */
-  const readSnapshotPayload = async (sessionID: string): Promise<RemoteRequestOutcome | undefined> => {
+  const readSnapshotPayload = async (sessionID: string, before?: string): Promise<RemoteRequestOutcome | undefined> => {
     const active = transport
     if (!active) return undefined
-    return active.request("session.snapshot", { sessionID })
+    return active.request("session.snapshot", { sessionID, input: { limit: historyPageSize, ...(before === undefined ? {} : { before }) } })
+  }
+
+  const historyFailure = (outcome: Exclude<RemoteRequestOutcome, { status: "ok" }>) =>
+    outcome.status === "failed" && (outcome.error.code === "invalid_message" || outcome.error.code === "unknown_operation")
+      ? "Update the connected device to read windowed Session history."
+      : outcome.status === "failed" && outcome.error.code === "message_too_large"
+        ? `This history page contains a message too large to load. ${outcome.error.message}`
+        : describeOutcome(outcome, "Session history")
+
+  const loadOlderMessages = async () => {
+    const sessionID = state.activeSessionID
+    const before = state.history?.before
+    const owner = transport
+    if (!sessionID || !before || !owner || state.history?.status === "loading") return
+    const token = selectionToken
+    setState({ history: { status: "loading", before } })
+    const outcome = await readSnapshotPayload(sessionID, before)
+    if (token !== selectionToken || !isCurrentConnection(owner) || state.activeSessionID !== sessionID || state.history?.before !== before) return
+    if (outcome === undefined || outcome.status !== "ok") {
+      setState({ history: { status: "error", before, error: outcome === undefined ? notConnectedPage : historyFailure(outcome) } })
+      return
+    }
+    const page = readSnapshot(outcome.value)
+    if (page === undefined || page.watermark === undefined) {
+      setState({ history: { status: "error", before, error: "The older history page was not readable." } })
+      return
+    }
+    const view = state.view
+    if (view === undefined) return
+    olderMessageIDs = new Set([...olderMessageIDs, ...page.messages.map((message) => message.id)])
+    const existing = new Set(page.messages.map((message) => message.id))
+    setState({ view: { ...view, messages: visibleTranscript([...page.messages, ...view.messages.filter((message) => !existing.has(message.id))]) },
+      history: { status: "idle", ...(page.before === undefined ? {} : { before: page.before }) } })
+  }
+
+  const loadOversizedMessage = async (messageID: string) => {
+    const sessionID = state.activeSessionID
+    const deviceID = state.activeDeviceID
+    const owner = transport
+    const token = selectionToken
+    if (!sessionID || !deviceID || !owner || oversizedReads.has(messageID) ||
+      !state.view?.messages.some((message) => message.kind === "oversized" && message.id === messageID)) return
+    const controller = new AbortController()
+    oversizedReads.set(messageID, controller)
+    setState({ view: { ...state.view, messages: state.view.messages.map((message) => message.kind === "oversized" && message.id === messageID ? { ...message, state: "loading" } : message) } })
+    try {
+      const response = await fetchContent(`/api/remote/devices/${encodeURIComponent(deviceID)}/sessions/${encodeURIComponent(sessionID)}/messages/${encodeURIComponent(messageID)}`,
+        { credentials: "same-origin", signal: controller.signal })
+      if (response.status === 404 && token === selectionToken && isCurrentConnection(owner) && state.activeSessionID === sessionID && state.view) {
+        const current = state.view.messages.find((entry) => entry.id === messageID)
+        if (current?.kind === "oversized" && !current.projected) {
+          setState({ view: { ...state.view, messages: state.view.messages.map((entry) => entry.id === messageID && entry.kind === "oversized" ? { ...entry, state: "pending" } : entry) } })
+          return
+        }
+      }
+      if (response.status === 503) {
+        const payload: unknown = await response.json().catch(() => undefined)
+        const error = payload && typeof payload === "object" ? Reflect.get(payload, "error") : undefined
+        if (error && typeof error === "object" && Reflect.get(error, "code") === "unknown_operation" &&
+          token === selectionToken && isCurrentConnection(owner) && state.activeSessionID === sessionID)
+          setState({ notice: "Update the connected device to read full Session content." })
+      }
+      if (!response.ok) throw new Error("Projected message unavailable")
+      const message = readProjectedMessage(await response.json())
+      if (message === undefined || message.id !== messageID) throw new Error("Invalid projected message")
+      if (token !== selectionToken || !isCurrentConnection(owner) || state.activeSessionID !== sessionID || controller.signal.aborted || !state.view) return
+      setState({ view: { ...state.view, messages: state.view.messages.some((entry) => entry.id === messageID)
+        ? state.view.messages.map((entry) => entry.id === messageID ? message : entry)
+        : [...state.view.messages, message] } })
+    } catch {
+      if (token === selectionToken && isCurrentConnection(owner) && state.activeSessionID === sessionID && !controller.signal.aborted && state.view)
+        setState({ view: { ...state.view, messages: state.view.messages.map((entry) => entry.kind === "oversized" && entry.id === messageID ? { ...entry, state: "error" } : entry) } })
+    } finally {
+      if (oversizedReads.get(messageID) === controller) oversizedReads.delete(messageID)
+    }
   }
 
   const reloadSnapshot = async (
     sessionID: string | undefined,
     token: number,
-    notice?: string,
   ): Promise<"applied" | "refused" | "unavailable"> => {
     if (sessionID === undefined || state.activeSessionID !== sessionID) return "unavailable"
     const owned: HydrationWindow = { sessionID, events: [], replayed: new Set() }
@@ -914,23 +1049,24 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         return "unavailable"
       }
       if (outcome.status !== "ok") {
-        setState({ notice: describeOutcome(outcome, "Session history") })
+        setState({ notice: historyFailure(outcome) })
         return "unavailable"
       }
       const applied = applySnapshot(sessionID, outcome.value, state.view)
       if (applied === "invalid") {
-        setState({ notice: notice ?? "The session snapshot was not readable, so the current history is kept." })
+        setState({ notice: "The session snapshot was not readable, so the current history is kept." })
         return "refused"
       }
       if (applied === "stale") {
-        setState({ notice: notice ?? "An older session snapshot arrived and was ignored." })
+        setState({ notice: "An older session snapshot arrived and was ignored." })
         return "refused"
       }
       sealed = { sessionID, parts: new Set(sealedPartKeys(applied.view.messages)), covered: new Set(applied.coveredAssistantIDs) }
       let view = applied.view
       for (const event of owned.events) view = applyEvent(view, event, true)
       owned.replayed.forEach((key) => sealed?.parts.delete(key))
-      setState({ view, ...(notice === undefined ? {} : { notice }) })
+      setState({ view, history: { status: "idle", ...(applied.before === undefined ? {} : { before: applied.before }) } })
+      view.messages.filter((message) => message.kind === "oversized" && message.state === "pending").forEach((message) => { void loadOversizedMessage(message.id) })
       const owner = transport
       if (teamWatching && owner !== undefined && state.team !== undefined) void loadTeam(owner, token, state.team.rootID, undefined, true)
       return "applied"
@@ -963,7 +1099,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       running: status.running.has(row.id), attention: status.attention.has(row.id),
     })) }))
     sessionPages = rows
-    setState({ sessionStatus: status, sessions: sortSessions(rows.flatMap((page) => page.rows)) })
+    setState({ sessionStatus: status, sessions: sortSessions(rows.flatMap((page) => page.rows)),
+      runningSessions: state.runningSessions?.filter((row) => status.running.has(row.id)) ?? [] })
   }
 
   const readSessionStatus = async (owner: RemoteTransport) => {
@@ -977,6 +1114,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (status !== undefined) {
       statusBaseline = true
       publishSessionStatus(status)
+      runningStatusRevision += 1
+      statusReloadRunning = status.running.size > 0
+      if (statusReloadRunning) void reloadStatusFirstPage(owner)
     }
   }
 
@@ -985,20 +1125,30 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     statusFrameRevision += 1
     const status = { running: new Set(frame.running), attention: new Set(frame.attention) }
     const previous = state.sessionStatus
+    const comparison = reconnectStatus?.owner === owner ? reconnectStatus.status : previous
+    const runningChanged = previous === undefined || previous.running.size !== status.running.size ||
+      [...status.running].some((id) => !previous.running.has(id))
     const changed = previous === undefined || previous.running.size !== status.running.size || previous.attention.size !== status.attention.size ||
       [...status.running].some((id) => !previous.running.has(id)) || [...status.attention].some((id) => !previous.attention.has(id))
-    if (statusBaseline && previous !== undefined) {
-      for (const id of status.attention) if (!previous.attention.has(id)) delivery.deliver("approval-requested", { sessionID: id, sessionTitle: state.sessions.find((row) => row.id === id)?.title })
-      for (const id of previous.running) if (!status.running.has(id)) delivery.deliver("agent-completed", { sessionID: id, sessionTitle: state.sessions.find((row) => row.id === id)?.title })
+    if ((statusBaseline || reconnectStatus?.owner === owner) && comparison !== undefined) {
+      for (const id of status.attention) if (!comparison.attention.has(id)) delivery.deliver("approval-requested", { sessionID: id, sessionTitle: state.sessions.find((row) => row.id === id)?.title })
+      for (const id of comparison.running) if (!status.running.has(id)) delivery.deliver("agent-completed", { sessionID: id, sessionTitle: state.sessions.find((row) => row.id === id)?.title })
     }
+    reconnectStatus = undefined
     statusBaseline = true
     publishSessionStatus(status)
     setState({ notifications: delivery.entries() })
-    if (changed && [...status.running, ...status.attention].some((id) => !state.sessions.some((row) => row.id === id))) void reloadStatusFirstPage(owner)
+    if (runningChanged) {
+      runningStatusRevision += 1
+      statusReloadRunning = status.running.size > 0
+    }
+    if (changed && [...status.running, ...status.attention].some((id) => !state.sessions.some((row) => row.id === id))) statusReloadLocal = true
+    if (statusReloadLocal || statusReloadRunning) void reloadStatusFirstPage(owner)
   }
 
   const reloadStatusFirstPage = async (owner: RemoteTransport) => {
-    if (!isCurrentConnection(owner) || state.selectedWorkspaceID === undefined) return
+    if (!isCurrentConnection(owner) || (!statusReloadLocal && !statusReloadRunning)) return
+    if (state.selectedWorkspaceID === undefined && !statusReloadRunning) return
     if (statusReloading) { statusReloadTrailing = true; return }
     if (performance.now() - lastStatusReload < 5_000) {
       statusReloadTrailing = true
@@ -1013,8 +1163,15 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     statusReloading = true
     lastStatusReload = performance.now()
     try {
-      if (loadingPageToken === sessionsToken) statusReloadTrailing = true
-      else await loadSessions(sessionsToken)
+      const loadLocal = statusReloadLocal && state.selectedWorkspaceID !== undefined && loadingPageToken !== sessionsToken
+      if (statusReloadLocal && !loadLocal) statusReloadTrailing = true
+      if (loadLocal) statusReloadLocal = false
+      const loadRunning = statusReloadRunning
+      statusReloadRunning = false
+      await Promise.all([
+        ...(loadLocal ? [loadSessions(sessionsToken)] : []),
+        ...(loadRunning ? [loadRunningSessions(owner, runningStatusRevision)] : []),
+      ])
     } finally {
       statusReloading = false
       if (statusReloadTrailing) {
@@ -1022,6 +1179,44 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         void reloadStatusFirstPage(owner)
       }
     }
+  }
+
+  const loadRunningSessions = async (owner: RemoteTransport, revision: number) => {
+    const running = state.sessionStatus?.running
+    if (running === undefined || running.size === 0) return
+    const rows: SessionInfoView[] = []
+    const cursors = new Set<string>()
+    let cursor: string | undefined
+    for (let page = 0; page < Math.ceil(RemoteLimits.maxStatusSessions / RemoteLimits.maxSessionListPage); page += 1) {
+      const outcome = await owner.request("session.list", { input: { limit: RemoteLimits.maxSessionListPage, order: "active", status: "running", parentID: null,
+        ...(cursor === undefined ? {} : { cursor }) } })
+      if (!isCurrentConnection(owner) || revision !== runningStatusRevision) return
+      if (outcome.status !== "ok") {
+        setState({ notice: describeOutcome(outcome, "Running Sessions") })
+        return
+      }
+      rows.push(...readSessionInfoList(outcome.value).flatMap((entry) => {
+        const session = readSessionInfo(entry)
+        const location = typeof entry === "object" && entry !== null ? Reflect.get(entry, "location") : undefined
+        const workspaceID = typeof location === "object" && location !== null ? Reflect.get(location, "workspaceID") : undefined
+        return session !== undefined && session.parentID === undefined && running.has(session.id)
+          ? [{ ...session, ...(typeof workspaceID === "string" ? { workspaceID } : {}) }] : []
+      }))
+      const value = typeof outcome.value === "object" && outcome.value !== null ? outcome.value : undefined
+      const marker = value === undefined ? undefined : Reflect.get(value, "cursor")
+      const next = typeof marker === "object" && marker !== null ? Reflect.get(marker, "next") : undefined
+      if (typeof next !== "string" || next.length === 0) {
+        const unique = [...new Map(rows.map((row) => [row.id, row])).values()]
+        setState({ runningSessions: sortSessions(unique).map((row) => ({ ...row, running: true,
+          workspaceName: state.sessionGroups.find((group) => group.projectID === row.projectID && group.directory === row.directory && group.workspaceID === row.workspaceID)?.name
+            ?? row.directory?.split("/").filter(Boolean).at(-1) ?? row.projectID ?? "Workspace" })) })
+        return
+      }
+      if (cursors.has(next)) break
+      cursors.add(next)
+      cursor = next
+    }
+    setState({ notice: "The device returned more running Session pages than its status limit allows." })
   }
 
   const loadSessions = async (token: number, cursor?: string, direction: "next" | "previous" = "next") => {
@@ -1099,9 +1294,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const sameWorkspace = selectedWorkspaceID === state.selectedWorkspaceID
     if (!sameWorkspace) sessionPages = []
     setState({ ...recoveredConnection(owner), sessionGroups: groups, selectedWorkspaceID,
+      runningSessions: state.runningSessions?.map((row) => ({ ...row, workspaceName: groups.find((group) =>
+        group.projectID === row.projectID && group.directory === row.directory && group.workspaceID === row.workspaceID)?.name ?? row.workspaceName })),
       ...(sameWorkspace ? {} : { sessions: [], advertised: [], sessionHasNext: false, sessionHasPrevious: false }),
       sessionListStatus: selectedWorkspaceID === undefined ? "ready" : "loading" })
     if (selectedWorkspaceID !== undefined) await loadSessions(token)
+    if (statusReloadLocal || statusReloadRunning) void reloadStatusFirstPage(owner)
   }
 
   const refreshSessionGroups = async (owner: RemoteTransport) => {
@@ -1119,10 +1317,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
 
   const selectSession = async (sessionID: string) => {
+    oversizedReads.forEach((controller) => controller.abort())
+    oversizedReads.clear()
     if (activeUpload) cancelUpload("Attachment upload was cancelled by Session selection. Files were not sent.")
     const active = transport
     // One selection owns the view; a superseded selection never writes state again.
     const token = ++selectionToken
+    olderMessageIDs = new Set()
     selectionReadyToken = undefined
     selectionFailedToken = undefined
     const info = state.sessions.find((session) => session.id === sessionID) ??
@@ -1130,7 +1331,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const rootID = info.parentID ?? sessionID
     setState({ activeSessionID: sessionID, selectedSessionInfo: info,
       view: createSessionView(sessionID), team: teamWatching ? { rootID, status: "loading", tasks: [], pageLoading: false } : undefined,
-      teamCues: [], todos: undefined, notice: undefined })
+      teamCues: [], todos: undefined, history: undefined, notice: undefined })
     if (!active) {
       selectionFailedToken = token
       if (teamWatching) setState({ team: { rootID, status: "error", tasks: [], pageLoading: false } })
@@ -1161,27 +1362,25 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (previous !== undefined && previous !== sessionID) releaseSubscription(active, previous)
     const owned: HydrationWindow = { sessionID, events: [], replayed: new Set() }
     hydration = owned
+    const continueWithoutHistory = async (notice: string) => {
+      if (hydration === owned) hydration = undefined
+      selectionReadyToken = token
+      setState({ notice, ...(teamWatching ? { team: { rootID, status: "loading" as const, tasks: [], pageLoading: false } } : {}) })
+      if (teamWatching) void loadTeam(active, token, rootID)
+      await loadSessionReads(sessionID, token)
+    }
     try {
       const outcome = await readSnapshotPayload(sessionID)
       if (token !== selectionToken || state.activeSessionID !== sessionID || outcome === undefined) return
       if (outcome.status !== "ok") {
-        selectionFailedToken = token
-        setState({ notice: describeOutcome(outcome, "Session history"),
-          ...(teamWatching ? { team: { rootID, status: "error" as const, tasks: [], pageLoading: false } } : {}) })
-        return
+        return await continueWithoutHistory(historyFailure(outcome))
       }
       const applied = applySnapshot(sessionID, outcome.value, state.view)
       if (applied === "invalid") {
-        selectionFailedToken = token
-        setState({ notice: "The session snapshot was not readable, so the current history is kept.",
-          ...(teamWatching ? { team: { rootID, status: "error" as const, tasks: [], pageLoading: false } } : {}) })
-        return
+        return await continueWithoutHistory("The session snapshot was not readable, so the current history is kept.")
       }
       if (applied === "stale") {
-        selectionFailedToken = token
-        setState({ notice: "An older session snapshot arrived and was ignored.",
-          ...(teamWatching ? { team: { rootID, status: "error" as const, tasks: [], pageLoading: false } } : {}) })
-        return
+        return await continueWithoutHistory("An older session snapshot arrived and was ignored.")
       }
       sealed = { sessionID, parts: new Set(sealedPartKeys(applied.view.messages)), covered: new Set(applied.coveredAssistantIDs) }
       let view = applied.view
@@ -1189,7 +1388,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       owned.replayed.forEach((key) => sealed?.parts.delete(key))
       selectionReadyToken = token
       const teamRootID = applied.parentID ?? state.selectedSessionInfo?.parentID ?? sessionID
-      setState({ view, team: teamWatching ? { rootID: teamRootID, status: "loading", tasks: [], pageLoading: false } : undefined,
+      setState({ view, history: { status: "idle", ...(applied.before === undefined ? {} : { before: applied.before }) }, team: teamWatching ? { rootID: teamRootID, status: "loading", tasks: [], pageLoading: false } : undefined,
         selectedSessionInfo: state.selectedSessionInfo?.id === sessionID
         ? { ...state.selectedSessionInfo, title: view.title ?? state.selectedSessionInfo.title, agent: view.agent ?? state.selectedSessionInfo.agent,
             model: view.model ?? state.selectedSessionInfo.model, modelLabel: modelLabel(view.model) ?? state.selectedSessionInfo.modelLabel,
@@ -1421,13 +1620,18 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       statusBaseline = false
       statusReloading = false
       statusReloadTrailing = false
+      statusReloadLocal = false
+      statusReloadRunning = false
+      runningStatusRevision += 1
+      reconnectStatus = undefined
+      reconnectingSameDevice = false
       lastStatusReload = -Infinity
       // The new socket starts with no subscriptions, no alerts, and no list of its own.
       subscribedSessionID = undefined
       queued = []
       sessionsToken += 1
       workspacesToken += 1
-      setState({ activeDeviceID: deviceID, sessions: [], sessionStatus: undefined, advertised: [], activeSessionID: undefined, view: undefined, notice: undefined, drafts,
+      setState({ activeDeviceID: deviceID, sessions: [], runningSessions: [], sessionStatus: undefined, advertised: [], activeSessionID: undefined, view: undefined, notice: undefined, drafts,
         team: undefined, teamCues: [], todos: undefined,
         sessionGroups: [], selectedWorkspaceID: undefined, selectedSessionInfo: undefined, sessionQuery: "", sessionFilter: "all",
         sessionListStatus: "idle", sessionPageLoading: false, sessionHasNext: false, sessionHasPrevious: false,
@@ -1468,6 +1672,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       cancelStatusReload?.()
       cancelStatusReload = undefined
       statusReloadTrailing = false
+      statusReloadLocal = false
+      statusReloadRunning = false
+      runningStatusRevision += 1
+      reconnectStatus = undefined
+      reconnectingSameDevice = false
       transport?.close(1000, "disconnected")
       cancelSearch?.()
       sessionPages = []
@@ -1480,6 +1689,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         activeDeviceID: undefined,
         advertised: [],
         sessions: [],
+        runningSessions: [],
         sessionGroups: [],
         selectedWorkspaceID: undefined,
         selectedSessionInfo: undefined,
@@ -1688,6 +1898,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (state.sessionCreation?.status !== "creating") setState({ sessionCreation: undefined })
     },
     reloadMessages,
+    loadOlderMessages,
+    loadOversizedMessage,
     loadShellOutputPage,
     switchModel: async (model) => {
       const sessionID = state.activeSessionID
@@ -1943,6 +2155,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       setState({ view: { ...view, autonomy } })
     },
     dispose: () => {
+      oversizedReads.forEach((controller) => controller.abort())
+      oversizedReads.clear()
       cancelUpload("Attachment upload was cancelled by workspace disposal. Files were not sent.")
       clearCatalogs()
       clearUsage()

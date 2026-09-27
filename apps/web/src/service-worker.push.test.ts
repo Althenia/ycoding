@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 
-test("service worker skips focused clients, shows background push, opens Session, and resubscribes", async () => {
+test("service worker shows one notification per push including malformed and focused, opens Session, and resubscribes", async () => {
   const listeners = new Map<string, (event: unknown) => void>()
   const previous = { addEventListener: Reflect.get(globalThis, "addEventListener"), clients: Reflect.get(globalThis, "clients"),
     registration: Reflect.get(globalThis, "registration"), location: Reflect.get(globalThis, "location"), fetch: globalThis.fetch }
@@ -35,13 +35,22 @@ test("service worker skips focused clients, shows background push, opens Session
       await pending
     }
     await emit("push", { data: { json: () => { throw new Error("malformed") } } })
-    expect(shown).toEqual([])
+    expect(shown).toEqual([{ title: "YCoding — update", options: { body: "Open YCoding to check your work.", tag: "ycoding-update",
+      icon: "/icons/icon-256.png", badge: "/icons/icon-256.png" } }])
+    await emit("push", {})
+    expect(shown).toHaveLength(2)
+    expect(shown[1]).toEqual(shown[0])
+    await emit("notificationclick", { notification: { close: () => undefined } })
+    expect(opened).toBe("/remote")
+    opened = ""
     const payload = { category: "approval-requested", sessionID: "ses_1", deviceID: "dev_1" }
     await emit("push", { data: { json: () => payload } })
-    expect(shown).toEqual([])
+    expect(shown).toHaveLength(3)
+    expect(shown[2]).toMatchObject({ title: "YCoding — approval needed", options: { tag: "ycoding-ses_1-approval-requested", data: { sessionID: "ses_1" } } })
     windowClients.length = 0
     await emit("push", { data: { json: () => payload } })
-    expect(shown[0]).toMatchObject({ title: "YCoding — approval needed", options: { tag: "ycoding-ses_1-approval-requested", data: { sessionID: "ses_1" } } })
+    expect(shown).toHaveLength(4)
+    expect(shown[3]).toMatchObject({ title: "YCoding — approval needed", options: { tag: "ycoding-ses_1-approval-requested", data: { sessionID: "ses_1" } } })
     await emit("notificationclick", { notification: { data: { sessionID: "ses_1" }, close: () => undefined } })
     expect(opened).toBe("/remote#session=ses_1")
     windowClients.push(windowClient)

@@ -7,6 +7,7 @@ import { Global } from "@ycoding-ai/core/global"
 import { createEventStream, createFetch, type FetchHandler } from "../fixture/tui-client"
 import type { TuiPluginStatus } from "../../src/plugin/host-api"
 import type { ClipboardService } from "../../src/context/clipboard"
+import type { RemoteConnectorPort } from "../../src/remote-connector"
 
 /**
  * Boots the REAL application against a deterministic fixture server and returns
@@ -29,6 +30,8 @@ export async function renderScreen(input: {
   kittyKeyboard?: boolean
   /** Frame is stable once this appears; avoids asserting a half-painted screen. */
   settle: string
+  remote?: { create: () => Promise<RemoteConnectorPort> }
+  state?: string
 }) {
   const setup = await createTestRenderer({
     width: input.width,
@@ -64,7 +67,8 @@ export async function renderScreen(input: {
       packages: { resolve: async () => undefined },
       args: input.args ?? {},
       log: () => {},
-    }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
+      remote: input.remote,
+    }).pipe(Effect.provide(input.state ? Global.layerWith({ state: input.state }) : AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
   )
 
   const deadline = Date.now() + 25_000

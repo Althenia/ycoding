@@ -65,6 +65,7 @@ test("relay status diff drives an encrypted push without delaying frame forwardi
   const frames: string[] = []
   const relay = createRelay({ now: () => 1_700_000_000_000, newID: () => "r1", send: (_id, frame) => frames.push(frame),
     close: () => undefined, saveSubscriptions: () => undefined, savePending: () => undefined,
+    loadStatus: async () => undefined, saveStatus: async () => undefined,
     authorizeClientCommand: async () => ({ ok: true }), authorizeAgentCommand: async () => ({ ok: true }), authorityTtlMs: 0,
     notifyPush: (accountID, event) => { pending.push(sendPushToOwner({ store, accountID, event,
       publicKey, privateKey, subject: "mailto:push@example.invalid", now: () => 1_700_000_000_000,

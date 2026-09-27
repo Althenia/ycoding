@@ -33,7 +33,25 @@ export function modelLabel(model: ModelRefView | undefined): string | undefined 
 
 export type ToolContentBlock =
   | { readonly kind: "text"; readonly text: string; readonly sourceTruncated?: boolean }
+  | { readonly kind: "image"; readonly uri: string; readonly mime: string; readonly name?: string }
   | { readonly kind: "other"; readonly type: string; readonly summary: string }
+
+export type MessageAttachment = { readonly name: string; readonly mime: string; readonly bytes: number; readonly digest: string }
+
+const imageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
+
+function readAttachments(value: unknown): readonly MessageAttachment[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item): readonly MessageAttachment[] => {
+    if (!isRecord(item) || !isRecord(item.content) || item.content.type !== "managed") return []
+    const digest = stringField(item.content.digest)
+    const mime = stringField(item.mime)
+    const bytes = item.content.bytes
+    if (digest === undefined || !/^[0-9a-f]{64}$/.test(digest) || mime === undefined ||
+      typeof bytes !== "number" || !Number.isSafeInteger(bytes) || bytes < 0) return []
+    return [{ name: stringField(item.name) ?? "Attachment", mime, bytes, digest }]
+  })
+}
 
 /**
  * `Shell.Output` page the client holds. `cursor` is the absolute byte offset after the
@@ -98,10 +116,12 @@ export type AssistantPart =
     }
 
 export type RemoteMessageView =
+  | { readonly kind: "oversized"; readonly id: string; readonly projected: boolean; readonly state: "loading" | "pending" | "error" }
   | {
       readonly kind: "user"
       readonly id: string
       readonly text: string
+      readonly attachments?: readonly MessageAttachment[]
       /** Absent when the projection does not carry a delivery mode. */
       readonly delivery?: "steer" | "queue"
       readonly state: "pending" | "promoted" | "consumed"
@@ -126,6 +146,7 @@ export type RemoteMessageView =
       readonly description?: string
       readonly source?: string
       readonly metadata?: Readonly<Record<string, unknown>>
+      readonly pending?: boolean
       readonly created: number
     }
   | {
@@ -146,6 +167,8 @@ export type RemoteMessageView =
       readonly id: string
       readonly status: "pending" | "running" | "completed" | "failed"
       readonly boundaryMessageID?: string
+      readonly jobID?: string
+      readonly failureCode?: string
       readonly trigger?: string
       readonly summary?: string
       readonly error?: string
@@ -354,6 +377,27 @@ export function toolTone(part: Extract<AssistantPart, { kind: "tool" }>): "succe
   if (part.status === "completed") return "success"
   if (part.status === "streaming" || part.status === "running") return "running"
   return /abort|cancel|interrupt|kill/i.test(part.error ?? "") ? "attention" : "error"
+}
+
+export function transcriptPartVisible(part: AssistantPart): boolean {
+  if (part.kind === "text" || part.kind === "reasoning") return Boolean(part.text.trim())
+  if (part.name === "goal") return false
+  return part.name !== "skill" || part.status !== "completed" || part.structured?.alreadyActive !== true
+}
+
+export function transcriptMessageVisible(message: RemoteMessageView): boolean {
+  if ((message.kind === "system" || message.kind === "synthetic") && (message.source === "session-state" || message.source === "team-view")) return false
+  if (message.kind === "synthetic") return Boolean(message.description?.trim())
+  if (message.kind === "compaction") return message.jobID === undefined && (message.status !== "failed" || message.failureCode === "aborted")
+  if (message.kind === "assistant") return message.parts.some(transcriptPartVisible) || message.completed !== undefined || message.error !== undefined || message.retry !== undefined
+  return true
+}
+
+export function visibleTranscriptMessages(messages: readonly RemoteMessageView[]): readonly RemoteMessageView[] {
+  const visible = messages.filter(transcriptMessageVisible)
+  const pendingInput = (message: RemoteMessageView) => message.kind === "user" && message.state === "pending" || message.kind === "synthetic" && message.pending === true
+  const pendingCompaction = (message: RemoteMessageView) => message.kind === "compaction" && (message.status === "pending" || message.status === "running")
+  return [...visible.filter((message) => !pendingInput(message) && !pendingCompaction(message)), ...visible.filter(pendingCompaction), ...visible.filter(pendingInput)]
 }
 
 export function classifySyntheticNotice(message: RemoteMessageView):
@@ -608,7 +652,7 @@ export function readSessionInfoList(payload: unknown): readonly unknown[] {
 
 export function readMessageList(payload: unknown): readonly RemoteMessageView[] {
   return readDataList(payload).flatMap((item) => {
-    const message = readSnapshotMessage(item)
+    const message = readProjectedMessage(item)
     return message ? [message] : []
   })
 }
@@ -678,7 +722,9 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
     case "session.input.admitted":
       return applyAdmitted(view, data, now)
     case "session.input.promoted":
-      return updateUserMessage(view, stringField(data.inputID), (message) => ({ ...message, state: "promoted" }))
+      return view.messages.some((message) => message.id === data.inputID && message.kind === "synthetic")
+        ? { ...view, messages: view.messages.map((message) => message.id === data.inputID && message.kind === "synthetic" ? { ...message, pending: false } : message) }
+        : updateUserMessage(view, stringField(data.inputID), (message) => ({ ...message, state: "promoted" }))
     case "session.input.consumed": {
       const ids = stringList(data.inputIDs)
       return ids.reduce(
@@ -951,6 +997,14 @@ export function readToolContent(content: unknown): readonly ToolContentBlock[] {
       )
       return [{ kind: "text", text: visible, ...(visible === text ? {} : { sourceTruncated: true }) }]
     }
+    if (type === "file") {
+      const mime = stringField(item.mime)
+      const uri = stringField(item.uri)
+      if (mime !== undefined && imageMimes.has(mime) && uri !== undefined &&
+        uri.startsWith(`data:${mime};base64,`) && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(uri.slice(`data:${mime};base64,`.length)))
+        return [{ kind: "image", uri, mime, ...(stringField(item.name) === undefined ? {} : { name: stringField(item.name) }) }]
+      return [{ kind: "other", type, summary: stringField(item.name) ?? "File" }]
+    }
     const summary = Object.entries(item)
       .flatMap(([key, entry]) => (typeof entry === "string" ? [`${key}: ${boundedText(entry, 200).text}`] : []))
       .join(", ")
@@ -1075,15 +1129,18 @@ function applyAdmitted(view: SessionView, data: Record<string, unknown>, now: nu
       ...(stringField(payload.description) ? { description: stringField(payload.description) } : {}),
       ...(metadata === undefined ? {} : { metadata }),
       ...(metadata && stringField(metadata.contextSource) ? { source: stringField(metadata.contextSource) } : {}),
+      pending: true,
       created: existing?.kind === "synthetic" ? existing.created : now,
     }
     return existing ? replaceMessage(view, message) : pushMessage(view, message)
   }
   const text = stringField(payload.text) ?? (existing?.kind === "user" ? existing.text : "")
+  const attachments = readAttachments(payload.files)
   const message: RemoteMessageView = {
     kind: "user",
     id,
     text,
+    ...(attachments.length > 0 ? { attachments } : existing?.kind === "user" && existing.attachments ? { attachments: existing.attachments } : {}),
     delivery: deliveryField(pending.delivery),
     state: existing?.kind === "user" ? existing.state : "pending",
     created: existing?.kind === "user" ? existing.created : now,
@@ -1263,6 +1320,8 @@ function withCompaction(
     kind: "compaction",
     id,
     status,
+    ...(stringField(data.jobID) ? { jobID: stringField(data.jobID) } : {}),
+    ...(status === "failed" ? { failureCode: stringField(data.code) ?? readError(data.error)?.code } : {}),
     ...(status === "completed" && boundary !== undefined ? { boundaryMessageID: boundary } : {}),
     ...(trigger === undefined ? {} : { trigger }),
     ...(error === undefined ? {} : { error }),
@@ -1332,7 +1391,7 @@ function pushActivity(activity: readonly ActivityItem[], item: ActivityItem): re
   return [...activity.filter((existing) => existing.id !== item.id), item].slice(-activityLimit)
 }
 
-function readSnapshotMessage(value: unknown): RemoteMessageView | undefined {
+export function readProjectedMessage(value: unknown): RemoteMessageView | undefined {
   if (!isRecord(value)) return undefined
   const id = stringField(value.id)
   const type = stringField(value.type)
@@ -1343,10 +1402,12 @@ function readSnapshotMessage(value: unknown): RemoteMessageView | undefined {
 
   if (type === "user") {
     // The projection carries no delivery mode and marks consumption by timestamp.
+    const attachments = readAttachments(value.files)
     return {
       kind: "user",
       id,
       text: stringField(value.text) ?? "",
+      ...(attachments.length === 0 ? {} : { attachments }),
       state: numberField(time.consumed) === undefined ? "promoted" : "consumed",
       created,
     }
@@ -1394,6 +1455,8 @@ function readSnapshotMessage(value: unknown): RemoteMessageView | undefined {
       kind: "compaction",
       id,
       status,
+      ...(stringField(value.jobID) ? { jobID: stringField(value.jobID) } : {}),
+      ...(status === "failed" ? { failureCode: stringField(value.code) ?? readError(value.error)?.code } : {}),
       ...(status === "completed" && boundary !== undefined ? { boundaryMessageID: boundary } : {}),
       ...(trigger === undefined ? {} : { trigger }),
       ...(summary === undefined ? {} : { summary: boundedText(summary).text }),
@@ -1474,6 +1537,7 @@ function stringList(value: unknown): readonly string[] {
 
 export type SessionSnapshot = {
   readonly messages: readonly RemoteMessageView[]
+  readonly before?: string
   readonly coveredAssistantIDs: readonly string[]
   readonly title?: string
   readonly parentID?: string
@@ -1492,19 +1556,21 @@ export type SessionSnapshot = {
  */
 export function readSnapshot(payload: unknown): SessionSnapshot | undefined {
   if (!isRecord(payload) || !Array.isArray(payload.messages)) return undefined
+  if (payload.before !== undefined && (typeof payload.before !== "string" || payload.before.length === 0 || payload.before.length > 256)) return undefined
   const session = isRecord(payload.session) ? payload.session : {}
   const watermark = isRecord(payload.watermark) ? numberField(payload.watermark.seq) : undefined
   const sourceEpoch = stringField(payload.sourceEpoch)
   const archived = isRecord(session.time) && numberField(session.time.archived) !== undefined
   const model = readModelRef(session.model)
   const allMessages = payload.messages.flatMap((item) => {
-    const message = readSnapshotMessage(item)
+    const message = readProjectedMessage(item)
     return message ? [message] : []
   })
   const messages = visibleTranscript(allMessages)
   const visibleIDs = new Set(messages.map((message) => message.id))
   return {
     messages,
+    ...(payload.before === undefined ? {} : { before: payload.before }),
     coveredAssistantIDs: allMessages.flatMap((message) => message.kind === "assistant" && !visibleIDs.has(message.id) ? [message.id] : []),
     ...(stringField(session.title) === undefined ? {} : { title: stringField(session.title) }),
     ...(stringField(session.parentID) === undefined ? {} : { parentID: stringField(session.parentID) }),

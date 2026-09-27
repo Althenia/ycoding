@@ -137,6 +137,8 @@ export type SessionCompactionMetrics = {
 
 export type EventLogSynced = { type: "log.synced"; aggregateID: string; seq?: number }
 
+export type PromptBase64 = string
+
 export type ProviderRequestTiming = {
   promptEvalDurationNs?: number
   generationDurationNs?: number
@@ -3427,6 +3429,7 @@ export type SessionProjection = {
   session: SessionInfo
   messages: Array<SessionMessageInfo>
   watermark: EventLogSynced
+  before?: string | null
 }
 
 export type SessionMessagesResponse = { data: Array<SessionMessageInfo> }
@@ -3557,6 +3560,14 @@ export type SessionNotFoundError = {
 }
 export const isSessionNotFoundError = (value: unknown): value is SessionNotFoundError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "SessionNotFoundError"
+
+export type AttachmentNotFoundError = { readonly _tag: "AttachmentNotFoundError"; readonly message: string }
+export const isAttachmentNotFoundError = (value: unknown): value is AttachmentNotFoundError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "AttachmentNotFoundError"
+
+export type AttachmentTooLargeError = { readonly _tag: "AttachmentTooLargeError"; readonly message: string }
+export const isAttachmentTooLargeError = (value: unknown): value is AttachmentTooLargeError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "AttachmentTooLargeError"
 
 export type UnknownError = {
   readonly _tag: "UnknownError"
@@ -3984,9 +3995,20 @@ export type SessionGetInput = { readonly sessionID: { readonly sessionID: string
 
 export type SessionGetOutput = { data: SessionInfo }["data"]
 
-export type SessionSnapshotInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+export type SessionSnapshotInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly limit?: { readonly limit?: number | undefined; readonly before?: string | undefined }["limit"]
+  readonly before?: { readonly limit?: number | undefined; readonly before?: string | undefined }["before"]
+}
 
 export type SessionSnapshotOutput = SessionProjection
+
+export type SessionAttachmentReadInput = {
+  readonly sessionID: { readonly sessionID: string; readonly digest: string }["sessionID"]
+  readonly digest: { readonly sessionID: string; readonly digest: string }["digest"]
+}
+
+export type SessionAttachmentReadOutput = { mime: string; bytes: number; data: PromptBase64 }
 
 export type SessionDiagnosticsInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 

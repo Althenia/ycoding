@@ -41,6 +41,8 @@ export const remoteOperations = [
   "session.get",
   "session.messages",
   "session.snapshot",
+  "session.attachment.read",
+  "session.message.stream",
   "session.todo.list",
   "session.subagent.list",
   "session.log",
@@ -83,6 +85,8 @@ export const remoteSessionOperations = [
   "session.get",
   "session.messages",
   "session.snapshot",
+  "session.attachment.read",
+  "session.message.stream",
   "session.todo.list",
   "session.subagent.list",
   "session.log",
@@ -168,6 +172,7 @@ export type RemoteErrorCode =
   | "unknown_operation"
   | "session_required"
   | "session_not_allowed"
+  | "not_found"
   | "not_subscribed"
   | "rate_limited"
   | "agent_unavailable"
@@ -182,6 +187,7 @@ const remoteErrorCodes: readonly RemoteErrorCode[] = [
   "unknown_operation",
   "session_required",
   "session_not_allowed",
+  "not_found",
   "not_subscribed",
   "rate_limited",
   "agent_unavailable",
@@ -228,6 +234,7 @@ export type RemoteSubscriptions = {
   readonly sessionIDs: readonly string[]
 }
 export type RemoteHeartbeat = { readonly type: "ping" } | { readonly type: "pong" }
+export type RemoteCancel = { readonly type: "cancel"; readonly id: string }
 
 /** Frames accepted from a browser connection. */
 export type RemoteClientMessage = RemoteRequest | RemoteHeartbeat
@@ -236,7 +243,7 @@ export type RemoteAgentMessage = RemoteResponse | RemoteEvent | RemoteSessions |
 /** Frames the relay sends to a browser connection. */
 export type RemoteRelayToClient = RemoteResponse | RemoteEvent | RemoteSessions | RemoteStatus | RemoteHeartbeat
 /** Frames the relay sends to a local agent connection. */
-export type RemoteRelayToAgent = RemoteRequest | RemoteSubscriptions | RemoteHeartbeat
+export type RemoteRelayToAgent = RemoteRequest | RemoteSubscriptions | RemoteHeartbeat | RemoteCancel
 
 export type ParseResult<T> =
   | { readonly ok: true; readonly value: T }
@@ -257,6 +264,10 @@ export function deviceSignaturePayload(challengeID: string, nonce: string): stri
 
 export function serializeRequest(request: RemoteRequest): string {
   return JSON.stringify(request)
+}
+
+export function serializeCancel(id: string): string {
+  return JSON.stringify({ type: "cancel", id })
 }
 
 export function serializeResponse(response: RemoteResponse): string {
@@ -309,6 +320,12 @@ export function parseRelayToAgentMessage(raw: string): ParseResult<RemoteRelayTo
   if (frame.value.type === "ping" || frame.value.type === "pong")
     return withOnlyKeys(frame.value, ["type"], { type: frame.value.type })
   if (frame.value.type === "request") return parseRequest(frame.value)
+  if (frame.value.type === "cancel") {
+    const keys = withOnlyKeys(frame.value, ["type", "id"], frame.value)
+    if (!keys.ok) return keys
+    const id = requireID(frame.value.id)
+    return id.ok ? { ok: true, value: { type: "cancel", id: id.value } } : id
+  }
   if (frame.value.type === "subscriptions") return parseSubscriptions(frame.value)
   return invalid()
 }
@@ -364,6 +381,14 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
 }
 
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
+  if (operation === "session.snapshot") return input === undefined || (isRecord(input) &&
+    typeof input.limit === "number" && Number.isSafeInteger(input.limit) && input.limit >= 1 && input.limit <= 200 &&
+    (input.before === undefined || (typeof input.before === "string" && input.before.length > 0 && input.before.length <= 256)) &&
+    Object.keys(input).every((key) => key === "limit" || key === "before"))
+  if (operation === "session.attachment.read") return isRecord(input) && typeof input.digest === "string" &&
+    /^[0-9a-f]{64}$/.test(input.digest) && Object.keys(input).length === 1
+  if (operation === "session.message.stream") return isRecord(input) && typeof input.messageID === "string" &&
+    /^msg_[A-Za-z0-9_-]+$/.test(input.messageID) && input.messageID.length <= 128 && Object.keys(input).length === 1
   if (operation === "session.attachment.upload")
     return isRecord(input) && typeof input.uploadID === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(input.uploadID) &&
       typeof input.index === "number" && Number.isSafeInteger(input.index) && input.index >= 0 && input.index < RemoteLimits.maxAttachmentChunks && typeof input.last === "boolean" &&

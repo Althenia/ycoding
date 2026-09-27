@@ -519,12 +519,13 @@ const lowerUserContent = Effect.fn("OpenAIResponses.lowerUserContent")(function*
       prompt_cache_breakpoint: supportsBreakpoints ? cacheBreakpoint(part.cache) : undefined,
     }
   if (part.type === "media") {
-    const media = yield* ProviderShared.validateMedia(
-      "OpenAI Responses",
-      part,
-      new Set<string>(ProviderShared.IMAGE_MIMES),
+    return yield* ProviderShared.recoverMedia(
+      "OpenAI Responses", part,
+      ProviderShared.validateMedia("OpenAI Responses", part, new Set<string>(ProviderShared.IMAGE_MIMES)).pipe(
+        Effect.map((media) => ({ type: "input_image" as const, image_url: media.dataUrl, ...(imageDetail ? { detail: imageDetail } : {}) })),
+      ),
+      (text) => ({ type: "input_text" as const, text }),
     )
-    return { type: "input_image" as const, image_url: media.dataUrl, ...(imageDetail ? { detail: imageDetail } : {}) }
   }
   return yield* ProviderShared.unsupportedContent("OpenAI Responses", "user", ["text", "media"])
 })
@@ -537,12 +538,13 @@ const lowerToolResultContentItem = Effect.fn("OpenAIResponses.lowerToolResultCon
   imageDetail?: OpenAIOptions.OpenAIImageDetail,
 ) {
   if (item.type === "text") return { type: "input_text" as const, text: item.text, prompt_cache_breakpoint: breakpoint }
-  const media = yield* ProviderShared.validateToolFile(
-    "OpenAI Responses",
-    item,
-    new Set<string>(ProviderShared.IMAGE_MIMES),
+  return yield* ProviderShared.recoverMedia(
+    "OpenAI Responses", { type: "media", mediaType: item.mime, data: item.uri, filename: item.name },
+    ProviderShared.validateToolFile("OpenAI Responses", item, new Set<string>(ProviderShared.IMAGE_MIMES)).pipe(
+      Effect.map((media) => ({ type: "input_image" as const, image_url: media.dataUrl, ...(imageDetail ? { detail: imageDetail } : {}) })),
+    ),
+    (text) => ({ type: "input_text" as const, text, prompt_cache_breakpoint: breakpoint }),
   )
-  return { type: "input_image" as const, image_url: media.dataUrl, ...(imageDetail ? { detail: imageDetail } : {}) }
 })
 
 const lowerToolResultOutput = Effect.fn("OpenAIResponses.lowerToolResultOutput")(function* (

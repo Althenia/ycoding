@@ -85,8 +85,9 @@ test("usage surface uses rounded tokens and disables entrance motion when reduce
   expect(css).toContain("border-radius: calc(var(--yc-radius-xl) - var(--yc-space-2))")
   expect(css).toContain("border-radius: var(--yc-radius-pill)")
   expect(css).toContain("@media (prefers-reduced-motion: reduce)")
-  expect(css).toContain(".usage-meter > span, .usage-donut__arc { animation: none; }")
+  expect(css).toContain(".usage-meter > span, .usage-donut__arc, .usage-chart__tooltip, .usage-distribution__tooltip { animation: none; }")
   expect(css).toContain(".usage-tabs button, .usage-toggle::before { transition: none; }")
+  expect(css).toContain(".usage-chart__tooltip, .usage-distribution__tooltip { animation: none; }")
 })
 
 test("quota headers separate a reported plan and show truthful relative freshness", () => {

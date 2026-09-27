@@ -338,19 +338,16 @@ const lowerServerToolResult = Effect.fn("AnthropicMessages.lowerServerToolResult
 })
 
 const lowerImage = Effect.fn("AnthropicMessages.lowerImage")(function* (part: MediaPart) {
-  const media = yield* ProviderShared.validateMedia(
-    "Anthropic Messages",
-    part,
-    new Set<string>(ProviderShared.IMAGE_MIMES),
+  return yield* ProviderShared.recoverMedia(
+    "Anthropic Messages", part,
+    ProviderShared.validateMedia("Anthropic Messages", part, new Set<string>(ProviderShared.IMAGE_MIMES)).pipe(
+      Effect.map((media) => ({
+        type: "image" as const,
+        source: { type: "base64" as const, media_type: media.mime, data: media.base64 },
+      })),
+    ),
+    (text) => ({ type: "text" as const, text }),
   )
-  return {
-    type: "image" as const,
-    source: {
-      type: "base64" as const,
-      media_type: media.mime,
-      data: media.base64,
-    },
-  } satisfies AnthropicImageBlock
 })
 
 // Tool results may carry structured text/images. Keep media as provider-native
@@ -359,19 +356,17 @@ const lowerToolResultContentItem = Effect.fn("AnthropicMessages.lowerToolResultC
   item: ToolContent,
 ) {
   if (item.type === "text") return { type: "text" as const, text: item.text } satisfies AnthropicTextBlock
-  const media = yield* ProviderShared.validateToolFile(
+  return yield* ProviderShared.recoverMedia(
     "Anthropic Messages",
-    item,
-    new Set<string>(ProviderShared.IMAGE_MIMES),
+    { type: "media", mediaType: item.mime, data: item.uri, filename: item.name },
+    ProviderShared.validateToolFile("Anthropic Messages", item, new Set<string>(ProviderShared.IMAGE_MIMES)).pipe(
+      Effect.map((media) => ({
+        type: "image" as const,
+        source: { type: "base64" as const, media_type: media.mime, data: media.base64 },
+      })),
+    ),
+    (text) => ({ type: "text" as const, text }),
   )
-  return {
-    type: "image" as const,
-    source: {
-      type: "base64" as const,
-      media_type: media.mime,
-      data: media.base64,
-    },
-  } satisfies AnthropicImageBlock
 })
 
 const lowerToolResultContent = Effect.fn("AnthropicMessages.lowerToolResultContent")(function* (part: ToolResultPart) {

@@ -12,6 +12,8 @@ const monthStart = Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(
 const old = new URLSearchParams(location.search).has("old")
 const offline = new URLSearchParams(location.search).has("offline")
 const none = new URLSearchParams(location.search).has("none")
+const paged = new URLSearchParams(location.search).has("paged")
+const pageError = new URLSearchParams(location.search).has("page-error")
 const providers: UsageProvider[] = [
   { providerID: "openai", label: "Codex", profile: "Personal", status: "available", source: "provider_api", stability: "stable", updatedAt: Date.now(), windows: [
     { id: "session", label: "Session allowance", unit: "percent", used: 38, resetAt: Date.now() + 2 * 3600_000, periodSeconds: 5 * 3600 },
@@ -64,6 +66,7 @@ const entries = (input: UsageReportInput): UsageReportRow[] => input.group === "
   physical: 41 - index, cost: (41 - index) * 0.45, costProvenance: index % 3 === 0 ? "current_catalog" : "recorded",
 }))
 const requests: { operation: string; input?: UsageReportInput | { refresh: boolean } }[] = []
+let releasePage: (() => void) | undefined
 const [state, setState] = createSignal({
   connection: offline ? { kind: "connecting" } : { kind: "connected", deviceName: "Studio Mac" }, transport: offline ? { kind: "connecting" } : { kind: "open" },
   usage: { providers: { status: "idle" }, summary: { status: "idle" }, reports: {} },
@@ -82,6 +85,15 @@ const store = {
   },
   loadUsageReport: async (input: UsageReportInput) => {
     requests.push({ operation: "usage.report", input })
+    if (paged && input.group !== "day" && input.from !== monthStart && ((input.offset ?? 0) > 0 || input.group !== "model" || input.order === "asc")) {
+      update({ ...state().usage, reports: { ...state().usage.reports, [reportKey(input)]: { status: "loading" } } })
+      await new Promise<void>((resolve) => { releasePage = resolve })
+      releasePage = undefined
+      if (pageError) {
+        update({ ...state().usage, reports: { ...state().usage.reports, [reportKey(input)]: { status: "error", message: "The usage page could not be loaded." } } })
+        return
+      }
+    }
     if (input.group === "model" && input.from === monthStart) {
       update({ ...state().usage, reports: { ...state().usage.reports, [reportKey(input)]: old ? { status: "unsupported" } : { status: "ready", data: {
         group: "model", rows: monthlyRows, total: { logical: 4, physical: 4, helpers: 0, continued: 0, fallback: 0,
@@ -102,7 +114,7 @@ const store = {
     update({ ...state().usage, reports: { ...state().usage.reports, [reportKey(input)]: old ? { status: "unsupported" } : { status: "ready", data: result } } })
   },
 } as unknown as RemoteStore
-Object.assign(window, { usageRequests: () => requests, usageConnect: () => {
+Object.assign(window, { usageRequests: () => requests, usageReleasePage: () => releasePage?.(), usageConnect: () => {
   setState({ ...state(), connection: { kind: "connected", deviceName: "Studio Mac" }, transport: { kind: "open" } })
   listeners.forEach((listener) => listener())
 } })

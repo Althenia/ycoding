@@ -1,9 +1,9 @@
 .session-status { display:flex; align-items:center; gap:var(--yc-space-1); min-inline-size:0; max-inline-size:100%; font:var(--yc-weight-medium) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); }
-.session-status__slot { display:flex; align-items:center; gap:var(--yc-space-1); min-inline-size:0; min-block-size:var(--yc-control-h-dense); max-inline-size:260px; padding-inline:var(--yc-space-2); border-radius:var(--yc-radius-pill); background:var(--yc-green-soft); color:var(--yc-green-strong); transition:background var(--yc-dur-base) var(--yc-ease-standard), color var(--yc-dur-base) var(--yc-ease-standard); }
+.session-status__slot { display:flex; align-items:center; gap:var(--yc-space-1); min-inline-size:0; min-block-size:var(--yc-control-h-dense); max-inline-size:260px; overflow:hidden; padding-inline:var(--yc-space-2); border-radius:var(--yc-radius-pill); background:var(--yc-green-soft); color:var(--yc-green-strong); transition:background var(--yc-dur-base) var(--yc-ease-standard), color var(--yc-dur-base) var(--yc-ease-standard); }
 .session-status__slot--empty { visibility:hidden; }
 .session-status__slot--attention { background:var(--yc-yellow-soft); color:var(--yc-yellow-strong); }
 .session-status__label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.session-status__mobile { display:none; white-space:nowrap; }
+.session-status__mobile { display:none; min-inline-size:0; max-inline-size:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .session-status__yolo { display:flex; align-items:center; min-block-size:var(--yc-control-h-dense); padding-inline:var(--yc-space-2); border-radius:var(--yc-radius-pill); background:var(--yc-green-soft); color:var(--yc-green-strong); white-space:nowrap; }
 .session-status__goal { position:relative; }
 .session-status__goal-trigger { min-block-size:var(--yc-control-h-dense); padding-inline:var(--yc-space-2); border:0; border-radius:var(--yc-radius-pill); background:var(--yc-green-soft); color:var(--yc-green-strong); font:inherit; cursor:pointer; white-space:nowrap; }

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import { launchBrowser } from "./cdp"
 
-const port = 4393
+const port = 4497
 const browserPath = process.env.YCODING_WEB_CHROME
 if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable.")
 let server: ReturnType<typeof Bun.spawn> | undefined
@@ -130,6 +130,130 @@ test("a machine with no connected quota providers shows one explicit empty state
     expect(await page.evaluate<number>(`document.querySelectorAll('.usage-provider').length`)).toBe(0)
   } finally { await page.close() }
 })
+
+test("paging keeps the table and page geometry mounted while the next report is in flight", async () => {
+  for (const [width, height] of [[390, 844], [1024, 768], [1440, 900]]) for (const theme of ["light", "dark"]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width!, height!)
+      await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?paged`)
+      await wait(page, `document.querySelectorAll('.usage-breakdown tbody tr').length === 25`)
+      await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
+      await page.evaluate(`(() => { document.querySelector('.usage-pagination')?.scrollIntoView({ block: 'center' }); window.usageNodes = {
+        header: document.querySelector('.usage-head'), tiles: document.querySelector('.usage-tiles'), charts: document.querySelector('.usage-visuals'), table: document.querySelector('.usage-breakdown table')
+      }; })()`)
+      const before = await page.evaluate<{ scroll: number; height: number }>(`({ scroll: document.scrollingElement.scrollTop, height: document.scrollingElement.scrollHeight })`)
+      await page.evaluate(`document.querySelector('.usage-pagination button:last-child')?.click()`)
+      await wait(page, `window.usageRequests().some(item => item.operation === 'usage.report' && item.input?.offset === 25)`)
+      const during = await page.evaluate<{ scroll: number; height: number; nodes: boolean; rows: number; busy: string | null }>(`({
+        scroll: document.scrollingElement.scrollTop, height: document.scrollingElement.scrollHeight,
+        nodes: window.usageNodes.header === document.querySelector('.usage-head') && window.usageNodes.tiles === document.querySelector('.usage-tiles') &&
+          window.usageNodes.charts === document.querySelector('.usage-visuals') && window.usageNodes.table === document.querySelector('.usage-breakdown table'),
+        rows: document.querySelectorAll('.usage-breakdown tbody tr').length,
+        busy: document.querySelector('.usage-breakdown')?.getAttribute('aria-busy') ?? null
+      })`)
+      if (width === 390 && theme === "light") await Bun.write(new URL("../../../.cache/tmp/usage-paging-pending.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      expect(during.nodes).toBe(true)
+      expect(during.rows).toBe(25)
+      expect(during.busy).toBe("true")
+      expect(during.height).toBe(before.height)
+      expect(Math.abs(during.scroll - before.scroll)).toBeLessThan(2)
+      await page.evaluate(`window.usageReleasePage()`)
+      await wait(page, `document.querySelectorAll('.usage-breakdown tbody tr').length === 16`)
+      expect(await page.evaluate<boolean>(`window.usageNodes.table === document.querySelector('.usage-breakdown table')`)).toBe(true)
+      expect(await page.evaluate<string | null>(`document.querySelector('.usage-breakdown')?.getAttribute('aria-busy') ?? null`)).toBe("false")
+      const settled = await page.evaluate<{ scroll: number; height: number }>(`({ scroll: document.scrollingElement.scrollTop, height: document.scrollingElement.scrollHeight })`)
+      expect(settled.height).toBe(before.height)
+      expect(Math.abs(settled.scroll - before.scroll)).toBeLessThan(2)
+    } finally { await page.close() }
+  }
+}, 180_000)
+
+test("a failed next-page read retains the table and shows an inline error", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?paged&page-error`)
+    await wait(page, `document.querySelectorAll('.usage-breakdown tbody tr').length === 25`)
+    await page.evaluate(`document.querySelector('.usage-pagination button:last-child')?.click()`)
+    await wait(page, `window.usageRequests().some(item => item.operation === 'usage.report' && item.input?.offset === 25)`)
+    await page.evaluate(`window.usageReleasePage()`)
+    await wait(page, `document.querySelector('.usage-breakdown [role="alert"]')?.textContent?.includes('could not be loaded') === true`)
+    expect(await page.evaluate<number>(`document.querySelectorAll('.usage-breakdown tbody tr').length`)).toBe(25)
+    expect(await page.evaluate<string | null>(`document.querySelector('.usage-breakdown')?.getAttribute('aria-busy') ?? null`)).toBe("false")
+  } finally { await page.close() }
+})
+
+test("sort and group changes retain the same table while only its report changes", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(1024, 768)
+    await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?paged`)
+    await wait(page, `document.querySelectorAll('.usage-breakdown tbody tr').length === 25`)
+    await page.evaluate(`window.usageTable = document.querySelector('.usage-breakdown table')`)
+    await page.evaluate(`document.querySelector('.usage-breakdown th:last-child button')?.click()`)
+    await wait(page, `window.usageRequests().some(item => item.operation === 'usage.report' && item.input?.order === 'asc')`)
+    expect(await page.evaluate<boolean>(`window.usageTable === document.querySelector('.usage-breakdown table') && document.querySelectorAll('.usage-breakdown tbody tr').length === 25 && document.querySelector('.usage-breakdown')?.getAttribute('aria-busy') === 'true'`)).toBe(true)
+    await page.evaluate(`window.usageReleasePage()`)
+    await wait(page, `document.querySelector('.usage-breakdown')?.getAttribute('aria-busy') === 'false'`)
+    await page.evaluate(`document.querySelector('#usage-tab-session')?.click()`)
+    await wait(page, `window.usageRequests().some(item => item.operation === 'usage.report' && item.input?.group === 'session')`)
+    expect(await page.evaluate<boolean>(`window.usageTable === document.querySelector('.usage-breakdown table') && document.querySelector('.usage-breakdown tbody tr')?.textContent?.includes('Session') === false && document.querySelector('.usage-breakdown')?.getAttribute('aria-busy') === 'true'`)).toBe(true)
+    await page.evaluate(`window.usageReleasePage()`)
+    await wait(page, `document.querySelector('.usage-breakdown tbody tr')?.textContent?.includes('Session') === true`)
+    expect(await page.evaluate<boolean>(`window.usageTable === document.querySelector('.usage-breakdown table')`)).toBe(true)
+  } finally { await page.close() }
+})
+
+test("chart details respond to hover, keyboard focus, and tap inside each card", async () => {
+  for (const [width, height] of [[390, 844], [1024, 768], [1440, 900]]) for (const theme of ["light", "dark"]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width!, height!)
+      await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html`)
+      await wait(page, `document.querySelectorAll('.usage-chart__bar').length === 30 && document.querySelectorAll('.usage-donut__arc').length === 2`)
+      await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
+      await page.evaluate(`document.querySelector('.usage-chart__bar:last-of-type')?.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true, pointerType: 'mouse' }))`)
+      const daily = await page.evaluate<{ text: string; inside: boolean; name: string | null }>(`(() => { const card = document.querySelector('.usage-chart'); const tip = card.querySelector('.usage-chart__tooltip'); const bar = card.querySelector('.usage-chart__bar:last-of-type'); const a = card.getBoundingClientRect(); const b = tip?.getBoundingClientRect(); return { text: tip?.textContent ?? '', inside: !!b && b.left >= a.left && b.right <= a.right && b.top >= a.top && b.bottom <= a.bottom, name: bar?.getAttribute('aria-label') ?? null }; })()`)
+      expect(daily.text).toContain("requests")
+      expect(daily.text).toContain("tokens")
+      expect(daily.text).toContain("$")
+      expect(daily.inside).toBe(true)
+      expect(daily.name).toContain("requests")
+      if (width === 390 && theme === "light") {
+        await page.evaluate(`document.querySelector('.usage-chart')?.scrollIntoView({ block: 'center' })`)
+        await Bun.sleep(200)
+        await Bun.write(new URL("../../../.cache/tmp/usage-day-tooltip.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      }
+      await page.evaluate(`document.querySelector('.usage-chart__bar:first-of-type')?.focus()`)
+      expect(await page.evaluate<string>(`document.querySelector('.usage-chart__tooltip')?.textContent ?? ''`)).toMatch(/\d{4}-\d{2}-\d{2}/)
+      await page.evaluate(`document.querySelector('.usage-chart__bar:last-of-type')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))`)
+      expect(await page.evaluate<string>(`document.querySelector('.usage-chart__tooltip')?.textContent ?? ''`)).toContain("requests")
+      await page.evaluate(`document.querySelector('.usage-donut__arc')?.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true, pointerType: 'mouse' }))`)
+      const provider = await page.evaluate<{ text: string; inside: boolean; name: string | null }>(`(() => { const card = document.querySelector('.usage-distribution'); const tip = card.querySelector('.usage-distribution__tooltip'); const arc = card.querySelector('.usage-donut__arc'); const a = card.getBoundingClientRect(); const b = tip?.getBoundingClientRect(); return { text: tip?.textContent ?? '', inside: !!b && b.left >= a.left && b.right <= a.right && b.top >= a.top && b.bottom <= a.bottom, name: arc?.getAttribute('aria-label') ?? null }; })()`)
+      expect(provider.text).toContain("Codex")
+      expect(provider.text).toContain("$")
+      expect(provider.text).toContain("%")
+      expect(provider.inside).toBe(true)
+      expect(provider.name).toContain("Codex")
+      if (width === 1440 && theme === "dark") {
+        await page.evaluate(`document.querySelector('.usage-distribution')?.scrollIntoView({ block: 'center' })`)
+        await Bun.sleep(200)
+        await Bun.write(new URL("../../../.cache/tmp/usage-provider-tooltip.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      }
+      await page.evaluate(`document.querySelectorAll('.usage-donut__arc')[1]?.focus()`)
+      expect(await page.evaluate<string>(`document.querySelector('.usage-distribution__tooltip')?.textContent ?? ''`)).toContain("OpenRouter")
+      await page.evaluate(`document.querySelectorAll('.usage-donut__arc')[1]?.dispatchEvent(new MouseEvent('click', { bubbles: true }))`)
+      expect(await page.evaluate<string>(`document.querySelector('.usage-distribution__tooltip')?.textContent ?? ''`)).toContain("OpenRouter")
+      if (width === 390 && theme === "light") {
+        await page.evaluate(`document.querySelector('.usage-toggle button:last-child')?.click()`)
+        await page.evaluate(`document.querySelector('.usage-donut__arc')?.focus()`)
+        expect(await page.evaluate<string>(`document.querySelector('.usage-distribution__tooltip')?.textContent ?? ''`)).toContain("$10.00")
+        expect(await page.evaluate<string>(`document.querySelector('.usage-distribution__tooltip')?.textContent ?? ''`)).toContain("tokens")
+      }
+      expect(await page.evaluate<number>(`window.usageRequests().length`)).toBe(5)
+    } finally { await page.close() }
+  }
+}, 180_000)
 
 async function wait(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, expression: string) {
   for (let index = 0; index < 50; index++) { if (await page.evaluate<boolean>(expression)) return; await Bun.sleep(100) }

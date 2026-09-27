@@ -1,7 +1,8 @@
 export * as PluginHooks from "./hooks"
 
+import { Message } from "@ycoding-ai/ai"
 import type { AISDKHooks } from "@ycoding-ai/plugin/effect/aisdk"
-import type { SessionHooks } from "@ycoding-ai/plugin/effect/session"
+import type { SessionContext, SessionHooks } from "@ycoding-ai/plugin/effect/session"
 import type { ToolHooks } from "@ycoding-ai/plugin/effect/tool"
 import { Context, Effect, Layer, Scope } from "effect"
 import { makeLocationNode } from "../effect/app-node"
@@ -14,6 +15,10 @@ export interface Domains {
 }
 
 type Callback<Event> = (event: Event) => Effect.Effect<void>
+
+const isSessionContext = (event: unknown): event is SessionContext =>
+  typeof event === "object" && event !== null && "sessionID" in event && typeof event.sessionID === "string" &&
+  "messages" in event && Array.isArray(event.messages)
 
 export interface Interface {
   readonly register: <Domain extends keyof Domains, Name extends keyof Domains[Domain]>(
@@ -54,6 +59,15 @@ const layer = Layer.effect(
 
     const trigger: Interface["trigger"] = Effect.fn("PluginHooks.trigger")(function* (domain, name, event) {
       for (const callback of callbacks.get(key(domain, name)) ?? []) {
+        if (domain === "session" && name === "context" && isSessionContext(event)) {
+          yield* Effect.suspend((): Effect.Effect<void> => Reflect.apply(callback, undefined, [event])).pipe(
+            Effect.catchDefect(() => Effect.gen(function* () {
+              yield* Effect.logWarning("Session context hook failed", { sessionID: event.sessionID, routeID: event.routeID })
+              event.messages.push(Message.user("Session context hook failed; its changes may be incomplete."))
+            })),
+          )
+          continue
+        }
         const result: Effect.Effect<void> = Reflect.apply(callback, undefined, [event])
         yield* result
       }

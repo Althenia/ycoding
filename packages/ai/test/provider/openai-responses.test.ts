@@ -819,9 +819,9 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("rejects non-image media in tool-result content with a clear error", () =>
+  it.effect("describes unsupported media in tool-result content", () =>
     Effect.gen(function* () {
-      const error = yield* LLMClient.prepare(
+      const prepared = yield* LLMClient.prepare(
         LLM.request({
           id: "req_tool_result_unsupported_media",
           model,
@@ -835,10 +835,9 @@ describe("OpenAI Responses route", () => {
             }),
           ],
         }),
-      ).pipe(Effect.flip)
+      )
 
-      expect(error.message).toContain("OpenAI Responses")
-      expect(error.message).toContain("audio/mpeg")
+      expect(JSON.stringify(prepared.body.input)).toContain("File (unnamed) (audio/mpeg) omitted: OpenAI Responses does not support media type audio/mpeg")
     }),
   )
 
@@ -2920,17 +2919,17 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("rejects unsupported user media content", () =>
+  it.effect("describes unsupported user media content", () =>
     Effect.gen(function* () {
-      const error = yield* LLMClient.prepare(
+      const prepared = yield* LLMClient.prepare(
         LLM.request({
           id: "req_media",
           model,
           messages: [Message.user({ type: "media", mediaType: "application/pdf", data: "AAECAw==" })],
         }),
-      ).pipe(Effect.flip)
+      )
 
-      expect(error.message).toContain("OpenAI Responses does not support media type application/pdf")
+      expect(JSON.stringify(prepared.body.input)).toContain("File (unnamed) (application/pdf) omitted: OpenAI Responses does not support media type application/pdf")
     }),
   )
 

@@ -1,5 +1,6 @@
 import type {
   OfficeActor,
+  OfficeActivity,
   OfficeCue,
   OfficeHomeRoom,
   OfficeInput,
@@ -17,8 +18,8 @@ export const maxOfficeActors = 16
 
 export function officeLocationLabel(room: OfficeRoomID | undefined): string {
   const labels: Record<OfficeRoomID, string> = {
-    ceo: "CEO office", developer: "Developer room", research: "Research lab", qa: "QA lab",
-    meeting: "Meeting room", lounge: "Relax lounge", hall: "Hallway",
+    developer: "Developer room", research: "Research lab", qa: "QA lab",
+    meeting: "Meeting room", lounge: "Lounge", hall: "Hallway",
   }
   return room ? labels[room] : "Entrance"
 }
@@ -44,7 +45,7 @@ export function projectOffice(input: OfficeInput, preferences: OfficePreferences
     ?? { id: rootID, title: rootID === input.activeSessionID ? "Current session" : "Parent session", agent: input.selected?.id === rootID ? input.selected.agent : undefined, archived: false }
   const actorID = (sessionID: string) => JSON.stringify([deviceID, sessionID])
   const selected = [
-    sessionActor(input, preferences, session, actorID(rootID)),
+    sessionActor(input, preferences, session, actorID(rootID), members.some((member) => member.state === "starting" || member.state === "running")),
     ...members.map((member) => taskActor(input, preferences, member, actorID(member.sessionID))),
   ]
     .sort((a, b) => Number(b.selected) - Number(a.selected))
@@ -80,10 +81,13 @@ export function projectOffice(input: OfficeInput, preferences: OfficePreferences
   }
 }
 
-function sessionActor(input: OfficeInput, preferences: OfficePreferences, session: SessionSummary, id: string): OfficeActor {
+function sessionActor(input: OfficeInput, preferences: OfficePreferences, session: SessionSummary, id: string, coordinating: boolean): OfficeActor {
   const detail = liveDetail(input, session.id)
   const status = statusFor(input.connection, detail, session.running)
   const source = sourceFor(input, detail)
+  const activity: OfficeActivity | undefined = status === "idle" ? undefined : detail?.thinking || status === "attention" || status === "compacting"
+    ? "hold" : detail?.activity ?? (coordinating ? "coordinate" : "implement")
+  const label = source === "projection" && (status === "tool" || status === "working") ? activityLabel(activity) : statusLabel(status, source)
   return {
     id,
     sessionID: session.id,
@@ -93,11 +97,12 @@ function sessionActor(input: OfficeInput, preferences: OfficePreferences, sessio
     title: shortText(session.title, 70),
     selected: session.id === input.activeSessionID,
     status,
-    statusText: statusLabel(status, source),
+    statusText: label,
     source,
-    bubble: bubbleFor(input, preferences, detail, status, statusLabel(status, source)),
+    bubble: bubbleFor(input, preferences, detail, status, label),
     unknownOutcome: detail?.unknownOutcome ?? false,
-    homeRoom: "ceo",
+    homeRoom: "developer",
+    activity,
   }
 }
 
@@ -105,7 +110,11 @@ function taskActor(input: OfficeInput, preferences: OfficePreferences, member: T
   const detail = liveDetail(input, member.sessionID)
   const status = detail || input.connection !== "ready" ? statusFor(input.connection, detail, undefined) : taskStatus[member.state]
   const source = sourceFor(input, detail)
-  const statusText = detail || input.connection !== "ready" ? statusLabel(status, source) : taskStateLabel[member.state]
+  const homeRoom = responsibilityRoom(detail?.agent ?? member.agent, member.description)
+  const activity: OfficeActivity | undefined = status === "idle" ? undefined : detail?.thinking || status === "attention" || status === "compacting"
+    ? "hold" : detail?.activity ?? (homeRoom === "research" ? "research" : homeRoom === "qa" ? "verify" : "implement")
+  const statusText = detail || input.connection !== "ready" ? source === "projection" && (status === "tool" || status === "working")
+    ? activityLabel(activity) : statusLabel(status, source) : taskStateLabel[member.state]
   return {
     id,
     sessionID: member.sessionID,
@@ -119,7 +128,8 @@ function taskActor(input: OfficeInput, preferences: OfficePreferences, member: T
     source,
     bubble: bubbleFor(input, preferences, detail, status, statusText),
     unknownOutcome: detail?.unknownOutcome ?? false,
-    homeRoom: responsibilityRoom(detail?.agent ?? member.agent, member.description),
+    homeRoom,
+    activity,
     teamRootSessionID: member.parentID,
     taskState: member.state,
   }
@@ -137,6 +147,13 @@ function responsibility(text: string): OfficeHomeRoom | undefined {
   const research = text.search(researchWords)
   if (qa < 0 && research < 0) return undefined
   return research < 0 || (qa >= 0 && qa < research) ? "qa" : "research"
+}
+
+function activityLabel(activity: OfficeActivity | undefined): string {
+  const labels: Record<Exclude<OfficeActivity, "hold">, string> = {
+    research: "Researching", implement: "Implementing", coordinate: "Coordinating", verify: "Testing",
+  }
+  return activity === undefined || activity === "hold" ? "Working" : labels[activity]
 }
 
 function corroboratedCues(input: OfficeInput, actors: readonly OfficeActor[], root: OfficeActor): readonly OfficeCue[] {

@@ -7,7 +7,7 @@ export function officeLayout(): OfficeLayout {
     pose: index % 3 ? "sit" : "stand",
   }))
   const rooms: Readonly<Record<OfficeHomeRoom, readonly OfficeSpot[]>> = {
-    ceo: spotList(2, 2), developer: spotList(9, 2), research: spotList(16, 2), qa: spotList(23, 2),
+    developer: spotList(9, 2), research: spotList(16, 2), qa: spotList(23, 2),
   }
   return {
     columns: 30,
@@ -19,7 +19,6 @@ export function officeLayout(): OfficeLayout {
     meeting: spotList(10, 10),
     lounge: spotList(22, 12),
     roomAt: (cell: Point) => {
-      if (cell.x >= 2 && cell.x < 7 && cell.y >= 2 && cell.y < 6) return "ceo"
       if (cell.x >= 9 && cell.x < 14 && cell.y >= 2 && cell.y < 6) return "developer"
       if (cell.x >= 16 && cell.x < 21 && cell.y >= 2 && cell.y < 6) return "research"
       if (cell.x >= 23 && cell.x < 28 && cell.y >= 2 && cell.y < 6) return "qa"

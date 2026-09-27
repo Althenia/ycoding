@@ -263,6 +263,29 @@ export const validateMedia = Effect.fn("ProviderShared.validateMedia")(function*
 export const validateToolFile = (route: string, part: ToolFileContent, supportedMimes: ReadonlySet<string>) =>
   validateMedia(route, { type: "media", mediaType: part.mime, data: part.uri, filename: part.name }, supportedMimes)
 
+export const recoverMedia = <A, B>(
+  route: string,
+  part: MediaPart,
+  lower: Effect.Effect<A, LLMError>,
+  text: (notice: string) => B,
+) =>
+  lower.pipe(
+    Effect.catchIf(
+      (error) => error.reason._tag === "InvalidRequest",
+      (error) => {
+        const notice = `File ${part.filename ?? "(unnamed)"} (${part.mediaType}) omitted: ${error.reason.message}`
+        return Effect.logWarning(`${route}: ${notice}`).pipe(Effect.as(text(notice)))
+      },
+    ),
+  )
+
+export const textOnlyMedia = (route: string, part: MediaPart) =>
+  recoverMedia(
+    route, part,
+    Effect.fail(invalidRequest(`${route} supports text only`)),
+    (text) => text,
+  )
+
 export const trimBaseUrl = (value: string) => value.replace(/\/+$/, "")
 
 export const toolResultText = (part: ToolResultPart) => {

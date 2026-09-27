@@ -12,6 +12,30 @@ const layer = PluginHooks.node.implementation as Layer.Layer<PluginHooks.Service
 const it = testEffect(layer)
 
 describe("PluginHooks", () => {
+  it.effect("keeps a failed context hook visible without blocking subsequent hooks", () =>
+    Effect.gen(function* () {
+      const hooks = yield* PluginHooks.Service
+      yield* hooks.register("session", "context", () => Effect.die(new Error("plugin unavailable")))
+      yield* hooks.register("session", "context", (event) => Effect.sync(() => {
+        event.messages.push(Message.user("following hook"))
+      }))
+      const event = {
+        sessionID: Session.ID.make("ses_hooks_failure"),
+        agent: Agent.ID.make("build"),
+        model: Model.Ref.make({ providerID: Provider.ID.make("test"), id: Model.ID.make("model") }),
+        routeID: "test-route",
+        system: [SystemPart.make("first")],
+        messages: [Message.user("original")],
+        tools: {},
+      }
+      expect(yield* hooks.trigger("session", "context", event)).toBe(event)
+      expect(event.messages.map((message) => message.content[0])).toEqual([
+        { type: "text", text: "original" },
+        { type: "text", text: "Session context hook failed; its changes may be incomplete." },
+        { type: "text", text: "following hook" },
+      ])
+    }),
+  )
   it.effect("registers scoped session hooks and triggers them sequentially", () =>
     Effect.gen(function* () {
       const hooks = yield* PluginHooks.Service

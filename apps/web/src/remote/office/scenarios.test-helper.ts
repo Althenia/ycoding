@@ -18,7 +18,7 @@ export function scenario(kind: string): OfficeInput {
   const selected = base.selected!
   if (kind === "attention") return { ...base, selected: { ...selected, requestCount: 1 } }
   if (kind === "compacting") return { ...base, selected: { ...selected, compacting: true } }
-  if (kind === "tool") return { ...base, selected: { ...selected, activeTool: "shell" } }
+  if (kind === "tool") return { ...base, selected: { ...selected, activeTool: "shell", activity: "implement" } }
   if (kind === "thinking") return { ...base, selected: { ...selected, thinking: true } }
   if (kind === "failed") return { ...base, selected: { ...selected, status: "failed" } }
   if (kind === "interrupted") return { ...base, selected: { ...selected, status: "interrupted" } }

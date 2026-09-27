@@ -320,11 +320,15 @@ increasing by exactly 1, no frame after `last`, and no chunk marker on a failed
 response. A violation closes the agent with `1008`. `packages/remote` exports
 `parseChunkedValue` for the client side.
 
-Large `session.messages` results are the expected case: the Projection API
-(`v2.message.list`, `GET /api/session/:sessionID/message`) is a single unpaginated
-response, so the local agent chunks it. `session.log` (`v2.session.log`) remains
-the incremental/paginated read via `after`, and `session.snapshot`
-(`v2.session.snapshot`) provides messages plus a watermark in one response.
+Large `session.messages` results are chunked through the relay. `session.log`
+(`v2.session.log`) remains the incremental read via `after`.
+`session.snapshot` reads the full projection when no window is requested, or
+returns newest-first pages requested with `limit` (1–200) and an opaque `before`
+cursor (at most 256 characters) in ascending message order. Each page includes
+Session metadata, `sourceEpoch`, and a watermark read atomically with its
+messages. The agent retries a window at smaller limits until its encoded
+response fits 64 chunks; one message that cannot fit returns
+`message_too_large`.
 
 ### 3.4 Operations (closed operation set)
 
@@ -345,7 +349,9 @@ grouping and Session-list filters are derived from backend metadata.
 | `session.status` | no | `v2.session.active`, pending Session permission/form/guardrail reads | Local active and pending-request GET routes | — |
 | `session.get` | yes | `v2.session.get` | `GET /api/session/:sessionID` | — |
 | `session.messages` | yes | `v2.message.list` | `GET /api/session/:sessionID/message` | — |
-| `session.snapshot` | yes | `v2.session.snapshot` | `GET /api/session/:sessionID/snapshot` | — |
+| `session.snapshot` | yes | `v2.session.snapshot` | `GET /api/session/:sessionID/snapshot` | `limit?` (1–200), `before?` (requires limit; at most 256 chars) |
+| `session.attachment.read` | yes | `v2.session.attachment.read` | `GET /api/session/:sessionID/attachment/:digest` | `digest` (64 lowercase hex) |
+| `session.message.stream` | yes | `v2.session.message` | `GET /api/session/:sessionID/message/:messageID` | `messageID` (HTTP stream relay-internal request) |
 | `session.todo.list` | yes | `v2.session.todo.list` | `GET /api/session/:sessionID/todo` | — |
 | `session.catalog` | yes | Location-scoped catalog reads | Same routes as `workspace.catalog` at the verified Session Location | — |
 | `session.file.find` | yes | `v2.fs.find` | `GET /api/fs/find` at the verified Session Location | `query`, `limit?` |
@@ -471,8 +477,39 @@ Location. The agent retains at most 20 MiB decoded per file, 40 MiB decoded
 and 64 upload IDs per connection; an upload expires 10 minutes after its latest chunk or use,
 and every agent disconnect clears the buffer. Invalid, out-of-order, duplicate,
 expired, oversized, or foreign-Session references fail before a local mutation.
+`session.attachment.read` serves only a digest on the verified Session's
+projected managed user-file references, through the local attachment store. Its
+response is `{ mime, bytes, data }` with base64 `data`; reads are capped at 10
+MiB. An unreferenced, missing, damaged, or invalid stored file returns `not_found`
+with a bounded local warning for store failures; a malformed digest
+returns `invalid_message`, and an oversized file returns `message_too_large`.
+Tool-result file URIs are not attachment-store references; inline `data:` image
+content stays in the projected message.
+
+For an oversized subscribed event, the agent sends
+`{type:"event",sessionID,event:{type:"session.remote.oversized",id?,durable?,data:{sessionID,messageID?,truncated:true,omittedChars}}}`
+instead of its payload, without closing the connection. This is a remote
+invalidation, not a durable Session event; when the original event is durable,
+its aggregate ID, sequence, and version are retained exactly so the browser can
+advance its watermark without a false gap. `omittedChars` is the size of the
+original serialized event frame; the event ID is retained when valid. The
+optional message ID is taken from
+the oversized event's message ID, assistant message ID, or input ID. A client
+retrieves that indexed projected message with the same-origin, cookie-authenticated
+`GET /api/remote/devices/:deviceID/sessions/:sessionID/messages/:messageID`.
+The router verifies account/device ownership, then a per-device Durable Object
+forwards one scoped `session.message.stream` read to the local agent. Bounded
+WebSocket response chunks form the HTTP `application/json` body in a
+`ReadableStream`; the browser makes one HTTP request, not one request per chunk.
+The analogous `/attachments/:digest` route streams the bounded managed user-file
+JSON result. A missing message or attachment returns HTTP 404, and an offline
+agent returns 503. Cancelling the HTTP body detaches the relay request and
+aborts the local read. An older connector that rejects the stream operation
+returns HTTP 503 with `{error:{code:"unknown_operation"}}`; the browser offers
+an update prompt, not an alternate read path. Without a message ID the browser
+refreshes the Session window.
 The relay Worker bundles the closed operation list; the deployed Worker must
-include this operation before browser uploads can reach the connector.
+include these operations before browser reads or uploads can reach the connector.
 `session.command` returns `{ data: SessionPending.User }`;
 successful `session.skill`, `session.switchModel`, and `session.switchAgent`
 NoContent operations return `null`.

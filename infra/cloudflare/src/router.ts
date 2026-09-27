@@ -9,6 +9,7 @@
 
 import {
   RemoteWebSocketPath,
+  isSessionID,
   parseBearerToken,
   parseChallengeRequest,
   parseDeviceRefreshRequest,
@@ -176,6 +177,11 @@ export function createRouter(deps: RouterDeps) {
     if (revoke) {
       if (request.method !== "POST") return methodNotAllowed()
       return revokeDevice(deps, request, revoke[1] ?? "")
+    }
+    const contentStream = /^\/api\/remote\/devices\/([A-Za-z0-9_-]{1,64})\/sessions\/([^/]+)\/(messages|attachments)\/([^/]+)$/.exec(url.pathname)
+    if (contentStream) {
+      if (request.method !== "GET") return methodNotAllowed()
+      return streamSessionContent(deps, request, contentStream[1] ?? "", contentStream[2] ?? "", contentStream[4] ?? "", contentStream[3] === "messages")
     }
     if (url.pathname === RemoteWebSocketPath.client) {
       if (request.method !== "GET") return methodNotAllowed()
@@ -462,6 +468,34 @@ async function connectClient(deps: RouterDeps, request: Request, url: URL): Prom
     browserSessionID: session.value.sessionID,
     credentialExpiresAt: session.value.expiresAt,
   })
+}
+
+async function streamSessionContent(deps: RouterDeps, request: Request, deviceID: string, sessionID: string, item: string, message: boolean): Promise<Response> {
+  if (isCrossSiteRequest(request) || (request.headers.has("origin") ? !isSameOrigin(request) : request.headers.get("sec-fetch-site") !== "same-origin"))
+    return apiError(403, "forbidden", "Message reads require a same-origin request")
+  const authenticated = await requireSession(deps, request)
+  if (!authenticated.ok) return authenticated.response
+  if (!isSessionID(sessionID) || sessionID.length > 128 ||
+    (message ? !/^msg_[A-Za-z0-9_-]+$/.test(item) || item.length > 128 : !/^[0-9a-f]{64}$/.test(item)))
+    return apiError(400, "invalid_message", "Invalid Session content ID")
+  const authorized = await deps.service.authorizeClientCommand(authenticated.session.sessionID, deviceID)
+  if (!authorized.ok) {
+    if (authorized.reason === "not_owner") return apiError(403, "forbidden", "Device belongs to another owner")
+    if (authorized.reason === "unknown_device") return apiError(404, "not_found", "Unknown device")
+    return apiError(401, "unauthorized", "Browser session or device is no longer authorized")
+  }
+  return withSecurityHeaders(await deps.relay.getByName(`${authorized.value.userID}:${deviceID}`).fetch(new Request(
+    `https://relay.internal/_ycoding/stream-${message ? "message" : "attachment"}`,
+    { method: "POST", signal: request.signal, headers: {
+      "x-ycoding-internal": "1",
+      "x-ycoding-owner": authorized.value.userID,
+      "x-ycoding-device": deviceID,
+      "x-ycoding-browser-session": authenticated.session.sessionID,
+      "x-ycoding-credential-expires-at": String(authenticated.session.expiresAt),
+      "x-ycoding-target-session": sessionID,
+      [message ? "x-ycoding-target-message" : "x-ycoding-target-digest"]: item,
+    } },
+  )))
 }
 
 async function connectAgent(deps: RouterDeps, request: Request): Promise<Response> {

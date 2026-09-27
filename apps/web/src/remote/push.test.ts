@@ -48,7 +48,17 @@ test("push Settings labels every capability and permission state without claimin
   expect(pushStatusView("unavailable")).toMatchObject({ label: "Unavailable", disabled: true, pressed: false })
   expect(pushStatusView("blocked")).toMatchObject({ label: "Blocked", disabled: true, pressed: false })
   expect(pushStatusView("off")).toMatchObject({ label: "Turn on", disabled: false, pressed: false })
+  expect(pushStatusView("needs-setup")).toMatchObject({ label: "Re-enable", disabled: false, pressed: false })
   expect(pushStatusView("on")).toMatchObject({ label: "Turn off", disabled: false, pressed: true })
+})
+
+test("a granted device with a revoked browser subscription shows push off and offers re-enable", async () => {
+  const h = fixture()
+  h.setPermission("granted")
+  expect(await readPushState(h.platform, h.http)).toBe("needs-setup")
+  expect(pushStatusView(await readPushState(h.platform, h.http)).detail).toContain("no active subscription")
+  expect(await enablePush(h.platform, h.http)).toEqual({ status: "on" })
+  expect(h.calls).toEqual(["permission", "subscribe", "register"])
 })
 
 test("push enable requests permission on click, registers only after subscribe, and disable removes before unsubscribe", async () => {

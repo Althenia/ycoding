@@ -6,7 +6,8 @@ import {
   type ContentPart,
   type ProviderMetadata,
 } from "@ycoding-ai/ai"
-import { Option, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
+import type { AttachmentStore } from "../../attachment-store"
 import type { ModelV2 } from "../../model"
 import { SessionMessage } from "../message"
 import type { FileAttachment } from "@ycoding-ai/schema/prompt"
@@ -14,13 +15,53 @@ import { SessionProviderState } from "../provider-state"
 
 const imageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
 
+type UnavailableReason = AttachmentStore.Error["reason"]
+
 export interface AttachmentMaterialization {
   readonly absolutePath: (file: FileAttachment) => string
   readonly images: ReadonlyMap<string, Uint8Array>
   readonly fallbackDescriptions?: ReadonlyMap<string, string>
+  readonly unavailable?: ReadonlyMap<string, UnavailableReason>
 }
 
 export const isProviderImage = (file: FileAttachment) => imageMimes.has(file.mime)
+
+export const readAttachments = Effect.fnUntraced(function* (
+  store: AttachmentStore.Interface,
+  sessionID: string,
+  messages: ReadonlyArray<SessionMessage.Info>,
+) {
+  const files = new Map(
+    messages.flatMap((message) => (message.type === "user" ? (message.files ?? []) : [])).map((file) => [file.content.digest, file] as const),
+  )
+  const results = yield* Effect.forEach(
+    [...files.values()],
+    (file) =>
+      store.read(file.content).pipe(
+        Effect.map((bytes) => ({ file, bytes })),
+        Effect.catchTag("AttachmentStore.Error", (error) =>
+          Effect.logWarning("Attachment is unavailable to the model", {
+            digest: file.content.digest,
+            reason: error.reason,
+          }).pipe(Effect.annotateLogs({ sessionID }), Effect.as({ file, reason: error.reason })),
+        ),
+      ),
+    { concurrency: 4 },
+  )
+  const verified = results.flatMap((result) => ("bytes" in result ? [result] : []))
+  return {
+    verified,
+    materialization: {
+      images: new Map(
+        verified.flatMap(({ file, bytes }) => (isProviderImage(file) ? [[file.content.digest, bytes] as const] : [])),
+      ),
+      unavailable: new Map(
+        results.flatMap((result) => ("reason" in result ? [[result.file.content.digest, result.reason] as const] : [])),
+      ),
+      absolutePath: (file: FileAttachment) => store.absolutePath(file.content),
+    },
+  }
+})
 
 const media = (file: FileAttachment, data: Uint8Array): ContentPart => ({
   type: "media",
@@ -37,6 +78,7 @@ const managedAttachment = (file: FileAttachment, absolutePath: string): ContentP
     file.description === undefined ? undefined : `Description: ${file.description}`,
     `MIME: ${file.mime}`,
     `Path: ${absolutePath}`,
+    "The path is a read-only snapshot of the attachment; apply requested changes to the original file instead.",
     `SHA-256: ${file.content.digest}`,
     `Bytes: ${file.content.bytes}`,
   ]
@@ -56,7 +98,30 @@ const fallbackAttachment = (file: FileAttachment, description: string): ContentP
   text: `\n\n${description}`,
 })
 
+const unavailableAttachment = (file: FileAttachment, reason: UnavailableReason): ContentPart => ({
+  type: "text",
+  text: `\n\n${[
+    `Attached file unavailable: ${file.name ?? file.content.digest}`,
+    file.description === undefined ? undefined : `Description: ${file.description}`,
+    `MIME: ${file.mime}`,
+    `SHA-256: ${file.content.digest}`,
+    `Reason: ${unavailableReason(reason)}`,
+    "Ask the user to attach the file again if you need its content.",
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n")}`,
+})
+
+const unavailableReason = (reason: UnavailableReason) => {
+  if (reason === "integrity" || reason === "limit")
+    return "its stored copy no longer matches the content recorded when it was attached."
+  if (reason === "io") return "its stored copy is missing or cannot be read."
+  return "its stored copy is not a trusted file."
+}
+
 const attachmentContent = (file: FileAttachment, attachments?: AttachmentMaterialization): ContentPart[] => {
+  const unavailable = attachments?.unavailable?.get(file.content.digest)
+  if (unavailable !== undefined) return [unavailableAttachment(file, unavailable)]
   if (!isProviderImage(file)) return [managedAttachment(file, attachments?.absolutePath(file) ?? file.content.path)]
   const fallback = attachments?.fallbackDescriptions?.get(file.content.digest)
   if (fallback !== undefined) return [fallbackAttachment(file, fallback)]

@@ -4,21 +4,15 @@
   "assets": [
     {
       "file": "tiles.png",
-      "width": 224,
+      "width": 192,
       "height": 32,
-      "bytes": 655
+      "bytes": 580
     },
     {
       "file": "walls.png",
       "width": 128,
       "height": 32,
       "bytes": 470
-    },
-    {
-      "file": "executiveDesk.png",
-      "width": 128,
-      "height": 76,
-      "bytes": 789
     },
     {
       "file": "developerDesk.png",
@@ -43,12 +37,6 @@
       "width": 256,
       "height": 112,
       "bytes": 987
-    },
-    {
-      "file": "sofa.png",
-      "width": 160,
-      "height": 72,
-      "bytes": 441
     },
     {
       "file": "sofaPeach.png",
@@ -177,12 +165,6 @@
       "bytes": 403
     },
     {
-      "file": "aquarium.png",
-      "width": 96,
-      "height": 80,
-      "bytes": 576
-    },
-    {
       "file": "globe.png",
       "width": 32,
       "height": 64,
@@ -235,12 +217,6 @@
       "width": 64,
       "height": 48,
       "bytes": 290
-    },
-    {
-      "file": "rug.png",
-      "width": 128,
-      "height": 96,
-      "bytes": 761
     },
     {
       "file": "blueRug.png",

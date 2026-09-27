@@ -1,16 +1,16 @@
 import type { OfficeLayout, OfficeRoomID, OfficeSpot, Point } from "./types"
 
 export const tileSize = 32
-export const columns = 56
+export const columns = 64
 export const rows = 40
 export const worldWidth = columns * tileSize
 export const worldHeight = rows * tileSize
 
-export type OfficeFurniture = "executiveDesk" | "developerDesk" | "researchDesk" | "qaDesk" | "conferenceTable"
-  | "sofa" | "sofaPeach" | "sofaOrange" | "coffeeTable" | "beanBag" | "beanBagBlue" | "beanBagPink" | "pingPong" | "kitchenCounter" | "fridge" | "serverRack"
+export type OfficeFurniture = "developerDesk" | "researchDesk" | "qaDesk" | "conferenceTable"
+  | "sofaPeach" | "sofaOrange" | "coffeeTable" | "beanBag" | "beanBagBlue" | "beanBagPink" | "pingPong" | "kitchenCounter" | "fridge" | "serverRack"
   | "deviceRack" | "bookshelf" | "whiteboard" | "bugBoard" | "wallTv" | "waterDispenser"
   | "plantFern" | "plantMonstera" | "plantBamboo" | "plantSucculent" | "plantFlowers"
-  | "aquarium" | "globe" | "readingSeat" | "receptionDesk" | "rug" | "blueRug"
+  | "globe" | "readingSeat" | "receptionDesk" | "blueRug"
   | "wallArt" | "clock" | "floorLamp" | "sideTable" | "filingCabinet" | "printer"
 
 export type OfficeProp = {
@@ -37,34 +37,31 @@ type OfficeRoom = {
 }
 
 export const rooms: readonly OfficeRoom[] = [
-  { id: "ceo", title: "CEO OFFICE", left: 2, top: 2, right: 16, bottom: 16, center: { x: 9, y: 9 }, label: { x: 9, y: 1 }, doors: [{ x: 8, y: 17 }, { x: 9, y: 17 }], floor: 1 },
-  { id: "research", title: "RESEARCH LAB", left: 19, top: 2, right: 36, bottom: 16, center: { x: 27, y: 9 }, label: { x: 27, y: 1 }, doors: [{ x: 27, y: 17 }, { x: 28, y: 17 }], floor: 3 },
-  { id: "qa", title: "QA LAB", left: 39, top: 2, right: 53, bottom: 16, center: { x: 46, y: 9 }, label: { x: 46, y: 1 }, doors: [{ x: 45, y: 17 }, { x: 46, y: 17 }], floor: 4 },
-  { id: "developer", title: "DEVELOPER STUDIO", left: 2, top: 22, right: 19, bottom: 35, center: { x: 10, y: 28 }, label: { x: 6, y: 20.7 }, doors: [{ x: 10, y: 21 }, { x: 11, y: 21 }, { x: 10, y: 36 }, { x: 11, y: 36 }], floor: 2 },
-  { id: "meeting", title: "MEETING ROOM", left: 24, top: 22, right: 35, bottom: 35, center: { x: 29, y: 29 }, label: { x: 25, y: 20.7 }, doors: [{ x: 29, y: 21 }, { x: 30, y: 21 }, { x: 29, y: 36 }, { x: 30, y: 36 }], floor: 5 },
-  { id: "lounge", title: "RELAX LOUNGE", left: 40, top: 22, right: 53, bottom: 35, center: { x: 46, y: 29 }, label: { x: 42, y: 20.7 }, doors: [{ x: 46, y: 21 }, { x: 47, y: 21 }, { x: 46, y: 36 }, { x: 47, y: 36 }], floor: 6 },
+  { id: "meeting", title: "MEETING ROOM", left: 2, top: 2, right: 16, bottom: 16, center: { x: 9, y: 9 }, label: { x: 9, y: 1 }, doors: [{ x: 8, y: 17 }, { x: 9, y: 17 }], floor: 4 },
+  { id: "research", title: "RESEARCH LAB", left: 19, top: 2, right: 36, bottom: 16, center: { x: 27, y: 9 }, label: { x: 27, y: 1 }, doors: [{ x: 27, y: 17 }, { x: 28, y: 17 }], floor: 2 },
+  { id: "qa", title: "QA LAB", left: 40, top: 2, right: 61, bottom: 16, center: { x: 50, y: 9 }, label: { x: 50, y: 1 }, doors: [{ x: 49, y: 17 }, { x: 50, y: 17 }], floor: 3 },
+  { id: "developer", title: "DEVELOPER STUDIO", left: 2, top: 22, right: 35, bottom: 35, center: { x: 18, y: 28 }, label: { x: 8, y: 20.7 }, doors: [{ x: 10, y: 21 }, { x: 11, y: 21 }, { x: 29, y: 21 }, { x: 30, y: 21 }, { x: 10, y: 36 }, { x: 11, y: 36 }, { x: 29, y: 36 }, { x: 30, y: 36 }], floor: 1 },
+  { id: "lounge", title: "LOUNGE", left: 40, top: 22, right: 61, bottom: 35, center: { x: 50, y: 28 }, label: { x: 43, y: 20.7 }, doors: [{ x: 46, y: 21 }, { x: 47, y: 21 }, { x: 56, y: 21 }, { x: 57, y: 21 }, { x: 46, y: 36 }, { x: 47, y: 36 }, { x: 56, y: 36 }, { x: 57, y: 36 }], floor: 5 },
 ]
 
-const outerDoor = { x: 27, y: 39 }
+const outerDoor = { x: 31, y: 39 }
 
 function prop(room: OfficeRoomID, kind: OfficeFurniture, x: number, y: number, width: number, height: number, blocks = true, layer: OfficeProp["layer"] = "object"): OfficeProp {
   return { room, kind, cell: { x, y }, width, height, blocks, layer }
 }
 
 export const props: readonly OfficeProp[] = [
-  prop("ceo", "rug", 4, 4, 11, 9, false, "floor"),
-  prop("ceo", "executiveDesk", 5, 5, 4, 2),
-  prop("ceo", "bookshelf", 2, 3, 2, 3),
-  prop("ceo", "aquarium", 11, 3, 3, 2),
-  prop("ceo", "sofa", 10, 9, 5, 2),
-  prop("ceo", "coffeeTable", 11, 12, 3, 1),
-  prop("ceo", "plantMonstera", 3, 14, 1, 1),
-  prop("ceo", "plantFlowers", 15, 14, 1, 1),
-  prop("ceo", "wallArt", 14, 2, 2, 1, false),
-  prop("ceo", "clock", 5, 2, 1, 1, false),
-  prop("ceo", "floorLamp", 15, 12, 1, 1),
-  prop("ceo", "printer", 15, 5, 1, 1),
-  ...[23, 26, 29, 32].flatMap((y) => [3, 9, 15].map((x) => prop("developer", "developerDesk", x, y, 3, 2))),
+  prop("meeting", "blueRug", 3, 4, 12, 9, false, "floor"),
+  prop("meeting", "conferenceTable", 4, 5, 8, 3),
+  prop("meeting", "wallTv", 6, 2, 4, 1, false),
+  prop("meeting", "whiteboard", 13, 2, 2, 1, false),
+  prop("meeting", "waterDispenser", 2, 12, 1, 2),
+  prop("meeting", "plantMonstera", 15, 14, 1, 1),
+  prop("meeting", "wallArt", 2, 2, 2, 1, false),
+  prop("meeting", "clock", 15, 2, 1, 1, false),
+  prop("meeting", "floorLamp", 15, 10, 1, 1),
+  prop("meeting", "printer", 2, 10, 1, 1),
+  ...[23, 26, 29, 32].flatMap((y) => [3, 9, 15, 24, 30].map((x) => prop("developer", "developerDesk", x, y, 3, 2))),
   prop("developer", "serverRack", 18, 23, 2, 3),
   prop("developer", "whiteboard", 6, 22, 4, 1, false),
   prop("developer", "plantFern", 2, 34, 1, 1),
@@ -74,6 +71,8 @@ export const props: readonly OfficeProp[] = [
   prop("developer", "clock", 3, 22, 1, 1, false),
   prop("developer", "floorLamp", 2, 30, 1, 1),
   prop("developer", "filingCabinet", 18, 29, 2, 2),
+  prop("developer", "blueRug", 24, 24, 11, 8, false, "floor"),
+  prop("developer", "plantMonstera", 34, 34, 1, 1),
   ...[4, 8, 12].flatMap((y) => [21, 29].map((x) => prop("research", "researchDesk", x, y, 3, 2))),
   prop("research", "bookshelf", 34, 3, 2, 3),
   prop("research", "bookshelf", 34, 6, 2, 3),
@@ -89,26 +88,16 @@ export const props: readonly OfficeProp[] = [
   prop("research", "floorLamp", 23, 15, 1, 1),
   prop("research", "sideTable", 24, 15, 1, 1),
   prop("research", "filingCabinet", 34, 15, 2, 2),
-  ...[4, 8, 12].flatMap((y) => [40, 47].map((x) => prop("qa", "qaDesk", x, y, 3, 2))),
-  prop("qa", "bugBoard", 43, 2, 4, 1, false),
-  prop("qa", "deviceRack", 51, 7, 2, 3),
-  prop("qa", "plantSucculent", 39, 14, 1, 1),
-  prop("qa", "plantFlowers", 52, 14, 1, 1),
-  prop("qa", "blueRug", 44, 14, 6, 2, false, "floor"),
-  prop("qa", "wallArt", 39, 2, 2, 1, false),
-  prop("qa", "clock", 50, 2, 1, 1, false),
-  prop("qa", "floorLamp", 39, 9, 1, 1),
-  prop("qa", "filingCabinet", 51, 12, 2, 2),
-  prop("meeting", "blueRug", 25, 24, 10, 8, false, "floor"),
-  prop("meeting", "conferenceTable", 26, 25, 8, 3),
-  prop("meeting", "wallTv", 27, 22, 4, 1, false),
-  prop("meeting", "whiteboard", 33, 22, 2, 1, false),
-  prop("meeting", "waterDispenser", 24, 32, 1, 2),
-  prop("meeting", "plantMonstera", 34, 33, 1, 1),
-  prop("meeting", "wallArt", 24, 22, 2, 1, false),
-  prop("meeting", "clock", 35, 22, 1, 1, false),
-  prop("meeting", "floorLamp", 35, 29, 1, 1),
-  prop("meeting", "printer", 24, 29, 1, 1),
+  ...[4, 8, 12].flatMap((y) => [41, 48, 55].map((x) => prop("qa", "qaDesk", x, y, 3, 2))),
+  prop("qa", "bugBoard", 46, 2, 4, 1, false),
+  prop("qa", "deviceRack", 59, 7, 2, 3),
+  prop("qa", "plantSucculent", 40, 14, 1, 1),
+  prop("qa", "plantFlowers", 60, 14, 1, 1),
+  prop("qa", "blueRug", 45, 14, 8, 2, false, "floor"),
+  prop("qa", "wallArt", 40, 2, 2, 1, false),
+  prop("qa", "clock", 58, 2, 1, 1, false),
+  prop("qa", "floorLamp", 40, 9, 1, 1),
+  prop("qa", "filingCabinet", 59, 12, 2, 2),
   prop("lounge", "blueRug", 41, 24, 11, 9, false, "floor"),
   prop("lounge", "sofaPeach", 41, 24, 5, 2),
   prop("lounge", "sofaOrange", 48, 24, 5, 2),
@@ -127,10 +116,14 @@ export const props: readonly OfficeProp[] = [
   prop("lounge", "clock", 52, 22, 1, 1, false),
   prop("lounge", "floorLamp", 53, 29, 1, 1),
   prop("lounge", "printer", 40, 27, 1, 1),
-  prop("hall", "rug", 26, 38, 4, 1, false, "floor"),
-  prop("hall", "receptionDesk", 32, 37, 2, 1),
-  prop("hall", "plantBamboo", 24, 37, 1, 1),
-  prop("hall", "plantMonstera", 34, 37, 1, 1),
+  prop("lounge", "sofaPeach", 55, 24, 5, 2),
+  prop("lounge", "beanBagBlue", 56, 29, 2, 2),
+  prop("lounge", "pingPong", 55, 31, 4, 2),
+  prop("lounge", "plantMonstera", 60, 34, 1, 1),
+  prop("hall", "blueRug", 30, 38, 4, 1, false, "floor"),
+  prop("hall", "receptionDesk", 36, 37, 2, 1),
+  prop("hall", "plantBamboo", 28, 37, 1, 1),
+  prop("hall", "plantMonstera", 39, 37, 1, 1),
 ]
 
 const occupied = new Set(props.filter((item) => item.blocks).flatMap((item) =>
@@ -183,12 +176,11 @@ function spots(roomID: Exclude<OfficeRoomID, "hall">, seated: readonly Point[]):
 export const officeLayout: OfficeLayout = {
   columns, rows, tileSize, walkable, roomAt, door: outerDoor,
   work: {
-    ceo: spots("ceo", [{ x: 6, y: 7 }, { x: 7, y: 7 }, { x: 11, y: 11 }, { x: 12, y: 11 }, { x: 13, y: 11 }, { x: 14, y: 11 }]),
-    developer: spots("developer", [25, 28, 31, 34].flatMap((y) => [4, 10, 16].map((x) => ({ x, y })))),
+    developer: spots("developer", [25, 28, 31, 34].flatMap((y) => [4, 10, 16, 25, 31].map((x) => ({ x, y })))),
     research: spots("research", [6, 10, 14].flatMap((y) => [22, 30].map((x) => ({ x, y })))),
-    qa: spots("qa", [6, 10, 14].flatMap((y) => [41, 48].map((x) => ({ x, y })))),
+    qa: spots("qa", [6, 10, 14].flatMap((y) => [42, 49, 56].map((x) => ({ x, y })))),
   },
-  meeting: spots("meeting", [...[27, 29, 31, 33].map((x) => ({ x, y: 24 })), ...[27, 29, 31, 33].map((x) => ({ x, y: 28 }))]),
+  meeting: spots("meeting", [...[5, 7, 9, 11].map((x) => ({ x, y: 4 })), ...[5, 7, 9, 11].map((x) => ({ x, y: 8 }))]),
   lounge: spots("lounge", [...[42, 43, 44, 45].map((x) => ({ x, y: 26 })), ...[49, 50, 51, 52].map((x) => ({ x, y: 26 })), { x: 43, y: 31 }, { x: 50, y: 31 }]),
 }
 

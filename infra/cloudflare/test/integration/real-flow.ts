@@ -1151,6 +1151,48 @@ try {
     imageFile.content.digest === createHash("sha256").update(png).digest("hex"), "the local admitted image did not retain the source bytes and MIME")
   checks.push("100 KiB PNG crossed browser upload chunks, relay, agent, and local attachment materialization")
 
+  if (!imageFile) throw new Error("the uploaded image has no managed reference")
+  const imageRead = await probeRequest("session.attachment.read", { sessionID, input: { digest: imageFile.content.digest } })
+  if (imageRead.status !== "ok" || !isRecord(imageRead.value) || typeof imageRead.value.data !== "string")
+    throw new Error(`managed image read failed: ${JSON.stringify(imageRead)}`)
+  expect(imageRead.value.mime === "image/png" && imageRead.value.bytes === png.length &&
+    createHash("sha256").update(Buffer.from(imageRead.value.data, "base64")).digest("hex") === imageFile.content.digest,
+  "the relay attachment read changed the managed image bytes")
+  const hostedImage = await browserFetch(`${workerOrigin}/api/remote/devices/${enrolled.deviceID}/sessions/${sessionID}/attachments/${imageFile.content.digest}`)
+  const hostedImageValue: unknown = await hostedImage.json()
+  expect(hostedImage.status === 200 && isRecord(hostedImageValue) && typeof hostedImageValue.data === "string" &&
+    createHash("sha256").update(Buffer.from(hostedImageValue.data, "base64")).digest("hex") === imageFile.content.digest,
+  "same-origin attachment stream changed or refused the managed image")
+  const unreferenced = await probeRequest("session.attachment.read", { sessionID, input: { digest: "f".repeat(64) } })
+  expect(unreferenced.status === "failed" && unreferenced.error.code === "not_found", "an unreferenced managed digest was readable")
+  checks.push("a Session-scoped managed PNG read returned exact bytes and refused an unreferenced digest")
+
+  const windowIDs: string[] = []
+  let before: string | undefined
+  let reachedOldest = false
+  for (let page = 0; page < 100; page++) {
+    const outcome = await probeRequest("session.snapshot", { sessionID, input: { limit: 1, ...(before === undefined ? {} : { before }) } })
+    if (outcome.status !== "ok" || !isRecord(outcome.value) || !Array.isArray(outcome.value.messages))
+      throw new Error(`windowed snapshot page failed: ${JSON.stringify(outcome)}`)
+    const messages = outcome.value.messages
+    if (messages.length !== 1 || !isRecord(messages[0]) || typeof messages[0].id !== "string")
+      throw new Error("windowed snapshot omitted its message")
+    windowIDs.push(messages[0].id)
+    if (typeof outcome.value.before !== "string") { reachedOldest = true; break }
+    before = outcome.value.before
+  }
+  expect(reachedOldest && windowIDs.length >= 3 && new Set(windowIDs).size === windowIDs.length && windowIDs.includes(imageMessage.id),
+    "windowed first/middle/last pages lost, duplicated, or skipped the admitted image")
+  checks.push("windowed snapshot pages chained from newest to oldest through the real relay")
+
+  const messageRead = await browserFetch(`${workerOrigin}/api/remote/devices/${enrolled.deviceID}/sessions/${sessionID}/messages/${imageMessage.id}`)
+  expect(messageRead.status === 200, `scoped message stream returned ${messageRead.status}`)
+  const recovered: unknown = await messageRead.json()
+  expect(isRecord(recovered) && recovered.id === imageMessage.id && Array.isArray(recovered.files) &&
+    isRecord(recovered.files[0]) && isRecord(recovered.files[0].content) && recovered.files[0].content.digest === imageFile.content.digest,
+  "the real relay message read did not preserve the managed image reference")
+  checks.push("same-origin indexed message stream returned the full projected item through the real relay")
+
   const pacedBytes = Buffer.alloc(1_100_000, 42)
   const pacedStart = performance.now()
   const statusCount = browserStatuses.length
@@ -1172,6 +1214,42 @@ try {
   const hiddenPending = await server.request(`/api/session/${hiddenSessionID}/pending`)
   expect(hiddenPending.ok && !JSON.stringify(await hiddenPending.json()).includes("msg_unknown_upload"), "the invalid upload reached the local Session")
   checks.push("an unresolved attachment reference failed before local prompt admission")
+
+  const largeText = "Oversized event stream proof ".repeat(80_000)
+  const largeID = "msg_real_flow_oversized"
+  const largePrompt = await server.request(`/api/session/${sessionID}/prompt`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-ycoding-directory": encodeURIComponent(workspace) },
+    body: JSON.stringify({ id: largeID, text: largeText }),
+  })
+  expect(largePrompt.status === 200, `local oversized prompt admission returned ${largePrompt.status}`)
+  const oversizedMarker = await waitFor(() => events.flatMap((entry) => {
+    if (!isRecord(entry) || !isRecord(entry.event) || entry.event.type !== "session.remote.oversized" || !isRecord(entry.event.data) || entry.event.data.messageID !== largeID) return []
+    return [entry.event]
+  }).at(-1), 30_000, "the subscribed client did not receive an oversized-event marker")
+  expect(isRecord(oversizedMarker.durable) && typeof oversizedMarker.durable.seq === "number" &&
+    isRecord(oversizedMarker.data) && oversizedMarker.data.truncated === true &&
+    typeof oversizedMarker.data.omittedChars === "number" && oversizedMarker.data.omittedChars > RemoteLimits.maxAgentMessageChars,
+  "oversized marker lost its durable sequence or omitted-size metadata")
+  expect(store.state().transport.kind === "open" && probe.status().kind === "open", "oversized event recycled an active relay connection")
+  checks.push("an oversized subscribed event retained its durable sequence and omitted size without disconnecting clients")
+  await waitFor(async () => (await local.messages(sessionID, { directory: workspace })).some((message) => message.type === "user" && message.id === largeID) ? true : undefined,
+    30_000, "the oversized user message was not projected")
+  const streamed = await browserFetch(`${workerOrigin}/api/remote/devices/${enrolled.deviceID}/sessions/${sessionID}/messages/${largeID}`)
+  expect(streamed.status === 200, `oversized message stream returned ${streamed.status}`)
+  const streamedMessage: unknown = await streamed.json()
+  expect(isRecord(streamedMessage) && streamedMessage.id === largeID && streamedMessage.text === largeText,
+    "the full oversized message did not survive the authenticated HTTP stream")
+  expect(probe.status().kind === "open", "the oversized message stream disconnected the relay client")
+  checks.push("a >2 MiB projected message streamed fully through authenticated HTTP without exhausting the WebSocket request window")
+
+  const absentMessage = await browserFetch(`${workerOrigin}/api/remote/devices/${enrolled.deviceID}/sessions/${sessionID}/messages/msg_not_found`)
+  expect(absentMessage.status === 404, `an unknown indexed message returned ${absentMessage.status}`)
+  if (!agent) throw new Error("the local connector was not running")
+  await agent.close()
+  await waitFor(async () => (await browserFetch(`${workerOrigin}/api/remote/devices/${enrolled.deviceID}/sessions/${sessionID}/messages/${imageMessage.id}`)).status === 503 ? true : undefined,
+    20_000, "the offline agent did not return 503 for a message stream")
+  checks.push("authenticated HTTP streams return 404 for missing messages and 503 when the local agent is offline")
 
   /* ------------------------------------------------------- logout closes client */
   const logout = await http.logout()

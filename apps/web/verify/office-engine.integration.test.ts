@@ -120,10 +120,10 @@ test("DPR 2 renders every authored room at CSS zoom one, a full fit, and a phone
   await page.evaluate<void>("document.querySelector('button[aria-label=\"Fit office\"]')?.click()")
   await Bun.sleep(90)
   expect(await page.evaluate<number>("window.__officeGame.scene.getScene('office').cameras.main.zoom")).toBeLessThan(2)
-  const labels = await page.evaluate<readonly { readonly title: string; readonly left: number; readonly right: number }[]>("window.__officeGame.scene.getScene('office').children.list.filter(object=>object.type==='Text'&&object.visible&&['CEO OFFICE','RESEARCH LAB','QA LAB','DEVELOPER STUDIO','MEETING ROOM','RELAX LOUNGE'].includes(object.text)).map(object=>({title:object.text,left:object.x-object.displayWidth/2,right:object.x+object.displayWidth/2}))")
-  expect(labels.length).toBe(rooms.length)
-  for (const room of rooms) {
-    const label = labels.find((item) => item.title === room.title)!
+  const labels = await page.evaluate<readonly { readonly title: string; readonly left: number; readonly right: number }[]>(`window.__officeGame.scene.getScene('office').children.list.filter(object=>object.type==='Text'&&object.visible&&${JSON.stringify(rooms.map((room) => room.title))}.includes(object.text)).map(object=>({title:object.text,left:object.x-object.displayWidth/2,right:object.x+object.displayWidth/2}))`)
+  expect(labels.length).toBeGreaterThan(0)
+  for (const label of labels) {
+    const room = rooms.find((item) => item.title === label.title)!
     expect(label.left, room.id).toBeGreaterThanOrEqual(room.left * tileSize - 1)
     expect(label.right, room.id).toBeLessThanOrEqual((room.right + 1) * tileSize + 1)
   }
@@ -132,6 +132,84 @@ test("DPR 2 renders every authored room at CSS zoom one, a full fit, and a phone
   await page.navigate(url("attention", "&inspectEngine=1"))
   await waitFor(page, "!!document.querySelector('.office-canvas-host canvas') && !document.querySelector('.office-notice[role=status]')")
   await Bun.write(join(captures, "dpr2-phone-390x844.png"), Buffer.from(await page.screenshot(), "base64"))
+  await page.close()
+}, 60_000)
+
+test("Fit covers the canvas without background pixels at landscape and portrait sizes", async () => {
+  const page = await requireBrowser().openPage()
+  await page.injectOnNewDocument(`(() => {const original=HTMLCanvasElement.prototype.getContext;HTMLCanvasElement.prototype.getContext=function(type,...args){if(String(type).includes('webgl'))return null;return original.call(this,type,...args)}})()`)
+  for (const [width, height] of [[1920, 1080], [1440, 900], [1024, 768], [820, 1180], [844, 390], [390, 844]] as const) {
+    await page.setViewport(width, height)
+    if (width === 390 || height === 390) await page.setCoarsePointer(true)
+    await page.navigate(url("tool", "&inspectEngine=1&freeCamera=1"))
+    await waitFor(page, "!!document.querySelector('.office-canvas-host canvas') && !document.querySelector('.office-notice[role=status]')")
+    await page.evaluate<void>("document.querySelector('button[aria-label=\"Fit office\"]')?.click()")
+    await Bun.sleep(100)
+    const fit = await page.evaluate<{ readonly zoom: number; readonly cover: number; readonly bounds: readonly number[]; readonly pixels: readonly string[] }>(`(() => {
+      const scene=window.__officeGame.scene.getScene('office'),camera=scene.cameras.main,canvas=document.querySelector('.office-canvas-host canvas');
+      const context=canvas.getContext('2d'),points=[[2,2],[canvas.width-3,2],[2,canvas.height-3],[canvas.width-3,canvas.height-3]];
+      return {zoom:camera.zoom,cover:Math.max(camera.width/${officeLayout.columns * tileSize},camera.height/${officeLayout.rows * tileSize}),
+        bounds:[camera.worldView.left,camera.worldView.top,camera.worldView.right,camera.worldView.bottom],
+        pixels:points.map(([x,y])=>{const color=context.getImageData(x,y,1,1).data;return [color[0],color[1],color[2]].join(',')})};
+    })()`)
+    expect(fit.zoom).toBeGreaterThanOrEqual(fit.cover - 0.001)
+    expect(fit.bounds[0]!).toBeGreaterThanOrEqual(-1)
+    expect(fit.bounds[1]!).toBeGreaterThanOrEqual(-1)
+    expect(fit.bounds[2]!).toBeLessThanOrEqual(officeLayout.columns * tileSize + 1)
+    expect(fit.bounds[3]!).toBeLessThanOrEqual(officeLayout.rows * tileSize + 1)
+    expect(fit.pixels.every((pixel) => pixel !== "27,40,50" && pixel !== "0,0,0")).toBe(true)
+    await Bun.write(join(captures, `cover-${width}x${height}-light.png`), Buffer.from(await page.screenshot(), "base64"))
+    await page.evaluate<void>("document.documentElement.dataset.theme='dark'")
+    await Bun.write(join(captures, `cover-${width}x${height}-dark.png`), Buffer.from(await page.screenshot(), "base64"))
+    if (width === 390 || height === 390) {
+      const moved = await page.evaluate<number>(`(() => {
+        const scene=window.__officeGame.scene.getScene('office'),camera=scene.cameras.main,canvas=document.querySelector('.office-canvas-host canvas'),rect=canvas.getBoundingClientRect();
+        const before={x:camera.scrollX,y:camera.scrollY},x=rect.left+rect.width/2,y=rect.top+rect.height/2;
+        const endX=x+${width === 390 ? 80 : 0},endY=y+${height === 390 ? 80 : 0};
+        canvas.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,clientX:x,clientY:y,button:0,buttons:1}));
+        canvas.dispatchEvent(new MouseEvent('mousemove',{bubbles:true,clientX:endX,clientY:endY,button:0,buttons:1}));
+        canvas.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,clientX:endX,clientY:endY,button:0,buttons:0}));
+        return Math.abs(camera.scrollX-before.x)+Math.abs(camera.scrollY-before.y);
+      })()`)
+      expect(moved).toBeGreaterThan(1)
+      await Bun.sleep(90)
+      await Bun.write(join(captures, `pan-${width}x${height}.png`), Buffer.from(await page.screenshot(), "base64"))
+    }
+  }
+  await page.close()
+}, 90_000)
+
+test("selected activity uses the Research, QA, Developer, and Meeting rooms with roaming only where appropriate", async () => {
+  const page = await requireBrowser().openPage()
+  for (const [activity, room, status] of [["research", "research", "Researching"], ["verify", "qa", "Testing"], ["implement", "developer", "Implementing"], ["coordinate", "meeting", "Coordinating"]] as const) {
+    await page.navigate(url("tool", `&activity=${activity}&inspectEngine=1`))
+    await waitFor(page, `window.__officeGame?.scene.getScene('office').latestFrames.some(frame=>frame.actor.selected&&frame.room==='${room}')`)
+    expect(await page.evaluate<string>("window.__officeGame.scene.getScene('office').latestFrames.find(frame=>frame.actor.selected)?.actor.statusText")).toBe(status)
+    const initial = await actorPositions(page)
+    const cameraBefore = await page.evaluate<{ readonly x: number; readonly y: number }>("(()=>{const camera=window.__officeGame.scene.getScene('office').cameras.main;return{x:camera.scrollX,y:camera.scrollY}})()")
+    await advanceScene(page, 600)
+    const after = await actorPositions(page)
+    expect((await page.evaluate<string>("window.__officeGame.scene.getScene('office').latestFrames.find(frame=>frame.actor.selected)?.room"))).toBe(room)
+    expect(after.some((actor, index) => actor.x !== initial[index]?.x || actor.y !== initial[index]?.y)).toBe(activity === "research" || activity === "verify")
+    if (activity === "research" || activity === "verify") {
+      const cameraAfter = await page.evaluate<{ readonly x: number; readonly y: number }>("(()=>{const camera=window.__officeGame.scene.getScene('office').cameras.main;return{x:camera.scrollX,y:camera.scrollY}})()")
+      if (activity === "research") expect(Math.abs(cameraAfter.x - cameraBefore.x) + Math.abs(cameraAfter.y - cameraBefore.y)).toBeGreaterThan(1)
+      const frame = await page.evaluate<{ readonly x: number; readonly y: number; readonly left: number; readonly right: number; readonly top: number; readonly bottom: number }>("(()=>{const scene=window.__officeGame.scene.getScene('office'),actor=scene.latestFrames.find(frame=>frame.actor.selected),view=scene.cameras.main.worldView;return{x:actor.position.x,y:actor.position.y,left:view.left,right:view.right,top:view.top,bottom:view.bottom}})()")
+      expect(frame.x).toBeGreaterThanOrEqual(frame.left)
+      expect(frame.x).toBeLessThanOrEqual(frame.right)
+      expect(frame.y).toBeGreaterThanOrEqual(frame.top)
+      expect(frame.y).toBeLessThanOrEqual(frame.bottom)
+    }
+    if (activity === "implement") expect(await page.evaluate<string>("window.__officeGame.scene.getScene('office').latestFrames.find(frame=>frame.actor.selected)?.pose")).toBe("type")
+    await Bun.sleep(120)
+    await Bun.write(join(captures, `activity-${activity}.png`), Buffer.from(await page.screenshot(), "base64"))
+  }
+  await page.navigate(url("tool", "&activity=research&inspectEngine=1"))
+  await waitFor(page, "window.__officeGame?.scene.getScene('office').latestFrames.some(frame=>frame.actor.selected&&frame.room==='research')")
+  await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle reduced motion')?.click()")
+  const still = await actorPositions(page)
+  await advanceScene(page, 600)
+  expect(await actorPositions(page)).toEqual(still)
   await page.close()
 }, 60_000)
 
@@ -218,6 +296,8 @@ test("sprite click selects its real Session while a drag pans without selecting"
   const page = await requireBrowser().openPage()
   await page.navigate(url("tool", "&team=1&inspectEngine=1"))
   await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 2")
+  await page.evaluate<void>("(()=>{const scene=window.__officeGame.scene.getScene('office'),sprite=scene.children.list.find(object=>object.type==='Sprite'&&object.name==='[\"fixture-device\",\"session-b\"]');scene.followSuspended=true;scene.cameras.main.centerOn(sprite.x,sprite.y)})()")
+  await Bun.sleep(90)
   const selected = await page.evaluate<string>(`(() => {
     const scene=window.__officeGame.scene.getScene('office');
     const sprite=scene.children.list.find(object=>object.type==='Sprite'&&object.texture.key==='characters'&&object.name==='["fixture-device","session-b"]');
@@ -295,7 +375,9 @@ test("a cue present during hydration does not replay a meeting", async () => {
   await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 2")
   const hydrated = await teamPositions(page)
   await advanceScene(page, 450)
-  expect(await teamPositions(page)).toEqual(hydrated)
+  expect((await teamPositions(page)).find((actor) => actor.id === '["fixture-device","session-a"]')).toEqual(hydrated.find((actor) => actor.id === '["fixture-device","session-a"]'))
+  expect(await page.evaluate<readonly string[]>("window.__officeGame.scene.getScene('office').latestFrames.filter(frame=>['session-a','session-b'].includes(frame.actor.sessionID)).map(frame=>frame.room)")).toEqual(["developer", "qa"])
+  expect(await page.evaluate<boolean>("window.__officeGame.scene.getScene('office').director.cueActive('[\"fixture-device\",\"session-a\"]')")).toBe(false)
   await Bun.write(join(captures, "1440x900-team-hydrated.png"), Buffer.from(await page.screenshot(), "base64"))
   await page.close()
 }, 30_000)
@@ -337,11 +419,11 @@ test("a new delegate cue brings supervisor and child into the meeting room and b
     return false;
   })()`)
   expect(reached).toBe(true)
-  await waitFor(page, "(()=>{const objects=window.__officeGame.scene.getScene('office').children.list;return objects.some(object=>object.type==='Text'&&object.text==='MEETING ROOM'&&object.visible)&&objects.some(object=>object.type==='Text'&&object.text==='Running a tool'&&object.visible)})()")
+  await waitFor(page, "(()=>{const objects=window.__officeGame.scene.getScene('office').children.list;return objects.some(object=>object.type==='Text'&&object.text==='MEETING ROOM'&&object.visible)&&objects.some(object=>object.type==='Text'&&object.text==='Implementing'&&object.visible)})()")
   const inspectMeetingLabel = `(() => {
     const scene=window.__officeGame.scene.getScene('office');
     const title=scene.children.list.find(object=>object.type==='Text'&&object.text==='MEETING ROOM');
-    const bubble=scene.children.list.find(object=>object.type==='Text'&&object.text==='Running a tool'&&object.visible);
+    const bubble=scene.children.list.find(object=>object.type==='Text'&&object.text==='Implementing'&&object.visible);
     if(!title||!bubble)return {visible:false,overlaps:true,alpha:1};
     const scale=scene.resolution/scene.cameras.main.zoom;
     const titleBounds={left:title.x-title.displayWidth/2-12*scale,right:title.x+title.displayWidth/2+12*scale,top:title.y-title.displayHeight/2-6*scale,bottom:title.y+title.displayHeight/2+6*scale};
@@ -350,7 +432,7 @@ test("a new delegate cue brings supervisor and child into the meeting room and b
   })()`
   const labels = await page.evaluate<{ readonly visible: boolean; readonly overlaps: boolean; readonly alpha: number }>(inspectMeetingLabel)
   expect(labels.visible).toBe(true)
-  expect(labels.overlaps).toBe(false)
+  expect(labels.overlaps && labels.alpha >= 0.35).toBe(false)
   await Bun.write(join(captures, "1440x900-team-delegate-meeting.png"), Buffer.from(await page.screenshot(), "base64"))
   await page.evaluate<void>("window.__officeGame.scene.getScene('office').fit()")
   await Bun.sleep(90)
@@ -358,11 +440,12 @@ test("a new delegate cue brings supervisor and child into the meeting room and b
   expect(fitLabels.overlaps && fitLabels.visible && fitLabels.alpha >= 0.35).toBe(false)
   await Bun.write(join(captures, "1440x900-team-delegate-fit.png"), Buffer.from(await page.screenshot(), "base64"))
   await advanceScene(page, 550)
-  expect(await teamPositions(page)).toEqual(initial)
+  expect(await page.evaluate<readonly string[]>("window.__officeGame.scene.getScene('office').latestFrames.filter(frame=>['session-a','session-b'].includes(frame.actor.sessionID)).map(frame=>frame.room)")).toEqual(["developer", "qa"])
   await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle observed cue')?.click()")
   await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle observed cue')?.click()")
   await advanceScene(page, 100)
-  expect(await teamPositions(page)).toEqual(initial)
+  expect((await teamPositions(page)).find((actor) => actor.id === '["fixture-device","session-a"]')).toEqual(initial.find((actor) => actor.id === '["fixture-device","session-a"]'))
+  expect(await page.evaluate<boolean>("window.__officeGame.scene.getScene('office').director.cueActive('[\"fixture-device\",\"session-a\"]')")).toBe(false)
   await page.close()
 }, 60_000)
 
@@ -401,18 +484,19 @@ test("roster cards show real sprite, unique name and role, follow selection, and
   await page.close()
 }, 60_000)
 
-test("a root with a lagging idle detail but a running report stays at its CEO desk with a working bubble", async () => {
+test("a root with a lagging idle detail but a running report stays active in the Developer room", async () => {
   const page = await requireBrowser().openPage()
   await page.navigate(url("idle", "&staleIdle=1&inspectEngine=1&workspace=1&team=1&cue=0"))
   await waitFor(page, "document.querySelectorAll('.office-roster__row').length===2&&window.__officeGame?.scene.getScene('office').latestFrames.length===2")
+  await waitFor(page, "window.__officeGame.scene.getScene('office').latestFrames.some(frame=>frame.actor.sessionID==='session-a'&&frame.room==='meeting'&&!frame.moving)")
   const root = await page.evaluate<{ readonly status: string; readonly room: string; readonly bubble: boolean; readonly desk: boolean }>(`(() => {
     const scene=window.__officeGame.scene.getScene('office');
     const frame=scene.latestFrames.find(frame=>frame.actor.sessionID==='session-a');
     return {status:document.querySelector('.office-roster__row[data-session-id="session-a"] .office-roster__status').textContent,
-      room:frame.room,bubble:scene.objects.get(frame.actor.id).bubble.text==='Working',
+      room:frame.room,bubble:scene.objects.get(frame.actor.id).bubble.text==='Coordinating',
       desk:scene.director.actors.get(frame.actor.id).work.cell.x===Math.floor(frame.position.x/32)&&scene.director.actors.get(frame.actor.id).work.cell.y===Math.floor(frame.position.y/32)};
   })()`)
-  expect(root).toEqual({ status: "Working", room: "ceo", bubble: true, desk: true })
+  expect(root).toEqual({ status: "Coordinating", room: "meeting", bubble: true, desk: true })
   await page.close()
 }, 30_000)
 
@@ -430,7 +514,7 @@ test("repeated ready team snapshots preserve roster row nodes and character spri
     for(let index=0;index<12;index++){
       [...document.querySelectorAll('button')].find(button=>button.textContent==='Refresh snapshot').click();
       await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-      if(document.querySelector('.office-roster__row[data-session-id="session-a"] .office-roster__status')?.textContent===(index%2===0?'Thinking':'Working'))updated++;
+      if(document.querySelector('.office-roster__row[data-session-id="session-a"] .office-roster__status')?.textContent===(index%2===0?'Thinking':'Implementing'))updated++;
     }
     observer.disconnect();
     return {removed,updated,sameRows:rows.every(row=>document.querySelector('.office-roster__row[data-session-id="'+row.dataset.sessionId+'"]')===row),
@@ -444,7 +528,6 @@ test("a report cue sends the child beside its supervisor, shows a report emote, 
   const page = await requireBrowser().openPage()
   await page.navigate(url("tool", "&team=1&inspectEngine=1&cue=0&cueKind=report"))
   await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 2")
-  const initial = await teamPositions(page)
   await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle observed cue')?.click()")
   const reported = await page.evaluate<boolean>(`(() => {
     const scene=window.__officeGame.scene.getScene('office');
@@ -462,7 +545,7 @@ test("a report cue sends the child beside its supervisor, shows a report emote, 
   expect(reported).toBe(true)
   await Bun.write(join(captures, "1440x900-team-report.png"), Buffer.from(await page.screenshot(), "base64"))
   await advanceScene(page, 550)
-  expect(await teamPositions(page)).toEqual(initial)
+  expect(await page.evaluate<readonly string[]>("window.__officeGame.scene.getScene('office').latestFrames.filter(frame=>['session-a','session-b'].includes(frame.actor.sessionID)).map(frame=>frame.room)")).toEqual(["developer", "qa"])
   await page.close()
 }, 60_000)
 

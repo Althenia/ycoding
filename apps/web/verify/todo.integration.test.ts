@@ -52,6 +52,10 @@ test("todo panel occupies composer flow and keeps transcript clear on phone, tab
       await page.evaluate(`window.updateTodos([{content:'Live work',status:'in_progress',priority:'high'}])`)
       expect(await page.evaluate<string>(`document.querySelector('.todo-panel__item').textContent`)).toContain("Live work")
       expect(await page.evaluate<string>(`document.querySelector('.todo-panel__progress').textContent.trim()`)).toBe("0/1")
+      await page.evaluate(`window.updateTodos([{content:'Live work',status:'completed',priority:'high'},{content:'Wrapped up',status:'completed',priority:'low'}])`)
+      expect(await page.evaluate<boolean>(`document.querySelector('.todo-panel') === null`)).toBe(true)
+      await page.evaluate(`window.updateTodos([{content:'Live work',status:'completed',priority:'high'},{content:'Follow-up',status:'pending',priority:'low'}])`)
+      expect(await page.evaluate<string>(`document.querySelector('.todo-panel__progress').textContent.trim()`)).toBe("1/2")
       await page.evaluate(`window.updateTodos([])`)
       expect(await page.evaluate<boolean>(`document.querySelector('.todo-panel') === null`)).toBe(true)
     } finally { await page.close() }

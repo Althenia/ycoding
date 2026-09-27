@@ -1,7 +1,7 @@
 import type { PushSubscriptionInput } from "@ycoding-ai/remote"
 import { createPushHttp } from "./http"
 
-export type PushStatus = "unsupported" | "unavailable" | "blocked" | "off" | "on" | "error"
+export type PushStatus = "unsupported" | "unavailable" | "blocked" | "off" | "needs-setup" | "on" | "error"
 
 export function pushStatusView(status: PushStatus) {
   switch (status) {
@@ -9,6 +9,7 @@ export function pushStatusView(status: PushStatus) {
     case "unavailable": return { label: "Unavailable", detail: "This server has not enabled Web Push.", disabled: true, pressed: false }
     case "blocked": return { label: "Blocked", detail: "Allow notifications for this site in your browser settings.", disabled: true, pressed: false }
     case "on": return { label: "Turn off", detail: "Push is registered on this device for approval and stopped-work alerts.", disabled: false, pressed: true }
+    case "needs-setup": return { label: "Re-enable", detail: "Push is off because this device has no active subscription. Re-enable alerts to this device.", disabled: false, pressed: false }
     case "error": return { label: "Retry setup", detail: "Push setup did not complete. Try again.", disabled: false, pressed: false }
     case "off": return { label: "Turn on", detail: "Enable alerts when the installed app is closed.", disabled: false, pressed: false }
   }
@@ -51,7 +52,8 @@ export async function readPushState(platform: PushPlatform, http: ReturnType<typ
   const key = await http.key()
   if (!key.ok) return key.status === 503 ? "unavailable" : "error"
   try {
-    return await (await platform.registration()).pushManager.getSubscription() ? "on" : "off"
+    if (await (await platform.registration()).pushManager.getSubscription()) return "on"
+    return platform.permission() === "granted" ? "needs-setup" : "off"
   } catch {
     return "unavailable"
   }

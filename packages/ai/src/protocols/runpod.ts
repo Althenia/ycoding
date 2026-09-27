@@ -6,7 +6,7 @@ import { Endpoint } from "../route/endpoint"
 import { Protocol } from "../route/protocol"
 import { HttpTransport } from "../route/transport"
 import { RequestExecutor } from "../route/executor"
-import { LLMEvent, Usage, type LLMError, type LLMRequest, type Message } from "../schema"
+import { LLMEvent, LLMRequest, Message, Usage, type LLMError, type ToolContent } from "../schema"
 import { Lifecycle } from "./utils/lifecycle"
 import { ProviderShared } from "./shared"
 import { protocol as openAIChat } from "./openai-chat"
@@ -86,13 +86,21 @@ const lowerMessage = (message: Message) => Effect.gen(function* () {
   if (message.role === "tool") {
     if (message.content.length !== 1 || message.content[0]?.type !== "tool-result")
       return yield* ProviderShared.invalidRequest("Runpod Ollama tool messages require one tool result")
-    return { role: "tool", content: ProviderShared.toolResultText(message.content[0]) }
+    const result = message.content[0]
+    const content: ReadonlyArray<ToolContent> = result.result.type === "content" ? result.result.value : []
+    return { role: "tool", content: result.result.type === "content"
+      ? (yield* Effect.forEach(content, (item) => item.type === "text"
+        ? Effect.succeed(item.text)
+        : ProviderShared.textOnlyMedia(OLLAMA, { type: "media", mediaType: item.mime, data: item.uri, filename: item.name }))).join("\n")
+      : ProviderShared.toolResultText(result) }
   }
-  if (message.content.some((part) => part.type !== "text" && (message.role !== "assistant" || part.type !== "tool-call")))
+  if (message.content.some((part) => part.type !== "text" && part.type !== "media" && (message.role !== "assistant" || part.type !== "tool-call")))
     return yield* ProviderShared.invalidRequest("Runpod Ollama supports text and assistant tool calls only")
   return {
     role: message.role,
-    content: message.content.filter((part) => part.type === "text").map((part) => part.text).join(""),
+    content: (yield* Effect.forEach(message.content, (part) => part.type === "text"
+      ? Effect.succeed(part.text)
+      : part.type === "media" ? ProviderShared.textOnlyMedia(OLLAMA, part) : Effect.succeed(""))).join(""),
     ...(message.role === "assistant" ? {
       tool_calls: message.content.filter((part) => part.type === "tool-call").map((part) => ({
         function: { name: part.name, arguments: part.input },
@@ -132,10 +140,30 @@ const fromOllamaRequest = Effect.fn("RunpodOllama.fromRequest")(function* (reque
 const fromVLLMRequest = Effect.fn("RunpodVLLM.fromRequest")(function* (request: LLMRequest) {
   if (request.responseFormat && request.responseFormat.type !== "text")
     return yield* ProviderShared.invalidRequest("Runpod vLLM chat proxy does not support structured response format")
-  if (request.messages.some((message) => message.content.some((part) =>
-    part.type === "media" || part.type === "tool-result" && part.result.type === "content" && part.result.value.some((item: { readonly type: string }) => item.type === "file"),
-  ))) return yield* ProviderShared.invalidRequest("Runpod vLLM chat proxy supports text media only")
-  const chat = yield* openAIChat.body.from(request)
+  const messages = yield* Effect.forEach(request.messages, (message) => Effect.gen(function* () {
+    if (message.role === "user") {
+      const content: Array<typeof message.content[number]> = []
+      for (const part of message.content) content.push(part.type === "media"
+        ? { type: "text", text: yield* ProviderShared.textOnlyMedia(VLLM, part) } : part)
+      return new Message({ id: message.id, role: message.role, content, volatile: message.volatile, metadata: message.metadata, native: message.native })
+    }
+    if (message.role !== "tool") return message
+    const content: Array<typeof message.content[number]> = []
+    for (const part of message.content) {
+      if (part.type !== "tool-result" || part.result.type !== "content") {
+        content.push(part)
+        continue
+      }
+      const value: ToolContent[] = []
+      for (const item of part.result.value) value.push(item.type === "text"
+        ? item : { type: "text", text: yield* ProviderShared.textOnlyMedia(VLLM, {
+          type: "media", mediaType: item.mime, data: item.uri, filename: item.name,
+        }) })
+      content.push({ ...part, result: { type: "content", value } })
+    }
+    return new Message({ id: message.id, role: message.role, content, volatile: message.volatile, metadata: message.metadata, native: message.native })
+  }))
+  const chat = yield* openAIChat.body.from(LLMRequest.update(request, { messages }))
   return { input: {
     route: "/v1/chat/completions" as const,
     method: "POST" as const,

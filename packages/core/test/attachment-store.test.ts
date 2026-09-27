@@ -6,7 +6,7 @@ import { Database } from "@ycoding-ai/core/database/database"
 import { Global } from "@ycoding-ai/core/global"
 import { Effect } from "effect"
 import { sql } from "drizzle-orm"
-import { mkdtemp, rm, stat, symlink, unlink, writeFile } from "fs/promises"
+import { chmod, mkdtemp, rm, stat, symlink, unlink, writeFile } from "fs/promises"
 import path from "path"
 import { tmpdir } from "os"
 import { testEffect } from "./lib/effect"
@@ -35,8 +35,23 @@ describe("AttachmentStore", () => {
         path: "attachments/sha256/41/41ec6d391622f64880fe2995d08baef45ddfa52fbd06dd04fae881f57c3a828d",
       })
       expect(Buffer.from(yield* store.read(content))).toEqual(bytes)
-      expect((yield* Effect.promise(() => stat(store.absolutePath(content)))).mode & 0o777).toBe(0o600)
+      expect((yield* Effect.promise(() => stat(store.absolutePath(content)))).mode & 0o777).toBe(0o400)
       expect(yield* store.import(bytes)).toEqual(content)
+    }),
+  )
+
+  it.effect("repairs a modified stored copy when identical bytes are imported again", () =>
+    Effect.gen(function* () {
+      const store = yield* AttachmentStore.Service
+      const bytes = Buffer.from("reimported attachment")
+      const content = yield* store.import(bytes)
+      yield* Effect.promise(() => chmod(store.absolutePath(content), 0o600))
+      yield* Effect.promise(() => writeFile(store.absolutePath(content), "modified by a tool"))
+      expect(yield* store.read(content).pipe(Effect.flip)).toMatchObject({ reason: "integrity" })
+
+      expect(yield* store.import(bytes)).toEqual(content)
+      expect(Buffer.from(yield* store.read(content))).toEqual(bytes)
+      expect((yield* Effect.promise(() => stat(store.absolutePath(content)))).mode & 0o777).toBe(0o400)
     }),
   )
 
@@ -60,6 +75,7 @@ describe("AttachmentStore", () => {
     Effect.gen(function* () {
       const store = yield* AttachmentStore.Service
       const content = yield* store.import(Buffer.from("original"))
+      yield* Effect.promise(() => chmod(store.absolutePath(content), 0o600))
       yield* Effect.promise(() => Bun.write(store.absolutePath(content), "changed"))
 
       const error = yield* store.read(content).pipe(Effect.flip)

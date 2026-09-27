@@ -9,6 +9,8 @@ import {
   CommandEvaluationError,
   CommandNotFoundError,
   InvalidRequestError,
+  AttachmentNotFoundError,
+  AttachmentTooLargeError,
   InvalidCursorError,
   MessageNotFoundError,
   ModelSwitchBlockedError,
@@ -135,11 +137,27 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.snapshot",
         Effect.fn(function* (ctx) {
-          const projection = yield* session.snapshot(ctx.params.sessionID).pipe(
+          if (ctx.query.before !== undefined && ctx.query.limit === undefined)
+            return yield* new InvalidCursorError({ message: "A snapshot cursor requires a window limit" })
+          const projection = yield* session.snapshot(ctx.params.sessionID, ctx.query).pipe(
             Effect.catchTag("Session.NotFoundError", (error) => Effect.fail(mapSessionNotFound(error))),
             Effect.catchTag("Session.MessageDecodeError", Effect.die),
+            Effect.catchTag("Session.InvalidCursorError", () => Effect.fail(new InvalidCursorError({ message: "Invalid cursor" }))),
           )
           return { sourceEpoch: identity.sourceEpoch, ...projection }
+        }),
+      )
+      .handle(
+        "session.attachment.read",
+        Effect.fn(function* (ctx) {
+          return yield* session.attachmentRead(ctx.params.sessionID, ctx.params.digest).pipe(
+            Effect.catchTag("Session.NotFoundError", (error) => Effect.fail(mapSessionNotFound(error))),
+            Effect.catchTag("Session.AttachmentReadError", (error) => Effect.fail(
+              error.reason === "not-found" ? new AttachmentNotFoundError({ message: "Attachment not found in this Session" })
+                : error.reason === "too-large" ? new AttachmentTooLargeError({ message: "Attachment exceeds the read size limit" })
+                : new InvalidRequestError({ message: "Invalid attachment digest" }),
+            )),
+          )
         }),
       )
       .handle(

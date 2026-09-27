@@ -288,15 +288,19 @@ const lowerToolResultContent = Effect.fn("BedrockConverse.lowerToolResultContent
       content.push({ text: item.text })
       continue
     }
-    const media = yield* BedrockMedia.lower({
+    const file = {
       type: "media",
       mediaType: item.mime,
       data: item.uri,
       filename: item.name,
-    })
-    if (!("image" in media))
-      return yield* ProviderShared.invalidRequest("Bedrock Converse only supports image media in tool results")
-    content.push(media)
+    } as const
+    content.push(yield* ProviderShared.recoverMedia(
+      "Bedrock Converse", file,
+      BedrockMedia.lower(file).pipe(Effect.flatMap((media) =>
+        "image" in media ? Effect.succeed(media) : ProviderShared.invalidRequest("Bedrock Converse only supports image media in tool results"),
+      )),
+      (text) => ({ text }),
+    ))
   }
   return content
 })
@@ -347,7 +351,7 @@ const lowerMessages = Effect.fn("BedrockConverse.lowerMessages")(function* (
           continue
         }
         if (part.type === "media") {
-          content.push(yield* BedrockMedia.lower(part))
+          content.push(yield* ProviderShared.recoverMedia("Bedrock Converse", part, BedrockMedia.lower(part), (text) => ({ text })))
           continue
         }
       }

@@ -15,7 +15,7 @@ import { SessionModelHeaders } from "./model-headers"
 import { SessionRunnerCache } from "./runner/cache"
 import { SessionRunnerModel } from "./runner/model"
 import PROMPT_DEFAULT from "./runner/prompt/base.txt"
-import { isProviderImage, toLLMMessages } from "./runner/to-llm-message"
+import { readAttachments, toLLMMessages } from "./runner/to-llm-message"
 import { AttachmentStore } from "../attachment-store"
 
 export const layer = (options?: SessionModelHeaders.Options) =>
@@ -42,27 +42,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
             .filter((part) => part.length > 0)
             .map(SystemPart.make)
           const providerMetadataKey = selected.model.route.providerMetadataKey ?? selected.model.provider
-          const attachmentFiles = history.messages.flatMap((message) =>
-            message.type === "user" ? (message.files ?? []) : [],
-          )
-          const verifiedAttachments = yield* Effect.forEach(
-            [...new Map(attachmentFiles.map((file) => [file.content.digest, file])).values()],
-            (file) =>
-              attachments.read(file.content).pipe(
-                Effect.orDie,
-                Effect.map((bytes) => ({ file, bytes })),
-              ),
-            { concurrency: 4 },
-          )
-          const images = new Map(
-            verifiedAttachments.flatMap(({ file, bytes }) =>
-              isProviderImage(file) ? [[file.content.digest, bytes] as const] : [],
-            ),
-          )
-          const attachmentMaterialization = {
-            images,
-            absolutePath: (file: (typeof attachmentFiles)[number]) => attachments.absolutePath(file.content),
-          }
+          const attachmentRead = yield* readAttachments(attachments, selection.session.id, history.messages)
           const contextEvent = yield* hooks.trigger("session", "context", {
             sessionID: selection.session.id,
             agent: selection.agent.id,
@@ -74,7 +54,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
                 selected.ref,
                 providerMetadataKey,
                 new Map(),
-                attachmentMaterialization,
+                attachmentRead.materialization,
               ),
               ...(history.instructionUpdate ? [Message.system(history.instructionUpdate)] : []),
               Message.user(input.prompt),

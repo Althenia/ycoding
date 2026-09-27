@@ -61,6 +61,7 @@ import {
   restoreSessionSubmission,
   retainSessionSubmission,
   yoloLevel,
+  type YoloLevel,
   type SessionSubmissionRetry,
 } from "../../util/session-autonomy"
 import { daybreakPlan, daybreakSuccessLabel, daybreakTitle } from "../../util/session-daybreak"
@@ -76,7 +77,7 @@ export type PromptProps = {
   onOverlayChange?: (open: boolean) => void
   autonomy?: SessionAutonomyState
   onAutonomyUpdated?: (sessionID: string, state: SessionAutonomyState) => void
-  onLandingYoloToggle?: (next: boolean) => void
+  onLandingYoloToggle?: (next: YoloLevel) => void
   onLandingGoalToggle?: (next: string | null) => void
   landingDaybreak?: ModelDaybreak
   onLandingDaybreakChange?: (next: ModelDaybreak | undefined) => void
@@ -143,6 +144,7 @@ type PromptSubmissionPayload = {
   mode: NonNullable<PromptInfo["mode"]>
   agentID: string
   daybreak?: ModelDaybreak
+  autonomy?: { yolo: YoloLevel; goal?: string }
   model: {
     providerID: string
     id: string
@@ -177,6 +179,7 @@ function submissionKey(sessionID: string | undefined, payload: PromptSubmissionP
     agent: payload.agentID,
     model: payload.model,
     daybreak: payload.daybreak,
+    autonomy: payload.autonomy,
     editor: payload.editor?.key,
   })
 }
@@ -872,11 +875,11 @@ export function Prompt(props: PromptProps) {
         run: async (input?: string) => {
           const token = input?.trim().split(/\s+/)[0]
           const parsed = token ? Number.parseInt(token, 10) : Number.NaN
-          const explicit =
-            Number.isInteger(parsed) && parsed >= 0 && parsed <= 3 ? (parsed as 0 | 1 | 2 | 3) : undefined
-          const currentLevel = yoloLevel(props.autonomy ?? ({ yolo: 0 } as unknown as SessionAutonomyState))
-          const nextLevel = explicit ?? (((currentLevel + 1) % 4) as 0 | 1 | 2 | 3)
+          const explicit = parsed === 0 || parsed === 1 || parsed === 2 || parsed === 3 ? parsed : undefined
+          const currentLevel = yoloLevel(props.autonomy ?? { yolo: 0 })
+          const nextLevel = explicit ?? (currentLevel === 3 ? 0 : currentLevel === 2 ? 3 : currentLevel === 1 ? 2 : 1)
           const sessionID = props.sessionID
+          if (!sessionID && landingTransferred) return
           if (sessionID) {
             try {
               const result = await client.api.session.autonomy.set({ sessionID, payload: { yolo: nextLevel } })
@@ -894,7 +897,7 @@ export function Prompt(props: PromptProps) {
             }
             return
           }
-          props.onLandingYoloToggle?.(nextLevel > 0)
+          props.onLandingYoloToggle?.(nextLevel)
           toast.show({
             message: nextLevel > 0 ? `YOLO ${nextLevel} enabled (landing)` : "YOLO disabled (landing)",
             variant: "success",
@@ -1555,6 +1558,7 @@ export function Prompt(props: PromptProps) {
   })
 
   let submitting = false
+  let landingTransferred = false
   async function submit(options?: { steerNow?: boolean }) {
     // Prevent overlapping invocations (e.g. a double-pressed Enter, or the
     // input's native onSubmit racing another dispatch). Without this guard,
@@ -1562,7 +1566,7 @@ export function Prompt(props: PromptProps) {
     // clears `store.prompt.text`, then awaits its own `session.create` and
     // ultimately reads the now-empty store — sending a phantom empty prompt
     // to a freshly created session.
-    if (submitting || operation()) return false
+    if (submitting || operation() || (landingTransferred && !props.sessionID)) return false
     submitting = true
     const current = beginOperation("submit", options?.steerNow ? "Preparing steer…" : "Preparing prompt…")
     if (!current) {
@@ -1627,9 +1631,9 @@ export function Prompt(props: PromptProps) {
       clearPrompt()
       const arg = normalized.slice(5).trim()
       const parsed = arg ? Number.parseInt(arg, 10) : NaN
-      const explicit = Number.isInteger(parsed) && parsed >= 0 && parsed <= 3 ? (parsed as 0 | 1 | 2 | 3) : undefined
-      const currentLevel = yoloLevel(props.autonomy ?? ({ yolo: 0 } as unknown as SessionAutonomyState))
-      const nextLevel = explicit ?? (((currentLevel + 1) % 4) as 0 | 1 | 2 | 3)
+      const explicit = parsed === 0 || parsed === 1 || parsed === 2 || parsed === 3 ? parsed : undefined
+      const currentLevel = yoloLevel(props.autonomy ?? { yolo: 0 })
+      const nextLevel = explicit ?? (currentLevel === 3 ? 0 : currentLevel === 2 ? 3 : currentLevel === 1 ? 2 : 1)
       const sessionID = props.sessionID
       if (sessionID) {
         try {
@@ -1646,7 +1650,7 @@ export function Prompt(props: PromptProps) {
           toast.show({ title: "Failed to toggle YOLO", message: errorMessage(error), variant: "error" })
         }
       } else {
-        props.onLandingYoloToggle?.(nextLevel > 0)
+        props.onLandingYoloToggle?.(nextLevel)
         toast.show({
           message: nextLevel > 0 ? `YOLO ${nextLevel} enabled (landing)` : "YOLO disabled (landing)",
           variant: "success",
@@ -1723,6 +1727,10 @@ export function Prompt(props: PromptProps) {
       mode: store.mode,
       agentID,
       daybreak: props.sessionID ? undefined : props.landingDaybreak,
+      autonomy: props.sessionID ? undefined : {
+        yolo: yoloLevel(props.autonomy ?? { yolo: 0 }),
+        ...(props.autonomy?.goal?.status === "active" ? { goal: props.autonomy.goal.text } : {}),
+      },
       model: {
         providerID: selectedModel!.providerID,
         id: selectedModel!.modelID,
@@ -1794,6 +1802,22 @@ export function Prompt(props: PromptProps) {
       }
 
       session = created
+    }
+
+    if (!props.sessionID && submission.payload.autonomy &&
+      (submission.payload.autonomy.yolo > 0 || submission.payload.autonomy.goal !== undefined)) {
+      updateOperation(currentOperation.id, "Setting autonomy…")
+      const error = await client.api.session.autonomy.set({
+        sessionID,
+        payload: submission.payload.autonomy.goal === undefined
+          ? { yolo: submission.payload.autonomy.yolo }
+          : { yolo: submission.payload.autonomy.yolo, goal: submission.payload.autonomy.goal },
+      }, requestOptions(currentOperation)).then(() => undefined, (error) => error)
+      if (error) {
+        finishOperation(currentOperation.id, { message: "Autonomy selection failed · draft retained", error: true })
+        toast.show({ title: "Failed to set autonomy", message: errorMessage(error), variant: "error" })
+        return false
+      }
     }
 
     if (submission.payload.daybreak && session?.daybreak !== submission.payload.daybreak) {
@@ -2109,6 +2133,7 @@ export function Prompt(props: PromptProps) {
 
     // temporary hack to make sure the message is sent
     if (!props.sessionID) {
+      landingTransferred = true
       if (pendingEditorSelection) editor.preserveSelectionFromNewSession()
       setTimeout(() => {
         route.navigate({
@@ -2289,6 +2314,7 @@ export function Prompt(props: PromptProps) {
    */
   async function applyGoalCommand(candidate?: string) {
     const sessionID = props.sessionID
+    if (!sessionID && landingTransferred) return false
     if (!sessionID) {
       // Landing with explicit goal text: create a Session, set the goal, and continue in transcript.
       if (candidate) {
@@ -2307,8 +2333,14 @@ export function Prompt(props: PromptProps) {
             agent: agentID,
             model: modelRef,
           })
+          const level = yoloLevel(props.autonomy ?? { yolo: 0 })
+          if (level > 0) await client.api.session.autonomy.set({ sessionID: created.id, payload: { yolo: level } })
           if (daybreak) await client.api.session.daybreak.set({ sessionID: created.id, daybreak })
-          await client.api.session.autonomy.set({ sessionID: created.id, payload: { goal: candidate } })
+          await client.api.session.autonomy.set({
+            sessionID: created.id,
+            payload: level > 0 ? { yolo: level, goal: candidate } : { goal: candidate },
+          })
+          landingTransferred = true
           props.onLandingGoalToggle?.(candidate)
           clearPrompt()
           setTimeout(() => route.navigate({ type: "session", sessionID: created.id }), 50)

@@ -184,8 +184,13 @@ const lowerToolConfig = (toolChoice: NonNullable<LLMRequest["toolChoice"]>) =>
 
 const lowerUserPart = Effect.fn("Gemini.lowerUserPart")(function* (part: TextPart | MediaPart) {
   if (part.type === "text") return { text: part.text }
-  const media = yield* ProviderShared.validateMedia("Gemini", part, MEDIA_MIMES)
-  return { inlineData: { mimeType: media.mime, data: media.base64 } }
+  return yield* ProviderShared.recoverMedia(
+    "Gemini", part,
+    ProviderShared.validateMedia("Gemini", part, MEDIA_MIMES).pipe(
+      Effect.map((media) => ({ inlineData: { mimeType: media.mime, data: media.base64 } })),
+    ),
+    (text) => ({ text }),
+  )
 })
 
 const googleMetadata = (metadata: Record<string, unknown>): ProviderMetadata => ({ google: metadata })
@@ -276,8 +281,13 @@ const lowerMessages = Effect.fn("Gemini.lowerMessages")(function* (request: LLMR
       })
       for (const item of content) {
         if (item.type === "text") continue
-        const media = yield* ProviderShared.validateToolFile("Gemini", item, MEDIA_MIMES)
-        parts.push({ inlineData: { mimeType: media.mime, data: media.base64 } })
+        parts.push(yield* ProviderShared.recoverMedia(
+          "Gemini", { type: "media", mediaType: item.mime, data: item.uri, filename: item.name },
+          ProviderShared.validateToolFile("Gemini", item, MEDIA_MIMES).pipe(
+            Effect.map((media) => ({ inlineData: { mimeType: media.mime, data: media.base64 } })),
+          ),
+          (text) => ({ text }),
+        ))
       }
     }
     contents.push({ role: "user", parts })

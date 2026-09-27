@@ -1,6 +1,6 @@
 import type { AssistantPart, RemoteMessageView } from "../projection"
 import type { RemoteStoreState } from "../store"
-import type { OfficeInput, SessionSummary } from "./types"
+import type { OfficeActivity, OfficeInput, SessionSummary } from "./types"
 
 type AssistantMessage = Extract<RemoteMessageView, { kind: "assistant" }>
 
@@ -8,6 +8,7 @@ export function officeInputFromRemote(state: RemoteStoreState): OfficeInput {
   const view = state.view?.id === state.activeSessionID ? state.view : undefined
   const assistants = view?.messages.filter((message): message is AssistantMessage => message.kind === "assistant") ?? []
   const unfinished = assistants.findLast((message) => message.completed === undefined)
+  const runningTool = unfinished?.parts.findLast(isActiveTool)
   const excerpt = assistants
     .findLast((message) => message.completed !== undefined)
     ?.parts.flatMap((part) => (part.kind === "text" ? [part.text] : []))
@@ -38,7 +39,8 @@ export function officeInputFromRemote(state: RemoteStoreState): OfficeInput {
       status: view.status,
       agent: view.agent,
       requestCount: view.requests.length,
-      activeTool: unfinished?.parts.findLast(isActiveTool)?.name,
+      activeTool: runningTool?.name,
+      activity: runningTool ? toolActivity(runningTool) : undefined,
       compacting: view.messages.some((message) => message.kind === "compaction" && (message.status === "pending" || message.status === "running")),
       thinking: unfinished?.parts.at(-1)?.kind === "reasoning",
       assistantExcerpt: excerpt || undefined,
@@ -71,4 +73,14 @@ function officeSessions(state: RemoteStoreState): readonly SessionSummary[] {
 
 function isActiveTool(part: AssistantPart): part is Extract<AssistantPart, { kind: "tool" }> {
   return part.kind === "tool" && (part.status === "streaming" || part.status === "running")
+}
+
+function toolActivity(part: Extract<AssistantPart, { kind: "tool" }>): OfficeActivity {
+  if (["read", "grep", "glob", "webfetch", "websearch"].includes(part.name)) return "research"
+  if (["subagent", "subagent_control", "subagent_report", "todowrite"].includes(part.name)) return "coordinate"
+  if (part.name !== "shell") return "implement"
+  const command = typeof part.input?.command === "string" ? part.input.command : ""
+  if (/\b(?:test|typecheck|lint|pytest|vitest|jest|tsc|eslint|oxlint)\b/i.test(command)) return "verify"
+  if (/\b(?:rg|grep|find|ls|cat|git\s+status)\b/i.test(command)) return "research"
+  return "implement"
 }

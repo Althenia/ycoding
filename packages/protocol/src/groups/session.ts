@@ -2,6 +2,7 @@ import { SessionMessage } from "@ycoding-ai/schema/session-message"
 import { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
 import { SessionPending } from "@ycoding-ai/schema/session-pending"
 import { PromptInput } from "@ycoding-ai/schema/prompt-input"
+import { AttachmentDigest, Base64 } from "@ycoding-ai/schema/prompt"
 import { Session } from "@ycoding-ai/schema/session"
 import { InstructionEntry } from "@ycoding-ai/schema/instruction-entry"
 import { Project } from "@ycoding-ai/schema/project"
@@ -23,6 +24,8 @@ import {
   ServiceUnavailableError,
   SessionBusyError,
   SessionNotFoundError,
+  AttachmentNotFoundError,
+  AttachmentTooLargeError,
   SkillConflictNotFoundError,
   SkillNotFoundError,
   UnknownError,
@@ -257,8 +260,14 @@ export const SessionProjection = Schema.Struct({
   session: Session.Info,
   messages: Schema.Array(SessionMessage.Info),
   watermark: EventLog.Synced,
+  before: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)).pipe(Schema.optional),
 }).annotate({ identifier: "SessionProjection" })
 export type SessionProjection = typeof SessionProjection.Type
+
+export const SessionSnapshotQuery = Schema.Struct({
+  limit: Schema.NumberFromString.pipe(Schema.decodeTo(PositiveInt.check(Schema.isLessThanOrEqualTo(200))), Schema.optional),
+  before: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)).pipe(Schema.optional),
+}).annotate({ identifier: "SessionSnapshotQuery" })
 
 export const SessionLogItem = Schema.Union([...SessionEvent.PublicDurable.members, EventLog.Synced])
   .mapMembers(Tuple.map(Schema.fieldsAssign({ sourceEpoch: SourceEpoch })))
@@ -336,8 +345,9 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
     .add(
       HttpApiEndpoint.get("session.snapshot", "/api/session/:sessionID/snapshot", {
         params: { sessionID: Session.ID },
+        query: SessionSnapshotQuery,
         success: SessionProjection,
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, InvalidCursorError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -345,9 +355,22 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
             identifier: "v2.session.snapshot",
             summary: "Get a session synchronization snapshot",
             description:
-              "Atomically retrieve the canonical projected messages and exact durable event watermark for one server process epoch.",
+              "Atomically retrieve the canonical projected messages and exact durable event watermark for one server process epoch. Optional limit and before page backward through projected messages.",
           }),
         ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.attachment.read", "/api/session/:sessionID/attachment/:digest", {
+        params: { sessionID: Session.ID, digest: AttachmentDigest },
+        success: Schema.Struct({ mime: Schema.String, bytes: NonNegativeInt, data: Base64 }),
+        error: [SessionNotFoundError, AttachmentNotFoundError, AttachmentTooLargeError, InvalidRequestError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(OpenApi.annotations({
+          identifier: "v2.session.attachment.read",
+          summary: "Read a Session's managed user attachment",
+          description: "Return bounded base64 content only for a managed file referenced by this Session's projected user messages.",
+        })),
     )
     .add(
       HttpApiEndpoint.get("session.diagnostics", "/api/session/:sessionID/diagnostics", {

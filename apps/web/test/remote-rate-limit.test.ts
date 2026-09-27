@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { RemoteLimits, parseClientMessage, parseRelayToAgentMessage, serializeResponse, serializeSessions, serializeStatus, type RemoteRequest } from "@ycoding-ai/remote"
+import { RemoteLimits, parseClientMessage, parseRelayToAgentMessage, serializeResponse, serializeSessions, serializeStatus, type RemoteRequest, type RemoteStatus } from "@ycoding-ai/remote"
 import { createRelay } from "../../../infra/cloudflare/src/relay/core"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore } from "../src/remote/store"
@@ -10,6 +10,7 @@ async function harness(count: number) {
   const sockets = new Map<string, Bun.ServerWebSocket<{ id: string }>>()
   const closed: { code: number; reason: string }[] = []
   const requests: RemoteRequest[] = []
+  let storedStatus: RemoteStatus | undefined
   let pongs = 0
   const relay = createRelay({
     now: Date.now,
@@ -62,6 +63,8 @@ async function harness(count: number) {
     },
     saveSubscriptions: () => {},
     savePending: () => {},
+    loadStatus: async () => storedStatus,
+    saveStatus: async (status) => { storedStatus = status },
     authorizeClientCommand: async () => ({ ok: true }),
     authorizeAgentCommand: async () => ({ ok: true }),
     authorityTtlMs: 5_000,

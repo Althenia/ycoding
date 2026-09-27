@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { RemoteLimits, RemoteProtocolVersion } from "../../../packages/remote/src/index"
+import { RemoteLimits, RemoteProtocolVersion, type RemoteStatus } from "../../../packages/remote/src/index"
 import { createRelay, type RelayConnection, type RelayDeps } from "../src/relay/core"
 
 type Sent = { readonly connectionID: string; readonly message: string }
 type Closed = { readonly connectionID: string; readonly code: number; readonly reason: string }
 type Authority = { ok: true } | { ok: false; reason: string }
 
-function harness(options: { readonly sessions?: readonly string[]; readonly authorityTtlMs?: number } = {}) {
+function harness(options: { readonly sessions?: readonly string[]; readonly authorityTtlMs?: number; readonly statusStore?: { value?: RemoteStatus } } = {}) {
   let now = 1_000_000
   let idSequence = 0
   const sent: Sent[] = []
@@ -14,6 +14,7 @@ function harness(options: { readonly sessions?: readonly string[]; readonly auth
   const pushed: { accountID: string; category: string; sessionID: string; deviceID: string }[] = []
   const storedSubscriptions = new Map<string, readonly string[]>()
   const storedPending = new Map<string, readonly { relayID: string; clientID: string }[]>()
+  const statusStore = options.statusStore ?? {}
   let advertisement: readonly string[] = options.sessions ?? ["ses_a"]
   let clientAuthority: Authority = { ok: true }
   let agentAuthority: Authority = { ok: true }
@@ -27,6 +28,8 @@ function harness(options: { readonly sessions?: readonly string[]; readonly auth
     close: (connectionID, code, reason) => closed.push({ connectionID, code, reason }),
     saveSubscriptions: (connectionID, values) => storedSubscriptions.set(connectionID, values),
     savePending: (connectionID, values) => storedPending.set(connectionID, values),
+    loadStatus: async () => statusStore.value,
+    saveStatus: async (status) => { statusStore.value = status },
     authorizeClientCommand: async () => {
       authorityReads += 1
       return readClientAuthority(authorityReads)
@@ -44,6 +47,7 @@ function harness(options: { readonly sessions?: readonly string[]; readonly auth
     pushed,
     storedSubscriptions,
     storedPending,
+    storedStatus: () => statusStore.value,
     advance: (milliseconds: number) => {
       now += milliseconds
     },
@@ -127,6 +131,16 @@ async function attachBoth(h: ReturnType<typeof harness>) {
   h.reset()
 }
 
+test("detaching a streaming client cancels its in-flight agent request", async () => {
+  const h = harness()
+  await attachBoth(h)
+  await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "request", id: "stream", operation: "session.message.stream", sessionID: "ses_a", input: { messageID: "msg_large" } }))
+  const request = h.requestsTo("agent-1").at(-1)
+  expect(request?.type).toBe("request")
+  h.relay.detach("client-1")
+  expect(h.messagesTo("agent-1").at(-1)).toEqual({ type: "cancel", id: request?.id })
+})
+
 describe("relay core: role separation", () => {
   test("status diff emits only new decisions and stopped roots after a silent baseline, capped per minute", async () => {
     const h = harness()
@@ -146,6 +160,37 @@ describe("relay core: role separation", () => {
     h.advance(60_001)
     await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: ["ses_new"] }))
     expect(h.pushed).toHaveLength(21)
+  })
+
+  test("a reattached agent diffs against the stored status, while unchanged and first-ever frames stay silent", async () => {
+    const h = harness()
+    await h.relay.attach(agent("agent-1"))
+    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: ["ses_a"], attention: [] }))
+    expect(h.pushed).toEqual([])
+    expect(h.storedStatus()).toEqual({ type: "status", running: ["ses_a"], attention: [] })
+    h.relay.detach("agent-1")
+    await h.relay.attach(agent("agent-2"))
+    await h.relay.handleAgentMessage("agent-2", JSON.stringify({ type: "status", running: ["ses_a"], attention: [] }))
+    expect(h.pushed).toEqual([])
+    h.relay.detach("agent-2")
+    await h.relay.attach(agent("agent-3"))
+    await h.relay.handleAgentMessage("agent-3", JSON.stringify({ type: "status", running: [], attention: ["ses_b"] }))
+    expect(h.pushed).toEqual([
+      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_b", deviceID: "dev_1" },
+      { accountID: "usr_1", category: "agent-completed", sessionID: "ses_a", deviceID: "dev_1" },
+    ])
+  })
+
+  test("a new relay instance reads the stored device baseline after hibernation", async () => {
+    const statusStore: { value?: RemoteStatus } = {}
+    const first = harness({ statusStore })
+    await first.relay.attach(agent("agent-1"))
+    await first.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: ["ses_a"], attention: [] }))
+    expect(first.pushed).toEqual([])
+    const restored = harness({ statusStore })
+    await restored.relay.attach(agent("agent-2"))
+    await restored.relay.handleAgentMessage("agent-2", JSON.stringify({ type: "status", running: [], attention: [] }))
+    expect(restored.pushed).toEqual([{ accountID: "usr_1", category: "agent-completed", sessionID: "ses_a", deviceID: "dev_1" }])
   })
 
   test("validates and broadcasts complete status to each device client and a late joiner", async () => {
@@ -459,7 +504,10 @@ describe("relay core: subscriptions and events", () => {
     h.relay.detach("client-1")
     await h.relay.handleAgentMessage("agent-1", response(subscribe.id as string, null))
     expect(h.storedSubscriptions.get("client-1")).toBeUndefined()
-    expect(h.messagesTo("agent-1")).toEqual([{ type: "subscriptions", clientID: "client-1", sessionIDs: [] }])
+    expect(h.messagesTo("agent-1")).toEqual([
+      { type: "subscriptions", clientID: "client-1", sessionIDs: [] },
+      { type: "cancel", id: subscribe.id },
+    ])
   })
 
   test("delivers events only to subscribed clients of advertised sessions", async () => {

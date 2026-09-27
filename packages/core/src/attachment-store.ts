@@ -4,7 +4,7 @@ import type { ManagedAttachmentContent } from "@ycoding-ai/schema/prompt"
 import { sql } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { createHash, randomUUID } from "node:crypto"
-import { chmod, link, lstat, mkdir, readFile, realpath, unlink, writeFile } from "node:fs/promises"
+import { chmod, link, lstat, mkdir, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { DataMigrationTable } from "./data-migration.sql"
 import { Database } from "./database/database"
@@ -33,6 +33,8 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/Att
 
 export const managedURI = (content: Pick<ManagedAttachmentContent, "digest">) =>
   `ycoding-attachment://sha256/${content.digest}`
+
+export const managedDigest = (uri: string) => URI_PATTERN.exec(uri)?.[1]
 
 export const layer = Layer.effect(
   Service,
@@ -96,17 +98,23 @@ export function make(dataRoot: string): Interface {
       path: relativePath(digestValue),
     }
     const target = absolutePath(content)
-    const exists = yield* targetExists(target)
-    if (exists) {
-      yield* read(content)
-      return content
-    }
+    const stored = (yield* targetExists(target))
+      ? yield* read(content).pipe(
+          Effect.as("verified" as const),
+          Effect.catchIf(
+            (error) => error.reason === "integrity" || error.reason === "limit",
+            () => Effect.succeed("modified" as const),
+          ),
+        )
+      : ("missing" as const)
+    if (stored === "verified") return content
     const temporary = `${target}.${randomUUID()}.tmp`
     yield* Effect.tryPromise({
       try: async () => {
         await ensureManagedDirectory(root, path.dirname(target))
         await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 })
-        await chmod(temporary, 0o600)
+        await chmod(temporary, 0o400)
+        if (stored === "modified") return rename(temporary, target)
         try {
           await link(temporary, target)
         } catch (cause) {
@@ -120,7 +128,7 @@ export function make(dataRoot: string): Interface {
   })
 
   const resolveURI = Effect.fn("AttachmentStore.resolveURI")(function* (uri: string) {
-    const digestValue = URI_PATTERN.exec(uri)?.[1]
+    const digestValue = managedDigest(uri)
     if (digestValue === undefined)
       return yield* new Error({ reason: "invalid-reference", message: "Invalid managed attachment URI" })
     const target = path.join(root, relativePath(digestValue))

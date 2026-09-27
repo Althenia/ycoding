@@ -89,6 +89,7 @@ import { destroyRenderer } from "./util/renderer"
 import { cliErrorMessage, errorFormat, errorMessage } from "./util/error"
 import { writeHeapSnapshot } from "node:v8"
 import { saveCustomEndpoint } from "./custom-endpoint-save"
+import { RemoteProvider, RemoteStatusLine, type RemoteConnectorPort } from "./remote-connector"
 
 const themePerformance = DevTools.register({ id: "theme-performance", title: "Theme performance" })
 
@@ -164,6 +165,7 @@ export type TuiInput = {
     | undefined
   >
   log?: LogSink
+  remote?: { create: () => Promise<RemoteConnectorPort>; inspect?: () => Promise<{ state: "off" | "other-process"; message?: string }> }
 }
 
 export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
@@ -341,6 +343,11 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                 <LocationProvider>
                                                   <ThemeProvider mode={mode}>
                                                     <LocalProvider>
+                                                      <RemoteProvider
+                                                        create={input.remote?.create}
+                                                        inspect={input.remote?.inspect}
+                                                        registerFinalizer={(dispose) => { finalizers.add(dispose) }}
+                                                      >
                                                       <PromptStashProvider>
                                                         <DialogProvider>
                                                           <FrecencyProvider>
@@ -366,6 +373,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                           </FrecencyProvider>
                                                         </DialogProvider>
                                                       </PromptStashProvider>
+                                                      </RemoteProvider>
                                                     </LocalProvider>
                                                   </ThemeProvider>
                                                 </LocationProvider>
@@ -1185,6 +1193,7 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
           <DevToolsSidebar />
         </Show>
       </box>
+      <RemoteStatusLine />
       <Show when={!startup.skipInitialLoading}>
         <StartupLoading ready={pluginsStarted} />
       </Show>

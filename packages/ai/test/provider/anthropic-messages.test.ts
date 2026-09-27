@@ -405,9 +405,9 @@ describe("Anthropic Messages route", () => {
     }),
   )
 
-  it.effect("rejects non-image media in tool-result content with a clear error", () =>
+  it.effect("makes unsupported tool-result media visible without failing request preparation", () =>
     Effect.gen(function* () {
-      const error = yield* LLMClient.prepare(
+      const prepared = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(
         LLM.request({
           id: "req_tool_result_unsupported_media",
           model,
@@ -417,15 +417,38 @@ describe("Anthropic Messages route", () => {
               id: "call_1",
               name: "fetch",
               resultType: "content",
-              result: [{ type: "file", uri: "data:audio/mpeg;base64,AAECAw==", mime: "audio/mpeg" }],
+              result: [{ type: "file", uri: "data:audio/mpeg;base64,AAECAw==", mime: "audio/mpeg", name: "voice.mp3" }],
             }),
           ],
           cache: "none",
         }),
-      ).pipe(Effect.flip)
+      )
 
-      expect(error.message).toContain("Anthropic Messages")
-      expect(error.message).toContain("audio/mpeg")
+      expect(expectToolResult(prepared.body).content).toEqual([
+        { type: "text", text: "File voice.mp3 (audio/mpeg) omitted: Anthropic Messages does not support media type audio/mpeg" },
+      ])
+    }),
+  )
+
+  it.effect("describes malformed tool-result bytes while retaining adjacent text", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(LLM.request({
+        model,
+        messages: [
+          Message.assistant([ToolCallPart.make({ id: "call_1", name: "read", input: {} })]),
+          Message.tool({ id: "call_1", name: "read", resultType: "content", result: [
+            { type: "text", text: "before" },
+            { type: "file", uri: "data:image/png;base64,%%%", mime: "image/png", name: "bad.png" },
+            { type: "text", text: "after" },
+          ] }),
+        ],
+        cache: "none",
+      }))
+      expect(expectToolResult(prepared.body).content).toEqual([
+        { type: "text", text: "before" },
+        { type: "text", text: "File bad.png (image/png) omitted: Anthropic Messages media data URL must contain valid base64" },
+        { type: "text", text: "after" },
+      ])
     }),
   )
 

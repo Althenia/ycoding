@@ -18,7 +18,7 @@ export type RemoteNotificationView = {
 export const NOTIFICATION_TEXT: Record<NotificationCategory, { readonly title: string; readonly body: string }> = {
   "agent-completed": { title: "YCoding — work stopped", body: "A session stopped running." },
   "approval-requested": { title: "YCoding — approval needed", body: "A session is waiting for your decision." },
-  "guardrail-blocked": { title: "YCoding — guardrail review", body: "A guardrail review or denial stopped an action." },
+  "guardrail-blocked": { title: "YCoding — guardrail blocked", body: "A guardrail decision blocked an action." },
   error: { title: "YCoding — session failure", body: "A session step failed." },
   "device-disconnected": { title: "YCoding — device disconnected", body: "The connected machine stopped reporting." },
 }
@@ -33,16 +33,9 @@ export function notificationCategory(payload: unknown): NotificationCategory | u
   const type = stringField(payload.type)
   if (type === undefined) return undefined
   switch (type) {
-    case "session.execution.succeeded":
-      return "agent-completed"
     case "session.execution.failed":
     case "session.step.failed":
       return "error"
-    case "permission.v2.asked":
-    case "form.created":
-      return "approval-requested"
-    case "guardrail.asked":
-      return "guardrail-blocked"
     case "guardrail.decided":
       return isRecord(payload.data) && isBlockingDecision(payload.data.decision) ? "guardrail-blocked" : undefined
     default:

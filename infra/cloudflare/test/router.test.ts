@@ -695,6 +695,33 @@ describe("router: websocket upgrades", () => {
   })
 })
 
+test("cookie-authenticated same-origin message stream forwards only an owned device and exact Session IDs", async () => {
+  const h = await harness()
+  const owner = await signIn(h, "stream-owner")
+  const intruder = await signIn(h, "stream-intruder")
+  const device = await enrollDevice(h, owner.userID)
+  const url = `${origin}/api/remote/devices/${device.deviceID}/sessions/ses_stream/messages/msg_large`
+  const cancelled = new AbortController()
+  expect((await h.router(new Request(url, { headers: { ...sessionCookie(owner.token), origin }, signal: cancelled.signal }))).status).toBe(200)
+  const forwarded = h.relayCalls.at(-1)
+  expect(forwarded?.name).toBe(`${owner.userID}:${device.deviceID}`)
+  expect(forwarded?.request.headers.get("x-ycoding-target-session")).toBe("ses_stream")
+  expect(forwarded?.request.headers.get("x-ycoding-target-message")).toBe("msg_large")
+  expect(forwarded?.request.signal.aborted).toBe(false)
+  cancelled.abort()
+  expect(forwarded?.request.signal.aborted).toBe(true)
+  const attachment = await h.router(new Request(url.replace("messages/msg_large", `attachments/${"a".repeat(64)}`), { headers: { ...sessionCookie(owner.token), origin } }))
+  expect(attachment.status).toBe(200)
+  expect(h.relayCalls.at(-1)?.request.headers.get("x-ycoding-target-digest")).toBe("a".repeat(64))
+  expect((await h.router(new Request(url, { headers: { ...sessionCookie(intruder.token), origin } }))).status).toBe(403)
+  expect((await h.router(new Request(url, { headers: { ...sessionCookie(owner.token), ...crossSite } }))).status).toBe(403)
+  expect((await h.router(new Request(url, { headers: { ...sessionCookie(owner.token), origin: "https://evil.example", "sec-fetch-site": "same-origin" } }))).status).toBe(403)
+  expect((await h.router(new Request(url, { headers: sessionCookie(owner.token) }))).status).toBe(403)
+  expect((await h.router(new Request(url, { headers: { ...sessionCookie(owner.token), "sec-fetch-site": "same-origin" } }))).status).toBe(200)
+  expect((await h.router(new Request(url.replace("msg_large", "../private"), { headers: { ...sessionCookie(owner.token), origin } }))).status).toBe(404)
+  expect((await h.router(new Request(url, { headers: { origin } }))).status).toBe(401)
+})
+
 describe("router: google client id", () => {
   test("uses the configured client id for audience checks", async () => {
     expect(testClientID).toContain("apps.googleusercontent.com")

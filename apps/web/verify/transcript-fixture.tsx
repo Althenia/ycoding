@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js"
 import { render } from "solid-js/web"
 import { TranscriptNavigation } from "../src/remote/ui/transcript-nav"
+import { TodoPanel } from "../src/remote/ui/todo-panel"
 import { RemoteProvider } from "../src/remote/context"
 import { createRemoteStore } from "../src/remote/store"
 import { createRemoteHttp } from "../src/remote/http"
@@ -9,6 +10,8 @@ import "../src/styles/tokens.css"
 import "../src/styles/base.css"
 import "../src/styles/remote.css"
 import "../src/remote/ui/transcript-fixture.css"
+
+document.documentElement.dataset.theme = new URLSearchParams(location.search).get("theme") === "dark" ? "dark" : "light"
 
 const initial: readonly RemoteMessageView[] = [
   { kind: "user", id: "msg_user", text: "A long prompt ".repeat(14), state: "pending", delivery: "queue", created: 1 },
@@ -27,6 +30,11 @@ const toolOutput = new URLSearchParams(location.search).has("tool-output")
 const navigation = new URLSearchParams(location.search).has("navigation")
 const runningStep = new URLSearchParams(location.search).has("running")
 const notification = new URLSearchParams(location.search).has("notification")
+const visibility = new URLSearchParams(location.search).has("visibility")
+const historyMode = new URLSearchParams(location.search).has("history")
+const imagesMode = new URLSearchParams(location.search).has("images")
+const oversizedMode = new URLSearchParams(location.search).has("oversized")
+const pendingOversized = new URLSearchParams(location.search).get("oversized") === "pending"
 const raw = "first line\n" + "x".repeat(20_000) + "\n... output truncated; full content saved to /private/fixture/tool-output.txt ..."
 const outputMessages: readonly RemoteMessageView[] = [{ kind: "assistant", id: "msg_tool", created: 1, parts: [
   { kind: "tool", callID: "call_store", name: "read", status: "completed", content: [{ kind: "text", text: raw.replace(/\.\.\. output truncated; full content saved to [^\r\n]*/g, "[full output retained on the device]"), sourceTruncated: true }], structured: { truncated: true } },
@@ -42,7 +50,45 @@ const notificationMessages: readonly RemoteMessageView[] = [
   { kind: "user", id: "msg_ordinary", text: "Check the repair", state: "consumed", created: 1 },
   { kind: "synthetic", id: "msg_notification", text: `Subagent notification:\n${JSON.stringify(notificationMetadata)}`, description: "Subagent notification", metadata: notificationMetadata, created: 2 },
 ]
-const [messages, setMessages] = createSignal(synthetic ? syntheticMessages(synthetic === "compacted") : toolOutput ? outputMessages : navigation ? navigationMessages : runningStep ? runningMessages : notification ? notificationMessages : initial)
+const visibilityMessages: readonly RemoteMessageView[] = [
+  notificationMessages[0]!,
+  { kind: "system", id: "msg_internal_state", text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":0},"todos":[]}', source: "session-state", created: 2 },
+  { kind: "synthetic", id: "msg_internal_team", text: 'Internal orchestration context (JSON). Use it to coordinate work. Do not surface subagent status unless the user explicitly asks; report a failure only when it blocks the requested outcome:\n{"children":[{"state":"running"}]}', description: "TeamView update", source: "team-view", created: 3 },
+  { kind: "synthetic", id: "msg_empty_synthetic", text: "Internal", description: " ", created: 4 },
+  notificationMessages[1]!,
+]
+const plot = document.createElement("canvas")
+plot.width = 320
+plot.height = 180
+const plotContext = plot.getContext("2d")
+if (!plotContext) throw new Error("Image fixture requires a canvas")
+plotContext.fillStyle = "#122b25"
+plotContext.fillRect(0, 0, 320, 180)
+plotContext.fillStyle = "#43c292"
+plotContext.fillRect(30, 90, 50, 60)
+plotContext.fillRect(105, 60, 50, 90)
+plotContext.fillRect(180, 25, 50, 125)
+const imageMessages: readonly RemoteMessageView[] = [
+  { kind: "user", id: "msg_image", text: "Review these files", state: "consumed", created: 1, attachments: [
+    { name: "screen.png", mime: "image/png", bytes: 4_096, digest: "a".repeat(64) },
+    { name: "report.pdf", mime: "application/pdf", bytes: 1_024, digest: "b".repeat(64) },
+    { name: "broken.png", mime: "image/png", bytes: 2_048, digest: "c".repeat(64) },
+  ] },
+  { kind: "assistant", id: "msg_tool_image", created: 2, parts: [{ kind: "tool", callID: "call_image", name: "read", status: "completed", content: [
+    { kind: "image", uri: plot.toDataURL("image/png"), mime: "image/png", name: "plot.png" },
+  ] }] },
+]
+if (imagesMode) {
+  const originalFetch = window.fetch.bind(window)
+  window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input
+    if (url.endsWith(`/attachments/${"a".repeat(64)}`)) return new Response(JSON.stringify({ mime: "image/png", bytes: 4_096, data: plot.toDataURL("image/png").split(",")[1] }), { headers: { "content-type": "application/json" } })
+    if (url.endsWith(`/attachments/${"c".repeat(64)}`)) return new Response(null, { status: 404 })
+    return originalFetch(input, init)
+  }, { preconnect: window.fetch.preconnect })
+}
+const [messages, setMessages] = createSignal(synthetic ? syntheticMessages(synthetic === "compacted") : toolOutput ? outputMessages : historyMode ? navigationMessages.slice(12) : imagesMode ? imageMessages : oversizedMode ? [{ kind: "oversized", id: "msg_big", projected: !pendingOversized, state: pendingOversized ? "pending" : "loading" }] as const : navigation ? navigationMessages : runningStep ? runningMessages : visibility ? visibilityMessages : notification ? notificationMessages : initial)
+const [history, setHistory] = createSignal<{ readonly status: "idle"; readonly before?: string }>(historyMode ? { status: "idle", before: "older" } : { status: "idle" })
 
 function syntheticMessages(compacted: boolean): readonly RemoteMessageView[] {
   const raw = Array.from({ length: 1_200 }, (_, index) => ({ id: `msg_${index}`, type: "assistant", agent: "god", content: [{ type: "reasoning", text: "**Check context** with `code` and *verify the next step*." }, { type: "text", text: `Answer ${index}` }], time: { created: index } }))
@@ -53,6 +99,15 @@ function syntheticMessages(compacted: boolean): readonly RemoteMessageView[] {
 const root = document.getElementById("app")
 if (!root) throw new Error("Missing transcript root")
 const store = createRemoteStore({ http: createRemoteHttp({ fetch: Object.assign(async () => new Response(null, { status: 401 }), { preconnect: () => {} }) }), createTransport: () => { throw new Error("Fixture transport must not connect") } })
-const fixtureState = { ...store.state(), activeSessionID: "ses_a" }
-Object.defineProperty(store, "state", { value: () => fixtureState })
-render(() => <RemoteProvider createStore={() => store}><main class="transcript-fixture workspace__main"><div class="workspace__scroll"><div class="transcript-fixture__controls"><button id="admit" onClick={() => setMessages((current) => current.map((message) => message.kind === "user" ? { ...message, state: "promoted" } : message))}>Admit</button><button id="consume" onClick={() => setMessages((current) => applySessionEvent({ ...createSessionView("ses_a"), messages: current }, { type: "session.input.consumed", data: { sessionID: "ses_a", inputIDs: ["msg_user"] } }, 3).messages)}>Consume</button><button id="stream" onClick={() => setMessages((current) => applySessionEvent({ ...createSessionView("ses_a"), messages: current }, { type: "session.reasoning.delta", data: { sessionID: "ses_a", assistantMessageID: "msg_agent", ordinal: 2, delta: "Streamed detail" } }, 4).messages)}>Stream</button><button id="append" onClick={() => setMessages((current) => current.map((item) => item.kind === "assistant" && item.id === "answer_11" ? { ...item, parts: item.parts.map((part) => part.kind === "text" ? { ...part, text: `${part.text}\n${"Streaming detail expands this answer. ".repeat(12)}` } : part) } : item))}>Append</button><button id="prune" onClick={() => setMessages((current) => current.slice(-12))}>Prune</button></div><TranscriptNavigation messages={messages} /></div><div class="composer transcript-fixture__composer">Composer preview</div></main></RemoteProvider>, root)
+const fixtureState = { ...store.state(), activeSessionID: "ses_a", activeDeviceID: "dev_1" }
+const listeners = new Set<() => void>()
+Object.defineProperty(store, "state", { value: () => ({ ...fixtureState, history: history() }) })
+Object.defineProperty(store, "subscribe", { value: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener) } })
+Object.defineProperty(store, "loadOlderMessages", { value: async () => {
+  if (!history().before) return
+  setMessages((current) => [...navigationMessages.slice(0, 12), ...current])
+  setHistory({ status: "idle" })
+  listeners.forEach((listener) => listener())
+} })
+Object.defineProperty(store, "loadOversizedMessage", { value: async () => setMessages([{ kind: "user", id: "msg_big", text: "Recovered full content", state: "consumed", created: 2 }]) })
+render(() => <RemoteProvider createStore={() => store}><main class="transcript-fixture workspace__main"><div class="workspace__scroll"><div class="transcript-fixture__controls"><button id="admit" onClick={() => setMessages((current) => current.map((message) => message.kind === "user" ? { ...message, state: "promoted" } : message))}>Admit</button><button id="consume" onClick={() => setMessages((current) => applySessionEvent({ ...createSessionView("ses_a"), messages: current }, { type: "session.input.consumed", data: { sessionID: "ses_a", inputIDs: ["msg_user"] } }, 3).messages)}>Consume</button><button id="stream" onClick={() => setMessages((current) => applySessionEvent({ ...createSessionView("ses_a"), messages: current }, { type: "session.reasoning.delta", data: { sessionID: "ses_a", assistantMessageID: "msg_agent", ordinal: 2, delta: "Streamed detail" } }, 4).messages)}>Stream</button><button id="append" onClick={() => setMessages((current) => current.map((item) => item.kind === "assistant" && item.id === "answer_11" ? { ...item, parts: item.parts.map((part) => part.kind === "text" ? { ...part, text: `${part.text}\n${"Streaming detail expands this answer. ".repeat(12)}` } : part) } : item))}>Append</button><button id="prune" onClick={() => setMessages((current) => current.slice(-12))}>Prune</button>{oversizedMode && <button id="fail-oversized" onClick={() => setMessages([{ kind: "oversized", id: "msg_big", projected: true, state: "error" }])}>Fail content</button>}</div><TranscriptNavigation messages={messages} /></div><div class="conversation-jump-slot" /><TodoPanel todos={[{ content: "Review the transcript", status: "in_progress", priority: "medium" }]} /><div class="composer transcript-fixture__composer">Composer preview</div></main></RemoteProvider>, root)

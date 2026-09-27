@@ -1,11 +1,15 @@
 import type { SessionAutonomyState } from "@ycoding-ai/client"
 
-export function yoloLevel(state: { yolo?: unknown }): number {
-  const raw = (state as { yolo?: unknown }).yolo
-  if (typeof raw === "number" && raw >= 0 && raw <= 3) return raw
+export type YoloLevel = 0 | 1 | 2 | 3
+
+export function yoloLevel(state: { yolo?: unknown }): YoloLevel {
+  const raw = state.yolo
   if (raw === true) return 2
-  if (raw === false || raw === 0) return 0
-  if (typeof raw === "number") return Math.max(0, Math.min(3, Math.trunc(raw)))
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return 0
+  const level = Math.max(0, Math.min(3, Math.trunc(raw)))
+  if (level === 1) return 1
+  if (level === 2) return 2
+  if (level === 3) return 3
   return 0
 }
 

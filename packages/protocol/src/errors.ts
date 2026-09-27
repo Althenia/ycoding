@@ -72,6 +72,18 @@ export class SessionNotFoundError extends Schema.TaggedErrorClass<SessionNotFoun
   { httpApiStatus: 404 },
 ) {}
 
+export class AttachmentNotFoundError extends Schema.TaggedErrorClass<AttachmentNotFoundError>()(
+  "AttachmentNotFoundError",
+  { message: Schema.String },
+  { httpApiStatus: 404 },
+) {}
+
+export class AttachmentTooLargeError extends Schema.TaggedErrorClass<AttachmentTooLargeError>()(
+  "AttachmentTooLargeError",
+  { message: Schema.String },
+  { httpApiStatus: 413 },
+) {}
+
 export class ModelSwitchBlockedError extends Schema.TaggedErrorClass<ModelSwitchBlockedError>()(
   "ModelSwitchBlockedError",
   Session.ModelSwitchBlocked.fields,

@@ -7,7 +7,12 @@ import {
   createSessionAutonomyRefreshGuard,
   goalToggleAction,
   parseGoalCommand,
+  yoloLevel,
 } from "../src/util/session-autonomy"
+
+test("normalizes untrusted YOLO input to a supported level", () => {
+  expect([1.5, 9, Number.NaN, -1, true].map((yolo) => yoloLevel({ yolo }))).toEqual([1, 3, 0, 0, 2])
+})
 
 test("represents explicit goal reports through the progress label", () => {
   expect(

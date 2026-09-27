@@ -80,6 +80,7 @@ type FakeSocket = {
   readonly publish: (status: RemoteTransportStatus) => void
   readonly sessions: (sessionIDs: readonly string[]) => void
   readonly event: (sessionID: string, event: unknown) => void
+  readonly statusFrame: (running: readonly string[], attention: readonly string[]) => void
   readonly reconnect: () => void
   readonly unsubscribes: string[]
 }
@@ -113,12 +114,16 @@ async function fakeConnectionHarness() {
         publish: (status) => handlers.onStatus?.(status),
         sessions: (_sessionIDs) => handlers.onSessions?.(),
         event: (sessionID, event) => handlers.onEvent?.(sessionID, event),
+        statusFrame: (running, attention) => handlers.onSessionStatus?.({ running, attention }),
         reconnect: () => handlers.onReconnect?.(),
         unsubscribes: [],
       }
       sockets.push(socket)
       const transport: RemoteTransport = {
-        connect: () => handlers.onStatus?.({ kind: "open" }),
+        connect: () => {
+          handlers.onStatus?.({ kind: "open" })
+          handlers.onSessionStatus?.({ running: [], attention: [] })
+        },
         // The replaced socket reports nothing; these cases publish its late frames by hand.
         close: () => {},
         status: () => ({ kind: "open" }),
@@ -1024,8 +1029,11 @@ describe("remote store integration", () => {
       expect(test.sockets).toHaveLength(1)
       expect(test.store.state().connection).toEqual({ kind: "connected", deviceName: "dev_1" })
       await test.store.selectSession("ses_a")
+      test.sockets[0]?.statusFrame(["ses_a"], [])
       test.sockets[0]?.event("ses_a", { id: "evt_done", type: "session.execution.succeeded", data: {} })
       await test.flush()
+      expect(alertCategories()).toEqual([])
+      test.sockets[0]?.statusFrame([], [])
       expect(alertCategories()).toEqual(["agent-completed"])
 
       // The device switch replaces the socket, so the alerts it raised end with it.
@@ -1033,13 +1041,17 @@ describe("remote store integration", () => {
       expect(test.sockets).toHaveLength(2)
       expect(test.store.state().connection).toEqual({ kind: "connected", deviceName: "dev_1" })
       await test.store.selectSession("ses_a")
+      test.sockets[1]?.statusFrame(["ses_a"], [])
       test.sockets[1]?.event("ses_a", { id: "evt_done_again", type: "session.execution.succeeded", data: {} })
       await test.flush()
+      expect(alertCategories()).toEqual([])
+      test.sockets[1]?.statusFrame([], [])
       expect(alertCategories()).toEqual(["agent-completed"])
 
       // A late 4401 from the replaced socket must not sign the browser out or end
       // the alerts of the connection that replaced it.
       test.sockets[0]?.publish({ kind: "closed", code: 4401, reason: "Your session expired.", retryable: false })
+      test.sockets[0]?.statusFrame(["ses_a"], ["ses_a"])
 
       expect(test.store.state().connection).toEqual({ kind: "connected", deviceName: "dev_1" })
       expect(test.store.state().owner?.id).toBe("user_1")
@@ -1853,11 +1865,16 @@ describe("remote store integration", () => {
   })
 
   test("re-reads the snapshot when a durable gap is detected", async () => {
-    const test = await harness({ watermark: 5 })
+    let watermark = 5
+    const test = await harness({ handler: (request) => request.operation === "session.snapshot"
+      ? { ok: true, value: { sourceEpoch: "epoch_1", session: { id: request.sessionID }, messages: [],
+        watermark: { type: "log.synced", aggregateID: request.sessionID, seq: watermark } } }
+      : "default" })
     try {
       await test.store.load()
       await waitFor(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
+      watermark = 9
       test.relay.pushEvent("ses_a", {
         id: "evt_gap",
         type: "session.execution.started",
@@ -1866,7 +1883,8 @@ describe("remote store integration", () => {
       })
       await test.flush()
       await waitFor(() => test.relay.requests.filter((request) => request.operation === "session.snapshot").length >= 2)
-      expect(test.store.state().notice).toContain("missed")
+      await waitFor(() => test.store.state().view?.watermark === 9)
+      expect(test.store.state().notice).toBeUndefined()
     } finally {
       await test.stop()
     }

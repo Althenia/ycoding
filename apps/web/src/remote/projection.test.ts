@@ -8,6 +8,9 @@ import {
   toolSummary,
   toolTone,
   classifySyntheticNotice,
+  transcriptMessageVisible,
+  transcriptPartVisible,
+  visibleTranscriptMessages,
   appendShellOutputPage,
   applySessionEvent,
   boundedText,
@@ -23,6 +26,7 @@ import {
   readForms,
   readShellOutputPage,
   readSnapshotParts,
+  readToolContent,
   sealedPartKeys,
   shellOutputFetchFor,
   shellOutputFor,
@@ -33,6 +37,49 @@ import {
   type ShellOutputView,
   type SessionView,
 } from "./projection"
+
+test("projects managed user files without exposing their storage path", () => {
+  const digest = "a".repeat(64)
+  const message = readMessageList({ data: [{ id: "msg_files", type: "user", text: "Look", files: [
+    { name: "chart.png", mime: "image/png", content: { type: "managed", digest, bytes: 1_234, path: `attachments/sha256/aa/${digest}` } },
+    { name: "notes.pdf", mime: "application/pdf", content: { type: "managed", digest: "b".repeat(64), bytes: 42, path: `attachments/sha256/bb/${"b".repeat(64)}` } },
+    { name: "untrusted", mime: "image/svg+xml", content: { type: "managed", digest: "not-a-digest", bytes: 10, path: "local" } },
+  ], time: { created: 1 } }] })
+  expect(message).toEqual([{
+    kind: "user", id: "msg_files", text: "Look", state: "promoted", created: 1,
+    attachments: [
+      { name: "chart.png", mime: "image/png", bytes: 1_234, digest },
+      { name: "notes.pdf", mime: "application/pdf", bytes: 42, digest: "b".repeat(64) },
+    ],
+  }])
+})
+
+test("keeps attached images on an admitted live prompt until its snapshot arrives", () => {
+  const digest = "c".repeat(64)
+  const view = applySessionEvent(createSessionView("ses_a"), { type: "session.input.admitted", data: {
+    sessionID: "ses_a", inputID: "msg_live", input: { type: "user", delivery: "steer", data: { text: "Picture", files: [
+      { name: "live.webp", mime: "image/webp", content: { type: "managed", digest, bytes: 75, path: `attachments/sha256/cc/${digest}` } },
+    ] } },
+  } }, 2)
+  expect(view.messages[0]).toMatchObject({ kind: "user", id: "msg_live", attachments: [{ name: "live.webp", mime: "image/webp", digest, bytes: 75 }] })
+})
+
+test("allows only image data URIs with matching supported MIME types in tool output", () => {
+  const png = "data:image/png;base64,iVBORw0KGgo="
+  expect(readToolContent([
+    { type: "file", mime: "image/png", uri: png, name: "plot.png" },
+    { type: "file", mime: "image/jpeg", uri: "data:image/png;base64,AAAA", name: "mismatch" },
+    { type: "file", mime: "image/svg+xml", uri: "data:image/svg+xml;base64,PHN2Zz4=" },
+    { type: "file", mime: "image/gif", uri: "javascript:alert(1)" },
+    { type: "file", mime: "image/webp", uri: "data:image/webp;base64,AQID" },
+  ])).toEqual([
+    { kind: "image", uri: png, mime: "image/png", name: "plot.png" },
+    { kind: "other", type: "file", summary: expect.any(String) },
+    { kind: "other", type: "file", summary: expect.any(String) },
+    { kind: "other", type: "file", summary: expect.any(String) },
+    { kind: "image", uri: "data:image/webp;base64,AQID", mime: "image/webp" },
+  ])
+})
 
 test("extracts only durable live subagent delegation and terminal notification identities", () => {
   expect(readTeamCue({ id: "evt_1", type: "session.tool.progress", durable: { aggregateID: "ses_root", seq: 1 }, data: {
@@ -123,6 +170,36 @@ test("classifies terminal synthetic statuses without inventing raw-text user mes
   }
   expect(classifySyntheticNotice({ kind: "synthetic", id: "n", text: "done", description: "Background finished", metadata: { source: "shell", state: "completed" }, created: 1 })).toEqual({ kind: "completion", label: "Shell", status: "finished", description: "Background finished" })
   expect(classifySyntheticNotice({ kind: "synthetic", id: "n", text: "Keep going", metadata: { autonomy: { goal: true } }, created: 1 })).toEqual({ kind: "goal", text: "Keep going" })
+})
+
+test("hides internal observations, empty synthetic rows, and non-display compactions", () => {
+  expect(transcriptMessageVisible({ kind: "system", id: "s", text: "state", source: "session-state", created: 1 })).toBe(false)
+  expect(transcriptMessageVisible({ kind: "synthetic", id: "t", text: "team", source: "team-view", description: "TeamView update", created: 2 })).toBe(false)
+  expect(transcriptMessageVisible({ kind: "synthetic", id: "e", text: "raw", description: "  ", created: 3 })).toBe(false)
+  expect(transcriptMessageVisible({ kind: "synthetic", id: "n", text: "notification", description: "Subagent notification", metadata: { source: "subagent_notification", type: "completed" }, created: 4 })).toBe(true)
+  expect(transcriptMessageVisible({ kind: "compaction", id: "c", status: "completed", jobID: "cmp_1" })).toBe(false)
+  expect(transcriptMessageVisible({ kind: "compaction", id: "f", status: "failed", failureCode: "provider_failed" })).toBe(false)
+  expect(transcriptMessageVisible({ kind: "compaction", id: "a", status: "failed", failureCode: "aborted" })).toBe(true)
+  expect(transcriptMessageVisible({ kind: "compaction", id: "l", status: "completed" })).toBe(true)
+})
+
+test("hides whitespace parts, goal tools, and completed duplicate skill loads", () => {
+  expect(transcriptPartVisible({ kind: "text", ordinal: 0, text: "  \n " })).toBe(false)
+  expect(transcriptPartVisible({ kind: "reasoning", ordinal: 1, text: "\t" })).toBe(false)
+  expect(transcriptPartVisible({ kind: "tool", callID: "g", name: "goal", status: "running", content: [] })).toBe(false)
+  expect(transcriptPartVisible({ kind: "tool", callID: "s", name: "skill", status: "completed", content: [], structured: { alreadyActive: true } })).toBe(false)
+  expect(transcriptPartVisible({ kind: "tool", callID: "s", name: "skill", status: "running", content: [], structured: { alreadyActive: true } })).toBe(true)
+  expect(transcriptPartVisible({ kind: "text", ordinal: 0, text: "Visible" })).toBe(true)
+})
+
+test("orders visible pending compactions and user inputs last without inventing rows", () => {
+  const rows = visibleTranscriptMessages([
+    { kind: "user", id: "pending", text: "Later", state: "pending", created: 1 },
+    { kind: "assistant", id: "answer", parts: [{ kind: "text", ordinal: 0, text: "Answer" }], created: 2 },
+    { kind: "compaction", id: "compact", status: "running" },
+    { kind: "synthetic", id: "team", text: "raw", description: "TeamView update", source: "team-view", created: 3 },
+  ])
+  expect(rows.map((row) => row.id)).toEqual(["answer", "compact", "pending"])
 })
 
 test("uses tool-specific one-line input summaries", () => {

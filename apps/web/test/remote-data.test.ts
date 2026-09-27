@@ -18,6 +18,86 @@ async function setup(handler?: (request: { operation: string; input?: Readonly<R
 }
 
 describe("remote data", () => {
+  test("the first status after a same-device reconnect reports decisions gained and work stopped while away", async () => {
+    const test = await setup()
+    const transitions = () => test.store.state().notifications.filter((entry) => entry.category === "approval-requested" || entry.category === "agent-completed")
+      .map((entry) => [entry.category, entry.sessionID])
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessionStatus !== undefined)
+      test.relay.pushStatus(["ses_a"], [])
+      await waitFor(() => test.store.state().sessionStatus?.running.has("ses_a") === true)
+      expect(transitions()).toEqual([])
+      const firstConnection = test.relay.connections
+      test.relay.dropConnections(1012, "Reconnect")
+      await waitFor(() => test.relay.connections > firstConnection && test.store.state().transport.kind === "open")
+      test.relay.pushStatus([], ["ses_b"])
+      await waitFor(() => test.store.state().sessionStatus?.attention.has("ses_b") === true)
+      expect(transitions()).toEqual([["agent-completed", "ses_a"], ["approval-requested", "ses_b"]])
+      const secondConnection = test.relay.connections
+      test.relay.dropConnections(1012, "Reconnect")
+      await waitFor(() => test.relay.connections > secondConnection && test.store.state().transport.kind === "open")
+      test.relay.pushStatus([], ["ses_b"])
+      await Bun.sleep(20)
+      expect(transitions()).toEqual([["agent-completed", "ses_a"], ["approval-requested", "ses_b"]])
+    } finally { await test.stop() }
+  })
+  test("loads every running root across workspaces with cursor pages and names", async () => {
+    const row = (id: string, projectID: string, directory: string, parentID?: string) => ({ id, title: `Session ${id}`,
+      projectID, location: { directory }, ...(parentID ? { parentID } : {}), time: { created: 1, updated: 2 } })
+    const test = await setup((request) => {
+      if (request.operation === "session.status") return { ok: true, value: { running: ["ses_r1", "ses_r2", "ses_r3"], attention: [] } }
+      if (request.operation === "workspace.list" && request.input?.sessionsOnly === true) return { ok: true, value: { data: [
+        { id: "wsp_a", projectID: "prj_a", directory: "/work/a", name: "Alpha" },
+        { id: "wsp_b", projectID: "prj_b", directory: "/work/b", name: "Beta" },
+        { id: "wsp_c", projectID: "prj_c", directory: "/work/c", name: "Gamma" },
+      ] } }
+      if (request.operation === "session.list" && request.input?.status === "running") return request.input.cursor === "next"
+        ? { ok: true, value: { data: [row("ses_r3", "prj_c", "/work/c")] } }
+        : { ok: true, value: { data: [row("ses_r1", "prj_a", "/work/a"), row("ses_child", "prj_a", "/work/a", "ses_r1"), row("ses_r2", "prj_b", "/work/b")], cursor: { next: "next" } } }
+      return "default"
+    })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().runningSessions?.length === 3)
+      expect(test.store.state().runningSessions?.map((session) => [session.id, session.workspaceName])).toEqual([
+        ["ses_r1", "Alpha"], ["ses_r2", "Beta"], ["ses_r3", "Gamma"],
+      ])
+      const reads = test.relay.requests.filter((request) => request.operation === "session.list" && request.input?.status === "running")
+      expect(reads).toHaveLength(2)
+      expect(reads[0]?.input).toMatchObject({ order: "active", status: "running", parentID: null, limit: 200 })
+      expect(reads[0]?.input).not.toHaveProperty("workspace")
+      expect(reads[1]?.input?.cursor).toBe("next")
+      await test.store.selectSession("ses_r2")
+      expect(test.store.state().activeSessionID).toBe("ses_r2")
+      expect(test.relay.requests.some((request) => request.operation === "session.subscribe" && request.sessionID === "ses_r2")).toBe(true)
+    } finally { await test.stop() }
+  })
+  test("coalesces running-set changes into the shared status refresh window", async () => {
+    const test = await setup((request) => {
+      if (request.operation === "session.status") return { ok: true, value: { running: ["ses_r1"], attention: [] } }
+      if (request.operation === "session.list" && request.input?.status === "running") {
+        const running = request.input.cursor === undefined ? current : []
+        return { ok: true, value: { data: running.map((id) => ({ id, title: id, projectID: "prj_a", location: { directory: "/work/a" }, time: { created: 1, updated: 2 } })) } }
+      }
+      return "default"
+    })
+    let current = ["ses_r1"]
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().runningSessions?.[0]?.id === "ses_r1")
+      current = ["ses_r2"]
+      test.relay.pushStatus(["ses_r2"], [])
+      current = ["ses_r3"]
+      test.relay.pushStatus(["ses_r3"], [])
+      await waitFor(() => test.store.state().sessionStatus?.running.has("ses_r3") === true)
+      expect(test.store.state().runningSessions).toEqual([])
+      await Bun.sleep(50)
+      expect(test.relay.requests.filter((request) => request.operation === "session.list" && request.input?.status === "running")).toHaveLength(1)
+      await waitFor(() => test.store.state().runningSessions?.[0]?.id === "ses_r3", 6_500)
+      expect(test.relay.requests.filter((request) => request.operation === "session.list" && request.input?.status === "running")).toHaveLength(2)
+    } finally { await test.stop() }
+  }, 8_000)
   test("uploads a large attachment in bounded acknowledged chunks before prompt admission", async () => {
     const uploads: { index: number; last: boolean; data: string; uploadID: string }[] = []
     const test = await setup((request) => {
@@ -210,7 +290,7 @@ describe("remote data", () => {
     const gate = new Promise<void>((resolve) => { release = resolve })
     let lists = 0
     const test = await setup(async (request) => {
-      if (request.operation === "session.list" && ++lists === 2) await gate
+      if (request.operation === "session.list" && request.input?.workspace !== undefined && ++lists === 2) await gate
       return "default" as const
     })
     try {

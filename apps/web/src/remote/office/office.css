@@ -1,6 +1,6 @@
 .app--office .workspace__scroll { display:flex; flex-direction:column; }
-.office-workspace { display:grid; flex:1; min-inline-size:0; min-block-size:min(640px,calc(100dvh - 180px)); }
-.office-workspace__stage { display:grid; grid-template-rows:auto minmax(0,1fr) auto; gap:var(--yc-space-3); min-inline-size:0; min-block-size:0; }
+.office-workspace { display:grid; flex:1; min-inline-size:0; min-block-size:max(400px,min(640px,calc(100dvh - 180px))); }
+.office-workspace__stage { display:grid; grid-template-rows:auto minmax(220px,1fr) auto; gap:var(--yc-space-3); min-inline-size:0; min-block-size:0; }
 .office-workspace__canvas { min-inline-size:0; min-block-size:0; block-size:100%; }
 .office-stage { position:relative; display:grid; grid-template-rows:auto minmax(0,1fr); min-inline-size:0; min-block-size:0; block-size:100%; overflow:hidden; border:var(--yc-border-width) solid var(--yc-border-strong); border-radius:var(--yc-radius-md); background:#1b2832; }
 .office-canvas-host { grid-row:2; min-inline-size:0; min-block-size:0; inline-size:100%; block-size:100%; }

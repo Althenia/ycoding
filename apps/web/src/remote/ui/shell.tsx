@@ -12,7 +12,6 @@ import {
   modelLabel,
   type ActivityItem,
   type PendingRequestView,
-  type RemoteMessageView,
   type SessionView,
 } from "../projection"
 import type { SessionInfoView } from "../store"
@@ -56,6 +55,7 @@ import { ActivityRow, RequestCard } from "./conversation"
 import { TranscriptNavigation } from "./transcript-nav"
 import { NotificationCenter, NotificationToasts } from "./notifications"
 import { TodoPanel } from "./todo-panel"
+import { RunningSessions } from "./running-sessions"
 
 const views = ["/remote", "/remote/sessions", "/remote/activity", "/remote/usage", "/remote/settings"] as const
 
@@ -211,6 +211,7 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
             </div>
             <Show when={composition().showComposer && !officeShown() && !newSessionOpen()}>
               <>
+                <div class="conversation-jump-slot" />
                 <TodoPanel todos={state().todos} />
                 <Composer
                   sessionID={state().activeSessionID}
@@ -232,7 +233,7 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
         <NotificationToasts onOpenSession={openSession} />
 
         <Show when={navOpen()}>
-          <Modal class="overlay--slideover" label="Sessions" onClose={() => setNavOpen(false)}>
+          <Modal class="overlay--slideover overlay--sessions-sheet" label="Sessions" onClose={() => setNavOpen(false)}>
             <SessionPanel
               canCreateSession={canCreateSession()}
               onNewSession={openNewSession}
@@ -1144,6 +1145,7 @@ function SessionsPage(props: {
               <h2 id="sessions-page-title" class="sessions-page__title">{workspaceTitle()}</h2>
               <NewSessionButton disabled={!props.canCreateSession} onClick={props.onNewSession} />
             </div>
+            <RunningSessions sessions={remote.state().runningSessions ?? []} onSelectSession={props.onSelectSession} />
             <div class="sessions-page__workspace-select">
               <WorkspaceSelector />
             </div>
@@ -1489,7 +1491,7 @@ function BottomNav(props: { readonly view: RemoteView }): JSX.Element {
                 <span class="attention-dot" aria-hidden="true" />
               </Show>
             </span>
-            <span>{item.label}</span>
+            <span class="bottom-nav__label" aria-hidden="true">{item.label}</span>
           </Link>
         )}
       </For>

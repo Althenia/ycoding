@@ -3,14 +3,15 @@ import { findPath } from "./navigation"
 import { floorFrameAt, officeLayout, props, rooms, wallAt } from "./map"
 import type { OfficeHomeRoom, OfficeRoomID, OfficeSpot } from "./types"
 
-const identities: readonly Exclude<OfficeRoomID, "hall">[] = ["ceo", "developer", "research", "qa", "meeting", "lounge"]
+const identities: readonly Exclude<OfficeRoomID, "hall">[] = ["developer", "research", "qa", "meeting", "lounge"]
 
 test("the original office fits the bounded 32px world and gives each room a distinct floor and door", () => {
   expect(officeLayout.tileSize).toBe(32)
-  expect(officeLayout.columns).toBeLessThanOrEqual(56)
+  expect(officeLayout.columns).toBeLessThanOrEqual(64)
   expect(officeLayout.rows).toBeLessThanOrEqual(40)
-  expect(officeLayout.columns).toBe(56)
+  expect(officeLayout.columns).toBe(64)
   expect(officeLayout.rows).toBe(40)
+  expect(officeLayout.columns / officeLayout.rows).toBeGreaterThanOrEqual(1.6)
   expect(new Set(rooms.map((room) => room.id))).toEqual(new Set(identities))
   expect(new Set(rooms.map((room) => floorFrameAt(room.center.x, room.center.y))).size).toBe(identities.length)
   expect(officeLayout.walkable(officeLayout.door.x, officeLayout.door.y)).toBe(true)
@@ -33,8 +34,8 @@ test("the original office fits the bounded 32px world and gives each room a dist
 
 test("every work, meeting, and lounge spot is distinct, walkable, correctly zoned, and reachable", () => {
   const categories: readonly { readonly room: OfficeRoomID; readonly spots: readonly OfficeSpot[]; readonly seated: number }[] = [
-    ...(["ceo", "developer", "research", "qa"] as const).map((room: OfficeHomeRoom) => ({
-      room, spots: officeLayout.work[room], seated: { ceo: 4, developer: 12, research: 6, qa: 6 }[room],
+    ...(["developer", "research", "qa"] as const).map((room: OfficeHomeRoom) => ({
+      room, spots: officeLayout.work[room], seated: { developer: 12, research: 6, qa: 6 }[room],
     })),
     { room: "meeting", spots: officeLayout.meeting, seated: 8 },
     { room: "lounge", spots: officeLayout.lounge, seated: 8 },
@@ -65,7 +66,6 @@ test("every work, meeting, and lounge spot is distinct, walkable, correctly zone
 
 test("furnished footprints block travel while room-specific props remain inside their rooms", () => {
   const required = {
-    ceo: ["executiveDesk", "bookshelf", "aquarium", "sofa", "coffeeTable", "plantMonstera"],
     developer: ["developerDesk", "serverRack", "whiteboard", "plantFern"],
     research: ["researchDesk", "bookshelf", "readingSeat", "whiteboard", "globe"],
     qa: ["qaDesk", "deviceRack", "bugBoard"],
@@ -117,7 +117,7 @@ test("each room has a furnished wall and a lit, lived-in floor without sacrifici
     const kinds = new Set<string>(props.filter((item) => item.room === room.id).map((item) => item.kind))
     for (const kind of ["wallArt", "clock", "floorLamp"]) expect(kinds.has(kind), `${room.id} ${kind}`).toBe(true)
     expect(kinds.has("filingCabinet") || kinds.has("printer"), `${room.id} storage`).toBe(true)
-    expect(kinds.has("rug") || kinds.has("blueRug"), `${room.id} rug`).toBe(true)
+    expect(kinds.has("blueRug"), `${room.id} rug`).toBe(true)
   }
   const shelves = props.filter((item) => item.room === "research" && item.kind === "bookshelf").sort((a, b) => a.cell.y - b.cell.y)
   expect(shelves.length).toBeGreaterThanOrEqual(4)

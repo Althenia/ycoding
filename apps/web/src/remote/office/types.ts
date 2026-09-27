@@ -20,8 +20,9 @@ export type SessionSummary = {
   readonly running?: boolean
 }
 
-export type OfficeHomeRoom = "ceo" | "developer" | "research" | "qa"
+export type OfficeHomeRoom = "developer" | "research" | "qa"
 export type OfficeRoomID = OfficeHomeRoom | "meeting" | "lounge" | "hall"
+export type OfficeActivity = "research" | "implement" | "coordinate" | "verify" | "hold"
 export type Direction = "down" | "left" | "right" | "up"
 
 export type SelectedSession = {
@@ -30,6 +31,7 @@ export type SelectedSession = {
   readonly agent?: string
   readonly requestCount: number
   readonly activeTool?: string
+  readonly activity?: OfficeActivity
   readonly compacting: boolean
   readonly thinking: boolean
   readonly assistantExcerpt?: string
@@ -83,6 +85,7 @@ export type OfficeActor = {
   readonly bubble?: string
   readonly unknownOutcome: boolean
   readonly homeRoom: OfficeHomeRoom
+  readonly activity?: OfficeActivity
   readonly teamRootSessionID?: string
   readonly taskState?: TaskState
 }

@@ -25,7 +25,8 @@ function Fixture() {
     const pulse = revision()
     return projectOffice({
     ...current,
-    ...(query.has("snapshots") && current.selected ? { selected: { ...current.selected, activeTool: undefined, thinking: pulse % 2 === 1 } } : {}),
+    ...(query.has("activity") && current.selected ? { selected: { ...current.selected, activity: (["research", "implement", "coordinate", "verify"] as const).find((value) => value === query.get("activity")) } }
+      : query.has("snapshots") && current.selected ? { selected: { ...current.selected, activeTool: undefined, thinking: pulse % 2 === 1 } } : {}),
     sessions: [
       ...current.sessions.map((session) => query.has("staleIdle") && session.id === "session-a" ? { ...session, running: true } : session),
       ...(extraSession() ? [{ id: "session-new", parentID: "session-a", title: "New research task", agent: "Researcher", archived: false, running: true }] : []),

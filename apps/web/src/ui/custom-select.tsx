@@ -245,17 +245,17 @@ export function CustomSelect(props: {
             <Modal class={`overlay--sheet custom-select__dialog${props.surfaceClass ? ` ${props.surfaceClass}` : ""}`} label={props.sheetTitle ?? props.label} onClose={() => closeMenu(true)}>
               <p class="custom-select__subtitle">{props.sheetSubtitle ?? "Available options"}</p>
               {options()}
-              <button
-                type="button"
-                class="button button--secondary custom-select__confirm"
-                disabled={!props.options.some((option) => option.value === pendingValue())}
-                onClick={() => {
-                  const option = props.options.find((item) => item.value === pendingValue())
-                  if (option === undefined) return
-                  if (option.value !== props.value) props.onChange(option.value)
-                  closeMenu(true)
-                }}
-              >Confirm Selection</button>
+              <div class="custom-select__confirm-footer"><button
+                  type="button"
+                  class="button button--secondary custom-select__confirm"
+                  disabled={!props.options.some((option) => option.value === pendingValue())}
+                  onClick={() => {
+                    const option = props.options.find((item) => item.value === pendingValue())
+                    if (option === undefined) return
+                    if (option.value !== props.value) props.onChange(option.value)
+                    closeMenu(true)
+                  }}
+                >Confirm Selection</button></div>
             </Modal>
           </Show>
         </Portal>

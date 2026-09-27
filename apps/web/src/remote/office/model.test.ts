@@ -31,13 +31,13 @@ test('historical tool activity does not make an idle session busy', () => {
   assert.equal(projectOffice({ ...input, sessions: input.sessions.map((session) => session.id === 'session-a' ? { ...session, running: false } : session), selected: { ...input.selected!, status: 'idle' as const } }, preferences).actors[0]!.status, 'idle')
 })
 test('a reported running root overrides a lagging idle detail and retains thinking', () => {
-  for (const [thinking, status, label] of [[false, 'working', 'Working'], [true, 'thinking', 'Thinking']] as const) {
+  for (const [thinking, status, label] of [[false, 'working', 'Implementing'], [true, 'thinking', 'Thinking']] as const) {
     const input = scenario('idle')
     const root = projectOffice({ ...input, sessions: input.sessions.map((session) => session.id === 'session-a' ? { ...session, running: true } : session), selected: { ...input.selected!, thinking } }, preferences).actors[0]!
     assert.equal(root.status, status)
     assert.equal(root.statusText, label)
     assert.equal(root.bubble, label)
-    assert.equal(root.homeRoom, 'ceo')
+    assert.equal(root.homeRoom, 'developer')
   }
 })
 test('unknown mutation remains explicit', () => assert.equal(selected('unknown-outcome').unknownOutcome, true))

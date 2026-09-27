@@ -44,11 +44,11 @@ test("human names are unique, deterministic across reorder and status updates, a
 })
 
 test("current Office location labels name rooms, hallway and entrance rather than the home room", async () => {
-  const officeLocationLabel: (room?: "ceo" | "meeting" | "lounge" | "hall") => string = Reflect.get(await import("./model"), "officeLocationLabel")
+  const officeLocationLabel: (room?: "developer" | "meeting" | "lounge" | "hall") => string = Reflect.get(await import("./model"), "officeLocationLabel")
   expect(typeof officeLocationLabel).toBe("function")
-  expect(officeLocationLabel("ceo")).toBe("CEO office")
+  expect(officeLocationLabel("developer")).toBe("Developer room")
   expect(officeLocationLabel("meeting")).toBe("Meeting room")
-  expect(officeLocationLabel("lounge")).toBe("Relax lounge")
+  expect(officeLocationLabel("lounge")).toBe("Lounge")
   expect(officeLocationLabel("hall")).toBe("Hallway")
   expect(officeLocationLabel(undefined)).toBe("Entrance")
 })

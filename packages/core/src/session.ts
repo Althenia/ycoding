@@ -1,11 +1,11 @@
 export * as SessionV2 from "./session"
 export * from "./session/schema"
 
-import { Cause, DateTime, Effect, Layer, Schema, Context, Stream, Scope } from "effect"
+import { Cause, DateTime, Effect, Layer, Option, Schema, Context, Stream, Scope } from "effect"
 import { ListAnchor } from "@ycoding-ai/schema/session"
 import type { Model } from "@ycoding-ai/schema/model"
 import { ID, type Admission, type Result } from "@ycoding-ai/schema/session-compaction"
-import { and, asc, desc, eq, gt, isNull, like, lt, or, type SQL } from "drizzle-orm"
+import { and, asc, desc, eq, gt, isNull, like, lt, or, sql, type SQL } from "drizzle-orm"
 import { ProjectV2 } from "./project"
 import { WorkspaceV2 } from "./workspace"
 import { ModelV2 } from "./model"
@@ -26,7 +26,7 @@ import { SessionContextState } from "./session/context-state"
 import { Info, list } from "./session/skill-status"
 import { SessionGoal } from "./session/goal"
 import { SessionGuardrail } from "./session/guardrail"
-import { Base64, FileAttachment, Prompt } from "@ycoding-ai/schema/prompt"
+import { Base64, FileAttachment, ManagedAttachmentContent, Prompt } from "@ycoding-ai/schema/prompt"
 import { PromptInput } from "@ycoding-ai/schema/prompt-input"
 import { EventV2 } from "./event"
 import { Database } from "./database/database"
@@ -44,7 +44,7 @@ import { fromRow } from "./session/info"
 import { SessionRunner } from "./session/runner/index"
 import { SessionStore } from "./session/store"
 import { SessionExecution } from "./session/execution"
-import { AgentNotFoundError, MessageDecodeError, NotFoundError } from "./session/error"
+import { AgentNotFoundError, AttachmentReadError, InvalidCursorError, MessageDecodeError, NotFoundError } from "./session/error"
 import { makeGlobalNode } from "./effect/app-node"
 import { LocationServiceMap } from "./location-service-map"
 import { SessionEvent } from "./session/event"
@@ -168,7 +168,9 @@ export class OperationUnavailableError extends Schema.TaggedErrorClass<Operation
   },
 ) {}
 
-export { MessageDecodeError, NotFoundError }
+export { AttachmentReadError, InvalidCursorError, MessageDecodeError, NotFoundError }
+
+export const MaxAttachmentReadBytes = 10 * 1024 * 1024
 
 export class PromptConflictError extends Schema.TaggedErrorClass<PromptConflictError>()("Session.PromptConflictError", {
   sessionID: SessionSchema.ID,
@@ -253,13 +255,18 @@ export interface Interface {
   readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly fork: (input: ForkInput) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
-  readonly snapshot: (sessionID: SessionSchema.ID) => Effect.Effect<
+  readonly snapshot: (sessionID: SessionSchema.ID, options?: { readonly limit?: number; readonly before?: string }) => Effect.Effect<
     {
       readonly session: SessionSchema.Info
       readonly messages: SessionMessage.Info[]
       readonly watermark: EventLog.Synced
+      readonly before?: string
     },
-    NotFoundError | MessageDecodeError
+    NotFoundError | MessageDecodeError | InvalidCursorError
+  >
+  readonly attachmentRead: (sessionID: SessionSchema.ID, digest: string) => Effect.Effect<
+    { readonly mime: string; readonly bytes: number; readonly data: string },
+    NotFoundError | AttachmentReadError
   >
   readonly remove: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly archive: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
@@ -869,12 +876,18 @@ const layer = Layer.effect(
         if (!session) return yield* new NotFoundError({ sessionID })
         return session
       }),
-      snapshot: Effect.fn("V2Session.snapshot")(function* (sessionID) {
+      snapshot: Effect.fn("V2Session.snapshot")(function* (sessionID, options) {
+        if (options?.limit !== undefined && (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > 200))
+          return yield* new InvalidCursorError()
+        if (options?.before !== undefined && options.limit === undefined) return yield* new InvalidCursorError()
+        const before = options?.before === undefined ? undefined : yield* SessionHistory.snapshotCursor(sessionID, options.before)
         return yield* db
           .transaction(() =>
             Effect.gen(function* () {
               const session = yield* result.get(sessionID)
-              const messages = yield* SessionHistory.load(db, sessionID)
+              const history = options?.limit === undefined
+                ? { messages: yield* SessionHistory.load(db, sessionID) }
+                : yield* SessionHistory.snapshotWindow(db, sessionID, options.limit, before)
               const sequence = yield* EventV2.latestSequence(db, sessionID)
               const watermark: EventLog.Synced = {
                 type: "log.synced",
@@ -883,12 +896,37 @@ const layer = Layer.effect(
               }
               return {
                 session,
-                messages,
+                ...history,
                 watermark,
               }
             }),
           )
           .pipe(Effect.orDie)
+      }),
+      attachmentRead: Effect.fn("V2Session.attachmentRead")(function* (sessionID, digest) {
+        if (!/^[0-9a-f]{64}$/.test(digest)) return yield* new AttachmentReadError({ reason: "invalid" })
+        yield* result.get(sessionID)
+        const reference = yield* db.get<{ mime: unknown; bytes: unknown; path: unknown }>(sql`
+          SELECT json_extract(file.value, '$.mime') AS mime,
+                 json_extract(file.value, '$.content.bytes') AS bytes,
+                 json_extract(file.value, '$.content.path') AS path
+          FROM session_message AS message, json_each(message.data, '$.files') AS file
+          WHERE message.session_id = ${sessionID} AND message.type = 'user'
+            AND json_extract(file.value, '$.content.type') = 'managed'
+            AND json_extract(file.value, '$.content.digest') = ${digest}
+          LIMIT 1
+        `).pipe(Effect.orDie)
+        if (!reference) return yield* new AttachmentReadError({ reason: "not-found" })
+        const content = yield* Schema.decodeUnknownEffect(ManagedAttachmentContent)({
+          type: "managed", digest, bytes: reference.bytes, path: reference.path,
+        }).pipe(Effect.orDie)
+        const mime = yield* Schema.decodeUnknownEffect(Schema.String)(reference.mime).pipe(Effect.orDie)
+        if (content.bytes > MaxAttachmentReadBytes) return yield* new AttachmentReadError({ reason: "too-large" })
+        const bytes = yield* attachments.read(content).pipe(Effect.catchTag("AttachmentStore.Error", (error) => Effect.gen(function* () {
+          yield* Effect.logWarning("Managed Session attachment unavailable", { reason: error.reason })
+          return yield* new AttachmentReadError({ reason: "not-found" })
+        })))
+        return { mime, bytes: bytes.byteLength, data: Buffer.from(bytes).toString("base64") }
       }),
       diagnostics: Effect.fn("V2Session.diagnostics")(function* (sessionID) {
         const session = yield* result.get(sessionID)
@@ -1239,6 +1277,7 @@ const layer = Layer.effect(
                       { text: input.text, files: input.files, agents: input.agents },
                       image,
                       attachments,
+                      db,
                     ).pipe(Effect.provideService(FSUtil.Service, fs))
                     const admitted = yield* SessionPending.admit(db, events, {
                       id: messageID,
@@ -1898,14 +1937,39 @@ const resolvePrompt = Effect.fn("V2Session.resolvePrompt")(function* (
   input: PromptInput.Prompt,
   image: Effect.Effect<Image.Interface>,
   attachments: AttachmentStore.Interface,
+  db: Database.Interface["db"],
 ) {
   const fs = yield* FSUtil.Service
   const files = input.files
-    ? yield* Effect.forEach(input.files, (file) => materializeAttachment(fs, file, image, attachments), {
+    ? yield* Effect.forEach(input.files, (file) => materializeAttachment(fs, file, image, attachments, db), {
         concurrency: 8,
       })
     : undefined
   return Prompt.make({ text: input.text, agents: input.agents, files })
+})
+
+const RecordedAttachment = Schema.Struct({ content: ManagedAttachmentContent, mime: Schema.String })
+const decodeRecordedAttachment = Schema.decodeUnknownOption(RecordedAttachment)
+
+const recordedAttachment = Effect.fnUntraced(function* (db: Database.Interface["db"], uri: string) {
+  const digest = AttachmentStore.managedDigest(uri)
+  if (digest === undefined) return undefined
+  const row = yield* db
+    .get<{ bytes: unknown; path: unknown; mime: unknown }>(sql`
+      SELECT json_extract(file.value, '$.content.bytes') AS bytes,
+             json_extract(file.value, '$.content.path') AS path,
+             json_extract(file.value, '$.mime') AS mime
+      FROM event, json_each(event.data, '$.input.data.files') AS file
+      WHERE event.type = 'session.input.admitted.1'
+        AND json_extract(file.value, '$.content.type') = 'managed'
+        AND json_extract(file.value, '$.content.digest') = ${digest}
+      LIMIT 1
+    `)
+    .pipe(Effect.orDie)
+  if (!row) return undefined
+  return Option.getOrUndefined(
+    decodeRecordedAttachment({ content: { type: "managed", digest, bytes: row.bytes, path: row.path }, mime: row.mime }),
+  )
 })
 
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
@@ -1915,17 +1979,28 @@ const materializeAttachment = Effect.fn("V2Session.materializeAttachment")(funct
   input: PromptInput.FileAttachment,
   image: Effect.Effect<Image.Interface>,
   attachments: AttachmentStore.Interface,
+  db: Database.Interface["db"],
 ) {
   if (input.uri.startsWith("ycoding-attachment://")) {
-    const content = yield* attachments
-      .resolveURI(input.uri)
-      .pipe(Effect.mapError((error) => new AttachmentError({ uri: input.uri, message: error.message })))
-    const bytes = yield* attachments
-      .read(content)
-      .pipe(Effect.mapError((error) => new AttachmentError({ uri: input.uri, message: error.message })))
+    const stored = yield* attachments.resolveURI(input.uri).pipe(
+      Effect.flatMap((content) =>
+        attachments.read(content).pipe(Effect.map((bytes) => ({ content, mime: Mime.detect(bytes) }))),
+      ),
+      Effect.catchTag("AttachmentStore.Error", (error) =>
+        Effect.gen(function* () {
+          const recorded = yield* recordedAttachment(db, input.uri)
+          if (!recorded) return yield* new AttachmentError({ uri: input.uri, message: error.message })
+          yield* Effect.logWarning("Admitting a recorded attachment whose stored copy is unavailable", {
+            digest: recorded.content.digest,
+            reason: error.reason,
+          })
+          return recorded
+        }),
+      ),
+    )
     return FileAttachment.create({
-      content,
-      mime: Mime.detect(bytes),
+      content: stored.content,
+      mime: stored.mime,
       name: input.name,
       description: input.description,
       mention: input.mention,

@@ -1255,12 +1255,41 @@ body:has(.app) {
   padding-block-start: var(--yc-space-4);
 }
 
+.app--conversation.app--selected {
+  --remote-column: 1400px;
+}
+
+.app--conversation.app--selected .workspace__main {
+  grid-template-rows: minmax(0, 1fr) auto auto auto;
+}
+
+.conversation-jump-slot { display: none; }
+
+@media (max-width: 1023px) {
+  .app--conversation.app--selected .conversation-jump-slot:has(.transcript-navigation__mobile-controls--visible) {
+    display: flex;
+    justify-content: flex-end;
+    inline-size: min(calc(100% - 2 * var(--yc-gutter)), var(--remote-column));
+    margin-inline: auto;
+    padding-block: var(--yc-space-2) var(--yc-space-3);
+  }
+}
+
 /* Notices, breadcrumb, transcript, pending requests, and the composer share the
    conversation column's edges at every width. */
 .app--conversation.app--selected .workspace__scroll > *,
-.app--conversation.app--selected .composer > * {
+.app--conversation.app--selected .composer > *,
+.app--conversation.app--selected .todo-panel__inner {
   inline-size: min(100%, var(--remote-column));
   margin-inline: auto;
+}
+
+@media (min-width: 1024px) {
+  .app--conversation.app--selected .workspace__scroll > *,
+  .app--conversation.app--selected .composer > *,
+  .app--conversation.app--selected .todo-panel__inner {
+    inline-size: min(calc(100% - var(--yc-space-12)), var(--remote-column));
+  }
 }
 
 /* The page already sits inside the workspace gutter; a second pane inset would
@@ -1791,7 +1820,7 @@ body:has(.app) {
 
 .bottom-nav {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   border-block-start: var(--yc-border-width) solid var(--yc-border);
   background: color-mix(in srgb, var(--yc-bg) 92%, transparent);
   backdrop-filter: blur(12px);
@@ -1800,14 +1829,15 @@ body:has(.app) {
 
 .bottom-nav__item {
   display: grid;
-  justify-items: center;
-  gap: 2px;
+  place-items: center;
   min-height: var(--yc-bottom-nav-h);
-  padding-block: 8px;
+  padding: 0;
   color: var(--yc-text-muted);
   font-size: var(--yc-size-2xs);
   text-decoration: none;
 }
+
+.bottom-nav__label { display: none; }
 
 .bottom-nav__item--active {
   color: var(--yc-green-strong);
@@ -2254,6 +2284,24 @@ body:has(.app) {
   position: absolute;
   inset-block-start: -2px;
   inset-inline-end: -4px;
+}
+
+@media (max-width: 767px) {
+  .app .overlay--sessions-sheet .overlay__surface {
+    inset-inline: 0;
+    inset-block-start: auto;
+    inset-block-end: 0;
+    inline-size: 100%;
+    max-block-size: min(78dvh, calc(100dvh - var(--yc-header-h) - var(--yc-status-strip-h) - var(--yc-space-4)));
+    border-radius: var(--yc-radius-xl) var(--yc-radius-xl) 0 0;
+    padding-block-end: env(safe-area-inset-bottom);
+  }
+}
+
+@media (max-width: 767px) and (prefers-reduced-motion: no-preference) {
+  .app .overlay--sessions-sheet[open] .overlay__surface {
+    animation: yc-sheet-in var(--yc-dur-base) var(--yc-ease-entrance) both;
+  }
 }
 
 @media (prefers-reduced-motion: no-preference) {

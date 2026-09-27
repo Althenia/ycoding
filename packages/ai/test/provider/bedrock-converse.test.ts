@@ -640,31 +640,31 @@ describe("Bedrock Converse route", () => {
     }),
   )
 
-  it.effect("rejects unsupported image media types", () =>
+  it.effect("describes unsupported image media types", () =>
     Effect.gen(function* () {
-      const error = yield* LLMClient.prepare(
+      const prepared = yield* LLMClient.prepare(
         LLM.request({
           id: "req_bad_image",
           model,
           messages: [Message.user([{ type: "media", mediaType: "image/svg+xml", data: "x" }])],
         }),
-      ).pipe(Effect.flip)
+      )
 
-      expect(error.message).toContain("Bedrock Converse does not support image media type image/svg+xml")
+      expect(JSON.stringify(prepared.body.messages)).toContain("File (unnamed) (image/svg+xml) omitted: Bedrock Converse does not support image media type image/svg+xml")
     }),
   )
 
-  it.effect("rejects unsupported document media types", () =>
+  it.effect("describes unsupported document media types", () =>
     Effect.gen(function* () {
-      const error = yield* LLMClient.prepare(
+      const prepared = yield* LLMClient.prepare(
         LLM.request({
           id: "req_bad_doc",
           model,
           messages: [Message.user([{ type: "media", mediaType: "application/x-tar", data: "x", filename: "a.tar" }])],
         }),
-      ).pipe(Effect.flip)
+      )
 
-      expect(error.message).toContain("Bedrock Converse does not support media type application/x-tar")
+      expect(JSON.stringify(prepared.body.messages)).toContain("File a.tar (application/x-tar) omitted: Bedrock Converse does not support media type application/x-tar")
     }),
   )
 

@@ -426,11 +426,44 @@ describe("SessionProjector", () => {
         "first",
         "second",
       ])
+      const newest = yield* sessions.snapshot(sessionID, { limit: 1 })
+      expect(newest.messages.map((message) => (message.type === "user" ? message.text : message.type))).toEqual(["second"])
+      expect(newest.before).toBeDefined()
+      expect(newest.watermark).toEqual(projection.watermark)
+      const oldest = yield* sessions.snapshot(sessionID, { limit: 1, before: newest.before })
+      expect(oldest.messages.map((message) => (message.type === "user" ? message.text : message.type))).toEqual(["first"])
+      expect(oldest.before).toBeUndefined()
+      expect(oldest.watermark).toEqual(projection.watermark)
       expect(projection.watermark).toEqual({
         type: "log.synced",
         aggregateID: sessionID,
         seq: EventV2.Seq.make(yield* EventV2.latestSequence((yield* Database.Service).db, sessionID)),
       })
+      yield* events.publish(SessionEvent.InputAdmitted, {
+        sessionID,
+        inputID: SessionMessage.ID.make("msg_third"),
+        input: { type: "user", data: { text: "third" }, delivery: "steer" },
+      })
+      yield* events.publish(SessionEvent.InputPromoted, {
+        sessionID,
+        inputID: SessionMessage.ID.make("msg_third"),
+      })
+      const firstWindow = yield* sessions.snapshot(sessionID, { limit: 1 })
+      const middleWindow = yield* sessions.snapshot(sessionID, { limit: 1, before: firstWindow.before })
+      const lastWindow = yield* sessions.snapshot(sessionID, { limit: 1, before: middleWindow.before })
+      expect([firstWindow, middleWindow, lastWindow].map((page) => page.messages[0]?.type === "user" ? page.messages[0].text : undefined)).toEqual(["third", "second", "first"])
+      expect(lastWindow.before).toBeUndefined()
+      expect(middleWindow.watermark).toEqual(firstWindow.watermark)
+      expect(lastWindow.watermark).toEqual(firstWindow.watermark)
+      expect(firstWindow.watermark.seq).toBe(EventV2.Seq.make(yield* EventV2.latestSequence((yield* Database.Service).db, sessionID)))
+      expect((yield* sessions.snapshot(sessionID, { limit: 1, before: newest.before })).messages[0]).toMatchObject({ text: "first" })
+      expect((yield* Effect.flip(sessions.snapshot(sessionID, { limit: 1, before: "invalid" })))._tag).toBe("Session.InvalidCursorError")
+      const emptySession = SessionV2.ID.make("ses_empty_window")
+      yield* db.insert(SessionTable).values({ id: emptySession, project_id: Project.ID.global, directory: "/project", title: "Empty" }).run()
+      const empty = yield* sessions.snapshot(emptySession, { limit: 10 })
+      expect(empty).toMatchObject({ messages: [], watermark: { aggregateID: emptySession } })
+      expect(empty.before).toBeUndefined()
+      expect((yield* Effect.flip(sessions.snapshot(emptySession, { limit: 1, before: newest.before })))._tag).toBe("Session.InvalidCursorError")
     }).pipe(Effect.provide(sessionsLayer)),
   )
 

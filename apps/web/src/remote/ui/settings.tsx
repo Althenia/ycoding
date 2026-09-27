@@ -567,7 +567,7 @@ export function NotificationSettings(): JSX.Element {
       id="notification-settings"
       category="Notifications"
       title="Notifications"
-      hint="Categories apply to notices in this workspace and, once this browser is permitted, to desktop alerts while it is open. Push to this device can alert an installed app after it closes. Reopening a session never replays a past alert."
+      hint="Categories apply to notices in this workspace and, once this browser is permitted, to desktop alerts while it is open. Push to this device can alert an installed app after it closes. If its subscription is missing, use Re-enable to restore alerts. Reopening a session never replays a past alert."
     >
       <table class="notification-table" aria-labelledby="notification-settings">
         <thead>

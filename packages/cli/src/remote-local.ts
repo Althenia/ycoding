@@ -89,7 +89,9 @@ export type LocalServer = {
   readonly referenceList: (location: LocalLocation) => Promise<readonly ReferenceInfo[]>
   readonly resourceCatalog: (location: LocalLocation) => Promise<McpResourceCatalog>
   readonly fileFind: (location: LocalLocation, query: string, limit: number) => Promise<readonly FileSystemEntry[]>
-  readonly snapshot: (sessionID: string, location: LocalLocation) => Promise<unknown>
+  readonly snapshot: (sessionID: string, location: LocalLocation, options?: { readonly limit?: number; readonly before?: string }) => Promise<unknown>
+  readonly attachmentRead: (sessionID: string, location: LocalLocation, digest: string) => Promise<{ readonly mime: string; readonly bytes: number; readonly data: string }>
+  readonly messageRead: (sessionID: string, location: LocalLocation, messageID: string, signal?: AbortSignal) => Promise<SessionMessageInfo>
   readonly todoList: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly subagentPage: (parentID: string, location: LocalLocation, cursor?: string) => Promise<unknown>
   readonly messages: (sessionID: string, location: LocalLocation) => Promise<readonly SessionMessageInfo[]>
@@ -205,8 +207,12 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     referenceList: (location) => call(async () => (await client.reference.list({}, request(location, timeoutMs))).data),
     resourceCatalog: (location) => call(async () => (await client.mcp.resource.catalog({}, request(location, timeoutMs))).data),
     fileFind: (location, query, limit) => call(async () => (await client.file.find({ query, limit }, request(location, timeoutMs))).data),
-    snapshot: (sessionID, location) =>
-      call(() => client.session.snapshot({ sessionID }, request(location, timeoutMs))),
+    snapshot: (sessionID, location, options) =>
+      call(() => client.session.snapshot({ sessionID, ...options }, request(location, timeoutMs))),
+    attachmentRead: (sessionID, location, digest) =>
+      call(() => client.session.attachment.read({ sessionID, digest }, request(location, timeoutMs))),
+    messageRead: (sessionID, location, messageID, signal) =>
+      call(() => client.session.message({ sessionID, messageID }, request(location, timeoutMs, signal))),
     todoList: (sessionID, location) =>
       call(() => client.session.todo.list({ sessionID }, request(location, timeoutMs))),
     subagentPage: (parentID, location, cursor) =>
@@ -335,9 +341,9 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
   }
 }
 
-function request(location: LocalLocation, timeoutMs: number) {
+function request(location: LocalLocation, timeoutMs: number, signal?: AbortSignal) {
   return {
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: signal === undefined ? AbortSignal.timeout(timeoutMs) : AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]),
     headers: {
       "x-ycoding-directory": encodeURIComponent(location.directory),
       ...(location.workspaceID === undefined ? {} : { "x-ycoding-workspace": location.workspaceID }),
@@ -366,9 +372,11 @@ function classify(cause: unknown, timeoutMs: number): LocalFailure {
     tag === "SkillNotFoundError" ||
     tag === "CommandNotFoundError" ||
     tag === "ShellNotFoundError"
+    || tag === "AttachmentNotFoundError"
   )
     return new LocalFailure("not_found", "Session is not available on this device", { cause })
   if (tag === "CommandEvaluationError") return new LocalFailure("invalid", "Local server rejected the command", { cause })
+  if (tag === "AttachmentTooLargeError") return new LocalFailure("too_large", "Attachment exceeds the read size limit", { cause })
   if (tag === "ConflictError" || tag === "SessionBusyError" || tag === "ModelSwitchBlockedError")
     return new LocalFailure("conflict", "Local server rejected the request", { cause })
   return new LocalFailure("server", `Local server failed the request after ${timeoutMs}ms timeout policy`, { cause })

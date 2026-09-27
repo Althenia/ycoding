@@ -364,6 +364,46 @@ Earlier work
       expect(text).toContain(`SHA-256: ${file.content.digest}`)
       expect(text).toContain(`Bytes: ${file.content.bytes}`)
     }
+    expect(text?.split("The path is a read-only snapshot of the attachment").length).toBe(files.length + 1)
+  })
+
+  test("names unavailable attachments without exposing their stored copy", () => {
+    const notes = managed("text/plain", "notes.txt", "7".repeat(64), 16)
+    const image = managed("image/png", "screen.png", "8".repeat(64), 32)
+    const messages = toLLMMessages(
+      [
+        SessionMessage.User.make({
+          id: id("user-unavailable"),
+          type: "user",
+          text: "Update the notes",
+          files: [notes, image],
+          time: { created },
+        }),
+      ],
+      model,
+      model.providerID,
+      new Map(),
+      {
+        images: new Map(),
+        absolutePath: (file) => `/managed/${file.name}`,
+        unavailable: new Map([
+          [notes.content.digest, "integrity"],
+          [image.content.digest, "io"],
+        ]),
+      },
+    )
+
+    const content = messages[0]?.content ?? []
+    expect(content.some((part) => part.type === "media")).toBe(false)
+    const text = content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")
+    expect(text).toContain("Update the notes")
+    expect(text).toContain(
+      `Attached file unavailable: notes.txt\nMIME: text/plain\nSHA-256: ${notes.content.digest}\nReason: its stored copy no longer matches the content recorded when it was attached.`,
+    )
+    expect(text).toContain(
+      `Attached file unavailable: screen.png\nMIME: image/png\nSHA-256: ${image.content.digest}\nReason: its stored copy is missing or cannot be read.`,
+    )
+    expect(text).not.toContain("/managed/")
   })
 
   test("uses transient materialized image bytes as provider media", () => {

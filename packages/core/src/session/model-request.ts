@@ -28,7 +28,7 @@ import { SessionRunnerCache } from "./runner/cache"
 import { SessionCacheRuntime } from "./runner/cache-runtime"
 import { SessionRunnerModel } from "./runner/model"
 import PROMPT_DEFAULT from "./runner/prompt/base.txt"
-import { isProviderImage, toLLMMessages } from "./runner/to-llm-message"
+import { isProviderImage, readAttachments, toLLMMessages } from "./runner/to-llm-message"
 import { ImageAnalyzer } from "./runner/image-analyzer"
 import { ConfigImageAnalyzer } from "../config/image-analyzer"
 import { Catalog } from "../catalog"
@@ -165,23 +165,9 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           modelID: resolved.ref.id,
           stateless: effectiveStore === false,
         })
-        const attachmentFiles = input.context.messages.flatMap((message) =>
-          message.type === "user" ? (message.files ?? []) : [],
-        )
-        const verifiedAttachments = yield* Effect.forEach(
-          [...new Map(attachmentFiles.map((file) => [file.content.digest, file])).values()],
-          (file) =>
-            attachments.read(file.content).pipe(
-              Effect.orDie,
-              Effect.map((bytes) => ({ file, bytes })),
-            ),
-          { concurrency: 4 },
-        )
-        const images = new Map(
-          verifiedAttachments.flatMap(({ file, bytes }) =>
-            isProviderImage(file) ? [[file.content.digest, bytes] as const] : [],
-          ),
-        )
+        const attachmentRead = yield* readAttachments(attachments, session.id, input.context.messages)
+        const verifiedAttachments = attachmentRead.verified
+        const images = attachmentRead.materialization.images
         let fallbackDescriptions: ReadonlyMap<string, string> | undefined
         if (images.size > 0) {
           const runningInfo = yield* catalog.model.get(resolved.ref.providerID, resolved.ref.id).pipe(
@@ -219,8 +205,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           }
         }
         const attachmentMaterialization = {
-          images,
-          absolutePath: (file: (typeof attachmentFiles)[number]) => attachments.absolutePath(file.content),
+          ...attachmentRead.materialization,
           ...(fallbackDescriptions ? { fallbackDescriptions } : {}),
         }
         const loweredHistory = input.context.messages.map((message) =>

@@ -1,6 +1,6 @@
 import { afterAll, describe, expect } from "bun:test"
 import { DateTime, Effect, Fiber, Layer, LayerMap, Schema, Stream } from "effect"
-import { mkdtemp, rm } from "fs/promises"
+import { chmod, mkdtemp, rm, writeFile } from "fs/promises"
 import { tmpdir } from "os"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -425,6 +425,54 @@ describe("SessionV2.prompt", () => {
       })
 
       expect(message.data.files?.[0]).toMatchObject({ content, mime: "image/png" })
+    }),
+  )
+
+  it.effect("admits a reattached file after its stored copy was modified outside YCoding", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const store = yield* AttachmentStore.Service
+      const uri = `data:text/plain;base64,${Buffer.from("reattached notes\n").toString("base64")}`
+      const first = yield* session.prompt({ sessionID, text: "Read the notes", files: [{ uri, name: "notes.txt" }], resume: false })
+      const content = first.data.files?.[0]?.content
+      expect(content).toBeDefined()
+      if (!content) return
+      yield* Effect.promise(() => chmod(store.absolutePath(content), 0o600))
+      yield* Effect.promise(() => writeFile(store.absolutePath(content), "notes edited by a tool\n"))
+
+      const second = yield* session.prompt({ sessionID, text: "Read them again", files: [{ uri, name: "notes.txt" }], resume: false })
+
+      expect(second.data.files?.[0]?.content).toEqual(content)
+      expect(Buffer.from(yield* store.read(content)).toString("utf8")).toBe("reattached notes\n")
+    }),
+  )
+
+  it.effect("admits a resent attachment reference after its stored copy was modified outside YCoding", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const store = yield* AttachmentStore.Service
+      const uri = `data:text/plain;base64,${Buffer.from("resent plan\n").toString("base64")}`
+      const first = yield* session.prompt({ sessionID, text: "Read the plan", files: [{ uri, name: "plan.txt" }], resume: false })
+      const content = first.data.files?.[0]?.content
+      expect(content).toBeDefined()
+      if (!content) return
+      yield* Effect.promise(() => chmod(store.absolutePath(content), 0o600))
+      yield* Effect.promise(() => writeFile(store.absolutePath(content), "plan edited by a tool\n"))
+
+      const resent = yield* session.prompt({
+        sessionID,
+        text: "Read it again",
+        files: [{ uri: AttachmentStore.managedURI(content), name: "plan.txt" }],
+        resume: false,
+      })
+
+      expect(resent.data.files?.[0]).toMatchObject({ content, mime: "text/plain", name: "plan.txt" })
+      const unknown = yield* session
+        .prompt({ sessionID, text: "Read this", files: [{ uri: AttachmentStore.managedURI({ digest: "9".repeat(64) }) }], resume: false })
+        .pipe(Effect.flip)
+      expect(unknown).toMatchObject({ _tag: "Session.AttachmentError" })
     }),
   )
 

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { launchBrowser } from "./cdp"
 
-const port = 4323
+const port = 4391
 const browserPath = process.env.YCODING_WEB_CHROME
 if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable.")
 
@@ -46,6 +46,39 @@ async function openPicker(width: number, machineName = "Studio Mac") {
 }
 
 describe("machine picker", () => {
+  test("keeps confirmation pinned while phone options scroll independently", async () => {
+    const page = await openPicker(390)
+    try {
+      await page.setViewport(390, 300)
+      if (!(await page.evaluate<boolean>(`document.querySelector('.custom-select__dialog[open]') !== null`)))
+        await page.evaluate(`document.querySelector('button[aria-label="Machine"]')?.click()`)
+      for (let index = 0; index < 40 && !(await page.evaluate<boolean>(`document.querySelector('.custom-select__dialog[open]') !== null`)); index++) await Bun.sleep(25)
+      await page.evaluate(`Promise.all([...document.querySelector('.custom-select__dialog .overlay__surface')?.getAnimations() ?? []].map(animation => animation.finished))`)
+      const initial = await page.evaluate<{ listScrollable: boolean; bodyScrollable: boolean; footerVisible: boolean; listTop: number; footerTop: number }>(`(() => { const body=document.querySelector('.custom-select__dialog .overlay__body'), list=body.querySelector('.custom-select__list'), footer=body.querySelector('.custom-select__confirm'), surface=document.querySelector('.custom-select__dialog .overlay__surface'); return { listScrollable:list.scrollHeight > list.clientHeight, bodyScrollable:body.scrollHeight > body.clientHeight, footerVisible:footer.getBoundingClientRect().bottom <= surface.getBoundingClientRect().bottom, listTop:list.getBoundingClientRect().top, footerTop:footer.getBoundingClientRect().top }; })()`)
+      expect(initial.listScrollable).toBe(true)
+      expect(initial.bodyScrollable).toBe(false)
+      expect(initial.footerVisible).toBe(true)
+      await page.evaluate(`document.querySelector('.custom-select__list').scrollTop = document.querySelector('.custom-select__list').scrollHeight`)
+      expect(await page.evaluate<number>(`document.querySelector('.custom-select__confirm').getBoundingClientRect().top`)).toBe(initial.footerTop)
+      await Bun.write(new URL(`../../../.cache/tmp/custom-select-sticky-390-light.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+    } finally { await page.close() }
+  }, 30_000)
+
+  test("keeps the picker and confirmation visible across phone, tablet and desktop themes", async () => {
+    for (const [width, height] of [[390, 844], [820, 1180], [1440, 900]]) for (const theme of ["light", "dark"]) {
+      const page = await openPicker(width!)
+      try {
+        await page.setViewport(width!, height!)
+        await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
+        await Bun.sleep(600)
+        const bounds = await page.evaluate<{ overflow: boolean; visible: boolean; footerVisible: boolean }>(`(() => { const surface=document.querySelector('.custom-select__dialog .overlay__surface, .custom-select__surface'), footer=document.querySelector('.custom-select__confirm'), rect=surface.getBoundingClientRect(); return { overflow:document.documentElement.scrollWidth > innerWidth, visible:rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight, footerVisible:!footer || footer.getBoundingClientRect().bottom <= rect.bottom }; })()`)
+        expect(bounds.overflow).toBe(false)
+        expect(bounds.visible).toBe(true)
+        expect(bounds.footerVisible).toBe(true)
+        await Bun.write(new URL(`../../../.cache/tmp/custom-select-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      } finally { await page.close() }
+    }
+  }, 60_000)
   test("keeps long machine names on one line with ellipsis without viewport overflow", async () => {
     const longName = "build-agent-west-coast-production-07.example.internal"
     for (const width of [1440, 1280, 1024, 768, 390, 320]) {

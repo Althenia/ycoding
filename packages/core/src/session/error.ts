@@ -19,6 +19,12 @@ export class MessageDecodeError extends Schema.TaggedErrorClass<MessageDecodeErr
   }
 }
 
+export class InvalidCursorError extends Schema.TaggedErrorClass<InvalidCursorError>()("Session.InvalidCursorError", {}) {}
+
+export class AttachmentReadError extends Schema.TaggedErrorClass<AttachmentReadError>()("Session.AttachmentReadError", {
+  reason: Schema.Literals(["invalid", "not-found", "too-large"]),
+}) {}
+
 export class AgentNotFoundError extends Schema.TaggedErrorClass<AgentNotFoundError>()("Session.AgentNotFoundError", {
   sessionID: SessionSchema.ID,
   agent: Agent.ID,

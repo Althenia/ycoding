@@ -57,12 +57,11 @@ scope.addEventListener("fetch", (event: FetchEvent) => {
 scope.addEventListener("push", (event: { data?: { json: () => unknown }; waitUntil: (promise: Promise<unknown>) => void }) => {
   event.waitUntil((async () => {
     const payload = await Promise.resolve().then(() => event.data?.json()).catch(() => undefined)
-    if (!isPushPayload(payload)) return
-    const clients = await scope.clients.matchAll({ type: "window", includeUncontrolled: true })
-    if (clients.some((client) => client.visibilityState === "visible" && client.focused)) return
-    await scope.registration.showNotification(payload.category === "approval-requested" ? "YCoding — approval needed" : "YCoding — work stopped", {
-      body: payload.category === "approval-requested" ? "A session is waiting for your decision." : "A session stopped running.",
-      tag: `ycoding-${payload.sessionID}-${payload.category}`, data: { sessionID: payload.sessionID },
+    const valid = isPushPayload(payload)
+    await scope.registration.showNotification(!valid ? "YCoding — update" : payload.category === "approval-requested" ? "YCoding — approval needed" : "YCoding — work stopped", {
+      body: !valid ? "Open YCoding to check your work." : payload.category === "approval-requested" ? "A session is waiting for your decision." : "A session stopped running.",
+      tag: valid ? `ycoding-${payload.sessionID}-${payload.category}` : "ycoding-update",
+      ...(valid ? { data: { sessionID: payload.sessionID } } : {}),
       icon: "/icons/icon-256.png", badge: "/icons/icon-256.png",
     })
   })())
@@ -72,7 +71,10 @@ scope.addEventListener("notificationclick", (event: { notification: { data?: unk
   event.notification.close()
   event.waitUntil((async () => {
     const data = event.notification.data
-    if (!isRecord(data) || !isSessionID(data.sessionID)) return
+    if (!isRecord(data) || !isSessionID(data.sessionID)) {
+      await scope.clients.openWindow("/remote")
+      return
+    }
     const clients = await scope.clients.matchAll({ type: "window", includeUncontrolled: true })
     const current = clients.find((client) => {
       const url = new URL(client.url)

@@ -147,6 +147,67 @@ test("renders each provider quota window with its own reset and derivable progre
   }
 })
 
+test("lists every provider quota before YCoding local Today spend", async () => {
+  const [{ ConfigProvider }, { ThemeProvider }, { Keymap }, { DialogProvider }, { ToastProvider }] = await Promise.all([
+    import("../../../src/config"),
+    import("../../../src/context/theme"),
+    import("../../../src/context/keymap"),
+    import("../../../src/ui/dialog"),
+    import("../../../src/ui/toast"),
+  ])
+  const now = 1_000_000
+  const localSpend = (providerID: string, label: string, used: number): Snapshot => ({
+    providerID, label, profile: "YCoding local", status: "available", source: "local_session", stability: "stable",
+    updatedAt: now, windows: [{ id: "today", label: "Today", unit: "usd", used }],
+  })
+  const snapshots: Snapshot[] = [
+    localSpend("anthropic", "Claude", 231.11),
+    {
+      providerID: "anthropic", label: "Claude Max", status: "available", source: "provider_internal_api",
+      stability: "best_effort", updatedAt: now,
+      windows: [{ id: "session", label: "Session", unit: "percent", used: 44, resetAt: now + 60 * 60 * 1_000 }],
+    },
+    {
+      providerID: "openai", label: "Codex Pro", status: "available", source: "provider_internal_api",
+      stability: "best_effort", updatedAt: now,
+      windows: [{ id: "weekly", label: "Weekly", unit: "percent", used: 27, resetAt: now + 2 * 60 * 60 * 1_000 }],
+    },
+    localSpend("openai", "Openai", 601.67),
+  ]
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <Keymap.Provider>
+            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+              <ToastProvider>
+                <DialogProvider>
+                  <ProviderUsageScreenContent snapshots={() => snapshots} initialTab="usage" now={() => now} />
+                </DialogProvider>
+              </ToastProvider>
+            </ThemeProvider>
+          </Keymap.Provider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 80, height: 60 },
+  )
+  app.renderer.start()
+  await app.waitForFrame((frame) => frame.includes("Openai · YCoding local"))
+
+  try {
+    const rows = app.captureCharFrame().split("\n")
+    const headers = ["Claude Max · updated now", "Codex Pro · updated now", "Claude · YCoding local", "Openai · YCoding local"]
+      .map((header) => rows.findIndex((row) => row.includes(header)))
+    expect(headers.every((index) => index >= 0)).toBe(true)
+    expect(headers).toEqual(headers.toSorted((left, right) => left - right))
+    expect(rows[headers[2]! + 1]).toContain("Today $231.11 used")
+    expect(rows[headers[3]! + 1]).toContain("Today $601.67 used")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("preserves reported account tiers and renders each reported reset without invented quota lanes", async () => {
   const [{ ConfigProvider }, { ThemeProvider }, { Keymap }, { DialogProvider }, { ToastProvider }] = await Promise.all([
     import("../../../src/config"),

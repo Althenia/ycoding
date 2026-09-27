@@ -26,6 +26,29 @@ async function setup(handler: (operation: string, sessionID?: string, cursor?: u
 }
 
 describe("remote team facts", () => {
+  test("a history size failure still loads todos, requests, and the selected root team", async () => {
+    const todos = [{ content: "Check output", status: "in_progress", priority: "high" }] as const
+    const test = await setup(() => ({ ok: true, value: { data: [task("ses_child")], summary: { total: 1 }, cursor: {} } }),
+      undefined, (request) => {
+        if (request.operation === "session.snapshot") return { ok: false, code: "message_too_large", message: "History exceeds the relay response limit" }
+        if (request.operation === "session.todo.list") return { ok: true, value: { data: todos } }
+        if (request.operation === "session.permission.list") return { ok: true, value: { data: [{ id: "per_1", sessionID: "ses_a", action: "shell", resources: ["test"] }] } }
+        return "default"
+      })
+    try {
+      test.store.watchTeam(true)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().team?.status === "ready" && test.store.state().todos?.length === 1)
+      expect(test.store.state().notice).toContain("History exceeds")
+      expect(test.store.state().view?.messages).toEqual([])
+      expect(test.store.state().todos).toEqual(todos)
+      expect(test.store.state().view?.requests).toMatchObject([{ id: "per_1", kind: "permission" }])
+      expect(test.store.state().team?.tasks).toMatchObject([{ sessionID: "ses_child" }])
+      expect(test.relay.requests.filter((request) => request.operation === "session.subagent.list").map((request) => request.sessionID)).toEqual(["ses_a"])
+      test.relay.pushEvent("ses_a", { type: "session.step.started", data: { assistantMessageID: "msg_live", agent: "god", model: { providerID: "openai", id: "gpt-6" } } })
+      await waitFor(() => test.store.state().view?.messages.some((message) => message.id === "msg_live") === true)
+    } finally { await test.stop() }
+  })
   test("a pending or failed refresh retains the ready Office roster", async () => {
     const held = Promise.withResolvers<RelayHandlerOutcome>()
     let reads = 0

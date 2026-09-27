@@ -2,6 +2,7 @@ import { useData } from "../context/data"
 import { createMemo } from "solid-js"
 import { DialogSelect } from "../ui/dialog-select"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { useRemote } from "../remote-connector"
 
 export type DialogStatusProps = {
   version?: string
@@ -12,6 +13,7 @@ export type DialogStatusProps = {
 
 export function DialogStatus(props: DialogStatusProps = {}) {
   const data = useData()
+  const remote = useRemote()
   const mcp = createMemo(() => data.location.mcp.server.list() ?? [])
   const connected = createMemo(() => mcp().filter((server) => server.status.status === "connected").length)
   return (
@@ -20,6 +22,14 @@ export function DialogStatus(props: DialogStatusProps = {}) {
       options={[
         { title: "YCoding", description: props.version ?? InstallationVersion, footer: "Connected", category: "Runtime", value: "ycoding" },
         { title: "Bun", footer: props.bunVersion ?? process.versions.bun ?? "unknown", category: "Runtime", value: "bun" },
+        {
+          title: "Remote",
+          description: remote.status().message ?? remote.status().notice,
+          footer: remote.status().state === "other-process" ? "On in another process" : remote.status().state,
+          state: remote.status().state === "error" ? "error" as const : remote.status().state === "on" ? "connected" as const : undefined,
+          category: "Services",
+          value: "remote",
+        },
         {
           title: "MCP servers",
           description: `${props.serviceSummary?.configured ?? mcp().length} configured`,

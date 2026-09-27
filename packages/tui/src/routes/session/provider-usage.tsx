@@ -39,6 +39,7 @@ export function visibleProviderSnapshots(snapshots: readonly ProviderUsageSnapsh
     return result
   }, new Map<string, ProviderUsageSnapshot>()).values()]
     .toSorted((left, right) =>
+      Number(left.source === "local_session") - Number(right.source === "local_session") ||
       left.label.localeCompare(right.label) ||
       left.providerID.localeCompare(right.providerID) ||
       (left.profile ?? "").localeCompare(right.profile ?? ""))

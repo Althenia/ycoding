@@ -148,9 +148,13 @@ export function successFrames(id: string, value: unknown): readonly RemoteRespon
         value: text.slice(offset, offset + take),
         chunk: { index, last: offset + take >= text.length },
       }
-      if (take === 1 || serializeResponse(candidate).length <= RemoteLimits.maxAgentMessageChars) break
-      take = Math.max(1, Math.floor(take / 2))
+      const length = serializeResponse(candidate).length
+      if (take === 1 || length <= RemoteLimits.maxAgentMessageChars) break
+      take = Math.max(1, take - (length - RemoteLimits.maxAgentMessageChars))
     }
+    if (offset + take < text.length && text.charCodeAt(offset + take - 1) >= 0xd800 && text.charCodeAt(offset + take - 1) <= 0xdbff &&
+      text.charCodeAt(offset + take) >= 0xdc00 && text.charCodeAt(offset + take) <= 0xdfff)
+      take = take === 1 ? 2 : take - 1
     const last = offset + take >= text.length
     frames.push({ type: "response", id, ok: true, value: text.slice(offset, offset + take), chunk: { index, last } })
     offset += take
@@ -516,6 +520,7 @@ class OperationError extends Error {
 
 export type OperationInput = {
   readonly request: RemoteRequest
+  readonly signal?: AbortSignal
   readonly uploads?: ReturnType<typeof createAttachmentUploads>
   readonly sessions: SessionRegistry
   readonly subscriptions: SubscriptionRegistry
@@ -578,8 +583,20 @@ async function run(input: OperationInput) {
   switch (validated.kind) {
     case "get":
       return { data: verified }
-    case "snapshot":
-      return await input.local.snapshot(sessionID, location)
+    case "snapshot": {
+      if (validated.limit === undefined) return await input.local.snapshot(sessionID, location)
+      for (let limit = validated.limit;; limit = Math.max(1, Math.floor(limit / 2))) {
+        const page = await input.local.snapshot(sessionID, location, { limit, ...(validated.before === undefined ? {} : { before: validated.before }) })
+        const frames = successFrames(request.id, page)
+        const first = frames[0]
+        if (!first || first.ok || first.error.code !== "message_too_large") return page
+        if (limit === 1) throw new OperationError("message_too_large", "A single projected message exceeds the response bound")
+      }
+    }
+    case "attachment.read":
+      return await input.local.attachmentRead(sessionID, location, validated.digest)
+    case "message.stream":
+      return await input.local.messageRead(sessionID, location, validated.messageID, input.signal)
     case "subagent.list":
       return await input.local.subagentPage(sessionID, location, validated.cursor)
     case "catalog":
@@ -698,7 +715,9 @@ type Validated =
   | { readonly kind: "command"; readonly input: CommandInput }
   | { readonly kind: "skill"; readonly input: { readonly id?: string; readonly skill: string; readonly resume?: boolean } }
   | { readonly kind: "get" }
-  | { readonly kind: "snapshot" }
+  | { readonly kind: "snapshot"; readonly limit?: number; readonly before?: string }
+  | { readonly kind: "attachment.read"; readonly digest: string }
+  | { readonly kind: "message.stream"; readonly messageID: string }
   | { readonly kind: "subagent.list"; readonly cursor?: string }
   | { readonly kind: "messages" }
   | { readonly kind: "todo.list" }
@@ -724,7 +743,6 @@ type Validated =
 
 const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
   "session.get": "get",
-  "session.snapshot": "snapshot",
   "session.catalog": "catalog",
   "session.messages": "messages",
   "session.todo.list": "todo.list",
@@ -746,6 +764,18 @@ function validate(request: RemoteRequest): Validated {
       throw new OperationError("invalid_message", "Invalid attachment upload")
     return { kind: "upload", uploadID: fields.uploadID, index: fields.index, last: fields.last, data: fields.data }
   }
+  if (request.operation === "session.snapshot") {
+    const limit = optionalInteger(fields.limit, "limit", 1, 200)
+    const before = fields.before === undefined ? undefined : requireString(fields.before, "before", 256)
+    if (before !== undefined && limit === undefined) throw new OperationError("invalid_message", "Snapshot cursor requires a limit")
+    return { kind: "snapshot", ...(limit === undefined ? {} : { limit }), ...(before === undefined ? {} : { before }) }
+  }
+  if (request.operation === "session.attachment.read") {
+    if (typeof fields.digest !== "string" || !/^[0-9a-f]{64}$/.test(fields.digest))
+      throw new OperationError("invalid_message", "Invalid managed attachment digest")
+    return { kind: "attachment.read", digest: fields.digest }
+  }
+  if (request.operation === "session.message.stream") return { kind: "message.stream", messageID: messageID(fields.messageID) }
   if (request.operation === "workspace.list") return { kind: "workspace.list", sessionsOnly: fields.sessionsOnly === true }
   if (request.operation === "session.list") return { kind: "list", query: parseListQuery(fields) }
   if (request.operation === "session.active") return { kind: "active" }
@@ -1117,7 +1147,9 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.attachment.upload": ["uploadID", "index", "last", "data"],
   "session.skill": ["id", "skill", "resume"],
   "session.get": [],
-  "session.snapshot": [],
+  "session.snapshot": ["limit", "before"],
+  "session.attachment.read": ["digest"],
+  "session.message.stream": ["messageID"],
   "session.subagent.list": ["cursor"],
   "session.messages": [],
   "session.todo.list": [],
@@ -1182,6 +1214,8 @@ const reviewReplies: ReadonlySet<string> = new Set([
 function localError(cause: LocalFailure, request: RemoteRequest): readonly [RemoteErrorCode, string] {
   switch (cause.kind) {
     case "not_found":
+      if (request.operation === "session.attachment.read" || request.operation === "session.message.stream")
+        return ["not_found", "The requested Session content is unavailable"]
       if (reviewReplies.has(request.operation))
         return ["invalid_message", "That request is no longer pending; reload before replying"]
       if (request.operation === "session.command" || request.operation === "session.skill")
@@ -1196,7 +1230,7 @@ function localError(cause: LocalFailure, request: RemoteRequest): readonly [Remo
     case "conflict":
       return ["invalid_message", "The local server refused a conflicting request; do not replay it automatically"]
     case "too_large":
-      return ["message_too_large", "The local response exceeded the bounded response size; read again with after"]
+      return ["message_too_large", request.operation === "session.attachment.read" ? "Attachment exceeds the bounded read size" : "The local response exceeded the bounded response size; read again with after"]
     case "transport":
       return isMutation(request)
         ? ["outcome_unknown", "The local server did not confirm the outcome; do not replay it automatically"]

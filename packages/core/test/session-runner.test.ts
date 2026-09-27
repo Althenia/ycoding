@@ -103,6 +103,8 @@ import { ProviderV2 } from "@ycoding-ai/core/provider"
 import { Cause, Clock, DateTime, Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { and, asc, eq, lte } from "drizzle-orm"
+import { chmod, writeFile } from "fs/promises"
+import { AttachmentStore } from "@ycoding-ai/core/attachment-store"
 import { testEffect } from "./lib/effect"
 import { agentHost, catalogHost, host } from "./plugin/host"
 import PROMPT_DEFAULT from "../src/session/runner/prompt/base.txt"
@@ -784,6 +786,7 @@ const it = testEffect(
       SessionCompactionExecution.node,
       SessionExecution.node,
       SessionV2.node,
+      AttachmentStore.node,
     ]),
     [
       [LayerNodePlatform.llmClient, client],
@@ -2806,6 +2809,38 @@ describe("SessionRunnerLLM", () => {
       })
       yield* session.wait(sessionID)
       expect(admitted.id).toBe(messageID)
+    }),
+  )
+
+  it.effect("keeps running Steps after a stored attachment is modified outside YCoding", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const store = yield* AttachmentStore.Service
+      const attached = yield* session.prompt({
+        sessionID,
+        text: "Update the attached notes",
+        files: [{ uri: `data:text/plain;base64,${Buffer.from("original notes\n").toString("base64")}`, name: "notes.txt" }],
+        resume: false,
+      })
+      const file = attached.data.files?.[0]
+      expect(file).toBeDefined()
+      if (!file) return
+      const stored = store.absolutePath(file.content)
+      yield* Effect.promise(() => chmod(stored, 0o600))
+      yield* Effect.promise(() => writeFile(stored, "notes edited by a tool\n"))
+
+      yield* session.resume(sessionID)
+      yield* admit(session, "continue")
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      for (const request of requests) {
+        const text = userTexts(request).join("\n")
+        expect(text).toContain(`Attached file unavailable: notes.txt\nMIME: text/plain\nSHA-256: ${file.content.digest}`)
+        expect(text).not.toContain(stored)
+        expect(text).not.toContain("notes edited by a tool")
+      }
+      expect(userTexts(requests[1]!)).toContain("continue")
     }),
   )
 

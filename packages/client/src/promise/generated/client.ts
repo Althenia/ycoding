@@ -18,6 +18,8 @@ import type {
   SessionGetOutput,
   SessionSnapshotInput,
   SessionSnapshotOutput,
+  SessionAttachmentReadInput,
+  SessionAttachmentReadOutput,
   SessionDiagnosticsInput,
   SessionDiagnosticsOutput,
   SessionAutonomyGetInput,
@@ -617,12 +619,26 @@ export function make(options: ClientOptions) {
           {
             method: "GET",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/snapshot`,
+            query: { limit: input["limit"], before: input["before"] },
             successStatus: 200,
             declaredStatuses: [404, 400, 401],
             empty: false,
           },
           requestOptions,
         ),
+      attachment: {
+        read: (input: SessionAttachmentReadInput, requestOptions?: RequestOptions) =>
+          request<SessionAttachmentReadOutput>(
+            {
+              method: "GET",
+              path: `/api/session/${encodeURIComponent(input.sessionID)}/attachment/${encodeURIComponent(input.digest)}`,
+              successStatus: 200,
+              declaredStatuses: [404, 413, 400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ),
+      },
       diagnostics: (input: SessionDiagnosticsInput, requestOptions?: RequestOptions) =>
         request<{ readonly data: SessionDiagnosticsOutput }>(
           {

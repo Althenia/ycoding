@@ -9,6 +9,7 @@ export function todoSummary(todos: readonly TodoView[]) {
   return {
     progress: `${todos.filter((todo) => todo.status === "completed").length}/${todos.length}`,
     active: todos.find((todo) => todo.status === "in_progress")?.content ?? "",
+    visible: todos.some((todo) => todo.status !== "completed"),
   }
 }
 
@@ -24,7 +25,7 @@ export function TodoPanel(props: { readonly todos?: readonly TodoView[] }): JSX.
   }
   const marker = (status: TodoView["status"]) => status === "completed" ? "✓" : status === "in_progress" ? "●" : status === "cancelled" ? "–" : "○"
 
-  return <Show when={props.todos?.length}>
+  return <Show when={summary().visible}>
     <section class="todo-panel" aria-label="Session todo list">
       <div class="todo-panel__inner">
         <button class="todo-panel__toggle" type="button" aria-expanded={expanded()} aria-controls="session-todo-items" onClick={toggle}>

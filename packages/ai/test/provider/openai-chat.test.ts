@@ -608,18 +608,18 @@ describe("OpenAI Chat route", () => {
     ["malformed base64", { mediaType: "image/png", data: "not-base64" }],
     ["unsupported SVG", { mediaType: "image/svg+xml", data: "PHN2Zz4=" }],
   ] as const)
-    it.effect(`rejects ${name}`, () =>
+    it.effect(`describes ${name}`, () =>
       Effect.gen(function* () {
-        const error = yield* LLMClient.prepare(
+        const prepared = yield* LLMClient.prepare(
           LLM.request({ model, messages: [Message.user({ type: "media", ...media })] }),
-        ).pipe(Effect.flip)
-        expect(error.message).toMatch(/does not support|does not match|valid base64/)
+        )
+        expect(JSON.stringify(prepared.body.messages)).toMatch(/File \(unnamed\).*omitted:.*(does not support|does not match|valid base64)/)
       }),
     )
 
-  it.effect("rejects oversized image input", () =>
+  it.effect("describes oversized image input", () =>
     Effect.gen(function* () {
-      const error = yield* LLMClient.prepare(
+      const prepared = yield* LLMClient.prepare(
         LLM.request({
           model,
           messages: [
@@ -630,8 +630,8 @@ describe("OpenAI Chat route", () => {
             }),
           ],
         }),
-      ).pipe(Effect.flip)
-      expect(error.message).toContain("encoded limit")
+      )
+      expect(JSON.stringify(prepared.body.messages)).toContain("encoded limit")
     }),
   )
 

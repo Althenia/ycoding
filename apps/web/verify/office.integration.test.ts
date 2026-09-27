@@ -93,11 +93,11 @@ describe("remote Office presentation", () => {
   test("updates the office from the stream and retains the transcript in Conversation", async () => {
     const page = await openRemote("scenario=conversation-tool-terminal-output-1440&presentation=office")
     try {
-      expect(await until(page, `document.querySelector('.office-roster__row[aria-current="true"] .office-roster__status')?.textContent === 'Working' && document.querySelectorAll('.office-workspace canvas').length === 1`, 150)).toBe(true)
+      expect(await until(page, `document.querySelector('.office-roster__row[aria-current="true"] .office-roster__status')?.textContent === 'Coordinating' && document.querySelectorAll('.office-workspace canvas').length === 1`, 150)).toBe(true)
       const before = await page.evaluate<OperationReport>(`remoteOperationReport()`)
       await page.evaluate(`[...document.querySelectorAll('.fixture__controls button')].find((button) => button.textContent.includes('Simulate streaming step')).click()`)
 
-      expect(await until(page, `document.querySelector('.office-roster__row[aria-current="true"] .office-roster__status')?.textContent === 'Working'`)).toBe(true)
+      expect(await until(page, `document.querySelector('.office-roster__row[aria-current="true"] .office-roster__status')?.textContent === 'Coordinating'`)).toBe(true)
       expect(await page.evaluate<number>(`document.querySelectorAll('.office-workspace__inspector,.composer').length`)).toBe(0)
       await choosePresentation(page, "Conversation")
       expect(await until(page, `document.querySelector('.conversation-pane')?.textContent.includes('Streaming through the relay with bounded tool output.') ?? false`)).toBe(true)
@@ -174,7 +174,7 @@ describe("remote Office presentation", () => {
   }, 60_000)
 
   test("fills the main area with a responsive canvas and accessible roster at each breakpoint and theme", async () => {
-    for (const [width, height] of [[390, 844], [820, 1180], [1024, 768], [1440, 900]] as const) {
+    for (const [width, height] of [[390, 844], [820, 1180], [1024, 768], [1440, 900], [1920, 1080]] as const) {
       const page = await openRemote("view=chat&presentation=office", width)
       try {
         await page.evaluate<void>(`document.querySelector('.fixture__banner').style.display='none';document.querySelector('.fixture__controls').style.display='none'`)
@@ -235,6 +235,25 @@ describe("remote Office presentation", () => {
     }
   }, 90_000)
 
+  test("touch-emulated portrait and landscape phones keep a rendered Office canvas", async () => {
+    for (const [width, height] of [[390, 844], [844, 390]] as const) {
+      const page = await openRemote("view=chat&presentation=office", width)
+      try {
+        await page.setCoarsePointer(true)
+        await page.setViewport(width, height)
+        await page.evaluate<void>(`document.querySelector('.fixture__banner').style.display='none';document.querySelector('.fixture__controls').style.display='none'`)
+        expect(await until(page, `document.querySelector('.office-canvas-host canvas')?.getBoundingClientRect().height >= 180 && !document.querySelector('.office-notice[role=alert]')`, 150)).toBe(true)
+        const state = await page.evaluate<{ readonly host: number; readonly backing: number; readonly canvas: number }>(`(() => {const host=document.querySelector('.office-canvas-host'),canvas=host.querySelector('canvas');return {host:host.getBoundingClientRect().height,canvas:canvas.getBoundingClientRect().height,backing:canvas.height}})()`)
+        expect(state.host).toBeGreaterThanOrEqual(180)
+        expect(state.canvas).toBeGreaterThanOrEqual(180)
+        expect(state.backing).toBeGreaterThan(180)
+        await Bun.write(join(captures, `touch-${width}x${height}.png`), Buffer.from(await page.screenshot(), "base64"))
+      } finally {
+        await page.close()
+      }
+    }
+  }, 60_000)
+
   test("stays usable at 200% zoom of a 1440 by 900 window", async () => {
     const page = await openRemote("view=chat&presentation=office", 720)
     try {
@@ -264,7 +283,7 @@ describe("remote Office presentation", () => {
       expect(await until(page, `${childRow}?.querySelector('.office-roster__name')?.textContent.includes('· general') ?? false`)).toBe(true)
       expect(await page.evaluate<string>(`${childRow}.querySelector('.office-roster__status').textContent`)).toBe("Running")
       expect(await page.evaluate<string>(`${childRow}.querySelector('.office-roster__room').textContent`)).toBe("Developer room")
-      expect(await page.evaluate<string>(`document.querySelector('.office-roster__row[data-session-id="ses_fixture"] .office-roster__room').textContent`)).toBe("CEO office")
+      expect(await until(page, `document.querySelector('.office-roster__row[data-session-id="ses_fixture"] .office-roster__room')?.textContent === 'Developer room'`)).toBe(true)
       expect(await page.evaluate<number>(`document.querySelectorAll('.office-roster__row').length`)).toBe(2)
       expect(await page.evaluate<string>(`document.querySelector('.office-roster [role="status"]').textContent`)).toBe("")
 

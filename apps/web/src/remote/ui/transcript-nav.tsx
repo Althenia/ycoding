@@ -2,14 +2,19 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, 
 import { Portal } from "solid-js/web"
 import { Icon } from "../../ui/icon"
 import { useRemote } from "../context"
-import type { RemoteMessageView } from "../projection"
+import { visibleTranscriptMessages, type RemoteMessageView } from "../projection"
 import { MessageRow } from "./conversation"
 import "./transcript-nav.css"
 
-export function followState(following: boolean, event: { readonly kind: "scroll" | "content" | "jump" | "session"; readonly distance: number }): boolean {
+export function followState(following: boolean, event: { readonly kind: "scroll" | "content" | "jump" | "top" | "session"; readonly distance: number }): boolean {
+  if (event.kind === "top") return false
   if (event.kind === "session" || event.kind === "jump") return true
   if (event.kind === "content") return following
   return event.distance <= 48
+}
+
+export function navigationTargets(scrollTop: number, following: boolean) {
+  return { top: scrollTop > 8, bottom: !following }
 }
 
 export function promptPreview(text: string): string {
@@ -20,14 +25,16 @@ export function promptPreview(text: string): string {
 export function TranscriptNavigation(props: { readonly messages: () => readonly RemoteMessageView[] }): JSX.Element {
   const remote = useRemote()
   const [away, setAway] = createSignal(false)
+  const [scrollTop, setScrollTop] = createSignal(0)
   const [visible, setVisible] = createSignal<ReadonlySet<string>>(new Set())
   const [hovered, setHovered] = createSignal<string>()
   const [tooltipTop, setTooltipTop] = createSignal(0)
-  const [main, setMain] = createSignal<HTMLElement>()
-  const [jumpPosition, setJumpPosition] = createSignal({ left: 0, bottom: 0 })
-  const ids = createMemo(() => props.messages().map((message) => message.id))
-  const prompts = createMemo(() => props.messages().filter((message): message is Extract<RemoteMessageView, { kind: "user" }> => message.kind === "user"))
-  const message = (id: string) => props.messages().find((entry) => entry.id === id)!
+  const [jumpSlot, setJumpSlot] = createSignal<HTMLElement>()
+  const targets = () => navigationTargets(scrollTop(), !away())
+  const rows = createMemo(() => visibleTranscriptMessages(props.messages()))
+  const ids = createMemo(() => rows().map((message) => message.id))
+  const prompts = createMemo(() => rows().filter((message): message is Extract<RemoteMessageView, { kind: "user" }> => message.kind === "user"))
+  const message = (id: string) => rows().find((entry) => entry.id === id)!
   const preview = (id: string) => {
     const item = message(id)
     return item.kind === "user" ? promptPreview(item.text) : ""
@@ -37,7 +44,9 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
   let scrollRoot: HTMLElement | undefined
   let following = true
   let jumping = false
+  let jumpingTop = false
   let contentUpdate = false
+  let loadingOlder = false
   let sessionID: string | undefined
   let frame = 0
 
@@ -55,6 +64,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     if (!scrollRoot || !following) return
     scrollRoot.scrollTop = scrollRoot.scrollHeight
     setAway(false)
+    setScrollTop(scrollRoot.scrollTop)
     showPromptsInView()
   }
   const schedule = () => {
@@ -65,27 +75,59 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
       showPromptsInView()
     })
   }
+  const loadOlder = async (preserve: boolean) => {
+    if (!scrollRoot || !wrapper || loadingOlder || remote.state().history?.status === "loading" || !remote.state().history?.before) return
+    loadingOlder = true
+    const anchor = preserve ? [...wrapper.querySelectorAll<HTMLElement>("[data-message-id]")].find((row) => row.getBoundingClientRect().bottom > scrollRoot!.getBoundingClientRect().top) : undefined
+    const top = anchor?.getBoundingClientRect().top
+    try {
+      await remote.store.loadOlderMessages()
+      requestAnimationFrame(() => {
+        if (scrollRoot && anchor?.isConnected && top !== undefined) scrollRoot.scrollTop += anchor.getBoundingClientRect().top - top
+        showPromptsInView()
+      })
+    } finally { loadingOlder = false }
+  }
   const onScroll = () => {
     if (contentUpdate && following) return
+    if (jumpingTop) {
+      setScrollTop(scrollRoot?.scrollTop ?? 0)
+      if ((scrollRoot?.scrollTop ?? 0) <= 8) jumpingTop = false
+      showPromptsInView()
+      return
+    }
     if (jumping && distance() > 48) return
     if (distance() <= 48) jumping = false
     following = followState(following, { kind: "scroll", distance: distance() })
     setAway(!following)
+    setScrollTop(scrollRoot?.scrollTop ?? 0)
     showPromptsInView()
+    if (scrollRoot && scrollRoot.scrollTop < 120 && remote.state().history?.status === "idle") void loadOlder(true)
   }
-  const onUserScroll = () => { jumping = false; contentUpdate = false }
-  const jump = () => {
+  const onUserScroll = () => { jumping = false; jumpingTop = false; contentUpdate = false }
+  const jumpToBottom = () => {
     if (!scrollRoot) return
     following = followState(following, { kind: "jump", distance: distance() })
     jumping = true
+    jumpingTop = false
     setAway(false)
     scrollRoot.scrollTo({ top: scrollRoot.scrollHeight, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" })
+  }
+  const jumpToTop = () => {
+    if (!scrollRoot) return
+    following = followState(following, { kind: "top", distance: distance() })
+    jumping = false
+    jumpingTop = true
+    setAway(true)
+    scrollRoot.scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" })
+    void loadOlder(false)
   }
   const selectPrompt = (id: string) => {
     if (!wrapper || !scrollRoot) return
     const row = [...wrapper.querySelectorAll<HTMLElement>("[data-message-id]")].find((item) => item.dataset.messageId === id)
     if (!row) return
     jumping = false
+    jumpingTop = false
     following = false
     setAway(true)
     row.focus({ preventScroll: true })
@@ -100,28 +142,18 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     scrollRoot = wrapper?.closest<HTMLElement>(".workspace__scroll") ?? undefined
     const container = wrapper?.closest<HTMLElement>(".workspace__main")
     if (!scrollRoot || !container || !wrapper) return
-    setMain(container)
-    const positionJump = () => {
-      const bounds = container.getBoundingClientRect()
-      const composer = container.querySelector<HTMLElement>(".composer")
-      const reference = composer?.getBoundingClientRect() ?? scrollRoot!.getBoundingClientRect()
-      setJumpPosition({ left: (reference.left + reference.right) / 2 - bounds.left, bottom: bounds.bottom - reference.top + 12 })
-    }
+    setJumpSlot(container.querySelector<HTMLElement>(".conversation-jump-slot") ?? undefined)
     const observer = new ResizeObserver(() => {
-      positionJump()
       if (following) pin()
       showPromptsInView()
     })
     observer.observe(wrapper)
     observer.observe(scrollRoot)
     observer.observe(container)
-    const composer = container.querySelector<HTMLElement>(".composer")
-    if (composer) observer.observe(composer)
     scrollRoot.addEventListener("scroll", onScroll, { passive: true })
     scrollRoot.addEventListener("wheel", onUserScroll, { passive: true })
     scrollRoot.addEventListener("touchstart", onUserScroll, { passive: true })
     scrollRoot.addEventListener("pointerdown", onUserScroll, { passive: true })
-    positionJump()
     schedule()
     onCleanup(() => {
       observer.disconnect()
@@ -136,26 +168,30 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
   createEffect(() => {
     const current = remote.state().activeSessionID
     ids()
-    props.messages()
+    rows()
     if (current !== sessionID) {
       sessionID = current
       following = followState(following, { kind: "session", distance: distance() })
       jumping = false
+      jumpingTop = false
     }
     contentUpdate = following
     schedule()
   })
 
-  return <div class="transcript-navigation" ref={wrapper}>
+  return <div class="transcript-navigation" classList={{ "transcript-navigation--empty": rows().length === 0 }} ref={wrapper}>
     <div class="transcript-navigation__rail-slot" ref={railSlot}>
       <Show when={prompts().length > 0}>
         <nav class="transcript-navigation__rail" aria-label="Conversation prompts">
-          <For each={prompts().map((prompt) => prompt.id)}>{(id) => <button type="button" class="transcript-navigation__tick" classList={{ "transcript-navigation__tick--visible": visible().has(id) }} aria-label={`Go to prompt: ${preview(id)}`} onMouseEnter={(event) => revealPrompt(id, event.currentTarget)} onMouseLeave={(event) => { if (document.activeElement !== event.currentTarget) setHovered(undefined) }} onFocus={(event) => revealPrompt(id, event.currentTarget)} onBlur={() => setHovered(undefined)} onClick={() => selectPrompt(id)}><span class="transcript-navigation__tick-mark" /></button>}</For>
+          <div class="transcript-navigation__ticks"><For each={prompts().map((prompt) => prompt.id)}>{(id) => <button type="button" class="transcript-navigation__tick" classList={{ "transcript-navigation__tick--visible": visible().has(id) }} aria-label={`Go to prompt: ${preview(id)}`} onMouseEnter={(event) => revealPrompt(id, event.currentTarget)} onMouseLeave={(event) => { if (document.activeElement !== event.currentTarget) setHovered(undefined) }} onFocus={(event) => revealPrompt(id, event.currentTarget)} onBlur={() => setHovered(undefined)} onClick={() => selectPrompt(id)}><span class="transcript-navigation__tick-mark" /></button>}</For></div>
+          <div class="transcript-navigation__desktop-controls"><Show when={targets().top}><button type="button" aria-label="Jump to top" onClick={jumpToTop}><Icon name="arrow-up" size={16} /></button></Show><Show when={targets().bottom}><button type="button" aria-label="Jump to latest" onClick={jumpToBottom}><Icon name="arrow-down" size={16} /></button></Show></div>
         </nav>
         <Show when={hovered()}>{(id) => <div class="transcript-navigation__tooltip" role="tooltip" style={{ top: `${tooltipTop()}px` }}>{preview(id())}</div>}</Show>
       </Show>
     </div>
+    <Show when={remote.state().history?.status === "idle" && !remote.state().history?.before}><p class="transcript-navigation__beginning">Beginning of conversation</p></Show>
+    <Show when={remote.state().history?.status === "error"}><p class="transcript-navigation__history-error" role="alert">{remote.state().history?.error} <button type="button" onClick={() => void loadOlder(true)}>Retry older history</button></p></Show>
     <ol class="transcript"><For each={ids()}>{(id) => <li class="transcript-navigation__item" data-message-id={id} data-prompt-id={message(id).kind === "user" ? id : undefined} tabindex={message(id).kind === "user" ? -1 : undefined}><MessageRow message={() => message(id)} /></li>}</For></ol>
-    <Show when={main()}>{(container) => <Portal mount={container()}><button type="button" class="transcript-navigation__jump" classList={{ "transcript-navigation__jump--visible": away() }} aria-label="Jump to latest" aria-hidden={!away()} tabIndex={away() ? 0 : -1} style={{ left: `${jumpPosition().left}px`, bottom: `${jumpPosition().bottom}px` }} onClick={jump}><Icon name="arrow-down" size={20} /></button></Portal>}</Show>
+    <Show when={jumpSlot()}>{(slot) => <Portal mount={slot()}><div class="transcript-navigation__mobile-controls" classList={{ "transcript-navigation__mobile-controls--visible": targets().top || targets().bottom }}><Show when={targets().top}><button type="button" aria-label="Jump to top" onClick={jumpToTop}><Icon name="arrow-up" size={18} /></button></Show><Show when={targets().bottom}><button type="button" aria-label="Jump to latest" onClick={jumpToBottom}><Icon name="arrow-down" size={18} /></button></Show></div></Portal>}</Show>
   </div>
 }

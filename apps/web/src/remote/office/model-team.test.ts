@@ -50,7 +50,7 @@ describe("office team projection", () => {
   test("shows each real child task of the team root once, with its reported state", () => {
     const snapshot = office(ready([member("ses_child", "running"), member("ses_done", "completed"), member("ses_foreign", "failed", "ses_other")], [], 2))
     expect(snapshot.actors.map((actor) => [actor.sessionID, actor.kind, actor.status, actor.statusText, actor.teamRootSessionID])).toEqual([
-      ["ses_root", "session", "working", "Working", undefined],
+      ["ses_root", "session", "working", "Coordinating", undefined],
       ["ses_child", "task", "working", "Running", "ses_root"],
       ["ses_done", "task", "idle", "Completed", "ses_root"],
     ])
@@ -115,5 +115,16 @@ describe("office team projection", () => {
     expect(snapshot.actors.map((actor) => actor.sessionID)).toEqual(["ses_root", ...Array.from({ length: maxOfficeActors - 1 }, (_, index) => `ses_t${String(index).padStart(2, "0")}`)])
     expect(snapshot.overflow).toBe(21 - maxOfficeActors)
     expect(snapshot.team.shown).toBe(maxOfficeActors - 1)
+  })
+
+  test("selected live activity outranks coordination, while thinking holds the current room", () => {
+    const members = [member("ses_child", "running")]
+    const coordinating = office(ready(members))
+    expect(coordinating.actors.find((actor) => actor.kind === "session")?.activity).toBe("coordinate")
+    const researching = office(ready(members), { selected: { ...coordinating.actors[0], id: "ses_root", status: "running", requestCount: 0, compacting: false, thinking: false, unknownOutcome: false, activity: "research" } })
+    expect(researching.actors.find((actor) => actor.kind === "session")?.activity).toBe("research")
+    const thinking = office(ready(members), { selected: { id: "ses_root", status: "running", requestCount: 0, compacting: false, thinking: true, unknownOutcome: false } })
+    expect(thinking.actors.find((actor) => actor.kind === "session")?.activity).toBe("hold")
+    expect(coordinating.actors.find((actor) => actor.kind === "task")?.activity).toBe("implement")
   })
 })
