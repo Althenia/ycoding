@@ -78,6 +78,7 @@ import { Tool } from "@ycoding-ai/core/tool/tool"
 import {
   InstructionStateTable,
   SessionPendingTable,
+  SessionCompactionJobTable,
   SessionContextStateTable,
   SessionMessageTable,
   SessionProviderContinuationTable,
@@ -6087,6 +6088,74 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
+    }),
+  )
+
+  it.effect("does not admit mandatory compaction when fixed request input alone exceeds its target", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = recoveryModel
+      const hooks = yield* PluginHooks.Service
+      yield* hooks.register("session", "context", (event) =>
+        Effect.sync(() => { event.system = [SystemPart.make("S".repeat(120_000))] }),
+      )
+      yield* admit(session, "Current request")
+      yield* session.resume(sessionID)
+
+      const db = (yield* Database.Service).db
+      expect(requests).toHaveLength(1)
+      expect(yield* db.select({ id: SessionCompactionJobTable.id }).from(SessionCompactionJobTable).all()).toEqual([])
+      expect(yield* db.select({ id: SessionTable.id }).from(SessionTable).where(eq(SessionTable.parent_id, sessionID)).all()).toEqual([])
+      expect(yield* recordedEventTypes(sessionID)).not.toContain("session.compaction.admitted.2")
+    }),
+  )
+
+  it.effect("surfaces provider overflow without futile compaction or retry", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = recoveryModel
+      const hooks = yield* PluginHooks.Service
+      yield* hooks.register("session", "context", (event) =>
+        Effect.sync(() => { event.system = [SystemPart.make("S".repeat(120_000))] }),
+      )
+      response = [LLMEvent.providerError({ message: "Prompt too long", classification: "context-overflow" })]
+      yield* admit(session, "Current request")
+      expect((yield* session.resume(sessionID).pipe(Effect.flip)).message).toContain("Prompt too long")
+
+      expect(requests).toHaveLength(1)
+      expect(yield* recordedEventTypes(sessionID)).not.toContain("session.compaction.admitted.2")
+      expect((yield* session.context(sessionID)).findLast((message) => message.type === "assistant")).toMatchObject({
+        finish: "error", error: { type: "provider.unknown" },
+      })
+    }),
+  )
+
+  it.effect("does not recover provider overflow when there is no compactable history", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = recoveryModel
+      response = [LLMEvent.providerError({ message: "Prompt too long", classification: "context-overflow" })]
+      yield* admit(session, "First prompt")
+      expect((yield* session.resume(sessionID).pipe(Effect.flip)).message).toContain("Prompt too long")
+      expect(requests).toHaveLength(1)
+      expect(yield* recordedEventTypes(sessionID)).not.toContain("session.compaction.admitted.2")
+    }),
+  )
+
+  it.effect("admits mandatory compaction when earlier conversation history can reduce the request", () =>
+    Effect.gen(function* () {
+      const session = yield* setupOverflowRecovery
+      currentModel = Model.make({
+        id: "history-recovery", provider: "fake",
+        route: OpenAIChat.route.with({ limits: { context: 7_000, output: 500 } }),
+      })
+      compactionSummary = true
+      yield* admit(session, "Continue after history")
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(yield* recordedEventTypes(sessionID)).toContain("session.compaction.admitted.2")
+      expect((yield* session.context(sessionID)).some((message) => message.type === "compaction" && message.status === "completed")).toBe(true)
     }),
   )
 

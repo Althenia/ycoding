@@ -625,6 +625,7 @@ const runGate = (input: {
         contextSafetyMarginTokens: 100,
       },
       candidate: input.candidate,
+      canReduce: () => true,
       ...(input.lastProviderInputTokens === undefined ? {} : { lastProviderInputTokens: input.lastProviderInputTokens }),
       ...(input.lastProviderTotalTokens === undefined ? {} : { lastProviderTotalTokens: input.lastProviderTotalTokens }),
       reload: ({ fullRebase }) => input.reload(fullRebase),

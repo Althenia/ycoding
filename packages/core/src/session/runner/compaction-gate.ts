@@ -11,7 +11,7 @@ import { SessionCompaction } from "../compaction"
 import { SessionCompactionExecution } from "../compaction-execution"
 import { SessionCompactionJob } from "../compaction-job"
 import { SessionContextPressure } from "../context-pressure"
-import type { SessionMessage } from "../message"
+import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
 import { SessionContextStateTable, SessionMessageTable } from "../sql"
 
@@ -45,6 +45,7 @@ export interface Input<
   // exceed the raw context limit while the input-side total stays below the cap.
   readonly lastProviderTotalTokens?: number
   readonly prepareOwner?: SessionCompaction.OwnerRequestBuilder
+  readonly canReduce: (candidate: Candidate<Context, Prepared>, targetMaxInputTokens: number) => boolean
   readonly reload: (options: {
     readonly fullRebase: boolean
   }) => Effect.Effect<Candidate<Context, Prepared>, ReloadError, ReloadRequirements>
@@ -87,15 +88,14 @@ export const ensureWithinLimit = <
     const db = (yield* Database.Service).db
     const jobs = yield* SessionCompactionJob.Service
     const configDigest = ConfigCompaction.admissionDigest(input.policy)
-    const targetMaxInputTokens = Math.floor(
-      (input.capabilities.contextWindowTokens * considerPercent(input.policy)) / 100,
-    )
+    const targetMaxInputTokens = targetInputTokens(input.capabilities, input.policy)
 
     const gated = yield* jobs
       .withAdmissionGate(input.sessionID, (admit) =>
         Effect.gen(function* () {
           let gateOwnedAdmissions = 0
           let compacted = false
+          let current = input.candidate
           // Seed with the provider-measured total when it exceeds the local
           // estimate: it is the fresher over-cap evidence until a reload
           // rebuilds the candidate. Later iterations use the rebuilt estimate.
@@ -110,19 +110,21 @@ export const ensureWithinLimit = <
               return { ...rebuilt, compacted }
             }
             const boundary = yield* latestCompleteBoundary(db, input.sessionID)
-            if (!boundary) return { ...input.candidate, compacted }
+            if (!boundary) return { ...current, compacted }
             const revision = yield* currentRevision(db, input.sessionID)
-            if (revision === undefined) return { ...input.candidate, compacted }
+            if (revision === undefined) return { ...current, compacted }
             const pending = yield* jobs.pending(input.sessionID)
             const existing = pending[0]
             if (existing) {
               const settled = yield* waitFor(existing.id, input.prepareOwner)
               const rebuilt = yield* input.reload({ fullRebase: settled.status === "ended" })
+              current = rebuilt
               compacted ||= settled.status === "ended"
               currentEstimate = estimate(rebuilt)
               if (currentEstimate < cap) return { ...rebuilt, compacted }
               continue
             }
+            if (!input.canReduce(current, targetMaxInputTokens)) return { ...current, compacted }
             if (
               yield* jobs.hasUnchangedDeterministicFailure({
                 sessionID: input.sessionID,
@@ -132,7 +134,7 @@ export const ensureWithinLimit = <
                 configDigest,
               })
             )
-              return { ...input.candidate, compacted }
+              return { ...current, compacted }
 
             const admitted = yield* admit({
               sessionID: input.sessionID,
@@ -146,6 +148,7 @@ export const ensureWithinLimit = <
             gateOwnedAdmissions += 1
             const settled = yield* waitFor(admitted.id, input.prepareOwner)
             const rebuilt = yield* input.reload({ fullRebase: settled.status === "ended" })
+            current = rebuilt
             compacted ||= settled.status === "ended"
             currentEstimate = estimate(rebuilt)
             if (currentEstimate < cap) return { ...rebuilt, compacted }
@@ -187,8 +190,28 @@ export const estimatedProviderInputTokens = (request: LLMRequest) => {
   )
 }
 
+export const canReduce = (request: LLMRequest, history: readonly SessionMessage.Info[], targetMaxInputTokens: number) => {
+  const lastUser = history.findLast((message) => message.type === "user")
+  const removable = new Set(history.flatMap((message) =>
+    (message.type === "user" && message !== lastUser && message.time.consumed !== undefined) ||
+    (message.type === "assistant" && message.time.completed !== undefined)
+      ? [message.id]
+      : [],
+  ))
+  if (removable.size === 0) return false
+  return estimatedProviderInputTokens(LLMRequest.update(request, {
+    messages: request.messages.filter((message) =>
+      message.role === "system" || message.volatile === true ||
+      (message.id === undefined ? message.role !== "tool" : !removable.has(SessionMessage.ID.make(message.id))),
+    ),
+  })) < targetMaxInputTokens
+}
+
 const considerPercent = (policy: ConfigCompaction.Resolved) =>
   policy.advisory === false ? 70 : policy.advisory.considerPercent
+
+export const targetInputTokens = (capabilities: { readonly contextWindowTokens: number }, policy: ConfigCompaction.Resolved) =>
+  Math.floor((capabilities.contextWindowTokens * considerPercent(policy)) / 100)
 
 const latestCompleteBoundary = Effect.fnUntraced(function* (db: Database.Interface["db"], sessionID: SessionSchema.ID) {
   const rows = yield* db

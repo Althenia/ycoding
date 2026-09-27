@@ -308,6 +308,8 @@ const layer = Layer.effect(
                   contextRevision: loaded.contextRevision }
               }),
               force: requestTrackerState.overflowRecovery === "pending",
+              canReduce: (candidate, target) =>
+                SessionCompactionGate.canReduce(candidate.prepared.request, candidate.context.messages, target),
               ...(lastProviderInput === undefined
                 ? {}
                 : {
@@ -636,7 +638,17 @@ const layer = Layer.effect(
 
           let overflowLimit: SessionError.Error | undefined
           if (contextOverflowFailure && !publisher.hasRetryEvidence()) {
-            if (requestTrackerState.overflowRecovery === undefined) {
+            if (
+              requestTrackerState.overflowRecovery === undefined &&
+              (limits?.context === undefined || limits.output === undefined ||
+                SessionCompactionGate.canReduce(
+                  prepared.request,
+                  loaded.messages,
+                  SessionCompactionGate.targetInputTokens({
+                    contextWindowTokens: limits.context,
+                  }, compactionPolicy),
+                ))
+            ) {
               requestTrackerState.overflowRecovery = "pending"
               return {
                 _tag: "RestartAfterOverflow",
@@ -645,11 +657,13 @@ const layer = Layer.effect(
                 assistantMessageID: publisher.hasStepStarted() ? yield* publisher.startAssistant() : undefined,
               } as const
             }
-            overflowLimit = {
-              type: "context.limit",
-              message: "The provider still rejected the request for context overflow after one compaction rebase",
+            if (requestTrackerState.overflowRecovery === "used") {
+              overflowLimit = {
+                type: "context.limit",
+                message: "The provider still rejected the request for context overflow after one compaction rebase",
+              }
+              yield* serialized(publisher.failAssistant(overflowLimit))
             }
-            yield* serialized(publisher.failAssistant(overflowLimit))
           }
 
           const invalidPreviousResponse =
