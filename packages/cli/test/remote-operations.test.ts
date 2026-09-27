@@ -150,6 +150,22 @@ describe("backend Session authorization", () => {
     expect(invalidations).toBe(2)
   })
 
+  test("keeps activity that only advances the updated time out of client list invalidations", async () => {
+    let current = sessionInfo("ses_1", { updated: 1, title: "Initial" })
+    let invalidations = 0
+    const { local } = fakeLocal({ listPage: async () => ({ data: [current] }), getSession: async () => current })
+    const registry = createSessionRegistry({ local, onChange: () => invalidations++ })
+    await registry.refresh()
+    invalidations = 0
+    for (let updated = 2; updated <= 50; updated++) {
+      current = { ...current, time: { ...current.time, updated } }
+      await registry.verify("ses_1")
+    }
+    await registry.refresh()
+    expect(invalidations).toBe(0)
+    expect(registry.snapshot().map((session) => session.time.updated)).toEqual([50])
+  })
+
   test("refuses a session absent from the authoritative backend inventory", async () => {
     const { local, registry, subscriptions, calls } = await harness({})
     const outcome = await executeRemoteOperation({

@@ -234,7 +234,9 @@ Relay rules:
   Unknown or already-settled IDs are dropped.
 - `event` frames are delivered only to clients subscribed to that `sessionID`.
 - `sessions` is a bounded invalidation, never an inventory. The client responds by
-  paging `session.list` until its cursor is exhausted.
+  rereading the Session groups and the selected group's first `session.list` page.
+  The agent sends it for membership and list-metadata changes, not for activity
+  that only advances a Session's updated time.
 - The client's registered subscription is updated when a `session.subscribe` or
   `session.unsubscribe` response succeeds.
 - The relay is the only per-client subscription authority. After each successful

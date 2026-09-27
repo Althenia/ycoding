@@ -190,10 +190,10 @@ function sessionInventoryChanged(previous: SessionInfo | undefined, current: Ses
   if (previous === undefined) return true
   return JSON.stringify([
     previous.title, previous.agent, previous.model, previous.projectID, previous.location,
-    previous.time.updated, previous.time.archived, previous.time.pinned,
+    previous.time.archived, previous.time.pinned,
   ]) !== JSON.stringify([
     current.title, current.agent, current.model, current.projectID, current.location,
-    current.time.updated, current.time.archived, current.time.pinned,
+    current.time.archived, current.time.pinned,
   ])
 }
 
