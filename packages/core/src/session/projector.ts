@@ -950,8 +950,8 @@ const layer = Layer.effectDiscard(
               fallback: sql`${SessionUsageTable.fallback} + ${event.data.continuation === "fallback" ? 1 : 0}`,
               cost:
                 event.data.cost === undefined
-                  ? null
-                  : sql`case when ${SessionUsageTable.cost} is null then null else ${SessionUsageTable.cost} + ${event.data.cost} end`,
+                  ? SessionUsageTable.cost
+                  : sql`coalesce(${SessionUsageTable.cost}, 0) + ${event.data.cost}`,
               input: sql`${SessionUsageTable.input} + ${event.data.tokens.input}`,
               output: sql`${SessionUsageTable.output} + ${event.data.tokens.output}`,
               reasoning: sql`${SessionUsageTable.reasoning} + ${event.data.tokens.reasoning}`,

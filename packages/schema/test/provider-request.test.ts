@@ -107,6 +107,8 @@ test("validates bounded usage report inputs", () => {
     sort: "tokens",
     order: "desc",
   })
+  for (const sort of ["steps", "input", "output", "reasoning", "cacheRead", "cacheWrite"] as const)
+    expect(decodeReportInput({ group: "day", sort }).sort).toBe(sort)
   for (const input of [
     { group: "week" },
     { group: "day", from: 2, to: 2 },

@@ -185,7 +185,7 @@ describe("SessionV2.log", () => {
         expect.objectContaining({ model: { providerID: "custom", id: "missing" } }),
       ])
       expect(rootUsage.models?.find((item) => item?.model?.providerID === "custom")).not.toHaveProperty("cost")
-      expect(rootUsage).not.toHaveProperty("cost")
+      expect(rootUsage.cost).toBe(Money.USD.make(0.0308))
       expect(yield* session.usage(child.id)).toMatchObject({
         logical: 1,
         cost: Money.USD.make(0.028),
@@ -231,6 +231,7 @@ describe("SessionV2.log", () => {
         continuation: ProviderRequest.Continuation
         cacheReadReported: boolean
         cost?: Money.USD
+        tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } }
         time: number
       }) {
         yield* events.publish(SessionEvent.ProviderRequestRecorded, {
@@ -252,7 +253,7 @@ describe("SessionV2.log", () => {
           continuation: input.continuation,
           cacheReadReported: input.cacheReadReported,
           ...(input.cost === undefined ? {} : { cost: input.cost }),
-          tokens: { input: 1_000, output: 100, reasoning: 25, cache: { read: 50, write: 10 } },
+          tokens: input.tokens ?? { input: 1_000, output: 100, reasoning: 25, cache: { read: 50, write: 10 } },
           time: DateTime.makeUnsafe(input.time),
         })
       })
@@ -267,6 +268,7 @@ describe("SessionV2.log", () => {
         continuation: "full",
         cacheReadReported: true,
         cost: Money.USD.make(0.1),
+        tokens: { input: 3_000, output: 30, reasoning: 3, cache: { read: 1, write: 10 } },
         time: Date.UTC(2026, 0, 31, 23, 59, 59, 999),
       })
       yield* record({
@@ -279,6 +281,7 @@ describe("SessionV2.log", () => {
         attempts: 1,
         continuation: "continued",
         cacheReadReported: true,
+        tokens: { input: 1_000, output: 10, reasoning: 1, cache: { read: 2, write: 20 } },
         time: Date.UTC(2026, 1, 1),
       })
       yield* record({
@@ -291,6 +294,7 @@ describe("SessionV2.log", () => {
         attempts: 3,
         continuation: "fallback",
         cacheReadReported: false,
+        tokens: { input: 2_000, output: 20, reasoning: 2, cache: { read: 3, write: 30 } },
         time: Date.UTC(2026, 1, 1, 1),
       })
 
@@ -308,24 +312,32 @@ describe("SessionV2.log", () => {
         continued: 1,
         fallback: 1,
         cacheReadReported: false,
-        tokens: { input: 3_000, output: 300, reasoning: 75, cache: { read: 150, write: 30 } },
+        tokens: { input: 6_000, output: 60, reasoning: 6, cache: { read: 6, write: 60 } },
       })
-      expect(byModel.total).not.toHaveProperty("cost")
-      expect(byModel.total).not.toHaveProperty("costProvenance")
+      expect(byModel.total.cost).toBeCloseTo(0.102088, 8)
+      expect(byModel.total.costProvenance).toBe("current_catalog")
       expect(byModel.rows.find((row) => row.label.includes("recorded-priced"))).toMatchObject({
         cost: Money.USD.make(0.1),
         costProvenance: "recorded",
       })
       expect(byModel.rows.find((row) => row.label.includes("provider-priced"))).toMatchObject({
-        cost: Money.USD.make(0.003),
+        cost: Money.USD.make(0.002088),
         costProvenance: "current_catalog",
       })
       expect(byModel.rows.find((row) => row.label.includes("missing"))).not.toHaveProperty("cost")
+      for (const sort of ["steps", "input", "output", "reasoning", "cacheRead", "cacheWrite"] as const) {
+        expect(
+          (yield* session.usageReport({ sessionID: root.id, group: "agent", sort, order: "asc" })).rows.map((row) => row.key),
+        ).toEqual(["review", "build"])
+        expect(
+          (yield* session.usageReport({ sessionID: root.id, group: "agent", sort, order: "desc" })).rows.map((row) => row.key),
+        ).toEqual(["build", "review"])
+      }
       expect(
         (yield* session.usageReport({ sessionID: root.id, group: "model", sort: "cost", order: "asc" })).rows.map(
           (row) => row.key,
         ),
-      ).toEqual(["openai/provider-priced", "openai/recorded-priced", "custom/missing"])
+      ).toEqual(["custom/missing", "openai/provider-priced", "openai/recorded-priced"])
       expect(
         (yield* session.usageReport({ sessionID: root.id, group: "model", sort: "cost", order: "desc" })).rows.map(
           (row) => row.key,
@@ -338,6 +350,11 @@ describe("SessionV2.log", () => {
       expect(yield* session.usageReport({ sessionID: root.id, group: "agent" })).toMatchObject({
         rowCount: 2,
         rows: [{ key: "build" }, { key: "review" }],
+      })
+      expect((yield* session.usageReport({ sessionID: root.id, group: "agent" })).rows[0]).toMatchObject({
+        key: "build",
+        cost: Money.USD.make(0.1),
+        costProvenance: "recorded",
       })
       expect(yield* session.usageReport({ sessionID: root.id, group: "session" })).toMatchObject({ rowCount: 3 })
       expect(yield* session.usageReport({ sessionID: root.id, group: "project" })).toMatchObject({

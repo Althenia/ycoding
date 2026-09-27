@@ -108,7 +108,7 @@ export function subagentEconomics(
     : undefined
   const reads = diagnostics?.cache.readReported ? number(diagnostics.tokens.cacheRead) : undefined
   const writes = diagnostics?.cache.writeReported ? number(diagnostics.tokens.cacheWrite) : undefined
-  const spent = session.cost > 0 ? money.format(session.cost) : undefined
+  const spent = money.format(session.cost)
   const summary = [
     tokens > 0 ? `${Locale.number(tokens)}${diagnostics?.context.percent === undefined ? "" : ` (${diagnostics.context.percent}%)`}` : undefined,
     hit,
@@ -148,7 +148,7 @@ function number(value: number) {
 export function subagentSiblingEconomics(session: Pick<SessionInfo, "cost" | "tokens"> | undefined) {
   if (!session) return undefined
   const tokens = totalTokens(session)
-  const output = [session.cost > 0 ? money.format(session.cost) : undefined, tokens > 0 ? Locale.number(tokens) : undefined]
+  const output = [money.format(session.cost), tokens > 0 ? Locale.number(tokens) : undefined]
     .filter(Boolean)
     .join(" · ")
   return output || undefined
@@ -166,7 +166,7 @@ export function subagentFooterData(
           model: formatted?.model ?? formatDiagnosticsModel(session.model),
           context: formatted?.context,
           cache: formatted?.cache,
-          cost: session.cost > 0 ? money.format(session.cost) : undefined,
+          cost: money.format(session.cost),
         }
       : undefined,
   }

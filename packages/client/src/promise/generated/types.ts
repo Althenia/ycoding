@@ -4530,7 +4530,17 @@ export type SessionUsageReportInput = {
     readonly to?: number | undefined
     readonly offset?: number | undefined
     readonly limit?: number | undefined
-    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly sort?:
+      | "key"
+      | "tokens"
+      | "cost"
+      | "steps"
+      | "input"
+      | "output"
+      | "reasoning"
+      | "cacheRead"
+      | "cacheWrite"
+      | undefined
     readonly order?: "asc" | "desc" | undefined
   }["group"]
   readonly from?: {
@@ -4539,7 +4549,17 @@ export type SessionUsageReportInput = {
     readonly to?: number | undefined
     readonly offset?: number | undefined
     readonly limit?: number | undefined
-    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly sort?:
+      | "key"
+      | "tokens"
+      | "cost"
+      | "steps"
+      | "input"
+      | "output"
+      | "reasoning"
+      | "cacheRead"
+      | "cacheWrite"
+      | undefined
     readonly order?: "asc" | "desc" | undefined
   }["from"]
   readonly to?: {
@@ -4548,7 +4568,17 @@ export type SessionUsageReportInput = {
     readonly to?: number | undefined
     readonly offset?: number | undefined
     readonly limit?: number | undefined
-    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly sort?:
+      | "key"
+      | "tokens"
+      | "cost"
+      | "steps"
+      | "input"
+      | "output"
+      | "reasoning"
+      | "cacheRead"
+      | "cacheWrite"
+      | undefined
     readonly order?: "asc" | "desc" | undefined
   }["to"]
   readonly offset?: {
@@ -4557,7 +4587,17 @@ export type SessionUsageReportInput = {
     readonly to?: number | undefined
     readonly offset?: number | undefined
     readonly limit?: number | undefined
-    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly sort?:
+      | "key"
+      | "tokens"
+      | "cost"
+      | "steps"
+      | "input"
+      | "output"
+      | "reasoning"
+      | "cacheRead"
+      | "cacheWrite"
+      | undefined
     readonly order?: "asc" | "desc" | undefined
   }["offset"]
   readonly limit?: {
@@ -4566,7 +4606,17 @@ export type SessionUsageReportInput = {
     readonly to?: number | undefined
     readonly offset?: number | undefined
     readonly limit?: number | undefined
-    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly sort?:
+      | "key"
+      | "tokens"
+      | "cost"
+      | "steps"
+      | "input"
+      | "output"
+      | "reasoning"
+      | "cacheRead"
+      | "cacheWrite"
+      | undefined
     readonly order?: "asc" | "desc" | undefined
   }["limit"]
   readonly sort?: {
@@ -4575,7 +4625,17 @@ export type SessionUsageReportInput = {
     readonly to?: number | undefined
     readonly offset?: number | undefined
     readonly limit?: number | undefined
-    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly sort?:
+      | "key"
+      | "tokens"
+      | "cost"
+      | "steps"
+      | "input"
+      | "output"
+      | "reasoning"
+      | "cacheRead"
+      | "cacheWrite"
+      | undefined
     readonly order?: "asc" | "desc" | undefined
   }["sort"]
   readonly order?: {
@@ -4584,7 +4644,17 @@ export type SessionUsageReportInput = {
     readonly to?: number | undefined
     readonly offset?: number | undefined
     readonly limit?: number | undefined
-    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly sort?:
+      | "key"
+      | "tokens"
+      | "cost"
+      | "steps"
+      | "input"
+      | "output"
+      | "reasoning"
+      | "cacheRead"
+      | "cacheWrite"
+      | undefined
     readonly order?: "asc" | "desc" | undefined
   }["order"]
 }
@@ -7777,7 +7847,17 @@ export type UsageReportInput = {
     readonly to?: number | undefined
     readonly offset?: number | undefined
     readonly limit?: number | undefined
-    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly sort?:
+      | "key"
+      | "tokens"
+      | "cost"
+      | "steps"
+      | "input"
+      | "output"
+      | "reasoning"
+      | "cacheRead"
+      | "cacheWrite"
+      | undefined
     readonly order?: "asc" | "desc" | undefined
   }["group"]
   readonly from?: {
@@ -7786,7 +7866,17 @@ export type UsageReportInput = {
     readonly to?: number | undefined
     readonly offset?: number | undefined
     readonly limit?: number | undefined
-    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly sort?:
+      | "key"
+      | "tokens"
+      | "cost"
+      | "steps"
+      | "input"
+      | "output"
+      | "reasoning"
+      | "cacheRead"
+      | "cacheWrite"
+      | undefined
     readonly order?: "asc" | "desc" | undefined
   }["from"]
   readonly to?: {
@@ -7795,7 +7885,17 @@ export type UsageReportInput = {
     readonly to?: number | undefined
     readonly offset?: number | undefined
     readonly limit?: number | undefined
-    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly sort?:
+      | "key"
+      | "tokens"
+      | "cost"
+      | "steps"
+      | "input"
+      | "output"
+      | "reasoning"
+      | "cacheRead"
+      | "cacheWrite"
+      | undefined
     readonly order?: "asc" | "desc" | undefined
   }["to"]
   readonly offset?: {
@@ -7804,7 +7904,17 @@ export type UsageReportInput = {
     readonly to?: number | undefined
     readonly offset?: number | undefined
     readonly limit?: number | undefined
-    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly sort?:
+      | "key"
+      | "tokens"
+      | "cost"
+      | "steps"
+      | "input"
+      | "output"
+      | "reasoning"
+      | "cacheRead"
+      | "cacheWrite"
+      | undefined
     readonly order?: "asc" | "desc" | undefined
   }["offset"]
   readonly limit?: {
@@ -7813,7 +7923,17 @@ export type UsageReportInput = {
     readonly to?: number | undefined
     readonly offset?: number | undefined
     readonly limit?: number | undefined
-    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly sort?:
+      | "key"
+      | "tokens"
+      | "cost"
+      | "steps"
+      | "input"
+      | "output"
+      | "reasoning"
+      | "cacheRead"
+      | "cacheWrite"
+      | undefined
     readonly order?: "asc" | "desc" | undefined
   }["limit"]
   readonly sort?: {
@@ -7822,7 +7942,17 @@ export type UsageReportInput = {
     readonly to?: number | undefined
     readonly offset?: number | undefined
     readonly limit?: number | undefined
-    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly sort?:
+      | "key"
+      | "tokens"
+      | "cost"
+      | "steps"
+      | "input"
+      | "output"
+      | "reasoning"
+      | "cacheRead"
+      | "cacheWrite"
+      | undefined
     readonly order?: "asc" | "desc" | undefined
   }["sort"]
   readonly order?: {
@@ -7831,7 +7961,17 @@ export type UsageReportInput = {
     readonly to?: number | undefined
     readonly offset?: number | undefined
     readonly limit?: number | undefined
-    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly sort?:
+      | "key"
+      | "tokens"
+      | "cost"
+      | "steps"
+      | "input"
+      | "output"
+      | "reasoning"
+      | "cacheRead"
+      | "cacheWrite"
+      | undefined
     readonly order?: "asc" | "desc" | undefined
   }["order"]
 }

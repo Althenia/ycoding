@@ -151,7 +151,7 @@ test("renders provider progress and unavailable states in a dedicated dialog", a
   }
 })
 
-test("renders unavailable local pricing without inventing zero cost", async () => {
+test("renders missing local pricing as an estimated zero cost", async () => {
   const [{ ConfigProvider }, { ThemeProvider }, { Keymap }, { DialogProvider }, { ToastProvider }] = await Promise.all([
     import("../../../src/config"),
     import("../../../src/context/theme"),
@@ -196,7 +196,7 @@ test("renders unavailable local pricing without inventing zero cost", async () =
     const frame = app.captureCharFrame()
     expect(frame).toContain("custom/custom")
     expect(frame).toContain("-/0")
-    expect(frame).not.toContain("$0.00")
+    expect(frame).toContain("$0.00")
   } finally {
     app.renderer.destroy()
   }
@@ -248,8 +248,7 @@ test("renders durable backend request usage after detailed records are compacted
     expect(frame).toContain("12,000")
     expect(frame).toContain("900")
     expect(frame).toContain("1,200")
-    expect(frame).toContain("Not reported")
-    expect(frame).not.toContain("$0.00")
+    expect(frame).toContain("$0.00")
   } finally {
     app.renderer.destroy()
   }

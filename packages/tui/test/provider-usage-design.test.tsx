@@ -104,13 +104,50 @@ test.each([
       expect(heading.indexOf("INPUT") + "INPUT".length).toBe(total.indexOf("9,000") + "9,000".length)
     }
 
-    for (const metric of ["3", "9,000", "600", "0", "4,000/300", "$6.50", "Not reported", "$0.00"]) {
+    for (const metric of ["3", "9,000", "600", "0", "4,000/300", "$6.50", "$0.00"]) {
       expect(frame).toContain(metric)
     }
   } finally {
     app.renderer.destroy()
   }
 })
+
+test("sorts complete overview model rows client-side and keeps Total pinned", async () => {
+  const config = createTuiResolvedConfig()
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={config}>
+          <Keymap.Provider config={config}>
+            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+              <ToastProvider>
+                <ProviderUsageScreenContent snapshots={() => []} backendUsage={() => usage} />
+              </ToastProvider>
+            </ThemeProvider>
+          </Keymap.Provider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 189, height: 32 },
+  )
+  app.renderer.start()
+  try {
+    await app.waitForFrame((frame) => frame.includes("LIFETIME MODEL BREAKDOWN"))
+    app.mockInput.pressKey("i")
+    let frame = await app.waitForFrame((value) => value.includes("INPUT▼") && value.indexOf("openrouter/") < value.indexOf("openai/"))
+    let lines = frame.split("\n")
+    expect(lines.findIndex((line) => line.trimStart().startsWith("Total"))).toBeLessThan(lines.findIndex((line) => line.includes("openrouter/")))
+
+    app.mockInput.pressKey("i")
+    frame = await app.waitForFrame((value) => value.includes("INPUT▲") && value.indexOf("openai/") < value.indexOf("openrouter/"))
+    lines = frame.split("\n")
+    expect(lines.findIndex((line) => line.trimStart().startsWith("Total"))).toBeLessThan(lines.findIndex((line) => line.includes("openai/")))
+    expect(lines.findIndex((line) => line.includes("openai/"))).toBeLessThan(lines.findIndex((line) => line.includes("openrouter/")))
+
+  } finally {
+    app.renderer.destroy()
+  }
+}, 30_000)
 
 test.each([
   { width: 80, height: 24 },

@@ -239,8 +239,8 @@ test("keeps a last-step model and limit when session selection changes", async (
     expect(frame).toContain("12")
     expect(frame).toContain("SPEND")
     expect(frame).toContain("Total")
-    expect(frame).toContain("Not reported")
-    expect(frame).not.toContain("$0.00")
+    expect(frame).toContain("$0.00")
+    expect(frame).not.toContain("Not reported")
     expect(frame).not.toContain("Prefix")
   } finally {
     app.renderer.destroy()
@@ -283,7 +283,7 @@ test("renders aggregate fallback spend as a single total when diagnostics are un
   }
 })
 
-test("renders durable model spend and an unreported total after diagnostics requests are compacted", async () => {
+test("renders durable model spend and estimated zero for unpriced costs after compaction", async () => {
   const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
     import("../../../src/config"),
     import("../../../src/context/theme"),
@@ -310,7 +310,7 @@ test("renders durable model spend and an unreported total after diagnostics requ
     expect(frame).toContain("openai/gpt-5.6-terra#high")
     expect(frame).not.toContain("Estimated (current catalog)")
     expect(frame).toContain("Total")
-    expect(frame).toContain("Not reported")
+    expect(frame).not.toContain("Not reported")
     expect(frame).toContain("$0.00")
   } finally {
     app.renderer.destroy()
@@ -351,17 +351,17 @@ test("groups spend by model under the measured model identity without colliding 
     expect(frame).toContain("54,015 / 400,000")
     expect(frame).toContain("SPEND")
     expect(frame).toContain("openai/gpt-5.6-terra#high")
-    expect(frame).toContain("Not reported")
+    expect(frame).toContain("$0.00")
     expect(frame).toContain("Total")
     expect(frame).not.toContain("· subagents")
     expect(frame).not.toContain("$0.40")
-    expect(frame).not.toContain("$0.00")
+    expect(frame).toContain("$0.00")
     expect(frame.indexOf("Model")).toBeLessThan(frame.indexOf("Context"))
     expect(frame.indexOf("Context")).toBeLessThan(frame.indexOf("Cache"))
     expect(frame.indexOf("Cache")).toBeLessThan(frame.indexOf("SPEND"))
     expect(frame.indexOf("SPEND")).toBeLessThan(frame.indexOf("$1.25"))
-    expect(frame.indexOf("$1.25")).toBeLessThan(frame.indexOf("Not reported"))
-    expect(frame.indexOf("Not reported")).toBeLessThan(frame.indexOf("Total"))
+    expect(frame.indexOf("$1.25")).toBeLessThan(frame.indexOf("$0.00"))
+    expect(frame.indexOf("$0.00")).toBeLessThan(frame.indexOf("Total"))
     expect(frame.indexOf("SPEND")).toBeLessThan(frame.indexOf("Total"))
     expect(frame.indexOf("Total")).toBeLessThan(frame.indexOf("CACHE"))
 
@@ -376,8 +376,8 @@ test("groups spend by model under the measured model identity without colliding 
     expect(spendRow?.trimEnd()).toMatch(/^ +anthropic\/claude-sonnet-4-5-\S*… +\$1\.25$/)
     expect(spendRow?.trimEnd().length).toBeLessThanOrEqual(47)
 
-    const unreportedRow = lines.find((line) => line.includes("Not reported"))
-    expect(unreportedRow?.trimEnd()).toMatch(/^ +openai\/gpt-5\.6-terra#high +Not reported$/)
+    const unpricedRow = lines.find((line) => line.includes("openai/gpt-5.6-terra#high"))
+    expect(unpricedRow?.trimEnd()).toMatch(/^ +openai\/gpt-5\.6-terra#high +\$0\.00$/)
   } finally {
     app.renderer.destroy()
   }
@@ -501,7 +501,7 @@ test("sums reported provider-priced spend in Total", async () => {
   }
 })
 
-test("renders Total and an unpriced model as Not reported", async () => {
+test("renders Total and an unpriced model as estimated zero", async () => {
   const app = await renderSpend(() => unknownCostDiagnostics)
   try {
     const frame = app.captureCharFrame()
@@ -509,12 +509,12 @@ test("renders Total and an unpriced model as Not reported", async () => {
     expect(frame).toContain("openai/gpt-5.6#high")
     expect(frame).toContain("$1.00")
     expect(frame).toContain("openrouter/gpt-5.6#high")
-    expect(lines.find((line) => line.includes("Total"))?.trim()).toMatch(/^Total +Not reported$/)
+    expect(lines.find((line) => line.includes("Total"))?.trim()).toMatch(/^Total +\$0\.00$/)
     expect(lines.find((line) => line.includes("openrouter/gpt-5.6#high"))?.trim()).toMatch(
-      /^openrouter\/gpt-5\.6#high +Not reported$/,
+      /^openrouter\/gpt-5\.6#high +\$0\.00$/,
     )
     expect(frame).not.toContain("· subagents")
-    expect(frame).not.toContain("$0.00")
+    expect(frame).toContain("$0.00")
   } finally {
     app.renderer.destroy()
   }

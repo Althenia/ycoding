@@ -28,6 +28,8 @@ test("decodes and validates usage report query bounds", () => {
     sort: "cost",
     order: "desc",
   })
+  for (const sort of ["steps", "input", "output", "reasoning", "cacheRead", "cacheWrite"] as const)
+    expect(decode({ group: "hour", sort }).sort).toBe(sort)
   for (const query of [
     { group: "hour", from: "2", to: "2" },
     { group: "hour", from: "3", to: "2" },

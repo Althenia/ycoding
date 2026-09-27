@@ -11,7 +11,7 @@ YCoding reduces provider usage without changing the logical agent result by:
 - applying provider-native prompt-cache controls only where the route and model support them;
 - reusing compatible stored OpenAI Responses state through durable, fingerprinted Session continuation;
 - measuring logical requests separately from physical transport attempts;
-- reporting raw provider tokens and estimated cost without treating missing pricing as zero.
+- reporting raw provider tokens and catalog/provider cost estimates, with unpriced requests contributing $0.
 
 Adaptive Anthropic TTL is chosen from the request source alone and needs no runtime or durable state. Stored Responses continuation and opaque stateless replay state are durable but are never authoritative Session transcript content.
 
@@ -188,11 +188,11 @@ The local section reports:
 | Raw cache write    | Provider-reported cache creation/write tokens.                                                             |
 | Raw output         | Visible output tokens after separating reasoning.                                                          |
 | Raw reasoning      | Provider-reported reasoning tokens.                                                                        |
-| Estimated cost     | Sum calculated from catalog pricing. It is unavailable when any recorded request lacks applicable pricing. |
+| Estimated cost     | Sum of priced request estimates from catalog or provider-reported pricing; an unpriced request contributes $0. |
 | Last invalidation  | Why the latest request did not retain or reuse the preceding prefix/state.                                 |
 | Namespace          | First eight characters of the latest prompt-cache namespace.                                               |
 
-Unknown pricing renders `Estimated cost unavailable`. A real zero-priced catalog model renders `$0.0000`.
+Displayed costs are estimates, not provider bills. Missing pricing contributes `$0.0000` to aggregates and cost displays.
 
 The Session rail and subagent economics intentionally omit a prefix-stability label. They retain the measured hit ratio and provider-reported cache read/write tokens because a stable local namespace describes request identity, not a cache-hit guarantee. When provider terminal usage arrives before local tool execution finishes, an instance-local diagnostics event updates these last-step values immediately instead of waiting for the tool-settlement boundary; durable provider-request and assistant projections remain the restart authority after the step becomes terminal. During automatic or mandatory local compaction, the Session rail uses the job's durable admission pressure to show the current local estimate against the safe input cap with an `est` label instead of retaining the prior provider step's occupancy. This temporary context estimate does not alter or relabel provider cache telemetry.
 

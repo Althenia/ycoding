@@ -17,7 +17,7 @@ type ReportInput = {
   to?: number
   offset?: number
   limit?: number
-  sort?: "key" | "tokens" | "cost"
+  sort?: "key" | "tokens" | "cost" | "steps" | "input" | "output" | "reasoning" | "cacheRead" | "cacheWrite"
   order?: "asc" | "desc"
 }
 
@@ -338,7 +338,7 @@ test("derives a full-width colored Stats graph and summary from daily, model, an
     expect(frame).toContain("Total tokens: 4,125")
     expect(frame).toContain("Total cost: $1.50")
     expect(frame).toContain("Busiest day: 2026-09-22 · ≥5,500 tokens")
-    expect(frame).toContain("Usage before 2026-09-16 is unreported")
+    expect(frame).not.toContain("Usage before 2026-09-16")
     expect(frame).not.toContain("est.")
     expect(calls.filter((call) => call.limit === 200).map((call) => ({ group: call.group, offset: call.offset, limit: call.limit }))).toEqual([
       { group: "day", offset: 0, limit: 200 },

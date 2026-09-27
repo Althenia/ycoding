@@ -99,7 +99,7 @@ const addTokens = (left: TokenUsage.Info, right: TokenUsage.Info): TokenUsage.In
 export type CostedRecord = ProviderRequest.Record & { readonly costProvenance?: ProviderRequest.CostProvenance }
 
 export function reportMetrics(records: readonly CostedRecord[]): ProviderRequest.ReportMetrics {
-  const priced = records.length > 0 && records.every((record) => record.cost !== undefined)
+  const priced = records.some((record) => record.cost !== undefined)
   return {
     logical: records.length,
     physical: records.reduce((total, record) => total + record.attempts, 0),
@@ -152,7 +152,7 @@ export function summarize(records: readonly CostedRecord[]): ProviderRequest.Sum
     }
     current.requests += 1
     current.tokens = addTokens(current.tokens, record.tokens)
-    current.priced &&= record.cost !== undefined
+    current.priced ||= record.cost !== undefined
     current.cost = Money.USD.make(current.cost + (record.cost ?? 0))
     current.currentCatalog ||= record.costProvenance === "current_catalog"
     current.cacheReadReported &&= record.cacheReadReported === true
@@ -189,7 +189,7 @@ export function summarize(records: readonly CostedRecord[]): ProviderRequest.Sum
     continued: metrics.continued,
     fallback: metrics.fallback,
     ...(metrics.cacheReadReported === undefined ? {} : { cacheReadReported: metrics.cacheReadReported }),
-    ...(records.length === 0 ? { cost: Money.USD.zero } : metrics.cost === undefined ? {} : { cost: metrics.cost }),
+    ...(metrics.cost === undefined ? {} : { cost: metrics.cost }),
     ...(items.length === 0 ? {} : { models: items }),
     tokens: metrics.tokens,
     ...(latest === undefined
@@ -334,7 +334,7 @@ const layer = Layer.effect(
               left.model.id.localeCompare(right.model.id) ||
               (left.model.variant ?? "").localeCompare(right.model.variant ?? ""),
           )
-        const cost = rows.every((row) => row.cost !== null)
+        const cost = rows.some((row) => row.cost !== null)
           ? Money.USD.make(rows.reduce((total, row) => total + (row.cost ?? 0), 0))
           : undefined
         return {

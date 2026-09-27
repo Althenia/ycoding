@@ -72,13 +72,11 @@ export function SidebarCacheContent(props: {
           .join(" · ")
       : undefined
   })
-  // The provider-request summary collapses the session cost to undefined when any request's cost is
-  // unknown, so Total reflects "unknown" rather than a $0-derived sum. Only the priced requests are summed.
   const spent = createMemo(() => {
     const requests = usage()
-    if (requests) return requests.cost === undefined ? undefined : { value: requests.cost }
+    if (requests) return { value: requests.cost ?? 0 }
     const value = diagnostics() ? props.cost?.() : fallback()?.cost
-    return value === undefined ? undefined : { value }
+    return { value: value ?? 0 }
   })
   const context = createMemo(() => {
     const currentPressure = pressure()
@@ -94,7 +92,7 @@ export function SidebarCacheContent(props: {
   })
   const modelSpend = createMemo(() =>
     (usage()?.models ?? []).map((entry) => {
-      const value = entry.cost === undefined ? "Not reported" : money.format(entry.cost)
+      const value = money.format(entry.cost ?? 0)
       return { label: spendModelLabel(entry.model, value), value }
     }),
   )
@@ -131,9 +129,7 @@ export function SidebarCacheContent(props: {
           </Show>
           <RailSubheading>SPEND</RailSubheading>
           <For each={modelSpend()}>{(entry) => <RailRow label={entry.label} value={entry.value} />}</For>
-          <Show when={spent()} fallback={<RailRow label="Total" value="Not reported" />}>
-            {(total) => <RailRow label="Total" value={money.format(total().value)} />}
-          </Show>
+          <Show when={spent()}>{(total) => <RailRow label="Total" value={money.format(total().value)} />}</Show>
         </>
       </Show>
       <Show when={hasCacheDetails()}>

@@ -166,10 +166,13 @@ it.effect("keeps unavailable pricing distinct and summarizes the latest bounded 
       helpers: 0,
       continued: 1,
       fallback: 0,
+      cost: Money.USD.make(0.01),
       models: [
         {
           model,
           requests: 2,
+          cost: Money.USD.make(0.01),
+          costProvenance: "recorded",
           tokens: { input: 30, output: 5, reasoning: 1, cache: { read: 100, write: 5 } },
         },
       ],
@@ -330,7 +333,7 @@ it.effect("persists true, false, and absent cache-read telemetry", () =>
   }),
 )
 
-it.effect("maintains a token and known-cost aggregate separate from raw provider-request projections", () =>
+it.effect("maintains a token and priced-cost aggregate separate from raw provider-request projections", () =>
   Effect.gen(function* () {
     const sessionID = SessionV2.ID.make("ses_provider_request_aggregate")
     yield* insertSession(sessionID)
@@ -372,7 +375,11 @@ it.effect("maintains a token and known-cost aggregate separate from raw provider
           sql`SELECT logical, input, output, reasoning, cache_read, cache_write, cost FROM session_usage WHERE session_id = ${sessionID}`,
         )
         .pipe(Effect.orDie),
-    ).toEqual({ logical: 2, input: 120, output: 14, reasoning: 6, cache_read: 80, cache_write: 10, cost: null })
+    ).toEqual({ logical: 2, input: 120, output: 14, reasoning: 6, cache_read: 80, cache_write: 10, cost: 0.02 })
+    expect(yield* service.summary(sessionID)).toMatchObject({
+      cost: 0.02,
+      models: [{ requests: 2, cost: 0.02, costProvenance: "recorded" }],
+    })
   }),
 )
 
@@ -410,7 +417,7 @@ it.effect("retains durable request usage when transcript projections are compact
   }),
 )
 
-it.effect("groups summary spend by model with deterministic ordering and unreported group cost", () =>
+it.effect("groups summary spend by model with deterministic ordering and priced partial cost", () =>
   Effect.gen(function* () {
     const sessionID = SessionV2.ID.make("ses_provider_request_model_spend")
     yield* insertSession(sessionID)
@@ -487,20 +494,21 @@ it.effect("groups summary spend by model with deterministic ordering and unrepor
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
       },
       {
+        model: model("anthropic", "claude-sonnet-4"),
+        requests: 2,
+        cost: Money.USD.make(0.125),
+        costProvenance: "recorded",
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      },
+      {
         model: model("zzz", "free-model"),
         requests: 1,
         cost: Money.USD.zero,
         costProvenance: "recorded",
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
       },
-      {
-        model: model("anthropic", "claude-sonnet-4"),
-        requests: 2,
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-      },
     ])
-    // One anthropic request never reported a cost, so neither its group nor the session total may claim one.
-    expect(summary).not.toHaveProperty("cost")
+    expect(summary.cost).toBe(Money.USD.make(2.875))
   }),
 )
 
@@ -578,6 +586,9 @@ it.effect("summarizes absent, mixed, and explicit-zero cache-read reporting by m
     }
 
     expect(SessionProviderRequest.summarize([])).not.toHaveProperty("cacheReadReported")
+    expect(SessionProviderRequest.summarize([])).not.toHaveProperty("cost")
+    expect(SessionProviderRequest.summarize([explicitZero])).not.toHaveProperty("cost")
+    expect(SessionProviderRequest.summarize([explicitZero]).models?.[0]).not.toHaveProperty("cost")
     expect(SessionProviderRequest.summarize([explicitZero])).toMatchObject({
       cacheReadReported: true,
       models: [{ model: firstModel, cacheReadReported: true, tokens: { cache: { read: 0 } } }],

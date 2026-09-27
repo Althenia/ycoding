@@ -100,7 +100,7 @@ export function formatProviderRequestDiagnostics(requests: ProviderRequestDiagno
     cacheWrite: requestTokens(requests.tokens.cache.write),
     output: requestTokens(requests.tokens.output),
     reasoning: requestTokens(requests.tokens.reasoning),
-    estimatedCost: requests.cost === undefined ? "unavailable" : requestMoney.format(requests.cost),
+    estimatedCost: requestMoney.format(requests.cost ?? 0),
     latestInvalidation: invalidationLabel(requests.latestInvalidation),
     latestNamespace: requests.latestNamespace,
   }

@@ -100,7 +100,7 @@ test("formats bounded local provider request diagnostics", () => {
   })
 })
 
-test("keeps unavailable request pricing distinct from a confirmed free request", () => {
+test("formats unavailable request pricing as an estimated zero", () => {
   const base = {
     logical: 1,
     physical: 1,
@@ -109,8 +109,8 @@ test("keeps unavailable request pricing distinct from a confirmed free request",
     fallback: 0,
     tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 0, write: 0 } },
   }
-  expect(formatProviderRequestDiagnostics(base as never).estimatedCost).toBe("unavailable")
-  expect(formatProviderRequestDiagnostics({ ...base, cost: 0 } as never).estimatedCost).toBe("$0.0000")
+  expect(formatProviderRequestDiagnostics(base).estimatedCost).toBe("$0.0000")
+  expect(formatProviderRequestDiagnostics({ ...base, cost: 0 }).estimatedCost).toBe("$0.0000")
 })
 
 test("labels cache reset diagnostics", () => {

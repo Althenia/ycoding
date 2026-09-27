@@ -217,13 +217,13 @@ test("session usage report uses the generated filtered report contract", async (
       to: 200,
       offset: 20,
       limit: 25,
-      sort: "tokens",
+      sort: "cacheRead",
       order: "desc",
     }),
   ).toEqual(report)
   expect(request?.method).toBe("GET")
   expect(request && `${new URL(request.url).pathname}${new URL(request.url).search}`).toBe(
-    "/api/session/ses_usage/usage/report?group=day&from=100&to=200&offset=20&limit=25&sort=tokens&order=desc",
+    "/api/session/ses_usage/usage/report?group=day&from=100&to=200&offset=20&limit=25&sort=cacheRead&order=desc",
   )
 })
 

@@ -30,7 +30,7 @@ export type ProviderUsageReportInput = {
   to?: number
   offset?: number
   limit?: number
-  sort?: "key" | "tokens" | "cost"
+  sort?: "key" | "tokens" | "cost" | "steps" | "input" | "output" | "reasoning" | "cacheRead" | "cacheWrite"
   order?: "asc" | "desc"
 }
 
@@ -286,6 +286,12 @@ function ProviderUsageTable(props: {
       { id: "provider-usage.sort.date", title: "Sort usage by date or name", group: "Usage", bind: "d", run: () => props.onSort("key") },
       { id: "provider-usage.sort.tokens", title: "Sort usage by tokens", group: "Usage", bind: "t", run: () => props.onSort("tokens") },
       { id: "provider-usage.sort.cost", title: "Sort usage by cost", group: "Usage", bind: "c", run: () => props.onSort("cost") },
+      { id: "provider-usage.sort.steps", title: "Sort usage by steps", group: "Usage", bind: "s", run: () => props.onSort("steps") },
+      { id: "provider-usage.sort.input", title: "Sort usage by input tokens", group: "Usage", bind: "i", run: () => props.onSort("input") },
+      { id: "provider-usage.sort.output", title: "Sort usage by output tokens", group: "Usage", bind: "o", run: () => props.onSort("output") },
+      { id: "provider-usage.sort.reasoning", title: "Sort usage by reasoning tokens", group: "Usage", bind: "g", run: () => props.onSort("reasoning") },
+      { id: "provider-usage.sort.cache-read", title: "Sort usage by cache-read tokens", group: "Usage", bind: "a", run: () => props.onSort("cacheRead") },
+      { id: "provider-usage.sort.cache-write", title: "Sort usage by cache-write tokens", group: "Usage", bind: "w", run: () => props.onSort("cacheWrite") },
       { id: "provider-usage.range", title: "Choose usage range", group: "Usage", bind: "f", run: showRange },
       { id: "provider-usage.page.previous", title: "Previous server page", group: "Usage", bind: "[", run: () => props.onOffset(Math.max(0, props.offset - PAGE_SIZE)) },
       { id: "provider-usage.page.next", title: "Next server page", group: "Usage", bind: "]", run: () => {
@@ -318,9 +324,9 @@ function ProviderUsageTable(props: {
               {providerUsageViewLabel(props.view)} · All sessions
             </text>
             <text flexShrink={0} fg={themeV2.border.default}>{"─".repeat(Math.max(1, Math.min(dimensions().width - 6, 96)))}</text>
-            <text flexShrink={0} fg={themeV2.text.subdued}>
-              {narrow() ? compactHeader(props.view) : wideHeader(props.view, dimensions().width)}
-            </text>
+            <Show when={!narrow()} fallback={<text flexShrink={0} fg={themeV2.text.subdued}>{compactHeader(props.view, props.sort, props.order)}</text>}>
+              <ReportHeader view={props.view} width={dimensions().width} sort={props.sort} order={props.order} onSort={props.onSort} />
+            </Show>
             <scrollbox
               ref={(value: ScrollBoxRenderable) => { scroll = value }}
               flexGrow={1}
@@ -572,7 +578,7 @@ function ProviderUsageStats(props: {
             <box flexGrow={1} />
             <text fg={themeV2.text.subdued}>
               {summary().first
-                ? `Usage before ${summary().first} is unreported (not retained) · ≥ marks a lower bound where cache reads were unreported.`
+                ? ""
                 : "No usage recorded in the last 52 weeks."}
             </text>
           </>
@@ -600,8 +606,9 @@ function isoDay(time: number) {
   return new Date(time).toISOString().slice(0, 10)
 }
 
-function compactHeader(view: ProviderUsageReportView) {
-  return `${nameHeading(view)} · STEPS / TOTAL TOKENS / COST`
+function compactHeader(view: ProviderUsageReportView, sort: Sort, order: Order) {
+  const heading = sort === "key" ? nameHeading(view) : sort === "tokens" ? "TOTAL" : sort === "cacheRead" ? "CACHE READ" : sort === "cacheWrite" ? "CACHE WRITE" : sort.toUpperCase()
+  return `${nameHeading(view)} · STEPS / TOTAL TOKENS / COST · ${heading} ${sortIndicator(sort, order)}`
 }
 
 function CompactReportRow(props: {
@@ -633,19 +640,47 @@ function reportGeometry(width: number) {
   return { ...columns, name: Math.max(22, available - reserved), fits: available >= 22 + reserved }
 }
 
-function wideHeader(view: ProviderUsageReportView, width: number) {
-  const geometry = reportGeometry(width)
-  return [
-    nameHeading(view).padEnd(geometry.name),
-    "STEPS".padStart(geometry.steps),
-    "INPUT".padStart(geometry.input),
-    "OUTPUT".padStart(geometry.output),
-    "REASON".padStart(geometry.reasoning),
-    "CACHE READ".padStart(geometry.read),
-    "CACHE WRITE".padStart(geometry.write),
-    "TOTAL".padStart(geometry.total),
-    "COST".padStart(geometry.cost),
-  ].join(" ")
+function ReportHeader(props: {
+  view: ProviderUsageReportView
+  width: number
+  sort: Sort
+  order: Order
+  onSort: (sort: Sort) => void
+}) {
+  const geometry = reportGeometry(props.width)
+  const columns = [
+    { key: "key" as const, label: nameHeading(props.view), width: geometry.name },
+    { key: "steps" as const, label: "STEPS", width: geometry.steps },
+    { key: "input" as const, label: "INPUT", width: geometry.input },
+    { key: "output" as const, label: "OUTPUT", width: geometry.output },
+    { key: "reasoning" as const, label: "REASON", width: geometry.reasoning },
+    { key: "cacheRead" as const, label: "CACHE READ", width: geometry.read },
+    { key: "cacheWrite" as const, label: "CACHE WRITE", width: geometry.write },
+    { key: "tokens" as const, label: "TOTAL", width: geometry.total },
+    { key: "cost" as const, label: "COST", width: geometry.cost },
+  ]
+  return (
+    <box flexShrink={0} flexDirection="row">
+      <For each={columns}>{(column, index) => (
+        <text
+          width={column.width + (index() > 0 ? 1 : 0)}
+          onMouseUp={() => props.onSort(column.key)}
+        >
+          {index() > 0 ? "\u00a0" : ""}{headerLabel(column.label, column.key, column.width, props.sort, props.order)}
+        </text>
+      )}</For>
+    </box>
+  )
+}
+
+function headerLabel(label: string, key: Sort, width: number, sort: Sort, order: Order) {
+  const indicator = sort === key ? ` ${sortIndicator(sort, order)}` : ""
+  const value = `${label}${indicator}`
+  return key === "key" ? value.padEnd(width) : value.padStart(width)
+}
+
+function sortIndicator(sort: Sort, order: Order) {
+  return order === "asc" ? "▲" : "▼"
 }
 
 function WideReportRow(props: {
@@ -707,7 +742,8 @@ function rangeLabel(range: DateRange) {
 }
 
 function sortLabel(sort: Sort, order: Order) {
-  return `${sort === "key" ? "date/name" : sort} ${order === "asc" ? "ascending" : "descending"}`
+  const label = sort === "key" ? "date/name" : sort === "tokens" ? "total tokens" : sort === "cacheRead" ? "cache read" : sort === "cacheWrite" ? "cache write" : sort
+  return `${label} ${order === "asc" ? "ascending" : "descending"}`
 }
 
 function cacheRead(value: ReportMetrics, format: (value: number) => string) {
@@ -726,11 +762,11 @@ function tokenTotalLabel(value: ReportMetrics, format: (value: number) => string
 }
 
 function tableCost(value: ReportMetrics) {
-  return value.cost === undefined ? "-" : `$${value.cost.toFixed(2)}`
+  return `$${(value.cost ?? 0).toFixed(2)}`
 }
 
 function costLabel(value: ReportMetrics) {
-  return value.cost === undefined ? "unreported" : `$${value.cost.toFixed(2)}`
+  return `$${(value.cost ?? 0).toFixed(2)}`
 }
 
 function reportTotal(value: ProviderRequestReport["total"]) {

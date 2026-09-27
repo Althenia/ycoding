@@ -6,6 +6,7 @@ import { ConfigProvider } from "../src/config"
 import { Keymap } from "../src/context/keymap"
 import { ThemeProvider } from "../src/context/theme"
 import { ProviderUsageScreenContent } from "../src/routes/session/provider-usage"
+import type { ProviderUsageView } from "../src/routes/session/provider-usage-reports"
 import { DialogProvider } from "../src/ui/dialog"
 import { ToastProvider } from "../src/ui/toast"
 import { TestTuiContexts } from "./fixture/tui-environment"
@@ -17,7 +18,7 @@ type ReportInput = {
   to?: number
   offset?: number
   limit?: number
-  sort?: "key" | "tokens" | "cost"
+  sort?: "key" | "tokens" | "cost" | "steps" | "input" | "output" | "reasoning" | "cacheRead" | "cacheWrite"
   order?: "asc" | "desc"
 }
 
@@ -67,6 +68,7 @@ async function renderReports(input: {
   height?: number
   load: (query: ReportInput) => Promise<ProviderRequestReport>
   onRefresh?: () => void
+  tab?: ProviderUsageView
 }) {
   const config = createTuiResolvedConfig()
   const app = await testRender(
@@ -80,7 +82,7 @@ async function renderReports(input: {
                   <ProviderUsageScreenContent
                     snapshots={() => []}
                     now={() => now}
-                    initialTab="models"
+                    initialTab={input.tab ?? "models"}
                     loadReport={input.load}
                     onRefresh={input.onRefresh}
                   />
@@ -94,7 +96,7 @@ async function renderReports(input: {
     { width: input.width ?? 189, height: input.height ?? 38 },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("Models"))
+  await app.waitForFrame((frame) => frame.includes(input.tab === "stats" ? "Stats" : "Models"))
   return app
 }
 
@@ -138,7 +140,7 @@ test("defaults tables to all retained history and exposes normalized metrics plu
     expect(frame).toContain("Visible output 1,200")
     expect(frame).toContain("Reasoning 300")
     expect(frame).toContain("Cache read -")
-    expect(frame).toContain("Total tokens ≥5,540 · Cost unreported")
+    expect(frame).toContain("Total tokens ≥5,540 · Cost $0.00")
     expect(frame).toContain("≥ marks a lower bound")
     app.mockInput.pressKey("ESCAPE")
     await waitFor(app, (value) => !value.includes("Usage details"), "details dismissal")
@@ -206,6 +208,70 @@ test("preserves selected identity on refresh and fences stale, failed, and chang
     expect(refreshes).toBe(3)
   } finally {
     app.renderer.destroy()
+  }
+}, 30_000)
+
+test("sorts every report metric from its column header and keyboard bindings", async () => {
+  const calls: ReportInput[] = []
+  const app = await renderReports({
+    load: async (query) => {
+      calls.push(query)
+      return report(query.group)
+    },
+  })
+  try {
+    await waitFor(app, (frame) => frame.includes("Alpha"), "initial rows")
+    const frame = app.captureCharFrame()
+    const lines = frame.split("\n")
+    const headerY = lines.findIndex((line) => line.includes("CACHE READ") && line.includes("TOTAL"))
+    const inputX = lines[headerY].indexOf("INPUT") + 2
+    await app.mockMouse.click(inputX, headerY)
+    await waitFor(app, () => calls.at(-1)?.sort === "input" && calls.at(-1)?.order === "desc", "click sort")
+    expect(app.captureCharFrame().split("\n")[headerY]).toContain("INPUT ▼")
+
+    for (const [bind, sort] of [["s", "steps"], ["o", "output"], ["g", "reasoning"], ["a", "cacheRead"], ["w", "cacheWrite"]] as const) {
+      app.mockInput.pressKey(bind)
+      await waitFor(app, () => calls.at(-1)?.sort === sort && calls.at(-1)?.order === "desc", `${sort} sort`)
+    }
+    app.mockInput.pressKey("i")
+    await waitFor(app, () => calls.at(-1)?.sort === "input" && calls.at(-1)?.order === "desc", "input key sort")
+    app.mockInput.pressKey("i")
+    await waitFor(app, () => calls.at(-1)?.sort === "input" && calls.at(-1)?.order === "asc", "input reverse sort")
+    app.mockInput.pressKey("t")
+    await waitFor(app, () => calls.at(-1)?.sort === "tokens" && calls.at(-1)?.order === "desc", "total key sort")
+    app.mockInput.pressKey("c")
+    await waitFor(app, () => calls.at(-1)?.sort === "cost" && calls.at(-1)?.order === "desc", "cost key sort")
+    app.mockInput.pressKey("d")
+    await waitFor(app, () => calls.at(-1)?.sort === "key" && calls.at(-1)?.order === "asc", "identity key sort")
+  } finally {
+    app.renderer.destroy()
+  }
+}, 30_000)
+
+test("removes the retention remark while preserving the empty-window message", async () => {
+  const empty = await renderReports({ tab: "stats", load: async (query) => report(query.group, []) })
+  try {
+    const frame = await waitFor(empty, (value) => value.includes("No usage recorded in the last 52 weeks."), "empty stats")
+    expect(frame).not.toContain("Usage before")
+    expect(frame).not.toContain("unreported (not retained)")
+  } finally {
+    empty.renderer.destroy()
+  }
+
+  const populated = await renderReports({
+    tab: "stats",
+    load: async (query) => {
+      const result = report(query.group, [{ key: "2026-09-20", label: "2026-09-20", logical: 1 }])
+      result.total = { ...result.total, cost: undefined, costProvenance: undefined }
+      result.rows = result.rows.map((row) => ({ ...row, cost: undefined, costProvenance: undefined }))
+      return result
+    },
+  })
+  try {
+    const frame = await waitFor(populated, (value) => value.includes("Total cost: $0.00"), "populated stats")
+    expect(frame).not.toContain("Usage before")
+  } finally {
+    populated.renderer.destroy()
   }
 }, 30_000)
 

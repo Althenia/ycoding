@@ -43,7 +43,7 @@ export type CostProvenance = typeof CostProvenance.Type
 export const ReportGroup = Schema.Literals(["model", "hour", "day", "month", "session", "project", "agent"])
 export type ReportGroup = typeof ReportGroup.Type
 
-export const ReportSort = Schema.Literals(["key", "tokens", "cost"])
+export const ReportSort = Schema.Literals(["key", "tokens", "cost", "steps", "input", "output", "reasoning", "cacheRead", "cacheWrite"])
 export type ReportSort = typeof ReportSort.Type
 
 export const ReportOrder = Schema.Literals(["asc", "desc"])
@@ -111,7 +111,7 @@ export const ModelSpend = Schema.Struct({
   tokens: TokenUsage.Info,
   /** True only when every request for this model explicitly reported cache-read usage. */
   cacheReadReported: Schema.Boolean.pipe(optional),
-  /** Absent when any request in the group has neither persisted nor catalog-estimated cost. */
+  /** Absent when no request in the group has persisted or catalog-estimated cost. */
   cost: Money.USD.pipe(optional),
   /** Recorded provider billing or a query-time current-catalog estimate; required when cost is present. */
   costProvenance: CostProvenance.pipe(optional),
@@ -154,7 +154,7 @@ const ReportMetricsFields = {
   continued: NonNegativeInt,
   fallback: NonNegativeInt,
   tokens: TokenUsage.Info,
-  /** Absent when any contributing request has no recorded or current-catalog-estimated cost. */
+  /** Absent when no contributing request has recorded or current-catalog-estimated cost. */
   cost: Money.USD.pipe(optional),
   /** Required exactly when cost is present. */
   costProvenance: CostProvenance.pipe(optional),

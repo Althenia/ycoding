@@ -461,16 +461,20 @@ function usageReportComparator(sort: ProviderRequest.ReportSort, order: Provider
   return (left: ProviderRequest.ReportRow, right: ProviderRequest.ReportRow) => {
     const key = left.key < right.key ? -1 : left.key > right.key ? 1 : 0
     if (sort === "key") return order === "asc" ? key : -key
-    if (sort === "cost") {
-      if (left.cost === undefined) return right.cost === undefined ? key : 1
-      if (right.cost === undefined) return -1
-      const cost = left.cost < right.cost ? -1 : left.cost > right.cost ? 1 : 0
-      return (order === "asc" ? cost : -cost) || key
+    const metric = (row: ProviderRequest.ReportRow) => {
+      if (sort === "cost") return row.cost ?? 0
+      if (sort === "tokens") return usageReportTokenTotal(row)
+      if (sort === "steps") return row.logical
+      if (sort === "input") return row.tokens.input
+      if (sort === "output") return row.tokens.output
+      if (sort === "reasoning") return row.tokens.reasoning
+      if (sort === "cacheRead") return row.tokens.cache.read
+      return row.tokens.cache.write
     }
-    const leftTokens = usageReportTokenTotal(left)
-    const rightTokens = usageReportTokenTotal(right)
-    const tokens = leftTokens < rightTokens ? -1 : leftTokens > rightTokens ? 1 : 0
-    return (order === "asc" ? tokens : -tokens) || key
+    const leftMetric = metric(left)
+    const rightMetric = metric(right)
+    const comparison = leftMetric < rightMetric ? -1 : leftMetric > rightMetric ? 1 : 0
+    return (order === "asc" ? comparison : -comparison) || key
   }
 }
 

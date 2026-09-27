@@ -148,6 +148,9 @@ export function ProviderUsageScreenContent(props: {
     return [summaryPresentation(summary), ...(summary.models ?? []).map(spendPresentation)]
   })
   const [view, setView] = createSignal<ProviderUsageView>(props.initialTab ?? "overview")
+  const [overviewSorting, setOverviewSorting] = createSignal<{ sort: OverviewSort; order: "asc" | "desc" }>({ sort: "cost", order: "desc" })
+  const changeOverviewSort = (sort: OverviewSort) =>
+    setOverviewSorting((current) => ({ sort, order: current.sort === sort ? (current.order === "asc" ? "desc" : "asc") : sort === "key" ? "asc" : "desc" }))
   const [reportRefresh, setReportRefresh] = createSignal(0)
   const reportView = createMemo(() => {
     const current = view()
@@ -194,6 +197,15 @@ export function ProviderUsageScreenContent(props: {
       { id: "provider-usage.scroll.end", title: "Last usage item", group: "Provider usage", bind: reportView() ? false : "end", run: () => scrollSimple("end") },
       { id: "provider-usage.scroll.page-up", title: "Scroll usage one page up", group: "Provider usage", bind: reportView() ? false : "pageup", run: () => scrollSimple("pageup") },
       { id: "provider-usage.scroll.page-down", title: "Scroll usage one page down", group: "Provider usage", bind: reportView() ? false : "pagedown", run: () => scrollSimple("pagedown") },
+      { id: "provider-usage.overview.sort.key", title: "Sort overview models by name", group: "Usage", bind: view() === "overview" ? "d" : false, run: () => { changeOverviewSort("key") } },
+      { id: "provider-usage.overview.sort.steps", title: "Sort overview models by steps", group: "Usage", bind: view() === "overview" ? "s" : false, run: () => { changeOverviewSort("steps") } },
+      { id: "provider-usage.overview.sort.input", title: "Sort overview models by input tokens", group: "Usage", bind: view() === "overview" ? "i" : false, run: () => { changeOverviewSort("input") } },
+      { id: "provider-usage.overview.sort.output", title: "Sort overview models by output tokens", group: "Usage", bind: view() === "overview" ? "o" : false, run: () => { changeOverviewSort("output") } },
+      { id: "provider-usage.overview.sort.reasoning", title: "Sort overview models by reasoning tokens", group: "Usage", bind: view() === "overview" ? "g" : false, run: () => { changeOverviewSort("reasoning") } },
+      { id: "provider-usage.overview.sort.cache-read", title: "Sort overview models by cache-read tokens", group: "Usage", bind: view() === "overview" ? "a" : false, run: () => { changeOverviewSort("cacheRead") } },
+      { id: "provider-usage.overview.sort.cache-write", title: "Sort overview models by cache-write tokens", group: "Usage", bind: view() === "overview" ? "w" : false, run: () => { changeOverviewSort("cacheWrite") } },
+      { id: "provider-usage.overview.sort.tokens", title: "Sort overview models by total tokens", group: "Usage", bind: view() === "overview" ? "t" : false, run: () => { changeOverviewSort("tokens") } },
+      { id: "provider-usage.overview.sort.cost", title: "Sort overview models by cost", group: "Usage", bind: view() === "overview" ? "c" : false, run: () => { changeOverviewSort("cost") } },
     ],
     bindings: ["provider-usage.back", "provider-usage.refresh"],
   }))
@@ -252,7 +264,7 @@ export function ProviderUsageScreenContent(props: {
           <text fg={themeV2.text.feedback.warning.default}>Some provider usage could not be refreshed.</text>
         </Show>
         <Show when={view() === "overview" && aggregateUsage()}>
-          {(items) => <OverviewTable items={items()} width={dimensions().width} />}
+          {(items) => <OverviewTable items={items()} width={dimensions().width} sorting={overviewSorting} onSort={changeOverviewSort} />}
         </Show>
         <Show when={view() === "usage"}><For each={visibleProviderSnapshots(props.snapshots())}>
           {(snapshot) => <QuotaSection snapshot={snapshot} now={props.now?.() ?? Date.now()} />}
@@ -300,18 +312,63 @@ function usageNavigationWindow(active: ProviderUsageView, width: number) {
   return PROVIDER_USAGE_VIEWS.slice(start, start + count)
 }
 
-function OverviewTable(props: { items: readonly OverviewItem[]; width: number }) {
+function OverviewTable(props: {
+  items: readonly OverviewItem[]
+  width: number
+  sorting: () => { sort: OverviewSort; order: "asc" | "desc" }
+  onSort: (sort: OverviewSort) => void
+}) {
   const { themeV2 } = useTheme()
   const geometry = () => overviewGeometry(props.width)
   const narrow = () => !geometry().fits
+  const orderedItems = createMemo(() => {
+    const current = props.sorting()
+    const metric = (item: OverviewItem) => current.sort === "key" ? item.model : item.values[current.sort]
+    return [props.items[0], ...props.items.slice(1).toSorted((left, right) => {
+      const a = metric(left)
+      const b = metric(right)
+      const comparison = typeof a === "number" && typeof b === "number" ? a - b : String(a).localeCompare(String(b))
+      return (current.order === "asc" ? comparison : -comparison) || left.model.localeCompare(right.model)
+    })].filter((item): item is OverviewItem => item !== undefined)
+  })
   return <box flexDirection="column" paddingTop={1}>
     <text fg={themeV2.text.subdued}>LIFETIME MODEL BREAKDOWN · YCODING BACKEND</text>
     <text fg={themeV2.border.default}>{"─".repeat(Math.max(1, Math.min(props.width - 6, 96)))}</text>
-    <Show when={!narrow()}><text fg={themeV2.text.subdued}>{overviewHeader(geometry())}</text></Show>
-    <For each={props.items}>{(item, index) => {
+    <Show when={!narrow()}><OverviewHeader geometry={geometry()} sorting={props.sorting} onSort={props.onSort} /></Show>
+    <For each={orderedItems()}>{(item, index) => {
       const identity = index() === 0 ? "Total" : item.model
       if (narrow()) return <box flexDirection="column" paddingTop={1}><text fg={index() === 0 ? themeV2.text.feedback.info.default : themeV2.text.default}>{identity} · {item.input} in · {item.output} out · {item.spent}</text><text fg={themeV2.text.subdued}>  steps {item.steps ?? "-"} · reasoning {item.reasoning ?? "-"} · cache {item.cacheRead}/{item.cacheWrite}</text></box>
       return <OverviewRow item={item} identity={identity} geometry={geometry()} total={index() === 0} />
+    }}</For>
+  </box>
+}
+
+type OverviewSort = "key" | "steps" | "input" | "output" | "reasoning" | "cacheRead" | "cacheWrite" | "tokens" | "cost"
+
+function OverviewHeader(props: {
+  geometry: OverviewGeometry
+  sorting: () => { sort: OverviewSort; order: "asc" | "desc" }
+  onSort: (sort: OverviewSort) => void
+}) {
+  const columns = [
+    { key: "key" as const, label: "MODEL", width: props.geometry.name + 1 },
+    { key: "steps" as const, label: "STEPS", width: props.geometry.steps },
+    { key: "input" as const, label: "INPUT", width: props.geometry.input },
+    { key: "output" as const, label: "VISIBLE OUTPUT", width: props.geometry.output },
+    { key: "reasoning" as const, label: "REASONING", width: props.geometry.reasoning },
+    { key: "cacheRead" as const, label: "CACHE R/W", width: props.geometry.cache },
+    { key: "cost" as const, label: "COST", width: props.geometry.cost },
+  ]
+  const { themeV2 } = useTheme()
+  return <box flexDirection="row">
+    <For each={columns}>{(column, index) => {
+      const selected = createMemo(() => props.sorting().sort === column.key)
+      const label = column.key === "key" ? column.label.padEnd(column.width - 1) : column.label.padStart(column.width - 1)
+      return <text width={column.width + (index() > 0 ? 1 : 0)} fg={themeV2.text.subdued} onMouseUp={() => props.onSort(column.key)}>
+        {index() > 0 ? "\u00a0" : ""}{label}
+        <Show when={selected()}><span>{props.sorting().order === "asc" ? "▲" : "▼"}</span></Show>
+        <Show when={!selected()}><span>{"\u00a0"}</span></Show>
+      </text>
     }}</For>
   </box>
 }
@@ -330,10 +387,6 @@ function overviewGeometry(width: number) {
   return { name: Math.max(20, available - reserved), steps, input, output, reasoning, cache, cost, fits: available >= 20 + reserved }
 }
 
-function overviewHeader(geometry: OverviewGeometry) {
-  return `${"MODEL".padEnd(geometry.name)} ${"STEPS".padStart(geometry.steps)} ${"INPUT".padStart(geometry.input)} ${"VISIBLE OUTPUT".padStart(geometry.output)} ${"REASONING".padStart(geometry.reasoning)} ${"CACHE R/W".padStart(geometry.cache)} ${"COST".padStart(geometry.cost)}`
-}
-
 function OverviewRow(props: {
   item: OverviewItem
   identity: string
@@ -342,15 +395,17 @@ function OverviewRow(props: {
 }) {
   const { themeV2 } = useTheme()
   return (
-    <text>
-      <span style={{ fg: props.total ? themeV2.text.feedback.info.default : themeV2.text.default }}>{Locale.truncate(props.identity, props.geometry.name).padEnd(props.geometry.name)}</span>{" "}
-      <span>{(props.item.steps ?? "-").padStart(props.geometry.steps)}</span>{" "}
-      <span style={{ fg: themeV2.text.feedback.success.default }}>{props.item.input.padStart(props.geometry.input)}</span>{" "}
-      <span style={{ fg: themeV2.text.feedback.warning.subdued }}>{props.item.output.padStart(props.geometry.output)}</span>{" "}
-      <span style={{ fg: themeV2.text.label }}>{(props.item.reasoning ?? "-").padStart(props.geometry.reasoning)}</span>{" "}
-      <span style={{ fg: themeV2.text.feedback.info.default }}>{`${props.item.cacheRead}/${props.item.cacheWrite}`.padStart(props.geometry.cache)}</span>{" "}
-      <span style={{ fg: themeV2.text.feedback.success.subdued }}>{props.item.spent.padStart(props.geometry.cost)}</span>
-    </text>
+    <box width="100%" flexShrink={0}>
+      <text>
+        <span style={{ fg: props.total ? themeV2.text.feedback.info.default : themeV2.text.default }}>{Locale.truncate(props.identity, props.geometry.name).padEnd(props.geometry.name)}</span>{" "}
+        <span>{(props.item.steps ?? "-").padStart(props.geometry.steps)}</span>{" "}
+        <span style={{ fg: themeV2.text.feedback.success.default }}>{props.item.input.padStart(props.geometry.input)}</span>{" "}
+        <span style={{ fg: themeV2.text.feedback.warning.subdued }}>{props.item.output.padStart(props.geometry.output)}</span>{" "}
+        <span style={{ fg: themeV2.text.label }}>{(props.item.reasoning ?? "-").padStart(props.geometry.reasoning)}</span>{" "}
+        <span style={{ fg: themeV2.text.feedback.info.default }}>{`${props.item.cacheRead}/${props.item.cacheWrite}`.padStart(props.geometry.cache)}</span>{" "}
+        <span style={{ fg: themeV2.text.feedback.success.subdued }}>{props.item.spent.padStart(props.geometry.cost)}</span>
+      </text>
+    </box>
   )
 }
 
@@ -426,6 +481,7 @@ type OverviewItem = {
   cacheRead: string
   cacheWrite: string
   spent: string
+  values: { steps: number; input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number; tokens: number; cost: number }
 }
 
 function summaryPresentation(summary: ProviderRequestSummary): OverviewItem {
@@ -437,12 +493,13 @@ function summaryPresentation(summary: ProviderRequestSummary): OverviewItem {
     reasoning: summary.tokens.reasoning.toLocaleString("en-US"),
     cacheRead: summary.cacheReadReported ? summary.tokens.cache.read.toLocaleString("en-US") : "-",
     cacheWrite: summary.tokens.cache.write.toLocaleString("en-US"),
-    spent: money(summary.cost),
+    spent: money(summary.cost ?? 0),
+    values: { steps: summary.logical, input: summary.tokens.input, output: summary.tokens.output, reasoning: summary.tokens.reasoning, cacheRead: summary.tokens.cache.read, cacheWrite: summary.tokens.cache.write, tokens: summary.tokens.input + summary.tokens.output + summary.tokens.reasoning + summary.tokens.cache.read + summary.tokens.cache.write, cost: summary.cost ?? 0 },
   }
 }
 
 function money(value: number | undefined) {
-  return value === undefined ? "Not reported" : `$${value.toFixed(2)}`
+  return `$${(value ?? 0).toFixed(2)}`
 }
 
 function spendPresentation(
@@ -456,6 +513,7 @@ function spendPresentation(
     reasoning: spend.tokens.reasoning.toLocaleString("en-US"),
     cacheRead: spend.cacheReadReported ? spend.tokens.cache.read.toLocaleString("en-US") : "-",
     cacheWrite: spend.tokens.cache.write.toLocaleString("en-US"),
-    spent: spend.cost === undefined ? "Not reported" : money(spend.cost),
+    spent: money(spend.cost),
+    values: { steps: spend.requests, input: spend.tokens.input, output: spend.tokens.output, reasoning: spend.tokens.reasoning, cacheRead: spend.tokens.cache.read, cacheWrite: spend.tokens.cache.write, tokens: spend.tokens.input + spend.tokens.output + spend.tokens.reasoning + spend.tokens.cache.read + spend.tokens.cache.write, cost: spend.cost ?? 0 },
   }
 }
