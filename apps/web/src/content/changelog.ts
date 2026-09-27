@@ -22,6 +22,22 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.7.9",
+    date: "2026-09-28",
+    title: "Remote Team panel, live Office activity, and TUI workspaces",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Manage every directory YCoding knows from the TUI with Manage workspaces: open one for your next Session, delete a project copy, or forget a directory and its Sessions." },
+      { tag: "Added", text: "Refresh models and providers from the TUI command palette to pick up new project configuration and provider models without restarting." },
+      { tag: "Added", text: "Manage a Session's subagents, shells, and side chats from the new remote Team panel on desktop, tablet, and phone." },
+      { tag: "Changed", text: "Turn remote access on and off with one Remote connection toggle in the TUI command palette, marked green when on and grey otherwise, instead of a bottom status line." },
+      { tag: "Changed", text: "Open subagents read-only in the remote Conversation with Main, Previous, and Next navigation; side chats still accept prompts." },
+      { tag: "Changed", text: "Show what each Office character is actually doing, keep the main agent in the Lounge while only its subagents work, and show Office only on tablets and desktops." },
+      { tag: "Changed", text: "Swipe through running Sessions in a carousel, keep the Conversation sidebar on the open Session's workspace, and let the agent read local skill files by absolute path." },
+      { tag: "Fixed", text: "Stop remote images and Usage cards from flickering, keep the Office scene when you select a teammate, and show only matching Sessions while searching." },
+    ],
+  },
+  {
     version: "0.7.8",
     date: "2026-09-27",
     title: "Paged remote history, images, and TUI remote toggle",
