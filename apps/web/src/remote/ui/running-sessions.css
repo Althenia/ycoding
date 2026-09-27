@@ -12,16 +12,25 @@
 }
 
 .running-sessions__list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  display: flex;
   gap: var(--yc-space-3);
   margin: 0;
   padding: 0;
   list-style: none;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  overscroll-behavior-inline: contain;
 }
+
+.running-sessions__list::-webkit-scrollbar { display: none; }
 
 .running-sessions__list li {
   min-inline-size: 0;
+  flex: 0 0 300px;
+  scroll-snap-align: start;
 }
 
 .running-sessions__item {
@@ -77,3 +86,11 @@
   border-radius: 50%;
   background: var(--yc-green-strong);
 }
+
+.running-sessions__pagination { display: flex; justify-content: center; gap: var(--yc-space-2); }
+.running-sessions__pagination button { inline-size: 28px; block-size: 28px; padding: 0; border: 0; background: transparent; cursor: pointer; display: grid; place-items: center; }
+.running-sessions__pagination button::after { content: ""; inline-size: 6px; block-size: 6px; border-radius: 50%; background: var(--yc-border-strong); }
+.running-sessions__pagination button[aria-current="true"]::after { inline-size: 8px; block-size: 8px; background: var(--yc-green-strong); }
+.running-sessions__pagination button:focus-visible { outline: 2px solid var(--yc-focus); outline-offset: 2px; }
+
+@media (max-width: 767px) { .running-sessions__list li { flex-basis: 85%; } }

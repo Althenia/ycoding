@@ -33,6 +33,11 @@ function office(team: TeamInput | undefined, patch: Partial<OfficeInput> = {}) {
     ],
     selected: { id: "ses_root", status: "running", requestCount: 0, compacting: false, thinking: false, unknownOutcome: false },
     team,
+    familyActivity: { status: "ready", members: [
+      { sessionID: "ses_root", executing: true, activity: { kind: "tool", room: "developer", text: "Editing app.ts" } },
+      ...(team?.members ?? []).map((item) => ({ sessionID: item.sessionID, executing: ["starting", "running", "cancelling"].includes(item.state),
+        ...(["starting", "running", "cancelling"].includes(item.state) ? { activity: { kind: "tool" as const, room: "developer" as const, text: "Editing app.ts" } } : {}) })),
+    ] },
     ...patch,
   }, defaultOfficePreferences)
 }
@@ -40,6 +45,16 @@ function office(team: TeamInput | undefined, patch: Partial<OfficeInput> = {}) {
 const actorID = (sessionID: string) => JSON.stringify(["dev_1", sessionID])
 
 describe("office team projection", () => {
+  test("an idle root stays in the Lounge while only its child executes a named action", () => {
+    const snapshot = office(ready([member("ses_child", "running")]), { familyActivity: {
+      status: "ready", members: [
+        { sessionID: "ses_root", executing: false },
+        { sessionID: "ses_child", executing: true, activity: { kind: "tool", room: "qa", text: "Running bun test ./src" } },
+      ],
+    } })
+    expect(snapshot.actors.find((actor) => actor.kind === "session")).toMatchObject({ status: "idle", bubble: undefined, activity: undefined })
+    expect(snapshot.actors.find((actor) => actor.kind === "task")).toMatchObject({ status: "tool", statusText: "Running bun test ./src", bubble: "Running bun test ./src", activity: "verify" })
+  })
   test("retains the same member ids across ready refresh inputs", () => {
     const members = [member("ses_child", "running"), member("ses_new", "running")]
     const first = office(ready(members))
@@ -50,9 +65,9 @@ describe("office team projection", () => {
   test("shows each real child task of the team root once, with its reported state", () => {
     const snapshot = office(ready([member("ses_child", "running"), member("ses_done", "completed"), member("ses_foreign", "failed", "ses_other")], [], 2))
     expect(snapshot.actors.map((actor) => [actor.sessionID, actor.kind, actor.status, actor.statusText, actor.teamRootSessionID])).toEqual([
-      ["ses_root", "session", "working", "Coordinating", undefined],
-      ["ses_child", "task", "working", "Running", "ses_root"],
-      ["ses_done", "task", "idle", "Completed", "ses_root"],
+      ["ses_root", "session", "tool", "Editing app.ts", undefined],
+      ["ses_child", "task", "tool", "Editing app.ts", "ses_root"],
+      ["ses_done", "task", "idle", "", "ses_root"],
     ])
     expect(snapshot.team).toEqual({ status: "ready", rootActorID: actorID("ses_root"), total: 2, shown: 2, more: false })
     expect(snapshot.overflow).toBe(0)
@@ -62,14 +77,14 @@ describe("office team projection", () => {
     const states = ["starting", "running", "waiting", "cancelling", "cancelled", "completed", "failed", "lost"] as const
     const snapshot = office(ready(states.map((state, index) => member(`ses_${index}`, state))))
     expect(snapshot.actors.filter((actor) => actor.kind === "task").map((actor) => [actor.taskState, actor.status, actor.statusText, actor.source])).toEqual([
-      ["starting", "working", "Starting", "summary"],
-      ["running", "working", "Running", "summary"],
-      ["waiting", "attention", "Waiting for a reply", "summary"],
-      ["cancelling", "working", "Cancelling", "summary"],
-      ["cancelled", "idle", "Cancelled", "summary"],
-      ["completed", "idle", "Completed", "summary"],
-      ["failed", "failed", "Failed", "summary"],
-      ["lost", "idle", "Lost", "summary"],
+      ["starting", "tool", "Editing app.ts", "projection"],
+      ["running", "tool", "Editing app.ts", "projection"],
+      ["waiting", "attention", "Needs your decision", "projection"],
+      ["cancelling", "tool", "Editing app.ts", "projection"],
+      ["cancelled", "idle", "", "projection"],
+      ["completed", "idle", "", "projection"],
+      ["failed", "failed", "Session failed", "projection"],
+      ["lost", "idle", "", "projection"],
     ])
     const offline = office(ready([member("ses_child", "running")]), { connection: "offline" })
     expect(offline.actors.find((actor) => actor.kind === "task")).toMatchObject({ status: "offline", statusText: "Machine offline", source: "unavailable" })
@@ -101,8 +116,8 @@ describe("office team projection", () => {
       selected: { id: "ses_child", status: "running", requestCount: 1, compacting: false, thinking: false, unknownOutcome: false },
     })
     expect(snapshot.actors.map((actor) => [actor.sessionID, actor.kind, actor.selected, actor.statusText, actor.title])).toEqual([
-      ["ses_child", "task", true, "Needs your reply", "Task ses_child"],
-      ["ses_root", "session", false, "Activity not reported", "Parent session"],
+      ["ses_child", "task", true, "Needs your decision", "Task ses_child"],
+      ["ses_root", "session", false, "Editing app.ts", "Parent session"],
     ])
     expect(snapshot.team.rootActorID).toBe(actorID("ses_root"))
   })
@@ -117,14 +132,21 @@ describe("office team projection", () => {
     expect(snapshot.team.shown).toBe(maxOfficeActors - 1)
   })
 
-  test("selected live activity outranks coordination, while thinking holds the current room", () => {
+  test("each member's own activity outranks family coordination, while thinking holds its current room", () => {
     const members = [member("ses_child", "running")]
     const coordinating = office(ready(members))
-    expect(coordinating.actors.find((actor) => actor.kind === "session")?.activity).toBe("coordinate")
-    const researching = office(ready(members), { selected: { ...coordinating.actors[0], id: "ses_root", status: "running", requestCount: 0, compacting: false, thinking: false, unknownOutcome: false, activity: "research" } })
+    expect(coordinating.actors.find((actor) => actor.kind === "session")?.activity).toBe("implement")
+    const researching = office(ready(members), { familyActivity: { status: "ready", members: [
+      { sessionID: "ses_root", executing: true, activity: { kind: "tool", room: "research", text: "Reading store.ts" } },
+      { sessionID: "ses_child", executing: true, activity: { kind: "tool", room: "qa", text: "Running bun test" } },
+    ] } })
     expect(researching.actors.find((actor) => actor.kind === "session")?.activity).toBe("research")
-    const thinking = office(ready(members), { selected: { id: "ses_root", status: "running", requestCount: 0, compacting: false, thinking: true, unknownOutcome: false } })
+    expect(researching.actors.find((actor) => actor.kind === "task")?.activity).toBe("verify")
+    const thinking = office(ready(members), { familyActivity: { status: "ready", members: [
+      { sessionID: "ses_root", executing: true, activity: { kind: "thinking", room: "hold", text: "Thinking" } },
+      { sessionID: "ses_child", executing: false },
+    ] } })
     expect(thinking.actors.find((actor) => actor.kind === "session")?.activity).toBe("hold")
-    expect(coordinating.actors.find((actor) => actor.kind === "task")?.activity).toBe("implement")
+    expect(thinking.actors.find((actor) => actor.kind === "task")?.bubble).toBeUndefined()
   })
 })

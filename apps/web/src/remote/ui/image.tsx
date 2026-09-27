@@ -1,10 +1,13 @@
-import { Show, createEffect, createSignal, onCleanup, onMount } from "solid-js"
+import { Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { Icon } from "../../ui/icon"
+import { useRemote } from "../context"
 import "./image.css"
 
 export function ImagePreview(props: { readonly src: string; readonly name: string }) {
   const [failed, setFailed] = createSignal(false)
   const [open, setOpen] = createSignal(false)
+  const source = createMemo(() => props.src)
+  createEffect(() => { source(); setFailed(false) })
   return <>
     <Show when={!failed()} fallback={<div class="transcript-image__unavailable" role="status">Image unavailable <button type="button" onClick={() => setFailed(false)}>Retry {props.name}</button></div>}>
       <button type="button" class="transcript-image" aria-label={`Open image ${props.name}`} onClick={() => setOpen(true)}>
@@ -29,6 +32,10 @@ function ImageLightbox(props: { readonly src: string; readonly name: string; rea
 }
 
 export function UserImage(props: { readonly deviceID: string; readonly sessionID: string; readonly digest: string; readonly mime: string; readonly name: string }) {
+  const remote = useRemote()
+  const input = createMemo(() => ({ deviceID: props.deviceID, sessionID: props.sessionID, digest: props.digest, mime: props.mime }), undefined, {
+    equals: (previous, next) => previous?.deviceID === next.deviceID && previous.sessionID === next.sessionID && previous.digest === next.digest && previous.mime === next.mime,
+  })
   const [source, setSource] = createSignal<string>()
   const [failed, setFailed] = createSignal(false)
   const [retry, setRetry] = createSignal(0)
@@ -48,21 +55,13 @@ export function UserImage(props: { readonly deviceID: string; readonly sessionID
   createEffect(() => {
     if (!visible()) return
     retry()
-    const controller = new AbortController()
+    const image = input()
+    let active = true
     setFailed(false)
     setSource(undefined)
-    void fetch(`/api/remote/devices/${encodeURIComponent(props.deviceID)}/sessions/${encodeURIComponent(props.sessionID)}/attachments/${props.digest}`,
-      { credentials: "same-origin", signal: controller.signal }).then(async (response) => {
-      if (!response.ok) throw new Error("Attachment unavailable")
-      const payload: unknown = await response.json()
-      if (typeof payload !== "object" || payload === null || !("mime" in payload) || !("data" in payload) || !("bytes" in payload) ||
-        payload.mime !== props.mime || !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(props.mime) ||
-        typeof payload.bytes !== "number" || !Number.isSafeInteger(payload.bytes) || payload.bytes < 0 || payload.bytes > 10 * 1024 * 1024 ||
-        typeof payload.data !== "string" || payload.data.length > 14 * 1024 * 1024 ||
-        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(payload.data)) throw new Error("Invalid attachment")
-      if (!controller.signal.aborted) setSource(`data:${props.mime};base64,${payload.data}`)
-    }).catch(() => { if (!controller.signal.aborted) setFailed(true) })
-    onCleanup(() => controller.abort())
+    void remote.store.loadImageSource(image)
+      .then((src) => { if (active) setSource(src) }, () => { if (active) setFailed(true) })
+    onCleanup(() => { active = false })
   })
   return <div class="transcript-attachment" ref={container}><Show when={source()} fallback={failed()
     ? <div class="transcript-image__unavailable" role="status">Image unavailable <button type="button" onClick={() => setRetry(retry() + 1)}>Retry {props.name}</button></div>

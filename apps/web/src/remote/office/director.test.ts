@@ -54,6 +54,24 @@ test("a running root leaves the lounge for a Developer desk and stays there whil
   }
 })
 
+test("a root becomes idle independently of working children and keeps actor travel through selection changes", () => {
+  const layout = officeLayout()
+  const director = new OfficeDirector(layout)
+  const root = actor("root", { kind: "session", homeRoom: "developer", status: "working", activity: "implement", selected: true })
+  const child = actor("child", { kind: "task", homeRoom: "qa", status: "tool", activity: "verify" })
+  director.sync(snapshot([root, child]))
+  director.sync(snapshot([{ ...root, status: "idle", activity: undefined, bubble: undefined }, child]))
+  const walking = run(director).find((frame) => frame.actor.id === root.id)!
+  expect(walking.moving).toBe(true)
+  const position = walking.position
+  director.sync(snapshot([{ ...root, status: "idle", activity: undefined, bubble: undefined }, { ...child, selected: true }]))
+  expect(frame(director, root.id).position).toEqual(position)
+  expect(frame(director, child.id).room).toBe("qa")
+  for (let step = 0; step < 500 && frame(director, root.id).moving; step++) run(director)
+  expect(frame(director, root.id).room).toBe("lounge")
+  expect(frame(director, child.id).room).toBe("qa")
+})
+
 test("work and lounge transitions route on walkable cells and return to the reserved work spot", () => {
   const layout = officeLayout()
   const director = new OfficeDirector(layout)

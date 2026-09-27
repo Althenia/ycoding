@@ -69,6 +69,7 @@ export type OfficeInput = {
   readonly sessions: readonly SessionSummary[]
   readonly selected?: SelectedSession
   readonly team?: TeamInput
+  readonly familyActivity?: { readonly status: "loading" | "ready" | "unsupported" | "error"; readonly members: readonly RemoteFamilyActivity[] }
 }
 
 export type OfficeActor = {
@@ -103,6 +104,7 @@ export type OfficeSnapshot = {
   readonly connection: OfficeInput["connection"]
   readonly actors: readonly OfficeActor[]
   readonly totalSessions: number
+  readonly activityStatus: "loading" | "ready" | "unsupported" | "error"
   readonly overflow: number
   readonly team: {
     readonly status: "none" | TeamInput["status"]
@@ -146,3 +148,4 @@ export type ActorFrame = {
   readonly leaving: boolean
   readonly opacity: number
 }
+import type { RemoteFamilyActivity } from "@ycoding-ai/remote"

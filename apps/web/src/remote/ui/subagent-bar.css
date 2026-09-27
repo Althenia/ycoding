@@ -1,0 +1,31 @@
+.subagent-bar {
+  display: grid;
+  gap: var(--yc-space-3);
+  min-inline-size: 0;
+  padding: var(--yc-space-3) var(--yc-gutter);
+  border-block-start: var(--yc-border-width) solid var(--yc-border);
+  background: var(--yc-surface-raised);
+}
+
+.subagent-bar__summary { display: grid; gap: var(--yc-space-1); min-inline-size: 0; }
+.subagent-bar__summary > div { display: flex; align-items: center; flex-wrap: wrap; gap: var(--yc-space-2); }
+.subagent-bar__summary p { margin: 0; overflow-wrap: anywhere; }
+.subagent-bar__status { color: var(--yc-text-muted); font-size: var(--yc-size-xs); }
+.subagent-bar__economics, .subagent-bar__rollup { color: var(--yc-text-muted); font-size: var(--yc-size-xs); }
+.subagent-bar__navigation { display: flex; flex-wrap: wrap; gap: var(--yc-space-2); }
+.subagent-bar__navigation button {
+  min-block-size: 44px;
+  padding-inline: var(--yc-space-3);
+  border: var(--yc-border-width) solid var(--yc-border-strong);
+  border-radius: var(--yc-radius-md);
+  background: var(--yc-surface);
+  color: var(--yc-text);
+  cursor: pointer;
+}
+.subagent-bar__navigation button:disabled { opacity: 0.5; cursor: not-allowed; }
+.subagent-bar__navigation button:focus-visible, .team-answer :is(textarea, button):focus-visible { outline: 2px solid var(--yc-focus); outline-offset: 2px; }
+.team-answer { display: grid; gap: var(--yc-space-2); min-inline-size: 0; }
+.team-answer label { display: grid; gap: var(--yc-space-2); }
+.team-answer textarea { min-inline-size: 0; max-inline-size: 100%; padding: var(--yc-space-2); border: var(--yc-border-width) solid var(--yc-border-strong); border-radius: var(--yc-radius-md); background: var(--yc-surface-raised); color: var(--yc-text); }
+.team-answer button { justify-self: start; }
+.team-answer [role="alert"] { margin: 0; color: var(--yc-danger); }

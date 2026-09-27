@@ -166,6 +166,7 @@ describe("office adapter", () => {
       total: 3,
       next: "cursor_2",
       pageLoading: false,
+      shells: [], shellStatus: "loading", sideChats: [], sideChatStatus: "loading", sideChatLoading: false,
     }
     const input = officeInputFromRemote(remoteState({ activeSessionID: "ses_a", team, teamCues: [{ id: "cue_1", kind: "delegated", childID: "ses_c" }] }))
     expect(input.team).toEqual({
@@ -182,11 +183,12 @@ describe("office adapter", () => {
 
   test("drives only the selected family actor from current state", () => {
     const snapshot = projectOffice(
-      officeInputFromRemote(remoteState({ activeSessionID: "ses_a", view: selectedView("ses_a", [assistant("msg_1", [tool("bash", "running")])]) })),
+      officeInputFromRemote(remoteState({ activeSessionID: "ses_a", view: selectedView("ses_a", [assistant("msg_1", [tool("bash", "running")])]),
+        familyActivity: { rootID: "ses_a", status: "ready", members: [{ sessionID: "ses_a", executing: true, activity: { kind: "tool", room: "developer", text: "Editing app.ts" } }] } })),
       defaultOfficePreferences,
     )
     expect(snapshot.actors.map((actor) => [actor.sessionID, actor.status, actor.source, actor.bubble])).toEqual([
-      ["ses_a", "tool", "projection", "Implementing"],
+      ["ses_a", "tool", "projection", "Editing app.ts"],
     ])
   })
 })

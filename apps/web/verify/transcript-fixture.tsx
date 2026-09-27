@@ -78,15 +78,32 @@ const imageMessages: readonly RemoteMessageView[] = [
     { kind: "image", uri: plot.toDataURL("image/png"), mime: "image/png", name: "plot.png" },
   ] }] },
 ]
+let imageFetches = 0
 if (imagesMode) {
   const originalFetch = window.fetch.bind(window)
   window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input
-    if (url.endsWith(`/attachments/${"a".repeat(64)}`)) return new Response(JSON.stringify({ mime: "image/png", bytes: 4_096, data: plot.toDataURL("image/png").split(",")[1] }), { headers: { "content-type": "application/json" } })
+    if (url.endsWith(`/attachments/${"a".repeat(64)}`)) {
+      imageFetches += 1
+      await new Promise((resolve) => setTimeout(resolve, 35))
+      return new Response(JSON.stringify({ mime: "image/png", bytes: 4_096, data: plot.toDataURL("image/png").split(",")[1] }), { headers: { "content-type": "application/json" } })
+    }
     if (url.endsWith(`/attachments/${"c".repeat(64)}`)) return new Response(null, { status: 404 })
     return originalFetch(input, init)
   }, { preconnect: window.fetch.preconnect })
 }
+let streamedImageText = ""
+const imageSnapshot = () => readSnapshot({ sourceEpoch: "epoch_1", session: { id: "ses_a" }, watermark: { type: "log.synced", aggregateID: "ses_a", seq: 12 }, messages: [
+  { id: "msg_image", type: "user", text: "Review these files", time: { created: 1, consumed: 2 }, files: [
+    { name: "screen.png", mime: "image/png", content: { type: "managed", bytes: 4_096, digest: "a".repeat(64) } },
+    { name: "report.pdf", mime: "application/pdf", content: { type: "managed", bytes: 1_024, digest: "b".repeat(64) } },
+    { name: "broken.png", mime: "image/png", content: { type: "managed", bytes: 2_048, digest: "c".repeat(64) } },
+  ] },
+  { id: "msg_tool_image", type: "assistant", time: { created: 2 }, content: [
+    { type: "tool", id: "call_image", name: "read", state: { status: "completed", content: [{ type: "file", uri: plot.toDataURL("image/png"), mime: "image/png", name: "plot.png" }] } },
+    ...(streamedImageText ? [{ type: "text", text: streamedImageText }] : []),
+  ] },
+] })?.messages ?? imageMessages
 const [messages, setMessages] = createSignal(synthetic ? syntheticMessages(synthetic === "compacted") : toolOutput ? outputMessages : historyMode ? navigationMessages.slice(12) : imagesMode ? imageMessages : oversizedMode ? [{ kind: "oversized", id: "msg_big", projected: !pendingOversized, state: pendingOversized ? "pending" : "loading" }] as const : navigation ? navigationMessages : runningStep ? runningMessages : visibility ? visibilityMessages : notification ? notificationMessages : initial)
 const [history, setHistory] = createSignal<{ readonly status: "idle"; readonly before?: string }>(historyMode ? { status: "idle", before: "older" } : { status: "idle" })
 
@@ -110,4 +127,21 @@ Object.defineProperty(store, "loadOlderMessages", { value: async () => {
   listeners.forEach((listener) => listener())
 } })
 Object.defineProperty(store, "loadOversizedMessage", { value: async () => setMessages([{ kind: "user", id: "msg_big", text: "Recovered full content", state: "consumed", created: 2 }]) })
+if (imagesMode) Object.assign(window, {
+  imageFetchCount: () => imageFetches,
+  imageUpdate: (kind: "stream" | "live" | "reconcile" | "prepend" | "reconnect" | "corrupt-tool" | "repair-tool") => {
+    if (kind === "stream") {
+      streamedImageText += "more "
+      setMessages((current) => applySessionEvent({ ...createSessionView("ses_a"), messages: current }, { type: "session.text.delta", data: { sessionID: "ses_a", assistantMessageID: "msg_tool_image", ordinal: 1, delta: "more " } }, 10).messages)
+    }
+    if (kind === "live") setMessages((current) => applySessionEvent({ ...createSessionView("ses_a"), messages: current }, { type: "session.input.consumed", data: { sessionID: "ses_a", inputIDs: ["msg_image"] } }, 11).messages)
+    if (kind === "reconcile" || kind === "reconnect") setMessages(imageSnapshot())
+    if (kind === "prepend") setMessages((current) => [{ kind: "user", id: "msg_older", text: "An older prompt", state: "consumed", created: 0 }, ...current])
+    if (kind === "corrupt-tool" || kind === "repair-tool") setMessages((current) => current.map((message) => message.kind === "assistant" && message.id === "msg_tool_image"
+      ? { ...message, parts: message.parts.map((part) => part.kind === "tool"
+        ? { ...part, content: part.content.map((block) => block.kind === "image" ? { ...block, uri: kind === "corrupt-tool" ? "data:image/png;base64,AAEC" : plot.toDataURL("image/png") } : block) }
+        : part) }
+      : message))
+  },
+})
 render(() => <RemoteProvider createStore={() => store}><main class="transcript-fixture workspace__main"><div class="workspace__scroll"><div class="transcript-fixture__controls"><button id="admit" onClick={() => setMessages((current) => current.map((message) => message.kind === "user" ? { ...message, state: "promoted" } : message))}>Admit</button><button id="consume" onClick={() => setMessages((current) => applySessionEvent({ ...createSessionView("ses_a"), messages: current }, { type: "session.input.consumed", data: { sessionID: "ses_a", inputIDs: ["msg_user"] } }, 3).messages)}>Consume</button><button id="stream" onClick={() => setMessages((current) => applySessionEvent({ ...createSessionView("ses_a"), messages: current }, { type: "session.reasoning.delta", data: { sessionID: "ses_a", assistantMessageID: "msg_agent", ordinal: 2, delta: "Streamed detail" } }, 4).messages)}>Stream</button><button id="append" onClick={() => setMessages((current) => current.map((item) => item.kind === "assistant" && item.id === "answer_11" ? { ...item, parts: item.parts.map((part) => part.kind === "text" ? { ...part, text: `${part.text}\n${"Streaming detail expands this answer. ".repeat(12)}` } : part) } : item))}>Append</button><button id="prune" onClick={() => setMessages((current) => current.slice(-12))}>Prune</button>{oversizedMode && <button id="fail-oversized" onClick={() => setMessages([{ kind: "oversized", id: "msg_big", projected: true, state: "error" }])}>Fail content</button>}</div><TranscriptNavigation messages={messages} /></div><div class="conversation-jump-slot" /><TodoPanel todos={[{ content: "Review the transcript", status: "in_progress", priority: "medium" }]} /><div class="composer transcript-fixture__composer">Composer preview</div></main></RemoteProvider>, root)

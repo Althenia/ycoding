@@ -9,6 +9,9 @@ export function scenario(kind: string): OfficeInput {
       { id: "session-c", title: "Previously idle session", agent: "Planner", archived: false, running: false },
     ],
     selected: { id: "session-a", status: "running", requestCount: 0, compacting: false, thinking: false, unknownOutcome: false },
+    familyActivity: { status: "ready", members: [{ sessionID: "session-a", executing: !["idle", "failed", "interrupted"].includes(kind),
+      ...(["idle", "failed", "interrupted"].includes(kind) ? {} : { activity: kind === "thinking" ? { kind: "thinking", room: "hold", text: "Thinking" } as const
+        : { kind: "tool", room: "developer", text: "Editing app.ts" } as const }) }] },
   }
   if (kind === "empty") return { ...base, sessions: [], activeSessionID: undefined, selected: undefined }
   if (kind === "signed-out") return { connection: "unavailable", sessions: [] }

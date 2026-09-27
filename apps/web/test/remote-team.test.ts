@@ -26,6 +26,162 @@ async function setup(handler: (operation: string, sessionID?: string, cursor?: u
 }
 
 describe("remote team facts", () => {
+  test("Team controls read bounded family economics, cancel and answer tasks, kill shells, and create BTW", async () => {
+    const test = await setup(() => ({ ok: true, value: { data: [{ ...task("ses_child"), state: "waiting", question: { id: "qst_1", text: "Which scope?", time: 2 } }], summary: { total: 1, active: 1 }, cursor: {} } }), undefined,
+      (request) => {
+        if (request.operation === "session.team.economics") return { ok: true, value: { data: [{ sessionID: "ses_child", cost: 0.25,
+          tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 3, write: 0 } }, cacheHitRatio: 0.75, contextTotal: 800, contextLimit: 2_000, cacheRead: 3, cacheWrite: 0 }] } }
+        if (request.operation === "session.team.shell.list") return { ok: true, value: { data: [{ id: "sh_child", ownerID: "ses_child", command: "bun test", status: "running", startedAt: 1 }] } }
+        if (request.operation === "session.side-chat.list") return { ok: true, value: { data: [{ id: "ses_btw", title: "Side question", updatedAt: 3 }], cursor: {} } }
+        if (request.operation === "session.subagent.answer") return { ok: true, value: { data: { ...task("ses_child"), state: "running", revision: 2 } } }
+        if (request.operation === "session.subagent.cancel") return { ok: true, value: { data: { ...task("ses_child"), state: "cancelling", revision: 3 } } }
+        if (request.operation === "session.team.shell.kill") return { ok: true, value: null }
+        if (request.operation === "session.side-chat.create") return { ok: true, value: { data: { id: request.input?.id, parentID: "ses_a", agent: "btw", title: "New side chat", time: { updated: 4 } } } }
+        return "default"
+      })
+    try {
+      test.store.watchTeam(true)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().team?.status === "ready")
+      await test.store.loadTeamControls()
+      await waitFor(() => test.store.state().team?.tasks[0]?.cacheHitRatio === 0.75)
+      expect(test.store.state().team?.tasks[0]).toMatchObject({ question: { id: "qst_1" }, tokens: 20, cost: 0.25, contextTotal: 800, cacheRead: 3 })
+      expect(test.store.state().team).toMatchObject({ shellStatus: "ready", sideChatStatus: "ready", shells: [{ id: "sh_child", ownerID: "ses_child" }], sideChats: [{ id: "ses_btw" }] })
+      expect(await test.store.answerSubagent("ses_child", "qst_1", "staging")).toMatchObject({ status: "ok" })
+      expect(test.store.state().team?.tasks[0]?.state).toBe("running")
+      expect(await test.store.cancelSubagent("ses_child")).toMatchObject({ status: "ok" })
+      expect(test.store.state().team?.tasks[0]?.state).toBe("cancelling")
+      expect(await test.store.killTeamShell("sh_child")).toMatchObject({ status: "ok" })
+      expect(test.store.state().team?.shells[0]?.status).toBe("killed")
+      expect(await test.store.createSideChat()).toMatchObject({ status: "ok" })
+      expect(test.relay.requests.filter((request) => request.operation === "session.side-chat.create")).toHaveLength(1)
+      expect(test.relay.requests.filter((request) => request.operation === "session.family.activity")).toEqual([])
+    } finally { await test.stop() }
+  })
+
+  test("watching task facts in Conversation never starts Office activity polling", async () => {
+    const test = await setup(() => ({ ok: true, value: { data: [task("ses_child")], summary: { total: 1 }, cursor: {} } }))
+    try {
+      test.store.watchTeam(true)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().team?.status === "ready")
+      await Bun.sleep(100)
+      expect(test.relay.requests.filter((request) => request.operation === "session.family.activity")).toEqual([])
+    } finally { await test.stop() }
+  })
+
+  test("one Office activity read reports each member and stops after leaving Office", async () => {
+    let reads = 0
+    const test = await setup(() => ({ ok: true, value: { data: [task("ses_child")], summary: { total: 1 }, cursor: {} } }), undefined,
+      (request) => request.operation === "session.family.activity" ? { ok: true, value: { data: [
+        { sessionID: "ses_a", executing: false },
+        { sessionID: "ses_child", executing: true, activity: ++reads === 1 ? { kind: "tool", room: "qa", text: "Running bun test" }
+          : { kind: "tool", room: "research", text: "Reading store.ts" } },
+      ] } } : "default")
+    try {
+      test.store.watchTeam(true)
+      test.store.watchFamilyActivity(true)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().familyActivity?.status === "ready")
+      expect(test.store.state().familyActivity?.members).toMatchObject([{ sessionID: "ses_a", executing: false }, { sessionID: "ses_child", executing: true }])
+      expect(test.relay.requests.filter((request) => request.operation === "session.family.activity")).toMatchObject([{ sessionID: "ses_a", input: { sessionIDs: ["ses_child"] } }])
+      await waitFor(() => test.relay.requests.filter((request) => request.operation === "session.family.activity").length === 2, 4_000)
+      await waitFor(() => test.store.state().familyActivity?.members[1]?.activity?.text === "Reading store.ts")
+      test.store.watchFamilyActivity(false)
+      await Bun.sleep(3_150)
+      expect(test.relay.requests.filter((request) => request.operation === "session.family.activity")).toHaveLength(2)
+    } finally { await test.stop() }
+  }, 12_000)
+
+  test("an older connector marks family activity unsupported instead of inventing child work", async () => {
+    const test = await setup(() => ({ ok: true, value: { data: [task("ses_child")], summary: { total: 1 }, cursor: {} } }), undefined,
+      (request) => request.operation === "session.family.activity" ? { ok: false, code: "unknown_operation", message: "Update YCoding" } : "default")
+    try {
+      test.store.watchTeam(true)
+      test.store.watchFamilyActivity(true)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().familyActivity?.status === "unsupported")
+      expect(test.store.state().familyActivity?.members).toEqual([])
+      expect(test.store.state().team?.tasks).toMatchObject([{ sessionID: "ses_child" }])
+    } finally { await test.stop() }
+  })
+  test("a transient family activity error stays retryable rather than asking for an update", async () => {
+    let reads = 0
+    const test = await setup(() => ({ ok: true, value: { data: [], summary: { total: 0 }, cursor: {} } }), undefined,
+      (request) => request.operation !== "session.family.activity" ? "default" : ++reads === 1
+        ? { ok: false, code: "internal_error", message: "Temporary backend failure" }
+        : { ok: true, value: { data: [{ sessionID: "ses_a", executing: false }] } })
+    try {
+      test.store.watchTeam(true)
+      test.store.watchFamilyActivity(true)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().familyActivity?.status === "error")
+      await waitFor(() => test.store.state().familyActivity?.status === "ready", 4_000)
+      expect(reads).toBe(2)
+    } finally { await test.stop() }
+  }, 8_000)
+
+  test("disconnect cancels the Office activity refresh", async () => {
+    const test = await setup(() => ({ ok: true, value: { data: [], summary: { total: 0 }, cursor: {} } }), undefined,
+      (request) => request.operation === "session.family.activity" ? { ok: true, value: { data: [{ sessionID: "ses_a", executing: false }] } } : "default")
+    try {
+      test.store.watchTeam(true)
+      test.store.watchFamilyActivity(true)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().familyActivity?.status === "ready")
+      const before = test.relay.requests.filter((request) => request.operation === "session.family.activity").length
+      test.store.disconnect()
+      await Bun.sleep(3_150)
+      expect(test.relay.requests.filter((request) => request.operation === "session.family.activity")).toHaveLength(before)
+    } finally { await test.stop() }
+  }, 6_000)
+
+  test("the one family read includes a selected child from a later task page", async () => {
+    const test = await setup((_operation, _id, cursor) => ({ ok: true, value: {
+      data: Array.from({ length: 10 }, (_, index) => task(`ses_${String(index + (cursor ? 10 : 0)).padStart(2, "0")}`)),
+      summary: { total: 20 }, cursor: cursor ? {} : { next: "more" },
+    } }), (id) => ({ session: { id, parentID: id === "ses_a" ? undefined : "ses_a", title: id, time: { created: 1, updated: 2 } },
+      messages: [], watermark: { seq: 0 }, sourceEpoch: "epoch_1" }), (request) => request.operation === "session.family.activity"
+      ? { ok: true, value: { data: [{ sessionID: "ses_a", executing: false },
+        ...(Array.isArray(request.input?.sessionIDs) ? request.input.sessionIDs.map((id) => ({ sessionID: id, executing: false })) : [])] } } : "default")
+    try {
+      test.store.watchTeam(true)
+      test.store.watchFamilyActivity(true)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().team?.status === "ready")
+      await test.store.loadMoreTeam()
+      await waitFor(() => test.store.state().team?.tasks.length === 20)
+      await test.store.selectSession("ses_19")
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.family.activity" &&
+        Array.isArray(request.input?.sessionIDs) && request.input.sessionIDs.includes("ses_19")), 5_000)
+      const ids = test.relay.requests.findLast((request) => request.operation === "session.family.activity")?.input?.sessionIDs
+      expect(ids).toContain("ses_19")
+      expect(Array.isArray(ids) ? ids.length : Infinity).toBeLessThanOrEqual(15)
+    } finally { await test.stop() }
+  }, 10_000)
+
+  test("selecting a child in the same root retains its ready team and family activity", async () => {
+    const test = await setup(() => ({ ok: true, value: { data: [task("ses_child")], summary: { total: 1 }, cursor: {} } }), (id) => ({
+      session: { id, parentID: id === "ses_child" ? "ses_a" : undefined, title: id, time: { created: 1, updated: 2 } }, messages: [], watermark: { seq: 0 }, sourceEpoch: "epoch_1",
+    }), (request) => request.operation === "session.family.activity" ? { ok: true, value: { data: [
+      { sessionID: "ses_a", executing: false }, { sessionID: "ses_child", executing: true, activity: { kind: "tool", room: "developer", text: "Editing app.ts" } },
+    ] } } : "default")
+    try {
+      test.store.watchTeam(true)
+      test.store.watchFamilyActivity(true)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().team?.status === "ready" && test.store.state().familyActivity?.status === "ready")
+      const rows = test.store.state().team?.tasks
+      const family = test.store.state().familyActivity?.members
+      const selecting = test.store.selectSession("ses_child")
+      expect(test.store.state().team?.tasks).toEqual(rows)
+      expect(test.store.state().familyActivity?.members).toEqual(family)
+      await selecting
+      await waitFor(() => test.store.state().team?.status === "ready")
+      expect(test.store.state().team?.tasks).toEqual(rows)
+      expect(test.store.state().familyActivity?.members).toEqual(family)
+    } finally { await test.stop() }
+  })
   test("a history size failure still loads todos, requests, and the selected root team", async () => {
     const todos = [{ content: "Check output", status: "in_progress", priority: "high" }] as const
     const test = await setup(() => ({ ok: true, value: { data: [task("ses_child")], summary: { total: 1 }, cursor: {} } }),

@@ -181,7 +181,7 @@ test("Fit covers the canvas without background pixels at landscape and portrait 
 
 test("selected activity uses the Research, QA, Developer, and Meeting rooms with roaming only where appropriate", async () => {
   const page = await requireBrowser().openPage()
-  for (const [activity, room, status] of [["research", "research", "Researching"], ["verify", "qa", "Testing"], ["implement", "developer", "Implementing"], ["coordinate", "meeting", "Coordinating"]] as const) {
+  for (const [activity, room, status] of [["research", "research", "Reading store.ts"], ["verify", "qa", "Running bun test"], ["implement", "developer", "Editing app.ts"], ["coordinate", "meeting", "Dispatching a subagent"]] as const) {
     await page.navigate(url("tool", `&activity=${activity}&inspectEngine=1`))
     await waitFor(page, `window.__officeGame?.scene.getScene('office').latestFrames.some(frame=>frame.actor.selected&&frame.room==='${room}')`)
     expect(await page.evaluate<string>("window.__officeGame.scene.getScene('office').latestFrames.find(frame=>frame.actor.selected)?.actor.statusText")).toBe(status)
@@ -234,12 +234,12 @@ test("attention emotes and markers do not obscure the selected bubble", async ()
   const page = await requireBrowser().openPage()
   await page.setViewport(390, 844)
   await page.navigate(url("attention", "&inspectEngine=1"))
-  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.some(object=>object.type==='Text'&&object.text==='Needs your reply'&&object.visible)")
+  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.some(object=>object.type==='Text'&&object.text==='Needs your decision'&&object.visible)")
   const layout = await page.evaluate<{ readonly bubble: { readonly left: number; readonly right: number; readonly top: number; readonly bottom: number }; readonly decorations: readonly { readonly left: number; readonly right: number; readonly top: number; readonly bottom: number }[] }>(`(() => {
     const objects=window.__officeGame.scene.getScene('office').children.list;
     const box=object=>({left:object.x-object.displayWidth*object.originX,right:object.x+object.displayWidth*(1-object.originX),
       top:object.y-object.displayHeight*object.originY,bottom:object.y+object.displayHeight*(1-object.originY)});
-    const bubble=objects.find(object=>object.type==='Text'&&object.text==='Needs your reply'&&object.visible);
+    const bubble=objects.find(object=>object.type==='Text'&&object.text==='Needs your decision'&&object.visible);
     const decorations=objects.filter(object=>object.visible&&((object.type==='Text'&&object.text==='!')||(object.type==='Sprite'&&object.texture.key==='emotes')));
     return {bubble:box(bubble),decorations:decorations.map(box)};
   })()`)
@@ -419,11 +419,11 @@ test("a new delegate cue brings supervisor and child into the meeting room and b
     return false;
   })()`)
   expect(reached).toBe(true)
-  await waitFor(page, "(()=>{const objects=window.__officeGame.scene.getScene('office').children.list;return objects.some(object=>object.type==='Text'&&object.text==='MEETING ROOM'&&object.visible)&&objects.some(object=>object.type==='Text'&&object.text==='Implementing'&&object.visible)})()")
+  await waitFor(page, "(()=>{const objects=window.__officeGame.scene.getScene('office').children.list;return objects.some(object=>object.type==='Text'&&object.text==='MEETING ROOM'&&object.visible)&&objects.some(object=>object.type==='Text'&&object.text==='Editing app.ts'&&object.visible)})()")
   const inspectMeetingLabel = `(() => {
     const scene=window.__officeGame.scene.getScene('office');
     const title=scene.children.list.find(object=>object.type==='Text'&&object.text==='MEETING ROOM');
-    const bubble=scene.children.list.find(object=>object.type==='Text'&&object.text==='Implementing'&&object.visible);
+    const bubble=scene.children.list.find(object=>object.type==='Text'&&object.text==='Editing app.ts'&&object.visible);
     if(!title||!bubble)return {visible:false,overlaps:true,alpha:1};
     const scale=scene.resolution/scene.cameras.main.zoom;
     const titleBounds={left:title.x-title.displayWidth/2-12*scale,right:title.x+title.displayWidth/2+12*scale,top:title.y-title.displayHeight/2-6*scale,bottom:title.y+title.displayHeight/2+6*scale};
@@ -484,19 +484,19 @@ test("roster cards show real sprite, unique name and role, follow selection, and
   await page.close()
 }, 60_000)
 
-test("a root with a lagging idle detail but a running report stays active in the Developer room", async () => {
+test("a root with lagging family running remains idle in the Lounge while its child works", async () => {
   const page = await requireBrowser().openPage()
   await page.navigate(url("idle", "&staleIdle=1&inspectEngine=1&workspace=1&team=1&cue=0"))
   await waitFor(page, "document.querySelectorAll('.office-roster__row').length===2&&window.__officeGame?.scene.getScene('office').latestFrames.length===2")
-  await waitFor(page, "window.__officeGame.scene.getScene('office').latestFrames.some(frame=>frame.actor.sessionID==='session-a'&&frame.room==='meeting'&&!frame.moving)")
+  await waitFor(page, "window.__officeGame.scene.getScene('office').latestFrames.some(frame=>frame.actor.sessionID==='session-a'&&frame.room==='lounge'&&!frame.moving)")
   const root = await page.evaluate<{ readonly status: string; readonly room: string; readonly bubble: boolean; readonly desk: boolean }>(`(() => {
     const scene=window.__officeGame.scene.getScene('office');
     const frame=scene.latestFrames.find(frame=>frame.actor.sessionID==='session-a');
-    return {status:document.querySelector('.office-roster__row[data-session-id="session-a"] .office-roster__status').textContent,
-      room:frame.room,bubble:scene.objects.get(frame.actor.id).bubble.text==='Coordinating',
+    return {status:document.querySelector('.office-roster__row[data-session-id="session-a"] .office-roster__status')?.textContent??'',
+      room:frame.room,bubble:scene.objects.get(frame.actor.id).bubble.visible,
       desk:scene.director.actors.get(frame.actor.id).work.cell.x===Math.floor(frame.position.x/32)&&scene.director.actors.get(frame.actor.id).work.cell.y===Math.floor(frame.position.y/32)};
   })()`)
-  expect(root).toEqual({ status: "Coordinating", room: "meeting", bubble: true, desk: true })
+  expect(root).toEqual({ status: "", room: "lounge", bubble: false, desk: false })
   await page.close()
 }, 30_000)
 
@@ -514,7 +514,7 @@ test("repeated ready team snapshots preserve roster row nodes and character spri
     for(let index=0;index<12;index++){
       [...document.querySelectorAll('button')].find(button=>button.textContent==='Refresh snapshot').click();
       await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-      if(document.querySelector('.office-roster__row[data-session-id="session-a"] .office-roster__status')?.textContent===(index%2===0?'Thinking':'Implementing'))updated++;
+      if(document.querySelector('.office-roster__row[data-session-id="session-a"] .office-roster__status')?.textContent===(index%2===0?'Thinking':'Editing app.ts'))updated++;
     }
     observer.disconnect();
     return {removed,updated,sameRows:rows.every(row=>document.querySelector('.office-roster__row[data-session-id="'+row.dataset.sessionId+'"]')===row),
@@ -645,7 +645,7 @@ test("task badges distinguish waiting and failure, while completed children depa
     await page.navigate(url("tool", `&team=1&inspectEngine=1&taskState=${state}`))
     await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 2")
     const texts = await page.evaluate<readonly string[]>("window.__officeGame.scene.getScene('office').children.list.filter(object=>object.type==='Text'&&object.visible).map(object=>object.text)")
-    expect(texts).toContain("TASK")
+    expect(texts).not.toContain("TASK")
     expect(texts.some((text) => text.includes(marker))).toBe(true)
   }
   await page.navigate(url("tool", "&team=1&inspectEngine=1&taskState=failed"))

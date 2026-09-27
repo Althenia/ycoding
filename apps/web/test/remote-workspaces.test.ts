@@ -104,7 +104,7 @@ describe("remote workspace session creation", () => {
       expect(h.store.state().workspaceStatus).toBe("ready")
       expect(await h.store.createSession({ workspaceID: workspace.id })).toBe(created.id)
       expect(h.relay.requests.find((request) => request.operation === "session.create")?.input).toEqual({ id: created.id, workspace: workspace.id })
-      expect(h.store.state().sessions.some((session) => session.id === created.id)).toBe(false)
+      expect(h.store.state().sessions.some((session) => session.id === created.id && session.directory === workspace.directory)).toBe(true)
       expect(h.store.state().activeSessionID).toBe(created.id)
       expect(h.relay.requests.some((request) => request.operation === "session.prompt")).toBe(false)
       createdVisible = true

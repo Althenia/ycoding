@@ -19,7 +19,6 @@ type ActorObjects = {
   bubble: Phaser.GameObjects.Text
   bubblePlate: Phaser.GameObjects.Graphics
   marker: Phaser.GameObjects.Text
-  relation: Phaser.GameObjects.Text
   emote: Phaser.GameObjects.Sprite
 }
 type RoomTitle = { readonly room: (typeof rooms)[number]; readonly text: Phaser.GameObjects.Text; readonly plate: Phaser.GameObjects.Graphics }
@@ -247,7 +246,7 @@ export class OfficeScene extends Phaser.Scene {
     for (const [id, objects] of this.objects) {
       if (present.has(id)) continue
       objects.sprite.destroy(); objects.shadow.destroy(); objects.ring.destroy(); objects.label.destroy(); objects.labelPlate.destroy()
-      objects.bubble.destroy(); objects.bubblePlate.destroy(); objects.marker.destroy(); objects.relation.destroy(); objects.emote.destroy()
+      objects.bubble.destroy(); objects.bubblePlate.destroy(); objects.marker.destroy(); objects.emote.destroy()
       this.objects.delete(id)
     }
     for (const frame of this.latestFrames) this.paintActor(frame, input.snapshot, scale)
@@ -351,7 +350,6 @@ export class OfficeScene extends Phaser.Scene {
         bubble: this.add.text(0, 0, "", { fontFamily: "sans-serif", fontSize: "13px", color: "#253443", wordWrap: { width: 180 }, resolution: this.resolution }).setOrigin(0.5, 1).setDepth(10003),
         bubblePlate: this.add.graphics().setDepth(10002),
         marker: this.add.text(0, 0, "!", { fontFamily: "sans-serif", fontSize: "18px", color: "#243340", backgroundColor: "#f3be65", padding: { x: 5, y: 1 }, resolution: this.resolution }).setOrigin(0.5, 1).setDepth(10005),
-        relation: this.add.text(0, 0, "TASK", { fontFamily: "sans-serif", fontSize: "11px", color: "#ffffff", backgroundColor: "#315a53", padding: { x: 4, y: 2 }, resolution: this.resolution }).setOrigin(0.5, 1).setDepth(10005),
         emote: this.add.sprite(0, 0, "emotes", 0).setOrigin(0.5, 1).setDepth(10004),
       }
       this.objects.set(frame.actor.id, objects)
@@ -377,7 +375,7 @@ export class OfficeScene extends Phaser.Scene {
       .setScale(scale).setVisible(preferences.labels && !frame.leaving)
     objects.labelPlate.setVisible(preferences.labels && !frame.leaving)
     const bubble = frame.actor.unknownOutcome ? "Action outcome unknown" : frame.actor.bubble ?? ""
-    const showBubble = frame.actor.selected && !frame.leaving && preferences.bubbles !== "off" && !!bubble
+    const showBubble = !frame.leaving && preferences.bubbles !== "off" && !!bubble
     objects.bubble.setText(bubble).setScale(scale).setVisible(showBubble)
     objects.bubblePlate.clear().setVisible(showBubble)
     const bubbleWidth = objects.bubble.displayWidth + 18 * scale
@@ -399,7 +397,6 @@ export class OfficeScene extends Phaser.Scene {
     const markerX = showBubble ? Math.min(view.right - objects.marker.displayWidth / 2, bubbleX + bubbleWidth / 2 + objects.marker.displayWidth / 2 + 5 * scale) : x + 20
     objects.marker.setPosition(markerX, showBubble ? y - 67 : y - 48)
       .setVisible(!frame.leaving && (frame.actor.status === "attention" || frame.actor.status === "failed" || frame.actor.unknownOutcome))
-    objects.relation.setPosition(x - 26, y - 33).setScale(scale).setVisible(!frame.leaving && frame.actor.kind === "task" && !!frame.actor.teamRootSessionID)
     if (snapshot.team.rootActorID === frame.actor.id) objects.ring.setStrokeStyle(2, 0x6de3b3)
   }
 }

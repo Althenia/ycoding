@@ -32,6 +32,19 @@ function Fixture() {
       ...(extraSession() ? [{ id: "session-new", parentID: "session-a", title: "New research task", agent: "Researcher", archived: false, running: true }] : []),
     ],
     activeSessionID: selected(),
+    familyActivity: { status: "ready", members: [
+      { sessionID: "session-a", executing: !["idle", "failed", "interrupted"].includes(state()),
+        ...(["idle", "failed", "interrupted"].includes(state()) ? {} : { activity: state() === "thinking" || query.has("snapshots") && pulse % 2 === 1
+          ? { kind: "thinking" as const, room: "hold" as const, text: "Thinking" }
+          : { kind: "tool" as const, room: query.get("activity") === "verify" ? "qa" as const : query.get("activity") === "research" ? "research" as const
+            : query.get("activity") === "coordinate" ? "meeting" as const : "developer" as const,
+          text: query.get("activity") === "verify" ? "Running bun test" : query.get("activity") === "research" ? "Reading store.ts"
+            : query.get("activity") === "coordinate" ? "Dispatching a subagent" : "Editing app.ts" } }) },
+      ...(query.has("team") ? [{ sessionID: "session-b", executing: ["starting", "running", "cancelling"].includes(taskState()),
+        ...(["starting", "running", "cancelling"].includes(taskState()) ? { activity: { kind: "tool" as const, room: "qa" as const, text: "Running bun test" } } : {}) }] : []),
+      ...(query.get("team") === "multi" ? [{ sessionID: "session-d", executing: true, activity: { kind: "tool" as const, room: "research" as const, text: "Reading model.ts" } }] : []),
+      ...(extraSession() ? [{ sessionID: "session-new", executing: true, activity: { kind: "tool" as const, room: "research" as const, text: "Searching files" } }] : []),
+    ] },
     ...(query.has("team") || query.has("arrival") ? { team: {
       rootID: "session-a", status: "ready" as const,
       members: [

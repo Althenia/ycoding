@@ -715,6 +715,16 @@ async function scenario(scenarioName: string, width: number, expected: string, t
 }
 
 async function selectSessionWorkspace(page: Awaited<ReturnType<NonNullable<typeof browser>["openPage"]>>, directory: string, expected: string, scope = ".sessions-page", row = ".sessions-table__row") {
+  if (scope === ".workspace__rail") {
+    await page.evaluate(`document.querySelector('.remote-nav a[href="/remote/sessions"]').click()`)
+    for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.sessions-page .workspace-nav__item') !== null`); attempt += 1) await Bun.sleep(50)
+    await selectSessionWorkspace(page, directory, expected)
+    await page.evaluate(`[...document.querySelectorAll('.sessions-table__select')].find(button => button.textContent.includes(${JSON.stringify(expected)}))?.click()`)
+    for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.workspace__rail .session-row')?.textContent?.includes(${JSON.stringify(expected)}) ?? false`); attempt += 1) await Bun.sleep(50)
+    expect(await page.evaluate<string>(`document.querySelector('.workspace__rail .session-panel__workspace h3')?.textContent?.trim() ?? ''`)).toBe(directory)
+    expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail .workspace-select') === null`)).toBe(true)
+    return
+  }
   await page.evaluate(`(async () => {
     const root = document.querySelector(${JSON.stringify(scope)});
     const name = ${JSON.stringify(directory)};

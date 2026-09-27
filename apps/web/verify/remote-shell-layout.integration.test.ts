@@ -28,6 +28,181 @@ afterAll(async () => {
 })
 
 describe("remote shell layout", () => {
+  test("places running Sessions before the workspace heading on the Sessions page", async () => {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(1440, 900)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`Boolean(document.querySelector('.running-sessions') && document.querySelector('.sessions-page__title'))`); attempt += 1) await Bun.sleep(50)
+      const positions = await page.evaluate<{ readonly running: number; readonly heading: number; readonly toolbar: number }>(`(() => ({ running: document.querySelector('.running-sessions')?.getBoundingClientRect().top ?? Infinity, heading: document.querySelector('.sessions-page__title')?.getBoundingClientRect().top ?? -1, toolbar: document.querySelector('.sessions-page__toolbar')?.getBoundingClientRect().top ?? -1 }))()`)
+      expect(positions.running).toBeLessThan(positions.heading)
+      expect(positions.running).toBeLessThan(positions.toolbar)
+    } finally { await page.close() }
+  }, 30_000)
+
+  test("keeps the no-selection Sessions overlay full width and the main empty content centered", async () => {
+    for (const theme of ["light", "dark"] as const) for (const [width, height] of [[390, 844], [820, 1180]]) {
+      const page = await browser!.openPage()
+      try {
+        await page.setViewport(width!, height!)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&noSelection=1&theme=${theme}`)
+        for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.app--empty .app-header__menu') !== null && document.querySelector('.new-session-composer') !== null`); attempt += 1) await Bun.sleep(50)
+        await page.evaluate(`document.querySelector('.app-header__menu').click()`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.overlay--sessions-sheet[open] .session-row') !== null`); attempt += 1) await Bun.sleep(50)
+        await page.evaluate(`Promise.all([...document.querySelector('.overlay--sessions-sheet .overlay__surface').getAnimations()].map(animation => animation.finished))`)
+        const geometry = await page.evaluate<{ readonly labelLeft: number; readonly buttonRight: number; readonly headerTop: number; readonly buttonTop: number; readonly innerLeft: number; readonly innerRight: number; readonly workspaceLeft: number; readonly headingLeft: number; readonly selectorAbsent: boolean; readonly filterLeft: number; readonly filterRight: number; readonly rowTextLeft: number; readonly bodyOverflow: boolean; readonly listOverflow: boolean; readonly centered: boolean; readonly pageOverflow: boolean }>(`(() => { const overlay = document.querySelector('.overlay--sessions-sheet'); const pane = overlay.querySelector('.pane'); const content = pane.getBoundingClientRect(); const pad = parseFloat(getComputedStyle(pane).paddingLeft); const label = pane.querySelector('.pane__title').getBoundingClientRect(); const button = pane.querySelector('.pane__head button').getBoundingClientRect(); const workspace = pane.querySelector('.session-panel__workspace .workspace-select__label').getBoundingClientRect(); const heading = pane.querySelector('.session-panel__workspace h3').getBoundingClientRect(); const filter = pane.querySelector('input[placeholder="Filter sessions"]').getBoundingClientRect(); const list = pane.querySelector('.session-list'); const row = pane.querySelector('.session-row__title').getBoundingClientRect(); const body = overlay.querySelector('.overlay__body'); const main = document.querySelector('.workspace__main').getBoundingClientRect(); const empty = document.querySelector('.new-session-composer').getBoundingClientRect(); return { labelLeft: label.left, buttonRight: button.right, headerTop: label.top, buttonTop: button.top, innerLeft: content.left + pad, innerRight: content.right - pad, workspaceLeft: workspace.left, headingLeft: heading.left, selectorAbsent: !pane.querySelector('.workspace-select .custom-select__trigger'), filterLeft: filter.left, filterRight: filter.right, rowTextLeft: row.left, bodyOverflow: body.scrollWidth > body.clientWidth + 1, listOverflow: list.scrollWidth > list.clientWidth + 1, centered: Math.abs((empty.left + empty.right - main.left - main.right)/2) <= 1, pageOverflow: document.documentElement.scrollWidth > innerWidth } })()`)
+        expect(Math.abs(geometry.labelLeft - geometry.innerLeft)).toBeLessThanOrEqual(1)
+        expect(Math.abs(geometry.buttonRight - geometry.innerRight)).toBeLessThanOrEqual(1)
+        expect(Math.abs(geometry.headerTop - geometry.buttonTop)).toBeLessThanOrEqual(14)
+        expect(Math.abs(geometry.workspaceLeft - geometry.innerLeft)).toBeLessThanOrEqual(1)
+        expect(Math.abs(geometry.headingLeft - geometry.innerLeft)).toBeLessThanOrEqual(1)
+        expect(geometry.selectorAbsent).toBe(true)
+        expect(Math.abs(geometry.filterLeft - geometry.innerLeft)).toBeLessThanOrEqual(1)
+        expect(Math.abs(geometry.filterRight - geometry.innerRight)).toBeLessThanOrEqual(1)
+        expect(Math.abs(geometry.rowTextLeft - geometry.innerLeft)).toBeLessThanOrEqual(1)
+        expect(geometry.bodyOverflow).toBe(false)
+        expect(geometry.listOverflow).toBe(false)
+        expect(geometry.centered).toBe(true)
+        expect(geometry.pageOverflow).toBe(false)
+        await Bun.write(new URL(`../../../.cache/tmp/sessions-no-selection-${theme}-${width}x${height}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      } finally { await page.close() }
+    }
+  }, 30_000)
+
+  test("shows Office only above phone sizes and keeps the selected Session and draft through rotation", async () => {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(390, 844)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&presentation=office&theme=light`)
+      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.app--selected') !== null`); attempt += 1) await Bun.sleep(50)
+      const layouts = [[390, 844, false, false], [1366, 650, false, true], [820, 1180, false, true], [1180, 820, false, true], [1440, 900, false, true], [1133, 744, true, true], [844, 390, true, false]] as const
+      for (const [width, height, coarse, office] of layouts) {
+        if (coarse) await page.setCoarsePointer(true)
+        expect(await page.evaluate<boolean>(`matchMedia('(pointer: coarse)').matches`)).toBe(coarse)
+        await page.setViewport(width, height)
+        for (let attempt = 0; attempt < 40 && await page.evaluate<boolean>(`document.querySelector('.office-workspace') !== null`) !== office; attempt += 1) await Bun.sleep(50)
+        const state = await page.evaluate<{ readonly switchVisible: boolean; readonly officeVisible: boolean; readonly conversationVisible: boolean; readonly session: string }>(`(() => ({ switchVisible: Boolean(document.querySelector('.presentation-switch')?.getBoundingClientRect().width), officeVisible: Boolean(document.querySelector('.office-workspace')?.getBoundingClientRect().width), conversationVisible: Boolean(document.querySelector('.conversation-pane')?.getBoundingClientRect().width), session: document.querySelector('.conversation-breadcrumb strong')?.textContent?.trim() ?? '' }))()`)
+        expect(state.switchVisible).toBe(office)
+        expect(state.officeVisible).toBe(office)
+        expect(state.conversationVisible).toBe(!office)
+        if (!office) expect(state.session).toBe("Stream remote output safely")
+        else expect(await page.evaluate<boolean>(`document.querySelector('.app--selected') !== null`)).toBe(true)
+      }
+      await page.setViewport(390, 844)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.composer__input') !== null`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`(() => { const input = document.querySelector('.composer__input'); input.value = 'Keep my rotation draft'; input.dispatchEvent(new InputEvent('input', { bubbles: true })) })()`)
+      expect(await page.evaluate<string>(`document.querySelector('.composer__input')?.value ?? ''`)).toBe("Keep my rotation draft")
+      await page.setViewport(820, 1180)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.office-workspace') !== null`); attempt += 1) await Bun.sleep(50)
+      await page.setViewport(390, 844)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.conversation-pane') !== null && document.querySelector('.composer__input') !== null`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<string>(`document.querySelector('.composer__input')?.value ?? ''`)).toBe("Keep my rotation draft")
+      expect(await page.evaluate<string>(`document.querySelector('.conversation-breadcrumb strong')?.textContent?.trim() ?? ''`)).toBe("Stream remote output safely")
+      const settings = await browser!.openPage()
+      try {
+        for (const [width, height, coarse, visible] of layouts) {
+          if (coarse) await settings.setCoarsePointer(true)
+          expect(await settings.evaluate<boolean>(`matchMedia('(pointer: coarse)').matches`)).toBe(coarse)
+          await settings.setViewport(width, height)
+          await settings.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=settings&presentation=office`)
+          for (let attempt = 0; attempt < 40 && !await settings.evaluate<boolean>(`document.querySelector('#office-settings') !== null`); attempt += 1) await Bun.sleep(50)
+          expect(await settings.evaluate<boolean>(`getComputedStyle(document.querySelector('#office-settings')).display !== 'none'`)).toBe(visible)
+        }
+      } finally { await settings.close() }
+    } finally { await page.close() }
+  }, 45_000)
+
+  test("follows another workspace's running Session from the carousel in desktop rail and phone sheet", async () => {
+    for (const width of [1440, 390]) {
+      const page = await browser!.openPage()
+      try {
+        await page.setViewport(width, 900)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=session-list-${width === 390 ? 390 : 1440}`)
+        for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`window.remoteStatus && document.querySelector('.sessions-page__title')`); attempt += 1) await Bun.sleep(50)
+        for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.running-sessions__item') !== null`); attempt += 1) await Bun.sleep(50)
+        await page.evaluate(`window.remoteStatus(['ses_fixture', 'ses_telemetry'], [])`)
+        for (let attempt = 0; attempt < 160 && await page.evaluate<number>(`document.querySelectorAll('.running-sessions__item').length`) !== 2; attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<number>(`document.querySelectorAll('.running-sessions__item').length`)).toBe(2)
+        await page.evaluate(`[...document.querySelectorAll('.running-sessions__item')].find(button => button.textContent.includes('Telemetry Event'))?.click()`)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.app--conversation.app--selected') !== null`); attempt += 1) await Bun.sleep(50)
+        if (width === 390) {
+          await page.evaluate(`document.querySelector('.app-header__menu').click()`)
+          for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.overlay--sessions-sheet[open] .session-panel__workspace') !== null`); attempt += 1) await Bun.sleep(50)
+        }
+        const result = await page.evaluate<{ readonly heading: string; readonly selector: boolean; readonly rows: readonly string[]; readonly active: string; readonly firstRunning: boolean }>(`(() => { const panel = document.querySelector(${width === 390 ? "'.overlay--sessions-sheet .pane'" : "'.workspace__rail .pane'"}); const rows = [...panel.querySelectorAll('.session-row')]; return { heading: panel.querySelector('.session-panel__workspace h3')?.textContent.trim() ?? '', selector: Boolean(panel.querySelector('.workspace-select .custom-select__trigger')), rows: rows.map(row => row.querySelector('.session-row__name')?.textContent.trim() ?? ''), active: panel.querySelector('.session-row--active .session-row__name')?.textContent.trim() ?? '', firstRunning: Boolean(rows[0]?.querySelector('.live-dot')) } })()`)
+        expect(result.heading).toBe("telemetry-daemon")
+        expect(result.selector).toBe(false)
+        expect(result.rows).toContain("Telemetry Event Buffer Flush Daemon")
+        expect(result.active).toBe("Telemetry Event Buffer Flush Daemon")
+        expect(result.firstRunning).toBe(true)
+      } finally { await page.close() }
+    }
+  }, 30_000)
+
+  test("follows a deep-linked Session's workspace instead of the previously browsed workspace", async () => {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(1440, 900)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=conversation-workspace-1440`)
+      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb strong') !== null`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`location.hash = '#session=ses_indexer'`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('Query batch indexer') ?? false`); attempt += 1) await Bun.sleep(50)
+      const state = await page.evaluate<{ readonly heading: string; readonly active: string; readonly selector: boolean }>(`(() => ({ heading: document.querySelector('.workspace__rail .session-panel__workspace h3')?.textContent?.trim() ?? '', active: document.querySelector('.workspace__rail .session-row--active .session-row__name')?.textContent?.trim() ?? '', selector: Boolean(document.querySelector('.workspace__rail .workspace-select .custom-select__trigger')) }))()`)
+      expect(state).toEqual({ heading: "indexer", active: "Query batch indexer", selector: false })
+    } finally { await page.close() }
+  }, 30_000)
+
+  test("highlights the root when a child Session is opened from a deep link", async () => {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(1440, 900)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
+      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb strong') !== null`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`location.hash = '#session=ses_child'`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('Child: fix flaky suite') ?? false`); attempt += 1) await Bun.sleep(50)
+      const result = await page.evaluate<{ readonly heading: string; readonly active: string; readonly dropdown: boolean }>(`(() => ({ heading: document.querySelector('.workspace__rail .session-panel__workspace h3')?.textContent?.trim() ?? '', active: document.querySelector('.workspace__rail .session-row--active .session-row__name')?.textContent?.trim() ?? '', dropdown: Boolean(document.querySelector('.workspace__rail .workspace-select .custom-select__trigger')) }))()`)
+      expect(result).toEqual({ heading: "ycoding", active: "Stream remote output safely", dropdown: false })
+    } finally { await page.close() }
+  }, 30_000)
+
+  test("opens a newly created Session in another repository and follows its sidebar workspace", async () => {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(1440, 900)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
+      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.workspace__rail .pane__head--sessions button') !== null`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`document.querySelector('.workspace__rail .pane__head--sessions button').click()`)
+      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.new-session-composer .mini-picker__trigger[aria-label="Repository"]') !== null`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`document.querySelector('.new-session-composer .mini-picker__trigger[aria-label="Repository"]').click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`[...document.querySelectorAll('.mini-picker__option')].some(option => option.textContent.includes('Other repository'))`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`[...document.querySelectorAll('.mini-picker__option')].find(option => option.textContent.includes('Other repository'))?.click()`)
+      await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Create session"]').click()`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('New session') ?? false`); attempt += 1) await Bun.sleep(50)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.workspace__rail .session-row--active') !== null`); attempt += 1) await Bun.sleep(50)
+      const result = await page.evaluate<{ readonly breadcrumb: string; readonly heading: string; readonly active: string }>(`(() => ({ breadcrumb: document.querySelector('.conversation-breadcrumb strong')?.textContent?.trim() ?? '', heading: document.querySelector('.workspace__rail .session-panel__workspace h3')?.textContent?.trim() ?? '', active: document.querySelector('.workspace__rail .session-row--active .session-row__name')?.textContent?.trim() ?? '' }))()`)
+      expect(result).toEqual({ breadcrumb: "New session", heading: "other", active: "New session" })
+    } finally { await page.close() }
+  }, 30_000)
+
+  test("keeps workspace switching on the Sessions page at desktop and phone widths", async () => {
+    for (const width of [1440, 390]) {
+      const page = await browser!.openPage()
+      try {
+        await page.setViewport(width, 900)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=session-list-${width === 390 ? 390 : 1440}`)
+        for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.sessions-page__title') !== null`); attempt += 1) await Bun.sleep(50)
+        if (width === 1440) await page.evaluate(`document.querySelector('.workspace-nav__item[title="/workspace/telemetry-daemon"]').click()`)
+        else {
+          await page.evaluate(`document.querySelector('.sessions-page__workspace-select .custom-select__trigger').click()`)
+          for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.custom-select__dialog .custom-select__option') !== null`); attempt += 1) await Bun.sleep(50)
+          await page.evaluate(`[...document.querySelectorAll('.custom-select__dialog .custom-select__option')].find(option => option.textContent.includes('telemetry-daemon'))?.click()`)
+          await page.evaluate(`document.querySelector('.custom-select__confirm').click()`)
+        }
+        for (let attempt = 0; attempt < 60 && await page.evaluate<string>(`document.querySelector('.sessions-page__title')?.textContent?.trim() ?? ''`) !== "telemetry-daemon"; attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<string>(`document.querySelector('.sessions-page__title')?.textContent?.trim() ?? ''`)).toBe("telemetry-daemon")
+      } finally { await page.close() }
+    }
+  }, 30_000)
   test("keeps the selected Session and draft stable through a rendered reconnect", async () => {
     const page = await fixture("view=chat", 390, "Stream remote output safely")
     try {

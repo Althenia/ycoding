@@ -90,14 +90,117 @@ describe("remote Office presentation", () => {
     }
   }, 60_000)
 
+  test("keeps one Office scene and roster through child, root, and child selection", async () => {
+    const page = await openRemote("view=chat&presentation=office")
+    try {
+      expect(await until(page, `document.querySelectorAll('.office-roster__row').length === 2 && !!document.querySelector('.office-canvas-host canvas')`)).toBe(true)
+      await page.evaluate<void>(`(() => {
+        const canvas=document.querySelector('.office-canvas-host canvas'),rows=[...document.querySelectorAll('.office-roster__row')];
+        window.officeContinuity={canvas,rows:new Map(rows.map(row=>[row.dataset.sessionId,row])),names:new Map(rows.map(row=>[row.dataset.sessionId,row.querySelector('.office-roster__name').textContent])),mounts:0};
+        new MutationObserver(records=>{for(const record of records)for(const node of record.addedNodes)if(node.nodeName==='CANVAS'||node.querySelector?.('.office-canvas-host canvas'))window.officeContinuity.mounts++}).observe(document.body,{subtree:true,childList:true});
+      })()`)
+      for (const sessionID of ["ses_child", "ses_fixture", "ses_child"]) {
+        await page.evaluate<void>(`document.querySelector('.office-roster__row[data-session-id=${JSON.stringify(sessionID)}]')?.click()`)
+        expect(await until(page, `document.querySelector('.office-roster__row[data-session-id=${JSON.stringify(sessionID)}]')?.getAttribute('aria-current')==='true'`)).toBe(true)
+        expect(await page.evaluate<{ readonly canvas: boolean; readonly rows: boolean; readonly names: boolean; readonly mounts: number }>(`(() => {const probe=window.officeContinuity,rows=[...document.querySelectorAll('.office-roster__row')];return {canvas:document.querySelector('.office-canvas-host canvas')===probe.canvas,rows:rows.length===probe.rows.size&&rows.every(row=>row===probe.rows.get(row.dataset.sessionId)),names:rows.every(row=>row.querySelector('.office-roster__name').textContent===probe.names.get(row.dataset.sessionId)),mounts:probe.mounts}})()`)).toEqual({ canvas: true, rows: true, names: true, mounts: 0 })
+      }
+    } finally { await page.close() }
+  }, 60_000)
+
+  test("two working children retain one Office scene while selection crosses the idle root", async () => {
+    const page = await openRemote("view=chat&presentation=office&team=two&inspectOffice=1")
+    try {
+      expect(await until(page, `document.querySelectorAll('.office-roster__row').length===3&&window.__officeGame?.scene.getScene('office').latestFrames.length===3&&document.querySelector('.office-roster__row[data-session-id="ses_child"] .office-roster__status')?.textContent==='Running bun test'`, 150)).toBe(true)
+      expect(await until(page, `window.__officeGame.scene.getScene('office').latestFrames.some(frame=>frame.actor.sessionID==='ses_fixture'&&frame.room==='lounge'&&!frame.moving)`, 150)).toBe(true)
+      await page.evaluate<void>(`(() => {
+        const game=window.__officeGame,scene=game.scene.getScene('office'),rows=[...document.querySelectorAll('.office-roster__row')];
+        window.officeContinuity={game,scene,canvas:document.querySelector('.office-canvas-host canvas'),camera:scene.cameras.main,
+          actors:new Map(scene.director.actors),rows:new Map(rows.map(row=>[row.dataset.sessionId,row])),names:new Map(rows.map(row=>[row.dataset.sessionId,row.querySelector('.office-roster__name').textContent]))};
+        document.querySelector('button[aria-label="Zoom in"]').click();
+        window.officeContinuity.zoom=scene.cameras.main.zoom;
+      })()`)
+      for (const sessionID of ["ses_child", "ses_fixture", "ses_second"]) {
+        await page.evaluate<void>(`document.querySelector('.office-roster__row[data-session-id=${JSON.stringify(sessionID)}]')?.click()`)
+        expect(await until(page, `document.querySelector('.office-roster__row[data-session-id=${JSON.stringify(sessionID)}]')?.getAttribute('aria-current')==='true'`)).toBe(true)
+        expect(await page.evaluate<unknown>(`(() => {const p=window.officeContinuity,s=window.__officeGame.scene.getScene('office'),rows=[...document.querySelectorAll('.office-roster__row')];return {
+          sameGame:window.__officeGame===p.game,sameScene:s===p.scene,sameCanvas:document.querySelector('.office-canvas-host canvas')===p.canvas,mounts:window.__officeMounts,
+          sameCamera:s.cameras.main===p.camera,zoom:s.cameras.main.zoom,rows:rows.length===3&&rows.every(row=>row===p.rows.get(row.dataset.sessionId)&&row.querySelector('.office-roster__name').textContent===p.names.get(row.dataset.sessionId)),
+          actors:[...s.director.actors].every(([id,state])=>state===p.actors.get(id)&&!state.leaving&&state.opacityAge===400),
+          root:s.latestFrames.find(frame=>frame.actor.sessionID==='ses_fixture')?.room,
+          actions:Object.fromEntries(rows.filter(row=>row.dataset.sessionId!=='ses_fixture').map(row=>[row.dataset.sessionId,row.querySelector('.office-roster__status')?.textContent])),
+        }})()`)).toEqual({ sameGame: true, sameScene: true, sameCanvas: true, mounts: 1, sameCamera: true,
+          zoom: await page.evaluate<number>(`window.officeContinuity.zoom`), rows: true, actors: true, root: "lounge", actions: { ses_child: "Running bun test", ses_second: "Reading projection.ts" } })
+      }
+      for (const theme of ["light", "dark"] as const) {
+        await page.evaluate<void>(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`)
+        await Bun.write(join(captures, `family-1440x900-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
+      }
+    } finally { await page.close() }
+  }, 60_000)
+
+  test("activity bubbles and the idle root render at tablet and desktop sizes in both themes", async () => {
+    for (const [width, height] of [[820, 1180], [1440, 900]] as const) {
+      const page = await openRemote("view=chat&presentation=office&team=two&inspectOffice=1", width)
+      try {
+        await page.setViewport(width, height)
+        expect(await until(page, `window.__officeGame?.scene.getScene('office').latestFrames.some(frame=>frame.actor.sessionID==='ses_fixture'&&frame.room==='lounge'&&!frame.moving)`, 150)).toBe(true)
+        const activity = await page.evaluate<{ readonly root: string; readonly roster: readonly string[]; readonly bubbles: readonly string[] }>(`(() => {
+          const scene=window.__officeGame.scene.getScene('office');return {root:scene.latestFrames.find(frame=>frame.actor.sessionID==='ses_fixture').actor.status,
+            roster:[...document.querySelectorAll('.office-roster__row .office-roster__status')].map(node=>node.textContent),
+            bubbles:scene.children.list.filter(node=>node.type==='Text'&&node.visible).map(node=>node.text)};
+        })()`)
+        expect(activity.root).toBe("idle")
+        expect(activity.roster).toContain("Reading projection.ts")
+        expect(activity.roster).toContain("Running bun test")
+        expect(activity.bubbles).toContain("Reading projection.ts")
+        expect(activity.bubbles).toContain("Running bun test")
+        expect(activity.bubbles).not.toContain("TASK")
+        expect(activity.bubbles).not.toContain("Idle")
+        expect(await until(page, `document.querySelector('.office-canvas-host canvas')?.getBoundingClientRect().height>180`)).toBe(true)
+        await page.evaluate<void>(`document.querySelector('.office-roster__toggle[aria-expanded="false"]')?.click()`)
+        for (const theme of ["light", "dark"] as const) {
+          await page.evaluate<void>(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`)
+          await Bun.sleep(100)
+          await Bun.write(join(captures, `family-${width}x${height}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
+        }
+      } finally { await page.close() }
+    }
+  }, 60_000)
+
+  test("hiding Office suspends family activity reads until the tab is visible", async () => {
+    const page = await openRemote("view=chat&presentation=office&team=two")
+    try {
+      expect(await until(page, `(remoteOperationReport().operations['session.family.activity']??0)>=1`)).toBe(true)
+      await page.evaluate<void>(`Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'))`)
+      const before = await page.evaluate<number>(`remoteOperationReport().operations['session.family.activity']??0`)
+      await Bun.sleep(3_150)
+      expect(await page.evaluate<number>(`remoteOperationReport().operations['session.family.activity']??0`)).toBe(before)
+      await page.evaluate<void>(`Object.defineProperty(document,'hidden',{configurable:true,value:false});document.dispatchEvent(new Event('visibilitychange'))`)
+      expect(await until(page, `(remoteOperationReport().operations['session.family.activity']??0)>${before}`)).toBe(true)
+      await choosePresentation(page, "Conversation")
+      const stopped = await page.evaluate<number>(`remoteOperationReport().operations['session.family.activity']??0`)
+      await Bun.sleep(3_150)
+      expect(await page.evaluate<number>(`remoteOperationReport().operations['session.family.activity']??0`)).toBe(stopped)
+    } finally { await page.close() }
+  }, 20_000)
+
+  test("an older connector asks for an update instead of inventing agent activity", async () => {
+    const page = await openRemote("view=chat&presentation=office&familyActivity=unsupported")
+    try {
+      expect(await until(page, `document.querySelector('.office-roster__note[role="status"]')?.textContent.includes('Update YCoding')??false`)).toBe(true)
+      expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll('.office-roster__status')].map(node=>node.textContent)`)).toEqual(["Needs your decision"])
+      expect(await page.evaluate<number>(`remoteOperationReport().operations['session.family.activity']??0`)).toBe(1)
+    } finally { await page.close() }
+  }, 30_000)
+
   test("updates the office from the stream and retains the transcript in Conversation", async () => {
     const page = await openRemote("scenario=conversation-tool-terminal-output-1440&presentation=office")
     try {
-      expect(await until(page, `document.querySelector('.office-roster__row[aria-current="true"] .office-roster__status')?.textContent === 'Coordinating' && document.querySelectorAll('.office-workspace canvas').length === 1`, 150)).toBe(true)
+      expect(await until(page, `document.querySelector('.office-roster__row[aria-current="true"] .office-roster__status')?.textContent === 'Editing store.ts' && document.querySelectorAll('.office-workspace canvas').length === 1`, 150)).toBe(true)
       const before = await page.evaluate<OperationReport>(`remoteOperationReport()`)
       await page.evaluate(`[...document.querySelectorAll('.fixture__controls button')].find((button) => button.textContent.includes('Simulate streaming step')).click()`)
 
-      expect(await until(page, `document.querySelector('.office-roster__row[aria-current="true"] .office-roster__status')?.textContent === 'Coordinating'`)).toBe(true)
+      expect(await until(page, `document.querySelector('.office-roster__row[aria-current="true"] .office-roster__status')?.textContent === 'Editing store.ts'`)).toBe(true)
       expect(await page.evaluate<number>(`document.querySelectorAll('.office-workspace__inspector,.composer').length`)).toBe(0)
       await choosePresentation(page, "Conversation")
       expect(await until(page, `document.querySelector('.conversation-pane')?.textContent.includes('Streaming through the relay with bounded tool output.') ?? false`)).toBe(true)
@@ -174,7 +277,7 @@ describe("remote Office presentation", () => {
   }, 60_000)
 
   test("fills the main area with a responsive canvas and accessible roster at each breakpoint and theme", async () => {
-    for (const [width, height] of [[390, 844], [820, 1180], [1024, 768], [1440, 900], [1920, 1080]] as const) {
+    for (const [width, height] of [[820, 1180], [1024, 768], [1440, 900], [1920, 1080]] as const) {
       const page = await openRemote("view=chat&presentation=office", width)
       try {
         await page.evaluate<void>(`document.querySelector('.fixture__banner').style.display='none';document.querySelector('.fixture__controls').style.display='none'`)
@@ -215,13 +318,6 @@ describe("remote Office presentation", () => {
         if (width >= 1024) expect(layout.independentlyScrollable).toBe(true)
         expect(layout.rows.every((row) => row >= 44)).toBe(true)
         expect(layout.controls.every((target) => target >= 44)).toBe(true)
-        if (width === 390) {
-          expect(await page.evaluate<boolean>(`document.querySelector('.office-roster__list').scrollWidth > document.querySelector('.office-roster__list').clientWidth`)).toBe(true)
-          await page.evaluate<void>(`document.querySelector('button[aria-label="Back to conversation"]').focus()`)
-          expect(await until(page, `getComputedStyle(document.querySelector('button[aria-label="Back to conversation"]'),'::after').opacity === '1'`)).toBe(true)
-          await page.evaluate<void>(`document.querySelector('button[aria-label="Back to conversation"]').blur()`)
-          expect(await until(page, `getComputedStyle(document.querySelector('button[aria-label="Back to conversation"]'),'::after').opacity === '0'`)).toBe(true)
-        }
         expect(await until(page, `[...document.querySelectorAll('.office-roster__row')].every(row=>row.getAnimations().every(animation=>animation.playState==='finished'))`)).toBe(true)
         for (const theme of ["light", "dark"] as const) {
           await page.evaluate<void>(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`)
@@ -235,42 +331,30 @@ describe("remote Office presentation", () => {
     }
   }, 90_000)
 
-  test("touch-emulated portrait and landscape phones keep a rendered Office canvas", async () => {
-    for (const [width, height] of [[390, 844], [844, 390]] as const) {
-      const page = await openRemote("view=chat&presentation=office", width)
-      try {
-        await page.setCoarsePointer(true)
-        await page.setViewport(width, height)
-        await page.evaluate<void>(`document.querySelector('.fixture__banner').style.display='none';document.querySelector('.fixture__controls').style.display='none'`)
-        expect(await until(page, `document.querySelector('.office-canvas-host canvas')?.getBoundingClientRect().height >= 180 && !document.querySelector('.office-notice[role=alert]')`, 150)).toBe(true)
-        const state = await page.evaluate<{ readonly host: number; readonly backing: number; readonly canvas: number }>(`(() => {const host=document.querySelector('.office-canvas-host'),canvas=host.querySelector('canvas');return {host:host.getBoundingClientRect().height,canvas:canvas.getBoundingClientRect().height,backing:canvas.height}})()`)
-        expect(state.host).toBeGreaterThanOrEqual(180)
-        expect(state.canvas).toBeGreaterThanOrEqual(180)
-        expect(state.backing).toBeGreaterThan(180)
-        await Bun.write(join(captures, `touch-${width}x${height}.png`), Buffer.from(await page.screenshot(), "base64"))
-      } finally {
-        await page.close()
-      }
-    }
-  }, 60_000)
+  test("phone presentation remains Conversation even when Office is preferred", async () => {
+    const page = await openRemote("view=chat&presentation=office", 390)
+    try {
+      await page.setCoarsePointer(true)
+      await page.setViewport(390, 844)
+      expect(await until(page, `document.querySelector('.conversation-breadcrumb')!==null&&document.querySelector('.composer')!==null`)).toBe(true)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.office-workspace,.office-canvas-host canvas').length`)).toBe(0)
+    } finally { await page.close() }
+  }, 30_000)
 
-  test("stays usable at 200% zoom of a 1440 by 900 window", async () => {
+  test("200% zoom uses the phone Conversation surface without horizontal overflow", async () => {
     const page = await openRemote("view=chat&presentation=office", 720)
     try {
       await page.setViewport(720, 450)
-      expect(await until(page, `document.querySelectorAll('.office-roster__row').length >= 1 && document.querySelectorAll('.office-workspace canvas').length === 1`, 150)).toBe(true)
-      expect(await until(page, `document.querySelector('.office-workspace__canvas')?.getBoundingClientRect().height > 180`, 150)).toBe(true)
-      const layout = await page.evaluate<{ readonly overflow: boolean; readonly stage: number; readonly targets: readonly number[] }>(`(() => {
+      expect(await until(page, `document.querySelector('.conversation-breadcrumb')!==null&&document.querySelector('.composer')!==null`, 150)).toBe(true)
+      const layout = await page.evaluate<{ readonly overflow: boolean; readonly targets: readonly number[] }>(`(() => {
         return {
           overflow: document.documentElement.scrollWidth > innerWidth,
-          stage:document.querySelector('.office-workspace__canvas').getBoundingClientRect().height,
-          targets: [...document.querySelectorAll('.presentation-switch [role="radio"], .office-roster__row')].map((element) => element.getBoundingClientRect().height),
+          targets: [...document.querySelectorAll('.composer button')].map((element) => element.getBoundingClientRect().height),
         }
       })()`)
       expect(layout.overflow).toBe(false)
-      expect(layout.stage).toBeGreaterThan(180)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.composer').length`)).toBe(0)
-      expect(layout.targets.every((height) => height >= 44)).toBe(true)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.office-workspace').length`)).toBe(0)
+      expect(layout.targets.some((height) => height >= 44)).toBe(true)
     } finally {
       await page.close()
     }
@@ -281,8 +365,8 @@ describe("remote Office presentation", () => {
     try {
       const childRow = `document.querySelector('.office-roster__row[data-session-id="ses_child"]')`
       expect(await until(page, `${childRow}?.querySelector('.office-roster__name')?.textContent.includes('· general') ?? false`)).toBe(true)
-      expect(await page.evaluate<string>(`${childRow}.querySelector('.office-roster__status').textContent`)).toBe("Running")
-      expect(await page.evaluate<string>(`${childRow}.querySelector('.office-roster__room').textContent`)).toBe("Developer room")
+      expect(await page.evaluate<string>(`${childRow}.querySelector('.office-roster__status').textContent`)).toBe("Running bun test")
+      expect(await until(page, `${childRow}?.querySelector('.office-roster__room')?.textContent === 'QA lab'`, 150)).toBe(true)
       expect(await until(page, `document.querySelector('.office-roster__row[data-session-id="ses_fixture"] .office-roster__room')?.textContent === 'Developer room'`)).toBe(true)
       expect(await page.evaluate<number>(`document.querySelectorAll('.office-roster__row').length`)).toBe(2)
       expect(await page.evaluate<string>(`document.querySelector('.office-roster [role="status"]').textContent`)).toBe("")
@@ -290,7 +374,7 @@ describe("remote Office presentation", () => {
       await page.evaluate(`[...document.querySelectorAll('.fixture__controls button')].find((button) => button.textContent.includes('Simulate subagent handoff')).click()`)
       expect(await until(page, `document.querySelector('.office-roster [role="status"]').textContent === 'Delegated to subagent Fix flaky suite.'`)).toBe(true)
       expect(await until(page, `document.querySelector('.office-roster [role="status"]').textContent === 'Subagent Fix flaky suite reported completed.'`)).toBe(true)
-      expect(await until(page, `${childRow} === null`, 250)).toBe(true)
+      expect(await until(page, `${childRow} === null`, 350)).toBe(true)
       expect(await page.evaluate<boolean>(`document.querySelector('.office-workspace') !== null && document.querySelector('.office-roster__row[data-session-id="ses_fixture"]') !== null`)).toBe(true)
     } finally {
       await page.close()

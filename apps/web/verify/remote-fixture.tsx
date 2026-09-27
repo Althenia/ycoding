@@ -102,6 +102,8 @@ const defaultSessions = [
   { id: sessionID, title: "Stream remote output safely", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(42), updated: ago(1) }, running: true },
   { id: "ses_archived", title: "Archived: release notes", time: { created: ago(300), updated: ago(280), archived: ago(280) } },
   { id: "ses_child", title: "Child: fix flaky suite", parentID: sessionID, time: { created: ago(30), updated: ago(4) } },
+  ...(accountParams.get("team") === "two" ? [{ id: "ses_second", title: "Child: inspect source", parentID: sessionID, time: { created: ago(20), updated: ago(2) } }] : []),
+  ...(accountParams.get("team") === "two" ? [{ id: "ses_btw", title: "Side question", parentID: sessionID, agent: "btw", time: { created: ago(19), updated: ago(2) } }] : []),
 ]
 const sessions = remoteScenarioData?.sessions ?? defaultSessions
 const inventoryCount = Math.min(15_000, Math.max(0, Number(accountParams.get("inventoryCount") ?? 0) || 0))
@@ -464,10 +466,14 @@ type Fixture = {
   readonly drop: () => void
   readonly stream: () => void
   readonly team: () => void
+  readonly teamCancelled: () => void
+  readonly teamPrompt: (id: string) => Promise<string>
+  readonly createdSideChatID: () => string | undefined
   readonly status: (running: readonly string[], attention: readonly string[]) => void
   readonly formRequests: () => readonly { readonly operation: string; readonly input: Readonly<Record<string, unknown>> | undefined }[]
   readonly mutationRequests: () => readonly { readonly operation: string; readonly input: Readonly<Record<string, unknown>> | undefined }[]
   readonly inventoryRequests: () => number
+  readonly inventoryInputs: () => readonly Readonly<Record<string, unknown>>[]
   readonly operationReport: () => { readonly transports: number; readonly operations: Readonly<Record<string, number>> }
 }
 
@@ -477,10 +483,13 @@ function createFixtureStore(): Fixture {
   let streamed = false
   let nextSeq = 43
   let teamReported = false
+  let teamCancelState: "running" | "cancelling" | "cancelled" = "running"
+  let teamShellKilled = false
+  let createdSideChatID: string | undefined
   let liveReads = 0
   const formRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
   const mutationRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
-  let inventoryRequests = 0
+  const inventoryInputs: Readonly<Record<string, unknown>>[] = []
   let transportsCreated = 0
   const operationCounts = new Map<string, number>()
   const workspaces = [
@@ -500,8 +509,8 @@ function createFixtureStore(): Fixture {
     const record = value as { readonly projectID?: string; readonly location?: { readonly directory?: string } }
     const projectID = record.projectID ?? "prj_remote"
     const directory = record.location?.directory ?? "/workspace/ycoding"
-    return { id: projectID === "prj_remote" && directory === "/workspace/ycoding"
-      ? "workspace_fixture" : `wsp_${projectID}_${directory.replaceAll("/", "_")}`,
+    return { id: workspaces.find((workspace) => workspace.projectID === projectID && workspace.directory === directory)?.id
+      ?? `wsp_${projectID}_${directory.replaceAll("/", "_")}`,
       projectID, directory, name: directory.split("/").at(-1) ?? projectID }
   }
   /** Requests this synthetic agent has already answered; a later list read omits them. */
@@ -554,9 +563,12 @@ function createFixtureStore(): Fixture {
   ): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
     operationCounts.set(operation, (operationCounts.get(operation) ?? 0) + 1)
     if (connectionMode === "offline") return { status: "failed", error: { code: "agent_unavailable", message: "No local agent is connected" } }
+    if (accountParams.get("teamControls") === "unsupported" && ["session.team.economics", "session.team.shell.list", "session.team.shell.kill", "session.side-chat.list", "session.side-chat.create", "session.subagent.cancel", "session.subagent.answer"].includes(operation))
+      return { status: "failed", error: { code: "unknown_operation", message: "Update YCoding on this machine" } }
     if ([
       "session.prompt", "session.autonomy.set", "session.guardrail.reply", "session.create",
       "session.command", "session.skill", "session.switchModel", "session.switchAgent",
+      "session.subagent.cancel", "session.subagent.answer", "session.team.shell.kill", "session.side-chat.create",
     ].includes(operation)) {
       mutationRequests.push({ operation, input })
     }
@@ -610,7 +622,7 @@ function createFixtureStore(): Fixture {
       return info ? { status: "ok", value: { data: info } } : { status: "failed", error: { code: "session_not_allowed", message: "Session not found" } }
     }
     if (operation === "session.list") {
-      inventoryRequests += 1
+      inventoryInputs.push(input ?? {})
       if (inventoryCount > 0) {
         const offset = Number(input?.cursor ?? 0)
         const limit = Math.min(50, Number(input?.limit ?? 50))
@@ -638,11 +650,41 @@ function createFixtureStore(): Fixture {
       if (accountParams.get("team") === "unsupported") return { status: "failed", error: { code: "unknown_operation", message: "Unknown operation" } }
       const tasks = targetSessionID === sessionID && accountParams.get("team") !== "none" ? [{
         sessionID: "ses_child", parentID: sessionID, description: "Fix flaky suite", agent: "general", model, background: true,
-        state: teamReported ? "completed" : "running", revision: teamReported ? 2 : 1,
+        state: teamReported ? "completed" : teamCancelState, revision: teamReported ? 2 : teamCancelState === "running" ? 1 : 2,
         time: { created: ago(30), updated: ago(teamReported ? 0 : 4) },
-      }] : []
+      }, ...(accountParams.get("team") === "two" ? [{ sessionID: "ses_second", parentID: sessionID, description: "Inspect source", agent: "researcher", model, background: true,
+        state: "running", revision: 1, time: { created: ago(20), updated: ago(2) } }] : [])] : []
       return { status: "ok", value: { data: tasks, summary: { total: tasks.length }, cursor: {} } }
     }
+    if (operation === "session.team.economics") return { status: "ok", value: { data: Array.isArray(input?.sessionIDs) ? input.sessionIDs.map((id) => ({ sessionID: id, cost: 0.25, tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 3, write: 0 } }, cacheHitRatio: 0.75, contextTotal: 800, contextLimit: 2_000, cacheRead: 3, cacheWrite: 0 })) : [] } }
+    if (operation === "session.subagent.cancel") {
+      if (targetSessionID !== sessionID || input?.childID !== "ses_child") return { status: "failed", error: { code: "forbidden", message: "Not a managed child" } }
+      teamCancelState = "cancelling"
+      return { status: "ok", value: { data: { sessionID: "ses_child", parentID: sessionID, description: "Fix flaky suite", agent: "general", model, background: true, state: "cancelling", revision: 2, time: { created: ago(30), updated: ago(1) } } } }
+    }
+    if (operation === "session.team.shell.list") return { status: "ok", value: { data: [{ id: "sh_team", ownerID: "ses_child", command: "bun test", status: teamShellKilled ? "killed" : "running", startedAt: ago(10) }] } }
+    if (operation === "session.team.shell.kill") {
+      if (targetSessionID !== sessionID || input?.shellID !== "sh_team") return { status: "failed", error: { code: "forbidden", message: "Shell is outside this family" } }
+      teamShellKilled = true
+      return { status: "ok", value: null }
+    }
+    if (operation === "session.side-chat.list") return { status: "ok", value: { data: [{ id: "ses_btw", title: "Side question", updatedAt: ago(2) },
+      ...(createdSideChatID ? [{ id: createdSideChatID, title: "New side chat", updatedAt: Date.now() }] : [])], cursor: {} } }
+    if (operation === "session.side-chat.create") {
+      if (targetSessionID !== sessionID || typeof input?.id !== "string") return { status: "failed", error: { code: "forbidden", message: "Side chat root is unavailable" } }
+      createdSideChatID = input.id
+      const created = { id: input.id, parentID: sessionID, agent: "btw", title: "New side chat", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, time: { created: Date.now(), updated: Date.now() } }
+      createdSessions.set(created.id, created)
+      handlers?.onSessions?.()
+      return { status: "ok", value: { data: created } }
+    }
+    if (operation === "session.family.activity" && accountParams.get("familyActivity") === "unsupported") return { status: "failed", error: { code: "unknown_operation", message: "Update YCoding" } }
+    if (operation === "session.family.activity") return { status: "ok", value: { data: [
+      { sessionID, executing: accountParams.get("team") !== "two", ...(accountParams.get("team") === "two" ? {} : { activity: { kind: "tool", room: "developer", text: "Editing store.ts" } }) },
+      ...(Array.isArray(input?.sessionIDs) ? input.sessionIDs.filter((id): id is string => typeof id === "string") : []).map((id) => ({ sessionID: id, executing: true, activity: id === "ses_second"
+        ? { kind: "tool", room: "research", text: "Reading projection.ts" }
+        : { kind: "tool", room: "qa", text: "Running bun test" } })),
+    ] } }
     if (operation === "session.snapshot") {
       return {
         status: "ok",
@@ -667,11 +709,11 @@ function createFixtureStore(): Fixture {
         },
       }
     }
-    if (operation === "session.permission.list") return { status: "ok", value: { data: targetSessionID === sessionID ? unreplied(permissions) : [] } }
-    if (operation === "session.guardrail.request.list") return { status: "ok", value: { data: targetSessionID === sessionID ? unreplied(guardrails) : [] } }
+    if (operation === "session.permission.list") return { status: "ok", value: { data: targetSessionID === sessionID && accountParams.get("team") !== "two" ? unreplied(permissions) : [] } }
+    if (operation === "session.guardrail.request.list") return { status: "ok", value: { data: targetSessionID === sessionID && accountParams.get("team") !== "two" ? unreplied(guardrails) : [] } }
     if (operation === "session.form.list") return {
       status: "ok",
-      value: targetSessionID !== sessionID ? [] : remoteScenarioData === undefined
+      value: targetSessionID !== sessionID || accountParams.get("team") === "two" ? [] : remoteScenarioData === undefined
         ? formMode === "constraints" ? unreplied([constraintsForm]) : unreplied(formMode === "all" ? [form, allForm] : [form])
         : unreplied(remoteScenarioData.forms),
     }
@@ -696,6 +738,7 @@ function createFixtureStore(): Fixture {
       if (formID !== undefined && formDelayMs > 0) return new Promise((resolve) => setTimeout(() => resolve({ status: "ok", value: null }), formDelayMs))
       return { status: "ok", value: null }
     }
+    if (operation === "session.prompt" && targetSessionID === "ses_child") return { status: "failed", error: { code: "subagent_read_only", message: "Managed subagents accept input only from their parent Session" } }
     if (operation === "session.prompt") return promptOutcome === "unknown"
       ? { status: "unknown", error: { code: "outcome_unknown", message: "Synthetic unknown prompt outcome" } }
       : { status: "ok", value: { data: { ...input, admittedSeq: 43 } } }
@@ -804,7 +847,15 @@ function createFixtureStore(): Fixture {
   const status = (running: readonly string[], attention: readonly string[]) => handlers?.onSessionStatus?.({ running, attention })
 
   return {
-    store, drop, stream, team, status, formRequests: () => formRequests, mutationRequests: () => mutationRequests, inventoryRequests: () => inventoryRequests,
+    store, drop, stream, team, teamCancelled: () => {
+      teamCancelState = "cancelled"
+      handlers?.onEvent?.(sessionID, { id: "evt_team_cancelled", type: "session.synthetic", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 },
+        data: { sessionID, messageID: "msg_team_cancelled", text: "Subagent cancelled", metadata: { source: "subagent_notification", childID: "ses_child", type: "cancelled", revision: 3 } } })
+    }, teamPrompt: async (id) => {
+      const result = await outcome("session.prompt", { id: "msg_team_probe", text: "Follow up", delivery: "steer" }, id)
+      return result.status === "failed" || result.status === "unknown" ? result.error.code : result.status
+    }, createdSideChatID: () => createdSideChatID,
+    status, formRequests: () => formRequests, mutationRequests: () => mutationRequests, inventoryRequests: () => inventoryInputs.length, inventoryInputs: () => inventoryInputs,
     operationReport: () => ({ transports: transportsCreated, operations: Object.fromEntries(operationCounts) }),
   }
 }
@@ -812,7 +863,9 @@ function createFixtureStore(): Fixture {
 const fixture = createFixtureStore()
 Object.assign(window, { remoteInventoryReport: () => ({ requests: fixture.inventoryRequests(), rows: fixture.store.state().sessions.length,
   groups: fixture.store.state().sessionGroups.length, next: fixture.store.state().sessionHasNext,
-  first: fixture.store.state().sessions[0]?.id, last: fixture.store.state().sessions.at(-1)?.id }) })
+  first: fixture.store.state().sessions[0]?.id, last: fixture.store.state().sessions.at(-1)?.id, inputs: fixture.inventoryInputs(),
+  firstListed: fixture.store.state().sessions.find((session) => session.id.startsWith("ses_inventory_"))?.id,
+  workspaceRequests: fixture.inventoryInputs().filter((input) => input.workspace !== undefined).length }) })
 
 /** Picks the device and session a user would pick, so the fixture opens on a live workspace. */
 async function openFixtureWorkspace(store: RemoteStore) {
@@ -821,7 +874,7 @@ async function openFixtureWorkspace(store: RemoteStore) {
   for (let attempt = 0; attempt < 40 && store.state().sessions.length === 0; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
-  if (store.state().activeSessionID === undefined) await store.selectSession(sessionID)
+  if (!accountParams.has("noSelection") && store.state().activeSessionID === undefined) await store.selectSession(sessionID)
 }
 
 /** Selects the fixture device and lets the real store settle its rejected list read. */
@@ -946,6 +999,9 @@ function remoteMutationReport() {
 ;(window as typeof window & { remoteFormReport?: typeof remoteFormReport }).remoteFormReport = remoteFormReport
 ;(window as typeof window & { remoteMutationReport?: typeof remoteMutationReport }).remoteMutationReport = remoteMutationReport
 ;(window as typeof window & { remoteOperationReport?: typeof fixture.operationReport }).remoteOperationReport = fixture.operationReport
+;(window as typeof window & { remoteTeamControl?: { cancelled: typeof fixture.teamCancelled; prompt: typeof fixture.teamPrompt; createdID: typeof fixture.createdSideChatID } }).remoteTeamControl = {
+  cancelled: fixture.teamCancelled, prompt: fixture.teamPrompt, createdID: fixture.createdSideChatID,
+}
 ;(window as typeof window & { remoteStatus?: typeof fixture.status }).remoteStatus = fixture.status
 
 const fixtureView = remoteScenarioData?.view ?? new URLSearchParams(window.location.search).get("view") ?? "chat"
@@ -1000,6 +1056,16 @@ function FixturePage() {
 
 const root = document.getElementById("app")
 if (!root) throw new Error("Missing fixture root")
+if (accountParams.has("inspectOffice")) {
+  const { default: Phaser } = await import("phaser")
+  const original: unknown = Reflect.get(Phaser.Game.prototype, "start")
+  if (typeof original !== "function") throw new Error("Office game hook unavailable")
+  Reflect.set(Phaser.Game.prototype, "start", function (this: Phaser.Game) {
+    original.call(this)
+    const mounts = Reflect.get(window, "__officeMounts")
+    Object.assign(window, { __officeGame: this, __officeMounts: (typeof mounts === "number" ? mounts : 0) + 1 })
+  })
+}
 render(
   () => (
     <RouterProvider>

@@ -10,7 +10,6 @@ import type {
   OfficeStatus,
   SelectedSession,
   SessionSummary,
-  TaskState,
   TeamMember,
 } from "./types"
 
@@ -32,7 +31,7 @@ export function shortText(text: string, limit: number): string {
 
 export function projectOffice(input: OfficeInput, preferences: OfficePreferences): OfficeSnapshot {
   if (!input.ownerID || !input.deviceID || !input.activeSessionID) {
-    return { scope: "", connection: "unavailable", actors: [], totalSessions: 0, overflow: 0, team: { status: "none", total: 0, shown: 0, more: false }, cues: [] }
+    return { scope: "", connection: "unavailable", actors: [], totalSessions: 0, overflow: 0, activityStatus: "loading", team: { status: "none", total: 0, shown: 0, more: false }, cues: [] }
   }
   const deviceID = input.deviceID
   const team = input.team
@@ -45,7 +44,7 @@ export function projectOffice(input: OfficeInput, preferences: OfficePreferences
     ?? { id: rootID, title: rootID === input.activeSessionID ? "Current session" : "Parent session", agent: input.selected?.id === rootID ? input.selected.agent : undefined, archived: false }
   const actorID = (sessionID: string) => JSON.stringify([deviceID, sessionID])
   const selected = [
-    sessionActor(input, preferences, session, actorID(rootID), members.some((member) => member.state === "starting" || member.state === "running")),
+    sessionActor(input, preferences, session, actorID(rootID)),
     ...members.map((member) => taskActor(input, preferences, member, actorID(member.sessionID))),
   ]
     .sort((a, b) => Number(b.selected) - Number(a.selected))
@@ -70,6 +69,7 @@ export function projectOffice(input: OfficeInput, preferences: OfficePreferences
     actors,
     totalSessions: total,
     overflow: total - actors.length,
+    activityStatus: input.familyActivity?.status ?? "loading",
     team: {
       status: team?.status ?? "none",
       rootActorID: root?.id,
@@ -81,13 +81,13 @@ export function projectOffice(input: OfficeInput, preferences: OfficePreferences
   }
 }
 
-function sessionActor(input: OfficeInput, preferences: OfficePreferences, session: SessionSummary, id: string, coordinating: boolean): OfficeActor {
+function sessionActor(input: OfficeInput, preferences: OfficePreferences, session: SessionSummary, id: string): OfficeActor {
   const detail = liveDetail(input, session.id)
-  const status = statusFor(input.connection, detail, session.running)
-  const source = sourceFor(input, detail)
-  const activity: OfficeActivity | undefined = status === "idle" ? undefined : detail?.thinking || status === "attention" || status === "compacting"
-    ? "hold" : detail?.activity ?? (coordinating ? "coordinate" : "implement")
-  const label = source === "projection" && (status === "tool" || status === "working") ? activityLabel(activity) : statusLabel(status, source)
+  const member = familyMember(input, session.id)
+  const status = statusFor(input.connection, member, detail)
+  const source = sourceFor(input, member)
+  const activity = roomActivity(member, status)
+  const label = memberLabel(member, status)
   return {
     id,
     sessionID: session.id,
@@ -99,7 +99,7 @@ function sessionActor(input: OfficeInput, preferences: OfficePreferences, sessio
     status,
     statusText: label,
     source,
-    bubble: bubbleFor(input, preferences, detail, status, label),
+    bubble: bubbleFor(preferences, status, label),
     unknownOutcome: detail?.unknownOutcome ?? false,
     homeRoom: "developer",
     activity,
@@ -108,13 +108,12 @@ function sessionActor(input: OfficeInput, preferences: OfficePreferences, sessio
 
 function taskActor(input: OfficeInput, preferences: OfficePreferences, member: TeamMember, id: string): OfficeActor {
   const detail = liveDetail(input, member.sessionID)
-  const status = detail || input.connection !== "ready" ? statusFor(input.connection, detail, undefined) : taskStatus[member.state]
-  const source = sourceFor(input, detail)
+  const current = familyMember(input, member.sessionID)
+  const status = ["completed", "cancelled", "lost"].includes(member.state) ? "idle" : statusFor(input.connection, current, detail, member.state === "waiting", member.state === "failed")
+  const source = sourceFor(input, current)
   const homeRoom = responsibilityRoom(detail?.agent ?? member.agent, member.description)
-  const activity: OfficeActivity | undefined = status === "idle" ? undefined : detail?.thinking || status === "attention" || status === "compacting"
-    ? "hold" : detail?.activity ?? (homeRoom === "research" ? "research" : homeRoom === "qa" ? "verify" : "implement")
-  const statusText = detail || input.connection !== "ready" ? source === "projection" && (status === "tool" || status === "working")
-    ? activityLabel(activity) : statusLabel(status, source) : taskStateLabel[member.state]
+  const activity = roomActivity(current, status)
+  const statusText = memberLabel(current, status)
   return {
     id,
     sessionID: member.sessionID,
@@ -126,7 +125,7 @@ function taskActor(input: OfficeInput, preferences: OfficePreferences, member: T
     status,
     statusText,
     source,
-    bubble: bubbleFor(input, preferences, detail, status, statusText),
+    bubble: bubbleFor(preferences, status, statusText),
     unknownOutcome: detail?.unknownOutcome ?? false,
     homeRoom,
     activity,
@@ -149,13 +148,6 @@ function responsibility(text: string): OfficeHomeRoom | undefined {
   return research < 0 || (qa >= 0 && qa < research) ? "qa" : "research"
 }
 
-function activityLabel(activity: OfficeActivity | undefined): string {
-  const labels: Record<Exclude<OfficeActivity, "hold">, string> = {
-    research: "Researching", implement: "Implementing", coordinate: "Coordinating", verify: "Testing",
-  }
-  return activity === undefined || activity === "hold" ? "Working" : labels[activity]
-}
-
 function corroboratedCues(input: OfficeInput, actors: readonly OfficeActor[], root: OfficeActor): readonly OfficeCue[] {
   const tasks = new Map(actors.filter((actor) => actor.kind === "task").map((actor) => [actor.sessionID, actor]))
   return (input.team?.cues ?? []).flatMap((cue): readonly OfficeCue[] => {
@@ -171,61 +163,46 @@ function liveDetail(input: OfficeInput, sessionID: string): SelectedSession | un
   return input.selected?.id === sessionID && input.activeSessionID === sessionID ? input.selected : undefined
 }
 
-function sourceFor(input: OfficeInput, detail: SelectedSession | undefined): OfficeActor["source"] {
+function familyMember(input: OfficeInput, sessionID: string) {
+  return input.familyActivity?.status === "ready" ? input.familyActivity.members.find((member) => member.sessionID === sessionID) : undefined
+}
+
+function sourceFor(input: OfficeInput, member: ReturnType<typeof familyMember>): OfficeActor["source"] {
   if (input.connection !== "ready") return "unavailable"
-  return detail ? "projection" : "summary"
+  return member ? "projection" : "summary"
 }
 
-function bubbleFor(input: OfficeInput, preferences: OfficePreferences, detail: SelectedSession | undefined, status: OfficeStatus, label: string) {
-  if (preferences.bubbles === "off") return undefined
-  if (preferences.bubbles === "excerpt" && detail?.assistantExcerpt && input.connection === "ready" && status === "idle") return shortText(detail.assistantExcerpt, 90)
-  return label
+function bubbleFor(preferences: OfficePreferences, status: OfficeStatus, label: string) {
+  return preferences.bubbles !== "off" && status !== "idle" && status !== "unknown" && label ? label : undefined
 }
 
-function statusFor(connection: OfficeInput["connection"], selected: SelectedSession | undefined, running: boolean | undefined): OfficeStatus {
+function statusFor(connection: OfficeInput["connection"], member: ReturnType<typeof familyMember>, detail?: SelectedSession, waiting = false, failed = false): OfficeStatus {
   if (connection === "offline") return "offline"
   if (connection === "reconnecting") return "reconnecting"
   if (connection !== "ready") return "unknown"
-  if (!selected) return running === undefined ? "unknown" : running ? "working" : "idle"
-  if (selected.requestCount > 0) return "attention"
-  if (selected.status === "failed") return "failed"
-  if (selected.status === "interrupted") return "interrupted"
-  if (selected.status === "idle" && running !== true) return "idle"
-  if (selected.compacting) return "compacting"
-  if (selected.activeTool) return "tool"
-  if (selected.thinking) return "thinking"
-  return "working"
+  if ((detail?.requestCount ?? 0) > 0 || waiting) return "attention"
+  if (failed || detail?.status === "failed") return "failed"
+  if (detail?.status === "interrupted") return "interrupted"
+  if (!member) return "unknown"
+  if (!member.executing) return "idle"
+  if (detail?.compacting) return "compacting"
+  return member.activity?.kind === "thinking" ? "thinking" : member.activity?.kind === "tool" ? "tool" : "working"
 }
 
-const taskStatus: Record<TaskState, OfficeStatus> = {
-  starting: "working",
-  running: "working",
-  waiting: "attention",
-  cancelling: "working",
-  cancelled: "idle",
-  completed: "idle",
-  failed: "failed",
-  lost: "idle",
+function roomActivity(member: ReturnType<typeof familyMember>, status: OfficeStatus): OfficeActivity | undefined {
+  if (status === "idle" || status === "unknown") return undefined
+  if (status === "attention" || status === "compacting" || member?.activity?.kind === "thinking") return "hold"
+  const rooms = { research: "research", qa: "verify", meeting: "coordinate", developer: "implement", hold: "hold" } as const
+  return member?.activity ? rooms[member.activity.room] : undefined
 }
 
-const taskStateLabel: Record<TaskState, string> = {
-  starting: "Starting",
-  running: "Running",
-  waiting: "Waiting for a reply",
-  cancelling: "Cancelling",
-  cancelled: "Cancelled",
-  completed: "Completed",
-  failed: "Failed",
-  lost: "Lost",
-}
-
-export function statusLabel(status: OfficeStatus, source: OfficeActor["source"]): string {
-  if (source === "summary" && status === "working") return "Last reported: running"
-  if (source === "summary" && status === "idle") return "Last reported: idle"
-  const labels: Record<OfficeStatus, string> = {
-    unknown: "Activity not reported", idle: "Idle", working: "Working", thinking: "Thinking",
-    tool: "Running a tool", attention: "Needs your reply", compacting: "Compacting context",
-    interrupted: "Interrupted", failed: "Session failed", offline: "Machine offline", reconnecting: "Reconnecting",
-  }
-  return labels[status]
+function memberLabel(member: ReturnType<typeof familyMember>, status: OfficeStatus): string {
+  if (status === "idle" || status === "unknown") return ""
+  if (status === "attention") return "Needs your decision"
+  if (status === "failed") return "Session failed"
+  if (status === "interrupted") return "Interrupted"
+  if (status === "compacting") return "Compacting context"
+  if (status === "offline") return "Machine offline"
+  if (status === "reconnecting") return "Reconnecting"
+  return member?.activity?.text ?? "Preparing next step"
 }

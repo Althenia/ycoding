@@ -14,6 +14,8 @@ const offline = new URLSearchParams(location.search).has("offline")
 const none = new URLSearchParams(location.search).has("none")
 const paged = new URLSearchParams(location.search).has("paged")
 const pageError = new URLSearchParams(location.search).has("page-error")
+const refreshCycle = new URLSearchParams(location.search).has("refresh-cycle")
+const largeValues = new URLSearchParams(location.search).has("large-values")
 const providers: UsageProvider[] = [
   { providerID: "openai", label: "Codex", profile: "Personal", status: "available", source: "provider_api", stability: "stable", updatedAt: Date.now(), windows: [
     { id: "session", label: "Session allowance", unit: "percent", used: 38, resetAt: Date.now() + 2 * 3600_000, periodSeconds: 5 * 3600 },
@@ -67,24 +69,40 @@ const entries = (input: UsageReportInput): UsageReportRow[] => input.group === "
 }))
 const requests: { operation: string; input?: UsageReportInput | { refresh: boolean } }[] = []
 let releasePage: (() => void) | undefined
+let releaseReload: (() => void) | undefined
+let pendingReload: Promise<void> | undefined
+let revision = 0
 const [state, setState] = createSignal({
-  connection: offline ? { kind: "connecting" } : { kind: "connected", deviceName: "Studio Mac" }, transport: offline ? { kind: "connecting" } : { kind: "open" },
+  connection: offline ? { kind: "connecting" } : { kind: "connected", deviceName: "Studio Mac" }, transport: offline ? { kind: "connecting" } : { kind: "open" }, activeDeviceID: "dev_fixture",
   usage: { providers: { status: "idle" }, summary: { status: "idle" }, reports: {} },
 } as RemoteStoreState)
 const listeners = new Set<() => void>()
 const update = (usage: RemoteStoreState["usage"]) => { setState({ ...state(), usage }); listeners.forEach((listener) => listener()) }
+const beginReload = () => { revision += 1; pendingReload = new Promise<void>((resolve) => { releaseReload = resolve }) }
+const refreshedProviders = () => providers.map((provider) => ({ ...provider, updatedAt: Date.now(), windows: provider.windows.map((window) => ({ ...window,
+  ...(window.used === undefined ? {} : { used: window.used + revision }),
+})) }))
 const store = {
   state, subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener) },
   load: async () => {}, dispose: () => {},
   loadUsage: async (options?: { refresh?: boolean }) => {
+    if (refreshCycle && options?.refresh && !pendingReload) beginReload()
     requests.push({ operation: "usage.providers", ...(options?.refresh ? { input: { refresh: true } } : {}) })
     requests.push({ operation: "usage.summary" })
-    update({ ...state().usage, providers: old ? { status: "unsupported" } : { status: "ready", data: none ? providers.slice(-4, -1) : providers }, summary: old ? { status: "unsupported" } : {
+    if (refreshCycle && pendingReload) {
+      update({ ...state().usage, providers: { ...state().usage.providers, status: "loading" }, summary: { ...state().usage.summary, status: "loading" } })
+      await pendingReload
+    }
+    update({ ...state().usage, providers: old ? { status: "unsupported" } : { status: "ready", data: none ? providers.slice(-4, -1) : refreshCycle ? refreshedProviders() : providers }, summary: old ? { status: "unsupported" } : {
       status: "ready", data: { logical: 980, physical: 1084, helpers: 0, continued: 0, fallback: 0, tokens, cost: 104.32 },
     } })
   },
   loadUsageReport: async (input: UsageReportInput) => {
     requests.push({ operation: "usage.report", input })
+    if (refreshCycle && pendingReload) {
+      update({ ...state().usage, reports: { ...state().usage.reports, [reportKey(input)]: { status: "loading" } } })
+      await pendingReload
+    }
     if (paged && input.group !== "day" && input.from !== monthStart && ((input.offset ?? 0) > 0 || input.group !== "model" || input.order === "asc")) {
       update({ ...state().usage, reports: { ...state().usage.reports, [reportKey(input)]: { status: "loading" } } })
       await new Promise<void>((resolve) => { releasePage = resolve })
@@ -96,12 +114,16 @@ const store = {
     }
     if (input.group === "model" && input.from === monthStart) {
       update({ ...state().usage, reports: { ...state().usage.reports, [reportKey(input)]: old ? { status: "unsupported" } : { status: "ready", data: {
-        group: "model", rows: monthlyRows, total: { logical: 4, physical: 4, helpers: 0, continued: 0, fallback: 0,
-          cost: 15, costProvenance: "current_catalog", tokens: { input: tokens.input * 4, output: tokens.output * 4, reasoning: tokens.reasoning * 4, cache: { read: tokens.cache.read * 4, write: tokens.cache.write * 4 } } }, rowCount: 4,
+        group: "model", rows: refreshCycle ? monthlyRows.map((row) => ({ ...row, cost: row.cost === undefined ? undefined : row.cost + revision })) : monthlyRows,
+        total: { logical: 4, physical: 4, helpers: 0, continued: 0, fallback: 0,
+          cost: 15 + (refreshCycle ? 3 * revision : 0), costProvenance: "current_catalog", tokens: { input: tokens.input * 4, output: tokens.output * 4, reasoning: tokens.reasoning * 4, cache: { read: tokens.cache.read * 4, write: tokens.cache.write * 4 } } }, rowCount: 4,
       } } } })
       return
     }
-    const all = entries(input)
+    const all = entries(input).map((row, index) => ({ ...row,
+      ...(refreshCycle && revision > 0 && input.group === "day" ? { cost: (row.cost ?? 0) + revision, costProvenance: "current_catalog" as const } : {}),
+      ...(largeValues && input.group === "day" && index === 29 ? { physical: 7_720, tokens: { input: 2_267_963_225, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } } : {}),
+    }))
     const sorted = input.group === "day" ? all : [...all].sort((a, b) => {
       const first = input.sort === "key" ? a.label : input.sort === "steps" ? a.physical : input.sort === "tokens" || input.sort === "input" ? a.tokens.input : input.sort === "output" ? a.tokens.output : input.sort === "reasoning" ? a.tokens.reasoning : a.cost ?? 0
       const second = input.sort === "key" ? b.label : input.sort === "steps" ? b.physical : input.sort === "tokens" || input.sort === "input" ? b.tokens.input : input.sort === "output" ? b.tokens.output : input.sort === "reasoning" ? b.tokens.reasoning : b.cost ?? 0
@@ -114,7 +136,29 @@ const store = {
     update({ ...state().usage, reports: { ...state().usage.reports, [reportKey(input)]: old ? { status: "unsupported" } : { status: "ready", data: result } } })
   },
 } as unknown as RemoteStore
-Object.assign(window, { usageRequests: () => requests, usageReleasePage: () => releasePage?.(), usageConnect: () => {
+Object.assign(window, { usageRequests: () => requests, usageReleasePage: () => releasePage?.(), usageReleaseReload: () => {
+  const release = releaseReload
+  pendingReload = undefined
+  releaseReload = undefined
+  release?.()
+}, usageReconnect: () => {
+  beginReload()
+  setState({ ...state(), connection: { kind: "connecting" }, transport: { kind: "reconnecting", attempt: 1, delayMs: 0 }, usage: { providers: { status: "idle" }, summary: { status: "idle" }, reports: {} } })
+  listeners.forEach((listener) => listener())
+  queueMicrotask(() => {
+    setState({ ...state(), connection: { kind: "connected", deviceName: "Studio Mac" }, transport: { kind: "open" } })
+    listeners.forEach((listener) => listener())
+  })
+}, usageSwitchDevice: () => {
+  setState({ ...state(), activeDeviceID: "dev_other", connection: { kind: "connecting" }, transport: { kind: "connecting", attempt: 1 }, usage: { providers: { status: "idle" }, summary: { status: "idle" }, reports: {} } })
+  listeners.forEach((listener) => listener())
+}, usageDisconnect: () => {
+  setState({ ...state(), activeDeviceID: undefined, connection: { kind: "no-device-selected" }, transport: { kind: "idle" }, usage: { providers: { status: "idle" }, summary: { status: "idle" }, reports: {} } })
+  listeners.forEach((listener) => listener())
+}, usageSignOut: () => {
+  setState({ ...state(), activeDeviceID: undefined, connection: { kind: "signed-out" }, transport: { kind: "idle" }, usage: { providers: { status: "idle" }, summary: { status: "idle" }, reports: {} } })
+  listeners.forEach((listener) => listener())
+}, usageConnect: () => {
   setState({ ...state(), connection: { kind: "connected", deviceName: "Studio Mac" }, transport: { kind: "open" } })
   listeners.forEach((listener) => listener())
 } })

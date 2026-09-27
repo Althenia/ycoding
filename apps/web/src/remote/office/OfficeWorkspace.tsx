@@ -66,6 +66,7 @@ function OfficeRoster(props: {
         <h3 class="office-roster__title">Agents <span>{actors().length}</span></h3>
         <button type="button" class="office-roster__toggle" aria-label={collapsed() ? "Show agent list" : "Hide agent list"} aria-expanded={!collapsed()} aria-controls="office-roster-list" onClick={() => setCollapsed(!collapsed())}>{collapsed() ? "Show agents" : "Hide agents"}</button>
       </div>
+      <Show when={props.snapshot.activityStatus === "unsupported"}><p class="office-roster__note" role="status">Update YCoding on this machine to show agent activity.</p></Show>
       <Show when={actors().length > 0} fallback={<p class="office-roster__empty">No agents in this Session yet.</p>}>
         <ul id="office-roster-list" class="office-roster__list">
           <For each={actorIDs()}>
@@ -107,7 +108,7 @@ function OfficeRosterRow(props: {
         <span class="office-roster__content">
           <span class="office-roster__name">{props.actor.name} <span aria-hidden="true">·</span> {props.actor.role}</span>
           <span class="office-roster__room">{officeLocationLabel(props.room)}</span>
-          <span class="office-roster__status">{props.actor.unknownOutcome ? "Outcome unknown" : props.actor.statusText}</span>
+          <Show when={props.actor.unknownOutcome || props.actor.statusText}><span class="office-roster__status">{props.actor.unknownOutcome ? "Outcome unknown" : props.actor.statusText}</span></Show>
         </span>
         <span class={`office-roster__indicator office-roster__indicator--${props.actor.status}`} aria-hidden="true" />
       </button>

@@ -97,6 +97,58 @@ describe("transcript rendering", () => {
     } finally { await page.close() }
   })
 
+  test("keeps loaded user and tool images mounted through streaming, reconciliation, older history, and reconnect", async () => {
+    const page = await browser!.openPage()
+    try {
+      for (const theme of ["light", "dark"] as const) for (const [width, height] of [[390, 844], [1440, 900]] as const) {
+        await page.setViewport(width, height)
+        await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?images=1&theme=${theme}`)
+        for (let i = 0; i < 40 && !await page.evaluate<boolean>(`document.querySelector('[data-message-id="msg_tool_image"] .transcript-tool__toggle') !== null`); i++) await Bun.sleep(50)
+        await page.evaluate(`document.querySelector('[data-message-id="msg_tool_image"] .transcript-tool__toggle').click()`)
+        for (let i = 0; i < 60 && !await page.evaluate<boolean>(`[...document.querySelectorAll('[data-message-id="msg_image"] .transcript-image img, [data-message-id="msg_tool_image"] .transcript-image img')].length === 2 && [...document.querySelectorAll('[data-message-id="msg_image"] .transcript-image img, [data-message-id="msg_tool_image"] .transcript-image img')].every((img) => img.complete && img.naturalWidth > 0)`); i++) await Bun.sleep(50)
+        expect(await page.evaluate<number>(`window.imageFetchCount()`)).toBe(1)
+        await page.evaluate(`(() => {
+          const user = document.querySelector('[data-message-id="msg_image"] .transcript-image img');
+          const tool = document.querySelector('[data-message-id="msg_tool_image"] .transcript-image img');
+          const userRow = document.querySelector('[data-message-id="msg_image"]');
+          const userHeight = userRow.getBoundingClientRect().height;
+          const probe = { user, tool, userRow, userContainer: user.closest('.transcript-attachment'), toolRow: tool.closest('[data-message-id]'), userSrc: user.src, toolSrc: tool.src, removed: 0, srcChanges: 0, loading: 0, heights: [userHeight] };
+          const resize = new ResizeObserver(() => probe.heights.push(userRow.getBoundingClientRect().height));
+          resize.observe(userRow);
+          const observer = new MutationObserver((records) => {
+            for (const record of records) {
+              if (record.type === 'attributes' && record.attributeName === 'src') probe.srcChanges++;
+              for (const node of record.removedNodes) if (node === user || node === tool || node instanceof Element && (node.contains(user) || node.contains(tool))) probe.removed++;
+              for (const node of record.addedNodes) if (node instanceof Element && (node.matches('.transcript-image__loading') || node.querySelector('.transcript-image__loading'))) probe.loading++;
+            }
+          });
+          observer.observe(document.querySelector('.transcript'), { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
+          window.imageProbe = () => ({ sameUser: probe.user === document.querySelector('[data-message-id="msg_image"] .transcript-image img'), sameTool: probe.tool === document.querySelector('[data-message-id="msg_tool_image"] .transcript-image img'), sameUserRow: probe.userRow === document.querySelector('[data-message-id="msg_image"]'), sameUserContainer: probe.userContainer === document.querySelector('[data-message-id="msg_image"] .transcript-attachment'), sameToolRow: probe.toolRow === document.querySelector('[data-message-id="msg_tool_image"]'), sameSources: probe.userSrc === document.querySelector('[data-message-id="msg_image"] .transcript-image img')?.src && probe.toolSrc === document.querySelector('[data-message-id="msg_tool_image"] .transcript-image img')?.src, removed: probe.removed, srcChanges: probe.srcChanges, loading: probe.loading, heightChanges: probe.heights.filter((value) => Math.abs(value - userHeight) > 1).length, fetches: window.imageFetchCount() });
+        })()`)
+        for (let i = 0; i < 10; i++) await page.evaluate(`window.imageUpdate('stream')`)
+        for (const operation of ["live", "reconcile", "prepend", "reconnect"]) await page.evaluate(`window.imageUpdate('${operation}')`)
+        await Bun.sleep(120)
+        expect(await page.evaluate<{ readonly sameUser: boolean; readonly sameTool: boolean; readonly sameUserRow: boolean; readonly sameUserContainer: boolean; readonly sameToolRow: boolean; readonly sameSources: boolean; readonly removed: number; readonly srcChanges: number; readonly loading: number; readonly heightChanges: number; readonly fetches: number }>(`window.imageProbe()`)).toEqual({ sameUser: true, sameTool: true, sameUserRow: true, sameUserContainer: true, sameToolRow: true, sameSources: true, removed: 0, srcChanges: 0, loading: 0, heightChanges: 0, fetches: 1 })
+      }
+    } finally { await page.close() }
+  }, 30_000)
+
+  test("recovers a changed tool image source after an invalid image without resetting unchanged images", async () => {
+    const page = await browser!.openPage()
+    try {
+      await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?images=1`)
+      for (let i = 0; i < 40 && !await page.evaluate<boolean>(`document.querySelector('[data-message-id="msg_tool_image"] .transcript-tool__toggle') !== null`); i++) await Bun.sleep(50)
+      await page.evaluate(`document.querySelector('[data-message-id="msg_tool_image"] .transcript-tool__toggle').click()`)
+      for (let i = 0; i < 40 && !await page.evaluate<boolean>(`document.querySelector('[data-message-id="msg_tool_image"] .transcript-image img')?.naturalWidth > 0`); i++) await Bun.sleep(50)
+      await page.evaluate(`window.imageUpdate('corrupt-tool')`)
+      for (let i = 0; i < 40 && !await page.evaluate<boolean>(`document.querySelector('[data-message-id="msg_tool_image"] .transcript-image__unavailable') !== null`); i++) await Bun.sleep(50)
+      expect(await page.evaluate<boolean>(`document.querySelector('[data-message-id="msg_tool_image"] .transcript-image__unavailable') !== null`)).toBe(true)
+      await page.evaluate(`window.imageUpdate('repair-tool')`)
+      for (let i = 0; i < 40 && !await page.evaluate<boolean>(`document.querySelector('[data-message-id="msg_tool_image"] .transcript-image img')?.naturalWidth > 0`); i++) await Bun.sleep(50)
+      expect(await page.evaluate<boolean>(`document.querySelector('[data-message-id="msg_tool_image"] .transcript-image img')?.naturalWidth > 0`)).toBe(true)
+    } finally { await page.close() }
+  })
+
   test("offers retry when a managed user image cannot load", async () => {
     const page = await browser!.openPage()
     try {
@@ -172,18 +224,19 @@ describe("transcript rendering", () => {
     } finally { await page.close() }
   }, 45_000)
 
-  test("places active Sessions at full width directly below the Sessions toolbar", async () => {
+  test("places active Sessions at full page width above the workspace heading", async () => {
     const page = await browser!.openPage()
     try {
       for (const width of [390, 1440]) {
         await page.setViewport(width, 900)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&theme=light`)
         for (let i = 0; i < 80 && !await page.evaluate(`document.querySelector('.sessions-page__toolbar')`); i++) await Bun.sleep(50)
-        const result = await page.evaluate<{ readonly cards: number; readonly left: number; readonly right: number; readonly columnLeft: number; readonly columnRight: number; readonly top: number; readonly toolbarBottom: number; readonly filterTop: number }>(`(() => { const section = document.querySelector('.running-sessions'); const card = section?.querySelector('.running-sessions__item'); const content = document.querySelector('.sessions-page__content').getBoundingClientRect(); return { cards: section?.querySelectorAll('.running-sessions__item').length ?? 0, left: section?.getBoundingClientRect().left ?? 0, right: section?.getBoundingClientRect().right ?? 0, columnLeft: content.left, columnRight: content.right, top: card?.getBoundingClientRect().top ?? 0, toolbarBottom: document.querySelector('.sessions-page__content .sessions-page__toolbar').getBoundingClientRect().bottom, filterTop: document.querySelector('.filter-bar').getBoundingClientRect().top } })()`)
+        const result = await page.evaluate<{ readonly cards: number; readonly left: number; readonly right: number; readonly pageLeft: number; readonly pageRight: number; readonly top: number; readonly headingTop: number; readonly toolbarTop: number; readonly filterTop: number }>(`(() => { const section = document.querySelector('.running-sessions'); const card = section?.querySelector('.running-sessions__item'); const page = document.querySelector('.sessions-page').getBoundingClientRect(); return { cards: section?.querySelectorAll('.running-sessions__item').length ?? 0, left: section?.getBoundingClientRect().left ?? 0, right: section?.getBoundingClientRect().right ?? 0, pageLeft: page.left, pageRight: page.right, top: card?.getBoundingClientRect().top ?? 0, headingTop: document.querySelector('.sessions-page__title').getBoundingClientRect().top, toolbarTop: document.querySelector('.sessions-page__content .sessions-page__toolbar').getBoundingClientRect().top, filterTop: document.querySelector('.filter-bar').getBoundingClientRect().top } })()`)
         expect(result.cards).toBeGreaterThan(0)
-        expect(Math.abs(result.left - result.columnLeft)).toBeLessThanOrEqual(1)
-        expect(Math.abs(result.right - result.columnRight)).toBeLessThanOrEqual(1)
-        expect(result.top).toBeGreaterThanOrEqual(result.toolbarBottom)
+        expect(Math.abs(result.left - result.pageLeft)).toBeLessThanOrEqual(1)
+        expect(Math.abs(result.right - result.pageRight)).toBeLessThanOrEqual(1)
+        expect(result.top).toBeLessThan(result.headingTop)
+        expect(result.top).toBeLessThan(result.toolbarTop)
         expect(result.top).toBeLessThan(result.filterTop)
       }
     } finally { await page.close() }

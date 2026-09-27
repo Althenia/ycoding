@@ -1,0 +1,29 @@
+.team-view { display: grid; gap: var(--yc-space-3); min-inline-size: 0; max-inline-size: 100%; color: var(--yc-text); }
+.team-view__header, .team-view__header > div, .team-view__row, .team-view__actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--yc-space-2); }
+.team-view__header { justify-content: space-between; }
+.team-view__header h2 { margin: 0; font-size: var(--yc-size-xl); }
+.team-view__header span, .team-view__state, .team-view__meta { color: var(--yc-text-muted); font-size: var(--yc-size-xs); }
+.team-view__tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--yc-space-1); border-block-end: var(--yc-border-width) solid var(--yc-border); }
+.team-view__tabs button { min-inline-size: 0; border: 0; border-block-end: 2px solid transparent; background: transparent; color: var(--yc-text-muted); }
+.team-view__tabs button[aria-selected="true"] { border-color: var(--yc-green-strong); color: var(--yc-text); font-weight: var(--yc-weight-semibold); }
+.team-view button { min-block-size: 44px; cursor: pointer; }
+.team-view button:focus-visible, .team-view__confirmation button:focus-visible { outline: 2px solid var(--yc-focus); outline-offset: 2px; }
+.team-view button:disabled { cursor: not-allowed; opacity: 0.55; }
+.team-view__list { display: grid; gap: var(--yc-space-2); max-block-size: min(55dvh, 36rem); overflow-y: auto; margin: 0; padding: 0; list-style: none; }
+.team-view__section h3 { margin: var(--yc-space-2) 0 0; color: var(--yc-text-muted); font-size: var(--yc-size-2xs); letter-spacing: var(--yc-tracking-wide); }
+.team-view__owner h3 { margin: var(--yc-space-2) 0 0; font-size: var(--yc-size-sm); }
+.team-view__task, .team-view__shell, .team-view__side-chat { display: grid; gap: var(--yc-space-2); min-inline-size: 0; padding: var(--yc-space-3); border: var(--yc-border-width) solid var(--yc-border); border-radius: var(--yc-radius-md); background: var(--yc-surface-raised); }
+.team-view__row { min-inline-size: 0; }
+.team-view__row strong, .team-view__shell strong { min-inline-size: 0; overflow-wrap: anywhere; }
+.team-view__state { min-inline-size: 5.5rem; }
+.team-view__meta { margin: 0; overflow-wrap: anywhere; }
+.team-view__actions button, .team-view__more, .team-view__side-chat button, .team-view__output button, .team-view__confirmation button, .team-view__header button, .team-view [data-action="new-side-chat"], .team-view [data-action="older-side-chats"] { padding-inline: var(--yc-space-3); border: var(--yc-border-width) solid var(--yc-border-strong); border-radius: var(--yc-radius-md); background: var(--yc-surface); color: var(--yc-text); }
+.team-view__error { margin: 0; color: var(--yc-danger); }
+.team-view__output { display: grid; gap: var(--yc-space-2); min-inline-size: 0; }
+.team-view__output h3 { margin: 0; font-size: var(--yc-size-md); }
+.team-view__output pre { overflow: auto; max-block-size: 20rem; margin: 0; padding: var(--yc-space-3); background: var(--yc-terminal-bg); color: var(--yc-terminal-fg); }
+.team-view__confirmation { display: grid; gap: var(--yc-space-3); }
+.team-view__confirmation p { margin: 0; }
+.team-view__confirmation > div { display: flex; flex-wrap: wrap; gap: var(--yc-space-2); }
+.team-view__sheet .overlay__surface { max-block-size: 85dvh; }
+.team-view__sheet .overlay__body { min-block-size: 0; overflow: auto; }

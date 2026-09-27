@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { canReplyToRequest } from "../src/remote/projection"
 import { createRemoteHttp } from "../src/remote/http"
-import { createRemoteStore, type RemoteStore } from "../src/remote/store"
+import { createRemoteStore, readSessionInfo, type RemoteStore } from "../src/remote/store"
 import { createRemoteTransport, type RemoteTransport, type RemoteTransportStatus } from "../src/remote/transport"
 import { startRelayDouble, waitFor, type RelayDouble, type RelayHandlerResult } from "./relay-double"
 
@@ -14,6 +14,7 @@ type Harness = {
 }
 
 async function harness(options: {
+  fetch?: (input: string, init?: RequestInit) => Promise<Response>
   handler?: (request: { operation: string; input?: Readonly<Record<string, unknown>>; sessionID?: string }) => RelayHandlerResult
   messages?: Record<string, readonly unknown[]>
   watermark?: number
@@ -50,6 +51,7 @@ async function harness(options: {
   }
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
+    ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
     createTransport: (deviceID, handlers) =>
       createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, schedule }),
     schedule,
@@ -163,6 +165,52 @@ async function fakeConnectionHarness() {
 }
 
 describe("remote store integration", () => {
+  test("parses explicit workspace identity from the backend Session Location", () => {
+    expect(readSessionInfo({ id: "ses_a", projectID: "prj_a", title: "A", time: { updated: 2 }, location: { directory: "/work", workspaceID: "wsp_explicit" } }))
+      .toMatchObject({ id: "ses_a", projectID: "prj_a", directory: "/work", workspaceID: "wsp_explicit" })
+  })
+
+  test("filters the sidebar to matching rows and resets search and status when a Session opens", async () => {
+    const test = await harness({ handler: (request) => {
+      if (request.operation === "workspace.list") return { ok: true, value: { data: [
+        { id: "wsp_work", projectID: "prj_work", directory: "/work" },
+        { id: "wsp_other", projectID: "prj_other", directory: "/other" },
+      ] } }
+      if (request.operation === "session.get" && request.sessionID === "ses_b") return { ok: true, value: { data: {
+        id: "ses_b", title: "Beta session", projectID: "prj_other", location: { directory: "/other" }, time: { created: 1, updated: 2 },
+      } } }
+      if (request.operation === "session.list") return { ok: true, value: { data: request.input?.search || request.input?.status === "idle" ? [] : [
+        request.input?.workspace === "wsp_other"
+          ? { id: "ses_b", title: "Beta session", projectID: "prj_other", location: { directory: "/other" }, time: { created: 1, updated: 2 } }
+          : { id: "ses_a", title: "Alpha session", projectID: "prj_work", location: { directory: "/work" }, time: { created: 1, updated: 2 } },
+      ] } }
+      return "default"
+    } })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.some((session) => session.id === "ses_a"))
+      await test.store.selectSession("ses_a")
+      test.store.searchSessions("no match")
+      await test.runUntil(() => test.store.state().sessionListStatus === "ready" && test.store.state().sessionQuery === "no match")
+      expect(test.store.state().sessions).toEqual([])
+      expect(test.store.state().activeSessionID).toBe("ses_a")
+      test.store.searchSessions("", "idle")
+      await test.runUntil(() => test.store.state().sessionListStatus === "ready" && test.store.state().sessionFilter === "idle")
+      expect(test.store.state().sessions).toEqual([])
+      await test.store.selectSession("ses_a")
+      await test.runUntil(() => test.store.state().sessionListStatus === "ready" && test.store.state().sessions.some((session) => session.id === "ses_a"))
+      expect(test.store.state().sessionQuery).toBe("")
+      expect(test.store.state().sessionFilter).toBe("all")
+      expect(test.store.state().sessions.map((session) => session.id)).toEqual(["ses_a"])
+      test.store.searchSessions("no match", "idle")
+      await test.runUntil(() => test.store.state().sessionListStatus === "ready" && test.store.state().sessionQuery === "no match")
+      void test.store.selectSession("ses_b")
+      await test.runUntil(() => test.store.state().selectedWorkspaceID === "wsp_other" && test.store.state().sessionListStatus === "ready")
+      expect(test.store.state().sessionQuery).toBe("")
+      expect(test.store.state().sessionFilter).toBe("all")
+      expect(test.store.state().sessions.map((session) => session.id)).toEqual(["ses_b"])
+    } finally { await test.stop() }
+  })
   test("loads the owner, connects the only device, and lists advertised sessions", async () => {
     const test = await harness()
     try {
@@ -1085,6 +1133,23 @@ describe("remote store integration", () => {
     } finally {
       await test.stop()
     }
+  })
+
+  test("a revoked device aborts an in-flight attachment image read", async () => {
+    let aborted = false
+    const test = await harness({ fetch: async (_url, init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => { aborted = true; reject(new DOMException("Aborted", "AbortError")) })
+    }) })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().connection.kind === "connected")
+      const read = test.store.loadImageSource({ deviceID: "dev_1", sessionID: "ses_a", digest: "a".repeat(64), mime: "image/png" })
+      const settled = read.then(() => false, (error: unknown) => error instanceof DOMException && error.name === "AbortError")
+      test.relay.dropConnections(4403, "device revoked")
+      await test.runUntil(() => aborted)
+      expect(aborted).toBe(true)
+      expect(await settled).toBe(true)
+    } finally { await test.stop() }
   })
 
   test("ignores frames and reconnects from the connection that was replaced", async () => {

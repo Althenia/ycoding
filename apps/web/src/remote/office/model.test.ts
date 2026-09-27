@@ -14,12 +14,12 @@ test('empty is empty, never demo data', () => assert.deepEqual(model('empty').ac
 for (const [input, expected] of [['tool','tool'],['thinking','thinking'],['attention','attention'],['compacting','compacting'],['idle','idle'],['failed','failed'],['interrupted','interrupted'],['offline','offline'],['reconnecting','reconnecting']] as const) {
   test(`selected ${input} projects as ${expected}`, () => assert.equal(selected(input).status, expected))
 }
-test('the selected root without live detail uses its reported running state', () => assert.equal(projectOffice({ ...scenario('tool'), selected: undefined }, preferences).actors[0]!.status, 'working'))
-test('the selected root can show its own last reported idle state', () => assert.equal(projectOffice({ ...scenario('tool'), activeSessionID: 'session-c', selected: undefined }, preferences).actors[0]!.bubble, 'Last reported: idle'))
+test('a family activity read keeps the root tool visible without the selected transcript', () => assert.equal(projectOffice({ ...scenario('tool'), selected: undefined }, preferences).actors[0]!.status, 'tool'))
+test('a member absent from the family read does not infer activity from a listed Session', () => assert.equal(projectOffice({ ...scenario('tool'), activeSessionID: 'session-c', selected: undefined }, preferences).actors[0]!.bubble, undefined))
 test('stale view for another session is ignored', () => {
   const result = projectOffice({ ...scenario('attention'), selected: { ...scenario('attention').selected!, id: 'not-selected' } }, preferences)
-  assert.equal(result.actors[0]!.source, 'summary')
-  assert.notEqual(result.actors[0]!.status, 'attention')
+  assert.equal(result.actors[0]!.source, 'projection')
+  assert.equal(result.actors[0]!.status, 'tool')
 })
 test('a selected detail cannot affect an unselected session', () => {
   const result = projectOffice({ ...scenario('attention'), activeSessionID: 'session-b' }, preferences)
@@ -28,25 +28,24 @@ test('a selected detail cannot affect an unselected session', () => {
 })
 test('historical tool activity does not make an idle session busy', () => {
   const input = scenario('tool')
-  assert.equal(projectOffice({ ...input, sessions: input.sessions.map((session) => session.id === 'session-a' ? { ...session, running: false } : session), selected: { ...input.selected!, status: 'idle' as const } }, preferences).actors[0]!.status, 'idle')
+  assert.equal(projectOffice({ ...input, sessions: input.sessions.map((session) => session.id === 'session-a' ? { ...session, running: false } : session), selected: { ...input.selected!, status: 'idle' as const }, familyActivity: { status: 'ready', members: [{ sessionID: 'session-a', executing: false }] } }, preferences).actors[0]!.status, 'idle')
 })
-test('a reported running root overrides a lagging idle detail and retains thinking', () => {
-  for (const [thinking, status, label] of [[false, 'working', 'Implementing'], [true, 'thinking', 'Thinking']] as const) {
-    const input = scenario('idle')
-    const root = projectOffice({ ...input, sessions: input.sessions.map((session) => session.id === 'session-a' ? { ...session, running: true } : session), selected: { ...input.selected!, thinking } }, preferences).actors[0]!
-    assert.equal(root.status, status)
-    assert.equal(root.statusText, label)
-    assert.equal(root.bubble, label)
-    assert.equal(root.homeRoom, 'developer')
-  }
+test('family-level running and an old thinking part cannot make an idle root busy', () => {
+  const input = scenario('idle')
+  const root = projectOffice({ ...input, sessions: input.sessions.map((session) => session.id === 'session-a' ? { ...session, running: true } : session), selected: { ...input.selected!, thinking: true } }, preferences).actors[0]!
+  assert.equal(root.status, 'idle')
+  assert.equal(root.statusText, '')
+  assert.equal(root.bubble, undefined)
 })
 test('unknown mutation remains explicit', () => assert.equal(selected('unknown-outcome').unknownOutcome, true))
 test('offline state cannot display an old transcript excerpt', () => {
   const input = { ...scenario('idle'), connection: 'offline' as const }
   assert.equal(projectOffice(input, { ...preferences, bubbles: 'excerpt' }).actors[0]!.bubble, 'Machine offline')
 })
-test('default bubbles do not expose completed text', () => assert.equal(selected('idle').bubble, 'Idle'))
-test('completed text is explicit opt-in', () => assert.match(projectOffice(scenario('idle'), { ...preferences, bubbles: 'excerpt' }).actors[0]!.bubble!, /synthetic text/))
+test('idle never shows a status or completed-text bubble', () => {
+  assert.equal(selected('idle').bubble, undefined)
+  assert.equal(projectOffice(scenario('idle'), { ...preferences, bubbles: 'excerpt' }).actors[0]!.bubble, undefined)
+})
 test('bubbles off suppresses status and text', () => assert.equal(projectOffice(scenario('idle'), { ...preferences, bubbles: 'off' }).actors[0]!.bubble, undefined))
 test('bounded text preserves Unicode code points and removes controls', () => {
   assert.equal(shortText('😀😀😀😀', 3), '😀😀…')

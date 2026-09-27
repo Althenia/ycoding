@@ -14,6 +14,7 @@ describe("remote Session location metadata", () => {
       title: "Inspect API",
       projectID: "prj_api",
       directory: "/work/api",
+      workspaceID: "ws_local",
       updatedAt: 42,
       archived: false,
     })

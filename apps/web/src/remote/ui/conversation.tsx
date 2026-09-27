@@ -15,6 +15,7 @@ import {
   type ActivityItem,
   type AssistantPart,
   type FileChangeView,
+  type MessageAttachment,
   type PendingRequestView,
   type RemoteMessageView,
   type ShellOutputFetch,
@@ -48,6 +49,14 @@ function SyntheticNotice(props: { readonly notice: NonNullable<ReturnType<typeof
  */
 export function partKey(part: AssistantPart): string {
   return part.kind === "tool" ? `tool:${part.callID}` : `${part.kind}:${part.ordinal}`
+}
+
+export function attachmentKey(attachment: MessageAttachment, index: number): string {
+  return `${index}:${attachment.mime}:${attachment.digest}`
+}
+
+export function toolContentKey(block: ToolContentBlock, index: number): string {
+  return `${block.kind}:${index}`
 }
 
 export function toolPartExpanded(input: {
@@ -193,20 +202,24 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
             <code>{props.part().inputText ?? JSON.stringify(props.part().input, null, 2)}</code>
           </pre>
         </Show>
-        <For each={output().content}>
-          {(block) =>
-            block.kind === "text" ? (
+        <For each={output().content.map(toolContentKey)}>
+          {(key) => {
+            const block = () => output().content[Number(key.slice(key.lastIndexOf(":") + 1))]!
+            const text = () => { const current = block(); return current.kind === "text" ? current.text : "" }
+            const image = () => { const current = block(); return current.kind === "image" ? current : undefined }
+            const other = () => { const current = block(); return current.kind === "other" ? current : undefined }
+            return key.startsWith("text:") ? (
               <pre class="output" tabindex="0">
-                <code>{block.text}</code>
+                <code>{text()}</code>
               </pre>
-            ) : block.kind === "image" ? (
-              <ImagePreview src={block.uri} name={block.name ?? "Image"} />
+            ) : key.startsWith("image:") ? (
+              <ImagePreview src={image()?.uri ?? ""} name={image()?.name ?? "Image"} />
             ) : (
               <p class="transcript-tool__note">
-                {block.type} content: {block.summary}
+                {other()?.type} content: {other()?.summary}
               </p>
             )
-          }
+          }}
         </For>
         <Show when={output().clientTruncated}>
           <p class="transcript-tool__note">Showing the first 4,000 characters of available tool output in this browser.</p>
@@ -329,6 +342,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
   }
   const syntheticNotice = () => classifySyntheticNotice(props.message())
   const attachments = () => { const message = props.message(); return message.kind === "user" ? message.attachments ?? [] : [] }
+  const attachmentKeys = () => attachments().map(attachmentKey)
   const oversized = () => { const message = props.message(); return message.kind === "oversized" ? message : undefined }
   const fallbackText = () => {
     const message = props.message()
@@ -343,11 +357,13 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
         </Show>
         <Show when={kind() === "user"}>
           <p class="transcript-message__bubble">{userText(props.message())}</p>
-          <For each={attachments()}>{(attachment) =>
-            attachment.mime === "image/png" || attachment.mime === "image/jpeg" || attachment.mime === "image/gif" || attachment.mime === "image/webp"
-              ? <UserImage name={attachment.name} mime={attachment.mime} digest={attachment.digest} deviceID={remote.state().activeDeviceID ?? ""} sessionID={remote.state().activeSessionID ?? ""} />
-              : <span class="transcript-file">{attachment.name} · {attachment.bytes < 1_024 ? `${attachment.bytes} B` : `${(attachment.bytes / 1_024).toFixed(1)} KB`}</span>
-          }</For>
+          <For each={attachmentKeys()}>{(key) => {
+            const attachment = () => attachments()[Number(key.slice(0, key.indexOf(":")))]!
+            const size = () => attachment().bytes < 1_024 ? `${attachment().bytes} B` : `${(attachment().bytes / 1_024).toFixed(1)} KB`
+            return ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(attachment().mime)
+              ? <UserImage name={attachment().name} mime={attachment().mime} digest={attachment().digest} deviceID={remote.state().activeDeviceID ?? ""} sessionID={remote.state().activeSessionID ?? ""} />
+              : <span class="transcript-file">{attachment().name} · {size()}</span>
+          }}</For>
           <span class="transcript-message__receipt" aria-label={userState(props.message()) === "consumed" ? "Read by YCoding" : userState(props.message()) === "pending" ? "Pending delivery" : "Sent, not yet read"}>
             <Show when={userState(props.message()) === "consumed"} fallback={<Show when={userState(props.message()) === "pending"} fallback={<Icon name="check" size={14} />}><span aria-hidden="true">◷</span></Show>}><span aria-hidden="true">✓✓</span></Show>
             {userState(props.message()) === "consumed" ? "Read" : userState(props.message()) === "pending" ? "Pending" : "Sent"}

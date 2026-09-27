@@ -97,7 +97,7 @@ describe("remote navigation", () => {
         for (const [width, height] of viewports) {
           await page.setViewport(width, height)
           await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=${theme}`)
-          await until(page, `document.getElementById("pending-requests") !== null && document.querySelector(".presentation-switch") !== null`)
+          await until(page, `document.getElementById("pending-requests") !== null && document.querySelector(".presentation-switch") ${width < 768 ? "===" : "!=="} null`)
           const report = await page.evaluate<{
             readonly tab: string | null
             readonly tabDot: boolean
@@ -118,8 +118,8 @@ describe("remote navigation", () => {
               overflow: document.documentElement.scrollWidth > innerWidth,
             }
           })()`)
-          expect(report.tab).toBe("Conversation, waiting for your decision")
-          expect(report.tabDot).toBe(true)
+          expect(report.tab).toBe(width < 768 ? null : "Conversation, waiting for your decision")
+          expect(report.tabDot).toBe(width >= 768)
           expect(report.navDot || report.bottomDot).toBe(true)
           expect(report.rowDot).toBe(true)
           expect(report.rows).not.toContain("Child: fix flaky suite")

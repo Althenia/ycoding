@@ -53,6 +53,7 @@ export function snapshot(actors: readonly OfficeActor[], options: Partial<Office
     connection: "ready",
     actors,
     totalSessions: actors.length,
+    activityStatus: "ready",
     overflow: 0,
     team: { status: "none", total: 0, shown: 0, more: false },
     cues: [],

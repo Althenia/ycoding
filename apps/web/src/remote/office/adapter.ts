@@ -34,6 +34,7 @@ export function officeInputFromRemote(state: RemoteStoreState): OfficeInput {
       more: state.team.next !== undefined,
       cues: state.teamCues,
     },
+    familyActivity: state.familyActivity ?? { status: "loading", members: [] },
     selected: view && {
       id: view.id,
       status: view.status,

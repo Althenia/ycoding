@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import { launchBrowser } from "./cdp"
 
-const port = 4497
+const port = 4593
 const browserPath = process.env.YCODING_WEB_CHROME
 if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable.")
 let server: ReturnType<typeof Bun.spawn> | undefined
@@ -51,7 +51,7 @@ test("provider allowances, spend, chart and breakdown reflow without overflow ac
             controls: [...document.querySelectorAll('.usage-page button')].filter(button => getComputedStyle(button).display !== 'none' && button.getClientRects().length > 0).every(button => button.getBoundingClientRect().height >= 44) } })()`)
         expect(result.overflow).toBe(false)
         expect(result.providerColumns).toBe(width! >= 1280 ? 3 : width! >= 768 ? 2 : 1)
-        expect(result.tileColumns).toBe(3)
+        expect(result.tileColumns).toBe(width! >= 1024 ? 3 : 1)
         expect(result.visualColumns).toBe(width! >= 1024 ? 2 : 1)
         expect(result.cardRadius).toBe("16px")
         expect(result.innerRadius).toBe("12px")
@@ -254,6 +254,98 @@ test("chart details respond to hover, keyboard focus, and tap inside each card",
     } finally { await page.close() }
   }
 }, 180_000)
+
+test("three same-device reloads and Refresh update values without removing cards or replaying entrances", async () => {
+  for (const [width, height] of [[390, 844], [820, 1180], [1440, 900]]) for (const theme of ["light", "dark"]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width!, height!)
+      await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?refresh-cycle`)
+      await wait(page, `document.querySelectorAll('.usage-provider').length === 5 && document.querySelectorAll('.usage-tile').length === 3 && document.querySelectorAll('.usage-donut__arc').length === 2`)
+      await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
+      await Bun.sleep(900)
+      await page.evaluate(`(() => {
+        const selectors = '.usage-provider, .usage-tile, .usage-chart, .usage-distribution, .usage-meter > span, .usage-donut__arc, .usage-distribution__legend li, .usage-chart__bar';
+        const root = document.querySelector('.usage-page');
+        const nodes = [...root.querySelectorAll(selectors)];
+        const probe = { nodes, removed: 0, starts: 0, empty: 0 };
+        root.addEventListener('animationstart', () => { probe.starts++ });
+        const observer = new MutationObserver(records => {
+          for (const record of records) for (const node of record.removedNodes) if (node.nodeType === 1 && (node.matches(selectors) || node.querySelector(selectors))) probe.removed++;
+          if (!root.querySelector('.usage-provider') || !root.querySelector('.usage-tile') || !root.querySelector('.usage-chart__bar') || !root.querySelector('.usage-donut__arc')) probe.empty++;
+        });
+        observer.observe(root, { subtree: true, childList: true });
+        window.usageProbe = probe;
+        window.usageProbeSnapshot = () => ({ removed: probe.removed, starts: probe.starts, empty: probe.empty,
+          same: nodes.every(node => node.isConnected && root.contains(node)),
+          providers: root.querySelectorAll('.usage-provider').length, tiles: root.querySelectorAll('.usage-tile').length,
+          session: root.querySelector('.usage-provider:first-child .usage-window__top')?.textContent ?? '',
+          today: root.querySelector('.usage-tile:first-child strong')?.textContent ?? '',
+          donut: root.querySelector('.usage-donut__total')?.textContent ?? '',
+          height: document.documentElement.scrollHeight,
+        });
+      })()`)
+      const baseline = await page.evaluate<{ height: number }>(`window.usageProbeSnapshot()`)
+      for (let cycle = 1; cycle <= 3; cycle++) {
+        await page.evaluate(`window.usageReconnect()`)
+        await wait(page, `window.usageRequests().filter(item => item.operation === 'usage.providers').length === ${cycle + 1}`)
+        const pending = await page.evaluate<{ removed: number; starts: number; empty: number; same: boolean; providers: number; tiles: number; session: string; today: string; donut: string; height: number }>(`window.usageProbeSnapshot()`)
+        if (cycle === 1 && width === 390 && theme === "light") await Bun.write(new URL("../../../.cache/tmp/usage-reconnect-pending.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        expect(pending).toMatchObject({ removed: 0, starts: 0, empty: 0, same: true, providers: 5, tiles: 3, today: cycle === 1 ? "$5.40" : `$${(5.4 + cycle - 1).toFixed(2)}`, donut: cycle === 1 ? "$15.00" : `$${(15 + 3 * (cycle - 1)).toFixed(2)}`, height: baseline.height })
+        await page.evaluate(`window.usageReleaseReload()`)
+        await wait(page, `document.querySelector('.usage-provider:first-child .usage-window__top')?.textContent?.includes('${38 + cycle}%') === true`)
+        const settled = await page.evaluate<{ removed: number; starts: number; empty: number; same: boolean; providers: number; tiles: number; today: string; donut: string; height: number }>(`window.usageProbeSnapshot()`)
+        expect(settled).toMatchObject({ removed: 0, starts: 0, empty: 0, same: true, providers: 5, tiles: 3, today: `$${(5.4 + cycle).toFixed(2)}`, donut: `$${(15 + 3 * cycle).toFixed(2)}`, height: baseline.height })
+      }
+      await page.evaluate(`document.querySelector('.usage-refresh')?.click()`)
+      await wait(page, `window.usageRequests().filter(item => item.operation === 'usage.providers').length === 5`)
+      expect(await page.evaluate<{ removed: number; starts: number; empty: number; same: boolean }>(`window.usageProbeSnapshot()`)).toMatchObject({ removed: 0, starts: 0, empty: 0, same: true })
+      await page.evaluate(`window.usageReleaseReload()`)
+      await wait(page, `document.querySelector('.usage-provider:first-child .usage-window__top')?.textContent?.includes('42%') === true`)
+      expect(await page.evaluate<{ removed: number; starts: number; empty: number; same: boolean }>(`window.usageProbeSnapshot()`)).toMatchObject({ removed: 0, starts: 0, empty: 0, same: true })
+      if (width === 390 && theme === "dark") await Bun.write(new URL("../../../.cache/tmp/usage-refresh-settled.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+    } finally { await page.close() }
+  }
+}, 180_000)
+
+test("large spend values keep each metric intact in usable tiles at 320, 390, and 820 pixels", async () => {
+  for (const [width, height] of [[320, 720], [390, 844], [820, 1180]]) for (const theme of ["light", "dark"]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width!, height!)
+      await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?large-values`)
+      await wait(page, `document.querySelector('.usage-tile:first-child .usage-tile__meta')?.textContent?.includes('2,267,963,225') === true`)
+      await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
+      const geometry = await page.evaluate<{ columns: number; widths: number[]; fragments: number[]; overflow: boolean }>(`(() => {
+        const tiles = [...document.querySelectorAll('.usage-tile')];
+        return { columns: getComputedStyle(document.querySelector('.usage-tiles')).gridTemplateColumns.split(' ').length,
+          widths: tiles.map(tile => tile.getBoundingClientRect().width),
+          fragments: [...document.querySelectorAll('.usage-tile__meta span')].map(span => span.getClientRects().length),
+          overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth };
+      })()`)
+      expect(geometry.columns).toBe(1)
+      expect(geometry.widths.every((value) => value >= 260)).toBe(true)
+      expect(geometry.fragments.every((value) => value === 1)).toBe(true)
+      expect(geometry.overflow).toBe(false)
+      await page.evaluate(`document.querySelector('.usage-tiles')?.scrollIntoView({ block: 'start' })`)
+      await Bun.sleep(400)
+      await Bun.write(new URL(`../../../.cache/tmp/usage-large-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+    } finally { await page.close() }
+  }
+}, 180_000)
+
+test("a device switch, explicit disconnect, or sign-out clears the previous machine's usage", async () => {
+  for (const action of ["usageSwitchDevice", "usageDisconnect", "usageSignOut"]) {
+    const page = await browser!.openPage()
+    try {
+      await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?refresh-cycle`)
+      await wait(page, `document.querySelectorAll('.usage-provider').length === 5 && document.querySelectorAll('.usage-tile').length === 3`)
+      await page.evaluate(`window.${action}()`)
+      await wait(page, `document.querySelectorAll('.usage-provider').length === 0 && document.querySelectorAll('.usage-tile').length === 0`)
+      expect(await page.evaluate<string>(`document.querySelector('.usage-quotas')?.textContent ?? ''`)).toContain("Connect to a machine")
+    } finally { await page.close() }
+  }
+})
 
 async function wait(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, expression: string) {
   for (let index = 0; index < 50; index++) { if (await page.evaluate<boolean>(expression)) return; await Bun.sleep(100) }

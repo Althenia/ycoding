@@ -13,6 +13,7 @@ import { declarationsWhere, readStylesheet, widthThreshold, type Stylesheet } fr
  */
 
 const BREAKPOINTS = [360, 480, 640, 768, 1024, 1280, 1600] as const
+const PHONE_LAYOUT_QUERY = "@media (max-width: 767px), (max-height: 599px) and (pointer: coarse)"
 
 const SURFACE_FILES = ["base.css", "site.css", "docs.css", "remote.css"] as const
 
@@ -57,6 +58,10 @@ describe("responsive contract", () => {
           // A keyframes prelude is not a condition on width; only media queries carry
           // a breakpoint that must be declared.
           if (!condition.startsWith("@media")) continue
+          if (condition === PHONE_LAYOUT_QUERY) {
+            expect(name).toBe("remote.css")
+            continue
+          }
           for (const feature of condition.replace(/^@media\s+/, "").split(" and ")) {
             if (feature.startsWith("(pointer:") || feature.startsWith("(prefers-")) continue
             const width = feature.match(/^\((min|max)-width: (\d+)px\)$/)
@@ -76,6 +81,12 @@ describe("responsive contract", () => {
         }
       }
     }
+  })
+
+  test("shares one portrait-or-landscape phone condition with Office visibility", async () => {
+    const remote = await readStylesheet("remote.css")
+    expect(remote.rules.some((rule) => rule.header === ":root" && rule.conditions.includes(PHONE_LAYOUT_QUERY) && rule.declarations["--yc-phone-layout"] === "1")).toBe(true)
+    expect(remote.rules.some((rule) => rule.header === "#office-settings" && rule.conditions.includes(PHONE_LAYOUT_QUERY) && rule.declarations.display === "none")).toBe(true)
   })
 
   test("declares the inline gutter step in one place", async () => {
