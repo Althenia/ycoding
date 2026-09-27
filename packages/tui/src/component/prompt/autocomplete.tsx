@@ -1,4 +1,4 @@
-import type { BoxRenderable, RGBA, TextareaRenderable, ScrollBoxRenderable } from "@opentui/core"
+import type { BoxRenderable, RGBA, TextareaRenderable } from "@opentui/core"
 import { pathToFileURL } from "node:url"
 import fuzzysort from "fuzzysort"
 import path from "path"
@@ -8,9 +8,7 @@ import { createStore } from "solid-js/store"
 import { useEditorContext } from "../../context/editor"
 import { useClient } from "../../context/client"
 import { useData } from "../../context/data"
-import { getScrollAcceleration } from "../../util/scroll"
 import { useTuiPaths } from "../../context/runtime"
-import { useConfig } from "../../config"
 import { useLocation } from "../../context/location"
 import { useTheme } from "../../context/theme"
 import { SplitBorder } from "../../ui/border"
@@ -91,7 +89,6 @@ export function Autocomplete(props: {
   const selection = autocompleteSelectionColors(themeV2)
   const dimensions = useTerminalDimensions()
   const frecency = useFrecency()
-  const config = useConfig().data
   const paths = useTuiPaths()
   const location = useLocation()
   const [hasOpened, setHasOpened] = createSignal(false)
@@ -99,7 +96,6 @@ export function Autocomplete(props: {
     index: 0,
     selected: 0,
     visible: false as AutocompleteRef["visible"],
-    input: "keyboard" as "keyboard" | "mouse",
   })
   const chromeHeight = createMemo(() => (store.visible === "/" ? 4 : 0))
   const commandMenu = createMemo(() => store.visible === "/")
@@ -148,7 +144,7 @@ export function Autocomplete(props: {
   const popupWidth = createMemo(() => position().width)
 
   const filter = createMemo(() => {
-    if (!store.visible) return
+    if (!store.visible) return undefined
     // Track props.value to make memo reactive to text changes
     props.value // <- there surely is a better way to do this, like making .input() reactive
 
@@ -163,14 +159,6 @@ export function Autocomplete(props: {
   createEffect(() => {
     const next = filter()
     setSearch(next ? next : "")
-  })
-
-  // When the filter changes due to how TUI works, the mousemove might still be triggered
-  // via a synthetic event as the layout moves underneath the cursor. This is a workaround to make sure the input mode remains keyboard so
-  // that the mouseover event doesn't trigger when filtering.
-  createEffect(() => {
-    filter()
-    setStore("input", "keyboard")
   })
 
   function insertPart(
@@ -298,7 +286,7 @@ export function Autocomplete(props: {
   const references = createMemo(() => data.location.reference.list(location.current) ?? [])
 
   const referenceMatch = createMemo(() => {
-    if (!store.visible || store.visible === "/") return
+    if (!store.visible || store.visible === "/") return undefined
     const base = parseFileLineRange(search()).base
     const slash = base.indexOf("/")
     const alias = slash === -1 ? base : base.slice(0, slash)
@@ -576,7 +564,7 @@ export function Autocomplete(props: {
 
     if (!searchValue) {
       const merged = mergeAutocompleteOptions(nonFileOptions, fileOptions)
-      return store.visible === "#" ? merged.slice(0, 8) : merged
+      return merged
     }
 
     const fuzziedNonFiles = fuzzysort
@@ -588,7 +576,7 @@ export function Autocomplete(props: {
           (obj) => obj.aliases?.join(" ") ?? "",
         ],
         threshold: store.visible === "@" ? 0.5 : 0,
-        limit: store.visible === "#" ? 8 : 10,
+        limit: nonFileOptions.length,
         scoreFn: (objResults) => {
           const displayResult = objResults[0]
           let score = objResults.score
@@ -605,7 +593,8 @@ export function Autocomplete(props: {
   })
 
   createEffect(() => {
-    filter()
+    store.visible
+    search()
     setStore("selected", 0)
   })
 
@@ -625,13 +614,13 @@ export function Autocomplete(props: {
 
   function moveTo(next: number) {
     setStore("selected", next)
-    if (!scroll) return
-    const scrollBottom = scroll.scrollTop + height()
-    if (next < scroll.scrollTop) {
-      scroll.scrollBy(next - scroll.scrollTop)
-    } else if (next + 1 > scrollBottom) {
-      scroll.scrollBy(next + 1 - scrollBottom)
-    }
+  }
+
+  let pointer: { x: number; y: number } | undefined
+  function hover(next: number, event: { x: number; y: number }) {
+    if (pointer?.x === event.x && pointer.y === event.y) return
+    pointer = { x: event.x, y: event.y }
+    moveTo(next)
   }
 
   function select() {
@@ -671,7 +660,6 @@ export function Autocomplete(props: {
         title: "Previous autocomplete item",
         group: "Autocomplete",
         run() {
-          setStore("input", "keyboard")
           move(-1)
         },
       },
@@ -680,7 +668,6 @@ export function Autocomplete(props: {
         title: "Next autocomplete item",
         group: "Autocomplete",
         run() {
-          setStore("input", "keyboard")
           move(1)
         },
       },
@@ -822,8 +809,6 @@ export function Autocomplete(props: {
   })
   const renderWindow = createMemo(() => autocompleteWindow(options(), store.selected, height()))
 
-  let scroll: ScrollBoxRenderable
-  const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
   const emptyMessage = createMemo(() => {
     if (store.visible === "/") return "No matching commands"
     if (store.visible === "$") return "No matching skills"
@@ -863,13 +848,11 @@ export function Autocomplete(props: {
           <text fg={themeV2.border.default}>{"─".repeat(Math.max(1, popupWidth() - 2))}</text>
         </>
       </Show>
-      <scrollbox
-        ref={(r: ScrollBoxRenderable) => (scroll = r)}
+      <box
         backgroundColor={store.visible === "/" ? themeV2.background.surface.offset : theme.backgroundMenu}
         height={height()}
-        scrollbarOptions={{ visible: false }}
-        scrollAcceleration={scrollAcceleration()}
         onMouseScroll={(event) => {
+          pointer = { x: event.x, y: event.y }
           if (event.scroll?.direction === "up") move(-1)
           if (event.scroll?.direction === "down") move(1)
         }}
@@ -889,16 +872,8 @@ export function Autocomplete(props: {
               }
               height={1}
               flexDirection="column"
-              onMouseMove={() => {
-                setStore("input", "mouse")
-                moveTo(renderWindow().start + index())
-              }}
-              onMouseOver={() => {
-                setStore("input", "mouse")
-                moveTo(renderWindow().start + index())
-              }}
+              onMouseMove={(event) => hover(renderWindow().start + index(), event)}
               onMouseDown={() => {
-                setStore("input", "mouse")
                 moveTo(renderWindow().start + index())
               }}
               onMouseUp={() => select()}
@@ -967,7 +942,7 @@ export function Autocomplete(props: {
             </box>
           )}
         </For>
-      </scrollbox>
+      </box>
       <Show when={store.visible === "/"}>
         <>
           <text fg={themeV2.border.default}>{"─".repeat(Math.max(1, popupWidth() - 2))}</text>

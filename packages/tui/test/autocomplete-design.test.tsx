@@ -9,7 +9,7 @@ import {
 } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { expect, test } from "bun:test"
-import { createEffect } from "solid-js"
+import { createEffect, createSignal } from "solid-js"
 import { Autocomplete, type AutocompleteRef } from "../src/component/prompt/autocomplete"
 import { ConfigProvider } from "../src/config"
 import { ClientProvider } from "../src/context/client"
@@ -70,6 +70,7 @@ async function renderAutocomplete(
   let textarea!: TextareaRenderable
   let anchor!: BoxRenderable
   let autocomplete!: AutocompleteRef
+  const [value, setValue] = createSignal(query)
   const mainWidth = sessionMainWidth(viewport.width)
   const dockedRailWidth = viewport.width - mainWidth
   const app = await testRender(
@@ -97,7 +98,7 @@ async function renderAutocomplete(
                             </box>
                             <text>ready</text>
                             <Autocomplete
-                              value={query}
+                              value={value()}
                               anchor={() => anchor}
                               input={() => textarea}
                               ref={(value) => (autocomplete = value)}
@@ -129,12 +130,20 @@ async function renderAutocomplete(
   )
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes("ready"))
-  if (!activate) return app
+  const result = Object.assign(app, {
+    updateQuery(next: string) {
+      textarea.deleteRange(0, 0, 0, textarea.plainText.length)
+      textarea.insertText(next)
+      setValue(next)
+      autocomplete.onInput(next)
+    },
+  })
+  if (!activate) return result
   textarea.focus()
   textarea.insertText(query)
   autocomplete.onInput(query)
-  await app.waitForFrame((frame) => frame.includes(query === "/" ? "/command-00" : "/model"))
-  return app
+  await app.waitForFrame((frame) => frame.includes(query === "/command-" ? "60 of 64" : query === "/" ? "/command-00" : "/model"))
+  return result
 }
 
 function expectGeometry(app: Awaited<ReturnType<typeof renderAutocomplete>>, viewport: typeof DESIGN_VIEWPORT) {
@@ -154,12 +163,12 @@ function expectGeometry(app: Awaited<ReturnType<typeof renderAutocomplete>>, vie
   })
 
   expect(suggestionRows.map((item) => item.command)).toEqual(["/model", "/mode", "/compact", "/mcp"])
-  expect(suggestionRows.slice(1).map((item, index) => item.row - suggestionRows[index]!.row)).toEqual([1, 1, 1])
+  expect(suggestionRows.slice(1).map((item, index) => item.row - suggestionRows[index].row)).toEqual([1, 1, 1])
   expect(header.slice(mainWidth)).not.toContain("/ COMMANDS")
   expect([left, right]).toEqual([0, mainWidth - 1])
   expect(count + "4 of 4".length).toBe(mainWidth - 3)
   expect(selected).toEqual({ start: 1, end: mainWidth - 1 })
-  expect(selectedBackgroundRows(app)).toEqual([suggestionRows[0]!.row])
+  expect(selectedBackgroundRows(app)).toEqual([suggestionRows[0].row])
   expect(Math.abs(description.indexOf("switch the active model") / (selected.end - selected.start) - 244 / 992)).toBeLessThanOrEqual(
     1 / (selected.end - selected.start),
   )
@@ -269,6 +278,106 @@ test("keeps only the visible command rows resident", async () => {
     await app.waitForFrame((frame) => frame.includes("/command-10"))
     expect(findTexts(app.renderer.root, /^\/command-/)).toHaveLength(10)
     expect(selectedCommands(app)).toEqual(["/command-10"])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("wheel reaches the last command without stationary-pointer hover snapping the window back", async () => {
+  const app = await renderAutocomplete(DESIGN_VIEWPORT, undefined, 60, "/")
+  try {
+    for (let index = 1; index <= 59; index++) {
+      const first = findTexts(app.renderer.root, /^\/command-/)[0]
+      if (!first) throw new Error("command rows did not render")
+      first.processMouseEvent(mouseScrollEvent(first, "down"))
+      await app.renderOnce()
+      const underPointer = findTexts(app.renderer.root, /^\/command-/)[0]
+      if (!underPointer) throw new Error("command rows disappeared")
+      underPointer.processMouseEvent(mouseEvent(underPointer, "move"))
+      await app.renderOnce()
+      expect(selectedCommands(app)).toEqual([`/command-${index.toString().padStart(2, "0")}`])
+    }
+    for (let index = 58; index >= 54; index--) {
+      const first = findTexts(app.renderer.root, /^\/command-/)[0]
+      if (!first) throw new Error("command rows did not render")
+      first.processMouseEvent(mouseScrollEvent(first, "up"))
+      await app.renderOnce()
+      expect(selectedCommands(app)).toEqual([`/command-${index.toString().padStart(2, "0")}`])
+    }
+    const hovered = findTexts(app.renderer.root, /^\/command-/)[4]
+    if (!hovered) throw new Error("hover target did not render")
+    hovered.processMouseEvent(mouseEvent(hovered, "move"))
+    await app.renderOnce()
+    const name = hovered.plainText.match(/\/command-\d+/)?.[0]
+    if (!name) throw new Error("hover target has no command name")
+    expect(selectedCommands(app)).toEqual([name])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("keeps every matching slash command reachable after filtering", async () => {
+  const app = await renderAutocomplete(DESIGN_VIEWPORT, undefined, 60, "/command-")
+  try {
+    await app.renderOnce()
+    const first = selectedCommands(app)
+    const seen = new Set(first)
+    for (let index = 0; index < 60; index++) {
+      app.mockInput.pressArrow("down")
+      await app.renderOnce()
+      selectedCommands(app).forEach((command) => seen.add(command))
+    }
+    expect(seen.size).toBe(60)
+    expect(seen.has("/command-59")).toBe(true)
+    expect(selectedCommands(app)).toEqual(first)
+    expect(findTexts(app.renderer.root, /^\/command-/)).toHaveLength(10)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("resets selection to the first match when the query changes", async () => {
+  const app = await renderAutocomplete(DESIGN_VIEWPORT, undefined, 20, "/")
+  try {
+    Array.from({ length: 12 }).forEach(() => app.mockInput.pressArrow("down"))
+    await app.waitFor(() => selectedCommands(app).join() === "/command-12")
+    app.updateQuery("/command-1")
+    await app.waitForFrame((frame) => frame.includes("11 of 24"))
+    const first = findTexts(app.renderer.root, /^\/command-/)[0]
+    const firstName = first?.plainText.match(/\/command-\d+/)?.[0]
+    if (!firstName) throw new Error("filtered first command did not render")
+    expect(selectedCommands(app)).toEqual([firstName])
+    Array.from({ length: 3 }).forEach(() => app.mockInput.pressArrow("down"))
+    app.updateQuery("/command-")
+    await app.waitForFrame((frame) => frame.includes("20 of 24"))
+    const allFirst = findTexts(app.renderer.root, /^\/command-/)[0]
+    const allFirstName = allFirst?.plainText.match(/\/command-\d+/)?.[0]
+    if (!allFirstName) throw new Error("unfiltered first command did not render")
+    expect(selectedCommands(app)).toEqual([allFirstName])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("wraps keyboard selection and keeps Enter and Tab completion", async () => {
+  const calls: string[] = []
+  const app = await renderAutocomplete(DESIGN_VIEWPORT, (command) => calls.push(command), 20, "/")
+  try {
+    const first = selectedCommands(app)
+    app.mockInput.pressArrow("up")
+    await app.renderOnce()
+    expect(selectedCommands(app)).not.toEqual(first)
+    app.mockInput.pressArrow("down")
+    await app.renderOnce()
+    expect(selectedCommands(app)).toEqual(first)
+    app.mockInput.pressEnter()
+    await app.renderOnce()
+    expect(calls).toEqual(["command-0"])
+    app.updateQuery("/")
+    await app.waitForFrame((frame) => frame.includes("24 of 24"))
+    app.mockInput.pressKey("TAB")
+    await app.renderOnce()
+    expect(calls).toEqual(["command-0", "command-0"])
   } finally {
     app.renderer.destroy()
   }

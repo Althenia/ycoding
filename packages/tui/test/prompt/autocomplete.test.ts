@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test"
 import {
-  AUTOCOMPLETE_NON_FILE_LIMIT,
   MENTION_DIRECTORY_LIMIT,
   MENTION_RESULT_LIMIT,
   autocompleteWindow,
@@ -45,14 +44,14 @@ describe("mention search results", () => {
     const merged = mergeFileSearchEntries([{ path: "packages/tui/", type: "directory" }], files(MENTION_RESULT_LIMIT))
 
     expect(merged[0]?.path).toBe("packages/tui/")
-    expect(merged).toHaveLength(MENTION_RESULT_LIMIT)
+    expect(merged).toHaveLength(MENTION_RESULT_LIMIT + 1)
   })
 
   test("caps folders so file results always keep slots", () => {
     const merged = mergeFileSearchEntries(directories(MENTION_DIRECTORY_LIMIT + 6), files(MENTION_RESULT_LIMIT))
 
     expect(merged.filter((item) => item.type === "directory")).toHaveLength(MENTION_DIRECTORY_LIMIT)
-    expect(merged.filter((item) => item.type === "file")).toHaveLength(MENTION_RESULT_LIMIT - MENTION_DIRECTORY_LIMIT)
+    expect(merged.filter((item) => item.type === "file")).toHaveLength(MENTION_RESULT_LIMIT)
   })
 
   test("keeps a single row when both searches return the same path", () => {
@@ -77,16 +76,16 @@ describe("mention search results", () => {
   })
 })
 
-describe("mention result caps", () => {
-  test("never lets agents and references crowd out file results", () => {
+describe("option merging", () => {
+  test("keeps every returned agent and file result reachable", () => {
     const nonFiles = Array.from({ length: 12 }, (_, index) => ({ display: `@agent-${index}` }))
     const fileOptions = Array.from({ length: 20 }, (_, index) => ({ display: `file-${index}.ts` }))
 
     const merged = mergeAutocompleteOptions(nonFiles, fileOptions)
 
     expect(merged.filter((item) => item.display.startsWith("file-"))).toHaveLength(20)
-    expect(merged.filter((item) => item.display.startsWith("@agent-"))).toHaveLength(AUTOCOMPLETE_NON_FILE_LIMIT)
-    expect(merged.slice(0, AUTOCOMPLETE_NON_FILE_LIMIT).every((item) => item.display.startsWith("@agent-"))).toBe(true)
+    expect(merged.filter((item) => item.display.startsWith("@agent-"))).toHaveLength(nonFiles.length)
+    expect(merged.slice(0, nonFiles.length).every((item) => item.display.startsWith("@agent-"))).toBe(true)
   })
 
   test("leaves command and skill lists untouched when there are no file results", () => {

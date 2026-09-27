@@ -28,7 +28,7 @@ function SyncLocation() {
   return null
 }
 
-async function renderAutocomplete(input: { agents: AgentInfo[]; skills: SkillInfo[]; height?: number }) {
+async function renderAutocomplete(input: { agents: AgentInfo[]; skills: SkillInfo[]; height?: number; trigger?: "@" | "$" | "#" }) {
   const events = createEventStream()
   const calls = createFetch((url) => {
     if (url.pathname === "/api/agent")
@@ -60,7 +60,7 @@ async function renderAutocomplete(input: { agents: AgentInfo[]; skills: SkillInf
                           </box>
                           <text>footer</text>
                           <Autocomplete
-                            value="#"
+                            value={input.trigger ?? "#"}
                             anchor={() => anchor}
                             input={() => textarea}
                             ref={(value) => (autocomplete = value)}
@@ -86,10 +86,18 @@ async function renderAutocomplete(input: { agents: AgentInfo[]; skills: SkillInf
   )
   app.renderer.start()
   await app.waitForFrame((value) => value.includes("footer"))
-  textarea.insertText("#")
-  autocomplete.onInput("#")
-  await app.waitForFrame((value) => value.includes(input.skills[0]?.name ?? "footer"))
-  return app
+  textarea.focus()
+  textarea.insertText(input.trigger ?? "#")
+  autocomplete.onInput(input.trigger ?? "#")
+  await app.waitForFrame((value) => value.includes(input.trigger === "@" ? `@${input.agents[0]?.id}` : input.skills[0]?.name ?? "footer"))
+  return Object.assign(app, {
+    updateTrigger(next: "@" | "$" | "#") {
+      textarea.deleteRange(0, 0, 0, textarea.plainText.length)
+      textarea.insertText(next)
+      autocomplete.onInput(next)
+      if (!autocomplete.visible) autocomplete.onInput(next)
+    },
+  })
 }
 
 function skill(id: string, conflicts = false): SkillInfo {
@@ -128,17 +136,36 @@ describe("prompt # autocomplete", () => {
     }
   })
 
-  test("caps # autocomplete at eight rows", async () => {
+  test.each(["$", "#", "@"] as const)("keeps every %s option reachable beyond the visible rows", async (trigger) => {
     const app = await renderAutocomplete({
-      agents: [],
-      skills: Array.from({ length: 9 }, (_, index) => skill(`skill-${index}`)),
+      agents: Array.from({ length: 60 }, (_, index) => agent(`agent-${index}`)),
+      skills: Array.from({ length: 60 }, (_, index) => skill(`skill-${index}`)),
       height: 12,
+      trigger,
     })
 
     try {
       const output = frame(app)
-      expect(output).toContain("skill-7")
-      expect(output).not.toContain("skill-8")
+      expect(output).not.toContain(trigger === "@" ? "agent-59" : "skill-59")
+      Array.from({ length: 59 }).forEach(() => app.mockInput.pressArrow("down"))
+      await app.waitForFrame((value) => value.includes(trigger === "@" ? "agent-59" : "skill-59"))
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("resets to the first row when switching triggers with the same empty query", async () => {
+    const app = await renderAutocomplete({
+      agents: [], skills: Array.from({ length: 60 }, (_, index) => skill(`skill-${index}`)),
+      trigger: "$", height: 12,
+    })
+    try {
+      Array.from({ length: 20 }).forEach(() => app.mockInput.pressArrow("down"))
+      await app.waitForFrame((value) => value.includes("skill-20"))
+      expect(frame(app)).not.toContain("skill-0 ")
+      app.updateTrigger("#")
+      await app.waitForFrame((value) => value.includes("skill-0 "))
+      expect(frame(app)).not.toContain("skill-20")
     } finally {
       app.renderer.destroy()
     }
