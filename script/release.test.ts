@@ -90,8 +90,11 @@ test("macOS release builds ship an ad-hoc signed app without signing secrets", (
   expect(workflow).toContain('codesign --verify --deep --strict "$staging/YCoding Computer Use.app"')
 })
 
-test("isolated-browser acceptance accepts installed Chrome 152 or newer", () => {
-  const check = /\n(\s*major="\$\(printf[\s\S]*?\n\s*\})\n/.exec(workflow)?.[1]
+test("isolated-browser acceptance accepts installed Chrome 152 or newer", async () => {
+  const browserHost = await Bun.file(
+    path.join(import.meta.dir, "../.github/actions/verify-browser-host/action.yml"),
+  ).text()
+  const check = /\n(\s*major="\$\(printf[\s\S]*?\n\s*\})\n/.exec(browserHost)?.[1]
   expect(check).toBeDefined()
   const accepts = (version: string) =>
     Bun.spawnSync(["bash", "-euo", "pipefail", "-c", `version=${JSON.stringify(version)}\n${check}`], { stdout: "pipe", stderr: "pipe" })
@@ -244,11 +247,62 @@ test("remote integration gate runs the composed real flow after the web build in
   )
   expect(workflow).toContain(
     [
+      "      - name: Build web application",
+      "        if: matrix.suite == 'web' || matrix.suite == 'remote'",
+      "        run: bun run build:web",
+    ].join("\n"),
+  )
+  expect(workflow).toContain(
+    [
       "      - name: Verify local remote integration",
+      "        if: matrix.suite == 'remote'",
       "        timeout-minutes: 20",
       "        run: bun run test:integration:remote",
     ].join("\n"),
   )
+})
+
+test("source verification legs start in parallel with the native builds", () => {
+  const verify = workflow.split("\n  verify-source:")[1]?.split("\n  build:")[0] ?? ""
+  const build = workflow.split("\n  build:")[1]?.split("\n  isolated-browser-acceptance:")[0] ?? ""
+  expect(verify).not.toContain("needs:")
+  expect(build).not.toContain("needs:")
+  expect(verify).toContain("fail-fast: false")
+  expect(verify).toContain("runs-on: ${{ matrix.runner }}")
+  expect([...verify.matchAll(/- suite: (\S+)/g)].map((match) => match[1])).toEqual([
+    "types",
+    "web",
+    "remote",
+    "cli",
+    "tui",
+    "browser",
+  ])
+  expect(verify).toContain(["          - suite: browser", "            runner: macos-26"].join("\n"))
+  for (const [step, condition] of [
+    ["Check workspace and types", "matrix.suite == 'types'"],
+    ["Verify web application and relay", "matrix.suite == 'web'"],
+    ["Build web application", "matrix.suite == 'web' || matrix.suite == 'remote'"],
+    ["Verify built web integration", "matrix.suite == 'web'"],
+    ["Verify local remote integration", "matrix.suite == 'remote'"],
+    ["Verify Cloudflare Worker", "matrix.suite == 'web'"],
+    ["Verify CLI suites", "matrix.suite == 'cli'"],
+    ["Verify transcript and approval suites", "matrix.suite == 'tui'"],
+    ["Verify goal continuation", "matrix.suite == 'tui'"],
+    ["Verify installer and web assets", "matrix.suite == 'web'"],
+    ["Verify approved browser host", "matrix.suite == 'browser'"],
+    ["Verify isolated-browser integration suites", "matrix.suite == 'browser'"],
+  ])
+    expect(verify).toContain(`      - name: ${step}\n        if: ${condition}\n`)
+  expect(verify).toContain("uses: ./.github/actions/verify-browser-host")
+})
+
+test("the packaged isolated-browser smoke waits for the native builds on the approved host", () => {
+  const acceptance = workflow.split("\n  isolated-browser-acceptance:")[1]?.split("\n  package:")[0] ?? ""
+  expect(acceptance).toContain("needs: build")
+  expect(acceptance).toContain("runs-on: macos-26")
+  expect(acceptance).toContain("uses: ./.github/actions/verify-browser-host")
+  expect(acceptance).toContain("isolated-browser-smoke.ts")
+  expect(acceptance).not.toContain("test:integration:browser")
 })
 
 test("obsolete Pages publishing is replaced by the web asset publisher", async () => {

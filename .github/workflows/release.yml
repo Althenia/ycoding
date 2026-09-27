@@ -23,9 +23,25 @@ env:
 
 jobs:
   verify-source:
-    name: verify release source
+    name: verify release source (${{ matrix.suite }})
     if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: types
+            runner: ubuntu-24.04
+          - suite: web
+            runner: ubuntu-24.04
+          - suite: remote
+            runner: ubuntu-24.04
+          - suite: cli
+            runner: ubuntu-24.04
+          - suite: tui
+            runner: ubuntu-24.04
+          - suite: browser
+            runner: macos-26
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
       - name: Checkout release source
@@ -70,6 +86,7 @@ jobs:
           install-flags: --frozen-lockfile
 
       - name: Check workspace and types
+        if: matrix.suite == 'types'
         run: |
           bun run check:ycoding-workspace
           bun run check:ycoding-brand
@@ -77,43 +94,59 @@ jobs:
           bun run lint:effect-patterns
 
       - name: Verify web application and relay
+        if: matrix.suite == 'web'
         run: |
           bun run test:web
           bun run test:remote
 
       - name: Build web application
+        if: matrix.suite == 'web' || matrix.suite == 'remote'
         run: bun run build:web
 
       - name: Verify built web integration
+        if: matrix.suite == 'web'
         run: bun run test:integration:web
 
       - name: Verify local remote integration
+        if: matrix.suite == 'remote'
         timeout-minutes: 20
         run: bun run test:integration:remote
 
       - name: Verify Cloudflare Worker
+        if: matrix.suite == 'web'
         run: |
           bun run test:cloudflare
           bun run build:cloudflare
 
       - name: Verify CLI suites
+        if: matrix.suite == 'cli'
         working-directory: packages/cli
         run: bun test --timeout 30000
 
       - name: Verify transcript and approval suites
+        if: matrix.suite == 'tui'
         working-directory: packages/tui
         run: bun test test/session-transcript-live-fixes.test.tsx test/cli/tui/permission-interaction.test.tsx test/cli/tui/permission.test.ts test/util/permission.test.ts test/branding.test.ts
 
       - name: Verify goal continuation
+        if: matrix.suite == 'tui'
         working-directory: packages/core
         run: bun test test/session-execution.test.ts test/session-autonomy.test.ts
 
       - name: Verify installer and web assets
+        if: matrix.suite == 'web'
         run: cd /tmp && bun test "$GITHUB_WORKSPACE/script/install.test.ts" "$GITHUB_WORKSPACE/script/build-web-assets.test.ts" "$GITHUB_WORKSPACE/script/release.test.ts"
+
+      - name: Verify approved browser host
+        if: matrix.suite == 'browser'
+        uses: ./.github/actions/verify-browser-host
+
+      - name: Verify isolated-browser integration suites
+        if: matrix.suite == 'browser'
+        run: bun run test:integration:browser
 
   build:
     name: build ${{ matrix.target }}
-    needs: verify-source
     if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
     strategy:
       fail-fast: false
@@ -230,28 +263,7 @@ jobs:
           install-flags: --frozen-lockfile
 
       - name: Verify approved browser host
-        run: |
-          set -euo pipefail
-          bun -e '
-            if (process.platform !== "darwin" || process.arch !== "arm64") {
-              console.error(`Expected darwin/arm64, got ${process.platform}/${process.arch}`)
-              process.exit(1)
-            }
-          '
-          chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-          test -x "$chrome" || { echo "Google Chrome is not installed at the approved path" >&2; exit 1; }
-          version="$("$chrome" --version)"
-          major="$(printf '%s\n' "$version" | sed -E 's/.* ([0-9]+)\..*/\1/')"
-          case "$major" in
-            '' | *[!0-9]*) major=0 ;;
-          esac
-          test "$major" -ge 152 || {
-            echo "Isolated-browser acceptance requires installed Google Chrome major 152 or newer; found: $version" >&2
-            exit 1
-          }
-
-      - name: Verify isolated-browser integration suites
-        run: bun run test:integration:browser
+        uses: ./.github/actions/verify-browser-host
 
       - name: Download darwin-arm64 executable
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

@@ -1,0 +1,26 @@
+name: "Verify approved browser host"
+description: "Require darwin/arm64 with Google Chrome 152 or newer at the approved path"
+runs:
+  using: "composite"
+  steps:
+    - name: Verify approved browser host
+      shell: bash
+      run: |
+        set -euo pipefail
+        bun -e '
+          if (process.platform !== "darwin" || process.arch !== "arm64") {
+            console.error(`Expected darwin/arm64, got ${process.platform}/${process.arch}`)
+            process.exit(1)
+          }
+        '
+        chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        test -x "$chrome" || { echo "Google Chrome is not installed at the approved path" >&2; exit 1; }
+        version="$("$chrome" --version)"
+        major="$(printf '%s\n' "$version" | sed -E 's/.* ([0-9]+)\..*/\1/')"
+        case "$major" in
+          '' | *[!0-9]*) major=0 ;;
+        esac
+        test "$major" -ge 152 || {
+          echo "Isolated-browser acceptance requires installed Google Chrome major 152 or newer; found: $version" >&2
+          exit 1
+        }
