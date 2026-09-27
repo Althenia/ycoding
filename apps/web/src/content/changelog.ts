@@ -22,6 +22,25 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.7.5",
+    date: "2026-09-27",
+    title: "Office view, context breakdown, and usage sorting",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Switch the remote workspace to Office to see the selected Session, other loaded Sessions, and its reported subagents as characters in a pixel office with CEO, Developer, Research, QA, Meeting, Relax, and entrance areas." },
+      { tag: "Added", text: "Office characters work in the room for their responsibility, relax in the lounge when idle, enter and leave through the entrance, and walk to live briefings and reports without replaying history." },
+      { tag: "Added", text: "Open context breakdown from the TUI command palette to see latest-request stats and an estimated split of the context window across system, tools, user, assistant, reasoning, tool calls, and other content." },
+      { tag: "Added", text: "Sort every TUI usage table by any column by clicking its header or pressing its key." },
+      { tag: "Added", text: "Connect Chrome from the landing command palette." },
+      { tag: "Changed", text: "Group remote Sessions by workspace and load 50 rows at a time as you scroll." },
+      { tag: "Changed", text: "Show remote prompts as right-aligned bubbles with Read after consumption, compact reasoning sections, and compaction-aware history." },
+      { tag: "Changed", text: "Show every TUI cost estimate as a dollar amount, counting unpriced requests as $0.00." },
+      { tag: "Changed", text: "Remove the live SHELLS sidebar section; running shells remain in the composer's shell tab." },
+      { tag: "Changed", text: "Open Usage from the landing footer with leader+Shift+U and apply a pending model choice when /goal starts or resumes a goal." },
+      { tag: "Fixed", text: "Report a machine offline when the relay has no local agent for the workspace read, and widen the desktop machine selector without wrapping names." },
+    ],
+  },
+  {
     version: "0.7.4",
     date: "2026-09-26",
     title: "Remote request pacing and readable machine names",
