@@ -369,6 +369,8 @@ async function run(input: OperationInput) {
       return { data: verified }
     case "snapshot":
       return await input.local.snapshot(sessionID, location)
+    case "subagent.list":
+      return await input.local.subagentPage(sessionID, location, validated.cursor)
     case "messages":
       return { data: await input.local.messages(sessionID, location) }
     case "autonomy.get":
@@ -456,6 +458,7 @@ type Validated =
   | { readonly kind: "session.create"; readonly id: string; readonly workspace: string }
   | { readonly kind: "get" }
   | { readonly kind: "snapshot" }
+  | { readonly kind: "subagent.list"; readonly cursor?: string }
   | { readonly kind: "messages" }
   | { readonly kind: "autonomy.get" }
   | { readonly kind: "permission.list" }
@@ -497,6 +500,7 @@ function validate(request: RemoteRequest): Validated {
   if (request.operation === "workspace.list") return { kind: "workspace.list", sessionsOnly: fields.sessionsOnly === true }
   if (request.operation === "session.list") return { kind: "list", query: parseListQuery(fields) }
   if (request.operation === "session.active") return { kind: "active" }
+  if (request.operation === "session.subagent.list") return { kind: "subagent.list", cursor: fields.cursor === undefined ? undefined : requireString(fields.cursor, "cursor", 1_024) }
   if (request.operation === "session.create")
     return {
       kind: "session.create",
@@ -743,6 +747,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.active": [],
   "session.get": [],
   "session.snapshot": [],
+  "session.subagent.list": ["cursor"],
   "session.messages": [],
   "session.log": ["after"],
   "session.autonomy.get": [],

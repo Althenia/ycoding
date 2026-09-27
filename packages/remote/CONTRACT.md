@@ -303,6 +303,7 @@ grouping and Session-list filters are derived from backend metadata.
 | `session.get` | yes | `v2.session.get` | `GET /api/session/:sessionID` | — |
 | `session.messages` | yes | `v2.message.list` | `GET /api/session/:sessionID/message` | — |
 | `session.snapshot` | yes | `v2.session.snapshot` | `GET /api/session/:sessionID/snapshot` | — |
+| `session.subagent.list` | yes | `v2.session.subagent.list` | `GET /api/session/:parentID/subagent` | `cursor?` |
 | `session.log` | yes | `v2.session.log` | `GET /api/experimental/session/:sessionID/log` | `after?` |
 | `session.subscribe` | yes | `v2.event.subscribe` | `GET /api/event` (SSE) | — |
 | `session.unsubscribe` | yes | — (tears down the agent's `v2.event.subscribe` stream for that session) | — | — |
@@ -346,6 +347,14 @@ Pinned order lists pins by ascending pin time, then unpinned Sessions by descend
 update time and ID. Its opaque cursors include the pin sort key and support both
 directions. `limit` defaults to 50 and is capped at 200. Search, group, status,
 and order changes start a new cursor traversal.
+
+`session.subagent.list` reads one existing Protocol task page (at most 10 direct
+children) for the verified parent Session at its backend Location. The optional
+opaque `cursor` continues that parent's page; no browser-selected Location,
+larger limit, mutation, or child subscription is accepted. The response keeps
+the Protocol `{ data, summary, cursor }` shape and is chunked if needed. An
+agent without this operation replies `unknown_operation`, which is an
+unsupported team read rather than an empty team.
 
 `session.create` accepts exactly `{ id, workspace }`. `id` is a client-generated
 Session ID; `workspace` must match an ID in a freshly rederived backend inventory.

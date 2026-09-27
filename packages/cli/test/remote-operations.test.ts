@@ -291,6 +291,19 @@ describe("workspace inventory and Session creation", () => {
 })
 
 describe("operation mapping", () => {
+  test("reads the bounded direct-child task page at the verified parent Location", async () => {
+    const page = { data: [{ sessionID: "ses_child", parentID: "ses_1", state: "running", revision: 1 }], summary: { total: 1, active: 1, running: 1, waiting: 0 }, cursor: { next: "opaque" } }
+    const { local, registry, subscriptions, calls } = await harness({ results: { subagentPage: async () => page } })
+    const outcome = await executeRemoteOperation({ request: request("session.subagent.list", { cursor: "opaque" }), sessions: registry, subscriptions, local })
+    expect(valueOf(outcome)).toEqual(page)
+    expect(calls.at(-1)).toEqual({ method: "subagentPage", args: ["ses_1", { directory: "/work" }, "opaque"] })
+    expect(calls.some((call) => call.method === "getSession")).toBe(true)
+
+    calls.length = 0
+    const missing = await executeRemoteOperation({ request: { ...request("session.subagent.list"), sessionID: "ses_missing" }, sessions: registry, subscriptions, local })
+    expect(errorOf(missing).code).toBe("session_not_allowed")
+    expect(calls.some((call) => call.method === "subagentPage")).toBe(false)
+  })
   test("maps each mutation onto its exact Protocol call and payload", async () => {
     const { local, registry, subscriptions, calls } = await harness({
       results: {
@@ -800,6 +813,9 @@ describe("strict validation and error mapping", () => {
       [request("session.prompt", { text: "hi", delivery: "now" }), "invalid_message"],
       [request("session.prompt", { text: "hi", files: [{ uri: 4 }] }), "invalid_message"],
       [request("session.log", { after: -1 }), "invalid_message"],
+      [request("session.subagent.list", { cursor: "" }), "invalid_message"],
+      [request("session.subagent.list", { limit: 11 }), "invalid_message"],
+      [request("session.subagent.list", { directory: "/etc" }), "invalid_message"],
       [request("session.permission.reply", { requestID: "grq_1", reply: "once" }), "invalid_message"],
       [request("session.permission.reply", { requestID: "per_1", reply: "maybe" }), "invalid_message"],
       [request("session.form.reply", { formID: "frm_1", answer: { invalid: { nested: true } } }), "invalid_message"],

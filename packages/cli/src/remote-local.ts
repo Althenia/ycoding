@@ -67,6 +67,7 @@ export type LocalServer = {
   /** Process-wide running status; the caller filters it to the current inventory. */
   readonly activeSessions: () => Promise<unknown>
   readonly snapshot: (sessionID: string, location: LocalLocation) => Promise<unknown>
+  readonly subagentPage: (parentID: string, location: LocalLocation, cursor?: string) => Promise<unknown>
   readonly messages: (sessionID: string, location: LocalLocation) => Promise<readonly SessionMessageInfo[]>
   readonly log: (sessionID: string, location: LocalLocation, after?: number) => Promise<readonly unknown[]>
   readonly autonomyGet: (sessionID: string, location: LocalLocation) => Promise<unknown>
@@ -164,6 +165,8 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     activeSessions: () => call(() => client.session.active({ signal: AbortSignal.timeout(timeoutMs) })),
     snapshot: (sessionID, location) =>
       call(() => client.session.snapshot({ sessionID }, request(location, timeoutMs))),
+    subagentPage: (parentID, location, cursor) =>
+      call(() => client.session.subagent.list({ parentID, ...(cursor === undefined ? {} : { cursor }) }, request(location, timeoutMs))),
     autonomyGet: (sessionID, location) =>
       call(() => client.session.autonomy.get({ sessionID }, request(location, timeoutMs))),
     permissionList: (sessionID, location) =>

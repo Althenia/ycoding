@@ -37,3 +37,22 @@ test("resolves a real Session beyond 200 backend results across authoritative Lo
     await rm(root, { recursive: true, force: true })
   }
 }, 120_000)
+
+test("reads the real bounded direct-child page at the verified parent's Location", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ycoding-remote-team-"))
+  const server = await startServer(root)
+  try {
+    await createSession(server, "ses_team_root", root)
+    const local = createLocalServer({ url: server.base, auth: { type: "basic", username: "ycoding", password } })
+    const page = await local.subagentPage("ses_team_root", { directory: root })
+    if (typeof page !== "object" || page === null) throw new Error("expected a task page")
+    const summary = Reflect.get(page, "summary")
+    const cursor = Reflect.get(page, "cursor")
+    expect(Reflect.get(page, "data")).toEqual([])
+    expect(typeof summary === "object" && summary !== null ? Reflect.get(summary, "total") : undefined).toBe(0)
+    expect(typeof cursor === "object" && cursor !== null ? Reflect.get(cursor, "next") : undefined).toBeUndefined()
+  } finally {
+    await server.close()
+    await rm(root, { recursive: true, force: true })
+  }
+}, 120_000)

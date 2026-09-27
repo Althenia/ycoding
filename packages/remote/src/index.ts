@@ -41,6 +41,7 @@ export const remoteOperations = [
   "session.get",
   "session.messages",
   "session.snapshot",
+  "session.subagent.list",
   "session.log",
   "session.subscribe",
   "session.unsubscribe",
@@ -68,6 +69,7 @@ export const remoteSessionOperations = [
   "session.get",
   "session.messages",
   "session.snapshot",
+  "session.subagent.list",
   "session.log",
   "session.subscribe",
   "session.unsubscribe",
@@ -325,6 +327,7 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
 
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
   if (operation === "workspace.list") return input === undefined || (isRecord(input) && input.sessionsOnly === true && Object.keys(input).length === 1)
+  if (operation === "session.subagent.list") return input === undefined || (isRecord(input) && typeof input.cursor === "string" && input.cursor.length > 0 && input.cursor.length <= 1_024 && Object.keys(input).length === 1)
   if (operation !== "session.create") return true
   if (
     !isRecord(input) ||

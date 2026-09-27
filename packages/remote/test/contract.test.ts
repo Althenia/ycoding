@@ -80,6 +80,17 @@ describe("remote envelope: request", () => {
     ]) expect(parseClientMessage(frame)).toMatchObject({ ok: false, error: { code: "invalid_message" } })
   })
 
+  test("admits only bounded parent-scoped subagent page inputs", () => {
+    expect(parseClientMessage('{"type":"request","id":"a","operation":"session.subagent.list","sessionID":"ses_parent"}')).toMatchObject({ ok: true })
+    expect(parseClientMessage('{"type":"request","id":"a","operation":"session.subagent.list","sessionID":"ses_parent","input":{"cursor":"page_2"}}')).toMatchObject({ ok: true })
+    for (const raw of [
+      '{"type":"request","id":"a","operation":"session.subagent.list"}',
+      '{"type":"request","id":"a","operation":"session.subagent.list","sessionID":"ses_parent","input":{"limit":11}}',
+      '{"type":"request","id":"a","operation":"session.subagent.list","sessionID":"ses_parent","input":{"directory":"/other"}}',
+      '{"type":"request","id":"a","operation":"session.subagent.list","sessionID":"ses_parent","input":{"cursor":""}}',
+    ]) expect(parseClientMessage(raw).ok).toBe(false)
+  })
+
   test("rejects malformed frames, unknown operations, and unknown keys", () => {
     expect(parseClientMessage("not json")).toEqual({
       ok: false,
@@ -276,6 +287,7 @@ describe("remote operations", () => {
       "session.get",
       "session.messages",
       "session.snapshot",
+      "session.subagent.list",
       "session.log",
       "session.subscribe",
       "session.unsubscribe",
@@ -303,6 +315,7 @@ describe("remote operations", () => {
     expect(requireSession("session.list")).toBe(false)
     expect(requireSession("session.active")).toBe(false)
     expect(requireSession("session.prompt")).toBe(true)
+    expect(requireSession("session.subagent.list")).toBe(true)
     expect(requireSession("session.goal.stop")).toBe(true)
     expect(RemoteProtocolVersion).toBe(3)
     expect(RemoteWebSocketPath).toEqual({ client: "/ws/v3/client", agent: "/ws/v3/agent" })
