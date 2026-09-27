@@ -22,6 +22,25 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.7.6",
+    date: "2026-09-27",
+    title: "Remote usage, composer, and push alerts",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Open the remote Usage page to see each provider's quota meters, reset countdowns, and pace, spend for today, yesterday, and 30 days, a daily chart, and sortable breakdowns by model, Session, project, and agent." },
+      { tag: "Added", text: "See the OpenRouter credit balance, Copilot AI credits, and Grok, OpenCode Go, and Z.ai quotas in the TUI and on the web, plus a separately labeled YCoding local Today spend." },
+      { tag: "Added", text: "Start a remote Session from a composer with a repository, agent, model, and first prompt, and autocomplete commands, files, agents, references, and skills while you type." },
+      { tag: "Added", text: "Get push alerts in a closed browser or installed app when a Session needs your decision or stops running, and review recent alerts in the notification center." },
+      { tag: "Added", text: "Follow the autonomy level, current activity, elapsed time, and active goal in a status bar above the remote composer." },
+      { tag: "Added", text: "Animate the public site, documentation, and changelog, respecting reduced motion." },
+      { tag: "Changed", text: "List workspaces by name in a Sessions sidebar and show top-level Sessions 25 at a time, running first, then pinned, then most recent." },
+      { tag: "Changed", text: "Render remote replies as Markdown with collapsible thinking and tool rows, and show only your text in prompt bubbles." },
+      { tag: "Changed", text: "Show only the selected Session's family in the Office, with unique names, an Agents list, and an icon toolbar." },
+      { tag: "Changed", text: "Replace bare dashes in TUI usage views with Unknown or No usage yet, and remove the ntfy tool and configuration." },
+      { tag: "Fixed", text: "Skip compaction that cannot bring a request under the model's context window, reload Usage after the connection changes, and keep the desktop header inside the window at 1024–1279 px." },
+    ],
+  },
+  {
     version: "0.7.5",
     date: "2026-09-27",
     title: "Office view, context breakdown, and usage sorting",
