@@ -84,7 +84,7 @@ function harness(options: {
       ),
     }),
     getSession: async (sessionID: string) => sessionInfo(sessionID),
-    activeSessions: {}, permissionList: [], formList: [], guardrailRequestList: [],
+    activeSessions: {}, permissionRequests: [], formRequests: [], guardrailRequestList: [],
     ...options.results,
   })
   const records: ConnectionRecord[] = []
@@ -170,6 +170,60 @@ function requestFrame(operation: string, sessionID?: string, input?: Record<stri
 }
 
 describe("remote bridge", () => {
+  test("unknown future operation returns an immediate error on the same connection", async () => {
+    const test = harness({})
+    await test.bridge.connect()
+    try {
+      test.records[0].deliver(requestFrame("session.future.unknown", "ses_1"))
+      const response = await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "response" && frame.id === "req_1"))
+      expect(response).toMatchObject({ type: "response", id: "req_1", ok: false, error: { code: "unknown_operation" } })
+    } finally { await test.bridge.close() }
+  })
+  test("disconnect invalidates uploaded bytes before a replacement connection can admit a prompt", async () => {
+    const test = harness({ results: { prompt: { id: "msg_1" } } })
+    await test.bridge.connect()
+    try {
+      const uploadID = "4ab94d33-6e6b-41a3-a638-f0a6596854a9"
+      test.records[0].deliver(requestFrame("session.attachment.upload", "ses_1", { uploadID, index: 0, last: true, data: "aGVsbG8=" }))
+      await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "response" && frame.ok))
+      test.records[0].input.onClose(RemoteCloseCode.unauthorized)
+      await waitFor(() => test.records[1])
+      test.records[1].deliver(requestFrame("session.prompt", "ses_1", { text: "Review", files: [{ uri: `ycoding-upload://${uploadID}` }] }))
+      const refused = await waitFor(() => sentFrames(test.records[1]).find((frame) => frame.type === "response" && !frame.ok))
+      expect(refused).toMatchObject({ error: { code: "invalid_message" } })
+      expect(test.calls.some((call) => call.method === "prompt")).toBe(false)
+    } finally { await test.bridge.close() }
+  })
+  test("a superseded relay connection cannot upload bytes into its replacement", async () => {
+    const test = harness({ results: { prompt: { id: "msg_1" } } })
+    await test.bridge.connect()
+    try {
+      test.records[0].input.onClose(RemoteCloseCode.unauthorized)
+      await waitFor(() => test.records[1])
+      const uploadID = "4ab94d33-6e6b-41a3-a638-f0a6596854a9"
+      test.records[0].deliver(requestFrame("session.attachment.upload", "ses_1", { uploadID, index: 0, last: true, data: "aGVsbG8=" }))
+      await Bun.sleep(10)
+      test.records[1].deliver(requestFrame("session.prompt", "ses_1", { text: "Review", files: [{ uri: `ycoding-upload://${uploadID}` }] }))
+      const refused = await waitFor(() => sentFrames(test.records[1]).find((frame) => frame.type === "response" && !frame.ok))
+      expect(refused).toMatchObject({ error: { code: "invalid_message" } })
+      expect(test.calls.some((call) => call.method === "prompt")).toBe(false)
+    } finally { await test.bridge.close() }
+  })
+  test("late close from an old connection cannot clear the replacement upload", async () => {
+    const test = harness({ results: { prompt: { id: "msg_1" } } })
+    await test.bridge.connect()
+    try {
+      test.records[0].input.onClose(RemoteCloseCode.unauthorized)
+      await waitFor(() => test.records[1])
+      const uploadID = "4ab94d33-6e6b-41a3-a638-f0a6596854a9"
+      test.records[1].deliver(requestFrame("session.attachment.upload", "ses_1", { uploadID, index: 0, last: true, data: "aGVsbG8=" }))
+      await waitFor(() => sentFrames(test.records[1]).find((frame) => frame.type === "response" && frame.ok))
+      test.records[0].input.onClose(RemoteCloseCode.unauthorized)
+      test.records[1].deliver(requestFrame("session.prompt", "ses_1", { text: "Review", files: [{ uri: `ycoding-upload://${uploadID}` }] }))
+      const admitted = await waitFor(() => sentFrames(test.records[1]).find((frame) => frame.type === "response" && frame.ok && typeof frame.value === "object" && frame.value !== null && "data" in frame.value))
+      expect(admitted).toMatchObject({ ok: true, value: { data: { id: "msg_1" } } })
+    } finally { await test.bridge.close() }
+  })
   test("execution-only status changes read active state without rescanning pending requests", async () => {
     let active: unknown = {}
     const sessions = Array.from({ length: 100 }, (_, index) => ({ sessionID: `ses_${index}`, directory: "/work", title: "Session" }))
@@ -204,7 +258,7 @@ describe("remote bridge", () => {
     let permissions: unknown[] = []
     const test = harness({ results: {
       activeSessions: () => active,
-      permissionList: () => permissions,
+      permissionRequests: () => permissions,
     } })
     await test.bridge.connect()
     try {
@@ -212,14 +266,14 @@ describe("remote bridge", () => {
       expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status")).toEqual([{ type: "status", running: [], attention: [] }])
       const stream = test.streams[0].stream
       for (let index = 0; index < 30; index += 1) {
-        active = index % 2 === 0 ? { ses_1: { type: "running" } } : {}
+        active = index % 2 === 0 || index === 29 ? { ses_1: { type: "running" } } : {}
         permissions = index === 29 ? [{ id: "per_1", sessionID: "ses_1" }] : []
         stream.onEvent({ type: index % 2 === 0 ? "session.step.started" : "permission.v2.asked", data: { sessionID: "ses_1" } })
       }
       await waitFor(() => sentFrames(test.records[0]).filter((frame) => frame.type === "status").length === 2 ? true : undefined, 1_000)
       expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status")).toEqual([
         { type: "status", running: [], attention: [] },
-        { type: "status", running: [], attention: ["ses_1"] },
+        { type: "status", running: ["ses_1"], attention: ["ses_1"] },
       ])
     } finally { await test.bridge.close() }
   })

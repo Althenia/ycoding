@@ -90,11 +90,14 @@ export type LocalServer = {
   readonly resourceCatalog: (location: LocalLocation) => Promise<McpResourceCatalog>
   readonly fileFind: (location: LocalLocation, query: string, limit: number) => Promise<readonly FileSystemEntry[]>
   readonly snapshot: (sessionID: string, location: LocalLocation) => Promise<unknown>
+  readonly todoList: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly subagentPage: (parentID: string, location: LocalLocation, cursor?: string) => Promise<unknown>
   readonly messages: (sessionID: string, location: LocalLocation) => Promise<readonly SessionMessageInfo[]>
   readonly log: (sessionID: string, location: LocalLocation, after?: number) => Promise<readonly unknown[]>
   readonly autonomyGet: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly permissionList: (sessionID: string, location: LocalLocation) => Promise<unknown>
+  readonly permissionRequests: (location: LocalLocation) => Promise<unknown>
+  readonly formRequests: (location: LocalLocation) => Promise<unknown>
   readonly guardrailStatus: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly guardrailRequestList: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly formList: (sessionID: string, location: LocalLocation) => Promise<readonly FormInfo[]>
@@ -204,12 +207,16 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     fileFind: (location, query, limit) => call(async () => (await client.file.find({ query, limit }, request(location, timeoutMs))).data),
     snapshot: (sessionID, location) =>
       call(() => client.session.snapshot({ sessionID }, request(location, timeoutMs))),
+    todoList: (sessionID, location) =>
+      call(() => client.session.todo.list({ sessionID }, request(location, timeoutMs))),
     subagentPage: (parentID, location, cursor) =>
       call(() => client.session.subagent.list({ parentID, ...(cursor === undefined ? {} : { cursor }) }, request(location, timeoutMs))),
     autonomyGet: (sessionID, location) =>
       call(() => client.session.autonomy.get({ sessionID }, request(location, timeoutMs))),
     permissionList: (sessionID, location) =>
       call(() => client.permission.list({ sessionID }, request(location, timeoutMs))),
+    permissionRequests: (location) => call(async () => (await client.permission.request.list({}, request(location, timeoutMs))).data),
+    formRequests: (location) => call(async () => (await client.form.request.list({}, request(location, timeoutMs))).data),
     guardrailStatus: (sessionID, location) =>
       call(() => client.guardrail.status({ sessionID }, request(location, timeoutMs))),
     guardrailRequestList: (sessionID, location) =>

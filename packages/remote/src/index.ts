@@ -41,11 +41,13 @@ export const remoteOperations = [
   "session.get",
   "session.messages",
   "session.snapshot",
+  "session.todo.list",
   "session.subagent.list",
   "session.log",
   "session.subscribe",
   "session.unsubscribe",
   "session.prompt",
+  "session.attachment.upload",
   "session.interrupt",
   "session.permission.list",
   "session.permission.reply",
@@ -81,11 +83,13 @@ export const remoteSessionOperations = [
   "session.get",
   "session.messages",
   "session.snapshot",
+  "session.todo.list",
   "session.subagent.list",
   "session.log",
   "session.subscribe",
   "session.unsubscribe",
   "session.prompt",
+  "session.attachment.upload",
   "session.interrupt",
   "session.permission.list",
   "session.permission.reply",
@@ -122,6 +126,12 @@ export type RemoteWorkspaceInfo = {
 /** Shared bounds. Both sides enforce the same numbers so neither can drift. */
 export const RemoteLimits = {
   maxClientMessageChars: 32_768,
+  maxAttachmentChunkChars: 28_000,
+  maxAttachmentChunks: 1_024,
+  maxAttachmentBytes: 20 * 1024 * 1024,
+  maxConnectionAttachmentBytes: 40 * 1024 * 1024,
+  maxAttachmentUploads: 64,
+  attachmentTtlMs: 10 * 60_000,
   maxAgentMessageChars: 262_144,
   maxPendingRequestsPerClient: 32,
   maxSessionListPage: 200,
@@ -354,6 +364,13 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
 }
 
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
+  if (operation === "session.attachment.upload")
+    return isRecord(input) && typeof input.uploadID === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(input.uploadID) &&
+      typeof input.index === "number" && Number.isSafeInteger(input.index) && input.index >= 0 && input.index < RemoteLimits.maxAttachmentChunks && typeof input.last === "boolean" &&
+      typeof input.data === "string" && input.data.length > 0 && input.data.length <= RemoteLimits.maxAttachmentChunkChars &&
+      /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(input.data) &&
+      (input.last || !input.data.endsWith("=")) &&
+      Object.keys(input).every((key) => key === "uploadID" || key === "index" || key === "last" || key === "data")
   if (operation === "usage.summary") return input === undefined
   if (operation === "usage.providers") return input === undefined || (isRecord(input) &&
     Object.keys(input).every((key) => key === "refresh") && (input.refresh === undefined || typeof input.refresh === "boolean"))
@@ -370,7 +387,7 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
   }
   if (operation === "workspace.list") return input === undefined || (isRecord(input) && input.sessionsOnly === true && Object.keys(input).length === 1)
   if (operation === "session.subagent.list") return input === undefined || (isRecord(input) && typeof input.cursor === "string" && input.cursor.length > 0 && input.cursor.length <= 1_024 && Object.keys(input).length === 1)
-  if (operation === "session.status" || operation === "session.catalog") return input === undefined
+  if (operation === "session.status" || operation === "session.catalog" || operation === "session.todo.list") return input === undefined
   if (operation === "workspace.catalog") return isRecord(input) && validWorkspace(input.workspace) && Object.keys(input).length === 1
   if (operation === "session.file.find" || operation === "workspace.file.find")
     return isRecord(input) && (operation !== "workspace.file.find" || validWorkspace(input.workspace)) &&

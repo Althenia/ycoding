@@ -3,11 +3,13 @@ import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { describe, expect, test } from "bun:test"
 import type { SessionInfo } from "@ycoding-ai/client/promise"
+import { Project } from "@ycoding-ai/schema/project"
 import { RemoteLimits, parseChunkedValue, requireSession, type RemoteRequest } from "@ycoding-ai/remote"
-import { assertPrivateEndpoint, type LocalServer } from "../src/remote-local"
+import { assertPrivateEndpoint, type LocalLocation, type LocalServer } from "../src/remote-local"
 import { LocalFailure as LocalFailureClass } from "../src/remote-local"
 import {
   createSessionRegistry,
+  createAttachmentUploads,
   createSubscriptions,
   executeRemoteOperation,
   listPage,
@@ -15,6 +17,97 @@ import {
   sessionStatus,
   successFrames,
 } from "../src/remote-operations"
+
+test("uploaded chunks resolve only for their Session and reach the local prompt as a canonical data URL", async () => {
+  const test = await harness({ sessions: [sessionInfo("ses_1", { updated: 1 }), sessionInfo("ses_2", { updated: 1 })], results: { prompt: { id: "msg_1" }, command: { id: "msg_2" } } })
+  const uploads = createAttachmentUploads()
+  const uploadID = "4ab94d33-6e6b-41a3-a638-f0a6596854a9"
+  const send = (index: number, last: boolean, data: string, sessionID = "ses_1") => executeRemoteOperation({ request: { ...request("session.attachment.upload", { uploadID, index, last, data }), sessionID }, uploads, local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
+  expect(valueOf(await send(0, false, "aGVs"))).toMatchObject({ received: 3 })
+  const uri = `ycoding-upload://${uploadID}`
+  const prompt = (sessionID: string) => executeRemoteOperation({ request: { ...request("session.prompt", { text: "Review", files: [{ uri, name: "hello.txt" }] }), sessionID }, uploads, local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
+  expect(errorOf(await prompt("ses_1")).code).toBe("invalid_message")
+  expect(errorOf(await send(2, true, "bG8=")).code).toBe("invalid_message")
+  expect(errorOf(await send(0, true, "bG8=")).code).toBe("invalid_message")
+  expect(errorOf(await send(1, true, "bG8=", "ses_2")).code).toBe("invalid_message")
+  expect(valueOf(await send(1, true, "bG8="))).toEqual({ uri })
+  expect(errorOf(await prompt("ses_2")).code).toBe("invalid_message")
+  expect(valueOf(await prompt("ses_1"))).toEqual({ data: { id: "msg_1" } })
+  expect(test.calls.find((call) => call.method === "prompt")?.args[2]).toMatchObject({ files: [{ uri: "data:application/octet-stream;base64,aGVsbG8=", name: "hello.txt" }] })
+  const command = await executeRemoteOperation({ request: request("session.command", { command: "test", files: [{ uri }] }), uploads, local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
+  expect(valueOf(command)).toEqual({ data: { id: "msg_2" } })
+  expect(test.calls.find((call) => call.method === "command")?.args[2]).toMatchObject({ files: [{ uri: "data:application/octet-stream;base64,aGVsbG8=" }] })
+  uploads.clear()
+  expect(errorOf(await prompt("ses_1")).code).toBe("invalid_message")
+})
+
+test("upload storage rejects oversize, expires idle buffers and clears on disconnect", () => {
+  let now = 0
+  const uploads = createAttachmentUploads({ now: () => now })
+  const id = "4ab94d33-6e6b-41a3-a638-f0a6596854a9"
+  expect(uploads.append("ses_1", id, 0, false, "AAAA")).toEqual({ received: 3 })
+  now = RemoteLimits.attachmentTtlMs + 1
+  expect(() => uploads.resolve("ses_1", `ycoding-upload://${id}`)).toThrow()
+  expect(() => uploads.append("ses_1", id, 1, true, "AAAA")).toThrow()
+  const huge = Buffer.alloc(RemoteLimits.maxAttachmentBytes + 1).toString("base64")
+  for (let offset = 0, index = 0; offset < huge.length; offset += RemoteLimits.maxAttachmentChunkChars, index++) {
+    const chunk = huge.slice(offset, offset + RemoteLimits.maxAttachmentChunkChars)
+    if (offset + RemoteLimits.maxAttachmentChunkChars >= huge.length) expect(() => uploads.append("ses_1", id, index, true, chunk)).toThrow()
+    else uploads.append("ses_1", id, index, false, chunk)
+  }
+  expect(() => uploads.resolve("ses_1", `ycoding-upload://${id}`)).toThrow()
+  uploads.append("ses_1", id, 0, true, "AAAA")
+  uploads.clear()
+  expect(() => uploads.resolve("ses_1", `ycoding-upload://${id}`)).toThrow()
+})
+
+test("two maximum-size uploads exhaust the bounded connection buffer", () => {
+  const uploads = createAttachmentUploads()
+  const encoded = Buffer.alloc(RemoteLimits.maxAttachmentBytes).toString("base64")
+  try {
+    expect(() => uploads.append("ses_1", "4ab94d33-6e6b-41a3-a638-000000000000", 0, false, "YQ==")).toThrow()
+    for (const id of ["4ab94d33-6e6b-41a3-a638-f0a6596854a9", "4ab94d33-6e6b-41a3-a638-f0a6596854aa"]) {
+      for (let offset = 0, index = 0; offset < encoded.length; offset += RemoteLimits.maxAttachmentChunkChars, index++)
+        uploads.append("ses_1", id, index, offset + RemoteLimits.maxAttachmentChunkChars >= encoded.length, encoded.slice(offset, offset + RemoteLimits.maxAttachmentChunkChars))
+    }
+    expect(() => uploads.append("ses_1", "4ab94d33-6e6b-41a3-a638-f0a6596854ab", 0, true, "AAAA")).toThrow()
+  } finally { uploads.clear() }
+})
+
+test("small uploads cannot exhaust the agent through unbounded buffer entries", () => {
+  const uploads = createAttachmentUploads()
+  try {
+    for (let index = 0; index < 64; index++)
+      uploads.append("ses_1", `4ab94d33-6e6b-41a3-a638-${index.toString(16).padStart(12, "0")}`, 0, true, "AAAA")
+    expect(() => uploads.append("ses_1", "4ab94d33-6e6b-41a3-a638-000000000040", 0, true, "AAAA")).toThrow()
+  } finally { uploads.clear() }
+})
+
+test("repeated references cannot expand one upload beyond the local admission byte budget", async () => {
+  const test = await harness({ results: { prompt: { id: "msg_1" } } })
+  const uploads = createAttachmentUploads()
+  const uploadID = "4ab94d33-6e6b-41a3-a638-f0a6596854a9"
+  const encoded = Buffer.alloc(RemoteLimits.maxAttachmentBytes).toString("base64")
+  try {
+    for (let offset = 0, index = 0; offset < encoded.length; offset += RemoteLimits.maxAttachmentChunkChars, index++)
+      uploads.append("ses_1", uploadID, index, offset + RemoteLimits.maxAttachmentChunkChars >= encoded.length, encoded.slice(offset, offset + RemoteLimits.maxAttachmentChunkChars))
+    const uri = `ycoding-upload://${uploadID}`
+    const outcome = await executeRemoteOperation({ request: request("session.prompt", { text: "Review", files: [{ uri }, { uri }, { uri }] }), uploads,
+      local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
+    expect(errorOf(outcome).code).toBe("message_too_large")
+    expect(test.calls.some((call) => call.method === "prompt")).toBe(false)
+  } finally { uploads.clear() }
+})
+
+test("existing global Sessions appear in read-only workspace groups without enabling global creation", async () => {
+  const directory = process.cwd()
+  const session = { ...sessionInfo("ses_global", { updated: 1, directory }), projectID: Project.ID.global }
+  const test = await harness({ sessions: [session], results: { projectList: [] } })
+  const requestGroup = (sessionsOnly: boolean) => executeRemoteOperation({ request: request("workspace.list", { sessionsOnly }),
+    local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
+  expect(valueOf(await requestGroup(true))).toMatchObject({ data: [{ projectID: Project.ID.global, directory }] })
+  expect(valueOf(await requestGroup(false))).toEqual({ data: [] })
+})
 
 const scratch = join(import.meta.dir, "../../../.cache/tmp")
 await mkdir(scratch, { recursive: true })
@@ -98,6 +191,7 @@ const readOperations = [
   "session.get",
   "session.messages",
   "session.snapshot",
+  "session.todo.list",
   "session.active",
   "session.log",
   "session.autonomy.get",
@@ -241,7 +335,7 @@ describe("workspace inventory and Session creation", () => {
     expect(test.calls.find((call) => call.method === "createSession")?.args).toEqual(["ses_chosen", { directory }, "build", model])
   })
 
-  test("hides temporary and global workspaces and names unnamed repositories by directory", async () => {
+  test("hides temporary and global creation workspaces while listing existing global Sessions read-only", async () => {
     const directory = process.cwd()
     const sessions = [sessionInfo("ses_allowed", { updated: 1, directory }),
       { ...sessionInfo("ses_global", { updated: 2, directory }), projectID: "global" },
@@ -253,8 +347,23 @@ describe("workspace inventory and Session creation", () => {
     for (const input of [undefined, { sessionsOnly: true }]) {
       const value = arrayOf(recordOf(valueOf(await executeRemoteOperation({ request: request("workspace.list", input), local: test.local,
         sessions: test.registry, subscriptions: test.subscriptions }))).data)
+      expect(value).toHaveLength(input?.sessionsOnly ? 2 : 1)
+      expect(value.find((item) => recordOf(item).projectID === "prj_1")).toMatchObject({ projectID: "prj_1", directory, name: "cli" })
+      if (input?.sessionsOnly) expect(value.find((item) => recordOf(item).projectID === "global")).toMatchObject({ projectID: "global", directory })
+    }
+  })
+
+  test("resolves dot segments so a recorded directory joins and names its workspace", async () => {
+    const directory = process.cwd()
+    const sessions = [sessionInfo("ses_plain", { updated: 1, directory }), sessionInfo("ses_dotted", { updated: 2, directory: `${directory}/test/..` })]
+    const test = await harness({ sessions, results: { projectList: [{ id: "prj_1", worktree: directory }], projectDirectories: async () => [] } })
+    for (const input of [undefined, { sessionsOnly: true }]) {
+      const value = arrayOf(recordOf(valueOf(await executeRemoteOperation({ request: request("workspace.list", input), local: test.local,
+        sessions: test.registry, subscriptions: test.subscriptions }))).data)
       expect(value).toHaveLength(1)
       expect(value[0]).toMatchObject({ projectID: "prj_1", directory, name: "cli" })
+      const id = String(recordOf(value[0]).id)
+      expect(listPage(sessions, parseListQuery({ workspace: id, limit: 10 })).data.map((session) => session.id)).toEqual(["ses_dotted", "ses_plain"])
     }
   })
 
@@ -375,12 +484,37 @@ describe("operation mapping", () => {
     expect(failure instanceof Error ? failure.message : undefined).toBe("Session status exceeds the bounded root count")
   })
 
+  test("status reads pending requests only at Locations with an executing Session", async () => {
+    const directory = process.cwd()
+    const idleLocation = join(directory, "src")
+    const sessions = [
+      sessionInfo("ses_root", { updated: 1, directory }),
+      sessionInfo("ses_child", { updated: 2, directory, parentID: "ses_root" }),
+      sessionInfo("ses_idle", { updated: 3, directory }),
+      sessionInfo("ses_elsewhere", { updated: 4, directory: idleLocation }),
+      sessionInfo("ses_gone", { updated: 5, directory: "/nonexistent/ycoding-removed-workspace" }),
+    ]
+    const idleRead = new Error("an idle Location was read for status")
+    const { local, calls } = fakeLocal({
+      activeSessions: { ses_child: { type: "running" } },
+      permissionRequests: async (location: LocalLocation) => location.directory === directory ? [{ id: "per_1", sessionID: "ses_child" }] : Promise.reject(idleRead),
+      formRequests: async (location: LocalLocation) => location.directory === directory ? [formInfo("frm_1", "ses_idle")] : Promise.reject(idleRead),
+      guardrailRequestList: async () => [],
+    })
+    expect(await sessionStatus(local, sessions)).toEqual({ running: ["ses_root"], attention: ["ses_idle", "ses_root"] })
+    expect(calls.filter((call) => call.method === "permissionRequests").map((call) => call.args[0])).toEqual([{ directory }])
+    expect(calls.filter((call) => call.method === "formRequests").map((call) => call.args[0])).toEqual([{ directory }])
+    expect(calls.filter((call) => call.method === "guardrailRequestList").map((call) => call.args[0])).toEqual(["ses_root"])
+    expect(calls.some((call) => call.method === "permissionList" || call.method === "formList")).toBe(false)
+  })
+
   test("status folds active descendants and unresolved requests to unique root IDs", async () => {
-    const sessions = [sessionInfo("ses_root", { updated: 1 }), sessionInfo("ses_child", { updated: 2, parentID: "ses_root" }), sessionInfo("ses_other", { updated: 3 })]
+    const directory = process.cwd()
+    const sessions = [sessionInfo("ses_root", { updated: 1, directory }), sessionInfo("ses_child", { updated: 2, parentID: "ses_root", directory }), sessionInfo("ses_other", { updated: 3, directory })]
     const { local, registry, subscriptions } = await harness({ sessions, results: {
       activeSessions: { ses_child: { type: "running" } },
-      permissionList: async (id: string) => id === "ses_child" ? [{ id: "per_1", sessionID: id }] : [],
-      formList: async (id: string) => id === "ses_other" ? [formInfo("frm_1", id)] : [],
+      permissionRequests: async () => [{ id: "per_1", sessionID: "ses_child" }],
+      formRequests: async () => [formInfo("frm_1", "ses_other")],
       guardrailRequestList: async (id: string) => id === "ses_root" ? [{ id: "grq_1", sessionID: "ses_child", rootSessionID: id }] : [],
     } })
     const outcome = await executeRemoteOperation({ request: request("session.status"), local, sessions: registry, subscriptions })
@@ -620,6 +754,7 @@ describe("operation mapping", () => {
     const { local, registry, subscriptions, calls } = await harness({
       results: {
         snapshot: async () => snapshot,
+        todoList: async () => [{ content: "Run tests", status: "in_progress", priority: "high" }],
         messages: async () => [{ id: "msg_1" }],
         log: async () => [{ id: "evt_1" }],
         autonomyGet: async () => ({ mode: "normal" }),
@@ -632,6 +767,8 @@ describe("operation mapping", () => {
     })
 
     expect(valueOf(await executeRemoteOperation({ request: request("session.snapshot"), sessions: registry, subscriptions, local }))).toEqual(snapshot)
+    expect(valueOf(await executeRemoteOperation({ request: request("session.todo.list"), sessions: registry, subscriptions, local }))).toEqual({ data: [{ content: "Run tests", status: "in_progress", priority: "high" }] })
+    expect(calls.at(-1)).toEqual({ method: "todoList", args: ["ses_1", { directory: "/work" }] })
     expect(valueOf(await executeRemoteOperation({ request: request("session.messages"), sessions: registry, subscriptions, local }))).toEqual({ data: [{ id: "msg_1" }] })
     expect(valueOf(await executeRemoteOperation({ request: request("session.log", { after: 4 }), sessions: registry, subscriptions, local }))).toEqual({ data: [{ id: "evt_1" }] })
     expect(valueOf(await executeRemoteOperation({ request: request("session.autonomy.get"), sessions: registry, subscriptions, local }))).toEqual({ data: { mode: "normal" } })
@@ -740,6 +877,7 @@ function readMethod(operation: (typeof readOperations)[number]) {
     "session.get": "getSession",
     "session.messages": "messages",
     "session.snapshot": "snapshot",
+    "session.todo.list": "todoList",
     "session.active": "activeSessions",
     "session.log": "log",
     "session.autonomy.get": "autonomyGet",

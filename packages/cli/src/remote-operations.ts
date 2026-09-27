@@ -58,6 +58,74 @@ const catalogLimit = { agents: 100, models: 500, commands: 200, skills: 200, ref
 type ModelSelection = NonNullable<Parameters<LocalServer["createSession"]>[3]>
 type CommandInput = Parameters<LocalServer["command"]>[2]
 
+export function createAttachmentUploads(options: { readonly now?: () => number } = {}) {
+  const now = options.now ?? Date.now
+  const entries = new Map<string, { readonly sessionID: string; readonly chunks: string[]; bytes: number; complete: boolean; expiresAt: number; timer?: ReturnType<typeof setTimeout> }>()
+  let total = 0
+  let closed = false
+  const remove = (id: string) => {
+    const entry = entries.get(id)
+    if (!entry) return
+    clearTimeout(entry.timer)
+    total -= entry.bytes
+    entries.delete(id)
+  }
+  const prune = () => { for (const [id, entry] of entries) if (entry.expiresAt <= now()) remove(id) }
+  const touch = (id: string, entry: NonNullable<ReturnType<typeof entries.get>>) => {
+    clearTimeout(entry.timer)
+    entry.expiresAt = now() + RemoteLimits.attachmentTtlMs
+    entry.timer = setTimeout(() => remove(id), RemoteLimits.attachmentTtlMs)
+    entry.timer.unref?.()
+  }
+  return {
+    append(sessionID: string, id: string, index: number, last: boolean, data: string) {
+      if (closed) throw new OperationError("invalid_message", "Attachment upload connection is closed")
+      prune()
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id) ||
+        !Number.isSafeInteger(index) || index < 0 || index >= RemoteLimits.maxAttachmentChunks ||
+        typeof last !== "boolean" || data.length === 0 || data.length > RemoteLimits.maxAttachmentChunkChars ||
+        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data) || (!last && data.endsWith("=")))
+        throw new OperationError("invalid_message", "Invalid attachment upload chunk")
+      const existing = entries.get(id)
+      if ((existing && (existing.sessionID !== sessionID || existing.complete || existing.chunks.length !== index)) || (!existing && index !== 0))
+        throw new OperationError("invalid_message", "Attachment chunks must arrive once, in order, for one Session")
+      if (!existing && entries.size >= RemoteLimits.maxAttachmentUploads)
+        throw new OperationError("message_too_large", "Too many attachment uploads are retained on this connection")
+      const bytes = Buffer.from(data, "base64").byteLength
+      if (bytes === 0 || bytes + (existing?.bytes ?? 0) > RemoteLimits.maxAttachmentBytes || bytes + total > RemoteLimits.maxConnectionAttachmentBytes) {
+        remove(id)
+        throw new OperationError("message_too_large", "Attachment exceeds the upload size limit")
+      }
+      const entry = existing ?? { sessionID, chunks: [], bytes: 0, complete: false, expiresAt: 0, timer: undefined }
+      entry.chunks.push(data)
+      entry.bytes += bytes
+      total += bytes
+      entries.set(id, entry)
+      if (last) {
+        const combined = entry.chunks.join("")
+        if (Buffer.from(combined, "base64").toString("base64") !== combined) {
+          remove(id)
+          throw new OperationError("invalid_message", "Attachment data is not canonical base64")
+        }
+        entry.complete = true
+      }
+      touch(id, entry)
+      return last ? { uri: `ycoding-upload://${id}` } : { received: entry.bytes }
+    },
+    resolve(sessionID: string, uri: string) {
+      if (closed) throw new OperationError("invalid_message", "Attachment upload connection is closed")
+      prune()
+      const id = uri.startsWith("ycoding-upload://") ? uri.slice("ycoding-upload://".length) : ""
+      const entry = entries.get(id)
+      if (!entry || entry.sessionID !== sessionID || !entry.complete)
+        throw new OperationError("invalid_message", "Attachment upload is unavailable or incomplete")
+      touch(id, entry)
+      return `data:application/octet-stream;base64,${entry.chunks.join("")}`
+    },
+    clear() { closed = true; for (const id of entries.keys()) remove(id) },
+  }
+}
+
 /** A response too large for one agent frame is chunked, never truncated. */
 export function successFrames(id: string, value: unknown): readonly RemoteResponse[] {
   const text = JSON.stringify(value ?? null)
@@ -231,8 +299,9 @@ async function workspaceInventory(local: LocalServer): Promise<WorkspaceCandidat
   const [sessions, projects] = await Promise.all([listSessions(local), local.projectList()])
   const projectsByID = new Map(projects.map((project) => [project.id, project]))
   const candidates = new Map<string, WorkspaceCandidate>()
-  const add = (projectID: string, directory: string, workspaceID?: string) => {
+  const add = (projectID: string, recorded: string, workspaceID?: string) => {
     if (projectID === Project.ID.global) return
+    const directory = resolve(recorded)
     const location = { directory, ...(workspaceID === undefined ? {} : { workspaceID }) }
     const tuple = [projectID, directory, workspaceID ?? null] as const
     const project = projectsByID.get(projectID)
@@ -279,12 +348,12 @@ async function workspaceList(local: LocalServer): Promise<readonly RemoteWorkspa
 
 async function sessionWorkspaces(local: LocalServer, sessions: readonly SessionInfo[]): Promise<readonly RemoteWorkspaceInfo[]> {
   const projects = new Map((await local.projectList()).map((project) => [project.id, project]))
-  const directories = [...new Set(sessions.filter((session) => session.projectID !== Project.ID.global).map((session) => session.location.directory))]
+  const directories = [...new Set(sessions.map((session) => resolve(session.location.directory)))]
   const permitted = new Set((await Promise.all(directories.map(async (directory) => await allowedWorkspaceDirectory(directory) ? directory : undefined)))
     .filter((directory): directory is string => directory !== undefined))
-  return [...new Map(sessions.filter((session) => session.projectID !== Project.ID.global && permitted.has(session.location.directory)).map((session) => {
+  return [...new Map(sessions.filter((session) => permitted.has(resolve(session.location.directory))).map((session) => {
     const projectID = session.projectID
-    const directory = session.location.directory
+    const directory = resolve(session.location.directory)
     const id = workspaceKey(projectID, directory, session.location.workspaceID)
     const name = projects.get(projectID)?.name ?? basename(directory)
     return [id, { id, projectID, directory,
@@ -347,14 +416,26 @@ async function findFiles(local: LocalServer, location: LocalLocation, query: str
   }) }
 }
 
-async function requireFileAttachments(local: LocalServer, location: LocalLocation, files: LocalPrompt["files"]) {
-  if (files === undefined || files.length === 0) return
+async function requireFileAttachments(local: LocalServer, location: LocalLocation, files: LocalPrompt["files"], uploads: ReturnType<typeof createAttachmentUploads> | undefined, sessionID: string) {
+  if (files === undefined || files.length === 0) return files
   const fileURIs = files.map((file) => typeof file === "object" && file !== null ? Reflect.get(file, "uri") : undefined)
   const root = fileURIs.some((uri) => typeof uri === "string" && uri.startsWith("file:"))
     ? await realpath(location.directory).catch(() => undefined) : undefined
   const catalogRequired: string[] = []
+  const resolvedUploads = new Map<string, string>()
+  let uploadedBytes = 0
   for (const uri of fileURIs) {
     if (typeof uri !== "string") throw new OperationError("invalid_message", "Invalid attachment URI")
+    if (uri.startsWith("ycoding-upload://")) {
+      if (!uploads) throw new OperationError("invalid_message", "Attachment upload is unavailable")
+      const resolved = resolvedUploads.get(uri) ?? uploads.resolve(sessionID, uri)
+      resolvedUploads.set(uri, resolved)
+      const encoded = resolved.slice("data:application/octet-stream;base64,".length)
+      uploadedBytes += encoded.length / 4 * 3 - (encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0)
+      if (uploadedBytes > RemoteLimits.maxConnectionAttachmentBytes)
+        throw new OperationError("message_too_large", "Expanded attachments exceed the local admission byte limit")
+      continue
+    }
     if (!uri.startsWith("file:")) {
       catalogRequired.push(uri)
       continue
@@ -362,10 +443,18 @@ async function requireFileAttachments(local: LocalServer, location: LocalLocatio
     const target = await Promise.resolve().then(() => fileURLToPath(uri)).then((path) => realpath(path), () => undefined).catch(() => undefined)
     if (root === undefined || target === undefined || !contained(root, target)) catalogRequired.push(uri)
   }
-  if (catalogRequired.length === 0) return
-  const available = await catalog(local, location)
-  const permitted = new Set([...available.references, ...available.resources].map((resource) => resource.uri))
-  if (catalogRequired.some((uri) => !permitted.has(uri))) throw new OperationError("invalid_message", "Attachment is outside the Session Location and current catalog")
+  if (catalogRequired.length) {
+    const available = await catalog(local, location)
+    const permitted = new Set([...available.references, ...available.resources].map((resource) => resource.uri))
+    if (catalogRequired.some((uri) => !permitted.has(uri))) throw new OperationError("invalid_message", "Attachment is outside the Session Location and current catalog")
+  }
+  return files.map((file) => {
+    if (typeof file !== "object" || file === null) throw new OperationError("invalid_message", "Invalid attachment")
+    const uri = Reflect.get(file, "uri")
+    return typeof uri === "string" && uri.startsWith("ycoding-upload://")
+      ? { ...file, uri: resolvedUploads.get(uri)! }
+      : file
+  })
 }
 
 function modelSelection(value: unknown): ModelSelection {
@@ -427,6 +516,7 @@ class OperationError extends Error {
 
 export type OperationInput = {
   readonly request: RemoteRequest
+  readonly uploads?: ReturnType<typeof createAttachmentUploads>
   readonly sessions: SessionRegistry
   readonly subscriptions: SubscriptionRegistry
   readonly local: LocalServer
@@ -481,6 +571,10 @@ async function run(input: OperationInput) {
   if (verified === undefined)
     throw new OperationError("session_not_allowed", "Session is not available at its recorded location")
   const location = locationInfo(verified)
+  if (validated.kind === "upload") {
+    if (!input.uploads) throw new OperationError("invalid_message", "Attachment uploads are unavailable")
+    return input.uploads.append(sessionID, validated.uploadID, validated.index, validated.last, validated.data)
+  }
   switch (validated.kind) {
     case "get":
       return { data: verified }
@@ -499,13 +593,14 @@ async function run(input: OperationInput) {
       await input.local.switchAgent(sessionID, location, validated.agent)
       return null
     case "command":
-      await requireFileAttachments(input.local, location, validated.input.files)
-      return { data: await input.local.command(sessionID, location, validated.input) }
+      return { data: await input.local.command(sessionID, location, { ...validated.input, ...(validated.input.files === undefined ? {} : { files: await requireFileAttachments(input.local, location, validated.input.files, input.uploads, sessionID) }) }) }
     case "skill":
       await input.local.skill(sessionID, location, validated.input)
       return null
     case "messages":
       return { data: await input.local.messages(sessionID, location) }
+    case "todo.list":
+      return { data: await input.local.todoList(sessionID, location) }
     case "autonomy.get":
       return { data: await input.local.autonomyGet(sessionID, location) }
     case "permission.list":
@@ -542,8 +637,7 @@ async function run(input: OperationInput) {
     case "unsubscribe":
       return null
     case "prompt":
-      await requireFileAttachments(input.local, location, validated.input.files)
-      return { data: await input.local.prompt(sessionID, location, validated.input) }
+      return { data: await input.local.prompt(sessionID, location, { ...validated.input, ...(validated.input.files === undefined ? {} : { files: await requireFileAttachments(input.local, location, validated.input.files, input.uploads, sessionID) }) }) }
     case "interrupt":
       await input.local.interrupt(sessionID, location)
       return null
@@ -600,12 +694,14 @@ type Validated =
   | { readonly kind: "file.find"; readonly query: string; readonly limit: number }
   | { readonly kind: "switchModel"; readonly model: ModelSelection }
   | { readonly kind: "switchAgent"; readonly agent: string }
+  | { readonly kind: "upload"; readonly uploadID: string; readonly index: number; readonly last: boolean; readonly data: string }
   | { readonly kind: "command"; readonly input: CommandInput }
   | { readonly kind: "skill"; readonly input: { readonly id?: string; readonly skill: string; readonly resume?: boolean } }
   | { readonly kind: "get" }
   | { readonly kind: "snapshot" }
   | { readonly kind: "subagent.list"; readonly cursor?: string }
   | { readonly kind: "messages" }
+  | { readonly kind: "todo.list" }
   | { readonly kind: "autonomy.get" }
   | { readonly kind: "permission.list" }
   | { readonly kind: "guardrail.status" }
@@ -631,6 +727,7 @@ const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
   "session.snapshot": "snapshot",
   "session.catalog": "catalog",
   "session.messages": "messages",
+  "session.todo.list": "todo.list",
   "session.autonomy.get": "autonomy.get",
   "session.permission.list": "permission.list",
   "session.guardrail.status": "guardrail.status",
@@ -644,6 +741,11 @@ const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
 
 function validate(request: RemoteRequest): Validated {
   const fields = validateFields(request)
+  if (request.operation === "session.attachment.upload") {
+    if (typeof fields.uploadID !== "string" || typeof fields.index !== "number" || typeof fields.last !== "boolean" || typeof fields.data !== "string")
+      throw new OperationError("invalid_message", "Invalid attachment upload")
+    return { kind: "upload", uploadID: fields.uploadID, index: fields.index, last: fields.last, data: fields.data }
+  }
   if (request.operation === "workspace.list") return { kind: "workspace.list", sessionsOnly: fields.sessionsOnly === true }
   if (request.operation === "session.list") return { kind: "list", query: parseListQuery(fields) }
   if (request.operation === "session.active") return { kind: "active" }
@@ -810,32 +912,35 @@ function scopedOperation(operation: RemoteOperation) {
 
 export async function sessionStatus(local: LocalServer, sessions: readonly SessionInfo[], knownAttention?: readonly string[]) {
   const byID = new Map(sessions.map((session) => [session.id, session]))
-  const active = activeIDs(await local.activeSessions())
-  const running = new Set([...active].flatMap((id) => {
-    const session = byID.get(id)
-    const root = session && rootSessionID(session, byID)
-    return root === undefined ? [] : [root]
-  }))
+  const rootOf = (sessionID: unknown) => {
+    const session = typeof sessionID === "string" ? byID.get(sessionID) : undefined
+    return session === undefined ? undefined : rootSessionID(session, byID)
+  }
+  const executing = [...activeIDs(await local.activeSessions())].flatMap((id) => byID.get(id) ?? [])
+  const running = new Set(executing.flatMap((session) => rootSessionID(session, byID) ?? []))
   if (running.size > RemoteLimits.maxStatusSessions || (knownAttention !== undefined && knownAttention.length > RemoteLimits.maxStatusSessions))
     throw new OperationError("message_too_large", "Session status exceeds the bounded root count")
   if (knownAttention !== undefined) return { running: [...running].sort(), attention: knownAttention }
+  const executingLocations = [...new Map(executing.map((session) => [JSON.stringify([session.location.directory, session.location.workspaceID ?? null]), locationInfo(session)])).values()]
   const attention = new Set<string>()
-  for (let offset = 0; offset < sessions.length; offset += 8) {
-    await Promise.all(sessions.slice(offset, offset + 8).map(async (session) => {
-      const rootID = rootSessionID(session, byID)
-      if (rootID === undefined) return
-      const [permissions, forms, reviews] = await Promise.all([
-        local.permissionList(session.id, locationInfo(session)), local.formList(session.id, locationInfo(session)),
-        session.id === rootID ? local.guardrailRequestList(rootID, locationInfo(session)) : Promise.resolve([]),
-      ])
-      if (!Array.isArray(permissions) || !Array.isArray(forms) || !Array.isArray(reviews))
+  for (let offset = 0; offset < executingLocations.length; offset += 8) {
+    await Promise.all(executingLocations.slice(offset, offset + 8).map(async (location) => {
+      const [permissions, forms] = await Promise.all([local.permissionRequests(location), local.formRequests(location)])
+      if (!Array.isArray(permissions) || !Array.isArray(forms))
         throw new OperationError("internal_error", "The local Session request listing was unreadable")
-      if (permissions.some((item) => typeof item === "object" && item !== null && Reflect.get(item, "sessionID") === session.id) ||
-        forms.some((form) => form.sessionID === session.id) ||
-        reviews.some((item) => {
-          const reviewSession = typeof item === "object" && item !== null ? byID.get(Reflect.get(item, "sessionID")) : undefined
-          return reviewSession !== undefined && rootSessionID(reviewSession, byID) === rootID
-        })) attention.add(rootID)
+      for (const item of [...permissions, ...forms]) {
+        const rootID = rootOf(typeof item === "object" && item !== null ? Reflect.get(item, "sessionID") : undefined)
+        if (rootID !== undefined) attention.add(rootID)
+      }
+    }))
+  }
+  const families = [...running].flatMap((id) => byID.get(id) ?? [])
+  for (let offset = 0; offset < families.length; offset += 8) {
+    await Promise.all(families.slice(offset, offset + 8).map(async (root) => {
+      const reviews = await local.guardrailRequestList(root.id, locationInfo(root))
+      if (!Array.isArray(reviews)) throw new OperationError("internal_error", "The local Session request listing was unreadable")
+      if (reviews.some((item) => rootOf(typeof item === "object" && item !== null ? Reflect.get(item, "sessionID") : undefined) === root.id))
+        attention.add(root.id)
     }))
   }
   if (attention.size > RemoteLimits.maxStatusSessions)
@@ -904,7 +1009,7 @@ export function listPage(sessions: readonly SessionInfo[], query: ListQuery, run
     running: session.parentID === undefined && runningRoots.has(session.id) })
   const needle = search?.toLowerCase()
   const matching = sessions
-    .filter((session) => query.workspace === undefined || workspaceKey(session.projectID, session.location.directory, session.location.workspaceID) === query.workspace)
+    .filter((session) => query.workspace === undefined || workspaceKey(session.projectID, resolve(session.location.directory), session.location.workspaceID) === query.workspace)
     .filter((session) => needle === undefined || (query.searchFields === "summary"
       ? [session.title, session.agent ?? "", ...(session.model === undefined ? [] : [`${session.model.providerID}/${session.model.id}${session.model.variant === undefined ? "" : `#${session.model.variant}`}`])]
         .some((value) => value.toLowerCase().includes(needle))
@@ -1009,11 +1114,13 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.switchModel": ["model"],
   "session.switchAgent": ["agent"],
   "session.command": ["id", "command", "arguments", "files", "agents", "delivery"],
+  "session.attachment.upload": ["uploadID", "index", "last", "data"],
   "session.skill": ["id", "skill", "resume"],
   "session.get": [],
   "session.snapshot": [],
   "session.subagent.list": ["cursor"],
   "session.messages": [],
+  "session.todo.list": [],
   "session.log": ["after"],
   "session.autonomy.get": [],
   "session.permission.list": [],

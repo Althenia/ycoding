@@ -346,6 +346,7 @@ grouping and Session-list filters are derived from backend metadata.
 | `session.get` | yes | `v2.session.get` | `GET /api/session/:sessionID` | — |
 | `session.messages` | yes | `v2.message.list` | `GET /api/session/:sessionID/message` | — |
 | `session.snapshot` | yes | `v2.session.snapshot` | `GET /api/session/:sessionID/snapshot` | — |
+| `session.todo.list` | yes | `v2.session.todo.list` | `GET /api/session/:sessionID/todo` | — |
 | `session.catalog` | yes | Location-scoped catalog reads | Same routes as `workspace.catalog` at the verified Session Location | — |
 | `session.file.find` | yes | `v2.fs.find` | `GET /api/fs/find` at the verified Session Location | `query`, `limit?` |
 | `session.subagent.list` | yes | `v2.session.subagent.list` | `GET /api/session/:parentID/subagent` | `cursor?` |
@@ -353,6 +354,7 @@ grouping and Session-list filters are derived from backend metadata.
 | `session.subscribe` | yes | `v2.event.subscribe` | `GET /api/event` (SSE) | — |
 | `session.unsubscribe` | yes | — (tears down the agent's `v2.event.subscribe` stream for that session) | — | — |
 | `session.prompt` | yes | `v2.session.prompt` | `POST /api/session/:sessionID/prompt` | `id?`, `text`, `files?`, `agents?`, `delivery?`, `resume?` |
+| `session.attachment.upload` | yes | local agent upload buffer | none | `uploadID`, `index`, `last`, `data` |
 | `session.command` | yes | `v2.session.command` | `POST /api/session/:sessionID/command` | `id?`, `command`, `arguments?`, `files?`, `agents?`, `delivery?` |
 | `session.skill` | yes | `v2.session.skill` | `POST /api/session/:sessionID/skill` | `id?`, `skill`, `resume?` |
 | `session.switchModel` | yes | `v2.session.switchModel` | `POST /api/session/:sessionID/model` | `model` |
@@ -454,10 +456,24 @@ accepted.
 File search accepts a nonempty query of at most 200 characters and a limit 1–50
 (default 20). It returns `{ files: [{ path, uri, kind }] }` with Location-relative
 forward-slash paths, file URLs, and file/directory kinds. Prompt and command
-attachments use `{ uri, name?, description?, mention? }` only when a file URL
-resolves inside the Session Location after realpath or exactly matches a current
-reference/resource Catalog URI. Other attachments fail `invalid_message` before
-a local mutation. `session.command` returns `{ data: SessionPending.User }`;
+attachments use `{ uri, name?, description?, mention? }` when a file URL
+resolves inside the Session Location after realpath, exactly matches a current
+reference/resource Catalog URI, or names a completed upload for that Session.
+The browser sends a local file in ordered `session.attachment.upload` requests:
+`uploadID` is a random UUIDv4, `index` starts at zero, `last` marks the final
+chunk, and `data` is canonical base64 of at most 28,000 characters. Each chunk
+receives a response before the next is sent, respecting the client request-rate
+window. The final response supplies `ycoding-upload://<uploadID>` for a prompt
+or command `files[].uri`. The agent resolves only complete same-Session uploads
+into canonical `data:application/octet-stream;base64,...` input for the local
+Protocol; clients cannot submit a data URL directly or select a filesystem
+Location. The agent retains at most 20 MiB decoded per file, 40 MiB decoded
+and 64 upload IDs per connection; an upload expires 10 minutes after its latest chunk or use,
+and every agent disconnect clears the buffer. Invalid, out-of-order, duplicate,
+expired, oversized, or foreign-Session references fail before a local mutation.
+The relay Worker bundles the closed operation list; the deployed Worker must
+include this operation before browser uploads can reach the connector.
+`session.command` returns `{ data: SessionPending.User }`;
 successful `session.skill`, `session.switchModel`, and `session.switchAgent`
 NoContent operations return `null`.
 
@@ -470,7 +486,7 @@ Required reconnect reads — `session.snapshot` (the Protocol `SessionProjection
 value), `session.active` (running state for the initial view and after
 reconnect), `session.permission.list`, `session.guardrail.status`,
 `session.guardrail.request.list`, `session.form.list`,
-`session.fileChange.list`, and `session.autonomy.get` — exist so the browser can
+`session.fileChange.list`, `session.todo.list`, and `session.autonomy.get` — exist so the browser can
 rebuild running state, pending approvals, and autonomy state after a reconnect
 instead of relying on ephemeral events.
 

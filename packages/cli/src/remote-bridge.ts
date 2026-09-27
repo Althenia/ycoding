@@ -14,6 +14,7 @@ import { DeviceAuthorizationError } from "./remote-credentials"
 import { agentURL } from "./remote-config"
 import {
   createSessionRegistry,
+  createAttachmentUploads,
   createSubscriptions,
   executeRemoteOperation,
   sessionStatus,
@@ -88,6 +89,7 @@ type PendingEvent = {
 export class RemoteAgent {
   private readonly registry: SessionRegistry
   private readonly subscriptions: SubscriptionRegistry
+  private uploads = createAttachmentUploads()
   private readonly now: () => number
   private readonly refreshIntervalMs: number
   private readonly eventRetryInitialMs: number
@@ -152,6 +154,7 @@ export class RemoteAgent {
     this.state = "closed"
     this.clearTimers()
     this.pendingEvents.splice(0)
+    this.uploads.clear()
     await this.stopEventStream()
     await this.connection?.disconnect(code, reason)
     this.connection = undefined
@@ -170,7 +173,10 @@ export class RemoteAgent {
       url: agentURL(this.options.relayURL),
       accessToken: credentials.accessToken,
       onOpen: () => {
+        if (this.connection !== connection) return
         this.subscriptions.clear()
+        this.uploads.clear()
+        this.uploads = createAttachmentUploads()
         void this.advertise()
         this.lastStatus = undefined
         this.attentionStatus = undefined
@@ -182,10 +188,10 @@ export class RemoteAgent {
         void this.sendStatus()
         this.syncEventStream()
       },
-      onClose: (code) => this.onConnectionClosed(code),
+      onClose: (code) => { if (this.connection === connection) this.onConnectionClosed(code) },
     })
     this.connection = connection
-    connection.onMessage((frame) => this.onFrame(frame))
+    connection.onMessage((frame) => { if (this.connection === connection) this.onFrame(frame) })
     // The invalidation is sent from the open callback, so the bridge is live
     // before the connection settles.
     this.state = "live"
@@ -203,7 +209,9 @@ export class RemoteAgent {
     // so no frame reaches the local server without contract validation.
     const parsed = parseRelayToAgentMessage(typeof frame === "string" ? frame : JSON.stringify(frame))
     if (!parsed.ok) {
-      this.diagnostic(`ignored an inbound frame: ${parsed.error.code}`)
+      if (parsed.id !== undefined)
+        void this.send(serializeResponse({ type: "response", id: parsed.id, ok: false, error: parsed.error }), this.connection)
+      this.diagnostic(`${parsed.id === undefined ? "ignored an inbound frame" : "rejected an inbound request"}: ${parsed.error.code}`)
       return
     }
     if (parsed.value.type === "subscriptions") {
@@ -215,13 +223,16 @@ export class RemoteAgent {
   }
 
   private async handleRequest(request: RemoteRequest) {
+    const owner = this.connection
     const frames = await executeRemoteOperation({
       request,
+      uploads: this.uploads,
       sessions: this.registry,
       subscriptions: this.subscriptions,
       local: this.options.local,
     })
-    for (const frame of frames) await this.send(serializeResponse(frame))
+    if (this.connection !== owner) return
+    for (const frame of frames) await this.send(serializeResponse(frame), owner)
   }
 
   private async send(frame: string, connection = this.connection) {
@@ -423,6 +434,7 @@ export class RemoteAgent {
   private onConnectionClosed(code: number | undefined) {
     if (this.state !== "live") return
     this.subscriptions.clear()
+    this.uploads.clear()
     if (code !== undefined && terminalCloseCodes.includes(code)) void this.rotateConnection()
   }
 
@@ -435,6 +447,7 @@ export class RemoteAgent {
     if (this.state !== "live") return
     const previous = this.connection
     this.connection = undefined
+    this.uploads.clear()
     this.pendingEvents.splice(0)
     try {
       await previous?.disconnect(RemoteCloseCode.tooLarge, reason)
@@ -463,6 +476,7 @@ export class RemoteAgent {
     this.lastAuthAttempt = attempt
     const previous = this.connection
     this.connection = undefined
+    this.uploads.clear()
     this.pendingEvents.splice(0)
     try {
       await previous?.disconnect(RemoteCloseCode.normal, "Rotating the device credential")
@@ -482,6 +496,7 @@ export class RemoteAgent {
     this.terminalReason = message
     this.clearTimers()
     this.pendingEvents.splice(0)
+    this.uploads.clear()
     void this.stopEventStream().catch((error) =>
       this.diagnostic(`could not stop the local event stream: ${describe(error)}`),
     )

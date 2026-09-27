@@ -26,6 +26,18 @@ import {
   type RemoteOperation,
 } from "../src/index"
 
+test("scoped attachment chunks stay within the client frame and require ordered upload fields", () => {
+  const input = { uploadID: "4ab94d33-6e6b-41a3-a638-f0a6596854a9", index: 0, last: false, data: "AAAA" }
+  const frame = { type: "request", id: "req_1", operation: "session.attachment.upload", sessionID: "ses_1", input }
+  expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
+  expect(parseRelayToAgentMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
+  for (const change of [{ index: -1 }, { data: "!" }, { data: "YQ==" }, { uploadID: "../other" }, { last: "true" }, { extra: true }])
+    expect(parseClientMessage(JSON.stringify({ ...frame, input: { ...input, ...change } })).ok).toBe(false)
+  expect(parseClientMessage(JSON.stringify({ ...frame, input: { ...input, data: "A".repeat(28_001) } })).ok).toBe(false)
+  expect(parseClientMessage(JSON.stringify({ ...frame, input: { ...input, data: "A".repeat(28_000) } })).ok).toBe(true)
+  expect(parseClientMessage(JSON.stringify({ ...frame, sessionID: undefined })).ok).toBe(false)
+})
+
 test("push subscription input admits only bounded known push services and key shapes", () => {
   const input = { endpoint: "https://fcm.googleapis.com/fcm/send/abc", keys: { p256dh: "BA" + "A".repeat(85), auth: "A".repeat(22) } }
   expect(parsePushSubscription(input)).toMatchObject({ ok: true, value: input })
@@ -65,6 +77,15 @@ const jwk = {
 } as const
 
 describe("remote envelope: request", () => {
+  test("requires a Session and no input for the todo read", () => {
+    expect(parseClientMessage('{"type":"request","id":"a","operation":"session.todo.list","sessionID":"ses_1"}')).toMatchObject({ ok: true })
+    for (const request of [
+      { operation: "session.todo.list" },
+      { operation: "session.todo.list", sessionID: "ses_1", input: {} },
+      { operation: "session.todo.list", sessionID: "ses_1", input: { directory: "/other" } },
+    ]) expect(parseClientMessage(JSON.stringify({ type: "request", id: "a", ...request })).ok).toBe(false)
+    expect(requireSession("session.todo.list" as RemoteOperation)).toBe(true)
+  })
   test("round-trips a bounded session operation", () => {
     const encoded = serializeRequest({
       type: "request",
@@ -345,11 +366,13 @@ describe("remote operations", () => {
       "session.get",
       "session.messages",
       "session.snapshot",
+      "session.todo.list",
       "session.subagent.list",
       "session.log",
       "session.subscribe",
       "session.unsubscribe",
       "session.prompt",
+      "session.attachment.upload",
       "session.interrupt",
       "session.permission.list",
       "session.permission.reply",
