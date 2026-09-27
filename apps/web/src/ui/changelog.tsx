@@ -67,7 +67,7 @@ export function ChangelogPage(): JSX.Element {
         <ol class="releases releases--timeline">
           <For each={releases()}>
             {(release) => (
-              <li class="release" id={release.version}>
+              <li class="release motion-reveal" id={release.version}>
                 <div class="release__meta">
                   <h2 class="release__version">v{release.version}</h2>
                   <time class="release__date" datetime={release.date}>

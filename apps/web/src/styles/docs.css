@@ -150,6 +150,7 @@
   color: var(--yc-text-muted);
   text-decoration: none;
   font-size: var(--yc-size-sm);
+  transition: translate var(--yc-dur-quick) var(--yc-ease-standard);
 }
 
 /* Links sit one step inside their group title, so the rail reads as a hierarchy. */
@@ -160,6 +161,7 @@
 .docs-nav__link:hover {
   background: var(--yc-surface-sunken);
   color: var(--yc-text);
+  translate: 2px 0;
 }
 
 .docs-nav__link--active {
@@ -460,10 +462,34 @@
   font-size: var(--yc-size-xs);
   color: var(--yc-text-muted);
   text-decoration: none;
+  transition: translate var(--yc-dur-quick) var(--yc-ease-standard);
 }
 
 .docs-toc__list a:hover {
   color: var(--yc-text);
+  translate: 2px 0;
+}
+
+.docs-toc__list a[aria-current="location"] {
+  color: var(--yc-green-strong);
+  translate: 2px 0;
+}
+
+.docs-bar__nav-toggle,
+.docs-search-trigger,
+.docs--changelog .release,
+.docs--index .card {
+  transition: translate var(--yc-dur-quick) var(--yc-ease-standard);
+}
+
+.docs--changelog .release:hover,
+.docs--index .card:hover {
+  translate: 0 -2px;
+}
+
+.docs--changelog .release:active,
+.docs--index .card:active {
+  translate: 0 0;
 }
 
 /* --- search ------------------------------------------------------------- */

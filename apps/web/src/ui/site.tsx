@@ -1,4 +1,4 @@
-import { For, Show, createSignal, type JSX } from "solid-js"
+import { For, Show, createEffect, createSignal, onCleanup, type JSX } from "solid-js"
 import { Link, useRouter } from "../router/router"
 import { SITE } from "../content/site"
 import { useTheme } from "../theme/theme-store"
@@ -56,6 +56,32 @@ export function OfflineBanner(): JSX.Element {
 export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.Element {
   const [open, setOpen] = createSignal(false)
   const router = useRouter()
+  createEffect(() => {
+    router.path()
+    const root = document.querySelector(".marketing > main")
+    if (!(root instanceof HTMLElement)) return
+    const targets = root.querySelectorAll<HTMLElement>(".motion-reveal")
+    if (typeof IntersectionObserver === "undefined") {
+      targets.forEach((target) => target.classList.add("motion-reveal--visible"))
+      return
+    }
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting || !(entry.target instanceof HTMLElement)) return
+        entry.target.classList.add("motion-reveal--visible")
+        observer.unobserve(entry.target)
+      })
+    }, { rootMargin: "0px 0px -8% 0px" })
+    targets.forEach((target) => observer.observe(target))
+    onCleanup(() => observer.disconnect())
+  })
+  createEffect(() => {
+    router.path()
+    const root = document.querySelector(".marketing > main")
+    if (!(root instanceof HTMLElement)) return
+    root.classList.remove("public-page-entry")
+    requestAnimationFrame(() => root.classList.add("public-page-entry"))
+  })
   const inDocs = () => router.path().startsWith("/docs")
   const inChangelog = () => router.path().startsWith("/changelog")
   return (
@@ -192,9 +218,9 @@ export function LandingPage(): JSX.Element {
     <>
       <section class="hero hero--compact">
         <div class="container hero__content">
-          <h1 class="hero__headline">{SITE.hero.headline}</h1>
-          <p class="hero__support">{SITE.hero.support}</p>
-          <div class="hero__actions">
+          <h1 class="hero__headline enter">{SITE.hero.headline}</h1>
+          <p class="hero__support enter enter-1">{SITE.hero.support}</p>
+          <div class="hero__actions enter enter-2">
             <button
               type="button"
               class="button button--primary button--large"
@@ -210,7 +236,7 @@ export function LandingPage(): JSX.Element {
               {SITE.hero.secondaryAction.label}
             </button>
           </div>
-          <CodeBlock code={SITE.installing.command} language="shell" label="Install command" />
+          <CodeBlock code={SITE.installing.command} language="shell" label="Install command" class="enter enter-3" />
         </div>
       </section>
 
@@ -219,7 +245,7 @@ export function LandingPage(): JSX.Element {
           <div class="features__grid">
             <For each={SITE.features}>
               {(feature) => (
-                <article class="feature">
+                <article class="feature motion-reveal">
                   <h2 class="feature__title">{feature.title}</h2>
                   <p class="feature__text">{feature.text}</p>
                 </article>

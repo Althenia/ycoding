@@ -46,13 +46,14 @@ export function CodeBlock(props: {
   readonly code: string
   readonly language: string
   readonly label?: string
+  readonly class?: string
 }): JSX.Element {
   const [copied, setCopied] = createSignal(false)
   let timer: ReturnType<typeof setTimeout> | undefined
   onCleanup(() => clearTimeout(timer))
   const name = () => props.label ?? props.language
   return (
-    <figure class="code-block">
+    <figure class={`code-block${props.class ? ` ${props.class}` : ""}`}>
       <figcaption class="code-block__head">
         <span class="code-block__label">{name()}</span>
         <button
@@ -185,7 +186,7 @@ function Block(props: { readonly block: DocBlock }): JSX.Element {
 
 function Section(props: { readonly page: DocPage; readonly section: DocSection; readonly index: number }): JSX.Element {
   return (
-    <section class="doc-section">
+    <section class="doc-section motion-reveal">
       <h2 id={sectionId(props.page, props.index)}>{props.section.heading}</h2>
       <For each={props.section.blocks}>{(block) => <Block block={block} />}</For>
     </section>
@@ -361,6 +362,25 @@ export function DocsShell(props: {
   // A surface without sections has nothing to put on this page, so it renders no
   // rail instead of an empty one.
   const showToc = () => props.class !== "docs--index" && props.page.sections.length > 0
+  createEffect(() => {
+    if (!showToc()) return
+    const article = document.querySelector(".docs-article")
+    if (!(article instanceof HTMLElement)) return
+    const headings = article.querySelectorAll<HTMLElement>(".doc-section > h2[id]")
+    const links = document.querySelectorAll<HTMLAnchorElement>(".docs-toc__list a")
+    if (typeof IntersectionObserver === "undefined") return
+    const observer = new IntersectionObserver(() => {
+      const active = [...headings].filter((heading) => heading.getBoundingClientRect().top <= innerHeight * 0.25).at(-1) ?? headings.item(0)
+      if (!(active instanceof HTMLElement)) return
+      links.forEach((link) => {
+        const selected = link.hash === `#${active.id}`
+        if (selected) link.setAttribute("aria-current", "location")
+        else link.removeAttribute("aria-current")
+      })
+    }, { rootMargin: "-12% 0px -72% 0px" })
+    headings.forEach((heading) => observer.observe(heading))
+    onCleanup(() => observer.disconnect())
+  })
   return (
     <div class={`docs${props.class ? ` ${props.class}` : ""}`}>
       <div class="docs-bar">
@@ -427,12 +447,12 @@ export function DocsIndexPage(): JSX.Element {
       <div class="docs-topic-index">
         <For each={docsByGroup()}>
           {(group) => (
-            <section class="doc-section" data-doc-group={docGroupID(group.group)}>
+            <section class="doc-section motion-reveal" data-doc-group={docGroupID(group.group)}>
               <h2>{docGroupLabel(group.group)}</h2>
               <ul class="card-grid">
                 <For each={group.pages}>
                   {(page) => (
-                    <li class="card">
+                    <li class="card motion-reveal">
                       <Link href={`/docs/${page.slug}`} class="card__link">
                         <span class="card__title">{page.title}</span>
                         <span class="card__text"><Inline text={page.description} /></span>

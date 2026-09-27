@@ -81,6 +81,9 @@ export async function launchBrowser(executable: string, width: number, height: n
         setColorScheme: (scheme: "light" | "dark") => call("Emulation.setEmulatedMedia", {
           features: [{ name: "prefers-color-scheme", value: scheme }],
         }),
+        setReducedMotion: (reduce: boolean) => call("Emulation.setEmulatedMedia", {
+          features: [{ name: "prefers-reduced-motion", value: reduce ? "reduce" : "no-preference" }],
+        }),
         async setCoarsePointer(enabled: boolean) {
           await call("Emulation.setTouchEmulationEnabled", { enabled, maxTouchPoints: enabled ? 1 : 0 })
           await call("Emulation.setEmulatedMedia", {
@@ -96,8 +99,8 @@ export async function launchBrowser(executable: string, width: number, height: n
           await call("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 })
         },
         async evaluate<T>(expression: string): Promise<T> {
-          const result = await call<{ readonly result: { readonly value: T }; readonly exceptionDetails?: { readonly text: string } }>("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true })
-          if (result.exceptionDetails) throw new Error(result.exceptionDetails.text)
+          const result = await call<{ readonly result: { readonly value: T }; readonly exceptionDetails?: { readonly text: string; readonly exception?: { readonly description?: string } } }>("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true })
+          if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text)
           return result.result.value
         },
         async close() {

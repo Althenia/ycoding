@@ -5,9 +5,9 @@ import { launchBrowser } from "./cdp"
 
 const port = 4181
 const browserPath = process.env.YCODING_WEB_CHROME
-const output = join(import.meta.dir, "../output/docs-layout")
+const output = join(import.meta.dir, "../../../.cache/tmp/public-motion/docs-layout")
 const routes = ["/", "/docs", "/docs/quickstart", "/docs/configuration", "/changelog", "/not-a-route"] as const
-const widths = [320, 390, 768, 1024, 1280, 1440, 1920, 2560] as const
+const widths = [320, 390, 768, 820, 1024, 1280, 1440, 1920, 2560] as const
 
 if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable before running this integration test.")
 
@@ -39,6 +39,7 @@ describe("public docs and site layout", () => {
       await page.setViewport(width, 1000)
       for (const route of routes) {
         await page.navigate(url(route))
+        for (let attempt = 0; attempt < 50 && !(await page.evaluate<boolean>(`document.querySelector('.app-header__inner') instanceof HTMLElement`)); attempt += 1) await Bun.sleep(100)
         const layout = await page.evaluate<{
           readonly width: number
           readonly scrollWidth: number
@@ -112,12 +113,13 @@ describe("public docs and site layout", () => {
         await saveScreenshot(page, "after", route, width, "light")
       }
     }
-    for (const width of [390, 1024, 1440] as const) {
+    for (const width of [390, 820, 1440] as const) {
       await page.setViewport(width, viewportHeight(width))
       for (const theme of ["light", "dark"] as const) {
         for (const route of routes) {
           await page.navigate(url(route))
           await page.evaluate<void>(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
+          await Bun.sleep(400)
           await saveScreenshot(page, "after", route, width, theme)
         }
       }
@@ -132,8 +134,8 @@ async function saveScreenshot(page: { screenshot(): Promise<string> }, phase: "b
   await Bun.write(path, Buffer.from(await page.screenshot(), "base64"))
 }
 
-function viewportHeight(width: number): number {
-  return ({ 320: 568, 390: 844, 768: 1024, 1024: 1366, 1280: 800, 1440: 900, 1920: 1080, 2560: 1600 } as const)[width as 320 | 390 | 768 | 1024 | 1280 | 1440 | 1920 | 2560]
+function viewportHeight(width: (typeof widths)[number]): number {
+  return ({ 320: 568, 390: 844, 768: 1024, 820: 1180, 1024: 1366, 1280: 800, 1440: 900, 1920: 1080, 2560: 1600 } as const)[width]
 }
 
 async function ready(): Promise<boolean> {

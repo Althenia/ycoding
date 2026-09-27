@@ -28,6 +28,47 @@ afterAll(async () => {
 })
 
 describe("public routes and design-system behavior", () => {
+  test("plays public entrance motion only without a reduced-motion preference", async () => {
+    const page = await requireBrowser().openPage()
+    await page.setViewport(1440, 900)
+    for (const reduce of [false, true]) {
+      await page.setReducedMotion(reduce)
+      await page.navigate(url("/"))
+      const motion = await page.evaluate<{ readonly animations: number; readonly headlineOpacity: string; readonly entries: number }>(`new Promise(resolve => {
+        const read = () => document.documentElement.dataset.hydrated === "true"
+          ? requestAnimationFrame(() => {
+            const entries = [...document.querySelectorAll('.enter, .public-page-entry, .motion-reveal--visible')]
+            resolve({
+              animations: entries.flatMap(element => element.getAnimations()).length,
+              headlineOpacity: getComputedStyle(document.querySelector('.hero__headline')).opacity,
+              entries: entries.length,
+            })
+          })
+          : requestAnimationFrame(read)
+        read()
+      })`)
+      expect(motion.entries).toBeGreaterThan(0)
+      expect(motion.headlineOpacity).toBe("1")
+      if (reduce) expect(motion.animations).toBe(0)
+      else expect(motion.animations).toBeGreaterThan(0)
+    }
+    await page.close()
+  })
+
+  test("tracks the visible documentation section in the contents rail", async () => {
+    const page = await requireBrowser().openPage()
+    await page.setViewport(1440, 900)
+    await page.navigate(url("/docs/quickstart"))
+    const active = await page.evaluate<string>(`(() => {
+      const heading = document.querySelector('.doc-section > h2[id]')
+      if (!(heading instanceof HTMLElement)) throw new Error('documentation section missing')
+      heading.scrollIntoView()
+      return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(heading.id))))
+    })()`)
+    expect(await page.evaluate<string>(`document.querySelector('.docs-toc__list a[aria-current="location"]')?.hash ?? ""`)).toBe(`#${active}`)
+    await page.close()
+  })
+
   test("keeps short-page footers at the viewport edge without fixing long-page footers", async () => {
     const page = await requireBrowser().openPage()
     const measure = () =>
@@ -156,6 +197,7 @@ describe("public routes and design-system behavior", () => {
     const page = await requireBrowser().openPage()
     await page.setViewport(390, 844)
     await page.navigate(url("/"))
+    await settleMotion(page)
     const layout = await page.evaluate<{
       readonly navVisible: boolean
       readonly headerActionVisible: boolean
@@ -770,6 +812,7 @@ describe("public routes and design-system behavior", () => {
     for (const width of [768, 1023]) {
       await page.setViewport(width, 900)
       await page.navigate(url("/not-a-route"))
+      await settleMotion(page)
       const notFound = await page.evaluate<{
         readonly textAlign: string
         readonly title: string
@@ -1065,6 +1108,15 @@ describe("public routes and design-system behavior", () => {
 function requireBrowser() {
   if (!browser) throw new Error("Browser was not initialized")
   return browser
+}
+
+async function settleMotion(page: Awaited<ReturnType<ReturnType<typeof requireBrowser>["openPage"]>>) {
+  await page.evaluate<void>(`new Promise(resolve => {
+    const settle = () => document.documentElement.dataset.hydrated === "true"
+      ? requestAnimationFrame(() => requestAnimationFrame(() => Promise.all(document.getAnimations().map(animation => animation.finished)).then(() => resolve(undefined))))
+      : requestAnimationFrame(settle)
+    settle()
+  })`)
 }
 
 function url(path: string): string {

@@ -28,6 +28,45 @@
   border-radius: var(--yc-radius-md);
 }
 
+.marketing .button,
+.marketing .feature,
+.marketing .card,
+.marketing .nav__link,
+.marketing .footer__column a {
+  transition: translate var(--yc-dur-quick) var(--yc-ease-standard);
+}
+
+.marketing .button:hover,
+.marketing .feature:hover,
+.marketing .card:hover {
+  translate: 0 -2px;
+}
+
+.marketing .button:active,
+.marketing .feature:active,
+.marketing .card:active {
+  translate: 0 0;
+}
+
+.marketing .button:active {
+  translate: 0 1px;
+}
+
+.marketing .nav__link:hover,
+.marketing .footer__column a:hover {
+  translate: 0 -1px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .motion-reveal--visible {
+    animation: yc-enter var(--yc-dur-base) var(--yc-ease-entrance) both;
+  }
+
+  :root[data-hydrated="true"] .public-page-entry {
+    animation: yc-enter var(--yc-dur-base) var(--yc-ease-entrance) both;
+  }
+}
+
 .site-footer {
   border-block-start: var(--yc-border-width) solid var(--yc-border);
   background: var(--yc-surface);
