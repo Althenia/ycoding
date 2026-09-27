@@ -68,6 +68,7 @@ import { Session, type SessionViewportStore } from "./routes/session"
 import { ShellOutput } from "./routes/shell-output"
 import { SessionTerminalInspector } from "./routes/terminal-inspector"
 import { ProviderUsageScreen } from "./routes/session/provider-usage"
+import { SessionContextScreen } from "./routes/session/context-breakdown"
 import { PromptHistoryProvider } from "./component/prompt/history"
 import { FrecencyProvider } from "./component/prompt/frecency"
 import { PromptStashProvider } from "./component/prompt/stash"
@@ -1168,6 +1169,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
                 </Match>
                 <Match when={route.data.type === "provider-usage"}>
                   <ProviderUsageScreen />
+                </Match>
+                <Match when={route.data.type === "session-context"}>
+                  <SessionContextScreen />
                 </Match>
               </Switch>
             </box>

@@ -37,6 +37,34 @@ export const estimatedInputTokens = (input: Usage) =>
     recentMessages: Token.estimateJson(input.messages),
   })
 
+export const breakdown = (input: Usage) => {
+  const totals = {
+    system: SessionContextBudget.countTokens(input.system.map((part) => part.text).join("\n")),
+    tools: input.tools.length ? SessionContextBudget.countTokens(JSON.stringify(input.tools)) : 0,
+    user: 0,
+    assistant: 0,
+    reasoning: 0,
+    toolCalls: 0,
+    other: 0,
+  }
+  for (const message of input.messages) {
+    for (const part of message.content) {
+      const category =
+        part.type === "tool-call" || part.type === "tool-result" || message.role === "tool"
+          ? "toolCalls"
+          : part.type === "reasoning"
+            ? "reasoning"
+            : part.type !== "text"
+              ? "other"
+              : message.role === "user" || message.role === "assistant" || message.role === "system"
+                ? message.role
+                : "other"
+      totals[category] += Token.estimateJson(part)
+    }
+  }
+  return totals
+}
+
 export const level = (
   input: Usage & {
     readonly capabilities: SessionContextBudget.Capabilities

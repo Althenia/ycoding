@@ -155,6 +155,7 @@ test("session diagnostics expose only bounded provider-request telemetry", async
   let request: Request | undefined
   const diagnostics = {
     model: { providerID: "openai", id: "gpt-5.6" },
+    contextBreakdown: { system: 100, tools: 200, user: 300, assistant: 400, reasoning: 50, toolCalls: 60, other: 10 },
     context: { total: 32_600 },
     tokens: { uncachedInput: 12_000, output: 900, reasoning: 300, cacheRead: 18_200, cacheWrite: 1_200 },
     cache: {
@@ -186,6 +187,7 @@ test("session diagnostics expose only bounded provider-request telemetry", async
   const result = await client.session.diagnostics({ sessionID: "ses_test" })
 
   expect(result).toEqual(diagnostics)
+  expect(result?.contextBreakdown?.toolCalls).toBe(60)
   expect(result?.requests?.latestNamespace).toBe("a1b2c3d4")
   expect(result?.requests?.latestTiming?.promptEvalDurationNs).toBe(4_000_000)
   expect(JSON.stringify(result)).not.toContain("promptCacheKey")

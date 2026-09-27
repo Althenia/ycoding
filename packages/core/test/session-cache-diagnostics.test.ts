@@ -3,6 +3,7 @@ import { DateTime } from "effect"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionCacheDiagnostics } from "@ycoding-ai/core/session/cache-diagnostics"
+import { SessionContextPressure } from "@ycoding-ai/core/session/context-pressure"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { ModelV2 } from "@ycoding-ai/core/model"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
@@ -19,6 +20,27 @@ const tokens = {
   reasoning: 10,
   cache: { read: 900, write: 0 },
 }
+
+test("estimates prepared request parts by model-visible category without altering pressure estimation", () => {
+  const request = {
+    system: [{ type: "text" as const, text: "System instructions for the model" }],
+    tools: [{ name: "read", description: "Read a file", inputSchema: { type: "object" } }],
+    messages: [
+      { role: "system" as const, content: [{ type: "text" as const, text: "Chronological system update" }] },
+      { role: "user" as const, content: [{ type: "text" as const, text: "User question" }, { type: "media" as const, mediaType: "image/png", data: "image" }] },
+      { role: "assistant" as const, content: [{ type: "text" as const, text: "Assistant answer" }, { type: "reasoning" as const, text: "Thought content" }, { type: "tool-call" as const, id: "call", name: "read", input: { path: "file" } }] },
+      { role: "tool" as const, content: [{ type: "tool-result" as const, id: "call", name: "read", result: { type: "text" as const, value: "contents" } }] },
+    ],
+  }
+  const before = SessionContextPressure.estimatedInputTokens(request)
+  const result = SessionContextPressure.breakdown(request)
+  for (const category of ["system", "tools", "user", "assistant", "reasoning", "toolCalls", "other"] as const)
+    expect(result[category]).toBeGreaterThan(0)
+  expect(SessionContextPressure.estimatedInputTokens(request)).toBe(before)
+  expect(SessionContextPressure.breakdown({ system: [], tools: [], messages: [] })).toEqual({
+    system: 0, tools: 0, user: 0, assistant: 0, reasoning: 0, toolCalls: 0, other: 0,
+  })
+})
 
 test("keeps cache effectiveness separate from context occupancy", () => {
   const result = SessionCacheDiagnostics.calculate({
@@ -50,6 +72,16 @@ test("keeps cache effectiveness separate from context occupancy", () => {
     writeReported: true,
   })
   expect(result.estimatedCost).toBe(Money.USD.make(0.0123))
+})
+
+test("reconstructs the last request breakdown from projected assistant diagnostics", () => {
+  const contextBreakdown = { system: 2, tools: 0, user: 4, assistant: 0, reasoning: 0, toolCalls: 0, other: 0 }
+  const messages = [SessionMessage.Assistant.make({
+    id: SessionMessage.ID.create(), type: "assistant", agent: AgentV2.defaultID, model: model("openai"), content: [],
+    tokens, cost: Money.USD.zero, diagnostics: { contextBreakdown }, time: { created: DateTime.makeUnsafe(0) },
+  })]
+  expect(SessionCacheDiagnostics.fromMessages(messages)?.contextBreakdown).toEqual(contextBreakdown)
+  expect(SessionCacheDiagnostics.fromMessages(messages)?.context.total).toBe(1030)
 })
 
 test("reports zero cache hits without lowering the context total", () => {

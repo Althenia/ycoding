@@ -483,10 +483,11 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
           draft.cost = event.data.cost
           draft.tokens = event.data.tokens
           draft.diagnostics =
-            event.data.contextLimit === undefined && event.data.providerCache === undefined
+            event.data.contextLimit === undefined && event.data.contextBreakdown === undefined && event.data.providerCache === undefined
               ? undefined
               : {
                   ...(event.data.contextLimit === undefined ? {} : { contextLimit: event.data.contextLimit }),
+                  ...(event.data.contextBreakdown === undefined ? {} : { contextBreakdown: castDraft(event.data.contextBreakdown) }),
                   ...(event.data.providerCache === undefined
                     ? {}
                     : { providerCache: castDraft(event.data.providerCache) }),
@@ -510,10 +511,11 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
             draft.tokens = castDraft(event.data.tokens)
           }
           draft.diagnostics =
-            event.data.contextLimit === undefined && event.data.providerCache === undefined
+            event.data.contextLimit === undefined && event.data.contextBreakdown === undefined && event.data.providerCache === undefined
               ? undefined
               : {
                   ...(event.data.contextLimit === undefined ? {} : { contextLimit: event.data.contextLimit }),
+                  ...(event.data.contextBreakdown === undefined ? {} : { contextBreakdown: castDraft(event.data.contextBreakdown) }),
                   ...(event.data.providerCache === undefined
                     ? {}
                     : { providerCache: castDraft(event.data.providerCache) }),

@@ -12,6 +12,7 @@ import { AgentV2 } from "../../agent"
 import { Snapshot } from "../../snapshot"
 import { RelativePath } from "../../schema"
 import { SessionUsage } from "../usage"
+import type { ContextBreakdown } from "@ycoding-ai/schema/session-cache-diagnostics"
 
 type Input = {
   readonly sessionID: SessionSchema.ID
@@ -329,6 +330,7 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
     readonly cost?: Money.USD
     readonly tokens?: ReturnType<typeof SessionUsage.tokens>
     readonly providerCache?: Session.ProviderCacheDiagnostics
+    readonly contextBreakdown?: ContextBreakdown
     readonly snapshot?: Snapshot.ID
     readonly files?: readonly RelativePath[]
   }) {

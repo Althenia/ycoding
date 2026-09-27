@@ -24,8 +24,20 @@ export const ProviderCache = Schema.Struct({
 }).annotate({ identifier: "Session.ProviderCacheDiagnostics" })
 export interface ProviderCache extends Schema.Schema.Type<typeof ProviderCache> {}
 
+export const ContextBreakdown = Schema.Struct({
+  system: NonNegativeInt,
+  tools: NonNegativeInt,
+  user: NonNegativeInt,
+  assistant: NonNegativeInt,
+  reasoning: NonNegativeInt,
+  toolCalls: NonNegativeInt,
+  other: NonNegativeInt,
+}).annotate({ identifier: "Session.ContextBreakdown" })
+export interface ContextBreakdown extends Schema.Schema.Type<typeof ContextBreakdown> {}
+
 export const Info = Schema.Struct({
   model: Model.Ref,
+  contextBreakdown: ContextBreakdown.pipe(optional),
   context: Schema.Struct({
     total: NonNegativeInt,
     limit: NonNegativeInt.pipe(optional),

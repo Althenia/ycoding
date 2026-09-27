@@ -39,6 +39,13 @@ export function Footer(props: {
         bind: "<leader>shift+u",
         run: openUsage,
       },
+      {
+        id: "session.context-breakdown.open",
+        title: "Open context breakdown",
+        group: "Session",
+        palette: true,
+        run: () => route.navigate({ type: "session-context", sessionID: props.sessionID }),
+      },
     ],
     bindings: ["session.provider-usage.open"],
   }))

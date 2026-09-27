@@ -2,6 +2,7 @@ export * as SessionCacheDiagnostics from "./cache-diagnostics"
 
 import { cacheProfile } from "@ycoding-ai/ai/cache-profile"
 import { Session } from "@ycoding-ai/schema/session"
+import type { ContextBreakdown } from "@ycoding-ai/schema/session-cache-diagnostics"
 import { Money } from "@ycoding-ai/schema/money"
 import type { TokenUsage } from "@ycoding-ai/schema/token-usage"
 import type { ModelV2 } from "../model"
@@ -13,6 +14,7 @@ export interface CalculateInput {
   readonly tokens: TokenUsage.Info
   readonly estimatedCost: Money.USD
   readonly contextLimit?: number
+  readonly contextBreakdown?: ContextBreakdown
   readonly routeID?: string
   readonly providerCache?: Session.ProviderCacheDiagnostics
 }
@@ -107,6 +109,7 @@ export function calculate(input: CalculateInput): Session.CacheDiagnostics {
 
   return {
     model: input.model,
+    ...(input.contextBreakdown === undefined ? {} : { contextBreakdown: input.contextBreakdown }),
     context: {
       total,
       ...(limit === undefined
@@ -157,6 +160,7 @@ export function fromMessages(
     tokens: last.tokens,
     estimatedCost: last.cost ?? Money.USD.zero,
     contextLimit: last.diagnostics?.contextLimit,
+    contextBreakdown: last.diagnostics?.contextBreakdown,
     providerCache: last.diagnostics?.providerCache,
   })
 }

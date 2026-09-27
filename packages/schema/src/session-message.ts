@@ -233,6 +233,7 @@ export const Assistant = Schema.Struct({
   tokens: TokenUsage.Info.pipe(optional),
   diagnostics: Schema.Struct({
     contextLimit: NonNegativeInt.pipe(optional),
+    contextBreakdown: SessionCacheDiagnostics.ContextBreakdown.pipe(optional),
     providerCache: SessionCacheDiagnostics.ProviderCache.pipe(optional),
   }).pipe(optional),
   error: SessionError.Error.pipe(optional),

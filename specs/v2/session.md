@@ -193,6 +193,10 @@ The bounded Session diagnostics response includes the latest provider-request in
 
 The instance-wide live stream emits `session.diagnostics.updated` when a provider step reports terminal usage, before waiting for local tools started by that step. Its payload is the normalized last-step `SessionCacheDiagnostics.Info`; the TUI may use it to refresh context and cache telemetry while the step remains active. The event is ephemeral and has no replay guarantee. Terminal `session.step.ended` or token-bearing `session.step.failed` remains the durable source used by the diagnostics endpoint after reconnect or restart.
 
+`SessionCacheDiagnostics.ContextBreakdown` (`Session.ContextBreakdown`) has seven nonnegative integer fields: `system`, `tools`, `user`, `assistant`, `reasoning`, `toolCalls`, and `other`. The runner estimates the prepared request's model-visible input by counting system text and serialized tool definitions with the context-budget estimator and each message part with the media-aware JSON estimator. System message text joins `system`; assistant tool-call inputs and tool results join `toolCalls`; non-text parts not otherwise classified join `other`. All seven fields are present, including zero counts, and their sum is the breakdown total rather than the provider-reported context total. This independent estimate does not alter the compaction estimate or admission behavior.
+
+`contextBreakdown` is optional on `session.step.ended.1` and `session.step.failed.1` next to `contextLimit` and `providerCache`, on the assistant message's `diagnostics`, and on `SessionCacheDiagnostics.Info` returned by `GET /api/session/:sessionID/diagnostics` and emitted in `session.diagnostics.updated`. Core folds the terminal Step value into the assistant projection; the diagnostics read model recovers it from that projection for the latest qualifying assistant after restart. Previously stored events and messages without the field remain decodable; this additive optional field does not change the durable event version.
+
 ## Durable Events Are Session-Scoped
 
 ### Runtime observations

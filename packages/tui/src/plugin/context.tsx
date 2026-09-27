@@ -134,7 +134,7 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver }>
               return route.data.sessionID
                 ? { type: "session" as const, sessionID: route.data.sessionID }
                 : { type: "home" as const }
-            if (route.data.type === "terminal-inspector")
+            if (route.data.type === "terminal-inspector" || route.data.type === "session-context")
               return { type: "session" as const, sessionID: route.data.sessionID }
             return route.data
           },

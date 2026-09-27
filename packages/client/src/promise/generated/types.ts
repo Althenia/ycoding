@@ -94,6 +94,16 @@ export type ToolFileContent = { type: "file"; uri: string; mime: string; name?: 
 
 export type SessionStructuredError = { type: string; message: string }
 
+export type SessionContextBreakdown = {
+  system: number
+  tools: number
+  user: number
+  assistant: number
+  reasoning: number
+  toolCalls: number
+  other: number
+}
+
 export type SessionCacheMechanism =
   | "openai-prefix-cache"
   | "openrouter-cache-control"
@@ -2243,6 +2253,7 @@ export type SessionStepEnded = {
     cost: MoneyUSD
     tokens: TokenUsageInfo
     contextLimit?: number
+    contextBreakdown?: SessionContextBreakdown
     providerCache?: SessionProviderCacheDiagnostics
     snapshot?: string
     files?: Array<string>
@@ -2264,6 +2275,7 @@ export type SessionStepFailed = {
     cost?: MoneyUSD
     tokens?: TokenUsageInfo
     contextLimit?: number
+    contextBreakdown?: SessionContextBreakdown
     providerCache?: SessionProviderCacheDiagnostics
     snapshot?: string
     files?: Array<string>
@@ -2281,6 +2293,7 @@ export type SessionMessageCompaction =
 
 export type SessionCacheDiagnostics = {
   model: ModelRef
+  contextBreakdown?: SessionContextBreakdown
   context: { total: number; limit?: number; remaining?: number; percent?: number }
   tokens: { uncachedInput: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number }
   cache: {
@@ -2690,7 +2703,11 @@ export type SessionMessageAssistant = {
   finish?: "stop" | "length" | "tool-calls" | "content-filter" | "error" | "unknown"
   cost?: MoneyUSD
   tokens?: TokenUsageInfo
-  diagnostics?: { contextLimit?: number; providerCache?: SessionProviderCacheDiagnostics }
+  diagnostics?: {
+    contextLimit?: number
+    contextBreakdown?: SessionContextBreakdown
+    providerCache?: SessionProviderCacheDiagnostics
+  }
   error?: SessionStructuredError
   retry?: SessionMessageAssistantRetry
 }
@@ -3109,6 +3126,7 @@ export type SessionLogItem =
         cost: MoneyUSD
         tokens: TokenUsageInfo
         contextLimit?: number
+        contextBreakdown?: SessionContextBreakdown
         providerCache?: SessionProviderCacheDiagnostics
         snapshot?: string
         files?: Array<string>
@@ -3129,6 +3147,7 @@ export type SessionLogItem =
         cost?: MoneyUSD
         tokens?: TokenUsageInfo
         contextLimit?: number
+        contextBreakdown?: SessionContextBreakdown
         providerCache?: SessionProviderCacheDiagnostics
         snapshot?: string
         files?: Array<string>

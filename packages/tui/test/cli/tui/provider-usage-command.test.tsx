@@ -70,7 +70,7 @@ test("registers screen-only entry and back commands without a command palette it
   expect(footer).toContain("Open provider usage")
   expect(footer).toContain('bind: "<leader>shift+u"')
   expect(route).toContain('type: "provider-usage"')
-  expect(footer).not.toContain("palette: true")
+  expect(footer.match(/id: "session\.provider-usage\.open"[\s\S]*?run: openUsage/)?.[0]).not.toContain("palette: true")
 })
 
 test("renders provider progress and unavailable states in a dedicated dialog", async () => {

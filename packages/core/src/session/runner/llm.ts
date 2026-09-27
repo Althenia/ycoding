@@ -59,6 +59,7 @@ type StepEnd = {
 
 type AttemptState = {
   current?: SessionProviderRequest.Tracker
+  contextBreakdown?: ReturnType<typeof SessionContextPressure.breakdown>
   attempts: number
   continuationFallback?: boolean
   overflowRecovery?: "pending" | "used"
@@ -366,6 +367,8 @@ const layer = Layer.effect(
         ...originalPrepared,
         request: LLMRequest.update(originalPrepared.request, { id: requestTracker.requestID }),
       }
+      const contextBreakdown = SessionContextPressure.breakdown(prepared.request)
+      requestTrackerState.contextBreakdown = contextBreakdown
       const unreadInputIDs = new Set(
         loaded.messages.flatMap((message) =>
           message.type === "user" && message.time.consumed === undefined ? [message.id] : [],
@@ -467,6 +470,7 @@ const layer = Layer.effect(
                     tokens: usage.tokens,
                     estimatedCost: usage.cost,
                     contextLimit: effectiveModel.route.defaults.limits?.context,
+                    contextBreakdown,
                     providerCache: providerCache(settlement),
                   }),
                 }),
@@ -588,6 +592,7 @@ const layer = Layer.effect(
                 finish: settlement.finish,
                 ...stepUsage(settlement),
                 contextLimit: effectiveModel.route.defaults.limits?.context,
+                contextBreakdown,
                 ...(cache === undefined ? {} : { providerCache: cache }),
                 ...end,
               },
@@ -775,6 +780,7 @@ const layer = Layer.effect(
                   sessionID: session.id,
                   assistantMessageID,
                   error,
+                  contextBreakdown,
                   ...(yield* captureStepEnd()),
                 }),
               )
@@ -803,6 +809,7 @@ const layer = Layer.effect(
               publisher.publishStepFailure({
                 ...(stepSettlement ? stepUsage(stepSettlement) : {}),
                 ...(cache === undefined ? {} : { providerCache: cache }),
+                contextBreakdown,
                 ...end,
               }),
             )
@@ -921,6 +928,7 @@ const layer = Layer.effect(
                   sessionID,
                   assistantMessageID: error.assistantMessageID,
                   error: error.error,
+                  contextBreakdown: requestTrackerState.contextBreakdown,
                 }),
               ),
               Effect.andThen(Effect.fail(error.cause)),
@@ -938,6 +946,7 @@ const layer = Layer.effect(
                   sessionID,
                   assistantMessageID,
                   error: { type: "aborted", message: "Step interrupted" },
+                  contextBreakdown: requestTrackerState.contextBreakdown,
                 }),
           ),
         )

@@ -2459,6 +2459,7 @@ describe("SessionRunnerLLM", () => {
       const assistant = requireAssistant(yield* session.context(sessionID))
       expect(assistant.diagnostics).toEqual({
         contextLimit: 20_000,
+        contextBreakdown: expect.objectContaining({ system: expect.any(Number), tools: expect.any(Number), user: expect.any(Number), assistant: expect.any(Number), reasoning: expect.any(Number), toolCalls: expect.any(Number), other: expect.any(Number) }),
         providerCache: {
           mechanism: "openai-prefix-cache",
           readReported: true,
@@ -2468,8 +2469,9 @@ describe("SessionRunnerLLM", () => {
       expect(
         (yield* recordedStepSettlementEvents(sessionID, assistant.id)).find(
           (event) => event.type === "session.step.ended.1",
-        )?.data,
+      )?.data,
       ).toMatchObject({
+        contextBreakdown: assistant.diagnostics?.contextBreakdown,
         providerCache: {
           mechanism: "openai-prefix-cache",
           readReported: true,
@@ -2478,6 +2480,7 @@ describe("SessionRunnerLLM", () => {
       })
       const diagnostics = yield* session.diagnostics(sessionID)
       expect(diagnostics).toMatchObject({
+        contextBreakdown: assistant.diagnostics?.contextBreakdown,
         context: { total: 1_030, limit: 20_000, remaining: 18_970, percent: 5 },
         tokens: { uncachedInput: 100, output: 20, reasoning: 10, cacheRead: 900, cacheWrite: 0 },
         cache: {
@@ -5778,6 +5781,7 @@ describe("SessionRunnerLLM", () => {
           cost: 0,
           tokens: { input: 8, output: 2, reasoning: 1, cache: { read: 0, write: 0 } },
           diagnostics: {
+            contextBreakdown: expect.objectContaining({ user: expect.any(Number), system: expect.any(Number) }),
             providerCache: {
               mechanism: "openai-prefix-cache",
               readReported: false,
@@ -5798,6 +5802,7 @@ describe("SessionRunnerLLM", () => {
           (event) => event.type === "session.step.failed.1",
         )?.data,
       ).toMatchObject({
+        contextBreakdown: assistant.diagnostics?.contextBreakdown,
         providerCache: {
           mechanism: "openai-prefix-cache",
           readReported: false,
