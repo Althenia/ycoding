@@ -22,13 +22,16 @@ const FILE_LIMIT = 10
 export const Input = Schema.Struct({
   id: SkillV2.ID.annotate({ description: "The ID of the skill from the available skills list" }),
   /**
-   * Optional supporting-file selector. Relative references resolve against the skill's root, exactly as
-   * on a filesystem. Only ever read from the held, digest-verified manifest for the skill's current
-   * content-bound approval.
+   * Optional supporting-file selector for an active MCP-served skill. Relative references resolve against
+   * the skill's root, exactly as on a filesystem. Only ever read from the held, digest-verified manifest
+   * for the skill's current content-bound approval. Local skills are read by absolute path with the read tool.
    */
   resource: Schema.String.pipe(
     Schema.optional,
-    Schema.annotate({ description: "Optional supporting file path relative to the skill's root" }),
+    Schema.annotate({
+      description:
+        "Supporting file path relative to an active MCP-served skill's root. For local skills, read files with the read tool by absolute path instead.",
+    }),
   ),
 })
 
@@ -62,7 +65,7 @@ export const toModelOutput = (skill: SkillV2.Info, files: ReadonlyArray<string>)
     skill.content.trim(),
     "",
     `Base directory for this skill: ${escapeXML(directory)}`,
-    "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.",
+    "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory. Read supporting files with the read tool by absolute path under this base directory; do not use the skill tool's resource input or search for them.",
     "Note: file list is sampled.",
     "",
     "<skill_files>",
@@ -267,6 +270,13 @@ export const Plugin = {
                 // manifest held at that approval, so metadata changes cannot slip content in.
                 if (input.resource !== undefined) {
                   if (!active) return yield* unableToLoad(input.id)
+                  if (!SkillV2.mcpSkillOrigin(input.id)) {
+                    const local = (yield* skills.list()).find((skill) => skill.id === input.id)
+                    if (!local) return yield* unableToLoad(input.id)
+                    return yield* new ToolFailure({
+                      message: `Skill ${input.id} is not served over MCP; read ${path.resolve(path.dirname(local.location), input.resource)} with the read tool`,
+                    })
+                  }
                   return yield* readMcpResource({ mcp, permission }, input.id, input.resource, messages, context)
                 }
                 const origin = SkillV2.mcpSkillOrigin(input.id)

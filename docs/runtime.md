@@ -422,6 +422,8 @@ Subagents do not synchronously return their final result to the initiating tool 
 
 Skills can activate through an explicit reference or the `skill` tool.
 
+Loading a local skill returns its base directory and sampled supporting files as absolute paths; the model reads supporting files with the `read` tool by absolute path. The `skill` tool's `resource` input reads only from active MCP-served skills. A `resource` call for an active local skill fails with the resolved absolute path to read instead.
+
 MCP servers that declare the Resources capability and `io.modelcontextprotocol/skills` contribute metadata-only skill entries to the available-skill catalog. Catalog discovery never retrieves skill content. Loading an MCP skill first obtains its current fixed entry, requires approval bound to that entry's complete digest manifest, and only then retrieves and verifies `SKILL.md`. The durable completed tool message retains the verified entry for activation; it is the authority for later supporting-resource reads, not a second mutable registry. A resource read requires that active MCP skill and its held manifest, repeats the content-bound permission check, and verifies the returned resource before rendering it. Dynamic manifests cannot load.
 
 Session skill status derives from the durable transcript and instruction state:

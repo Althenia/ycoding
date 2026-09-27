@@ -211,6 +211,9 @@ describe("SkillTool", () => {
               value: SkillTool.toModelOutput(info, [reference]),
             })
             expect(SkillTool.toModelOutput(info, [reference])).toContain(`Base directory for this skill: ${directory}`)
+            expect(SkillTool.toModelOutput(info, [reference])).toContain(
+              "Read supporting files with the read tool by absolute path",
+            )
             expect(
               yield* settleTool(registry, {
                 sessionID,
@@ -238,6 +241,21 @@ describe("SkillTool", () => {
                 call: { type: "tool-call", id: "call-active-skill", name: "skill", input: { id: "effect" } },
               }),
             ).toEqual({ type: "text", value: "Skill Effect is already active for this session." })
+            expect(
+              yield* executeTool(registry, {
+                sessionID,
+                ...toolIdentity,
+                call: {
+                  type: "tool-call",
+                  id: "call-local-resource",
+                  name: "skill",
+                  input: { id: "effect", resource: "reference.md" },
+                },
+              }),
+            ).toEqual({
+              type: "error",
+              value: `Skill effect is not served over MCP; read ${reference} with the read tool`,
+            })
             expect(assertions).toHaveLength(2)
             active = false
             expect(
