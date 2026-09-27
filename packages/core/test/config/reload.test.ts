@@ -37,7 +37,7 @@ describe("config plugin reloads", () => {
       const skills = yield* SkillV2.Service
       const host = yield* PluginHost.make(plugins)
       let entries: Config.Entry[] = [config("first")]
-      const service = Config.Service.of({ entries: () => Effect.sync(() => entries) })
+      const service = Config.Service.of({ reload: () => Effect.void, entries: () => Effect.sync(() => entries) })
       const setup = <R>(effect: Effect.Effect<void, never, R>) =>
         effect.pipe(Effect.provideService(Config.Service, service))
 

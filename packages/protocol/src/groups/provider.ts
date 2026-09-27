@@ -1,7 +1,7 @@
 import { Provider } from "@ycoding-ai/schema/provider"
 import { Location } from "@ycoding-ai/schema/location"
 import { Schema } from "effect"
-import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { ProviderNotFoundError, ServiceUnavailableError } from "../errors.js"
 import { LocationQuery, locationQueryOpenApi } from "./location.js"
 
@@ -18,6 +18,22 @@ export const ProviderGroup = HttpApiGroup.make("server.provider")
           identifier: "v2.provider.list",
           summary: "List providers",
           description: "Retrieve active AI providers so clients can show provider availability and configuration.",
+        }),
+      ),
+  )
+  .add(
+    HttpApiEndpoint.post("provider.refresh", "/api/provider/refresh", {
+      query: LocationQuery,
+      success: HttpApiSchema.NoContent,
+      error: ServiceUnavailableError,
+    })
+      .annotateMerge(locationQueryOpenApi)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.provider.refresh",
+          summary: "Refresh providers and models",
+          description:
+            "Rediscover the location's configuration sources and rerun provider model discovery. Clients observe the refreshed catalog through catalog.updated.",
         }),
       ),
   )

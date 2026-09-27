@@ -633,16 +633,22 @@ export type Endpoint10_0Input = { readonly location?: Endpoint10_0Request["query
 export type Endpoint10_0Output = EffectValue<ReturnType<RawClient["server.provider"]["provider.list"]>>
 export type ProviderListOperation<E = never> = (input?: Endpoint10_0Input) => Effect.Effect<Endpoint10_0Output, E>
 
-type Endpoint10_1Request = Parameters<RawClient["server.provider"]["provider.get"]>[0]
-export type Endpoint10_1Input = {
-  readonly providerID: Endpoint10_1Request["params"]["providerID"]
-  readonly location?: Endpoint10_1Request["query"]["location"]
+type Endpoint10_1Request = Parameters<RawClient["server.provider"]["provider.refresh"]>[0]
+export type Endpoint10_1Input = { readonly location?: Endpoint10_1Request["query"]["location"] }
+export type Endpoint10_1Output = EffectValue<ReturnType<RawClient["server.provider"]["provider.refresh"]>>
+export type ProviderRefreshOperation<E = never> = (input?: Endpoint10_1Input) => Effect.Effect<Endpoint10_1Output, E>
+
+type Endpoint10_2Request = Parameters<RawClient["server.provider"]["provider.get"]>[0]
+export type Endpoint10_2Input = {
+  readonly providerID: Endpoint10_2Request["params"]["providerID"]
+  readonly location?: Endpoint10_2Request["query"]["location"]
 }
-export type Endpoint10_1Output = EffectValue<ReturnType<RawClient["server.provider"]["provider.get"]>>
-export type ProviderGetOperation<E = never> = (input: Endpoint10_1Input) => Effect.Effect<Endpoint10_1Output, E>
+export type Endpoint10_2Output = EffectValue<ReturnType<RawClient["server.provider"]["provider.get"]>>
+export type ProviderGetOperation<E = never> = (input: Endpoint10_2Input) => Effect.Effect<Endpoint10_2Output, E>
 
 export interface ProviderApi<E = never> {
   readonly list: ProviderListOperation<E>
+  readonly refresh: ProviderRefreshOperation<E>
   readonly get: ProviderGetOperation<E>
 }
 
@@ -888,23 +894,42 @@ export interface CredentialApi<E = never> {
 export type Endpoint15_0Output = EffectValue<ReturnType<RawClient["server.project"]["project.list"]>>
 export type ProjectListOperation<E = never> = () => Effect.Effect<Endpoint15_0Output, E>
 
-type Endpoint15_1Request = Parameters<RawClient["server.project"]["project.current"]>[0]
-export type Endpoint15_1Input = { readonly location?: Endpoint15_1Request["query"]["location"] }
-export type Endpoint15_1Output = EffectValue<ReturnType<RawClient["server.project"]["project.current"]>>
-export type ProjectCurrentOperation<E = never> = (input?: Endpoint15_1Input) => Effect.Effect<Endpoint15_1Output, E>
-
-type Endpoint15_2Request = Parameters<RawClient["server.project"]["project.directories"]>[0]
-export type Endpoint15_2Input = {
-  readonly projectID: Endpoint15_2Request["params"]["projectID"]
-  readonly location?: Endpoint15_2Request["query"]["location"]
+type Endpoint15_1Request = Parameters<RawClient["server.project"]["project.inventory"]>[0]
+export type Endpoint15_1Input = {
+  readonly limit?: Endpoint15_1Request["query"]["limit"]
+  readonly search?: Endpoint15_1Request["query"]["search"]
+  readonly cursor?: Endpoint15_1Request["query"]["cursor"]
 }
-export type Endpoint15_2Output = EffectValue<ReturnType<RawClient["server.project"]["project.directories"]>>
-export type ProjectDirectoriesOperation<E = never> = (input: Endpoint15_2Input) => Effect.Effect<Endpoint15_2Output, E>
+export type Endpoint15_1Output = EffectValue<ReturnType<RawClient["server.project"]["project.inventory"]>>
+export type ProjectInventoryOperation<E = never> = (input?: Endpoint15_1Input) => Effect.Effect<Endpoint15_1Output, E>
+
+type Endpoint15_2Request = Parameters<RawClient["server.project"]["project.current"]>[0]
+export type Endpoint15_2Input = { readonly location?: Endpoint15_2Request["query"]["location"] }
+export type Endpoint15_2Output = EffectValue<ReturnType<RawClient["server.project"]["project.current"]>>
+export type ProjectCurrentOperation<E = never> = (input?: Endpoint15_2Input) => Effect.Effect<Endpoint15_2Output, E>
+
+type Endpoint15_3Request = Parameters<RawClient["server.project"]["project.directories"]>[0]
+export type Endpoint15_3Input = {
+  readonly projectID: Endpoint15_3Request["params"]["projectID"]
+  readonly location?: Endpoint15_3Request["query"]["location"]
+}
+export type Endpoint15_3Output = EffectValue<ReturnType<RawClient["server.project"]["project.directories"]>>
+export type ProjectDirectoriesOperation<E = never> = (input: Endpoint15_3Input) => Effect.Effect<Endpoint15_3Output, E>
+
+type Endpoint15_4Request = Parameters<RawClient["server.project"]["project.forget"]>[0]
+export type Endpoint15_4Input = {
+  readonly projectID: Endpoint15_4Request["params"]["projectID"]
+  readonly directory: Endpoint15_4Request["payload"]["directory"]
+}
+export type Endpoint15_4Output = EffectValue<ReturnType<RawClient["server.project"]["project.forget"]>>
+export type ProjectForgetOperation<E = never> = (input: Endpoint15_4Input) => Effect.Effect<Endpoint15_4Output, E>
 
 export interface ProjectApi<E = never> {
   readonly list: ProjectListOperation<E>
+  readonly inventory: ProjectInventoryOperation<E>
   readonly current: ProjectCurrentOperation<E>
   readonly directories: ProjectDirectoriesOperation<E>
+  readonly forget: ProjectForgetOperation<E>
 }
 
 type Endpoint16_0Request = Parameters<RawClient["server.form"]["form.request.list"]>[0]

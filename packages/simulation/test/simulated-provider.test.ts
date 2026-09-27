@@ -699,7 +699,15 @@ const toolLifecycleLayer = (endpoint: string) => {
   })
   return AppNodeBuilder.build(
     LayerNode.group([Database.node, EventV2.node, SdkPlugins.node, LocationServiceMap.node, provider]),
-    [[Config.node, Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))]],
+    [
+      [
+        Config.node,
+        Layer.succeed(
+          Config.Service,
+          Config.Service.of({ reload: () => Effect.void, entries: () => Effect.succeed([]) }),
+        ),
+      ],
+    ],
   )
 }
 

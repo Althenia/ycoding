@@ -24,6 +24,7 @@ const providerID = ProviderV2.ID.make("advisor-test")
 const modelID = ModelV2.ID.make("advisor-test")
 const advisorSessionID = SessionSchema.ID.make("ses_conversation_compact_advisor")
 const advisorConfig = Config.Service.of({
+  reload: () => Effect.void,
   entries: () =>
     Effect.succeed([
       new Config.Document({

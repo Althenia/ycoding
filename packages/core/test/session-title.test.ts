@@ -77,6 +77,7 @@ let titleMode: SessionHelperPolicy.TitleMode = "local"
 const config = Layer.succeed(
   Config.Service,
   Config.Service.of({
+    reload: () => Effect.void,
     entries: () =>
       Effect.succeed([
         new Config.Document({

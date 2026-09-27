@@ -25,6 +25,23 @@ export const DirectoriesInput = Schema.Struct({
 export interface DirectoriesInput extends Schema.Schema.Type<typeof DirectoriesInput> {}
 export const Directories = Schema.Array(Directory).annotate({ identifier: "Project.Directories" })
 export type Directories = typeof Directories.Type
+export const InventoryEntry = Schema.Struct({
+  projectID: ID,
+  projectName: optional(Schema.String),
+  projectWorktree: AbsolutePath,
+  directory: AbsolutePath,
+  strategy: optional(Schema.String),
+  sessions: NonNegativeInt,
+  timeActive: NonNegativeInt,
+  available: Schema.Boolean,
+}).annotate({ identifier: "Project.InventoryEntry" })
+export interface InventoryEntry extends Schema.Schema.Type<typeof InventoryEntry> {}
+export const InventoryAnchor = Schema.Struct({
+  projectWorktree: AbsolutePath,
+  projectID: ID,
+  directory: AbsolutePath,
+}).annotate({ identifier: "Project.InventoryAnchor" })
+export interface InventoryAnchor extends Schema.Schema.Type<typeof InventoryAnchor> {}
 export const Icon = Schema.Struct({
   url: optional(Schema.String),
   override: optional(Schema.String),

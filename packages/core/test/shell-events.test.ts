@@ -22,6 +22,7 @@ afterAll(() => rm(workspace, { recursive: true, force: true }))
 const config = Layer.succeed(
   Config.Service,
   Config.Service.of({
+    reload: () => Effect.void,
     entries: () =>
       Effect.succeed([
         new Config.Document({

@@ -336,6 +336,17 @@ export type ProjectCommands = { start?: string }
 
 export type ProjectTime = { created: number; updated: number; initialized?: number }
 
+export type ProjectInventoryEntry = {
+  projectID: string
+  projectName?: string
+  projectWorktree: string
+  directory: string
+  strategy?: string
+  sessions: number
+  timeActive: number
+  available: boolean
+}
+
 export type ProjectCurrent = { id: string; directory: string }
 
 export type ProjectDirectory = { directory: string; strategy?: string }
@@ -1808,6 +1819,8 @@ export type Project = {
   time: ProjectTime
   sandboxes: Array<string>
 }
+
+export type ProjectInventoryResponse = { data: Array<ProjectInventoryEntry>; cursor: { next?: string | null } }
 
 export type ProjectDirectories = Array<ProjectDirectory>
 
@@ -4971,6 +4984,14 @@ export type ProviderListOutput = {
   data: Array<ProviderV2Info>
 }
 
+export type ProviderRefreshInput = {
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+}
+
+export type ProviderRefreshOutput = void
+
 export type ProviderGetInput = {
   readonly providerID: { readonly providerID: string }["providerID"]
   readonly location?: {
@@ -5333,6 +5354,26 @@ export type CredentialRemoveOutput = void
 
 export type ProjectListOutput = Array<Project>
 
+export type ProjectInventoryInput = {
+  readonly limit?: {
+    readonly limit?: number | undefined
+    readonly search?: string | undefined
+    readonly cursor?: string | undefined
+  }["limit"]
+  readonly search?: {
+    readonly limit?: number | undefined
+    readonly search?: string | undefined
+    readonly cursor?: string | undefined
+  }["search"]
+  readonly cursor?: {
+    readonly limit?: number | undefined
+    readonly search?: string | undefined
+    readonly cursor?: string | undefined
+  }["cursor"]
+}
+
+export type ProjectInventoryOutput = ProjectInventoryResponse
+
 export type ProjectCurrentInput = {
   readonly location?: {
     readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
@@ -5349,6 +5390,13 @@ export type ProjectDirectoriesInput = {
 }
 
 export type ProjectDirectoriesOutput = ProjectDirectories
+
+export type ProjectForgetInput = {
+  readonly projectID: { readonly projectID: string }["projectID"]
+  readonly directory: { readonly directory: string }["directory"]
+}
+
+export type ProjectForgetOutput = void
 
 export type FormRequestListInput = {
   readonly location?: {

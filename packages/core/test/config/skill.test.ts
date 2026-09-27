@@ -44,6 +44,7 @@ describe("ConfigSkillPlugin.Plugin", () => {
         Effect.provideService(
           Config.Service,
           Config.Service.of({
+            reload: () => Effect.void,
             entries: () =>
               Effect.succeed([
                 new Config.ClaudeDirectory({ type: "claude", path: AbsolutePath.make("/repo/.claude") }),

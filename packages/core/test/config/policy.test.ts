@@ -28,7 +28,10 @@ const addPlugin = Effect.fn(function* (entries: () => Config.Entry[]) {
   const plugin = yield* PluginV2.Service
   const host = yield* PluginHost.make(plugin)
   yield* ConfigPolicyPlugin.Plugin.effect(host).pipe(
-    Effect.provideService(Config.Service, Config.Service.of({ entries: () => Effect.sync(entries) })),
+    Effect.provideService(
+      Config.Service,
+      Config.Service.of({ reload: () => Effect.void, entries: () => Effect.sync(entries) }),
+    ),
   )
 })
 

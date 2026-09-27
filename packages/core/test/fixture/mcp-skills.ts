@@ -332,6 +332,7 @@ export const skillsMcpLayer = (url: string) => {
         Layer.succeed(
           Config.Service,
           Config.Service.of({
+            reload: () => Effect.void,
             entries: () =>
               Effect.succeed([
                 new Config.Document({

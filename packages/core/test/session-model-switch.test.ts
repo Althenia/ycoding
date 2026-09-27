@@ -133,6 +133,7 @@ let compactionConfig: readonly ConfigCompaction.Info[] = []
 const config = Layer.succeed(
   Config.Service,
   Config.Service.of({
+    reload: () => Effect.void,
     entries: () =>
       Effect.succeed([
         ...compactionConfig.map(

@@ -130,6 +130,8 @@ import type {
   GenerateTextOutput,
   ProviderListInput,
   ProviderListOutput,
+  ProviderRefreshInput,
+  ProviderRefreshOutput,
   ProviderGetInput,
   ProviderGetOutput,
   ProviderUsageListInput,
@@ -177,10 +179,14 @@ import type {
   CredentialRemoveInput,
   CredentialRemoveOutput,
   ProjectListOutput,
+  ProjectInventoryInput,
+  ProjectInventoryOutput,
   ProjectCurrentInput,
   ProjectCurrentOutput,
   ProjectDirectoriesInput,
   ProjectDirectoriesOutput,
+  ProjectForgetInput,
+  ProjectForgetOutput,
   FormRequestListInput,
   FormRequestListOutput,
   FormListInput,
@@ -1345,6 +1351,18 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ),
+      refresh: (input?: ProviderRefreshInput, requestOptions?: RequestOptions) =>
+        request<ProviderRefreshOutput>(
+          {
+            method: "POST",
+            path: `/api/provider/refresh`,
+            query: { location: input?.["location"] },
+            successStatus: 204,
+            declaredStatuses: [503, 401, 400],
+            empty: true,
+          },
+          requestOptions,
+        ),
       get: (input: ProviderGetInput, requestOptions?: RequestOptions) =>
         request<ProviderGetOutput>(
           {
@@ -1653,6 +1671,18 @@ export function make(options: ClientOptions) {
           { method: "GET", path: `/api/project`, successStatus: 200, declaredStatuses: [401, 400], empty: false },
           requestOptions,
         ),
+      inventory: (input?: ProjectInventoryInput, requestOptions?: RequestOptions) =>
+        request<ProjectInventoryOutput>(
+          {
+            method: "GET",
+            path: `/api/project/inventory`,
+            query: { limit: input?.["limit"], search: input?.["search"], cursor: input?.["cursor"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
       current: (input?: ProjectCurrentInput, requestOptions?: RequestOptions) =>
         request<ProjectCurrentOutput>(
           {
@@ -1674,6 +1704,18 @@ export function make(options: ClientOptions) {
             successStatus: 200,
             declaredStatuses: [401, 400],
             empty: false,
+          },
+          requestOptions,
+        ),
+      forget: (input: ProjectForgetInput, requestOptions?: RequestOptions) =>
+        request<ProjectForgetOutput>(
+          {
+            method: "DELETE",
+            path: `/api/project/${encodeURIComponent(input.projectID)}/directories`,
+            body: { directory: input["directory"] },
+            successStatus: 204,
+            declaredStatuses: [401, 400],
+            empty: true,
           },
           requestOptions,
         ),

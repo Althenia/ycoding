@@ -62,6 +62,7 @@ describe("ConfigAgentPlugin.Plugin", () => {
       )
 
       const config = Config.Service.of({
+        reload: () => Effect.void,
         entries: () =>
           Effect.succeed([
             new Config.Document({
@@ -147,6 +148,7 @@ describe("ConfigAgentPlugin.Plugin", () => {
     Effect.gen(function* () {
       const agents = yield* AgentV2.Service
       const config = Config.Service.of({
+        reload: () => Effect.void,
         entries: () =>
           Effect.succeed([
             new Config.Document({
@@ -215,6 +217,7 @@ describe("ConfigAgentPlugin.Plugin", () => {
       yield* agents.transform((editor) => editor.update(build, () => {}))
 
       const config = Config.Service.of({
+        reload: () => Effect.void,
         entries: () =>
           Effect.succeed([
             new Config.Document({
@@ -278,6 +281,7 @@ Use current fields.`,
           })
           const agents = yield* AgentV2.Service
           const config = Config.Service.of({
+            reload: () => Effect.void,
             entries: () =>
               Effect.succeed([
                 new Config.Document({
@@ -323,6 +327,7 @@ function loadHomePermissions(home: string) {
     const build = AgentV2.ID.make("build")
     yield* agents.transform((editor) => editor.update(build, () => {}))
     const config = Config.Service.of({
+      reload: () => Effect.void,
       entries: () =>
         Effect.succeed([
           new Config.Document({

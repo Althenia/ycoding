@@ -4,7 +4,7 @@ import { makeLocationNode } from "./effect/app-node"
 import path from "path"
 import { isDeepStrictEqual } from "node:util"
 import { type ParseError, parse } from "jsonc-parser"
-import { Context, Effect, Fiber, Layer, Option, PubSub, Schema, Semaphore, Stream } from "effect"
+import { Context, Effect, Fiber, Layer, Option, PubSub, Schema, Scope, Semaphore, Stream } from "effect"
 import { Permission } from "@ycoding-ai/schema/permission"
 import { Event } from "@ycoding-ai/schema/config"
 import { Integration } from "@ycoding-ai/schema/integration"
@@ -185,6 +185,7 @@ export function latest<K extends keyof Info>(entries: readonly Entry[], key: K):
 export interface Interface {
   /** Returns location config documents and discovery sources from lowest to highest priority. */
   readonly entries: () => Effect.Effect<Entry[]>
+  readonly reload: () => Effect.Effect<void>
 }
 
 export const Options = Schema.Struct({
@@ -210,6 +211,7 @@ export const layer = (options?: Options) =>
       const wellknown = yield* WellKnown.Service
       const names = ["ycoding.json", "ycoding.jsonc"]
       const reloadLock = Semaphore.makeUnsafe(1)
+      const context = yield* Effect.context<Scope.Scope | FSUtil.Service>()
       const decodeOptions = { errors: "all", onExcessProperty: "ignore", propertyOrder: "original" } as const
       const decodeInfo = Schema.decodeUnknownOption(Info, decodeOptions)
       const removedKeys = new Set([
@@ -512,6 +514,7 @@ export const layer = (options?: Options) =>
         entries: Effect.fn("Config.entries")(function* () {
           return configs
         }),
+        reload: () => reload({ notify: true }).pipe(Effect.provideContext(context)),
       })
     }),
   )

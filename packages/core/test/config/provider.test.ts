@@ -64,7 +64,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
     Effect.gen(function* () {
       const integrations = yield* Integration.Service
       const catalog = yield* Catalog.Service
-      yield* addPlugin(Config.Service.of({ entries: () => Effect.succeed([new Config.Document({
+      yield* addPlugin(Config.Service.of({ reload: () => Effect.void, entries: () => Effect.succeed([new Config.Document({
         type: "document",
         info: decode({ providers: {
           "runpod-a": { package: "@ycoding-ai/ai/providers/runpod", settings: { worker: "ollama", baseURL: "https://api.runpod.ai/v2/a" }, models: { ollama: { capabilities: { tools: true } } } },
@@ -99,6 +99,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
       const integrations = yield* Integration.Service
       const id = Integration.ID.make("private-compatible")
       yield* addPlugin(Config.Service.of({
+        reload: () => Effect.void,
         entries: () => Effect.succeed([new Config.Document({
           type: "document",
           info: decode({ providers: {
@@ -147,7 +148,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
         yield* credentials.create({
           integrationID: blockedID, value: Credential.Key.make({ type: "key", key: "blocked-key" }),
         })
-        yield* addPlugin(Config.Service.of({ entries: () => Effect.succeed([new Config.Document({
+        yield* addPlugin(Config.Service.of({ reload: () => Effect.void, entries: () => Effect.succeed([new Config.Document({
           type: "document",
           info: decode({ providers: {
             [id]: {
@@ -202,7 +203,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
       ({ server, requests }) => Effect.gen(function* () {
         const catalog = yield* Catalog.Service
         const baseURL = `http://0.0.0.0:${server.port}/v1`
-        yield* addPlugin(Config.Service.of({ entries: () => Effect.succeed([new Config.Document({
+        yield* addPlugin(Config.Service.of({ reload: () => Effect.void, entries: () => Effect.succeed([new Config.Document({
           type: "document",
           info: decode({ providers: {
             "config-key": { settings: { baseURL, apiKey: "configured-key" }, catalog: { source: "openai-models" } },
@@ -258,6 +259,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
             }),
           )
           const config = Config.Service.of({
+            reload: () => Effect.void,
             entries: () =>
               Effect.succeed([
                 new Config.Document({
@@ -298,6 +300,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
       const providerID = ProviderV2.ID.opencode
       const modelID = ModelV2.ID.make("alpha-gpt-next")
       const config = Config.Service.of({
+        reload: () => Effect.void,
         entries: () =>
           Effect.succeed([
             new Config.Document({
@@ -350,6 +353,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
       const providerID = ProviderV2.ID.opencode
       const modelID = ModelV2.ID.make("alpha-gpt-next")
       const config = Config.Service.of({
+        reload: () => Effect.void,
         entries: () =>
           Effect.succeed([
             new Config.Document({
@@ -398,6 +402,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
         const providerID = ProviderV2.ID.make("custom")
         const modelID = ModelV2.ID.make("chat")
         const config = Config.Service.of({
+          reload: () => Effect.void,
           entries: () =>
             Effect.succeed([
               new Config.Document({

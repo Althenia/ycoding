@@ -73,7 +73,10 @@ const fakeShellState: {
   output: "partial output",
 }
 
-const config = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed(configEntries) }))
+const config = Layer.succeed(
+  Config.Service,
+  Config.Service.of({ reload: () => Effect.void, entries: () => Effect.succeed(configEntries) }),
+)
 
 const permission = Layer.succeed(
   PermissionV2.Service,

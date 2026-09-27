@@ -396,6 +396,45 @@ describe("Config", () => {
     ),
   )
 
+  it.live("reload discovers unwatched project config and publishes an update on every request", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const global = path.join(tmp.path, "global")
+          const project = path.join(tmp.path, "project")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(global, { recursive: true })
+            await fs.mkdir(project, { recursive: true })
+            await fs.writeFile(path.join(global, "ycoding.json"), JSON.stringify({ shell: "global" }))
+          })
+          const watcher = Layer.succeed(Watcher.Service, Watcher.Service.of({ subscribe: () => Stream.never }))
+
+          return yield* Effect.gen(function* () {
+            const config = yield* Config.Service
+            const events = yield* EventV2.Service
+            expect(Config.latest(yield* config.entries(), "shell")).toBe("global")
+            const changed = yield* events
+              .subscribe(ConfigSchema.Event.Updated)
+              .pipe(Stream.take(2), Stream.runCollect, Effect.forkScoped)
+            yield* Effect.sleep("10 millis")
+
+            yield* Effect.promise(() =>
+              fs.writeFile(path.join(project, "ycoding.json"), JSON.stringify({ shell: "project" })),
+            )
+            yield* config.reload()
+            expect(Config.latest(yield* config.entries(), "shell")).toBe("project")
+            yield* config.reload()
+
+            expect(yield* Fiber.join(changed).pipe(Effect.timeout("2 seconds"))).toHaveLength(2)
+          }).pipe(Effect.provide(testLayer(project, global, project, undefined, watcher)))
+        }),
+      ),
+    ),
+  )
+
   it.effect("returns the latest defined scalar from priority-ordered documents", () =>
     Effect.sync(() => {
       const entries = [

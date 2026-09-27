@@ -2,6 +2,25 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-09-27: Add Project Directory Inventory and Forget
+
+- Add `Project.InventoryEntry` (`projectID`, optional `projectName`, `projectWorktree`, `directory`, optional `strategy`, `sessions`, `timeActive`, `available`) and `Project.InventoryAnchor`.
+- Add `GET /api/project/inventory` with `limit` (1–200, default 50), `search`, and an opaque `cursor`. It lists every recorded project directory and every Session directory across projects, ordered by project worktree, project ID, and directory; `cursor.next` continues the same search.
+- Add `DELETE /api/project/:projectID/directories` with payload `{ directory }` (`204 No Content`). It deletes every Session of that project in the directory, including their child Sessions, and removes the directory record without touching files.
+
+Compatibility:
+
+- The shapes and operations are additive. Promise and Effect client surfaces are regenerated from the assembled `HttpApi`.
+
+## 2026-09-27: Add Provider Refresh
+
+- Add `POST /api/provider/refresh` (Location-scoped, `204 No Content`). It rediscovers the Location's configuration sources, publishes `config.updated`, and reruns provider model discovery; the refreshed catalog is delivered through `catalog.updated`.
+
+Compatibility:
+
+- The operation is additive. The plugin catalog API keeps only `provider.list` and `provider.get`.
+- Promise and Effect client surfaces are regenerated from the assembled `HttpApi`.
+
 ## 2026-09-22: Add Session Daybreak Access Program Selection
 
 - Add `Model.Daybreak` (`"daybreak_blue" | "daybreak_red"`), the optional advertised `Model.Info.daybreak` list on ordinary catalog model entries, and optional `Session.Info.daybreak` recording the Session's selected program.

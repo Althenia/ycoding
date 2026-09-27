@@ -13,6 +13,7 @@ import { PermissionSaved } from "@ycoding-ai/core/permission/saved"
 import { PtyTicket } from "@ycoding-ai/core/pty/ticket"
 import { Pty } from "@ycoding-ai/core/pty"
 import { Project } from "@ycoding-ai/core/project"
+import { ProjectInventory } from "@ycoding-ai/core/project/inventory"
 import { ProjectArtifactStore } from "@ycoding-ai/core/project-artifact"
 import { ProjectArtifactAccounting } from "@ycoding-ai/core/project-artifact/accounting"
 import { SessionV2 } from "@ycoding-ai/core/session"
@@ -60,6 +61,7 @@ const applicationServices = LayerNode.group([
   ToolOutputStore.cleanupNode,
   Job.node,
   Project.node,
+  ProjectInventory.node,
   ProjectArtifactStore.node,
   ProjectArtifactAccounting.node,
   SessionV2.node,

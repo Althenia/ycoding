@@ -12,6 +12,6 @@ export type SessionApi = Client["session"]
 export type SkillApi = Client["skill"]
 
 export interface CatalogApi {
-  readonly provider: ProviderApi
+  readonly provider: Pick<ProviderApi, "list" | "get">
   readonly model: ModelApi
 }
