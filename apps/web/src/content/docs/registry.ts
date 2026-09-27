@@ -70,7 +70,7 @@ export const DOC_INDEX: DocPage = {
             { title: "Goal", text: "Objectives, continuation, and terminal goal states.", href: "/docs/configuration/goal" },
             { title: "YOLO mode", text: "Tiered autonomous execution and what each level answers.", href: "/docs/configuration/yolo" },
             { title: "Guardrails", text: "Session-family reviews, caps, and custom rule files.", href: "/docs/configuration/guardrails" },
-            { title: "Notifications", text: "Attention categories, sounds, and the ntfy tool.", href: "/docs/configuration/notifications" },
+            { title: "Notifications", text: "Attention categories, desktop alerts, and sounds.", href: "/docs/configuration/notifications" },
             { title: "Permissions", text: "Ordered tool rules, effects, and inheritance.", href: "/docs/configuration/permissions" },
             { title: "Tools", text: "Tool surfaces, output bounds, and shell resource limits.", href: "/docs/configuration/tools" },
             { title: "Appearance", text: "Themes, keybindings, scroll, and mouse behavior.", href: "/docs/configuration/appearance" },

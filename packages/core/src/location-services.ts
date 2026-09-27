@@ -27,7 +27,6 @@ import { Policy } from "./policy"
 import { LocationServiceMap } from "./location-service-map"
 import { MCP } from "./mcp/index"
 import { Memory } from "./memory"
-import { NtfyAttention } from "./ntfy/attention"
 import { PermissionV2 } from "./permission"
 import { PluginV2 } from "./plugin"
 import { PluginSupervisor } from "./plugin/supervisor"
@@ -93,7 +92,6 @@ const locationServiceNodes = [
   MCP.node,
   Memory.node,
   PermissionV2.node,
-  NtfyAttention.deliveryNode,
   SessionGuardrail.node,
   BrowserAdmission.node,
   IsolatedBrowserExecutor.node,
@@ -179,7 +177,7 @@ export function buildLocationServiceMap(
       }),
     ),
   )
-  return Layer.merge(map, NtfyAttention.lifecycleLayer.pipe(Layer.provide(map)))
+  return map
 }
 
 // This is temporary for backwards compatibility

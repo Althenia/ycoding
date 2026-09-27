@@ -554,7 +554,6 @@ describe("LocationServiceMap", () => {
                 "goal",
                 "grep",
                 "memory",
-                "ntfy",
                 "patch",
                 "project_artifact",
                 "question",

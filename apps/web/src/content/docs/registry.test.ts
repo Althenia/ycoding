@@ -99,6 +99,10 @@ describe("remote workspace documentation", () => {
 })
 
 describe("page structure", () => {
+  test("configuration pages describe local attention without a removed remote notification tool", () => {
+    expect(JSON.stringify(DOC_PAGES.filter((page) => page.group === "Configuration"))).not.toMatch(/ntfy/i)
+    expect(findDocPage("configuration/notifications")?.sections.some((section) => section.heading === "Terminal attention")).toBe(true)
+  })
   test("gives every page a group, description, and content", () => {
     const slugs = new Set<string>()
     for (const page of DOC_PAGES) {

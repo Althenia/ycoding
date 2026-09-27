@@ -30,7 +30,6 @@ import { ConfigLSP } from "./config/lsp"
 import { ConfigMCP } from "./config/mcp"
 import { ConfigModel } from "./config/model"
 import { ConfigMemory } from "./config/memory"
-import { ConfigNtfy } from "./config/ntfy"
 import { ConfigPlugin } from "./config/plugin"
 import { ConfigProvider } from "./config/provider"
 import { ConfigProviderUsage } from "./config/provider-usage"
@@ -137,9 +136,6 @@ export class Info extends Schema.Class<Info>("Config.Info")({
     description: "Ordered plugin enablement directives and external package declarations",
   }),
   providers: Schema.Record(Schema.String, ConfigProvider.Info).pipe(Schema.optional),
-  ntfy: ConfigNtfy.Info.pipe(Schema.optional).annotate({
-    description: "Optional ntfy attention-notification configuration",
-  }),
   provider_usage: ConfigProviderUsage.Info.pipe(Schema.optional).annotate({
     description: "Read-only provider quota sources and optional local client bridges",
   }),

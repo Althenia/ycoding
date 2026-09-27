@@ -6,7 +6,6 @@ import { Config } from "@ycoding-ai/core/config"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
 import { ConfigModel } from "@ycoding-ai/core/config/model"
-import { ConfigNtfy } from "@ycoding-ai/core/config/ntfy"
 import { Config as ConfigSchema } from "@ycoding-ai/schema/config"
 import { ConfigProvider } from "@ycoding-ai/core/config/provider"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -519,32 +518,24 @@ describe("Config", () => {
     }),
   )
 
-  it.effect("decodes optional ntfy attention-notification settings", () =>
-    Effect.sync(() => {
-      const decode = Schema.decodeUnknownSync(Config.Info)
-
-      expect(decode({}).ntfy).toBeUndefined()
-      expect(decode({ ntfy: { enabled: true, topic: "attention" } }).ntfy).toEqual({
-        enabled: true,
-        topic: "attention",
-      })
-      expect(decode({ ntfy: { enabled: false } }).ntfy).toEqual({ enabled: false })
-      expect(
-        Config.latest(
-          [
-            new Config.Document({
-              type: "document",
-              info: new Config.Info({ ntfy: new ConfigNtfy.Info({ enabled: false, topic: "lower" }) }),
-            }),
-            new Config.Document({
-              type: "document",
-              info: new Config.Info({ ntfy: new ConfigNtfy.Info({ enabled: true, topic: "higher" }) }),
-            }),
-          ],
-          "ntfy",
-        ),
-      ).toEqual({ enabled: true, topic: "higher" })
-    }),
+  it.live("ignores an unknown ntfy key while loading other valid config fields", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "ycoding.jsonc"),
+            JSON.stringify({ ntfy: { enabled: true, topic: "old-topic" }, shell: "/bin/zsh" })))
+          return yield* Effect.gen(function* () {
+            const config = yield* Config.Service
+            const document = (yield* config.entries()).find((entry) => entry.type === "document")
+            expect(document?.info.shell).toBe("/bin/zsh")
+            expect(document?.info).not.toHaveProperty("ntfy")
+          }).pipe(Effect.provide(testLayer(tmp.path)))
+        }),
+      ),
+    ),
   )
 
   it.live("returns an empty configuration when directory files do not exist", () =>

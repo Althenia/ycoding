@@ -25,7 +25,7 @@ const domainCards: DocBlock = {
     { title: "Goal", text: "Objectives and automatic continuation.", href: "/docs/configuration/goal" },
     { title: "YOLO mode", text: "Tiered autonomous execution.", href: "/docs/configuration/yolo" },
     { title: "Guardrails", text: "Session-family reviews and custom rules.", href: "/docs/configuration/guardrails" },
-    { title: "Notifications", text: "Attention categories, sounds, and ntfy.", href: "/docs/configuration/notifications" },
+    { title: "Notifications", text: "Desktop attention alerts and sounds.", href: "/docs/configuration/notifications" },
     { title: "Permissions", text: "Ordered tool rules and inheritance.", href: "/docs/configuration/permissions" },
     { title: "Tools", text: "Tool surfaces and resource limits.", href: "/docs/configuration/tools" },
     { title: "Appearance", text: "Theme, keybindings, and terminal behavior.", href: "/docs/configuration/appearance" },
@@ -121,7 +121,6 @@ export const configurationPages: readonly DocPage[] = [
   "default_agent": "god",
   "shell": "/bin/zsh",
   "shell_memory_limit_mb": 4096,
-  "ntfy": { "enabled": true, "topic": "my-attention-topic" },
 }`,
           },
           {
@@ -248,7 +247,6 @@ export const configurationPages: readonly DocPage[] = [
               ["`references`", "record", "unset", "Named local directories or Git repositories used as context."],
               ["`plugins`", "array of string | `{ package, options? }`", "unset", "Ordered plugin additions and removals."],
               ["`providers`", "record of provider objects", "unset", "Provider and model metadata and request overlays."],
-              ["`ntfy`", "`{ enabled?: boolean, topic?: string }`", "disabled", "Remote attention-message tool."],
               ["`provider_usage.codex_app_server`", "object", "unset", "Optional local Codex app-server quota source."],
               ["`efficiency`", "object", "runtime-derived", "Helper models, title policy, prompt caching, Responses continuation."],
               ["`image_analyzer`", "object", "unset", "Image-to-text fallback for text-only models."],
@@ -1412,14 +1410,14 @@ Confirm the account, cluster, namespace, and change plan.`,
     slug: "configuration/notifications",
     title: "Notifications",
     group: "Configuration",
-    description: "Terminal attention alerts and sounds in cli.json, and the optional ntfy remote delivery tool.",
+    description: "Terminal desktop attention alerts and sounds in cli.json.",
     sections: [
       {
         heading: "What it controls",
         blocks: [
           {
             kind: "paragraph",
-            text: "Notifications ask for attention when work needs a human: an unresolved permission, question, form, or guardrail review, an error, or verified completion. Desktop notifications and sounds are configured in `cli.json`. Remote phone or browser delivery uses the optional `ntfy` tool configured in `ycoding.jsonc`.",
+            text: "Notifications ask for attention when work needs a human: an unresolved permission, question, form, or guardrail review, an error, or verified completion. Desktop notifications and sounds are configured in `cli.json`.",
           },
         ],
       },
@@ -1463,47 +1461,11 @@ Confirm the account, cluster, namespace, and change plan.`,
         ],
       },
       {
-        heading: "Remote attention with ntfy",
-        blocks: [
-          {
-            kind: "paragraph",
-            text: "The built-in `ntfy` tool posts one plain-text message to `https://ntfy.sh/<topic>`. It is disabled until `ntfy.enabled` is exactly `true` and `ntfy.topic` is non-blank; otherwise it returns a configuration failure without sending.",
-          },
-          {
-            kind: "code",
-            language: "jsonc",
-            label: "ycoding.jsonc",
-            code: `{
-  "ntfy": { "enabled": true, "topic": "project-attention" },
-  "permissions": [
-    { "action": "ntfy", "resource": "https://ntfy.sh/*", "effect": "allow" },
-  ],
-}`,
-          },
-          {
-            kind: "table",
-            head: ["Field", "Type", "Default"],
-            rows: [
-              ["`ntfy.enabled`", "boolean", "unset (disabled)"],
-              ["`ntfy.topic`", "string", "unset"],
-            ],
-          },
-          {
-            kind: "list",
-            items: [
-              "Explicit `ntfy` tool calls check permission action `ntfy` with resource `https://ntfy.sh/*` like any other tool.",
-              "Automatic lifecycle delivery waits 500 ms for a pending request, sends at most once, and posts only when that permission is already `allow`; `ask` and `deny` neither prompt nor post. Built-in agents start from an allow-all baseline, so add an `ask` or `deny` rule to stop automatic posts.",
-              "Automatic messages are model-generated from Session context, capped at 200 characters, and sanitized; generation failure skips the post.",
-            ],
-          },
-        ],
-      },
-      {
         heading: "Verify it took effect",
         blocks: [
           {
             kind: "paragraph",
-            text: "Subscribe to the topic in the ntfy app or at `https://ntfy.sh/<topic>`, then leave a permission request unanswered for more than 500 ms. For terminal alerts, change `attention.volume` and trigger a question; the TUI rewrites `cli.json` atomically and keeps comments.",
+            text: "Change `attention.volume` and trigger a question; the TUI rewrites `cli.json` atomically and keeps comments.",
           },
           { kind: "related", slugs: ["configuration/appearance", "usage/remote", "configuration/guardrails"] },
         ],
@@ -1574,7 +1536,6 @@ Confirm the account, cluster, namespace, and change plan.`,
               ["`shell`", "The full command text."],
               ["`webfetch`", "The URL."],
               ["`websearch`, `question`, `subagent`, `subagent_control`, `memory`, `computer`", "Tool-specific; use `*` to match every call."],
-              ["`ntfy`", "`https://ntfy.sh/*`."],
               ["`<server>_<tool>`", "MCP tool calls, resource `*`. Characters outside `A–Z a–z 0–9 _ -` in the server or tool name become `_`."],
             ],
           },
@@ -1666,7 +1627,6 @@ Confirm the account, cluster, namespace, and change plan.`,
               ["`browser`", "`ycoding.tool.browser`", "Paired Chrome tabs, Session-owned tabs, or an isolated browser."],
               ["`computer`", "`ycoding.tool.computer`", "macOS iTerm sessions, Finder paths, and one identified app window."],
               ["`memory`", "`ycoding.tool.memory`", "Explicit workspace knowledge."],
-              ["`ntfy`", "`ycoding.tool.ntfy`", "Remote attention message."],
               ["`subagent`, `subagent_control`, `todowrite`, `question`, `goal`, `skill`", "`ycoding.tool.subagent`, `.subagent-control`, `.todowrite`, `.question`, `.goal`, `.skill`", "Orchestration and Session control."],
             ],
           },

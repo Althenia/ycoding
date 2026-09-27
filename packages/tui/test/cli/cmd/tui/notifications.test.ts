@@ -494,19 +494,6 @@ describe("internal notifications TUI plugin", () => {
     expect(harness.notifications).toEqual([])
   })
 
-  test("remote ntfy delivery is not a local completion marker", async () => {
-    const harness = await setup()
-    harness.emit(executionStarted("root-start"))
-    harness.emit({
-      ...completedTask("call-remote")[0],
-      data: { sessionID: "session", assistantMessageID: "msg_completion", callID: "call-remote", name: "ntfy" },
-    })
-    harness.emit(completedTask("call-remote")[1])
-    harness.emit(executionSucceeded("root-success"))
-    await settle()
-    expect(harness.notifications).toEqual([])
-  })
-
   test("does not treat an unfinished or another Session's completion call as root completion", async () => {
     const harness = await setup()
     harness.emit(executionStarted("root-start"))

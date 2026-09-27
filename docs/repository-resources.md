@@ -53,24 +53,9 @@ There is no generic `.ycoding/tool` loader. Custom tools must be provided by a p
 
 The built-in `memory` tool stores explicit folder-scoped knowledge outside repository resource discovery. Configure it through the runtime `memory` object; it does not scan `.ycoding` for concepts or automatically load knowledge as instructions. Its actions are `status`, `list`, `search`, `read`, `write`, and offline `graph` export. See [Workspace knowledge memory](./memory.md) for storage, format, permissions, and update semantics.
 
-## Built-in ntfy attention notifications
+## Built-in task completion signal
 
-The provider-visible `task_complete` tool records an explicit local completion signal after the agent verifies its work. It has no input, remote configuration, HTTP request, or external permission; its successful durable tool call can trigger the TUI completion alert after root settlement if no child task or root-owned background shell remains active. Do not call it for idle, partial results, or routine progress. The remote `ntfy` tool is a separate optional delivery path.
-
-The built-in provider-visible `ntfy` tool is configured in the Location's runtime configuration; it is not a repository resource file. Configure it as:
-
-```jsonc
-{
-  "ntfy": {
-    "enabled": true,
-    "topic": "project-attention",
-  },
-}
-```
-
-It is disabled when omitted. The tool returns a configuration failure without requesting permission or making an HTTP request unless `enabled` is exactly `true` and `topic` is present and non-blank. When enabled, it asks permission for the external write, then sends one plain-text message to the configured ntfy topic. Agents use it only when user attention is needed for a question, confirmation/approval, or a verified completed task; it is not for routine progress. During active goal mode, routine autonomous decisions, background progress, retries, and auto-resolvable questions do not warrant notification. Genuine attention triggers are exhausted goal attempts, a user-owned blocker, confirmation/approval that autonomy cannot resolve, or verified task completion. Explicit tool calls use the goal and tool state already visible to the agent and do not read or mutate Session autonomy; the automatic lifecycle reads current goal state only to classify terminal attention.
-
-One process-global observer resolves each Session's Location to obtain Location-scoped configuration, permission, and HTTP delivery. It runs a 500 ms attention checkpoint for unresolved Session permissions, questions, guardrails, forms, and eligible root-terminal outcomes. A request that resolves before its checkpoint is silent; each unresolved request has at most one delivery. Lifecycle posting requires an already-effective `allow` for `ntfy` on `https://ntfy.sh/*`; `ask` and `deny` stay silent and never create an approval prompt. This does not alter the explicit tool's normal permission request. A completed explicit `ntfy` tool call after an execution starts suppresses only that execution's automatic successful-terminal post; it does not establish general notification deduplication. Global MCP forms remain local-only: TUI desktop notifications and sounds may alert locally, while they produce no remote ntfy post and create no new permission authority. The external ntfy post does not create a terminal desktop notification or play a sound.
+The provider-visible `task_complete` tool records an explicit local completion signal after the agent verifies its work. It has no input, remote configuration, HTTP request, or external permission; its successful durable tool call can trigger the TUI completion alert after root settlement if no child task or root-owned background shell remains active. Do not call it for idle, partial results, or routine progress.
 
 There is no supported project `.ycoding/tui.json`. Terminal preferences are global in `cli.json`.
 
