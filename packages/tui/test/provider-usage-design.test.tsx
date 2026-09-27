@@ -44,6 +44,24 @@ const usage: ProviderRequestSummary = {
   ],
 }
 
+test("renders an unreported cache read as a word instead of a bare placeholder", async () => {
+  const config = createTuiResolvedConfig()
+  const app = await testRender(() => <TestTuiContexts><ConfigProvider config={config}>
+    <Keymap.Provider config={config}><ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+      <ToastProvider><ProviderUsageScreenContent snapshots={() => []} backendUsage={() => ({
+        ...usage, cacheReadReported: false, models: usage.models?.map((entry) => ({ ...entry, cacheReadReported: false })),
+      })} /></ToastProvider>
+    </ThemeProvider></Keymap.Provider>
+  </ConfigProvider></TestTuiContexts>, { width: 189, height: 38 })
+  app.renderer.start()
+  try {
+    await app.waitForFrame((frame) => frame.includes("LIFETIME MODEL BREAKDOWN"))
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("Unknown/300")
+    expect(frame).not.toMatch(/\s-\/300/)
+  } finally { app.renderer.destroy() }
+})
+
 test.each([
   { width: 80, height: 24 },
   { width: 100, height: 32 },

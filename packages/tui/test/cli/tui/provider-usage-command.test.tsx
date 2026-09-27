@@ -195,7 +195,7 @@ test("renders missing local pricing as an estimated zero cost", async () => {
   try {
     const frame = app.captureCharFrame()
     expect(frame).toContain("custom/custom")
-    expect(frame).toContain("-/0")
+    expect(frame).toContain("Unknown/0")
     expect(frame).toContain("$0.00")
   } finally {
     app.renderer.destroy()

@@ -27,12 +27,38 @@ test("renders each provider quota window with its own reset and derivable progre
       updatedAt: now,
       windows: [
         { id: "key", label: "Key limit", unit: "usd", used: 3.2, limit: 10, remaining: 6.8, resetAt: now + 60 * 60 * 1_000 },
+        { id: "balance", label: "Balance", unit: "usd", remaining: 50 },
         { id: "daily", label: "Daily", unit: "usd", used: 7.02 },
         { id: "weekly", label: "Weekly", unit: "usd", used: 11.22 },
         { id: "monthly", label: "Monthly", unit: "usd", used: 18.45 },
         { id: "later", label: "Later reset", unit: "percent", used: 25, resetAt: now + 4 * 60 * 60 * 1_000 },
         { id: "reset", label: "Sooner reset", unit: "percent", used: 91, resetAt: now + (2 * 60 + 3) * 60 * 1_000 },
       ],
+    },
+    {
+      providerID: "github-copilot", label: "Copilot", status: "available", source: "provider_internal_api",
+      stability: "best_effort", updatedAt: now,
+      windows: [
+        { id: "credits", label: "AI credits", unit: "percent", used: 42, resetAt: now + 60 * 60 * 1_000 },
+        { id: "extra-usage", label: "Extra usage", unit: "count", used: 3 },
+        { id: "org-credits", label: "Org credits", unit: "count", used: 125 },
+        { id: "org-spend", label: "Org spend", unit: "usd", used: 1.25 },
+      ],
+    },
+    {
+      providerID: "xai", label: "Grok", status: "available", source: "provider_internal_api",
+      stability: "best_effort", updatedAt: now,
+      windows: [{ id: "extra-usage", label: "Extra usage", unit: "count", limit: 2500 }],
+    },
+    {
+      providerID: "zai", label: "Z.ai", status: "available", source: "provider_internal_api",
+      stability: "best_effort", updatedAt: now,
+      windows: [{ id: "web-searches", label: "Web Searches", unit: "count", used: 12, limit: 100 }],
+    },
+    {
+      providerID: "openai", label: "Codex", profile: "YCoding local", status: "available",
+      source: "local_session", stability: "stable", updatedAt: now,
+      windows: [{ id: "today", label: "Today", unit: "usd", used: 0 }],
     },
     {
       providerID: "openrouter-uncapped",
@@ -82,7 +108,7 @@ test("renders each provider quota window with its own reset and derivable progre
         </ConfigProvider>
       </TestTuiContexts>
     ),
-    { width: 80, height: 60 },
+    { width: 80, height: 100 },
   )
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes("Usage"))
@@ -92,9 +118,19 @@ test("renders each provider quota window with its own reset and derivable progre
     const rows = frame.split("\n")
     expect(rows.find((row) => row.includes("Openrouter"))).toContain("updated now")
     expect(rows.find((row) => row.includes("Key limit"))).toContain("███░░░░░░░ $3.20 / $10.00 ($6.80 left)")
-    expect(rows.find((row) => /^\s*Daily\s/.test(row))).toContain("███████░░░ $7.02 / $10.00")
-    expect(rows.find((row) => row.includes("Weekly"))).toContain("██████████ $11.22 / $10.00")
-    expect(rows.find((row) => /^\s*Monthly\s/.test(row))).toContain("██████████ $18.45 / $10.00")
+    expect(rows.find((row) => /^\s*Daily\s/.test(row))).toContain("$7.02 used")
+    expect(rows.find((row) => row.includes("Balance"))).toContain("$50.00 left")
+    expect(rows.find((row) => row.includes("AI credits"))).toContain("42% used")
+    expect(rows.find((row) => row.includes("Org credits"))).toContain("125 credits")
+    expect(rows.find((row) => row.includes("Org spend"))).toContain("$1.25 billed")
+    expect(rows.find((row) => row.includes("2,500 cap"))).toContain("Extra usage")
+    expect(rows.find((row) => row.includes("Extra usage") && !row.includes("cap"))).toContain("3 used")
+    expect(rows.find((row) => row.includes("Web Searches"))).toContain("12 / 100 used")
+    expect(rows.some((row) => /\d count\b/.test(row))).toBe(false)
+    expect(rows.find((row) => row.includes("Codex · YCoding local"))).toContain("local_session · stable")
+    expect(rows.find((row) => /^\s*Today\s/.test(row))).toContain("$0.00 used")
+    expect(rows.find((row) => /^\s*Weekly\s/.test(row))).toContain("$11.22 used")
+    expect(rows.find((row) => /^\s*Monthly\s/.test(row))).toContain("$18.45 used")
     expect(rows.find((row) => row.includes("Later reset"))).toContain("███░░░░░░░ 25% used · resets in 4h")
     expect(rows.find((row) => row.includes("Sooner reset"))).toContain("█████████░ 91% used · resets in 2h 3m")
     expect(rows.find((row) => row.includes("Uncapped daily"))).toContain("$7.02 used")
@@ -193,9 +229,9 @@ test("preserves reported account tiers and renders each reported reset without i
     expect(rows.find((row) => row.includes("5-hour"))).toContain("resets in 1h")
     expect(rows.find((row) => row.includes("Weekly") && !row.includes("all models"))).toContain("resets in 2h")
     expect(rows.find((row) => row.includes("Spark weekly"))).toContain("resets in 3h")
-    expect(rows.find((row) => row.includes("Reset credits"))).toContain("4 count")
+    expect(rows.find((row) => row.includes("Reset credits"))).toContain("4 used")
     expect(rows.find((row) => row.includes("Reset credits"))).not.toContain("resets")
-    expect(rows.find((row) => row.includes("Monthly AI credits"))).toContain("45 count · resets in 4h")
+    expect(rows.find((row) => row.includes("Monthly AI credits"))).toContain("45 used · resets in 4h")
     expect(rows.find((row) => row.includes("Monthly AI credits"))).not.toContain("#")
     expect(rows.find((row) => row.includes("Premium requests"))).toContain("█████████░ 91% used")
     expect(rows.find((row) => row.includes("Free monthly"))).toContain("50 remaining")

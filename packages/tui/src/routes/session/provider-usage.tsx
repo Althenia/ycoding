@@ -337,7 +337,7 @@ function OverviewTable(props: {
     <Show when={!narrow()}><OverviewHeader geometry={geometry()} sorting={props.sorting} onSort={props.onSort} /></Show>
     <For each={orderedItems()}>{(item, index) => {
       const identity = index() === 0 ? "Total" : item.model
-      if (narrow()) return <box flexDirection="column" paddingTop={1}><text fg={index() === 0 ? themeV2.text.feedback.info.default : themeV2.text.default}>{identity} · {item.input} in · {item.output} out · {item.spent}</text><text fg={themeV2.text.subdued}>  steps {item.steps ?? "-"} · reasoning {item.reasoning ?? "-"} · cache {item.cacheRead}/{item.cacheWrite}</text></box>
+      if (narrow()) return <box flexDirection="column" paddingTop={1}><text fg={index() === 0 ? themeV2.text.feedback.info.default : themeV2.text.default}>{identity} · {item.input} in · {item.output} out · {item.spent}</text><text fg={themeV2.text.subdued}>  steps {item.steps} · reasoning {item.reasoning} · cache {item.cacheRead}/{item.cacheWrite}</text></box>
       return <OverviewRow item={item} identity={identity} geometry={geometry()} total={index() === 0} />
     }}</For>
   </box>
@@ -398,10 +398,10 @@ function OverviewRow(props: {
     <box width="100%" flexShrink={0}>
       <text>
         <span style={{ fg: props.total ? themeV2.text.feedback.info.default : themeV2.text.default }}>{Locale.truncate(props.identity, props.geometry.name).padEnd(props.geometry.name)}</span>{" "}
-        <span>{(props.item.steps ?? "-").padStart(props.geometry.steps)}</span>{" "}
+        <span>{props.item.steps.padStart(props.geometry.steps)}</span>{" "}
         <span style={{ fg: themeV2.text.feedback.success.default }}>{props.item.input.padStart(props.geometry.input)}</span>{" "}
         <span style={{ fg: themeV2.text.feedback.warning.subdued }}>{props.item.output.padStart(props.geometry.output)}</span>{" "}
-        <span style={{ fg: themeV2.text.label }}>{(props.item.reasoning ?? "-").padStart(props.geometry.reasoning)}</span>{" "}
+        <span style={{ fg: themeV2.text.label }}>{props.item.reasoning.padStart(props.geometry.reasoning)}</span>{" "}
         <span style={{ fg: themeV2.text.feedback.info.default }}>{`${props.item.cacheRead}/${props.item.cacheWrite}`.padStart(props.geometry.cache)}</span>{" "}
         <span style={{ fg: themeV2.text.feedback.success.subdued }}>{props.item.spent.padStart(props.geometry.cost)}</span>
       </text>
@@ -422,17 +422,7 @@ function QuotaSection(props: { snapshot: ProviderUsageSnapshot; now: number }) {
       </text>
       <For each={props.snapshot.windows}>
         {(window) => {
-          const keyLimit =
-            props.snapshot.providerID === "openrouter"
-              ? props.snapshot.windows.find((candidate) => candidate.id === "key" && candidate.unit === "usd")?.limit
-              : undefined
-          const presented =
-            window.limit === undefined &&
-            props.snapshot.providerID === "openrouter" &&
-            ["daily", "weekly", "monthly"].includes(window.id)
-              ? { ...window, limit: keyLimit }
-              : window
-          const ratio = quotaRatio(presented)
+          const ratio = quotaRatio(window)
           const deadline =
             props.snapshot.providerID === "meta" && window.id === "current-bill"
               ? formatBillDue(window.resetAt, props.now)
@@ -448,7 +438,7 @@ function QuotaSection(props: { snapshot: ProviderUsageSnapshot; now: number }) {
               <text>
                 {" "}
                 {window.label} <span style={{ fg: color }}>{ratio === undefined ? "" : `${progressBar(ratio)} `}</span>
-                {formatWindowValue(presented)}
+                {formatWindowValue(window)}
                 {deadline ? ` · ${deadline}` : ""}
               </text>
             </box>
@@ -491,7 +481,7 @@ function summaryPresentation(summary: ProviderRequestSummary): OverviewItem {
     input: summary.tokens.input.toLocaleString("en-US"),
     output: summary.tokens.output.toLocaleString("en-US"),
     reasoning: summary.tokens.reasoning.toLocaleString("en-US"),
-    cacheRead: summary.cacheReadReported ? summary.tokens.cache.read.toLocaleString("en-US") : "-",
+    cacheRead: summary.cacheReadReported ? summary.tokens.cache.read.toLocaleString("en-US") : "Unknown",
     cacheWrite: summary.tokens.cache.write.toLocaleString("en-US"),
     spent: money(summary.cost ?? 0),
     values: { steps: summary.logical, input: summary.tokens.input, output: summary.tokens.output, reasoning: summary.tokens.reasoning, cacheRead: summary.tokens.cache.read, cacheWrite: summary.tokens.cache.write, tokens: summary.tokens.input + summary.tokens.output + summary.tokens.reasoning + summary.tokens.cache.read + summary.tokens.cache.write, cost: summary.cost ?? 0 },
@@ -511,7 +501,7 @@ function spendPresentation(
     input: spend.tokens.input.toLocaleString("en-US"),
     output: spend.tokens.output.toLocaleString("en-US"),
     reasoning: spend.tokens.reasoning.toLocaleString("en-US"),
-    cacheRead: spend.cacheReadReported ? spend.tokens.cache.read.toLocaleString("en-US") : "-",
+    cacheRead: spend.cacheReadReported ? spend.tokens.cache.read.toLocaleString("en-US") : "Unknown",
     cacheWrite: spend.tokens.cache.write.toLocaleString("en-US"),
     spent: money(spend.cost),
     values: { steps: spend.requests, input: spend.tokens.input, output: spend.tokens.output, reasoning: spend.tokens.reasoning, cacheRead: spend.tokens.cache.read, cacheWrite: spend.tokens.cache.write, tokens: spend.tokens.input + spend.tokens.output + spend.tokens.reasoning + spend.tokens.cache.read + spend.tokens.cache.write, cost: spend.cost ?? 0 },

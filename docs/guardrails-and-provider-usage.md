@@ -227,7 +227,7 @@ Spark weekly  █░░░░░░░░░ 7% used
 
 Percentage windows show stable ten-cell progress bars, reset times, freshness, and source stability. Claude Pro/Max and ChatGPT Plus/Pro are included in the safe provider label only when the account source reports the tier; YCoding does not infer a tier from missing quota categories. Claude session, all-model, model-specific, and extra-usage windows and Codex weekly, Spark, credit, and additional named windows render only when reported. Percentages below 70% use normal styling, 70–89% use warning styling, and 90% or above use error styling. Providers without a supported quota path or usable credential are hidden. Unauthorized and failed providers remain visible with their status and safe message. A failed request retains a prior snapshot as stale and surfaces a partial-refresh warning.
 
-Unknown quota values render as `Not reported`; unreported steps, reasoning, cache reads, and token totals render as `-`. Displayed report costs are catalog/provider estimates, not provider bills; unpriced requests contribute $0, and aggregates include cost and provenance when any request is priced.
+Unknown quota values render as `Not reported`; unreported report values render as `Unknown` rather than a bare placeholder, and an empty activity period reads `No usage yet`. Displayed report costs are catalog/provider estimates, not provider bills; unpriced requests contribute $0, and aggregates include cost and provenance when any request is priced.
 
 For Meta Model API credentials, YCoding sums the USD cost buckets reported for the adapter's current UTC calendar-month query into one **Current bill** row. When current-period cost data is present, the row labels the next UTC month boundary as **Bill due**, following Meta's documented automatic charge on the first of each month. Missing cost data or an unverified billing period leaves the amount or date unreported; YCoding does not estimate either from local Session tokens.
 
@@ -235,13 +235,19 @@ For Meta Model API credentials, YCoding sums the USD cost buckets reported for t
 
 | Provider | Source | Stability |
 | --- | --- | --- |
-| OpenRouter | Current-key API; optional account credits for a management credential | stable provider API |
+| OpenRouter | Current-key spend, optional account credits and balance with the configured key, capped-key limit | stable provider API |
 | OpenAI API | Organization usage and cost endpoints for an explicitly marked admin credential | stable provider API |
 | Meta Model API | Organization usage and USD cost buckets for the current-bill and weekly/monthly request and token views | stable provider API |
 | Claude subscription | Unified response headers from normal Claude Code requests | observed live state |
 | Claude subscription | OAuth usage snapshot for cold start and model-specific buckets | best-effort provider-internal API |
 | Codex / Spark | Configured Codex app-server `account/rateLimits/read` | official local client contract |
 | Codex / Spark | ChatGPT OAuth backend usage fallback | best-effort provider-internal API |
+| GitHub Copilot | Stored GitHub OAuth login: personal AI credits, enabled extra usage, finite Chat/Completions | best-effort provider-internal API |
+| GitHub Copilot org billing | Org-owner/billing-manager summaries for separate org-wide credits and billed spend | stable provider API |
+| Grok Build | Stored xAI OAuth login: shared weekly pool and pay-as-you-go cap | best-effort provider-internal API |
+| OpenCode Go | Stored Go key: Session, Weekly, Monthly account quotas | stable provider API |
+| Z.ai Coding Plan | Stored Z.ai key: Session, Weekly, Web Searches | best-effort provider-internal API |
+| YCoding local Today spend | Retained priced provider requests for available Claude, OpenAI/Codex, Grok, OpenCode Go, and OpenCode Zen providers; separate from account quotas and credential profiles | stable local Session records |
 
 Provider results are cached by provider and credential identity. Credentials, account email addresses, key fragments, OAuth tokens, and provider response bodies are not returned through Protocol or rendered in the Usage screen.
 

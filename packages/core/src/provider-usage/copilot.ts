@@ -4,9 +4,6 @@ import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
 import { ProviderV2 } from "../provider"
 import { Option, Schema } from "effect"
 
-// GitHub bills AI credits at a fixed rate: 1 credit = $0.01 USD.
-export const CREDIT_TO_USD = 0.01
-
 const userStatusPath = "/copilot_internal/user"
 const orgsPath = "/user/orgs"
 
@@ -22,14 +19,13 @@ const QuotaSnapshot = Schema.Struct({
   percent_remaining: Schema.optional(Schema.Number),
   overage_count: Schema.optional(Schema.Number),
   overage_permitted: Schema.optional(Schema.Boolean),
+  credits_used: Schema.optional(Schema.Number),
   unlimited: Schema.optional(Schema.Boolean),
 })
 
-// Legacy pre-June-2026 premium/chat/completions allowances. Values are raw
-// counts, never AI credits; the AI-credit usage comes from the org billing API.
 const UserStatus = Schema.Struct({
   copilot_plan: Schema.optional(Schema.String),
-  access_type_sku: Schema.optional(Schema.String),
+  token_based_billing: Schema.optional(Schema.Boolean),
   quota_reset_date: Schema.optional(Schema.String),
   quota_reset_date_utc: Schema.optional(Schema.String),
   quota_snapshots: Schema.optional(Schema.Record(Schema.String, Schema.Union([QuotaSnapshot, Schema.Null]))),
@@ -41,8 +37,10 @@ const UserStatus = Schema.Struct({
 const Orgs = Schema.Array(Schema.Struct({ login: Schema.String }))
 
 const UsageItem = Schema.Struct({
-  aic_quantity: Schema.optional(Schema.Number),
-  aic_gross_amount: Schema.optional(Schema.Number),
+  product: Schema.optional(Schema.String),
+  unitType: Schema.optional(Schema.String),
+  grossQuantity: Schema.optional(Schema.Number),
+  netAmount: Schema.optional(Schema.Number),
 })
 
 const BillingSummary = Schema.Struct({
@@ -86,30 +84,40 @@ export interface BillingResult {
 export async function load(input: LoadInput): Promise<LoadResult> {
   const status = requireSuccess(await input.request(userStatusPath))
   const decoded = userStatus(status.body)
-  if (tokenBasedBilling(decoded)) return orgUsage(input, resetDate(decoded.quota_reset_date ?? decoded.quota_reset_date_utc))
+  const personal = normalizeQuota({ ...input, response: status.body })
+  if (decoded.token_based_billing === true && !personal.windows.some((window) => window.id === "credits" && window.unit === "percent")) {
+    const organization = await orgUsage(input)
+    if (personal.windows.length === 0 && organization.snapshot.windows.length > 0) return organization
+    return {
+      snapshot: new ProviderUsage.Snapshot({
+        providerID: personal.providerID, label: personal.label, status: personal.status,
+        source: personal.source, stability: personal.stability, updatedAt: personal.updatedAt,
+        windows: [...personal.windows, ...organization.snapshot.windows],
+      }),
+      matchedOrg: organization.matchedOrg,
+    }
+  }
   return {
-    snapshot: normalizeQuota({
-      providerID: input.providerID,
-      label: input.label,
-      updatedAt: input.updatedAt,
-      response: status.body,
-    }),
+    snapshot: personal,
     matchedOrg: undefined,
   }
 }
 
-/**
- * Paid-tier legacy quota snapshots and free limited-user quotas. The org
- * token-based-billing placeholder is routed to `load`, never normalized here.
- */
 export function normalizeQuota(input: NormalizeQuotaInput) {
   const status = userStatus(input.response)
-  if (status.limited_user_quotas !== undefined || status.monthly_quotas !== undefined)
-    return limitedSnapshot(input, status)
   const resetAt = resetDate(status.quota_reset_date ?? status.quota_reset_date_utc)
-  const windows = Object.entries(status.quota_snapshots ?? {}).flatMap(([key, value]) =>
-    value === null ? [] : quotaWindows(key, value, resetAt),
-  )
+  const quota = status.quota_snapshots ?? {}
+  const premium = quota.premium_interactions
+  const credits = premium ? creditWindow(premium, resetAt, status.token_based_billing === true) : undefined
+  const windows = [
+    ...(credits ? [credits] : []),
+    ...(credits?.unit === "percent" && premium?.overage_permitted === true && premium.overage_count !== undefined
+      ? [new ProviderUsage.Window({ id: "extra-usage", label: "Extra usage", unit: "count", used: nonNegative(premium.overage_count, "overage_count") })]
+      : []),
+    ...(["chat", "completions"] as const).flatMap((key) => quota[key] ? quotaWindows(key, quota[key], resetAt) : []),
+  ]
+  if (!windows.length && (status.limited_user_quotas !== undefined || status.monthly_quotas !== undefined))
+    return limitedSnapshot(input, status)
   return new ProviderUsage.Snapshot({
     providerID: input.providerID,
     label: input.label,
@@ -126,65 +134,59 @@ export function normalizeBilling(input: NormalizeBillingInput): BillingResult {
   return billingResult(input, aiCreditEntries(summary))
 }
 
-async function orgUsage(input: LoadInput, resetAt: number | undefined): Promise<LoadResult> {
+async function orgUsage(input: LoadInput): Promise<LoadResult> {
   if (input.matchedOrg) {
-    const remembered = await orgSummary(input, input.matchedOrg, resetAt)
+    const remembered = await orgSummary(input, input.matchedOrg)
     if (remembered) return remembered
   }
-  const orgs = undefine(decodeOrgs(requireSuccess(await input.request(orgsPath)).body))
+  const response = await input.request(orgsPath).catch(() => ({ status: 0, body: null }))
+  if (response.status < 200 || response.status >= 300) return { snapshot: available(input, []), matchedOrg: undefined }
+  const orgs = undefine(decodeOrgs(response.body))
   const logins = (orgs ?? []).map((entry) => entry.login).filter((login) => login !== input.matchedOrg)
   for (const login of logins) {
-    const result = await orgSummary(input, login, resetAt)
+    const result = await orgSummary(input, login)
     if (result) return result
   }
   return { snapshot: available(input, []), matchedOrg: undefined }
 }
 
-async function orgSummary(input: LoadInput, login: string, resetAt: number | undefined): Promise<LoadResult | undefined> {
+async function orgSummary(input: LoadInput, login: string): Promise<LoadResult | undefined> {
   const response = await input.request(`/orgs/${encodeURIComponent(login)}/settings/billing/usage/summary`)
+    .catch(() => ({ status: 0, body: null }))
   if (response.status < 200 || response.status >= 300) return undefined
   const summary = undefine(decodeBilling(response.body))
   if (!summary) return undefined
-  const result = billingResult(input, aiCreditEntries(summary), resetAt)
+  const result = billingResult(input, aiCreditEntries(summary))
   return result.matched ? { snapshot: result.snapshot, matchedOrg: login } : undefined
 }
 
-function billingResult(input: SnapshotInput, entries: ReadonlyArray<UsageItemType>, resetAt?: number): BillingResult {
-  const credits = total(entries, (entry) => nonNegative(entry.aic_quantity, "aic_quantity"))
-  const windows = entries.length
-    ? [
-        new ProviderUsage.Window({
-          id: "monthly-ai-credits",
-          label: "Monthly AI credits",
-          unit: "count",
-          ...(credits === undefined ? {} : { used: credits }),
-          ...(resetAt === undefined ? {} : { resetAt }),
-        }),
-      ]
-    : []
-  return { matched: entries.length > 0, snapshot: available(input, windows) }
+function billingResult(input: SnapshotInput, entries: ReadonlyArray<UsageItemType>): BillingResult {
+  const credits = total(entries, (entry) => nonNegative(entry.grossQuantity, "grossQuantity"))
+  const spend = total(entries, (entry) => nonNegative(entry.netAmount, "netAmount"))
+  const windows = [
+    ...(credits === undefined ? [] : [new ProviderUsage.Window({ id: "org-credits", label: "Org credits", unit: "count", used: credits })]),
+    ...(spend === undefined ? [] : [new ProviderUsage.Window({ id: "org-spend", label: "Org spend", unit: "usd", used: spend })]),
+  ]
+  return { matched: windows.length > 0, snapshot: available(input, windows) }
 }
 
 function limitedSnapshot(input: NormalizeQuotaInput, status: Schema.Schema.Type<typeof UserStatus>) {
   const resetAt = resetDate(status.limited_user_reset_date)
-  const limited = Object.entries(status.limited_user_quotas ?? {}).map(([key, value]) =>
-    new ProviderUsage.Window({
-      id: safeID(key),
-      label: limitedLabel(key),
-      unit: "count",
-      remaining: nonNegative(value, key),
+  const limited = status.limited_user_quotas ?? {}
+  const monthly = status.monthly_quotas ?? {}
+  const windows = (["chat", "completions"] as const).flatMap((key) => {
+    const prefix = key === "chat" ? ["chat", "chat_completion", "chat_completions"] : ["completions", "code_completion", "code_completions"]
+    const remaining = prefix.map((name) => limited[name]).find((value) => value !== undefined)
+    const limit = prefix.map((name) => monthly[name]).find((value) => value !== undefined)
+    if (remaining === undefined || limit === undefined || limit <= 0) return []
+    const used = nonNegative(remaining, key)
+    if (used === undefined) return []
+    return [new ProviderUsage.Window({
+      id: key, label: key === "chat" ? "Chat" : "Completions", unit: "percent",
+      used: round(Math.max(0, (1 - used / limit) * 100)),
       ...(resetAt === undefined ? {} : { resetAt }),
-    }),
-  )
-  const monthly = Object.entries(status.monthly_quotas ?? {}).map(([key, value]) =>
-    new ProviderUsage.Window({
-      id: safeID(key),
-      label: limitedLabel(key),
-      unit: "count",
-      remaining: nonNegative(value, key),
-      ...(resetAt === undefined ? {} : { resetAt }),
-    }),
-  )
+    })]
+  })
   return new ProviderUsage.Snapshot({
     providerID: input.providerID,
     label: input.label,
@@ -192,17 +194,18 @@ function limitedSnapshot(input: NormalizeQuotaInput, status: Schema.Schema.Type<
     source: "provider_internal_api",
     stability: "best_effort",
     updatedAt: Math.max(0, Math.trunc(input.updatedAt)),
-    windows: [...limited, ...monthly.filter((window) => !limited.some((item) => item.id === window.id))],
+    windows,
   })
 }
 
 function quotaWindows(key: string, value: QuotaSnapshotType, resetAt: number | undefined) {
+  if (value.unlimited === true || value.entitlement === -1 || value.remaining === -1 || value.quota_remaining === -1 || value.entitlement === 0) return []
   const used =
-    value.unlimited === true ? undefined : percent(value.percent_remaining, key) ?? derived(value, key)
+    percent(value.percent_remaining, key) ?? derived(value, key)
   const remaining = nonNegative(value.remaining ?? value.quota_remaining, key)
   const limitValue = limit(value, key)
   const windows = []
-  if (used !== undefined || remaining !== undefined || limitValue !== undefined || value.unlimited === true)
+  if (used !== undefined)
     windows.push(
       new ProviderUsage.Window({
         id: safeID(key),
@@ -211,26 +214,29 @@ function quotaWindows(key: string, value: QuotaSnapshotType, resetAt: number | u
         ...(used === undefined ? {} : { used }),
         ...(remaining === undefined ? {} : { remaining }),
         ...(limitValue === undefined ? {} : { limit: limitValue }),
-        ...(value.unlimited === true ? { unlimited: true } : {}),
         ...(resetAt === undefined ? {} : { resetAt }),
-      }),
-    )
-  if (value.overage_count !== undefined)
-    windows.push(
-      new ProviderUsage.Window({
-        id: `${safeID(key)}-overage`,
-        label: `${laneLabel(key)} overage`,
-        unit: "count",
-        used: nonNegative(value.overage_count, `${key}.overage_count`),
       }),
     )
   return windows
 }
 
+function creditWindow(value: QuotaSnapshotType, resetAt: number | undefined, orgManaged: boolean) {
+  if (value.entitlement === 0 && orgManaged) {
+    const used = nonNegative(value.credits_used, "credits_used")
+    return used === undefined ? undefined : new ProviderUsage.Window({
+      id: "credits", label: "AI credits", unit: "count", used,
+    })
+  }
+  const window = quotaWindows("credits", value, resetAt)[0]
+  return window
+}
+
 function aiCreditEntries(summary: BillingSummaryType) {
   return summary.usageItems.filter((entry) => {
-    nonNegative(entry.aic_gross_amount, "aic_gross_amount")
-    return entry.aic_quantity !== undefined || entry.aic_gross_amount !== undefined
+    if (entry.product?.toLowerCase() !== "copilot" || !["ai-units", "ai-credits"].includes(entry.unitType?.toLowerCase() ?? "")) return false
+    nonNegative(entry.grossQuantity, "grossQuantity")
+    nonNegative(entry.netAmount, "netAmount")
+    return true
   })
 }
 
@@ -302,10 +308,6 @@ function billingSummary(value: unknown) {
   return summary
 }
 
-function tokenBasedBilling(status: Schema.Schema.Type<typeof UserStatus>) {
-  return status.access_type_sku?.toLowerCase().replaceAll("_", "-") === "token-based-billing"
-}
-
 function undefine<A>(option: Option.Option<A>) {
   return Option.match(option, { onNone: () => undefined, onSome: (value) => value })
 }
@@ -314,7 +316,7 @@ function laneLabel(key: string) {
   const names: Readonly<Record<string, string>> = {
     chat: "Chat",
     completions: "Completions",
-    premium_interactions: "Premium requests",
+    credits: "AI credits",
   }
   return (
     names[key] ??
@@ -324,12 +326,6 @@ function laneLabel(key: string) {
       .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
       .join(" ")
   )
-}
-
-function limitedLabel(key: string) {
-  if (key === "chat_completion" || key === "chat_completions") return "Chat completions"
-  if (key === "code_completion" || key === "code_completions") return "Code completions"
-  return laneLabel(key)
 }
 
 function available(input: SnapshotInput, windows: ReadonlyArray<ProviderUsage.Window>) {

@@ -10,6 +10,7 @@ interface KeyData {
   readonly usage_monthly?: unknown
   readonly limit?: unknown
   readonly limit_remaining?: unknown
+  readonly is_free_tier?: unknown
 }
 
 interface CreditsData {
@@ -26,36 +27,38 @@ export interface NormalizeKeyInput {
 
 export function normalizeKey(input: NormalizeKeyInput) {
   const data = keyData(input.response)
-  const usage = amount(data.usage, "usage", true) ?? 0
   const limit = amount(data.limit, "limit", false)
   const remaining = amount(data.limit_remaining, "limit_remaining", false)
   return new ProviderUsage.Snapshot({
     providerID: input.providerID,
-    label: input.label,
+    label: typeof data.is_free_tier === "boolean"
+      ? `${input.label} · ${data.is_free_tier ? "Free tier" : "Pay as you go"}`
+      : input.label,
     status: "available",
     source: "provider_api",
     stability: "stable",
     updatedAt: Math.max(0, Math.trunc(input.updatedAt)),
     windows: [
-      new ProviderUsage.Window({
+      ...(limit === undefined || limit === 0 ? [] : [new ProviderUsage.Window({
         id: "key",
-        label: "Key limit",
+        label: "Key Limit",
         unit: "usd",
-        used: usage,
-        ...(limit === undefined ? {} : { limit }),
-        ...(remaining === undefined ? {} : { remaining }),
-      }),
-      ...window("daily", "Daily", data.usage_daily),
-      ...window("weekly", "Weekly", data.usage_weekly),
-      ...window("monthly", "Monthly", data.usage_monthly),
+        limit,
+        ...(remaining === undefined ? {} : { used: Math.max(0, limit - remaining), remaining }),
+      })]),
+      ...window("daily", "Today", data.usage_daily),
+      ...window("weekly", "This Week", data.usage_weekly),
+      ...window("monthly", "This Month", data.usage_monthly),
     ],
   })
 }
 
 export function mergeCredits(snapshot: ProviderUsage.Snapshot, response: unknown) {
   const data = creditsData(response)
-  const limit = amount(data.total_credits, "total_credits", true) ?? 0
-  const used = amount(data.total_usage, "total_usage", true) ?? 0
+  const limit = amount(data.total_credits, "total_credits", true)
+  const used = amount(data.total_usage, "total_usage", true)
+  if (limit === undefined || used === undefined) throw new Error("Invalid OpenRouter usage response")
+  const balance = Math.max(limit - used, 0)
   return new ProviderUsage.Snapshot({
     providerID: snapshot.providerID,
     label: snapshot.label,
@@ -65,14 +68,15 @@ export function mergeCredits(snapshot: ProviderUsage.Snapshot, response: unknown
     updatedAt: snapshot.updatedAt,
     windows: [
       ...snapshot.windows,
-      new ProviderUsage.Window({
+      ...(limit === 0 ? [] : [new ProviderUsage.Window({
         id: "credits",
         label: "Credits",
         unit: "usd",
         used,
         limit,
-        remaining: Math.max(limit - used, 0),
-      }),
+        remaining: balance,
+      })]),
+      new ProviderUsage.Window({ id: "balance", label: "Balance", unit: "usd", remaining: balance }),
     ],
     ...(snapshot.message === undefined ? {} : { message: snapshot.message }),
   })
@@ -86,7 +90,7 @@ function window(id: string, label: string, value: unknown) {
 function keyData(value: unknown): KeyData {
   const data = nestedData(value)
   for (const key of ["usage", "usage_daily", "usage_weekly", "usage_monthly", "limit", "limit_remaining"] as const)
-    amount(data[key], key, key === "usage")
+    amount(data[key], key, false)
   return data
 }
 

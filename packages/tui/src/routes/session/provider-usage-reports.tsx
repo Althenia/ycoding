@@ -559,7 +559,7 @@ function ProviderUsageStats(props: {
             <text paddingTop={1} attributes={TextAttributes.BOLD} fg={themeV2.text.feedback.info.default}>Stats</text>
             <box flexDirection="row" paddingTop={1}>
               <box flexDirection="column" width="50%">
-                <StatLine label="Favorite model" value={props.state.stats?.favoriteModel ?? "-"} color={themeV2.text.feedback.success.default} />
+                <StatLine label="Favorite model" value={props.state.stats?.favoriteModel ?? "No usage yet"} color={themeV2.text.feedback.success.default} />
                 <StatLine label="Sessions" value={formatNumber(props.state.stats?.sessions ?? 0)} color={themeV2.text.feedback.info.default} />
                 <StatLine label="Current streak" value={dayCount(summary().current)} color={themeV2.text.feedback.info.default} />
                 <StatLine label="Active days" value={`${formatNumber(summary().active)}/${formatNumber(summary().days)}`} color={themeV2.text.feedback.info.default} />
@@ -570,7 +570,7 @@ function ProviderUsageStats(props: {
                 <StatLine label="Longest streak" value={dayCount(summary().longest)} color={themeV2.text.feedback.info.default} />
                 <StatLine
                   label="Busiest day"
-                  value={summary().busiest ? `${summary().busiest!.key.slice(0, 10)} · ${tokenTotalLabel(summary().busiest!, compactNumber)} tokens` : "-"}
+                  value={summary().busiest ? `${summary().busiest!.key.slice(0, 10)} · ${tokenTotalLabel(summary().busiest!, compactNumber)} tokens` : "No usage yet"}
                   color={themeV2.text.feedback.info.default}
                 />
               </box>
@@ -748,7 +748,7 @@ function sortLabel(sort: Sort, order: Order) {
 
 function cacheRead(value: ReportMetrics, format: (value: number) => string) {
   if (value.cacheReadReported === true) return format(value.tokens.cache.read)
-  return value.tokens.cache.read > 0 ? `≥${format(value.tokens.cache.read)}` : "-"
+  return value.tokens.cache.read > 0 ? `≥${format(value.tokens.cache.read)}` : "Unknown"
 }
 
 function knownTokens(value: ReportMetrics | undefined) {
@@ -758,7 +758,7 @@ function knownTokens(value: ReportMetrics | undefined) {
 
 function tokenTotalLabel(value: ReportMetrics, format: (value: number) => string) {
   if (value.cacheReadReported === true) return format(knownTokens(value))
-  return knownTokens(value) > 0 ? `≥${format(knownTokens(value))}` : "-"
+  return knownTokens(value) > 0 ? `≥${format(knownTokens(value))}` : "Unknown"
 }
 
 function tableCost(value: ReportMetrics) {

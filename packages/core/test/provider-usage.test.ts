@@ -97,6 +97,55 @@ describe("ProviderUsageCache", () => {
 })
 
 describe("ProviderUsageV2", () => {
+  test("reports only measured YCoding-local daily spend separately from account quotas", () => {
+    const now = new Date(2026, 8, 27, 12).getTime()
+    const values = ProviderUsageV2.localSpendSnapshots([
+      { model: { providerID: "anthropic" }, cost: 0, timeCreated: now },
+      { model: { providerID: "anthropic" }, cost: 0.75, timeCreated: now - 1_000 },
+      { model: { providerID: "anthropic" }, cost: 2, timeCreated: now },
+      { model: { providerID: "openai" }, cost: null, timeCreated: now },
+      { model: { providerID: "opencode" }, cost: 0.25, timeCreated: now },
+      { model: { providerID: "xai" }, cost: 1, timeCreated: now - 86_400_000 },
+    ], now)
+    expect(values).toMatchObject([
+      { providerID: "anthropic", profile: "YCoding local", source: "local_session", stability: "stable", windows: [{ id: "today", label: "Today", unit: "usd", used: 2.75 }] },
+      { providerID: "opencode", label: "OpenCode Zen", profile: "YCoding local", source: "local_session", windows: [{ used: 0.25 }] },
+    ])
+    expect(values).toHaveLength(2)
+  })
+
+  test("lists local spend separately from a provider's account windows", async () => {
+    const now = new Date(2026, 8, 27, 12).getTime()
+    const service = ProviderUsageV2.make({
+      credentials: { all: () => Effect.succeed([new Credential.Info({
+        id: Credential.ID.make("cred_local_spend"), integrationID: Integration.ID.make("anthropic"),
+        label: "default", value: { type: "key", key: "secret" },
+      })]) },
+      providers: { available: () => Effect.succeed([{ id: ProviderV2.ID.make("anthropic") }]) },
+      adapters: { anthropic: (input) => Effect.succeed(new ProviderUsage.Snapshot({
+        providerID: input.providerID, label: "Claude", status: "available", source: "provider_internal_api",
+        stability: "best_effort", updatedAt: now,
+        windows: [new ProviderUsage.Window({ id: "session", label: "Session", unit: "percent", used: 35 })],
+      })) },
+      localSpend: () => Effect.succeed([{ model: { providerID: "anthropic" }, cost: 0.5, timeCreated: now }]),
+      now: () => now,
+    })
+    expect((await Effect.runPromise(service.list({ refresh: true }))).map((item) => [item.profile, item.source, item.windows[0]?.id])).toEqual([
+      [undefined, "provider_internal_api", "session"], ["YCoding local", "local_session", "today"],
+    ])
+  })
+
+  test("does not surface local spend for a provider disabled in the current Location", async () => {
+    const now = new Date(2026, 8, 27, 12).getTime()
+    const service = ProviderUsageV2.make({
+      credentials: { all: () => Effect.succeed([]) },
+      providers: { available: () => Effect.succeed([]) },
+      adapters: {}, now: () => now,
+      localSpend: () => Effect.succeed([{ model: { providerID: "anthropic" }, cost: 2, timeCreated: now }]),
+    })
+    expect(await Effect.runPromise(service.list())).toEqual([])
+  })
+
   test("refreshes independent providers concurrently and preserves successes beside failures", async () => {
     const ready = await Effect.runPromise(Deferred.make<void>())
     const started: string[] = []

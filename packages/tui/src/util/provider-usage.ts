@@ -50,6 +50,12 @@ export function formatBillDue(dueAt: number | undefined, now = Date.now()) {
 
 export function formatWindowValue(window: ProviderUsageWindow) {
   if (window.unlimited) return "Unlimited"
+  if (window.id === "extra-usage" && window.unit === "count" && window.limit !== undefined)
+    return window.limit === 0 ? "Disabled" : `${window.limit.toLocaleString("en-US")} cap`
+  if (window.id === "org-spend" && window.unit === "usd" && window.used !== undefined)
+    return `${money.format(window.used)} billed`
+  if (["credits", "org-credits"].includes(window.id) && window.unit === "count" && window.used !== undefined)
+    return `${formatNumber(window.used)} credits`
   if (window.unit === "percent") return window.used === undefined ? "Not reported" : `${round(window.used)}% used`
   if (window.unit === "usd") {
     if (window.used !== undefined && window.limit !== undefined) {
@@ -61,9 +67,10 @@ export function formatWindowValue(window: ProviderUsageWindow) {
     return "Not reported"
   }
   if (window.remaining !== undefined) return `${formatNumber(window.remaining)} remaining`
+  const unit = window.unit === "count" ? "used" : window.unit
   if (window.used !== undefined && window.limit !== undefined)
-    return `${formatNumber(window.used)} / ${formatNumber(window.limit)} ${window.unit}`
-  if (window.used !== undefined) return `${formatNumber(window.used)} ${window.unit}`
+    return `${formatNumber(window.used)} / ${formatNumber(window.limit)} ${unit}`
+  if (window.used !== undefined) return `${formatNumber(window.used)} ${unit}`
   return "Not reported"
 }
 
