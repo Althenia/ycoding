@@ -1,0 +1,264 @@
+{
+  "provenance": "Original procedural office art",
+  "license": "CC0-1.0",
+  "assets": [
+    {
+      "file": "tiles.png",
+      "width": 224,
+      "height": 32,
+      "bytes": 655
+    },
+    {
+      "file": "walls.png",
+      "width": 128,
+      "height": 32,
+      "bytes": 470
+    },
+    {
+      "file": "executiveDesk.png",
+      "width": 128,
+      "height": 76,
+      "bytes": 789
+    },
+    {
+      "file": "developerDesk.png",
+      "width": 96,
+      "height": 76,
+      "bytes": 782
+    },
+    {
+      "file": "researchDesk.png",
+      "width": 96,
+      "height": 76,
+      "bytes": 881
+    },
+    {
+      "file": "qaDesk.png",
+      "width": 96,
+      "height": 76,
+      "bytes": 889
+    },
+    {
+      "file": "conferenceTable.png",
+      "width": 256,
+      "height": 112,
+      "bytes": 987
+    },
+    {
+      "file": "sofa.png",
+      "width": 160,
+      "height": 72,
+      "bytes": 441
+    },
+    {
+      "file": "sofaPeach.png",
+      "width": 160,
+      "height": 72,
+      "bytes": 442
+    },
+    {
+      "file": "sofaOrange.png",
+      "width": 160,
+      "height": 72,
+      "bytes": 444
+    },
+    {
+      "file": "coffeeTable.png",
+      "width": 96,
+      "height": 40,
+      "bytes": 340
+    },
+    {
+      "file": "beanBag.png",
+      "width": 64,
+      "height": 64,
+      "bytes": 437
+    },
+    {
+      "file": "beanBagBlue.png",
+      "width": 64,
+      "height": 64,
+      "bytes": 436
+    },
+    {
+      "file": "beanBagPink.png",
+      "width": 64,
+      "height": 64,
+      "bytes": 437
+    },
+    {
+      "file": "pingPong.png",
+      "width": 128,
+      "height": 80,
+      "bytes": 480
+    },
+    {
+      "file": "kitchenCounter.png",
+      "width": 160,
+      "height": 64,
+      "bytes": 543
+    },
+    {
+      "file": "fridge.png",
+      "width": 32,
+      "height": 80,
+      "bytes": 247
+    },
+    {
+      "file": "serverRack.png",
+      "width": 64,
+      "height": 112,
+      "bytes": 452
+    },
+    {
+      "file": "deviceRack.png",
+      "width": 64,
+      "height": 112,
+      "bytes": 409
+    },
+    {
+      "file": "bookshelf.png",
+      "width": 64,
+      "height": 112,
+      "bytes": 415
+    },
+    {
+      "file": "whiteboard.png",
+      "width": 128,
+      "height": 64,
+      "bytes": 458
+    },
+    {
+      "file": "bugBoard.png",
+      "width": 128,
+      "height": 64,
+      "bytes": 358
+    },
+    {
+      "file": "wallTv.png",
+      "width": 128,
+      "height": 64,
+      "bytes": 340
+    },
+    {
+      "file": "waterDispenser.png",
+      "width": 32,
+      "height": 72,
+      "bytes": 233
+    },
+    {
+      "file": "plantFern.png",
+      "width": 32,
+      "height": 72,
+      "bytes": 552
+    },
+    {
+      "file": "plantMonstera.png",
+      "width": 32,
+      "height": 72,
+      "bytes": 437
+    },
+    {
+      "file": "plantBamboo.png",
+      "width": 32,
+      "height": 72,
+      "bytes": 389
+    },
+    {
+      "file": "plantSucculent.png",
+      "width": 32,
+      "height": 72,
+      "bytes": 319
+    },
+    {
+      "file": "plantFlowers.png",
+      "width": 32,
+      "height": 72,
+      "bytes": 403
+    },
+    {
+      "file": "aquarium.png",
+      "width": 96,
+      "height": 80,
+      "bytes": 576
+    },
+    {
+      "file": "globe.png",
+      "width": 32,
+      "height": 64,
+      "bytes": 340
+    },
+    {
+      "file": "readingSeat.png",
+      "width": 96,
+      "height": 72,
+      "bytes": 413
+    },
+    {
+      "file": "wallArt.png",
+      "width": 64,
+      "height": 48,
+      "bytes": 345
+    },
+    {
+      "file": "clock.png",
+      "width": 32,
+      "height": 32,
+      "bytes": 240
+    },
+    {
+      "file": "floorLamp.png",
+      "width": 32,
+      "height": 96,
+      "bytes": 235
+    },
+    {
+      "file": "sideTable.png",
+      "width": 32,
+      "height": 48,
+      "bytes": 272
+    },
+    {
+      "file": "filingCabinet.png",
+      "width": 64,
+      "height": 80,
+      "bytes": 357
+    },
+    {
+      "file": "printer.png",
+      "width": 32,
+      "height": 48,
+      "bytes": 213
+    },
+    {
+      "file": "receptionDesk.png",
+      "width": 64,
+      "height": 48,
+      "bytes": 290
+    },
+    {
+      "file": "rug.png",
+      "width": 128,
+      "height": 96,
+      "bytes": 761
+    },
+    {
+      "file": "blueRug.png",
+      "width": 128,
+      "height": 96,
+      "bytes": 452
+    },
+    {
+      "file": "characters.png",
+      "width": 384,
+      "height": 2304,
+      "bytes": 70032
+    },
+    {
+      "file": "emotes.png",
+      "width": 168,
+      "height": 24,
+      "bytes": 581
+    }
+  ]
+}

@@ -34,16 +34,28 @@ import {
   type RemoteSessionSummary,
   type SessionChip,
 } from "../view-model"
+import { officeInputFromRemote } from "../office/adapter"
+import { projectOffice } from "../office/model"
+import { OfficeWorkspace } from "../office/OfficeWorkspace"
+import { createOfficeSettings, type OfficeSettingsStore, type WorkspacePresentation } from "../office/storage"
 import { Composer } from "./composer"
 import { NewSessionButton, NewSessionDialog } from "./new-session"
-import { AccountSettings, AppearanceSettings, AutonomySettings, DeviceSettings, NotificationSettings } from "./settings"
+import {
+  AccountSettings,
+  AppearanceSettings,
+  AutonomySettings,
+  DeviceSettings,
+  NotificationSettings,
+  OfficeSettings,
+  moveRadio,
+} from "./settings"
 import { ActivityRow, MessageRow, RequestCard } from "./conversation"
 
 const views = ["/remote", "/remote/sessions", "/remote/activity", "/remote/settings"] as const
 
 export type RemoteView = (typeof views)[number]
 
-const settingsSupport = "Account, devices, appearance, autonomy, and notifications for this workspace."
+const settingsSupport = "Account, devices, appearance, office view, autonomy, and notifications for this workspace."
 
 export function RemoteShell(props: { readonly path: string }): JSX.Element {
   const remote = useRemote()
@@ -58,8 +70,10 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
   tabletQuery.addEventListener("change", updateTabletLayout)
   onCleanup(() => tabletQuery.removeEventListener("change", updateTabletLayout))
 
+  const office = createOfficeSettings()
   const state = () => remote.state()
   const view: RemoteView = views.find((entry) => entry === props.path) ?? "/remote"
+  const officeShown = () => view === "/remote" && office.presentation() === "office"
   const activeSession = () => state().selectedSessionInfo ?? state().sessions.find((session) => session.id === state().activeSessionID)
   const selected = () => activeSession() !== undefined
   const composition = () => remoteSurfaceComposition(view, selected())
@@ -90,7 +104,7 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
 
   return (
     <Show when={entry() === "workspace"} fallback={<SignInScreen />}>
-      <div class={`app app--${viewClass}${selected() ? " app--selected" : view === "/remote" ? " app--empty" : ""}${railCollapsed() ? " app--rail-collapsed" : ""}`}>
+      <div class={`app app--${viewClass}${selected() ? " app--selected" : view === "/remote" ? " app--empty" : ""}${railCollapsed() ? " app--rail-collapsed" : ""}${officeShown() ? " app--office" : ""}`}>
         <a class="skip-link" href="#remote-main">Skip to content</a>
         <RemoteHeader
           navExpanded={navExpanded()}
@@ -115,11 +129,28 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
             <div class="workspace__scroll">
               <Notices />
               <Show when={view === "/remote"}>
-                <ConversationView
-                  title={activeSession()?.title ?? noSessionTitle}
-                  canCreateSession={canCreateSession()}
-                  onNewSession={openNewSession}
-                />
+                <PresentationSwitch value={office.presentation()} onChange={office.present} />
+                <Show
+                  when={officeShown()}
+                  fallback={
+                    <ConversationView
+                      title={activeSession()?.title ?? noSessionTitle}
+                      canCreateSession={canCreateSession()}
+                      onNewSession={openNewSession}
+                    />
+                  }
+                >
+                  <OfficePresentation
+                    office={office}
+                    inspector={
+                      <ConversationView
+                        title={activeSession()?.title ?? noSessionTitle}
+                        canCreateSession={canCreateSession()}
+                        onNewSession={openNewSession}
+                      />
+                    }
+                  />
+                </Show>
               </Show>
               <Show when={view === "/remote/sessions"}>
                 <SessionsPage
@@ -132,7 +163,7 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
                 <ActivityPage />
               </Show>
               <Show when={view === "/remote/settings"}>
-                <SettingsPage />
+                <SettingsPage office={office} />
               </Show>
             </div>
             <Show when={composition().showComposer}>
@@ -893,12 +924,74 @@ function ConversationView(props: {
           <Transcript messages={messages} />
         </Show>
         <Show when={requests().length > 0}>
-          <div class="requests">
+          <div id="pending-requests" class="requests" tabindex="-1" aria-label="Pending requests">
             <RequestCards requests={requests} activeSessionID={state().activeSessionID} />
           </div>
         </Show>
       </div>
     </Show>
+  )
+}
+
+const presentations: readonly { readonly id: WorkspacePresentation; readonly label: string }[] = [
+  { id: "conversation", label: "Conversation" },
+  { id: "office", label: "Office" },
+]
+
+function PresentationSwitch(props: {
+  readonly value: WorkspacePresentation
+  readonly onChange: (value: WorkspacePresentation) => void
+}): JSX.Element {
+  return (
+    <div class="presentation-switch filters" role="radiogroup" aria-label="Workspace view">
+      <For each={presentations}>
+        {(option, index) => (
+          <button
+            type="button"
+            role="radio"
+            aria-checked={props.value === option.id}
+            tabIndex={props.value === option.id ? 0 : -1}
+            class={`filters__option${props.value === option.id ? " filters__option--active" : ""}`}
+            onClick={() => props.onChange(option.id)}
+            onKeyDown={(event) => moveRadio(event, index(), presentations.length, (next) => {
+              const selected = presentations[next]
+              if (selected) props.onChange(selected.id)
+            })}
+          >
+            {option.label}
+          </button>
+        )}
+      </For>
+    </div>
+  )
+}
+
+function OfficePresentation(props: { readonly office: OfficeSettingsStore; readonly inspector: JSX.Element }): JSX.Element {
+  const remote = useRemote()
+  onMount(() => remote.store.watchTeam(true))
+  onCleanup(() => remote.store.watchTeam(false))
+  const snapshot = createMemo(() => projectOffice(officeInputFromRemote(remote.state()), props.office.preferences()))
+  const requestCount = () => {
+    const state = remote.state()
+    return state.view?.id === state.activeSessionID ? state.view?.requests.length ?? 0 : 0
+  }
+  const showRequests = () => {
+    const target = document.getElementById("pending-requests")
+    target?.scrollIntoView({ block: "start" })
+    target?.focus()
+  }
+  return (
+    <OfficeWorkspace
+      snapshot={snapshot()}
+      preferences={props.office.preferences()}
+      renderKey={`${props.office.preferences().quality}:${props.office.generation()}`}
+      requestCount={requestCount()}
+      onSelectSession={(sessionID) => void remote.store.selectSession(sessionID)}
+      onNormalView={() => props.office.present("conversation")}
+      onShowRequests={showRequests}
+      onLoadMoreTeam={() => void remote.store.loadMoreTeam()}
+      inspector={props.inspector}
+    />
   )
 }
 
@@ -1137,7 +1230,7 @@ function ActivityPage(): JSX.Element {
   )
 }
 
-function SettingsPage(): JSX.Element {
+function SettingsPage(props: { readonly office: OfficeSettingsStore }): JSX.Element {
   return (
     <>
       <div class="page-head">
@@ -1151,6 +1244,7 @@ function SettingsPage(): JSX.Element {
           <AccountSettings />
           <DeviceSettings />
           <AppearanceSettings />
+          <OfficeSettings office={props.office} />
           <AutonomySettings />
           <NotificationSettings />
         </div>

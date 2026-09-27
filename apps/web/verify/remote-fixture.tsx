@@ -14,6 +14,7 @@ import { ThemeProvider } from "../src/theme/theme-store"
 import { App } from "../src/app"
 import { createRemoteStore, type RemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
+import { OFFICE_PREFERENCES_KEY, WORKSPACE_PRESENTATION_KEY } from "../src/remote/office/storage"
 import type { RemoteHttp, RemoteHttpResult } from "../src/remote/http"
 import type {
   RemoteRequestOutcome,
@@ -45,6 +46,10 @@ let devices: readonly RemoteDeviceInfo[] = [
 ]
 
 const accountParams = new URLSearchParams(window.location.search)
+if (accountParams.get("presentation") !== "keep") {
+  window.localStorage.setItem(WORKSPACE_PRESENTATION_KEY, accountParams.get("presentation") === "office" ? "office" : "conversation")
+  window.localStorage.removeItem(OFFICE_PREFERENCES_KEY)
+}
 const relayURL = accountParams.get("relay")
 const relayAddress = relayURL === null ? undefined : new URL(relayURL)
 if (relayAddress !== undefined && (relayAddress.protocol !== "ws:" || relayAddress.hostname !== "127.0.0.1")) throw new Error("Verification relay must be loopback")
@@ -63,7 +68,8 @@ const formOutcome = accountParams.get("formOutcome")
 const promptOutcome = accountParams.get("promptOutcome")
 const deviceMode = accountParams.get("devices")
 const emptyBackend = remoteScenarioData?.emptyBackend ?? accountParams.get("sessions") === "empty"
-if (remoteScenarioData !== undefined) localStorage.setItem("ycoding.theme", remoteScenarioData.theme)
+const fixtureTheme = accountParams.get("theme") ?? remoteScenarioData?.theme
+if (fixtureTheme !== undefined) localStorage.setItem("ycoding.theme", fixtureTheme)
 if (remoteScenarioData !== undefined) devices = remoteScenarioData.devices
 const machineName = accountParams.get("machineName")
 if (machineName !== null) devices = devices.map((device, index) => index === 0 ? { ...device, name: machineName } : device)
@@ -374,19 +380,25 @@ type Fixture = {
   readonly store: RemoteStore
   readonly drop: () => void
   readonly stream: () => void
+  readonly team: () => void
   readonly formRequests: () => readonly { readonly operation: string; readonly input: Readonly<Record<string, unknown>> | undefined }[]
   readonly mutationRequests: () => readonly { readonly operation: string; readonly input: Readonly<Record<string, unknown>> | undefined }[]
   readonly inventoryRequests: () => number
+  readonly operationReport: () => { readonly transports: number; readonly operations: Readonly<Record<string, number>> }
 }
 
 function createFixtureStore(): Fixture {
   let handlers: RemoteTransportHandlers | undefined
   let open = true
   let streamed = false
+  let nextSeq = 43
+  let teamReported = false
   let liveReads = 0
   const formRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
   const mutationRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
   let inventoryRequests = 0
+  let transportsCreated = 0
+  const operationCounts = new Map<string, number>()
   const workspaces = [
     { id: "workspace_fixture", projectID: "prj_remote", directory: "/workspace/ycoding", name: "YCoding" },
     { id: "workspace_other", projectID: "prj_other", directory: "/workspace/other", name: "Other repository" },
@@ -454,6 +466,7 @@ function createFixtureStore(): Fixture {
     input?: Readonly<Record<string, unknown>>,
     targetSessionID = sessionID,
   ): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
+    operationCounts.set(operation, (operationCounts.get(operation) ?? 0) + 1)
     if (connectionMode === "offline") return { status: "failed", error: { code: "agent_unavailable", message: "No local agent is connected" } }
     if (operation === "session.prompt" || operation === "session.autonomy.set" || operation === "session.guardrail.reply" || operation === "session.create") {
       mutationRequests.push({ operation, input })
@@ -508,6 +521,15 @@ function createFixtureStore(): Fixture {
         .filter((session) => input?.workspace === undefined || groupOf(session).id === input.workspace) } }
     }
     if (operation === "session.active") return { status: "ok", value: { data: { [sessionID]: { type: "running" } } } }
+    if (operation === "session.subagent.list") {
+      if (accountParams.get("team") === "unsupported") return { status: "failed", error: { code: "unknown_operation", message: "Unknown operation" } }
+      const tasks = targetSessionID === sessionID && accountParams.get("team") !== "none" ? [{
+        sessionID: "ses_child", parentID: sessionID, description: "Fix flaky suite", agent: "general", model, background: true,
+        state: teamReported ? "completed" : "running", revision: teamReported ? 2 : 1,
+        time: { created: ago(30), updated: ago(teamReported ? 0 : 4) },
+      }] : []
+      return { status: "ok", value: { data: tasks, summary: { total: tasks.length }, cursor: {} } }
+    }
     if (operation === "session.snapshot") {
       return {
         status: "ok",
@@ -587,6 +609,7 @@ function createFixtureStore(): Fixture {
   const store = createRemoteStore({
     http: syntheticHttp,
     createTransport: (_deviceID, transportHandlers) => {
+      transportsCreated += 1
       handlers = transportHandlers
       if (relayAddress !== undefined) {
         const wire = createRemoteTransport({ url: relayAddress.href, handlers: transportHandlers })
@@ -621,19 +644,19 @@ function createFixtureStore(): Fixture {
     streamed = true
     const steps: readonly unknown[] = [
       { type: "session.status", data: { sessionID, status: { type: "busy" } } },
-      { type: "session.step.started", durable: { aggregateID: sessionID, seq: 43, version: 1 }, data: { assistantMessageID: "msg_live", agent: "god", model } },
-      { type: "session.text.started", durable: { aggregateID: sessionID, seq: 44, version: 1 }, data: { assistantMessageID: "msg_live", ordinal: 0 } },
+      { type: "session.step.started", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { assistantMessageID: "msg_live", agent: "god", model } },
+      { type: "session.text.started", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { assistantMessageID: "msg_live", ordinal: 0 } },
       { type: "session.text.delta", data: { assistantMessageID: "msg_live", ordinal: 0, delta: "Streaming " } },
       { type: "session.text.delta", data: { assistantMessageID: "msg_live", ordinal: 0, delta: "through " } },
       { type: "session.text.delta", data: { assistantMessageID: "msg_live", ordinal: 0, delta: "the relay." } },
       {
         type: "session.tool.success",
-        durable: { aggregateID: sessionID, seq: 45, version: 1 },
+        durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 },
         data: { assistantMessageID: "msg_live", callID: "call_live", content: [{ type: "text", text: "bound output kept locally scrollable" }] },
       },
       {
         type: "session.text.ended",
-        durable: { aggregateID: sessionID, seq: 46, version: 1 },
+        durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 },
         data: { assistantMessageID: "msg_live", ordinal: 0, text: "Streaming through the relay with bounded tool output." },
       },
     ]
@@ -642,7 +665,33 @@ function createFixtureStore(): Fixture {
     }
   }
 
-  return { store, drop, stream, formRequests: () => formRequests, mutationRequests: () => mutationRequests, inventoryRequests: () => inventoryRequests }
+  const team = () => {
+    handlers?.onEvent?.(sessionID, {
+      id: "evt_team_delegate",
+      type: "session.tool.progress",
+      durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 },
+      data: { sessionID, assistantMessageID: "msg_team", callID: "call_subagent", structured: { sessionID: "ses_child", status: "running" } },
+    })
+    setTimeout(() => {
+      teamReported = true
+      handlers?.onEvent?.(sessionID, {
+        id: "evt_team_report",
+        type: "session.synthetic",
+        durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 },
+        data: {
+          sessionID,
+          messageID: "msg_team_report",
+          text: "Subagent ses_child completed.",
+          metadata: { source: "subagent_notification", childID: "ses_child", type: "completed", revision: 2 },
+        },
+      })
+    }, 400)
+  }
+
+  return {
+    store, drop, stream, team, formRequests: () => formRequests, mutationRequests: () => mutationRequests, inventoryRequests: () => inventoryRequests,
+    operationReport: () => ({ transports: transportsCreated, operations: Object.fromEntries(operationCounts) }),
+  }
 }
 
 const fixture = createFixtureStore()
@@ -781,6 +830,7 @@ function remoteMutationReport() {
 
 ;(window as typeof window & { remoteFormReport?: typeof remoteFormReport }).remoteFormReport = remoteFormReport
 ;(window as typeof window & { remoteMutationReport?: typeof remoteMutationReport }).remoteMutationReport = remoteMutationReport
+;(window as typeof window & { remoteOperationReport?: typeof fixture.operationReport }).remoteOperationReport = fixture.operationReport
 
 const fixtureView = remoteScenarioData?.view ?? new URLSearchParams(window.location.search).get("view") ?? "chat"
 const fixturePath = fixtureView === "chat" ? "/remote" : `/remote/${fixtureView}`
@@ -819,6 +869,9 @@ function FixturePage() {
         </button>
         <button type="button" class="button button--secondary button--small" onClick={() => fixture.drop()}>
           Simulate disconnect and reconnect
+        </button>
+        <button type="button" class="button button--secondary button--small" onClick={() => fixture.team()}>
+          Simulate subagent handoff
         </button>
       </div>
       <App createRemoteStore={() => fixture.store} />

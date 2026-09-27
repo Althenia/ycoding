@@ -1,0 +1,77 @@
+import { describe, expect, test } from "bun:test"
+import { projectOffice } from "./model"
+import { defaultOfficePreferences } from "./preferences"
+import type { OfficeInput, SessionSummary, TeamMember } from "./types"
+
+const base: OfficeInput = {
+  ownerID: "user_1",
+  deviceID: "dev_1",
+  connection: "ready",
+  activeSessionID: "ses_root",
+  sessions: [{ id: "ses_root", title: "Plan the release", agent: "build", archived: false, running: true }],
+}
+
+function rooms(input: Partial<OfficeInput>) {
+  const snapshot = projectOffice({ ...base, ...input }, defaultOfficePreferences)
+  return Object.fromEntries(snapshot.actors.map((actor) => [actor.sessionID, actor.homeRoom]))
+}
+
+function task(sessionID: string, description: string, agent?: string): TeamMember {
+  return { sessionID, parentID: "ses_root", description, state: "running", ...(agent === undefined ? {} : { agent }) }
+}
+
+describe("office responsibility rooms", () => {
+  test("top-level Sessions, including a placeholder parent, work in the CEO office", () => {
+    expect(rooms({
+      sessions: [
+        { id: "ses_root", title: "Plan the release", agent: "build", archived: false, running: true },
+        { id: "ses_review", title: "Review the parser", agent: "reviewer", archived: false, running: false },
+      ],
+    })).toEqual({ ses_root: "ceo", ses_review: "ceo" })
+    expect(rooms({
+      sessions: [],
+      activeSessionID: "ses_worker",
+      team: { rootID: "ses_root", status: "ready", more: false, cues: [], members: [task("ses_worker", "Fix the parser")] },
+    })).toEqual({ ses_root: "ceo", ses_worker: "developer" })
+  })
+
+  test("a listed child Session works where its agent name places it", () => {
+    const child = (id: string, agent: string | undefined, title: string): SessionSummary =>
+      ({ id, parentID: "ses_root", title, archived: false, ...(agent === undefined ? {} : { agent }) })
+    expect(rooms({
+      sessions: [
+        base.sessions[0]!,
+        child("ses_qa", "code-reviewer", "Tidy the parser"),
+        child("ses_research", "explore", "Tidy the parser"),
+        child("ses_dev", "zeus", "Tidy the parser"),
+        child("ses_titled", undefined, "Investigate relay drops"),
+      ],
+    })).toEqual({ ses_root: "ceo", ses_qa: "qa", ses_research: "research", ses_dev: "developer", ses_titled: "research" })
+  })
+
+  test("subagent tasks use their agent name first, then the leading words of their task", () => {
+    expect(rooms({
+      team: {
+        rootID: "ses_root", status: "ready", more: false, cues: [],
+        members: [
+          task("ses_agent_wins", "Investigate relay drops", "qa-bot"),
+          task("ses_review", "Read-only review of reconnect failures", "general"),
+          task("ses_investigate", "Investigate why the relay drops", "general"),
+          task("ses_analyze", "Analyze bundle size", "zeus"),
+          task("ses_late_keyword", "Web office renderer: Phaser engine and engine verification", "zeus"),
+          task("ses_unnamed", "Fix the parser"),
+          task("ses_first_match", "Explore and test the importer", "general"),
+        ],
+      },
+    })).toEqual({
+      ses_root: "ceo",
+      ses_agent_wins: "qa",
+      ses_review: "qa",
+      ses_investigate: "research",
+      ses_analyze: "research",
+      ses_late_keyword: "developer",
+      ses_unnamed: "developer",
+      ses_first_match: "research",
+    })
+  })
+})

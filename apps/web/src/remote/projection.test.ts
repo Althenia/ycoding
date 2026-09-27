@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  readTeamCue,
   appendShellOutputPage,
   applySessionEvent,
   boundedText,
@@ -25,6 +26,20 @@ import {
   type ShellOutputView,
   type SessionView,
 } from "./projection"
+
+test("extracts only durable live subagent delegation and terminal notification identities", () => {
+  expect(readTeamCue({ id: "evt_1", type: "session.tool.progress", durable: { aggregateID: "ses_root", seq: 1 }, data: {
+    sessionID: "ses_root", assistantMessageID: "msg_1", callID: "call_1", structured: { sessionID: "ses_child", status: "running" },
+  } })).toEqual({ id: "msg_1:call_1:ses_child", kind: "delegated", childID: "ses_child" })
+  expect(readTeamCue({ id: "evt_success", type: "session.tool.success", durable: { aggregateID: "ses_root", seq: 2 }, data: {
+    sessionID: "ses_root", assistantMessageID: "msg_1", callID: "call_1", structured: { sessionID: "ses_child", status: "running" },
+  } })).toEqual({ id: "msg_1:call_1:ses_child", kind: "delegated", childID: "ses_child" })
+  expect(readTeamCue({ id: "evt_2", type: "session.synthetic", durable: { aggregateID: "ses_root", seq: 2 }, data: {
+    sessionID: "ses_root", metadata: { source: "subagent_notification", childID: "ses_child", type: "completed", revision: 3 },
+  } })).toEqual({ id: "evt_2:3:ses_child", kind: "reported", childID: "ses_child", outcome: "completed" })
+  expect(readTeamCue({ id: "evt_3", type: "session.synthetic", data: { sessionID: "ses_root", metadata: { source: "subagent_notification", childID: "ses_child", type: "completed", revision: 3 } } })).toBeUndefined()
+  expect(readTeamCue({ id: "evt_4", type: "session.synthetic", durable: { aggregateID: "ses_root", seq: 4 }, data: { sessionID: "ses_root", metadata: { source: "other", childID: "ses_child", type: "completed", revision: 4 } } })).toBeUndefined()
+})
 
 const event = (type: string, data: Record<string, unknown>) => ({ id: `evt_${type}`, type, data })
 

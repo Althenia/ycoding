@@ -28,6 +28,7 @@ import {
   readFormRequests,
   readSessionInfoList,
   readSnapshot,
+  readTeamCue,
   replaceFileChanges,
   replaceRequests,
   shellOutputFetchFor,
@@ -39,6 +40,7 @@ import {
   type RemoteMessageView,
   type SessionAutonomyView,
   type SessionView,
+  type TeamCue,
   type ShellOutputFetch,
 } from "./projection"
 import type { ModelRefView } from "./projection"
@@ -52,6 +54,7 @@ import type { RemoteConnectionState } from "./view-model"
 
 export type SessionInfoView = {
   readonly id: string
+  readonly parentID?: string
   readonly title: string
   readonly projectID?: string
   readonly directory?: string
@@ -63,6 +66,26 @@ export type SessionInfoView = {
   readonly pinnedAt?: number
   /** Absent when the connection cannot report active sessions. */
   readonly running?: boolean
+}
+
+export type TeamTaskView = {
+  readonly sessionID: string
+  readonly parentID: string
+  readonly description: string
+  readonly agent?: string
+  readonly modelLabel?: string
+  readonly state: "starting" | "running" | "waiting" | "cancelling" | "cancelled" | "completed" | "failed" | "lost"
+  readonly revision: number
+  readonly updatedAt: number
+}
+
+export type TeamView = {
+  readonly rootID: string
+  readonly status: "loading" | "ready" | "unsupported" | "error"
+  readonly tasks: readonly TeamTaskView[]
+  readonly total?: number
+  readonly next?: string
+  readonly pageLoading: boolean
 }
 
 export type PendingMutation = {
@@ -107,6 +130,8 @@ export type RemoteStoreState = {
   readonly sessionCreation?: SessionCreation
   readonly activeSessionID?: string
   readonly view?: SessionView
+  readonly team?: TeamView
+  readonly teamCues: readonly TeamCue[]
   readonly transport: RemoteTransportStatus
   readonly mutations: readonly PendingMutation[]
   readonly notice?: string
@@ -140,6 +165,8 @@ export type RemoteStore = {
   readonly connect: (deviceID: string) => void
   readonly disconnect: () => void
   readonly selectSession: (sessionID: string) => Promise<void>
+  readonly watchTeam: (enabled: boolean) => void
+  readonly loadMoreTeam: () => Promise<void>
   readonly selectWorkspace: (workspaceID: string) => void
   readonly searchSessions: (query: string, filter?: "all" | "running" | "idle") => void
   readonly nextSessionsPage: () => Promise<void>
@@ -223,12 +250,19 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     workspaces: [],
     workspaceStatus: "idle",
     mutations: [],
+    teamCues: [],
     notifications: [],
     transport: { kind: "idle" },
     unhandledEvents: 0,
   }
   let transport: RemoteTransport | undefined
   let selectionToken = 0
+  let selectionReadyToken: number | undefined
+  let selectionFailedToken: number | undefined
+  let teamWatching = false
+  let teamWatchToken = 0
+  let teamRead: { readonly owner: RemoteTransport; readonly token: number; readonly rootID: string; readonly watchToken: number } | undefined
+  let pendingTeamRead: { readonly owner: RemoteTransport; readonly token: number; readonly rootID: string; readonly watchToken: number } | undefined
   /**
    * Generation of the backend Session-list context. A list read may publish only
    * while it still describes the generation it was issued for, and every
@@ -318,6 +352,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (batch.length === 0) return
     let view = state.view
     let unhandled = state.unhandledEvents
+    let teamCues = state.teamCues
+    let refreshTeam = false
     let gap = false
     for (const item of batch) {
       if (!view || item.sessionID !== view.id) continue
@@ -335,6 +371,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         // per aggregate, so a gap means a lost event and forces a re-read.
         if (sequence.seq <= view.watermark) continue
         if (sequence.seq > view.watermark + 1) gap = true
+      }
+      if (teamWatching && hydration === undefined && state.activeSessionID === item.sessionID && subscribedSessionID === item.sessionID &&
+        state.team?.rootID === item.sessionID) {
+        const cue = readTeamCue(item.event)
+        if (cue !== undefined && !teamCues.some((entry) => entry.id === cue.id)) {
+          teamCues = [...teamCues, cue].slice(-8)
+          refreshTeam = true
+        }
       }
       // Alerts follow the events that reach the projection: a dropped duplicate
       // raises nothing, and the snapshot paths below never call this loop.
@@ -367,14 +411,67 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       view,
       unhandledEvents: unhandled,
       notifications: delivery.entries(),
+      teamCues,
     }
     notify()
     if (gap) void reloadSnapshot(state.activeSessionID, selectionToken, "Events were missed, so history was reloaded.")
+    if (refreshTeam && state.team?.status !== "unsupported" && state.team !== undefined && transport !== undefined)
+      void loadTeam(transport, selectionToken, state.team.rootID, undefined, true)
   }
 
   const queueEvent = (sessionID: string, event: unknown) => {
     queued.push({ sessionID, event })
     cancelBatch ??= schedule(flush, batchMs)
+  }
+
+  const loadTeam = async (owner: RemoteTransport, token: number, rootID: string, cursor?: string, refresh = false) => {
+    if (!teamWatching) return
+    const watchToken = teamWatchToken
+    if (teamRead !== undefined) {
+      if (cursor === undefined && (refresh || teamRead.owner !== owner || teamRead.token !== token ||
+        teamRead.rootID !== rootID || teamRead.watchToken !== watchToken)) pendingTeamRead = { owner, token, rootID, watchToken }
+      return
+    }
+    if (token !== selectionToken || !isCurrentConnection(owner) || state.team?.rootID !== rootID || state.transport.kind !== "open") return
+    const read = { owner, token, rootID, watchToken }
+    teamRead = read
+    setState({ team: { ...state.team, rootID, status: cursor === undefined ? "loading" : state.team.status, pageLoading: cursor !== undefined } })
+    const outcome = await owner.request("session.subagent.list", { sessionID: rootID,
+      ...(cursor === undefined ? {} : { input: { cursor } }) })
+    if (teamRead === read) teamRead = undefined
+    const currentTeam = state.team
+    if (teamWatching && watchToken === teamWatchToken && token === selectionToken && isCurrentConnection(owner) &&
+      currentTeam?.rootID === rootID && state.transport.kind === "open") {
+      if (outcome.status === "failed" && outcome.error.code === "unknown_operation") {
+        setState({ team: { rootID, status: "unsupported", tasks: [], pageLoading: false } })
+      } else if (outcome.status !== "ok") {
+        setState({ team: { ...currentTeam, status: "error", pageLoading: false } })
+      } else {
+        const value = outcome.value
+        const data = typeof value === "object" && value !== null ? Reflect.get(value, "data") : undefined
+        const summary = typeof value === "object" && value !== null ? Reflect.get(value, "summary") : undefined
+        const cursors = typeof value === "object" && value !== null ? Reflect.get(value, "cursor") : undefined
+        if (!Array.isArray(data) || typeof cursors !== "object" || cursors === null) {
+          setState({ team: { ...currentTeam, status: "error", pageLoading: false } })
+        } else {
+          const rows = data.flatMap((item: unknown) => {
+            const task = readTeamTask(item)
+            return task?.parentID === rootID ? [task] : []
+          })
+          const next = Reflect.get(cursors, "next")
+          const total = typeof summary === "object" && summary !== null ? Reflect.get(summary, "total") : undefined
+          setState({ team: { rootID, status: "ready", tasks: cursor === undefined
+            ? rows : [...currentTeam.tasks.filter((item) => !rows.some((row) => row.sessionID === item.sessionID)), ...rows],
+            ...(typeof total === "number" && Number.isInteger(total) && total >= 0 ? { total } : {}),
+            ...(typeof next === "string" && next.length > 0 ? { next } : {}), pageLoading: false } })
+        }
+      }
+    }
+    const pending = pendingTeamRead
+    pendingTeamRead = undefined
+    if (teamWatching && pending !== undefined && teamRead === undefined && pending.watchToken === teamWatchToken && pending.token === selectionToken &&
+      isCurrentConnection(pending.owner) && state.transport.kind === "open" && state.team?.rootID === pending.rootID && state.team.status !== "unsupported")
+      void loadTeam(pending.owner, pending.token, pending.rootID)
   }
 
   /**
@@ -414,6 +511,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
     lastStatusKind = status.kind
     if (status.kind === "closed") subscribedSessionID = undefined
+    if (status.kind === "closed") setState({ teamCues: [], ...(state.team === undefined ? {} : { team: { ...state.team, status: "loading", pageLoading: false } }) })
     if (rejected && status.kind === "closed") {
       sessionPages = []
       // Relay authorization can reject one revoked device while the browser account
@@ -434,6 +532,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         sessionHasNext: false,
         sessionHasPrevious: false,
         selectedSessionInfo: undefined,
+        team: undefined,
+        teamCues: [],
         drafts: {},
         workspaces: [],
         workspaceStatus: "idle",
@@ -492,7 +592,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
    * snapshot below the projection's durable watermark, is refused so the visible
    * transcript is never erased or rewound.
    */
-  const applySnapshot = (sessionID: string, payload: unknown, base?: SessionView): { readonly view: SessionView; readonly coveredAssistantIDs: readonly string[] } | "invalid" | "stale" => {
+  const applySnapshot = (sessionID: string, payload: unknown, base?: SessionView): { readonly view: SessionView; readonly coveredAssistantIDs: readonly string[]; readonly parentID?: string } | "invalid" | "stale" => {
     const snapshot = readSnapshot(payload)
     if (snapshot === undefined) return "invalid"
     if (base?.watermark !== undefined && snapshot.watermark !== undefined && snapshot.watermark < base.watermark) {
@@ -509,7 +609,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       watermark: snapshot.watermark,
       ...(snapshot.sourceEpoch === undefined ? {} : { sourceEpoch: snapshot.sourceEpoch }),
     }
-    return { view, coveredAssistantIDs: snapshot.coveredAssistantIDs }
+    return { view, coveredAssistantIDs: snapshot.coveredAssistantIDs, parentID: snapshot.parentID }
   }
 
   const applyEvent = (view: SessionView, event: unknown, replaying: boolean): SessionView => {
@@ -665,6 +765,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       for (const event of owned.events) view = applyEvent(view, event, true)
       owned.replayed.forEach((key) => sealed?.parts.delete(key))
       setState({ view, ...(notice === undefined ? {} : { notice }) })
+      const owner = transport
+      if (teamWatching && owner !== undefined && state.team !== undefined) void loadTeam(owner, token, state.team.rootID, undefined, true)
       return "applied"
     } finally {
       if (hydration === owned) hydration = undefined
@@ -768,10 +870,19 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const active = transport
     // One selection owns the view; a superseded selection never writes state again.
     const token = ++selectionToken
-    setState({ activeSessionID: sessionID, selectedSessionInfo: state.sessions.find((session) => session.id === sessionID) ??
-      (state.selectedSessionInfo?.id === sessionID ? state.selectedSessionInfo : { id: sessionID, title: sessionID, updatedAt: 0, archived: false }),
-      view: createSessionView(sessionID), notice: undefined })
-    if (!active) return
+    selectionReadyToken = undefined
+    selectionFailedToken = undefined
+    const info = state.sessions.find((session) => session.id === sessionID) ??
+      (state.selectedSessionInfo?.id === sessionID ? state.selectedSessionInfo : { id: sessionID, title: sessionID, updatedAt: 0, archived: false })
+    const rootID = info.parentID ?? sessionID
+    setState({ activeSessionID: sessionID, selectedSessionInfo: info,
+      view: createSessionView(sessionID), team: teamWatching ? { rootID, status: "loading", tasks: [], pageLoading: false } : undefined,
+      teamCues: [], notice: undefined })
+    if (!active) {
+      selectionFailedToken = token
+      if (teamWatching) setState({ team: { rootID, status: "error", tasks: [], pageLoading: false } })
+      return
+    }
     // Subscribe before the snapshot so events during the read are queued and then
     // reconciled against the snapshot watermark instead of being lost.
     const subscribed = await active.request("session.subscribe", { sessionID })
@@ -782,7 +893,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         releaseSubscription(active, subscribedSessionID)
       }
       if (token !== selectionToken || state.activeSessionID !== sessionID) return
-      setState({ notice: "This session is not available from the connected device." })
+      selectionFailedToken = token
+      setState({ notice: "This session is not available from the connected device.",
+        ...(teamWatching ? { team: { rootID, status: "error" as const, tasks: [], pageLoading: false } } : {}) })
       return
     }
     if (token !== selectionToken || state.activeSessionID !== sessionID) {
@@ -799,26 +912,37 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const outcome = await readSnapshotPayload(sessionID)
       if (token !== selectionToken || state.activeSessionID !== sessionID || outcome === undefined) return
       if (outcome.status !== "ok") {
-        setState({ notice: describeOutcome(outcome, "Session history") })
+        selectionFailedToken = token
+        setState({ notice: describeOutcome(outcome, "Session history"),
+          ...(teamWatching ? { team: { rootID, status: "error" as const, tasks: [], pageLoading: false } } : {}) })
         return
       }
       const applied = applySnapshot(sessionID, outcome.value, state.view)
       if (applied === "invalid") {
-        setState({ notice: "The session snapshot was not readable, so the current history is kept." })
+        selectionFailedToken = token
+        setState({ notice: "The session snapshot was not readable, so the current history is kept.",
+          ...(teamWatching ? { team: { rootID, status: "error" as const, tasks: [], pageLoading: false } } : {}) })
         return
       }
       if (applied === "stale") {
-        setState({ notice: "An older session snapshot arrived and was ignored." })
+        selectionFailedToken = token
+        setState({ notice: "An older session snapshot arrived and was ignored.",
+          ...(teamWatching ? { team: { rootID, status: "error" as const, tasks: [], pageLoading: false } } : {}) })
         return
       }
       sealed = { sessionID, parts: new Set(sealedPartKeys(applied.view.messages)), covered: new Set(applied.coveredAssistantIDs) }
       let view = applied.view
       for (const event of owned.events) view = applyEvent(view, event, true)
       owned.replayed.forEach((key) => sealed?.parts.delete(key))
-      setState({ view, selectedSessionInfo: state.selectedSessionInfo?.id === sessionID
+      selectionReadyToken = token
+      const teamRootID = applied.parentID ?? state.selectedSessionInfo?.parentID ?? sessionID
+      setState({ view, team: teamWatching ? { rootID: teamRootID, status: "loading", tasks: [], pageLoading: false } : undefined,
+        selectedSessionInfo: state.selectedSessionInfo?.id === sessionID
         ? { ...state.selectedSessionInfo, title: view.title ?? state.selectedSessionInfo.title, agent: view.agent ?? state.selectedSessionInfo.agent,
-            model: view.model ?? state.selectedSessionInfo.model, modelLabel: modelLabel(view.model) ?? state.selectedSessionInfo.modelLabel }
+            model: view.model ?? state.selectedSessionInfo.model, modelLabel: modelLabel(view.model) ?? state.selectedSessionInfo.modelLabel,
+            ...(applied.parentID === undefined ? {} : { parentID: applied.parentID }) }
         : state.selectedSessionInfo })
+      if (teamWatching) void loadTeam(active, token, teamRootID)
     } finally {
       if (hydration === owned) hydration = undefined
     }
@@ -993,7 +1117,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       accountToken += 1
       await options.http.logout()
       api.disconnect()
-      setState({ owner: undefined, devices: [], sessions: [], advertised: [], activeSessionID: undefined, view: undefined, connection: { kind: "signed-out" }, notice: "Signed out." })
+      setState({ owner: undefined, devices: [], sessions: [], advertised: [], activeSessionID: undefined, view: undefined,
+        team: undefined, teamCues: [], connection: { kind: "signed-out" }, notice: "Signed out." })
     },
     createEnrollment: () => options.http.createEnrollment(),
     revokeDevice: async (deviceID) => {
@@ -1015,6 +1140,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       sessionsToken += 1
       workspacesToken += 1
       setState({ activeDeviceID: deviceID, sessions: [], advertised: [], activeSessionID: undefined, view: undefined, notice: undefined, drafts,
+        team: undefined, teamCues: [],
         sessionGroups: [], selectedWorkspaceID: undefined, selectedSessionInfo: undefined, sessionQuery: "", sessionFilter: "all",
         sessionListStatus: "idle", sessionPageLoading: false, sessionHasNext: false, sessionHasPrevious: false,
         workspaces: [], workspaceStatus: "idle", workspaceError: undefined,
@@ -1073,11 +1199,34 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         sessionCreation: undefined,
         activeSessionID: undefined,
         view: undefined,
+        team: undefined,
+        teamCues: [],
         connection: state.owner === undefined ? { kind: "signed-out" } : deviceConnection(state.devices.length),
       })
       endAlerts()
     },
     selectSession,
+    watchTeam: (enabled) => {
+      if (teamWatching === enabled) return
+      teamWatching = enabled
+      teamWatchToken += 1
+      pendingTeamRead = undefined
+      if (!enabled) {
+        setState({ team: undefined, teamCues: [] })
+        return
+      }
+      const sessionID = state.activeSessionID
+      if (sessionID === undefined) return
+      const rootID = state.selectedSessionInfo?.parentID ?? sessionID
+      setState({ team: { rootID, status: selectionFailedToken === selectionToken ? "error" : "loading", tasks: [], pageLoading: false }, teamCues: [] })
+      if (selectionReadyToken === selectionToken && transport !== undefined) void loadTeam(transport, selectionToken, rootID)
+    },
+    loadMoreTeam: async () => {
+      const owner = transport
+      const team = state.team
+      if (!teamWatching || owner === undefined || team?.status !== "ready" || team.next === undefined || team.pageLoading || state.transport.kind !== "open") return
+      await loadTeam(owner, selectionToken, team.rootID, team.next)
+    },
     selectWorkspace: (workspaceID) => {
       if (state.transport.kind !== "open" || state.connection.kind === "offline") return
       if (!state.sessionGroups.some((group) => group.id === workspaceID) || state.selectedWorkspaceID === workspaceID) return
@@ -1327,6 +1476,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       setState({ view: { ...view, autonomy } })
     },
     dispose: () => {
+      teamWatching = false
+      teamWatchToken += 1
+      pendingTeamRead = undefined
       sealed = undefined
       cancelSearch?.()
       cancelBatch?.()
@@ -1335,7 +1487,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       transport?.close(1000, "disposed")
       transport = undefined
       subscribedSessionID = undefined
-      setState({ drafts: {}, workspaces: [], workspaceStatus: "idle", workspaceError: undefined, sessionCreation: undefined })
+      setState({ drafts: {}, workspaces: [], workspaceStatus: "idle", workspaceError: undefined, sessionCreation: undefined,
+        team: undefined, teamCues: [] })
       endAlerts()
       listeners.clear()
     },
@@ -1424,6 +1577,7 @@ export function readSessionInfo(value: unknown, options: { readonly running?: bo
   const model = readModelRef(record.model)
   return {
     id,
+    ...(typeof record.parentID === "string" && record.parentID.length > 0 ? { parentID: record.parentID } : {}),
     title: typeof record.title === "string" && record.title.length > 0 ? record.title : id,
     ...(typeof record.projectID === "string" && record.projectID.length > 0 ? { projectID: record.projectID } : {}),
     ...(typeof location.directory === "string" && location.directory.length > 0 ? { directory: location.directory } : {}),
@@ -1434,6 +1588,27 @@ export function readSessionInfo(value: unknown, options: { readonly running?: bo
     ...(typeof time.pinned === "number" ? { pinnedAt: time.pinned } : {}),
     ...(options.running === undefined ? {} : { running: options.running }),
   }
+}
+
+function readTeamTask(value: unknown): TeamTaskView | undefined {
+  if (typeof value !== "object" || value === null) return undefined
+  const sessionID = Reflect.get(value, "sessionID")
+  const parentID = Reflect.get(value, "parentID")
+  const description = Reflect.get(value, "description")
+  const agent = Reflect.get(value, "agent")
+  const state = Reflect.get(value, "state")
+  const revision = Reflect.get(value, "revision")
+  const time = Reflect.get(value, "time")
+  const updatedAt = typeof time === "object" && time !== null ? Reflect.get(time, "updated") : undefined
+  if (typeof sessionID !== "string" || sessionID.length === 0 || typeof parentID !== "string" || parentID.length === 0 ||
+    typeof description !== "string" || (agent !== undefined && typeof agent !== "string") ||
+    (state !== "starting" && state !== "running" && state !== "waiting" && state !== "cancelling" &&
+      state !== "cancelled" && state !== "completed" && state !== "failed" && state !== "lost") ||
+    typeof revision !== "number" || !Number.isInteger(revision) || revision < 0 ||
+    typeof updatedAt !== "number" || !Number.isFinite(updatedAt)) return undefined
+  const model = readModelRef(Reflect.get(value, "model"))
+  return { sessionID, parentID, description, ...(agent === undefined ? {} : { agent }),
+    ...(model === undefined ? {} : { modelLabel: modelLabel(model) }), state, revision, updatedAt }
 }
 
 /** Reads `GET /api/session/active`: `{ data: Record<SessionID, { type: "running" }> }`. */

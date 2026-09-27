@@ -2280,3 +2280,199 @@ body:has(.app) {
     inline-size: 100%;
   }
 }
+
+.presentation-switch.filters {
+  display: flex;
+  gap: var(--yc-space-1);
+  margin-block-end: var(--yc-space-4);
+}
+
+.presentation-switch .filters__option,
+.office-settings .filters__option {
+  inline-size: auto;
+  min-block-size: var(--yc-hit-min);
+  padding-inline: var(--yc-space-4);
+}
+
+.office-settings .list__control.filters {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--yc-space-1);
+}
+
+.app--conversation.app--office .workspace__scroll > *,
+.app--conversation.app--office .composer > * {
+  inline-size: 100%;
+}
+
+.office-workspace {
+  display: grid;
+  gap: var(--yc-space-4);
+  min-inline-size: 0;
+}
+
+.office-workspace__stage {
+  display: grid;
+  gap: var(--yc-space-3);
+  align-content: start;
+  min-inline-size: 0;
+}
+
+.office-workspace__canvas {
+  position: relative;
+  block-size: clamp(260px, 44dvh, 420px);
+  min-inline-size: 0;
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-lg);
+  overflow: hidden;
+  background: var(--yc-surface-sunken);
+}
+
+.office-workspace__inspector {
+  min-inline-size: 0;
+}
+
+.office-attention {
+  justify-self: start;
+  min-block-size: var(--yc-hit-min);
+  padding: var(--yc-space-2) var(--yc-space-4);
+  border: var(--yc-border-width) solid var(--yc-yellow-strong);
+  border-radius: var(--yc-radius-md);
+  background: var(--yc-yellow-soft);
+  color: var(--yc-text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.office-attention:focus-visible,
+.office-roster__row:focus-visible,
+.requests:focus-visible {
+  outline: none;
+  box-shadow: var(--yc-focus-ring);
+}
+
+.office-roster {
+  display: grid;
+  gap: var(--yc-space-2);
+}
+
+.office-roster__title {
+  margin: 0;
+  font-size: var(--yc-size-sm);
+  font-weight: 600;
+}
+
+.office-roster__list {
+  display: grid;
+  gap: var(--yc-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.office-roster__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: var(--yc-space-3);
+  row-gap: 2px;
+  inline-size: 100%;
+  min-block-size: var(--yc-hit-min);
+  padding: var(--yc-space-2) var(--yc-space-3);
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-md);
+  background: var(--yc-surface-raised);
+  color: var(--yc-text);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.office-roster__row--selected {
+  border-color: var(--yc-green-strong);
+  box-shadow: inset 3px 0 0 var(--yc-green-strong);
+}
+
+.office-roster__name {
+  overflow: hidden;
+  font-size: var(--yc-size-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.office-roster__session,
+.office-roster__room,
+.office-roster__status {
+  grid-column: 1;
+  font-size: var(--yc-size-xs);
+  overflow-wrap: anywhere;
+}
+
+.office-roster__session,
+.office-roster__room {
+  color: var(--yc-text-muted);
+}
+
+.office-roster__chips {
+  display: flex;
+  flex-direction: column;
+  align-items: end;
+  gap: var(--yc-space-1);
+  grid-column: 2;
+  grid-row: 1 / span 5;
+}
+
+.office-roster__more {
+  justify-self: start;
+}
+
+.office-roster__empty,
+.office-roster__note {
+  margin: 0;
+  color: var(--yc-text-muted);
+  font-size: var(--yc-size-xs);
+}
+
+.list__detail {
+  display: block;
+  margin-block-start: 2px;
+  color: var(--yc-text-muted);
+  font-size: var(--yc-size-xs);
+}
+
+.office-settings .list__row {
+  flex-wrap: wrap;
+}
+
+.office-settings .list__label {
+  flex: 1 1 220px;
+  min-inline-size: 0;
+}
+
+@media (min-width: 768px) {
+  .office-workspace__canvas {
+    block-size: clamp(320px, 52dvh, 560px);
+  }
+
+  .office-roster__list {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  }
+}
+
+@media (min-width: 1280px) {
+  .office-workspace {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
+    align-items: start;
+  }
+
+  .office-workspace__stage {
+    position: sticky;
+    inset-block-start: 0;
+  }
+
+  .office-workspace__canvas {
+    block-size: clamp(360px, 62dvh, 720px);
+  }
+}

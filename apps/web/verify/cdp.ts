@@ -63,6 +63,7 @@ export async function launchBrowser(executable: string, width: number, height: n
         disableCache: () => call("Network.setCacheDisabled", { cacheDisabled: true }),
         screenshot: async () => (await call<{ readonly data: string }>("Page.captureScreenshot", { format: "png" })).data,
         allowServiceWorker: () => call("Network.setBlockedURLs", { urls: [] }),
+        blockURLs: (patterns: readonly string[]) => call("Network.setBlockedURLs", { urls: ["*sw.js*", ...patterns] }),
         installabilityErrors: async () => (await call<{ readonly installabilityErrors: readonly { readonly errorId: string }[] }>("Page.getInstallabilityErrors")).installabilityErrors,
         setOffline: (offline: boolean) => call("Network.emulateNetworkConditions", {
           offline,

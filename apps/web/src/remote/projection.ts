@@ -228,6 +228,35 @@ export type SessionView = {
   readonly sourceEpoch?: string
 }
 
+export type TeamCue =
+  | { readonly id: string; readonly kind: "delegated"; readonly childID: string }
+  | { readonly id: string; readonly kind: "reported"; readonly childID: string; readonly outcome: "completed" | "failed" | "cancelled" | "lost" }
+
+export function readTeamCue(payload: unknown): TeamCue | undefined {
+  if (!isRecord(payload) || !isRecord(payload.durable) || !isRecord(payload.data)) return undefined
+  const id = stringField(payload.id)
+  const parentID = stringField(payload.data.sessionID)
+  if (id === undefined || !id.startsWith("evt_") || parentID === undefined || payload.durable.aggregateID !== parentID ||
+    typeof payload.durable.seq !== "number" || !Number.isInteger(payload.durable.seq) || payload.durable.seq < 0) return undefined
+  if (payload.type === "session.tool.progress" || payload.type === "session.tool.success") {
+    const structured = recordField(payload.data.structured)
+    const childID = structured && stringField(structured.sessionID)
+    const callID = stringField(payload.data.callID)
+    const messageID = stringField(payload.data.assistantMessageID)
+    if (childID === undefined || callID === undefined || messageID === undefined || structured?.status !== "running") return undefined
+    return { id: `${messageID}:${callID}:${childID}`, kind: "delegated", childID }
+  }
+  if (payload.type !== "session.synthetic") return undefined
+  const metadata = recordField(payload.data.metadata)
+  if (metadata?.source !== "subagent_notification") return undefined
+  const childID = stringField(metadata.childID)
+  const outcome = metadata.type
+  const revision = metadata.revision
+  if (childID === undefined || (outcome !== "completed" && outcome !== "failed" && outcome !== "cancelled" && outcome !== "lost") ||
+    typeof revision !== "number" || !Number.isInteger(revision) || revision < 0) return undefined
+  return { id: `${id}:${revision}:${childID}`, kind: "reported", childID, outcome }
+}
+
 /** Caps a derived summary (compaction, non-text tool content) so it cannot dominate the page. */
 export const messageTextLimit = 4_000
 export const activityLimit = 200
@@ -1297,6 +1326,7 @@ export type SessionSnapshot = {
   readonly messages: readonly RemoteMessageView[]
   readonly coveredAssistantIDs: readonly string[]
   readonly title?: string
+  readonly parentID?: string
   readonly agent?: string
   readonly model?: ModelRefView
   readonly archived?: boolean
@@ -1327,6 +1357,7 @@ export function readSnapshot(payload: unknown): SessionSnapshot | undefined {
     messages,
     coveredAssistantIDs: allMessages.flatMap((message) => message.kind === "assistant" && !visibleIDs.has(message.id) ? [message.id] : []),
     ...(stringField(session.title) === undefined ? {} : { title: stringField(session.title) }),
+    ...(stringField(session.parentID) === undefined ? {} : { parentID: stringField(session.parentID) }),
     ...(stringField(session.agent) === undefined ? {} : { agent: stringField(session.agent) }),
     ...(model === undefined ? {} : { model }),
     ...(archived ? { archived: true } : {}),

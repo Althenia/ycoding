@@ -63,6 +63,8 @@ The local CLI connects outbound to the relay and maps a fixed operation set onto
 
 The edge authenticates browser users and enrolled devices separately, checks device/account ownership, and routes bounded frames. Each device Durable Object reports current authenticated agent presence to the owner-only device-list API; enrollment and `lastSeenAt` do not imply online status. D1 owns authentication and device metadata, not presence, conversation history, or streamed tool/model output. Durable Session facts remain in the local runtime.
 
+The web Office presentation is a Phaser scene loaded only while Office is shown. It reads the same browser store through a read-only adapter and emits only local selection and camera intents; prompts, replies, interruption, and settings stay in Solid components. It adds no transport, relay operation, or execution authority.
+
 The public build includes only curated `apps/web` content and the installer/configuration downloads exported by `script/build-web-assets.ts`. The engineering `docs` directory is not a public-site input.
 
 ## Package ownership

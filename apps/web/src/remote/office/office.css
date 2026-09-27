@@ -1,0 +1,8 @@
+.office-stage { position:relative; display:grid; grid-template-rows:auto minmax(0,1fr); min-width:0; height:100%; overflow:hidden; border:1px solid var(--yc-border-strong); border-radius:var(--yc-radius-sm); background:#1b2832; }
+.office-canvas-host { grid-row:2; min-width:0; min-height:0; width:100%; height:100%; }
+.office-canvas-host canvas { display:block; width:100%; height:100%; image-rendering:pixelated; touch-action:none; }
+.office-camera-controls { display:flex; justify-content:flex-end; gap:6px; flex-wrap:wrap; min-width:0; padding:10px; }
+.office-camera-controls button,.office-notice button { min-width:44px; min-height:44px; padding:6px 10px; border:1px solid var(--yc-border-strong, #78847e); border-radius:var(--yc-radius-sm, 6px); background:var(--yc-surface-raised, #ffffff); color:var(--yc-text, #0b0f14); cursor:pointer; }
+.office-camera-controls button:focus-visible,.office-notice button:focus-visible { outline:3px solid var(--yc-focus); outline-offset:2px; }
+.office-notice { position:absolute; z-index:3; margin:0; left:12px; bottom:12px; max-width:calc(100% - 24px); padding:12px; background:var(--yc-surface-raised); color:var(--yc-text); border:1px solid var(--yc-border-strong); border-radius:var(--yc-radius-sm); }
+@media (prefers-reduced-motion:reduce) { .office-stage * { animation:none !important; transition:none !important; } }

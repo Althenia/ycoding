@@ -1,0 +1,387 @@
+import Phaser from "phaser"
+import { OfficeDirector } from "./director"
+import type { OfficeMailbox } from "./bridge"
+import { columns, floorFrameAt, officeLayout, props, rooms, rows, tileSize, wallAt, wallFrameAt, worldHeight, worldWidth } from "./map"
+import { shortText } from "./model"
+import { hasReducedMotion } from "./preferences"
+import { characterAppearances, characterColumns, characterDirections, characterFrame, emotes } from "./sprites"
+import type { ActorFrame, OfficeCue, OfficeSnapshot } from "./types"
+
+const importedAssets = import.meta.glob<string>("./assets/*.png", { eager: true, query: "?url&no-inline", import: "default" })
+const textureURLs = Object.fromEntries(Object.entries(importedAssets).map(([filename, url]) => [filename.slice(filename.lastIndexOf("/") + 1, -4), url]))
+
+type ActorObjects = {
+  sprite: Phaser.GameObjects.Sprite
+  shadow: Phaser.GameObjects.Ellipse
+  ring: Phaser.GameObjects.Ellipse
+  label: Phaser.GameObjects.Text
+  labelPlate: Phaser.GameObjects.Graphics
+  bubble: Phaser.GameObjects.Text
+  bubblePlate: Phaser.GameObjects.Graphics
+  marker: Phaser.GameObjects.Text
+  relation: Phaser.GameObjects.Text
+  emote: Phaser.GameObjects.Sprite
+}
+type RoomTitle = { readonly room: (typeof rooms)[number]; readonly text: Phaser.GameObjects.Text; readonly plate: Phaser.GameObjects.Graphics }
+
+export class OfficeScene extends Phaser.Scene {
+  private readonly director = new OfficeDirector(officeLayout)
+  private readonly objects = new Map<string, ActorObjects>()
+  private readonly roomTitles: RoomTitle[] = []
+  private readonly seenCues = new Set<string>()
+  private badgeQueue: OfficeCue[] = []
+  private badge?: Phaser.GameObjects.Text
+  private badgeActorID?: string
+  private badgeUntil = 0
+  private cueScope = ""
+  private cueRootID?: string
+  private lastConnection: OfficeSnapshot["connection"] = "unavailable"
+  private applied = -1
+  private selectedID?: string
+  private drag?: { x: number; y: number; scrollX: number; scrollY: number }
+  private ready = false
+  private failed = false
+  private followSuspended = false
+  private desiredZoom: number
+  private latestFrames: readonly ActorFrame[] = []
+
+  constructor(private readonly mailbox: OfficeMailbox, private readonly selectSession: (id: string) => void, private readonly fail: (message: string) => void, private readonly resolution: number) {
+    super({ key: "office" })
+    this.desiredZoom = resolution
+  }
+
+  preload(): void {
+    for (const key of ["tiles", "walls", "characters", "emotes", ...new Set(props.map((prop) => prop.kind))]) {
+      if (textureURLs[key]) continue
+      this.failed = true
+      this.fail("An office asset failed to load. The normal workspace remains available.")
+      return
+    }
+    this.load.spritesheet("tiles", textureURLs.tiles, { frameWidth: 32, frameHeight: 32 })
+    this.load.spritesheet("walls", textureURLs.walls, { frameWidth: 32, frameHeight: 32 })
+    this.load.spritesheet("characters", textureURLs.characters, { frameWidth: 32, frameHeight: 48 })
+    this.load.spritesheet("emotes", textureURLs.emotes, { frameWidth: 24, frameHeight: 24 })
+    for (const kind of new Set(props.map((prop) => prop.kind))) this.load.image(kind, textureURLs[kind])
+    this.load.once("loaderror", () => {
+      this.failed = true
+      this.fail("An office asset failed to load. The normal workspace remains available.")
+    })
+  }
+
+  create(): void {
+    if (this.failed) return
+    if (!["tiles", "walls", "characters", "emotes", ...new Set(props.map((prop) => prop.kind))].every((key) => this.textures.exists(key))) {
+      this.failed = true
+      this.fail("An office asset failed to load. The normal workspace remains available.")
+      return
+    }
+    for (let y = 0; y < rows; y++) for (let x = 0; x < columns; x++) {
+      this.add.image(x * tileSize, y * tileSize, "tiles", floorFrameAt(x, y)).setOrigin(0).setDepth(-2000)
+      if (wallAt(x, y)) this.add.image(x * tileSize, y * tileSize, "walls", wallFrameAt(x, y))
+        .setOrigin(0).setDepth((y + 1) * tileSize - 1)
+    }
+    for (const door of [...rooms.flatMap((room) => room.doors), officeLayout.door, { x: officeLayout.door.x + 1, y: officeLayout.door.y }]) {
+      this.add.image(door.x * tileSize, door.y * tileSize, "walls", door.y === rows - 1 ? 3 : 2)
+        .setOrigin(0).setDepth((door.y + 1) * tileSize - 1)
+    }
+    for (const prop of props) {
+      const image = this.add.image(prop.cell.x * tileSize, prop.layer === "floor" ? prop.cell.y * tileSize : (prop.cell.y + prop.height) * tileSize, prop.kind)
+      if (prop.layer === "floor") image.setOrigin(0).setDisplaySize(prop.width * tileSize, prop.height * tileSize).setDepth(-1900)
+      if (prop.layer === "object") image.setOrigin(0, 1).setScale(prop.width * tileSize / image.width).setDepth((prop.cell.y + prop.height) * tileSize - 1)
+    }
+    for (const room of rooms) {
+      const text = this.add.text((room.label.x + 0.5) * tileSize, (room.label.y + 0.5) * tileSize, room.title, {
+        fontFamily: "sans-serif", fontStyle: "bold", fontSize: "17px", color: "#455264", resolution: this.resolution,
+      }).setOrigin(0.5).setDepth(9000)
+      this.roomTitles.push({ room, text, plate: this.add.graphics().setDepth(8999) })
+    }
+    this.badge = this.add.text(0, 0, "", { fontFamily: "sans-serif", fontSize: "13px", color: "#1e2934", backgroundColor: "#f4bd3d", padding: { x: 6, y: 3 }, resolution: this.resolution })
+      .setOrigin(0.5, 1).setDepth(10007).setVisible(false)
+    for (let appearance = 0; appearance < characterAppearances; appearance++) for (const direction of characterDirections) {
+      for (const [pose, columns, speed] of [
+        ["stand", characterColumns.stand, 1], ["walk", characterColumns.walk, 8],
+        ["talk", characterColumns.talk, 3], ["type", characterColumns.type, 4],
+      ] as const) {
+        this.anims.create({ key: `${appearance}-${direction}-${pose}`,
+          frames: this.anims.generateFrameNumbers("characters", { start: characterFrame(appearance, direction, columns[0]), end: characterFrame(appearance, direction, columns[columns.length - 1]!) }),
+          frameRate: speed, repeat: -1 })
+      }
+    }
+    this.cameras.main.setZoom(this.resolution)
+    this.boundCamera()
+    this.cameras.main.centerOn(worldWidth / 2, worldHeight / 2)
+    this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      this.drag = { x: pointer.x, y: pointer.y, scrollX: this.cameras.main.scrollX, scrollY: this.cameras.main.scrollY }
+    })
+    this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
+      if (!pointer.isDown || !this.drag) return
+      if (pointer.getDistance() >= 6) this.followSuspended = true
+      this.cameras.main.setScroll(this.drag.scrollX - (pointer.x - this.drag.x) / this.cameras.main.zoom, this.drag.scrollY - (pointer.y - this.drag.y) / this.cameras.main.zoom)
+    })
+    this.input.on("pointerup", () => { this.drag = undefined })
+    this.input.on("gameout", () => { this.drag = undefined })
+    this.cueScope = this.mailbox.read().snapshot.scope
+    this.cueRootID = this.mailbox.read().snapshot.team.rootActorID
+    this.lastConnection = this.mailbox.read().snapshot.connection
+    for (const cue of this.mailbox.read().snapshot.cues) this.seenCues.add(cue.id)
+    this.events.once("shutdown", () => {
+      this.objects.clear(); this.roomTitles.length = 0; this.badge = undefined
+      this.badgeQueue = []; this.seenCues.clear(); this.ready = false
+    })
+    this.ready = true
+  }
+
+  fit(): void {
+    if (!this.ready) return
+    this.followSuspended = true
+    this.desiredZoom = Math.min(this.scale.width / worldWidth, this.scale.height / worldHeight)
+    this.cameras.main.setZoom(this.desiredZoom)
+    this.boundCamera()
+    this.cameras.main.centerOn(worldWidth / 2, worldHeight / 2)
+  }
+
+  zoomBy(factor: number): void {
+    if (!this.ready) return
+    this.desiredZoom = Phaser.Math.Clamp(this.cameras.main.zoom * factor, this.resolution * 0.2, this.resolution * 2)
+    this.cameras.main.setZoom(this.desiredZoom)
+    this.boundCamera()
+  }
+
+  resize(): void {
+    if (!this.ready) return
+    this.cameras.main.setZoom(this.desiredZoom)
+    this.boundCamera()
+  }
+
+  defaultView(): void {
+    if (!this.ready) return
+    this.desiredZoom = this.resolution
+    this.cameras.main.setZoom(this.desiredZoom)
+    this.boundCamera()
+    this.followSuspended = false
+    const selected = this.latestFrames.find((frame) => frame.actor.selected)
+    this.cameras.main.centerOn(selected?.position.x ?? worldWidth / 2, selected?.position.y ?? worldHeight / 2)
+  }
+
+  follow(): void {
+    this.followSuspended = false
+    const selected = this.latestFrames.find((frame) => frame.actor.selected)
+    if (selected) this.cameras.main.centerOn(selected.position.x, selected.position.y)
+  }
+
+  settle(): void { this.director.settle() }
+
+  adoptLatest(): void {
+    const snapshot = this.mailbox.read().snapshot
+    if (snapshot.scope !== this.cueScope || snapshot.team.rootActorID !== this.cueRootID) this.seenCues.clear()
+    this.cueScope = snapshot.scope
+    this.cueRootID = snapshot.team.rootActorID
+    for (const cue of snapshot.cues) this.seenCues.add(cue.id)
+    this.badgeQueue = []
+    this.badge?.setVisible(false)
+    this.director.settle()
+  }
+
+  private boundCamera(): void {
+    const camera = this.cameras.main
+    const marginX = Math.max(0, (camera.width / camera.zoom - worldWidth) / 2)
+    const marginY = Math.max(0, (camera.height / camera.zoom - worldHeight) / 2)
+    camera.setBounds(-marginX, -marginY, worldWidth + marginX * 2, worldHeight + marginY * 2)
+  }
+
+  override update(time: number, delta: number): void {
+    if (!this.ready) return
+    if (this.cameras.main.zoom !== this.desiredZoom) {
+      this.cameras.main.setZoom(this.desiredZoom)
+      this.boundCamera()
+    }
+    const input = this.mailbox.read()
+    const reduced = hasReducedMotion(input.preferences, input.systemReduced)
+    if (this.applied !== this.mailbox.revision()) {
+      this.director.sync(input.snapshot)
+      if (input.snapshot.connection !== "ready" || this.lastConnection !== "ready") {
+        this.badgeQueue = []
+        for (const cue of input.snapshot.cues) this.seenCues.add(cue.id)
+        this.director.settle()
+        this.badge?.setVisible(false)
+      }
+      this.discoverCues(input.snapshot, reduced)
+      this.lastConnection = input.snapshot.connection
+      this.applied = this.mailbox.revision()
+    }
+    if (reduced && this.badgeQueue.length && time >= this.badgeUntil) this.showCueBadge(this.badgeQueue.shift()!, time)
+    this.latestFrames = this.director.tick(delta, reduced)
+    const scale = this.resolution / this.cameras.main.zoom
+    for (const title of this.roomTitles) {
+      title.text.setX(Phaser.Math.Linear((title.room.label.x + 0.5) * tileSize, (title.room.center.x + 0.5) * tileSize,
+        Phaser.Math.Clamp((scale - 1) / 1.5, 0, 1)))
+      title.text.setScale(scale)
+      const width = title.text.displayWidth + 24 * scale
+      const height = title.text.displayHeight + 12 * scale
+      const view = this.cameras.main.worldView
+      const visible = title.text.x - width / 2 >= view.left && title.text.x + width / 2 <= view.right
+        && title.text.y - height / 2 >= view.top && title.text.y + height / 2 <= view.bottom
+      title.text.setVisible(visible)
+      title.plate.clear().setVisible(visible)
+      if (visible) title.plate.fillStyle(0xf4f2f3, 0.85).fillRoundedRect(title.text.x - width / 2, title.text.y - height / 2, width, height, 8 * scale)
+    }
+    const present = new Set(this.latestFrames.map((frame) => frame.actor.id))
+    for (const [id, objects] of this.objects) {
+      if (present.has(id)) continue
+      objects.sprite.destroy(); objects.shadow.destroy(); objects.ring.destroy(); objects.label.destroy(); objects.labelPlate.destroy()
+      objects.bubble.destroy(); objects.bubblePlate.destroy(); objects.marker.destroy(); objects.relation.destroy(); objects.emote.destroy()
+      this.objects.delete(id)
+    }
+    for (const frame of this.latestFrames) this.paintActor(frame, input.snapshot, scale)
+    this.placeLabels(scale)
+    for (const title of this.roomTitles) {
+      if (!title.text.visible) continue
+      const left = title.text.x - title.text.displayWidth / 2 - 12 * scale
+      const right = title.text.x + title.text.displayWidth / 2 + 12 * scale
+      const top = title.text.y - title.text.displayHeight / 2 - 6 * scale
+      const bottom = title.text.y + title.text.displayHeight / 2 + 6 * scale
+      const overlaps = (itemLeft: number, itemRight: number, itemTop: number, itemBottom: number) =>
+        left < itemRight && right > itemLeft && top < itemBottom && bottom > itemTop
+      const covered = [...this.objects.values()].some((objects) => objects.bubble.visible && overlaps(
+        objects.bubble.x - objects.bubble.displayWidth / 2 - 9 * scale, objects.bubble.x + objects.bubble.displayWidth / 2 + 9 * scale,
+        objects.bubble.y - objects.bubble.displayHeight - 5 * scale, objects.bubble.y + 5 * scale,
+      ) || objects.emote.visible && overlaps(
+        objects.emote.x - objects.emote.displayWidth / 2, objects.emote.x + objects.emote.displayWidth / 2,
+        objects.emote.y - objects.emote.displayHeight, objects.emote.y,
+      ))
+      title.text.setAlpha(covered ? 0.25 : 1)
+      title.plate.setAlpha(covered ? 0.15 : 1)
+    }
+    const target = this.latestFrames.find((frame) => frame.actor.id === this.badgeActorID)
+    this.badge?.setVisible(time < this.badgeUntil && !!target)
+    if (target) this.badge?.setPosition(target.position.x, target.position.y - 66).setScale(scale)
+    const selected = this.latestFrames.find((frame) => frame.actor.selected)
+    if (selected?.actor.id !== this.selectedID) this.followSuspended = false
+    if (input.preferences.followSelected && selected && !this.followSuspended) this.cameras.main.centerOn(selected.position.x, selected.position.y)
+    this.selectedID = selected?.actor.id
+  }
+
+  private discoverCues(snapshot: OfficeSnapshot, reduced: boolean): void {
+    if (snapshot.scope !== this.cueScope || snapshot.team.rootActorID !== this.cueRootID) {
+      this.cueScope = snapshot.scope
+      this.cueRootID = snapshot.team.rootActorID
+      this.seenCues.clear()
+      this.badgeQueue = []
+      this.badge?.setVisible(false)
+      for (const cue of snapshot.cues) this.seenCues.add(cue.id)
+      return
+    }
+    const visible = new Set(snapshot.cues.map((cue) => cue.id))
+    this.badgeQueue = this.badgeQueue.filter((cue) => visible.has(cue.id))
+    for (const cue of snapshot.cues) {
+      if (this.seenCues.has(cue.id)) continue
+      this.seenCues.add(cue.id)
+      if (reduced) this.badgeQueue.push(cue)
+      if (!reduced) this.director.playCue(cue)
+    }
+  }
+
+  private showCueBadge(cue: OfficeCue, time: number): void {
+    this.badge?.setText(cue.kind === "delegate" ? "Delegated" : "Reported")
+    this.badgeActorID = cue.toActorID
+    this.badgeUntil = time + 750
+  }
+
+  private placeLabels(scale: number): void {
+    const view = this.cameras.main.worldView
+    const spacing = 6 * scale
+    const placed: { left: number; right: number; top: number; bottom: number }[] = []
+    for (const frame of [...this.latestFrames].sort((a, b) => Number(b.actor.selected) - Number(a.actor.selected))) {
+      const objects = this.objects.get(frame.actor.id)
+      if (!objects?.label.visible) continue
+      const width = objects.label.displayWidth + 28 * scale
+      const height = objects.label.displayHeight + 8 * scale
+      const baseline = frame.position.y + 8
+      const offsets = [0, 16, -16, 32, -32, 48, -48, 80, -80].map((pixels) => pixels * scale)
+      const rowOffsets = [0, height + spacing, -height - spacing]
+      const candidates = rowOffsets.flatMap((dy) => offsets.map((dx) => ({
+        left: frame.position.x + dx - width / 2, right: frame.position.x + dx + width / 2,
+        top: baseline + dy, bottom: baseline + dy + height,
+      })))
+      const choice = candidates.find((candidate) => candidate.left >= view.left && candidate.right <= view.right
+        && candidate.top >= view.top && candidate.bottom <= view.bottom
+        && placed.every((other) => candidate.right + spacing <= other.left || candidate.left >= other.right + spacing
+          || candidate.bottom + spacing <= other.top || candidate.top >= other.bottom + spacing)) ?? candidates[0]!
+      placed.push(choice)
+      objects.label.setPosition(choice.left + 19 * scale, choice.top + 4 * scale)
+      const color = frame.actor.status === "attention" ? 0xe6b15b : frame.actor.status === "failed" ? 0xd77176
+        : ["working", "tool", "thinking", "compacting"].includes(frame.actor.status) ? 0x49bc88 : 0x9ba9b2
+      objects.labelPlate.clear().fillStyle(0x1e2934, 0.94).fillRoundedRect(choice.left, choice.top, width, height, 6 * scale)
+        .fillStyle(color).fillCircle(choice.left + 10 * scale, choice.top + height / 2, 3 * scale)
+    }
+  }
+
+  private paintActor(frame: ActorFrame, snapshot: OfficeSnapshot, scale: number): void {
+    let objects = this.objects.get(frame.actor.id)
+    if (!objects) {
+      const sprite = this.add.sprite(0, 0, "characters", characterFrame(frame.appearance, frame.direction, 0))
+        .setName(frame.actor.id).setOrigin(0.5, 46 / 48).setInteractive({ useHandCursor: true })
+      sprite.on("pointerup", (pointer: Phaser.Input.Pointer) => {
+        if (pointer.getDistance() < 6 && !this.latestFrames.find((item) => item.actor.id === frame.actor.id)?.leaving) this.selectSession(frame.actor.sessionID)
+      })
+      objects = {
+        sprite,
+        shadow: this.add.ellipse(0, 0, 23, 7, 0x24334a, 0.3),
+        ring: this.add.ellipse(0, 0, 34, 14, 0x8fe0c6, 0.22).setStrokeStyle(2, 0x6de3b3),
+        label: this.add.text(0, 0, "", { fontFamily: "sans-serif", fontSize: "12px", color: "#ffffff", resolution: this.resolution }).setOrigin(0, 0).setDepth(10001),
+        labelPlate: this.add.graphics().setDepth(10000),
+        bubble: this.add.text(0, 0, "", { fontFamily: "sans-serif", fontSize: "13px", color: "#253443", wordWrap: { width: 180 }, resolution: this.resolution }).setOrigin(0.5, 1).setDepth(10003),
+        bubblePlate: this.add.graphics().setDepth(10002),
+        marker: this.add.text(0, 0, "!", { fontFamily: "sans-serif", fontSize: "18px", color: "#243340", backgroundColor: "#f3be65", padding: { x: 5, y: 1 }, resolution: this.resolution }).setOrigin(0.5, 1).setDepth(10005),
+        relation: this.add.text(0, 0, "TASK", { fontFamily: "sans-serif", fontSize: "11px", color: "#ffffff", backgroundColor: "#315a53", padding: { x: 4, y: 2 }, resolution: this.resolution }).setOrigin(0.5, 1).setDepth(10005),
+        emote: this.add.sprite(0, 0, "emotes", 0).setOrigin(0.5, 1).setDepth(10004),
+      }
+      this.objects.set(frame.actor.id, objects)
+    }
+    const x = Math.round(frame.position.x)
+    const y = Math.round(frame.position.y)
+    const alpha = frame.opacity * (frame.actor.source === "unavailable" ? 0.45 : frame.actor.status === "unknown" ? 0.7 : 1)
+    objects.sprite.setPosition(x, y).setDepth(y).setAlpha(alpha)
+    if (frame.leaving) objects.sprite.disableInteractive()
+    if (!frame.leaving && !objects.sprite.input) objects.sprite.setInteractive({ useHandCursor: true })
+    if (frame.pose === "sit" || frame.pose === "wave") {
+      objects.sprite.anims.stop()
+      objects.sprite.setTexture("characters", characterFrame(frame.appearance, frame.direction, characterColumns[frame.pose][0]))
+    }
+    if (frame.pose !== "sit" && frame.pose !== "wave") objects.sprite.play(`${frame.appearance}-${frame.direction}-${frame.pose}`, true)
+    objects.shadow.setPosition(x, y + 2).setDepth(y - 1).setAlpha(alpha * 0.55)
+    objects.ring.setPosition(x, y + 2).setDepth(y - 0.5).setVisible(frame.actor.selected && !frame.leaving).setAlpha(alpha)
+    const preferences = this.mailbox.read().preferences
+    const terminalTask = frame.actor.kind === "task" && ["completed", "cancelled", "lost", "failed"].includes(frame.actor.taskState ?? "")
+    objects.label.setText(terminalTask
+      ? `${shortText(frame.actor.name, 20)}\n${frame.actor.statusText}${frame.actor.source === "summary" ? " · reported" : ""}`
+      : `${shortText(frame.actor.name, 20)}${frame.actor.source === "summary" ? " · reported" : ""}`)
+      .setScale(scale).setVisible(preferences.labels && !frame.leaving)
+    objects.labelPlate.setVisible(preferences.labels && !frame.leaving)
+    const bubble = frame.actor.unknownOutcome ? "Action outcome unknown" : frame.actor.bubble ?? ""
+    const showBubble = frame.actor.selected && !frame.leaving && preferences.bubbles !== "off" && !!bubble
+    objects.bubble.setText(bubble).setScale(scale).setVisible(showBubble)
+    objects.bubblePlate.clear().setVisible(showBubble)
+    const bubbleWidth = objects.bubble.displayWidth + 18 * scale
+    const view = this.cameras.main.worldView
+    const bubbleX = showBubble && view.width >= bubbleWidth + 8 * scale
+      ? Phaser.Math.Clamp(x, view.left + bubbleWidth / 2 + 4 * scale, view.right - bubbleWidth / 2 - 4 * scale) : x
+    objects.bubble.setPosition(bubbleX, y - 67)
+    if (showBubble) {
+      const height = objects.bubble.displayHeight + 10 * scale
+      objects.bubblePlate.fillStyle(0xfaf7ef, 0.97).fillRoundedRect(bubbleX - bubbleWidth / 2, y - 67 - height + 5 * scale, bubbleWidth, height, 6 * scale)
+    }
+    const speech = frame.speech ?? (frame.actor.status === "attention" ? "attention" : frame.actor.status === "failed" ? "failed"
+      : frame.actor.taskState === "completed" ? "done" : frame.actor.status === "thinking" ? "thinking" : undefined)
+    const emoteIndex = speech ? emotes.indexOf(speech) : -1
+    objects.emote.setFrame(Math.max(0, emoteIndex)).setScale(scale).setDepth(10004).setAlpha(alpha).setVisible(emoteIndex >= 0 && !frame.leaving)
+    const emoteX = showBubble ? Math.max(view.left + objects.emote.displayWidth / 2, bubbleX - bubbleWidth / 2 - objects.emote.displayWidth / 2 - 5 * scale) : x - 20
+    objects.emote.setPosition(emoteX, showBubble ? y - 67 : y - 55)
+    objects.marker.setText(frame.actor.status === "failed" ? "×" : "!").setScale(scale)
+    const markerX = showBubble ? Math.min(view.right - objects.marker.displayWidth / 2, bubbleX + bubbleWidth / 2 + objects.marker.displayWidth / 2 + 5 * scale) : x + 20
+    objects.marker.setPosition(markerX, showBubble ? y - 67 : y - 48)
+      .setVisible(!frame.leaving && (frame.actor.status === "attention" || frame.actor.status === "failed" || frame.actor.unknownOutcome))
+    objects.relation.setPosition(x - 26, y - 33).setScale(scale).setVisible(!frame.leaving && frame.actor.kind === "task" && !!frame.actor.teamRootSessionID)
+    if (snapshot.team.rootActorID === frame.actor.id) objects.ring.setStrokeStyle(2, 0x6de3b3)
+  }
+}

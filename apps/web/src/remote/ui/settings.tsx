@@ -4,6 +4,8 @@ import { useTheme } from "../../theme/theme-store"
 import type { ThemePreference } from "../../theme/theme"
 import type { SessionView } from "../projection"
 import { useRemote } from "../context"
+import type { OfficeSettingsStore, WorkspacePresentation } from "../office/storage"
+import type { OfficePreferences } from "../office/types"
 import {
   accountReadState,
   accountSectionView,
@@ -36,7 +38,7 @@ const autonomyOptions = [
   { level: 3 as const, label: "YOLO 3", detail: "Also approves ordinary guardrail reviews." },
 ]
 
-function moveRadio(event: KeyboardEvent, index: number, count: number, select: (next: number) => void) {
+export function moveRadio(event: KeyboardEvent, index: number, count: number, select: (next: number) => void) {
   const next = event.key === "ArrowRight" || event.key === "ArrowDown" ? (index + 1) % count
     : event.key === "ArrowLeft" || event.key === "ArrowUp" ? (index - 1 + count) % count
     : event.key === "Home" ? 0 : event.key === "End" ? count - 1 : undefined
@@ -336,6 +338,110 @@ export function AppearanceSettings(): JSX.Element {
         </div>
       </div>
     </Section>
+  )
+}
+
+const presentationOptions: readonly { readonly id: WorkspacePresentation; readonly label: string }[] = [
+  { id: "conversation", label: "Conversation" },
+  { id: "office", label: "Office" },
+]
+const motionOptions: readonly { readonly id: OfficePreferences["motion"]; readonly label: string }[] = [
+  { id: "system", label: "Follow system" },
+  { id: "reduced", label: "Reduce" },
+]
+const bubbleOptions: readonly { readonly id: OfficePreferences["bubbles"]; readonly label: string }[] = [
+  { id: "off", label: "Off" },
+  { id: "status", label: "Status" },
+  { id: "excerpt", label: "Completed text" },
+]
+const switchOptions: readonly { readonly id: boolean; readonly label: string }[] = [
+  { id: true, label: "On" },
+  { id: false, label: "Off" },
+]
+const qualityOptions: readonly { readonly id: OfficePreferences["quality"]; readonly label: string }[] = [
+  { id: "standard", label: "Standard · 30 FPS" },
+  { id: "battery", label: "Battery · 20 FPS" },
+]
+
+export function OfficeSettings(props: { readonly office: OfficeSettingsStore }): JSX.Element {
+  const [reset, setReset] = createSignal(false)
+  const preferences = () => props.office.preferences()
+  return (
+    <Section
+      id="office-settings"
+      category="Office"
+      title="Office"
+      hint="Presentation choices for the Office view, stored in this browser. They never change Sessions, drafts, requests, or your account."
+    >
+      <div class="list office-settings">
+        <ChoiceRow id="office-view" label="Workspace view" detail="Conversation stays the default. Office shows the same Session, requests, and composer." options={presentationOptions} value={props.office.presentation()} onChange={props.office.present} />
+        <ChoiceRow id="office-motion" label="Motion" detail="Your system's reduced-motion setting always applies." options={motionOptions} value={preferences().motion} onChange={(motion) => props.office.update({ motion })} />
+        <ChoiceRow id="office-bubbles" label="Bubbles" detail="Status describes reported activity. Completed text shows short excerpts of finished replies above characters." options={bubbleOptions} value={preferences().bubbles} onChange={(bubbles) => props.office.update({ bubbles })} />
+        <ChoiceRow id="office-labels" label="Character labels" detail="The office session list always stays labelled." options={switchOptions} value={preferences().labels} onChange={(labels) => props.office.update({ labels })} />
+        <ChoiceRow id="office-follow" label="Follow selected character" detail="Panning pauses following until you select a character again." options={switchOptions} value={preferences().followSelected} onChange={(followSelected) => props.office.update({ followSelected })} />
+        <ChoiceRow id="office-quality" label="Rendering quality" detail="Changing quality restarts only the office renderer, not the connection." options={qualityOptions} value={preferences().quality} onChange={(quality) => props.office.update({ quality })} />
+        <div class="list__row">
+          <span class="list__label" id="office-reset">
+            Reset office appearance
+            <span class="list__detail" id="office-reset-detail">Restores these defaults and recenters the office. Sessions, drafts, and your account stay unchanged.</span>
+          </span>
+          <span class="list__control">
+            <button
+              type="button"
+              class="button button--secondary button--small"
+              aria-describedby="office-reset-detail"
+              onClick={() => {
+                props.office.reset()
+                setReset(true)
+              }}
+            >
+              Reset
+            </button>
+          </span>
+        </div>
+      </div>
+      <Show when={reset()}>
+        <p class="settings__hint" role="status">Office appearance reset.</p>
+      </Show>
+    </Section>
+  )
+}
+
+function ChoiceRow<Value extends string | boolean>(props: {
+  readonly id: string
+  readonly label: string
+  readonly detail: string
+  readonly options: readonly { readonly id: Value; readonly label: string }[]
+  readonly value: Value
+  readonly onChange: (value: Value) => void
+}): JSX.Element {
+  return (
+    <div class="list__row">
+      <span class="list__label">
+        <span id={`${props.id}-label`}>{props.label}</span>
+        <span class="list__detail" id={`${props.id}-detail`}>{props.detail}</span>
+      </span>
+      <span class="list__control filters" role="radiogroup" aria-labelledby={`${props.id}-label`} aria-describedby={`${props.id}-detail`}>
+        <For each={props.options}>
+          {(option, index) => (
+            <button
+              type="button"
+              role="radio"
+              aria-checked={props.value === option.id}
+              tabIndex={props.value === option.id ? 0 : -1}
+              class={`filters__option${props.value === option.id ? " filters__option--active" : ""}`}
+              onClick={() => props.onChange(option.id)}
+              onKeyDown={(event) => moveRadio(event, index(), props.options.length, (next) => {
+                const selected = props.options[next]
+                if (selected) props.onChange(selected.id)
+              })}
+            >
+              {option.label}
+            </button>
+          )}
+        </For>
+      </span>
+    </div>
   )
 }
 
