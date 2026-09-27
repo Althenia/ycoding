@@ -116,19 +116,21 @@ describe("public docs and site layout", () => {
     for (const width of [390, 820, 1440] as const) {
       await page.setViewport(width, viewportHeight(width))
       for (const theme of ["light", "dark"] as const) {
+        await page.setColorScheme(theme)
         for (const route of routes) {
           await page.navigate(url(route))
           await page.evaluate<void>(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
-          await Bun.sleep(400)
+          if (["/", "/docs/quickstart", "/changelog"].includes(route)) await saveScreenshot(page, "mid", route, width, theme)
+          await Bun.sleep(650)
           await saveScreenshot(page, "after", route, width, theme)
         }
       }
     }
     await page.close()
-  }, 60_000)
+  }, 120_000)
 })
 
-async function saveScreenshot(page: { screenshot(): Promise<string> }, phase: "before" | "after", route: string, width: number, theme: "light" | "dark"): Promise<void> {
+async function saveScreenshot(page: { screenshot(): Promise<string> }, phase: "before" | "mid" | "after", route: string, width: number, theme: "light" | "dark"): Promise<void> {
   const path = join(output, phase, `${route === "/" ? "home" : route.slice(1).replaceAll("/", "-")}-${width}-${theme}.png`)
   await mkdir(join(output, phase), { recursive: true })
   await Bun.write(path, Buffer.from(await page.screenshot(), "base64"))

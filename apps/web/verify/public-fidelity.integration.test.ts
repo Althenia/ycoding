@@ -28,30 +28,129 @@ afterAll(async () => {
 })
 
 describe("public routes and design-system behavior", () => {
-  test("plays public entrance motion only without a reduced-motion preference", async () => {
+  test("animates public entrances over time and leaves content visible without motion", async () => {
     const page = await requireBrowser().openPage()
     await page.setViewport(1440, 900)
-    for (const reduce of [false, true]) {
-      await page.setReducedMotion(reduce)
-      await page.navigate(url("/"))
-      const motion = await page.evaluate<{ readonly animations: number; readonly headlineOpacity: string; readonly entries: number }>(`new Promise(resolve => {
-        const read = () => document.documentElement.dataset.hydrated === "true"
-          ? requestAnimationFrame(() => {
-            const entries = [...document.querySelectorAll('.enter, .public-page-entry, .motion-reveal--visible')]
-            resolve({
-              animations: entries.flatMap(element => element.getAnimations()).length,
-              headlineOpacity: getComputedStyle(document.querySelector('.hero__headline')).opacity,
-              entries: entries.length,
-            })
-          })
-          : requestAnimationFrame(read)
-        read()
+    for (const [path, selector] of [["/", ".hero__headline"], ["/docs/quickstart", ".docs-article > h1"], ["/changelog", ".release"]] as const) {
+      await page.setReducedMotion(false)
+      await page.navigate(url(path))
+      const animated = await page.evaluate<{ readonly early: number; readonly middle: number; readonly settled: number; readonly transformChanged: boolean }>(`new Promise((resolve, reject) => {
+        const selector = ${JSON.stringify(selector)}
+        const start = performance.now()
+        const wait = () => {
+          const element = document.querySelector(selector)
+          if (!(element instanceof HTMLElement) || document.documentElement.dataset.motion !== 'on') {
+            if (performance.now() - start > 3000) return reject(new Error('motion gate or target missing'))
+            return requestAnimationFrame(wait)
+          }
+          const early = Number(getComputedStyle(element).opacity)
+          const firstTransform = getComputedStyle(element).transform + getComputedStyle(element).translate
+          setTimeout(() => {
+            const middle = Number(getComputedStyle(element).opacity)
+            const transformChanged = firstTransform !== getComputedStyle(element).transform + getComputedStyle(element).translate
+            setTimeout(() => resolve({ early, middle, settled: Number(getComputedStyle(element).opacity), transformChanged }), 700)
+          }, 100)
+        }
+        wait()
       })`)
-      expect(motion.entries).toBeGreaterThan(0)
-      expect(motion.headlineOpacity).toBe("1")
-      if (reduce) expect(motion.animations).toBe(0)
-      else expect(motion.animations).toBeGreaterThan(0)
+      expect(animated.early).toBeLessThan(1)
+      expect(animated.middle).toBeGreaterThan(animated.early)
+      expect(animated.settled).toBe(1)
+      expect(animated.transformChanged).toBe(true)
+      await page.setReducedMotion(true)
+      expect(await page.evaluate<number>(`Number(getComputedStyle(document.querySelector(${JSON.stringify(selector)})).opacity)`)).toBe(1)
+      await page.evaluate<void>(`document.documentElement.removeAttribute('data-motion')`)
+      expect(await page.evaluate<number>(`Number(getComputedStyle(document.querySelector(${JSON.stringify(selector)})).opacity)`)).toBe(1)
     }
+    await page.setReducedMotion(true)
+    await page.navigate(url("/"))
+    expect(await page.evaluate<{ readonly gate?: string; readonly opacity: number; readonly animations: number }>(`({ gate: document.documentElement.dataset.motion, opacity: Number(getComputedStyle(document.querySelector('.hero__headline')).opacity), animations: document.querySelector('.hero__headline').getAnimations().length })`)).toEqual({ opacity: 1, animations: 0 })
+    await page.setViewport(390, 844)
+    await page.setReducedMotion(false)
+    await page.navigate(url("/"))
+    expect(await page.evaluate<number>(`Number(getComputedStyle(document.querySelector('.feature:last-child')).opacity)`)).toBe(0)
+    await page.evaluate<void>(`document.documentElement.removeAttribute('data-motion')`)
+    expect(await page.evaluate<number>(`Number(getComputedStyle(document.querySelector('.feature:last-child')).opacity)`)).toBe(1)
+    await page.evaluate<void>(`document.documentElement.dataset.motion = 'on'`)
+    await page.setReducedMotion(true)
+    expect(await page.evaluate<number>(`Number(getComputedStyle(document.querySelector('.feature:last-child')).opacity)`)).toBe(1)
+    await page.close()
+  })
+
+  test("reveals scrolled cards and sections without changing document geometry", async () => {
+    const page = await requireBrowser().openPage()
+    await page.setViewport(390, 844)
+    for (const [path, selector] of [["/", ".feature"], ["/docs/quickstart", ".docs-article .doc-section"], ["/changelog", ".release"]] as const) {
+      await page.navigate(url(path))
+      for (let attempt = 0; attempt < 50 && !(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector)}) instanceof HTMLElement`)); attempt += 1) await Bun.sleep(100)
+      const motion = await page.evaluate<{ readonly before: number; readonly early: number; readonly middle: number; readonly heightBefore: number; readonly heightAfter: number }>(`new Promise((resolve, reject) => {
+        const element = [...document.querySelectorAll(${JSON.stringify(selector)})].at(-1)
+        if (!(element instanceof HTMLElement)) return reject(new Error('reveal target missing: ' + ${JSON.stringify(path)}))
+        const before = Number(getComputedStyle(element).opacity)
+        const heightBefore = document.querySelector('#main').offsetHeight
+        element.scrollIntoView({ block: 'center' })
+        const start = performance.now()
+        const wait = () => {
+          if (!element.classList.contains('motion-reveal--visible')) {
+            if (performance.now() - start > 3000) return reject(new Error('reveal not observed'))
+            return requestAnimationFrame(wait)
+          }
+          const early = Number(getComputedStyle(element).opacity)
+          setTimeout(() => resolve({ before, early, middle: Number(getComputedStyle(element).opacity), heightBefore, heightAfter: document.querySelector('#main').offsetHeight }), 300)
+        }
+        wait()
+      })`)
+      expect(motion.before).toBe(0)
+      expect(motion.middle).toBeGreaterThan(motion.early)
+      expect(motion.heightAfter).toBe(motion.heightBefore)
+    }
+    await page.close()
+  })
+
+  test("cross-fades public route content and slides the documentation contents marker", async () => {
+    const page = await requireBrowser().openPage()
+    await page.setViewport(1440, 900)
+    await page.navigate(url("/"))
+    await page.evaluate<void>(`document.querySelector('nav[aria-label="Primary"] a[href="/docs"]')?.click()`)
+    const route = await page.evaluate<{ readonly early: number; readonly later: number }>(`new Promise((resolve, reject) => {
+      const start = performance.now()
+      const wait = () => {
+        const main = document.querySelector('.marketing > main')
+        if (!(main instanceof HTMLElement) || !main.querySelector('.docs-article')) {
+          if (performance.now() - start > 3000) return reject(new Error('docs route missing'))
+          return requestAnimationFrame(wait)
+        }
+        requestAnimationFrame(() => {
+          const early = Number(getComputedStyle(main).opacity)
+          setTimeout(() => resolve({ early, later: Number(getComputedStyle(main).opacity) }), 120)
+        })
+      }
+      wait()
+    })`)
+    expect(route.early).toBeLessThan(1)
+    expect(route.later).toBeGreaterThan(route.early)
+    await page.navigate(url("/docs/quickstart"))
+    const marker = await page.evaluate<{ readonly first: string; readonly moving: string; readonly settled: string }>(`new Promise((resolve, reject) => {
+      const list = document.querySelector('.docs-toc__list')
+      const headings = [...document.querySelectorAll('.doc-section > h2[id]')]
+      if (!(list instanceof HTMLElement) || headings.length < 2) return reject(new Error('contents rail missing'))
+      const first = getComputedStyle(list, '::before').transform
+      window.scrollTo(0, scrollY + headings[1].getBoundingClientRect().top - innerHeight * 0.2)
+      const start = performance.now()
+      const wait = () => {
+        if (document.querySelector('.docs-toc__list a[aria-current="location"]')?.hash !== '#' + headings[1].id) {
+          if (performance.now() - start > 3000) return reject(new Error('contents selection missing'))
+          return requestAnimationFrame(wait)
+        }
+        setTimeout(() => {
+          const moving = getComputedStyle(list, '::before').transform
+          setTimeout(() => resolve({ first, moving, settled: getComputedStyle(list, '::before').transform }), 400)
+        }, 60)
+      }
+      wait()
+    })`)
+    expect(marker.moving).not.toBe(marker.first)
+    expect(marker.settled).not.toBe(marker.moving)
     await page.close()
   })
 
@@ -607,6 +706,7 @@ describe("public routes and design-system behavior", () => {
     for (const [width, left, minWidth] of [[390, 16, 354], [768, 24, 716]] as const) {
       await page.setViewport(width, 1024)
       await page.navigate(url("/changelog"))
+      await settleMotion(page)
       const layout = await page.evaluate<{
         readonly left: number
         readonly width: number
@@ -647,6 +747,7 @@ describe("public routes and design-system behavior", () => {
     for (const width of [1280, 1440, 2048] as const) {
       await page.setViewport(width, 900)
       await page.navigate(url("/changelog"))
+      await settleMotion(page)
       const layout = await page.evaluate<{
         readonly cardLeft: number
         readonly cardWidth: number
@@ -928,6 +1029,7 @@ describe("public routes and design-system behavior", () => {
     for (const width of [390, 1440]) {
       await page.setViewport(width, 900)
       await page.navigate(url("/"))
+      await settleMotion(page)
       for (const theme of ["light", "dark"] as const) {
         await page.evaluate<void>(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
         expect(await page.evaluate<boolean>(`(() => {
@@ -1042,8 +1144,16 @@ describe("public routes and design-system behavior", () => {
     }
     await page.setViewport(768, 900)
     await page.navigate(url("/docs"))
+    for (let attempt = 0; attempt < 50 && !(await page.evaluate<boolean>(`document.querySelector('.docs-bar__nav-toggle') instanceof HTMLElement`)); attempt += 1) await Bun.sleep(100)
     await page.evaluate<void>(`document.querySelector(".docs-bar__nav-toggle")?.dispatchEvent(new MouseEvent("click", { bubbles: true }))`)
-    await page.evaluate<void>(`new Promise(resolve => setTimeout(resolve, 250))`)
+    await page.evaluate<void>(`new Promise(resolve => {
+      const wait = () => {
+        const surface = document.querySelector('.overlay--docs-nav .overlay__surface')
+        if (!(surface instanceof HTMLElement)) return requestAnimationFrame(wait)
+        Promise.all(surface.getAnimations().map(animation => animation.finished)).then(() => resolve(undefined))
+      }
+      wait()
+    })`)
     const drawer = await page.evaluate<{ readonly width: number; readonly left: number; readonly top: number; readonly height: number; readonly headerHeight: number; readonly close: number }>(`(() => { const dialog = document.querySelector(".overlay--docs-nav"); const surface = dialog?.querySelector(".overlay__surface"); const close = dialog?.querySelector(".overlay__close"); const header = document.querySelector(".app-header"); if (!(surface instanceof HTMLElement) || !(close instanceof HTMLElement) || !(header instanceof HTMLElement)) throw new Error("docs drawer missing"); const box = surface.getBoundingClientRect(); return { width: box.width, left: box.left, top: box.top, height: box.height, headerHeight: header.getBoundingClientRect().height, close: close.getBoundingClientRect().height } })()`)
     expect(drawer).toEqual({ width: 320, left: 0, top: drawer.headerHeight, height: 900 - drawer.headerHeight, headerHeight: drawer.headerHeight, close: 44 })
     await page.setViewport(1440, 900)
@@ -1112,8 +1222,8 @@ function requireBrowser() {
 
 async function settleMotion(page: Awaited<ReturnType<ReturnType<typeof requireBrowser>["openPage"]>>) {
   await page.evaluate<void>(`new Promise(resolve => {
-    const settle = () => document.documentElement.dataset.hydrated === "true"
-      ? requestAnimationFrame(() => requestAnimationFrame(() => Promise.all(document.getAnimations().map(animation => animation.finished)).then(() => resolve(undefined))))
+    const settle = () => document.documentElement.dataset.motion === "on"
+      ? Promise.all(document.getAnimations().filter(animation => animation.effect?.getComputedTiming().iterations !== Infinity).map(animation => animation.finished)).then(() => resolve(undefined))
       : requestAnimationFrame(settle)
     settle()
   })`)

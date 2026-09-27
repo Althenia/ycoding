@@ -150,7 +150,8 @@
   color: var(--yc-text-muted);
   text-decoration: none;
   font-size: var(--yc-size-sm);
-  transition: translate var(--yc-dur-quick) var(--yc-ease-standard);
+  transition: translate var(--yc-dur-base) var(--yc-ease-standard),
+    background-color var(--yc-dur-base) var(--yc-ease-standard);
 }
 
 /* Links sit one step inside their group title, so the rail reads as a hierarchy. */
@@ -453,6 +454,25 @@
 .docs-toc__list {
   display: grid;
   gap: 2px;
+  position: relative;
+}
+
+.docs-toc__list::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: -8px;
+  inset-block-start: 0;
+  inline-size: 3px;
+  block-size: var(--yc-hit-min);
+  background: var(--yc-green-strong);
+  border-radius: var(--yc-radius-pill);
+  opacity: 0;
+  transform: translateY(var(--toc-offset, 0px));
+  transition: transform var(--yc-dur-slow) var(--yc-ease-standard), opacity var(--yc-dur-base) var(--yc-ease-standard);
+}
+
+.docs-toc__list--active::before {
+  opacity: 1;
 }
 
 .docs-toc__list a {
@@ -479,12 +499,14 @@
 .docs-search-trigger,
 .docs--changelog .release,
 .docs--index .card {
-  transition: translate var(--yc-dur-quick) var(--yc-ease-standard);
+  transition: translate var(--yc-dur-base) var(--yc-ease-standard),
+    box-shadow var(--yc-dur-base) var(--yc-ease-standard);
 }
 
 .docs--changelog .release:hover,
 .docs--index .card:hover {
-  translate: 0 -2px;
+  translate: 0 -4px;
+  box-shadow: 0 12px 28px -14px color-mix(in srgb, var(--yc-text) 35%, transparent);
 }
 
 .docs--changelog .release:active,
@@ -821,6 +843,35 @@
 
 .releases--timeline {
   gap: var(--yc-space-4);
+  position: relative;
+}
+
+.releases--timeline::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  inline-size: 2px;
+  background: var(--yc-green-strong);
+  transform-origin: top;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-motion="on"] .releases--timeline.motion-reveal--visible::before {
+    animation: yc-line-draw calc(var(--yc-dur-slow) * 1.75) var(--yc-ease-entrance) both;
+  }
+
+  :root[data-motion="on"] .docs-article > h1,
+  :root[data-motion="on"] .docs-article__lede {
+    animation: yc-enter calc(var(--yc-dur-slow) * 1.5) var(--yc-ease-entrance) both;
+  }
+
+  :root[data-motion="on"] .docs-article__lede { animation-delay: 90ms; }
+}
+
+@keyframes yc-line-draw {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
 }
 
 .releases--timeline .release {
@@ -828,6 +879,8 @@
   border: var(--yc-border-width) solid var(--yc-border-strong);
   border-radius: var(--yc-radius-md);
   background: var(--yc-surface);
+  transition: translate var(--yc-dur-base) var(--yc-ease-standard),
+    box-shadow var(--yc-dur-base) var(--yc-ease-standard);
 }
 
 @media (min-width: 768px) {

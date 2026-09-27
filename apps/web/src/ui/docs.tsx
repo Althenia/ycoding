@@ -367,7 +367,9 @@ export function DocsShell(props: {
     const article = document.querySelector(".docs-article")
     if (!(article instanceof HTMLElement)) return
     const headings = article.querySelectorAll<HTMLElement>(".doc-section > h2[id]")
-    const links = document.querySelectorAll<HTMLAnchorElement>(".docs-toc__list a")
+    const list = document.querySelector<HTMLElement>(".docs-toc__list")
+    const links = list?.querySelectorAll<HTMLAnchorElement>("a")
+    if (!list || !links) return
     if (typeof IntersectionObserver === "undefined") return
     const observer = new IntersectionObserver(() => {
       const active = [...headings].filter((heading) => heading.getBoundingClientRect().top <= innerHeight * 0.25).at(-1) ?? headings.item(0)
@@ -376,7 +378,9 @@ export function DocsShell(props: {
         const selected = link.hash === `#${active.id}`
         if (selected) link.setAttribute("aria-current", "location")
         else link.removeAttribute("aria-current")
+        if (selected) list.style.setProperty("--toc-offset", `${link.offsetTop}px`)
       })
+      list.classList.add("docs-toc__list--active")
     }, { rootMargin: "-12% 0px -72% 0px" })
     headings.forEach((heading) => observer.observe(heading))
     onCleanup(() => observer.disconnect())

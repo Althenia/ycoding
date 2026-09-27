@@ -1052,29 +1052,23 @@ kbd {
   margin-inline-start: auto;
 }
 
-/* --- motion -------------------------------------------------------------
-   Every entrance animation is declared only for readers who accept motion, and no
-   base rule hides content. Removing motion therefore cannot hide content: the
-   animated end state is the only state the base layer knows. The entrance is bound
-   to `data-hydrated`, which the runtime sets after the first paint, so the
-   pre-hydration paint and a no-script render both show the final state.
-   ------------------------------------------------------------------------ */
+/* --- motion ------------------------------------------------------------- */
 
 @media (prefers-reduced-motion: no-preference) {
-  :root[data-hydrated="true"] .enter {
-    animation: yc-enter var(--yc-dur-base) var(--yc-ease-entrance) both;
+  :root[data-motion="on"] .enter {
+    animation: yc-enter calc(var(--yc-dur-slow) * 1.5) var(--yc-ease-entrance) both;
   }
 
   .enter-1 {
-    animation-delay: 40ms;
-  }
-
-  .enter-2 {
     animation-delay: 90ms;
   }
 
+  .enter-2 {
+    animation-delay: 180ms;
+  }
+
   .enter-3 {
-    animation-delay: 140ms;
+    animation-delay: 270ms;
   }
 
   .overlay[open] .overlay__surface {
@@ -1100,17 +1094,19 @@ kbd {
   }
 }
 
-/* Content entrance moves, it never fades: `yc-enter` has no opacity step, so a
-   reader who lands mid-animation still sees every word. Only an overlay and its
-   scrim fade, because an open overlay starts a layer that did not exist before the
-   interaction. */
 @keyframes yc-enter {
   from {
-    translate: 0 8px;
+    opacity: 0;
+    translate: 0 18px;
+    filter: blur(5px);
+    scale: 0.985;
   }
 
   to {
+    opacity: 1;
     translate: 0 0;
+    filter: blur(0);
+    scale: 1;
   }
 }
 

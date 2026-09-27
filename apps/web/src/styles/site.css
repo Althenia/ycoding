@@ -33,13 +33,15 @@
 .marketing .card,
 .marketing .nav__link,
 .marketing .footer__column a {
-  transition: translate var(--yc-dur-quick) var(--yc-ease-standard);
+  transition: translate var(--yc-dur-base) var(--yc-ease-standard),
+    box-shadow var(--yc-dur-base) var(--yc-ease-standard);
 }
 
 .marketing .button:hover,
 .marketing .feature:hover,
 .marketing .card:hover {
-  translate: 0 -2px;
+  translate: 0 -4px;
+  box-shadow: 0 12px 28px -14px color-mix(in srgb, var(--yc-text) 35%, transparent);
 }
 
 .marketing .button:active,
@@ -49,7 +51,8 @@
 }
 
 .marketing .button:active {
-  translate: 0 1px;
+  translate: 0 2px;
+  box-shadow: none;
 }
 
 .marketing .nav__link:hover,
@@ -58,13 +61,40 @@
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .motion-reveal--visible {
-    animation: yc-enter var(--yc-dur-base) var(--yc-ease-entrance) both;
+  :root[data-motion="on"] .motion-reveal:not(.motion-reveal--visible) {
+    opacity: 0;
+    translate: 0 18px;
+    filter: blur(5px);
   }
 
-  :root[data-hydrated="true"] .public-page-entry {
-    animation: yc-enter var(--yc-dur-base) var(--yc-ease-entrance) both;
+  :root[data-motion="on"] .motion-reveal--visible {
+    animation: yc-enter calc(var(--yc-dur-slow) * 1.5) var(--yc-ease-entrance) both;
   }
+
+  :root[data-motion="on"] .features__grid .motion-reveal:nth-child(4n + 2),
+  :root[data-motion="on"] .card-grid .motion-reveal:nth-child(3n + 2),
+  :root[data-motion="on"] .releases .motion-reveal:nth-child(3n + 2) {
+    animation-delay: 70ms;
+  }
+
+  :root[data-motion="on"] .features__grid .motion-reveal:nth-child(4n + 3),
+  :root[data-motion="on"] .card-grid .motion-reveal:nth-child(3n + 3),
+  :root[data-motion="on"] .releases .motion-reveal:nth-child(3n + 3) {
+    animation-delay: 140ms;
+  }
+
+  :root[data-motion="on"] .features__grid .motion-reveal:nth-child(4n + 4) {
+    animation-delay: 210ms;
+  }
+
+  :root[data-motion="on"] .public-page-entry {
+    animation: yc-page-in var(--yc-dur-slow) var(--yc-ease-entrance) both;
+  }
+}
+
+@keyframes yc-page-in {
+  from { opacity: 0.65; translate: 0 8px; }
+  to { opacity: 1; translate: 0 0; }
 }
 
 .site-footer {
@@ -76,7 +106,29 @@
 /* --- hero --------------------------------------------------------------- */
 
 .hero {
+  position: relative;
+  isolation: isolate;
   padding-block: var(--yc-space-10) var(--yc-space-12);
+}
+
+.hero__content { position: relative; }
+
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-motion="on"] .hero::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(ellipse 38% 48% at 35% 42%, var(--yc-green-soft), transparent);
+    opacity: 0.65;
+    animation: yc-ambient 12s var(--yc-ease-standard) infinite alternate;
+  }
+}
+
+@keyframes yc-ambient {
+  from { transform: translate3d(-6%, 0, 0) scale(0.9); }
+  to { transform: translate3d(10%, 0, 0) scale(1.15); }
 }
 
 .hero__content {

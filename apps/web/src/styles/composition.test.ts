@@ -196,7 +196,7 @@ describe("motion contract", () => {
     })
   })
 
-  test("runs the content entrance only after the first paint and only when motion is accepted", async () => {
+  test("runs the content entrance only with the JS motion gate and accepted preference", async () => {
     const base = await readStylesheet("base.css")
     const entrances = base.rules.filter(
       (rule) => rule.header.includes(".enter") && rule.declarations["animation"] !== undefined,
@@ -207,30 +207,32 @@ describe("motion contract", () => {
         header: rule.header,
         conditions: ["@media (prefers-reduced-motion: no-preference)"],
       })
-      expect(rule.header).toContain(':root[data-hydrated="true"]')
+      expect(rule.header).toContain(':root[data-motion="on"]')
     }
   })
 
-  test("moves content in without fading it", async () => {
+  test("fades and rises content into place", async () => {
     const base = await readStylesheet("base.css")
     const step = base.rules.filter((rule) => rule.header === "from" && rule.conditions.includes("@keyframes yc-enter"))
-    expect(step.map((rule) => Object.keys(rule.declarations))).toEqual([["translate"]])
+    expect(step.map((rule) => Object.keys(rule.declarations))).toEqual([["opacity", "translate", "filter", "scale"]])
   })
 
-  test("keeps public entrances visible until revealed and limits motion to transforms", async () => {
+  test("gates hidden reveal states and keeps interactive motion on composited properties", async () => {
     const site = await readStylesheet("site.css")
     const docs = await readStylesheet("docs.css")
     const publicRules = [...site.rules, ...docs.rules]
-    for (const rule of publicRules.filter((item) => item.header.includes(".motion-reveal") || item.header.includes(".hero__"))) {
-      expect(rule.declarations["opacity"]).not.toBe("0")
+    const hidden = publicRules.filter((rule) => rule.declarations.opacity === "0" && rule.header.includes(".motion-reveal"))
+    expect(hidden.length).toBeGreaterThan(0)
+    for (const rule of hidden) {
+      expect(rule.header).toContain(':root[data-motion="on"]')
+      expect(rule.header).toContain(":not(.motion-reveal--visible)")
+      expect(rule.conditions).toContain("@media (prefers-reduced-motion: no-preference)")
     }
     expect(publicRules.some((rule) => rule.header.includes(".motion-reveal--visible") && rule.conditions.includes("@media (prefers-reduced-motion: no-preference)") && rule.declarations["animation"]?.includes("yc-enter"))).toBe(true)
     expect(publicRules.some((rule) => rule.declarations["transition"]?.includes("transform") || rule.declarations["transition"]?.includes("translate"))).toBe(true)
   })
 
-  test("never hides content to prepare an animation", async () => {
-    // Only an open overlay and its scrim may fade, because an open overlay creates a
-    // layer that did not exist before the interaction.
+  test("never hides content without the motion gate", async () => {
     const overlayFades = ["@keyframes yc-fade-in", "@keyframes yc-dialog-in"]
     for (const name of SURFACE_FILES) {
       const sheet = await readStylesheet(name)
@@ -238,7 +240,10 @@ describe("motion contract", () => {
         .filter(
           (rule) =>
             rule.declarations["opacity"] === "0" &&
-            !rule.conditions.some((condition) => overlayFades.includes(condition)),
+            !rule.conditions.some((condition) => overlayFades.includes(condition)) &&
+            !rule.conditions.includes("@keyframes yc-enter") &&
+            !rule.header.includes(':root[data-motion="on"]') &&
+            rule.header !== ".docs-toc__list::before",
         )
         .map((rule) => `${name} ${rule.header}`)
       expect(zeroOpacity).toEqual([])

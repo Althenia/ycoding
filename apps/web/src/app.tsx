@@ -55,18 +55,30 @@ function Outlet(): JSX.Element {
 
 export function App(props: { readonly createRemoteStore?: () => RemoteStore }): JSX.Element {
   const router = useRouter()
-  // Content entrance is bound to `data-hydrated`, which is set two frames after mount:
-  // the pre-hydration paint and a no-script render both show the final state, so no
-  // reader ever sees content hidden pending an animation.
+  const preference = window.matchMedia("(prefers-reduced-motion: no-preference)")
   let second = 0
   const first = requestAnimationFrame(() => {
     second = requestAnimationFrame(() => {
-      document.documentElement.dataset.hydrated = "true"
+      if (preference.matches && !router.path().startsWith("/remote")) document.documentElement.dataset.motion = "on"
     })
+  })
+  const updateMotion = () => {
+    if (preference.matches && !router.path().startsWith("/remote")) document.documentElement.dataset.motion = "on"
+    else delete document.documentElement.dataset.motion
+  }
+  preference.addEventListener("change", updateMotion)
+  let previousPath = router.path()
+  createEffect(() => {
+    const path = router.path()
+    if (path === previousPath) return
+    previousPath = path
+    updateMotion()
   })
   onCleanup(() => {
     cancelAnimationFrame(first)
     cancelAnimationFrame(second)
+    preference.removeEventListener("change", updateMotion)
+    delete document.documentElement.dataset.motion
   })
   return (
     <Show

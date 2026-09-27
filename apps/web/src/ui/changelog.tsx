@@ -64,7 +64,7 @@ export function ChangelogPage(): JSX.Element {
         </For>
       </fieldset>
       <Show when={releases().length > 0} fallback={<p class="prose">No releases match these filters.</p>}>
-        <ol class="releases releases--timeline">
+        <ol class="releases releases--timeline motion-reveal">
           <For each={releases()}>
             {(release) => (
               <li class="release motion-reveal" id={release.version}>

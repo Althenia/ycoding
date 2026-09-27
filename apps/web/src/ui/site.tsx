@@ -60,20 +60,24 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
     router.path()
     const root = document.querySelector(".marketing > main")
     if (!(root instanceof HTMLElement)) return
-    const targets = root.querySelectorAll<HTMLElement>(".motion-reveal")
-    if (typeof IntersectionObserver === "undefined") {
-      targets.forEach((target) => target.classList.add("motion-reveal--visible"))
-      return
-    }
-    const observer = new IntersectionObserver((entries) => {
+    const observer = typeof IntersectionObserver === "undefined" ? undefined : new IntersectionObserver((entries) => {
       entries.forEach((entry) => {
         if (!entry.isIntersecting || !(entry.target instanceof HTMLElement)) return
         entry.target.classList.add("motion-reveal--visible")
-        observer.unobserve(entry.target)
+        observer?.unobserve(entry.target)
       })
     }, { rootMargin: "0px 0px -8% 0px" })
-    targets.forEach((target) => observer.observe(target))
-    onCleanup(() => observer.disconnect())
+    const observe = () => root.querySelectorAll<HTMLElement>(".motion-reveal:not(.motion-reveal--visible)").forEach((target) => {
+      if (observer) observer.observe(target)
+      else target.classList.add("motion-reveal--visible")
+    })
+    observe()
+    const changes = new MutationObserver(observe)
+    changes.observe(root, { childList: true, subtree: true })
+    onCleanup(() => {
+      observer?.disconnect()
+      changes.disconnect()
+    })
   })
   createEffect(() => {
     router.path()
