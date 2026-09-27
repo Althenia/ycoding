@@ -24,6 +24,10 @@ const routes = [
     render: (_params: Readonly<Record<string, string>>) => <RemoteShell path="/remote/activity" />,
   },
   {
+    path: "/remote/usage",
+    render: (_params: Readonly<Record<string, string>>) => <RemoteShell path="/remote/usage" />,
+  },
+  {
     path: "/remote/settings",
     render: (_params: Readonly<Record<string, string>>) => <RemoteShell path="/remote/settings" />,
   },

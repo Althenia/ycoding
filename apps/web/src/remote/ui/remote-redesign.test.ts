@@ -7,9 +7,11 @@ import {
   awaitsApproval,
   connectionStripView,
   filterSessions,
+  notificationAge,
   queueRowView,
   reportedEvents,
   sessionChips,
+  sessionNeedsAttention,
   remoteSurfaceComposition,
   summarizeSession,
 } from "./shell"
@@ -313,6 +315,29 @@ describe("waiting for a decision", () => {
     const chips = sessionChips(session({ running: true }), undefined)
     expect(chips.map((chip) => chip.label)).toEqual(["Running"])
   })
+
+  test("leads with a waiting chip for a Session the device reports waiting on a human", () => {
+    const chips = sessionChips(session({ running: true, attention: true }), undefined)
+    expect(chips.map((chip) => chip.label)).toEqual(["Waiting for you", "Running"])
+    expect(chips[0]?.tone).toBe("attention")
+  })
+
+  test("flags a loaded Session with an open question as needing attention", () => {
+    expect(sessionNeedsAttention(session({}), view({ requests: [form] }))).toBe(true)
+    expect(sessionChips(session({}), view({ requests: [form] })).map((chip) => chip.label)[0]).toBe("Waiting for you")
+    expect(sessionNeedsAttention(session({}), view({ id: "ses_other", requests: [form] }))).toBe(false)
+    expect(sessionNeedsAttention(session({ attention: false }), undefined)).toBe(false)
+  })
+})
+
+describe("notification age", () => {
+  const now = Date.UTC(2026, 8, 27, 12, 0, 0)
+  test("counts minutes and hours, then falls back to the date", () => {
+    expect(notificationAge(now - 20_000, now)).toBe("now")
+    expect(notificationAge(now - 5 * 60_000, now)).toBe("5m")
+    expect(notificationAge(now - 3 * 3_600_000, now)).toBe("3h")
+    expect(notificationAge(now - 3 * 86_400_000, now)).toBe(new Date(now - 3 * 86_400_000).toLocaleDateString())
+  })
 })
 
 describe("reported events", () => {
@@ -386,8 +411,8 @@ describe("part identity", () => {
 })
 
 describe("tool body expansion", () => {
-  test("opens a settled tool and leaves a running one closed", () => {
-    expect(toolPartExpanded({ touched: false, manual: false, status: "completed" })).toBe(true)
+  test("keeps untouched tool rows collapsed whether running or settled", () => {
+    expect(toolPartExpanded({ touched: false, manual: false, status: "completed" })).toBe(false)
     expect(toolPartExpanded({ touched: false, manual: true, status: "running" })).toBe(false)
   })
 

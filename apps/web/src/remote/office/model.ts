@@ -4,6 +4,7 @@ import type {
   OfficeHomeRoom,
   OfficeInput,
   OfficePreferences,
+  OfficeRoomID,
   OfficeSnapshot,
   OfficeStatus,
   SelectedSession,
@@ -14,11 +15,12 @@ import type {
 
 export const maxOfficeActors = 16
 
-export const homeRoomLabel: Record<OfficeHomeRoom, string> = {
-  ceo: "CEO office",
-  developer: "Developer room",
-  research: "Research lab",
-  qa: "QA lab",
+export function officeLocationLabel(room: OfficeRoomID | undefined): string {
+  const labels: Record<OfficeRoomID, string> = {
+    ceo: "CEO office", developer: "Developer room", research: "Research lab", qa: "QA lab",
+    meeting: "Meeting room", lounge: "Relax lounge", hall: "Hallway",
+  }
+  return room ? labels[room] : "Entrance"
 }
 
 export function shortText(text: string, limit: number): string {
@@ -28,32 +30,41 @@ export function shortText(text: string, limit: number): string {
 }
 
 export function projectOffice(input: OfficeInput, preferences: OfficePreferences): OfficeSnapshot {
-  if (!input.ownerID || !input.deviceID) {
+  if (!input.ownerID || !input.deviceID || !input.activeSessionID) {
     return { scope: "", connection: "unavailable", actors: [], totalSessions: 0, overflow: 0, team: { status: "none", total: 0, shown: 0, more: false }, cues: [] }
   }
   const deviceID = input.deviceID
   const team = input.team
+  const rootID = team?.rootID ?? input.activeSessionID
   const members = team?.status === "ready"
-    ? [...new Map(team.members.filter((member) => member.parentID === team.rootID).map((member) => [member.sessionID, member])).values()]
+    ? [...new Map(team.members.filter((member) => member.parentID === rootID).map((member) => [member.sessionID, member])).values()]
       .sort((a, b) => a.sessionID.localeCompare(b.sessionID))
     : []
-  const memberIDs = new Set(members.map((member) => member.sessionID))
-  const unique = new Map(input.sessions.filter((item) => !item.archived && !memberIDs.has(item.id)).map((item) => [item.id, item]))
-  if (team && members.length > 0 && !unique.has(team.rootID)) unique.set(team.rootID, { id: team.rootID, title: "Parent session", archived: false })
-  const sessions = [...unique.values()].sort((a, b) => a.id.localeCompare(b.id))
+  const session = input.sessions.find((item) => item.id === rootID && !item.archived)
+    ?? { id: rootID, title: rootID === input.activeSessionID ? "Current session" : "Parent session", agent: input.selected?.id === rootID ? input.selected.agent : undefined, archived: false }
   const actorID = (sessionID: string) => JSON.stringify([deviceID, sessionID])
-  const rank = (actor: OfficeActor) =>
-    actor.selected ? 0 : actor.sessionID === team?.rootID && members.length > 0 ? 1 : actor.kind === "task" ? 2 : 3
-  const actors = [
-    ...sessions.map((session) => sessionActor(input, preferences, session, actorID(session.id))),
+  const selected = [
+    sessionActor(input, preferences, session, actorID(rootID)),
     ...members.map((member) => taskActor(input, preferences, member, actorID(member.sessionID))),
   ]
-    .sort((a, b) => rank(a) - rank(b))
+    .sort((a, b) => Number(b.selected) - Number(a.selected))
     .slice(0, maxOfficeActors)
-  const root = team && members.length > 0 ? actors.find((actor) => actor.kind === "session" && actor.sessionID === team.rootID) : undefined
-  const total = sessions.length + members.length
+  const used = new Set<string>()
+  const names = new Map(selected.map((actor) => [actor.id, actor] as const).sort((a, b) => a[0].localeCompare(b[0])).map(([id, actor]) => {
+    const hash = Array.from(actor.sessionID).reduce((value, character) => (value * 31 + character.codePointAt(0)!) >>> 0, 7)
+    const first = ["Ari", "Mira", "Noah", "Lena", "Theo", "Iris", "Juno", "Ezra", "Nia", "Owen", "Sage", "Ravi", "Zara", "Milo", "Ada", "Leah"][hash % 16]!
+    const last = ["Vale", "Rowan", "Ellis", "Hale", "Briar", "Stone", "River", "Wells", "Cedar", "Reed", "Bloom", "Wren", "Mason", "Dove", "Klein", "Frost"][Math.floor(hash / 16) % 16]!
+    const base = `${first} ${last}`
+    const suffix = Array.from({ length: maxOfficeActors }, (_, index) => index + 1).find((value) => !used.has(value === 1 ? base : `${base} ${value}`))!
+    const name = suffix === 1 ? base : `${base} ${suffix}`
+    used.add(name)
+    return [id, name] as const
+  }))
+  const actors = selected.map((actor) => ({ ...actor, name: names.get(actor.id)! }))
+  const root = actors.find((actor) => actor.kind === "session" && actor.sessionID === rootID)
+  const total = 1 + members.length
   return {
-    scope: JSON.stringify([input.ownerID, deviceID]),
+    scope: JSON.stringify([input.ownerID, deviceID, rootID]),
     connection: input.connection,
     actors,
     totalSessions: total,
@@ -77,7 +88,8 @@ function sessionActor(input: OfficeInput, preferences: OfficePreferences, sessio
     id,
     sessionID: session.id,
     kind: "session",
-    name: shortText(detail?.agent ?? session.agent ?? "Agent", 28),
+    name: "",
+    role: shortText(detail?.agent ?? session.agent ?? "Agent", 28),
     title: shortText(session.title, 70),
     selected: session.id === input.activeSessionID,
     status,
@@ -85,7 +97,7 @@ function sessionActor(input: OfficeInput, preferences: OfficePreferences, sessio
     source,
     bubble: bubbleFor(input, preferences, detail, status, statusLabel(status, source)),
     unknownOutcome: detail?.unknownOutcome ?? false,
-    homeRoom: session.parentID === undefined ? "ceo" : responsibilityRoom(detail?.agent ?? session.agent, session.title),
+    homeRoom: "ceo",
   }
 }
 
@@ -98,7 +110,8 @@ function taskActor(input: OfficeInput, preferences: OfficePreferences, member: T
     id,
     sessionID: member.sessionID,
     kind: "task",
-    name: shortText(detail?.agent ?? member.agent ?? "Subagent", 28),
+    name: "",
+    role: shortText(detail?.agent ?? member.agent ?? "Subagent", 28),
     title: shortText(member.description || "Subagent task", 70),
     selected: member.sessionID === input.activeSessionID,
     status,

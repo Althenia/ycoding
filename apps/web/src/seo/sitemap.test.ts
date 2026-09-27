@@ -42,7 +42,7 @@ describe("sitemap document", () => {
       expect(location).not.toContain("?")
       expect(location).not.toContain("#")
     }
-    for (const privatePath of ["/remote", "/remote/sessions", "/remote/activity", "/remote/settings"]) {
+    for (const privatePath of ["/remote", "/remote/sessions", "/remote/activity", "/remote/usage", "/remote/settings"]) {
       expect(locations).not.toContain(`${SITE.origin}${privatePath}`)
     }
     expect(document).not.toContain("does-not-exist")

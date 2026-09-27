@@ -111,7 +111,7 @@ describe("remote and public product interactions", () => {
     try {
       const titles = ["Async Auth Token Revocation Migration", "Telemetry Event Buffer Flush Daemon", "Redis Cache Cluster Rebalancing Spec", "Postgres Partition Pruning Worker"]
       for (const [index, title] of titles.entries()) {
-        await sessions.evaluate(`(() => { const select = document.querySelector('.sessions-page select'); select.selectedIndex = ${index}; select.dispatchEvent(new Event('change', { bubbles: true })); })()`)
+        await sessions.evaluate(`document.querySelectorAll('.workspace-nav__item')[${index}]?.click()`)
         for (let attempt = 0; attempt < 40; attempt += 1) {
           if (await sessions.evaluate<boolean>(`document.querySelector('.sessions-table__select')?.textContent?.includes(${JSON.stringify(title)}) ?? false`)) break
           await Bun.sleep(50)
@@ -119,7 +119,7 @@ describe("remote and public product interactions", () => {
         expect(await sessions.evaluate<string>(`document.querySelector('.sessions-table__select')?.textContent ?? ''`)).toContain(title)
         expect(await sessions.evaluate<number>(`document.querySelectorAll('.sessions-table__select').length`)).toBe(1)
       }
-      await sessions.evaluate(`(() => { const select = document.querySelector('.sessions-page select'); select.selectedIndex = 0; select.dispatchEvent(new Event('change', { bubbles: true })); })()`)
+      await sessions.evaluate(`document.querySelectorAll('.workspace-nav__item')[0]?.click()`)
       for (let attempt = 0; attempt < 40; attempt += 1) {
         if (await sessions.evaluate<boolean>(`document.querySelector('.sessions-table__select')?.textContent?.includes('Async Auth Token Revocation Migration') ?? false`)) break
         await Bun.sleep(50)
@@ -141,12 +141,12 @@ describe("remote and public product interactions", () => {
 
     const conversation = await remote("conversation-tool-terminal-output", 390)
     try {
-      expect(await conversation.evaluate<string>(`document.querySelector('.tool__toggle')?.getAttribute('aria-expanded') ?? ''`)).toBe("true")
-      await conversation.evaluate(`document.querySelector('.tool__toggle')?.click()`)
-      expect(await conversation.evaluate<string>(`document.querySelector('.tool__toggle')?.getAttribute('aria-expanded') ?? ''`)).toBe("false")
-      await conversation.evaluate(`document.querySelector('.tool__toggle')?.click()`)
-      expect(await conversation.evaluate<string>(`document.querySelector('.tool__toggle')?.getAttribute('aria-expanded') ?? ''`)).toBe("true")
-      expect(await conversation.evaluate<boolean>(`[...document.querySelectorAll('.tool pre.output')].some(output => output.textContent?.includes('pool_spin_ok'))`)).toBe(true)
+      expect(await conversation.evaluate<string>(`document.querySelector('.transcript-tool__toggle')?.getAttribute('aria-expanded') ?? ''`)).toBe("false")
+      await conversation.evaluate(`document.querySelectorAll('.transcript-tool__toggle').forEach((toggle) => toggle.click())`)
+      expect(await conversation.evaluate<string>(`document.querySelector('.transcript-tool__toggle')?.getAttribute('aria-expanded') ?? ''`)).toBe("true")
+      expect(await conversation.evaluate<boolean>(`[...document.querySelectorAll('.transcript-tool pre.output')].some(output => output.textContent?.includes('pool_spin_ok'))`)).toBe(true)
+      await conversation.evaluate(`document.querySelector('.transcript-tool__toggle')?.click()`)
+      expect(await conversation.evaluate<string>(`document.querySelector('.transcript-tool__toggle')?.getAttribute('aria-expanded') ?? ''`)).toBe("false")
     } finally { await conversation.close() }
 
     const activity = await remote("activity-pending-decisions", 1440)

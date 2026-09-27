@@ -29,6 +29,7 @@
       "version": "0.1.1",
       "dependencies": {
         "@ycoding-ai/remote": "workspace:*",
+        "marked": "catalog:",
         "phaser": "4.2.1",
         "solid-js": "catalog:",
       },

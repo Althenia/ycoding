@@ -36,6 +36,7 @@ export function actor(id: string, options: Partial<OfficeActor> = {}): OfficeAct
     sessionID: id,
     kind: "session",
     name: id,
+    role: "Developer",
     title: id,
     selected: false,
     status: "working",

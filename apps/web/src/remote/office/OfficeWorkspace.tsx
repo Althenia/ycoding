@@ -1,9 +1,10 @@
-import { For, Show, createMemo, type JSX } from "solid-js"
-import { Link } from "../../router/router"
-import { Chip } from "../../ui/chip"
+import { For, Show, createMemo, createSignal, type JSX } from "solid-js"
 import { OfficeCanvas } from "./OfficeCanvas"
-import { homeRoomLabel } from "./model"
-import type { OfficeActor, OfficePreferences, OfficeSnapshot } from "./types"
+import { officeLocationLabel } from "./model"
+import { appearanceFor, characterFrame } from "./sprites"
+import type { OfficeActor, OfficePreferences, OfficeRoomID, OfficeSnapshot } from "./types"
+
+const characterSheetURL = new URL("./assets/characters.png?no-inline", import.meta.url).href
 
 export function OfficeWorkspace(props: {
   readonly snapshot: OfficeSnapshot
@@ -14,8 +15,13 @@ export function OfficeWorkspace(props: {
   readonly onNormalView: () => void
   readonly onShowRequests: () => void
   readonly onLoadMoreTeam: () => void
-  readonly inspector: JSX.Element
 }): JSX.Element {
+  const [locations, setLocations] = createSignal<Readonly<Record<string, OfficeRoomID | undefined>>>({})
+  const [focusRequest, setFocusRequest] = createSignal<{ readonly actorID: string; readonly revision: number }>()
+  const focusActor = (actor: OfficeActor) => {
+    props.onSelectSession(actor.sessionID)
+    setFocusRequest({ actorID: actor.id, revision: (focusRequest()?.revision ?? 0) + 1 })
+  }
   return (
     <div class="office-workspace">
       <section class="office-workspace__stage" aria-labelledby="office-stage-title">
@@ -33,99 +39,85 @@ export function OfficeWorkspace(props: {
                 preferences={props.preferences}
                 onSelectSession={props.onSelectSession}
                 onNormalView={props.onNormalView}
+                onLocations={setLocations}
+                focusRequest={focusRequest()}
               />
             )}
           </For>
         </div>
-        <OfficeRoster snapshot={props.snapshot} onSelectSession={props.onSelectSession} onLoadMoreTeam={props.onLoadMoreTeam} />
+        <OfficeRoster snapshot={props.snapshot} locations={locations()} onFocusActor={focusActor} onLoadMoreTeam={props.onLoadMoreTeam} />
       </section>
-      <div class="office-workspace__inspector">{props.inspector}</div>
     </div>
   )
 }
 
 function OfficeRoster(props: {
   readonly snapshot: OfficeSnapshot
-  readonly onSelectSession: (sessionID: string) => void
+  readonly locations: Readonly<Record<string, OfficeRoomID | undefined>>
+  readonly onFocusActor: (actor: OfficeActor) => void
   readonly onLoadMoreTeam: () => void
 }): JSX.Element {
-  const ids = createMemo(() => props.snapshot.actors.map((actor) => actor.sessionID))
-  const actor = (sessionID: string) => props.snapshot.actors.find((entry) => entry.sessionID === sessionID)
-  const root = () => props.snapshot.actors.find((entry) => entry.id === props.snapshot.team.rootActorID)
+  const [collapsed, setCollapsed] = createSignal(true)
+  const actors = createMemo(() => props.snapshot.actors.filter((actor) => actor.kind !== "task" || !["completed", "cancelled", "failed", "lost"].includes(actor.taskState ?? "") || Object.hasOwn(props.locations, actor.id)))
   return (
-    <div class="office-roster">
-      <h3 class="office-roster__title">In this office</h3>
-      <Show when={ids().length > 0} fallback={<p class="office-roster__empty">No sessions are shown in the office yet.</p>}>
-        <ul class="office-roster__list">
-          <For each={ids()}>
-            {(sessionID) => (
-              <Show when={actor(sessionID)}>
-                {(entry) => <OfficeRosterRow actor={entry()} root={root()} onSelectSession={props.onSelectSession} />}
-              </Show>
-            )}
+    <aside class="office-roster" classList={{ "office-roster--collapsed": collapsed() }} aria-label="Office agents">
+      <div class="office-roster__head">
+        <h3 class="office-roster__title">Agents <span>{actors().length}</span></h3>
+        <button type="button" class="office-roster__toggle" aria-label={collapsed() ? "Show agent list" : "Hide agent list"} aria-expanded={!collapsed()} aria-controls="office-roster-list" onClick={() => setCollapsed(!collapsed())}>{collapsed() ? "Show agents" : "Hide agents"}</button>
+      </div>
+      <Show when={actors().length > 0} fallback={<p class="office-roster__empty">No agents in this Session yet.</p>}>
+        <ul id="office-roster-list" class="office-roster__list">
+          <For each={actors()}>
+            {(actor) => <OfficeRosterRow actor={actor} room={Object.hasOwn(props.locations, actor.id) ? props.locations[actor.id] : actor.status === "idle" ? "lounge" : actor.homeRoom} onFocusActor={props.onFocusActor} />}
           </For>
         </ul>
       </Show>
-      <Show when={teamNote(props.snapshot.team)}>{(note) => <p class="office-roster__note">{note()}</p>}</Show>
+      <Show when={teamNote(props.snapshot.team, actors().filter((actor) => actor.kind === "task").length)}>{(note) => <p class="office-roster__note">{note()}</p>}</Show>
       <Show when={props.snapshot.team.more}>
         <button type="button" class="button button--secondary button--small office-roster__more" onClick={props.onLoadMoreTeam}>
           Load more subagents
         </button>
       </Show>
       <p class="visually-hidden" role="status">{cueAnnouncement(props.snapshot)}</p>
-      <Show when={props.snapshot.overflow > 0}>
-        <p class="office-roster__note">
-          {props.snapshot.overflow === 1 ? "1 more session is" : `${props.snapshot.overflow} more sessions are`} listed in{" "}
-          <Link href="/remote/sessions">Sessions</Link>.
-        </p>
-      </Show>
-    </div>
+      <Show when={props.snapshot.overflow > 0}><p class="office-roster__note">{props.snapshot.overflow} more subagents are outside this view.</p></Show>
+    </aside>
   )
 }
 
 function OfficeRosterRow(props: {
   readonly actor: OfficeActor
-  readonly root: OfficeActor | undefined
-  readonly onSelectSession: (sessionID: string) => void
+  readonly room?: OfficeRoomID
+  readonly onFocusActor: (actor: OfficeActor) => void
 }): JSX.Element {
+  const frame = () => characterFrame(appearanceFor(props.actor.sessionID), "down", 0)
   return (
     <li>
       <button
         type="button"
         class={`office-roster__row${props.actor.selected ? " office-roster__row--selected" : ""}`}
+        data-session-id={props.actor.sessionID}
         aria-current={props.actor.selected ? "true" : undefined}
-        onClick={() => props.onSelectSession(props.actor.sessionID)}
+        onClick={() => props.onFocusActor(props.actor)}
       >
-        <span class="office-roster__name">{props.actor.name}</span>
-        <span class="office-roster__session">{props.actor.title}</span>
-        <Show when={props.actor.kind === "task"}>
-          <span class="office-roster__session">Subagent of {props.root?.title ?? "the parent session"}</span>
-        </Show>
-        <span class="office-roster__room">{homeRoomLabel[props.actor.homeRoom]}</span>
-        <span class="office-roster__status">{props.actor.statusText}</span>
-        <span class="office-roster__chips">
-          <Show when={props.actor.selected}>
-            <Chip label="Selected" tone="success" />
-          </Show>
-          <Show when={props.actor.kind === "task"}>
-            <Chip label="Subagent" />
-          </Show>
-          <Show when={props.actor.unknownOutcome}>
-            <Chip label="Outcome unknown" tone="attention" />
-          </Show>
+        <span class="office-roster__sprite" aria-hidden="true" style={{ "background-image": `url(${characterSheetURL})`, "background-position": `${-(frame() % 12) * 32}px ${-Math.floor(frame() / 12) * 48}px` }} />
+        <span class="office-roster__content">
+          <span class="office-roster__name">{props.actor.name} <span aria-hidden="true">·</span> {props.actor.role}</span>
+          <span class="office-roster__room">{officeLocationLabel(props.room)}</span>
+          <span class="office-roster__status">{props.actor.unknownOutcome ? "Outcome unknown" : props.actor.statusText}</span>
         </span>
+        <span class={`office-roster__indicator office-roster__indicator--${props.actor.status}`} aria-hidden="true" />
       </button>
     </li>
   )
 }
 
-function teamNote(team: OfficeSnapshot["team"]): string | undefined {
+function teamNote(team: OfficeSnapshot["team"], shown: number): string | undefined {
   if (team.status === "loading") return "Loading subagents…"
   if (team.status === "unsupported") return "The connected machine does not report subagents."
   if (team.status === "error") return "Subagents could not be loaded."
   if (team.status !== "ready") return undefined
   if (team.total === 0) return "No subagents for this session."
-  return team.total > team.shown ? `Showing ${team.shown} of ${team.total} subagents.` : undefined
+  return team.total > shown ? `Showing ${shown} of ${team.total} subagents.` : undefined
 }
 
 function cueAnnouncement(snapshot: OfficeSnapshot): string {

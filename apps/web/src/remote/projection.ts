@@ -76,7 +76,7 @@ export type AssistantPart =
       readonly text: string
       readonly phase?: "commentary" | "final_answer"
     }
-  | { readonly kind: "reasoning"; readonly ordinal: number; readonly text: string }
+  | { readonly kind: "reasoning"; readonly ordinal: number; readonly text: string; readonly started?: number; readonly completed?: number }
   | {
       readonly kind: "tool"
       readonly callID: string
@@ -92,6 +92,9 @@ export type AssistantPart =
       /** Client request state for `shellOutput`, kept apart from the device's bytes. */
       readonly shellOutputFetch?: ShellOutputFetch
       readonly error?: string
+      readonly started?: number
+      readonly ran?: number
+      readonly completed?: number
     }
 
 export type RemoteMessageView =
@@ -115,12 +118,13 @@ export type RemoteMessageView =
       readonly error?: string
       readonly retry?: { readonly attempt: number; readonly at: number; readonly code: string }
     }
-  | { readonly kind: "system"; readonly id: string; readonly text: string; readonly created: number }
+  | { readonly kind: "system"; readonly id: string; readonly text: string; readonly source?: string; readonly created: number }
   | {
       readonly kind: "synthetic"
       readonly id: string
       readonly text: string
       readonly description?: string
+      readonly source?: string
       readonly created: number
     }
   | {
@@ -215,6 +219,7 @@ export type SessionView = {
   readonly lastError?: { readonly code: string; readonly message: string }
   readonly autonomy?: SessionAutonomyView
   readonly retry?: { readonly attempt: number; readonly at: number; readonly code: string }
+  readonly executionStarted?: number
   readonly messages: readonly RemoteMessageView[]
   readonly requests: readonly PendingRequestView[]
   /** Latest recorded patch per changed path, from the ledger read and live records. */
@@ -267,7 +272,6 @@ export const activityLimit = 200
  * unhandled counter.
  */
 const ignoredEventTypes: readonly string[] = [
-  "session.context.observed",
   "session.instructions.updated",
   "session.task.updated",
   "session.project-artifacts-ended",
@@ -287,6 +291,91 @@ const ignoredEventTypes: readonly string[] = [
 
 export function createSessionView(id: string): SessionView {
   return { id, status: "idle", messages: [], requests: [], fileChanges: [], activity: [], unhandledEvents: 0 }
+}
+
+export function formatElapsed(ms: number): string {
+  const seconds = Math.max(0, ms) / 1_000
+  if (seconds < 60) return `${seconds.toFixed(1)}s`
+  const minutes = Math.floor(seconds / 60)
+  return `${minutes}m${String(Math.floor(seconds % 60)).padStart(2, "0")}s`
+}
+
+export function formatPartDuration(ms: number): string {
+  if (ms < 1_000) return `${Math.max(0, Math.round(ms))}ms`
+  if (ms < 60_000) return `${Math.floor(ms / 1_000)}s`
+  return formatElapsed(ms)
+}
+
+export function sessionStatusLabel(view: SessionView, now: number, waiting = 0): string {
+  const goal = view.autonomy?.goal?.status === "active"
+  const level = view.autonomy?.yolo ?? 0
+  const prefix = level > 0 && goal ? `YOLO ${level} + Goal · autonomous` : level > 0 ? `YOLO ${level} · auto-approve` : goal ? "Goal · autonomous" : ""
+  const assistant = view.messages.findLast((message) => message.kind === "assistant")
+  const activeTool = assistant?.kind === "assistant" ? assistant.parts.findLast((part) => part.kind === "tool" && (part.status === "running" || part.status === "streaming")) : undefined
+  const activeReasoning = assistant?.kind === "assistant" ? assistant.parts.findLast((part) => part.kind === "reasoning" && part.completed === undefined) : undefined
+  const elapsed = view.executionStarted === undefined ? "" : ` · ${formatElapsed(now - view.executionStarted)}`
+  const status = view.status === "failed" ? "provider error"
+    : view.retry && view.retry.at > now ? `${view.retry.attempt - 1} failed · retry ${view.retry.attempt} · in ${Math.ceil((view.retry.at - now) / 1_000)}s`
+    : view.retry ? `retrying · attempt ${view.retry.attempt}`
+    : view.requests.length && view.status === "running" ? `? awaiting input${elapsed}`
+    : view.status === "running" && activeTool ? `tool running${elapsed}`
+    : view.status === "running" && activeReasoning ? `thinking${elapsed}`
+    : view.status === "running" && waiting ? `waiting · ${waiting} subagent${waiting === 1 ? "" : "s"}`
+    : view.status === "running" ? `cooking${elapsed}`
+    : waiting ? `waiting · ${waiting} subagent${waiting === 1 ? "" : "s"}` : "ready"
+  return prefix ? `${prefix} · ${status}` : status
+}
+
+export function sessionStatusTimed(view: SessionView, waiting = 0): boolean {
+  if (view.status !== "running") return false
+  if (view.retry || view.requests.length || waiting === 0) return true
+  const assistant = view.messages.findLast((message) => message.kind === "assistant")
+  return assistant?.kind === "assistant" && assistant.parts.some((part) => part.kind === "tool" && (part.status === "running" || part.status === "streaming") || part.kind === "reasoning" && part.completed === undefined)
+}
+
+export function toolSummary(part: Extract<AssistantPart, { kind: "tool" }>): string {
+  const input = part.input ?? {}
+  const field = (key: string) => typeof input[key] === "string" ? input[key] : undefined
+  const name = part.name.toLowerCase()
+  if (name === "shell") {
+    const command = field("command") ?? "Shell"
+    return command.length > 72 ? `${command.slice(0, 35)}…${command.slice(-35)}` : command
+  }
+  if (name === "read" || name === "write" || name === "edit" || name === "patch") return `${name[0]!.toUpperCase()}${name.slice(1)} ${field("path") ?? "file"}`
+  if (name === "grep" || name === "glob") return `${name === "grep" ? "Grep" : "Glob"} "${field("pattern") ?? ""}"${field("path") ? ` in ${field("path")}` : ""}`
+  if (name === "subagent") return `${field("agent") ?? field("subagent_type") ?? "General"} Subagent — ${field("description") ?? "Subagent"}`
+  if (name === "skill") return `Skill "${field("id") ?? "skill"}"`
+  return part.name
+}
+
+export function toolTone(part: Extract<AssistantPart, { kind: "tool" }>): "success" | "error" | "attention" | "running" {
+  if (part.name.toLowerCase() === "subagent" && part.structured?.status === "running") return "running"
+  if (part.status === "completed") return "success"
+  if (part.status === "streaming" || part.status === "running") return "running"
+  return /abort|cancel|interrupt|kill/i.test(part.error ?? "") ? "attention" : "error"
+}
+
+export function noticeSummary(source: string | undefined, text: string): string | undefined {
+  const prefix = source === "session-state" ? "Authoritative current Session state (JSON):\n"
+    : source === "team-view" ? "Internal orchestration context (JSON). Use it to coordinate work. Do not surface subagent status unless the user explicitly asks; report a failure only when it blocks the requested outcome:\n" : undefined
+  if (!prefix || !text.startsWith(prefix)) return undefined
+  const unavailable = source === "session-state" ? "Session state · unavailable" : "TeamView · unavailable"
+  try {
+    const value: unknown = JSON.parse(text.slice(prefix.length).split("\n")[0] ?? "")
+    if (!isRecord(value)) return unavailable
+    if (source === "session-state") {
+      const autonomy = isRecord(value.autonomy) ? value.autonomy : {}
+      const count = Array.isArray(value.todos) ? value.todos.length : 0
+      return `Session state · ${typeof autonomy.mode === "string" ? autonomy.mode : "unknown"} · YOLO ${typeof autonomy.yolo === "number" || typeof autonomy.yolo === "boolean" ? autonomy.yolo : 0} · ${count} ${count === 1 ? "task" : "tasks"}`
+    }
+    const children = Array.isArray(value.children) ? value.children : []
+    const states = children.flatMap((child) => isRecord(child) && typeof child.state === "string" ? [child.state] : [])
+    const omitted = typeof value.omitted === "number" && value.omitted > 0 ? value.omitted : 0
+    if (!states.length) return omitted ? `TeamView · ${omitted} omitted` : "TeamView · no children"
+    return `TeamView · ${[...new Set(states)].map((state) => `${states.filter((item) => item === state).length} ${state}`).concat(omitted ? [`${omitted} omitted`] : []).join(" · ")}`
+  } catch {
+    return unavailable
+  }
 }
 
 export function boundedText(
@@ -542,17 +631,17 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
       return { ...view, model: selected ?? view.model, updatedAt: now }
     }
     case "session.execution.started":
-      return { ...view, status: "running", retry: undefined, updatedAt: now }
+      return { ...view, status: "running", executionStarted: view.executionStarted ?? now, retry: undefined, updatedAt: now }
     case "session.execution.succeeded":
-      return { ...view, status: "idle", retry: undefined, updatedAt: now }
+      return { ...view, status: "idle", executionStarted: undefined, retry: undefined, updatedAt: now }
     case "session.execution.failed":
-      return { ...view, status: "failed", lastError: readError(data.error), updatedAt: now }
+      return { ...view, status: "failed", executionStarted: undefined, lastError: readError(data.error), updatedAt: now }
     case "session.execution.interrupted":
-      return { ...view, status: "interrupted", retry: undefined, updatedAt: now }
+      return { ...view, status: "interrupted", executionStarted: undefined, retry: undefined, updatedAt: now }
     case "session.status":
       return applyStatus(view, data, now)
     case "session.idle":
-      return { ...view, status: "idle", retry: undefined, updatedAt: now }
+      return { ...view, status: "idle", executionStarted: undefined, retry: undefined, updatedAt: now }
     case "session.retry.scheduled":
       return {
         ...view,
@@ -579,6 +668,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         const stepModel = readModelRef(data.model)
         return {
           ...message,
+          created: message.parts.length === 0 ? now : message.created,
           agent: stringField(data.agent) ?? message.agent,
           model: stepModel ?? message.model,
         }
@@ -602,20 +692,21 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         ...(phaseField(data.phase) === undefined ? {} : { phase: phaseField(data.phase) }),
       }))
     case "session.reasoning.started":
-      return withReasoningPart(view, data, now, (part) => part)
+      return withReasoningPart(view, data, now, (part) => ({ ...part, started: part.started ?? now }))
     case "session.reasoning.delta":
       return withReasoningPart(view, data, now, (part) => ({
         ...part,
         text: part.text + (stringField(data.delta) ?? ""),
       }))
     case "session.reasoning.ended":
-      return withReasoningPart(view, data, now, (part) => ({ ...part, text: stringField(data.text) ?? part.text }))
+      return withReasoningPart(view, data, now, (part) => ({ ...part, text: stringField(data.text) ?? part.text, completed: now }))
     case "session.tool.input.started":
       return withToolActivity(
         withToolPart(view, data, now, (part) => ({
           ...part,
           name: stringField(data.name) ?? part.name,
           status: "streaming",
+          started: part.started ?? now,
         })),
         data,
         "pending",
@@ -631,6 +722,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
       return withToolPart(view, data, now, (part) => ({
         ...part,
         status: "running",
+        ran: part.ran ?? now,
         inputText: stringField(data.text) ?? part.inputText,
       }))
     case "session.tool.called":
@@ -638,6 +730,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         withToolPart(view, data, now, (part) => ({
           ...part,
           status: "running",
+          ran: part.ran ?? now,
           input: recordField(data.input) ?? part.input,
         })),
         data,
@@ -656,6 +749,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         withToolPart(view, data, now, (part) => ({
           ...part,
           status: "completed",
+          completed: now,
           content: readToolContent(data.content),
           input: recordField(data.input) ?? part.input,
           structured: recordField(data.structured) ?? part.structured,
@@ -669,6 +763,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         withToolPart(view, data, now, (part) => ({
           ...part,
           status: "failed",
+          completed: now,
           error: readError(data.error)?.message ?? "The tool failed",
         })),
         data,
@@ -681,6 +776,14 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
       return applyShell(view, data, now, true)
     case "session.file-change.recorded":
       return applyFileChange(view, data, now)
+    case "session.context.observed":
+      return pushMessage(view, {
+        kind: data.source === "team-view" ? "synthetic" : "system",
+        id: event.id ?? `context_${view.messages.length}`,
+        text: stringField(data.text) ?? "",
+        ...(stringField(data.source) ? { source: stringField(data.source) } : {}),
+        created: now,
+      })
     case "session.compaction.admitted":
     case "session.compaction.started":
       return withCompaction(view, data, "running")
@@ -694,6 +797,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         id: event.id ?? `synthetic_${view.messages.length}`,
         text: stringField(data.text) ?? "",
         ...(stringField(data.description) === undefined ? {} : { description: stringField(data.description) }),
+        ...(isRecord(data.metadata) && stringField(data.metadata.contextSource) ? { source: stringField(data.metadata.contextSource) } : {}),
         created: now,
       })
     case "session.skill.activated":
@@ -782,12 +886,14 @@ export function readSnapshotParts(content: unknown): readonly AssistantPart[] {
       continue
     }
     if (item.type === "reasoning") {
-      parts.push({ kind: "reasoning", ordinal: parts.length, text: stringField(item.text) ?? "" })
+      const time = recordField(item.time)
+      parts.push({ kind: "reasoning", ordinal: parts.length, text: stringField(item.text) ?? "", ...(time && numberField(time.created) !== undefined ? { started: numberField(time.created) } : {}), ...(time && numberField(time.completed) !== undefined ? { completed: numberField(time.completed) } : {}) })
       continue
     }
     if (item.type === "tool") {
       const state = isRecord(item.state) ? item.state : {}
       const status = stringField(state.status)
+      const time = recordField(item.time)
       parts.push({
         kind: "tool",
         callID: stringField(item.id) ?? `tool-${parts.length}`,
@@ -796,6 +902,9 @@ export function readSnapshotParts(content: unknown): readonly AssistantPart[] {
         ...(stringField(state.input) === undefined ? {} : { inputText: stringField(state.input) }),
         ...(recordField(state.input) === undefined ? {} : { input: recordField(state.input) }),
         content: readToolContent(state.content),
+        ...(time && numberField(time.created) !== undefined ? { started: numberField(time.created) } : {}),
+        ...(time && numberField(time.ran) !== undefined ? { ran: numberField(time.ran) } : {}),
+        ...(time && numberField(time.completed) !== undefined ? { completed: numberField(time.completed) } : {}),
         ...(recordField(state.structured) === undefined ? {} : { structured: recordField(state.structured) }),
         ...(readError(state.error)?.message === undefined ? {} : { error: readError(state.error)?.message }),
       })
@@ -1205,10 +1314,14 @@ function readSnapshotMessage(value: unknown): RemoteMessageView | undefined {
       created,
     }
   }
-  if (type === "system") return { kind: "system", id, text: stringField(value.text) ?? "", created }
+  if (type === "system") {
+    const metadata = recordField(value.metadata)
+    return { kind: "system", id, text: stringField(value.text) ?? "", ...(metadata && stringField(metadata.contextSource) ? { source: stringField(metadata.contextSource) } : {}), created }
+  }
   if (type === "synthetic") {
     const description = stringField(value.description)
-    return { kind: "synthetic", id, text: stringField(value.text) ?? "", ...(description === undefined ? {} : { description }), created }
+    const metadata = recordField(value.metadata)
+    return { kind: "synthetic", id, text: stringField(value.text) ?? "", ...(description === undefined ? {} : { description }), ...(metadata && stringField(metadata.contextSource) ? { source: stringField(metadata.contextSource) } : {}), created }
   }
   if (type === "agent-switched") {
     return { kind: "notice", id, notice: "agent-switched", text: `Agent: ${stringField(value.agent) ?? "unknown"}`, created }

@@ -1,12 +1,14 @@
 import Phaser from "phaser"
 import { createOfficeMailbox, type OfficeFrameInput } from "./bridge"
 import { OfficeScene } from "./OfficeScene"
+import type { OfficeRoomID } from "./types"
 
 export type OfficeHandle = {
   update: (input: OfficeFrameInput) => void
   fit: () => void
   zoomBy: (factor: number) => void
   follow: () => void
+  focus: (actorID: string) => void
   destroy: () => void
 }
 
@@ -50,7 +52,7 @@ class OfficeGame extends Phaser.Game {
   }
 }
 
-export function mountOffice(host: HTMLElement, initial: OfficeFrameInput, selectSession: (id: string) => void, fail: (message: string) => void): OfficeHandle {
+export function mountOffice(host: HTMLElement, initial: OfficeFrameInput, selectSession: (id: string) => void, fail: (message: string) => void, onLocations: (locations: Readonly<Record<string, OfficeRoomID | undefined>>) => void): OfficeHandle {
   const mailbox = createOfficeMailbox(initial)
   const resolution = Math.min(2, Math.max(1, window.devicePixelRatio || 1))
   let failed = false
@@ -61,7 +63,7 @@ export function mountOffice(host: HTMLElement, initial: OfficeFrameInput, select
     game?.pause()
     fail(message)
   }
-  const scene = new OfficeScene(mailbox, selectSession, reportFailure, resolution)
+  const scene = new OfficeScene(mailbox, selectSession, reportFailure, resolution, onLocations)
   game = new OfficeGame({
     type: Phaser.AUTO, parent: host,
     width: Math.max(1, Math.round(host.clientWidth * resolution)), height: Math.max(1, Math.round(host.clientHeight * resolution)),
@@ -108,6 +110,7 @@ export function mountOffice(host: HTMLElement, initial: OfficeFrameInput, select
     fit: () => scene.fit(),
     zoomBy: (factor) => scene.zoomBy(factor),
     follow: () => scene.follow(),
+    focus: (actorID) => scene.focus(actorID),
     destroy: () => {
       if (disposed) return
       disposed = true

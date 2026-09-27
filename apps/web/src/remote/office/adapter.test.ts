@@ -29,6 +29,8 @@ function remoteState(patch: Partial<RemoteStoreState> = {}): RemoteStoreState {
     sessionHasNext: false,
     sessionHasPrevious: false,
     drafts: {},
+    catalogs: {},
+    usage: { providers: { status: "idle" }, summary: { status: "idle" }, reports: {} },
     workspaces: [],
     workspaceStatus: "idle",
     transport: { kind: "open" },
@@ -122,13 +124,14 @@ describe("office adapter", () => {
     expect(listed.sessions.map((item) => item.id)).toEqual(["ses_a", "ses_b"])
   })
 
-  test("carries a listed child Session's recorded parent so the office treats it as a subagent", () => {
+  test("does not turn listed child Sessions into Office actors without a team report", () => {
     const input = officeInputFromRemote(remoteState({
+      activeSessionID: "ses_a",
       sessions: [session("ses_a", { agent: "build" }), session("ses_c", { parentID: "ses_a", agent: "code-reviewer" })],
     }))
     expect(input.sessions.map((item) => [item.id, item.parentID])).toEqual([["ses_a", undefined], ["ses_c", "ses_a"]])
     expect(projectOffice(input, defaultOfficePreferences).actors.map((actor) => [actor.sessionID, actor.homeRoom]))
-      .toEqual([["ses_a", "ceo"], ["ses_c", "qa"]])
+      .toEqual([["ses_a", "ceo"]])
   })
 
   test("maps connection state without claiming readiness it does not have", () => {
@@ -161,14 +164,13 @@ describe("office adapter", () => {
     expect(officeInputFromRemote(remoteState()).team).toBeUndefined()
   })
 
-  test("drives the selected actor from current state while other Sessions stay reported summaries", () => {
+  test("drives only the selected family actor from current state", () => {
     const snapshot = projectOffice(
       officeInputFromRemote(remoteState({ activeSessionID: "ses_a", view: selectedView("ses_a", [assistant("msg_1", [tool("bash", "running")])]) })),
       defaultOfficePreferences,
     )
     expect(snapshot.actors.map((actor) => [actor.sessionID, actor.status, actor.source, actor.bubble])).toEqual([
       ["ses_a", "tool", "projection", "Running a tool"],
-      ["ses_b", "idle", "summary", "Last reported: idle"],
     ])
   })
 })

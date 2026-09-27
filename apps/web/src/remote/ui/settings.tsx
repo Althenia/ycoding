@@ -1,9 +1,11 @@
-import { For, Show, createSignal, type JSX } from "solid-js"
+import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
 import { useTheme } from "../../theme/theme-store"
 import type { ThemePreference } from "../../theme/theme"
 import type { SessionView } from "../projection"
 import { useRemote } from "../context"
+import { createPushHttp } from "../http"
+import { browserPushPlatform, disablePush, enablePush, pushStatusView, readPushState, type PushPlatform, type PushStatus } from "../push"
 import type { OfficeSettingsStore, WorkspacePresentation } from "../office/storage"
 import type { OfficePreferences } from "../office/types"
 import {
@@ -525,7 +527,34 @@ export function AutonomySettings(): JSX.Element {
 export function NotificationSettings(): JSX.Element {
   const [preferences, setPreferences] = createSignal(readNotificationPreferences())
   const [permission, setPermission] = createSignal(permissionDescription())
+  const [pushStatus, setPushStatus] = createSignal<PushStatus>("unsupported")
+  const [pushBusy, setPushBusy] = createSignal(true)
+  const [pushError, setPushError] = createSignal("")
+  const pushView = () => pushStatusView(pushStatus())
+  const pushHttp = createPushHttp()
+  let pushPlatform: PushPlatform | undefined
+  let active = true
   const counts = () => countEnabledChannels(preferences())
+
+  onMount(() => {
+    pushPlatform = browserPushPlatform()
+    void readPushState(pushPlatform, pushHttp).then((status) => {
+      if (!active) return
+      setPushStatus(status)
+      setPushBusy(false)
+    })
+  })
+  onCleanup(() => { active = false })
+
+  const togglePush = async () => {
+    if (!pushPlatform || pushBusy()) return
+    setPushBusy(true)
+    const result = pushStatus() === "on" ? await disablePush(pushPlatform, pushHttp) : await enablePush(pushPlatform, pushHttp)
+    if (!active) return
+    setPushStatus(result.status)
+    setPushError(result.message ?? "")
+    setPushBusy(false)
+  }
 
   const update = (category: NotificationCategory, channel: NotificationChannel) => {
     const next = toggleNotificationChannel(preferences(), category, channel)
@@ -538,7 +567,7 @@ export function NotificationSettings(): JSX.Element {
       id="notification-settings"
       category="Notifications"
       title="Notifications"
-      hint="Categories apply to notices in this workspace and, once this browser is permitted, to desktop alerts. Alerts cover live events only: reopening a session never replays one, and desktop alerts appear while this page is open because the workspace has no background push."
+      hint="Categories apply to notices in this workspace and, once this browser is permitted, to desktop alerts while it is open. Push to this device can alert an installed app after it closes. Reopening a session never replays a past alert."
     >
       <table class="notification-table" aria-labelledby="notification-settings">
         <thead>
@@ -576,6 +605,16 @@ export function NotificationSettings(): JSX.Element {
         </tbody>
       </table>
       <div class="defs">
+        <div class="defs__row">
+          <span class="defs__key">Push to this device</span>
+          <span class="defs__value">
+            <button type="button" class="button button--secondary button--small"
+              aria-label="Push to this device" aria-describedby="push-device-status"
+              aria-pressed={pushView().pressed} disabled={pushBusy() || pushView().disabled}
+              onClick={() => void togglePush()}>{pushBusy() ? "Checking…" : pushView().label}</button>
+            <span id="push-device-status" class="field__hint" role="status" aria-live="polite">{pushError() || pushView().detail}</span>
+          </span>
+        </div>
         <div class="defs__row">
           <span class="defs__key">Desktop alerts</span>
           <span class="defs__value">

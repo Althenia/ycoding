@@ -61,7 +61,7 @@ describe("tablet remote navigation", () => {
             overflow: document.documentElement.scrollWidth > innerWidth,
           };
         })()`)
-        expect(state.links).toEqual(["Sessions", "Conversation", "Activity", "Settings"])
+        expect(state.links).toEqual(["Sessions", "Conversation", "Activity", "Usage", "Settings"])
         expect(state.railVisible).toBe(true)
         expect(state.toggleVisible).toBe(width < 1024)
         if (state.toggleVisible) {
@@ -133,7 +133,7 @@ describe("tablet remote navigation", () => {
             overflow: document.documentElement.scrollWidth > innerWidth,
           };
         })()`)
-        expect(state.labels).toEqual(["Sessions", "Conversation", "Activity", "Settings"])
+        expect(state.labels).toEqual(["Sessions", "Conversation", "Activity", "Usage", "Settings"])
         expect(state.heights.every((height) => height >= 44)).toBe(true)
         expect(state.clipped).toBe(false)
         expect(state.overflow).toBe(false)
@@ -158,7 +158,7 @@ describe("tablet remote navigation", () => {
         return toggle instanceof HTMLElement && getComputedStyle(toggle).display !== "none" && toggle.getBoundingClientRect().width > 0;
       })()`)).toBe(false)
       expect(await page.evaluate<boolean>(`document.querySelector(".workspace__rail") === null`)).toBe(true)
-      expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll(".remote-nav a")].filter(link => link.getBoundingClientRect().width > 0).map(link => link.textContent.trim())`)).toEqual(["Sessions", "Conversation", "Activity", "Settings"])
+      expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll(".remote-nav a")].filter(link => link.getBoundingClientRect().width > 0).map(link => link.textContent.trim())`)).toEqual(["Sessions", "Conversation", "Activity", "Usage", "Settings"])
     } finally {
       await page.close()
     }

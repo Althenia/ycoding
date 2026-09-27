@@ -210,6 +210,20 @@ export function sessionProjectLabel(session: { readonly projectID?: string; read
   return session.projectID ?? "Not reported"
 }
 
+export function workspaceLabels(
+  groups: readonly { readonly id: string; readonly projectID: string; readonly directory: string; readonly name?: string }[],
+): ReadonlyMap<string, string> {
+  const base = groups.map((group) => {
+    const segments = group.directory.split(/[\\/]+/).filter((segment) => segment.length > 0)
+    return { id: group.id, label: group.name ?? segments.at(-1) ?? group.directory, parent: segments.at(-2) }
+  })
+  const counts = base.reduce((result, entry) => result.set(entry.label, (result.get(entry.label) ?? 0) + 1), new Map<string, number>())
+  return new Map(base.map((entry) => [
+    entry.id,
+    (counts.get(entry.label) ?? 0) > 1 && entry.parent !== undefined ? `${entry.label} (${entry.parent})` : entry.label,
+  ]))
+}
+
 export function createUnavailableRemoteViewModel(
   reason: RemoteUnavailableReason = "not-configured",
 ): RemoteViewModel {

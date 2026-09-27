@@ -36,11 +36,16 @@ class FakeNotification {
     FakeNotification.refuseToConstruct = false
   }
   readonly tag: string
+  readonly title: string
+  readonly body: string
   closed = false
   onclose: (() => void) | null = null
   onerror: (() => void) | null = null
-  constructor(_title: string, options?: NotificationOptions) {
+  onclick: (() => void) | null = null
+  constructor(title: string, options?: NotificationOptions) {
     if (FakeNotification.refuseToConstruct) throw new Error("notification refused")
+    this.title = title
+    this.body = options?.body ?? ""
     this.tag = options?.tag ?? ""
     FakeNotification.instances.push(this)
   }
@@ -158,9 +163,7 @@ describe("createNotificationDelivery", () => {
   test("raises one in-app notice and one desktop alert for one event", () => {
     const test = deliveryWith({})
     test.delivery.deliver("agent-completed")
-    expect(test.delivery.entries()).toEqual([
-      { id: "agent-completed", category: "agent-completed", ...NOTIFICATION_TEXT["agent-completed"], at: 1_001 },
-    ])
+    expect(test.delivery.entries()).toMatchObject([{ category: "agent-completed", ...NOTIFICATION_TEXT["agent-completed"], at: 1_001, read: false }])
     expect(test.recorder.alerts).toHaveLength(1)
     expect(test.recorder.alerts[0]?.title).toBe(NOTIFICATION_TEXT["agent-completed"].title)
     expect(test.recorder.alerts[0]?.body).toBe(NOTIFICATION_TEXT["agent-completed"].body)
@@ -208,27 +211,32 @@ describe("createNotificationDelivery", () => {
     expect(test.delivery.entries()[0]?.body).not.toContain("leaked-token-abc")
   })
 
-  test("keeps one notice per category so repeated events cannot stack", () => {
+  test("keeps newest notices with session context, limits to 50, and marks or clears them", () => {
     const test = deliveryWith({})
     for (const category of NOTIFICATION_CATEGORIES) test.delivery.deliver(category.id)
     expect(test.delivery.entries()).toHaveLength(NOTIFICATION_CATEGORIES.length)
 
-    test.delivery.deliver("error")
-    expect(test.delivery.entries()).toHaveLength(NOTIFICATION_CATEGORIES.length)
-    const error = test.delivery.entries().find((entry) => entry.category === "error")
-    expect(error?.at).toBe(NOTIFICATION_CATEGORIES.length + 1_001)
-    expect(test.recorder.alerts).toHaveLength(NOTIFICATION_CATEGORIES.length + 1)
+    for (let index = 0; index < 52; index += 1) test.delivery.deliver("error", { sessionID: `ses_${index}`, sessionTitle: `Session ${index}` })
+    expect(test.delivery.entries()).toHaveLength(50)
+    expect(test.delivery.entries()[0]).toMatchObject({ category: "error", sessionID: "ses_51", sessionTitle: "Session 51", read: false })
+    expect(test.delivery.entries().at(-1)?.sessionID).toBe("ses_2")
+    test.delivery.markRead()
+    expect(test.delivery.entries().every((entry) => entry.read)).toBe(true)
+    test.delivery.clear()
+    expect(test.delivery.entries()).toEqual([])
+    expect(test.recorder.alerts.at(-1)?.body).toBe(NOTIFICATION_TEXT.error.body)
   })
 
   test("dismisses one notice without touching the others", () => {
     const test = deliveryWith({})
     test.delivery.deliver("error")
     test.delivery.deliver("agent-completed")
-    expect(test.delivery.entries().map((entry) => entry.id)).toEqual(["error", "agent-completed"])
-    test.delivery.dismiss("error")
-    expect(test.delivery.entries().map((entry) => entry.id)).toEqual(["agent-completed"])
+    const ids = test.delivery.entries().map((entry) => entry.id)
+    expect(ids).toHaveLength(2)
+    test.delivery.dismiss(ids[1]!)
+    expect(test.delivery.entries().map((entry) => entry.id)).toEqual([ids[0]!])
     test.delivery.dismiss("unknown")
-    expect(test.delivery.entries().map((entry) => entry.id)).toEqual(["agent-completed"])
+    expect(test.delivery.entries().map((entry) => entry.id)).toEqual([ids[0]!])
   })
 
   test("releases the desktop notifier and its notices on dispose", () => {
@@ -246,13 +254,44 @@ describe("createNotificationDelivery", () => {
     expect(test.delivery.entries()).toHaveLength(0)
 
     test.delivery.deliver("error")
-    expect(test.delivery.entries().map((entry) => entry.id)).toEqual(["error"])
+    expect(test.delivery.entries().map((entry) => entry.category)).toEqual(["error"])
     expect(test.recorder.alerts).toHaveLength(2)
     expect(test.recorder.disposals()).toBe(1)
   })
 })
 
 describe("createDesktopNotifier", () => {
+  test("opens the owning Session on click without putting its title in desktop copy", () => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, "window")
+    const received: string[] = []
+    let focused = 0
+    const windowTarget = Object.assign(new EventTarget(), { focus: () => { focused += 1 } })
+    windowTarget.addEventListener("ycoding:open-session", (event) => {
+      if (event instanceof CustomEvent) received.push(event.detail.sessionID)
+    })
+    Object.defineProperty(globalThis, "window", { configurable: true, value: windowTarget })
+    try {
+      withFakeNotification("granted", () => {
+        const delivery = createNotificationDelivery({
+          preferences: () => normalizeNotificationPreferences(undefined), desktop: createDesktopNotifier(),
+        })
+        delivery.deliver("approval-requested", { sessionID: "ses_a", sessionTitle: "Private Session" })
+        expect(FakeNotification.instances[0]?.title).toBe(NOTIFICATION_TEXT["approval-requested"].title)
+        expect(FakeNotification.instances[0]?.body).toBe(NOTIFICATION_TEXT["approval-requested"].body)
+        expect(FakeNotification.instances[0]?.body).not.toContain("Private Session")
+        expect(FakeNotification.instances[0]?.onclick).toBeFunction()
+        FakeNotification.instances[0]?.onclick?.()
+        expect(focused).toBe(1)
+        expect(received).toEqual(["ses_a"])
+        expect(FakeNotification.instances[0]?.closed).toBe(true)
+        expect(FakeNotification.instances[0]?.onclick).toBeNull()
+        delivery.dispose()
+      })
+    } finally {
+      if (original) Object.defineProperty(globalThis, "window", original)
+      else Reflect.deleteProperty(globalThis, "window")
+    }
+  })
   test("never requests permission and stays silent until the browser already granted it", () => {
     withFakeNotification("default", () => {
       // The whole delivery path is exercised, not just the notifier: nothing may
@@ -272,16 +311,18 @@ describe("createDesktopNotifier", () => {
   test("replaces a live alert for the same category and closes every alert on dispose", () => {
     withFakeNotification("granted", () => {
       const notifier = createDesktopNotifier()
-      notifier.show({ title: "first", body: "same category", tag: "ycoding-error" })
-      notifier.show({ title: "second", body: "same category", tag: "ycoding-error" })
+      notifier.show({ title: "first", body: "same category", tag: "ycoding-error", sessionID: "ses_a" })
+      notifier.show({ title: "second", body: "same category", tag: "ycoding-error", sessionID: "ses_b" })
       notifier.show({ title: "other", body: "other category", tag: "ycoding-device-disconnected" })
       expect(FakeNotification.instances).toHaveLength(3)
       expect(FakeNotification.instances[0]?.closed).toBe(true)
+      expect(FakeNotification.instances[0]?.onclick).toBeNull()
       expect(FakeNotification.instances[1]?.closed).toBe(false)
       notifier.dispose()
       expect(FakeNotification.instances[1]?.closed).toBe(true)
       expect(FakeNotification.instances[2]?.closed).toBe(true)
       expect(FakeNotification.instances[1]?.onclose).toBeNull()
+      expect(FakeNotification.instances[1]?.onclick).toBeNull()
     })
   })
 

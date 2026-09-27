@@ -46,7 +46,6 @@ describe("office team projection", () => {
       ["ses_root", "session", "working", "Working", undefined],
       ["ses_child", "task", "working", "Running", "ses_root"],
       ["ses_done", "task", "idle", "Completed", "ses_root"],
-      ["ses_other", "session", "idle", "Last reported: idle", undefined],
     ])
     expect(snapshot.team).toEqual({ status: "ready", rootActorID: actorID("ses_root"), total: 2, shown: 2, more: false })
     expect(snapshot.overflow).toBe(0)
@@ -82,10 +81,10 @@ describe("office team projection", () => {
     expect(office(ready([member("ses_child", "running")], cues), { connection: "offline" }).cues).toEqual([])
 
     const unsupported = office({ rootID: "ses_root", status: "unsupported", members: [], cues, more: false })
-    expect(unsupported.team).toEqual({ status: "unsupported", rootActorID: undefined, total: 0, shown: 0, more: false })
+    expect(unsupported.team).toEqual({ status: "unsupported", rootActorID: actorID("ses_root"), total: 0, shown: 0, more: false })
     expect(unsupported.cues).toEqual([])
-    expect(unsupported.actors.find((actor) => actor.sessionID === "ses_child")).toMatchObject({ kind: "session", statusText: "Last reported: running" })
-    expect(office(undefined).team).toEqual({ status: "none", rootActorID: undefined, total: 0, shown: 0, more: false })
+    expect(unsupported.actors.map((actor) => actor.sessionID)).toEqual(["ses_root"])
+    expect(office(undefined).team).toEqual({ status: "none", rootActorID: actorID("ses_root"), total: 0, shown: 0, more: false })
   })
 
   test("keeps a selected child live and anchors it to its parent when the page window lists neither", () => {
@@ -103,11 +102,11 @@ describe("office team projection", () => {
 
   test("counts task actors toward the canvas cap after the selection and its root", () => {
     const sessions = Array.from({ length: 20 }, (_, index) => ({ id: `ses_s${String(index).padStart(2, "0")}`, title: `Session ${index}`, archived: false }))
-    const members = Array.from({ length: 5 }, (_, index) => member(`ses_t${index}`, "running"))
+    const members = Array.from({ length: 20 }, (_, index) => member(`ses_t${String(index).padStart(2, "0")}`, "running"))
     const snapshot = office(ready(members, [], 5), { sessions: [{ id: "ses_root", title: "Root", archived: false }, ...sessions] })
     expect(snapshot.actors).toHaveLength(maxOfficeActors)
-    expect(snapshot.actors.slice(0, 6).map((actor) => actor.sessionID)).toEqual(["ses_root", "ses_t0", "ses_t1", "ses_t2", "ses_t3", "ses_t4"])
-    expect(snapshot.overflow).toBe(21 + 5 - maxOfficeActors)
-    expect(snapshot.team.shown).toBe(5)
+    expect(snapshot.actors.map((actor) => actor.sessionID)).toEqual(["ses_root", ...Array.from({ length: maxOfficeActors - 1 }, (_, index) => `ses_t${String(index).padStart(2, "0")}`)])
+    expect(snapshot.overflow).toBe(21 - maxOfficeActors)
+    expect(snapshot.team.shown).toBe(maxOfficeActors - 1)
   })
 })

@@ -1,0 +1,11 @@
+.session-status { display:grid; gap:var(--yc-space-2); min-inline-size:0; padding:var(--yc-space-2) var(--yc-space-3); border-block-start:1px solid var(--yc-border); font:var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); color:var(--yc-text-muted); background:var(--yc-surface-sunken); overflow-wrap:anywhere; }
+.session-status__operation { display:flex; align-items:center; flex-wrap:wrap; gap:var(--yc-space-2); min-inline-size:0; }
+.session-status__chip { padding:var(--yc-space-1) var(--yc-space-2); border:1px solid var(--yc-border); border-radius:var(--yc-radius-pill); background:var(--yc-surface-raised); }
+.session-status__chip--attention { color:var(--yc-yellow-strong); background:var(--yc-yellow-soft); }
+.session-status__goal { display:flex; flex-wrap:wrap; align-items:center; gap:var(--yc-space-2); min-inline-size:0; }
+.session-status__goal details { min-inline-size:0; max-inline-size:100%; }
+.session-status__goal summary { max-inline-size:42ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; min-block-size:44px; align-content:center; }
+.session-status__goal details[open] summary { white-space:normal; }
+.session-status__goal p { margin:0; overflow-wrap:anywhere; }
+.session-status__goal button { min-block-size:44px; border:1px solid var(--yc-border-strong); border-radius:var(--yc-radius-sm); color:var(--yc-danger); background:var(--yc-surface-raised); cursor:pointer; }
+.session-status :is(button,summary):focus-visible { outline:2px solid var(--yc-focus); outline-offset:2px; }

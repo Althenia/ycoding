@@ -44,8 +44,9 @@ export class OfficeScene extends Phaser.Scene {
   private followSuspended = false
   private desiredZoom: number
   private latestFrames: readonly ActorFrame[] = []
+  private lastLocations = ""
 
-  constructor(private readonly mailbox: OfficeMailbox, private readonly selectSession: (id: string) => void, private readonly fail: (message: string) => void, private readonly resolution: number) {
+  constructor(private readonly mailbox: OfficeMailbox, private readonly selectSession: (id: string) => void, private readonly fail: (message: string) => void, private readonly resolution: number, private readonly onLocations: (locations: Readonly<Record<string, ActorFrame["room"]>>) => void) {
     super({ key: "office" })
     this.desiredZoom = resolution
   }
@@ -169,6 +170,13 @@ export class OfficeScene extends Phaser.Scene {
     if (selected) this.cameras.main.centerOn(selected.position.x, selected.position.y)
   }
 
+  focus(actorID: string): void {
+    const actor = this.latestFrames.find((frame) => frame.actor.id === actorID && !frame.leaving)
+    if (!actor) return
+    this.followSuspended = false
+    this.cameras.main.centerOn(actor.position.x, actor.position.y)
+  }
+
   settle(): void { this.director.settle() }
 
   adoptLatest(): void {
@@ -211,6 +219,12 @@ export class OfficeScene extends Phaser.Scene {
     }
     if (reduced && this.badgeQueue.length && time >= this.badgeUntil) this.showCueBadge(this.badgeQueue.shift()!, time)
     this.latestFrames = this.director.tick(delta, reduced)
+    const locations = Object.fromEntries(this.latestFrames.map((frame) => [frame.actor.id, frame.room]))
+    const locationKey = JSON.stringify(locations)
+    if (locationKey !== this.lastLocations) {
+      this.lastLocations = locationKey
+      this.onLocations(locations)
+    }
     const scale = this.resolution / this.cameras.main.zoom
     for (const title of this.roomTitles) {
       title.text.setX(Phaser.Math.Linear((title.room.label.x + 0.5) * tileSize, (title.room.center.x + 0.5) * tileSize,
@@ -354,8 +368,8 @@ export class OfficeScene extends Phaser.Scene {
     const preferences = this.mailbox.read().preferences
     const terminalTask = frame.actor.kind === "task" && ["completed", "cancelled", "lost", "failed"].includes(frame.actor.taskState ?? "")
     objects.label.setText(terminalTask
-      ? `${shortText(frame.actor.name, 20)}\n${frame.actor.statusText}${frame.actor.source === "summary" ? " · reported" : ""}`
-      : `${shortText(frame.actor.name, 20)}${frame.actor.source === "summary" ? " · reported" : ""}`)
+      ? `${shortText(frame.actor.name, 20)} · ${shortText(frame.actor.role, 16)}\n${frame.actor.statusText}`
+      : `${shortText(frame.actor.name, 20)} · ${shortText(frame.actor.role, 16)}`)
       .setScale(scale).setVisible(preferences.labels && !frame.leaving)
     objects.labelPlate.setVisible(preferences.labels && !frame.leaving)
     const bubble = frame.actor.unknownOutcome ? "Action outcome unknown" : frame.actor.bubble ?? ""

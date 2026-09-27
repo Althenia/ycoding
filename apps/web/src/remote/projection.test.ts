@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import {
   readTeamCue,
+  noticeSummary,
+  formatPartDuration,
+  sessionStatusLabel,
+  sessionStatusTimed,
+  toolSummary,
+  toolTone,
   appendShellOutputPage,
   applySessionEvent,
   boundedText,
@@ -47,6 +53,75 @@ function apply(view: SessionView, type: string, data: Record<string, unknown>, n
   return applySessionEvent(view, event(type, data), now)
 }
 
+test("tracks live execution and part timings for the transcript and status bar", () => {
+  let view = apply(createSessionView("ses_a"), "session.execution.started", {}, 1_000)
+  expect(view.executionStarted).toBe(1_000)
+  view = apply(view, "session.step.started", { assistantMessageID: "msg_a" }, 1_100)
+  view = apply(view, "session.reasoning.started", { assistantMessageID: "msg_a", ordinal: 0 }, 1_200)
+  view = apply(view, "session.reasoning.ended", { assistantMessageID: "msg_a", ordinal: 0, text: "thinking" }, 3_200)
+  view = apply(view, "session.tool.input.started", { assistantMessageID: "msg_a", callID: "call_a", name: "shell" }, 3_300)
+  view = apply(view, "session.tool.called", { assistantMessageID: "msg_a", callID: "call_a", input: { command: "bun test" } }, 3_500)
+  view = apply(view, "session.tool.success", { assistantMessageID: "msg_a", callID: "call_a", content: [] }, 3_637)
+  expect(view.messages[0]).toMatchObject({ created: 1_100, parts: [
+    { kind: "reasoning", started: 1_200, completed: 3_200 },
+    { kind: "tool", started: 3_300, ran: 3_500, completed: 3_637 },
+  ] })
+  view = apply(view, "session.execution.succeeded", {}, 4_000)
+  expect(view.executionStarted).toBeUndefined()
+})
+
+test("keeps short row durations precise without changing live one-decimal elapsed", () => {
+  expect(formatPartDuration(137)).toBe("137ms")
+  expect(formatPartDuration(2_000)).toBe("2s")
+  expect(formatPartDuration(134_000)).toBe("2m14s")
+})
+
+test("derives operational status and elapsed from active work and retry state", () => {
+  const base = { ...createSessionView("ses_a"), status: "running" as const, executionStarted: 1_000 }
+  expect(sessionStatusLabel(base, 47_700)).toBe("cooking · 46.7s")
+  expect(sessionStatusLabel({ ...base, autonomy: { mode: "yolo", yolo: 3 } }, 47_700)).toBe("YOLO 3 · auto-approve · cooking · 46.7s")
+  expect(sessionStatusLabel({ ...base, messages: [{ kind: "assistant", id: "a", created: 2_000, parts: [{ kind: "reasoning", ordinal: 0, text: "…", started: 3_000 }] }] }, 49_700)).toBe("thinking · 48.7s")
+  expect(sessionStatusLabel({ ...base, messages: [{ kind: "assistant", id: "a", created: 2_000, parts: [{ kind: "tool", callID: "c", name: "shell", status: "running", content: [], started: 3_000 }] }] }, 135_000)).toBe("tool running · 2m14s")
+  expect(sessionStatusLabel({ ...base, retry: { attempt: 2, at: 6_000, code: "rate_limit" } }, 4_000)).toBe("1 failed · retry 2 · in 2s")
+  expect(sessionStatusLabel({ ...base, requests: [{ kind: "permission", id: "p", action: "read", resources: [], askedAt: 2_000 }] }, 3_000)).toBe("? awaiting input · 2.0s")
+  expect(sessionStatusLabel(base, 3_000, 2)).toBe("waiting · 2 subagents")
+  expect(sessionStatusTimed(base, 2)).toBe(false)
+  expect(sessionStatusTimed(base, 0)).toBe(true)
+  expect(sessionStatusLabel({ ...base, status: "failed" }, 3_000)).toBe("provider error")
+  expect(sessionStatusLabel(createSessionView("ses_a"), 3_000)).toBe("ready")
+})
+
+test("summarizes runtime observations without exposing raw JSON inline", () => {
+  const session = "Authoritative current Session state (JSON):\n{\"autonomy\":{\"mode\":\"goal\",\"yolo\":2},\"todos\":[{}]}"
+  expect(noticeSummary("session-state", session)).toBe("Session state · goal · YOLO 2 · 1 task")
+  expect(noticeSummary("team-view", "Internal orchestration context (JSON). Use it to coordinate work. Do not surface subagent status unless the user explicitly asks; report a failure only when it blocks the requested outcome:\n{\"children\":[{\"state\":\"running\"},{\"state\":\"running\"}]}" )).toBe("TeamView · 2 running")
+  expect(noticeSummary("session-state", "Authoritative current Session state (JSON):\n{" )).toBe("Session state · unavailable")
+  expect(noticeSummary(undefined, session)).toBeUndefined()
+  const view = apply(createSessionView("ses_a"), "session.context.observed", { source: "session-state", text: session })
+  expect(view.messages[0]).toMatchObject({ kind: "system", source: "session-state" })
+  const snapshot = readMessageList({ data: [{ id: "msg_observed", type: "system", text: session, metadata: { contextSource: "session-state" }, time: { created: 1 } }] })
+  expect(snapshot[0]).toMatchObject({ kind: "system", source: "session-state" })
+  const synthetic = apply(createSessionView("ses_a"), "session.synthetic", { text: session, metadata: { contextSource: "session-state" } })
+  expect(synthetic.messages[0]).toMatchObject({ source: "session-state" })
+})
+
+test("uses tool-specific one-line input summaries", () => {
+  const part = { kind: "tool" as const, callID: "c", status: "completed" as const, content: [], name: "shell", input: { command: "bun test" } }
+  expect(toolSummary(part)).toBe("bun test")
+  expect(toolSummary({ ...part, input: { command: `prefix-${"x".repeat(100)}-suffix` } })).toMatch(/^prefix-.+….+-suffix$/)
+  expect(toolSummary({ ...part, name: "read", input: { path: "src/main.ts" } })).toBe("Read src/main.ts")
+  expect(toolSummary({ ...part, name: "grep", input: { pattern: "TODO" } })).toBe('Grep "TODO"')
+  expect(toolSummary({ ...part, name: "subagent", input: { agent: "Explore", description: "Find callers" } })).toBe("Explore Subagent — Find callers")
+  expect(toolSummary({ ...part, name: "skill", input: { id: "ycoding" } })).toBe('Skill "ycoding"')
+})
+
+test("distinguishes failed tools from interrupted or cancelled work needing attention", () => {
+  expect(toolTone({ kind: "tool", callID: "a", name: "shell", status: "completed", content: [] })).toBe("success")
+  expect(toolTone({ kind: "tool", callID: "a", name: "shell", status: "failed", content: [], error: "Permission denied" })).toBe("error")
+  expect(toolTone({ kind: "tool", callID: "a", name: "shell", status: "failed", content: [], error: "Step interrupted" })).toBe("attention")
+  expect(toolTone({ kind: "tool", callID: "a", name: "subagent", status: "completed", content: [], structured: { status: "running" } })).toBe("running")
+})
+
 function completedCompaction(id: string, jobID: string, messageID: string, seq: number, created: number) {
   return {
     id, type: "compaction", jobID, trigger: "manual", status: "completed", revision: 1,
@@ -90,12 +165,17 @@ describe("assistant streaming", () => {
     const message = view.messages[0]
     if (message?.kind !== "assistant") throw new Error("expected an assistant message")
     expect(message.parts).toEqual([
-      { kind: "reasoning", ordinal: 0, text: "thinking" },
+      { kind: "reasoning", ordinal: 0, text: "thinking", started: 1 },
       {
         kind: "tool",
         callID: "call_1",
         name: "execute",
         status: "completed",
+        started: 1,
+        ran: 1,
+        completed: 1,
+        input: undefined,
+        structured: undefined,
         inputText: '{"code":"1"}',
         content: [{ kind: "text", text: "done" }],
       },

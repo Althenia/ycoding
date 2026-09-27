@@ -4,7 +4,7 @@ import { SITE } from "../content/site"
 import { parseLocation } from "../router/route"
 import { headMetadata, resolveRouteMetadata, type HeadTag } from "./metadata"
 
-const REMOTE_ROUTES = ["/remote", "/remote/sessions", "/remote/activity", "/remote/settings"] as const
+const REMOTE_ROUTES = ["/remote", "/remote/sessions", "/remote/activity", "/remote/usage", "/remote/settings"] as const
 
 function attrsFor(tags: readonly HeadTag[], key: { readonly name?: string; readonly property?: string; readonly rel?: string }) {
   return tags.filter((tag) => {

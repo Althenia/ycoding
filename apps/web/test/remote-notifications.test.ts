@@ -164,7 +164,7 @@ describe("remote notification delivery", () => {
       test.relay.pushEvent("ses_a", durable("session.execution.succeeded", 6))
       await test.flush()
       expect(test.store.state().notifications.map((entry) => entry.category)).toEqual(["agent-completed"])
-      expect(test.store.state().notifications[0]?.body).toBe("The active session finished its work.")
+      expect(test.store.state().notifications[0]?.body).toBe("A session stopped running.")
       expect(test.alerts).toHaveLength(1)
 
       // The same durable event again is a duplicate, not a second alert.
@@ -189,9 +189,9 @@ describe("remote notification delivery", () => {
       await test.flush()
 
       expect(test.store.state().notifications.map((entry) => entry.category)).toEqual([
-        "approval-requested",
-        "guardrail-blocked",
         "error",
+        "guardrail-blocked",
+        "approval-requested",
       ])
       expect(test.alerts.map((alert) => alert.title)).toEqual([
         "YCoding — approval needed",
@@ -416,7 +416,7 @@ describe("remote notification delivery", () => {
     }
   })
 
-  test("replaces a repeated category instead of stacking notices", async () => {
+  test("keeps separately actionable repeated notices newest first", async () => {
     const test = await harness()
     try {
       await test.openSession()
@@ -424,7 +424,8 @@ describe("remote notification delivery", () => {
       await test.flush()
       test.relay.pushEvent("ses_a", { id: "evt_31", type: "permission.v2.asked", data: { id: "per_2", action: "write" } })
       await test.flush()
-      expect(test.store.state().notifications.map((entry) => entry.id)).toEqual(["approval-requested"])
+      expect(test.store.state().notifications.map((entry) => entry.category)).toEqual(["approval-requested", "approval-requested"])
+      expect(new Set(test.store.state().notifications.map((entry) => entry.id)).size).toBe(2)
       expect(test.alerts).toHaveLength(2)
     } finally {
       await test.stop()
@@ -438,12 +439,14 @@ describe("remote notification delivery", () => {
       test.relay.pushEvent("ses_a", durable("session.execution.succeeded", 6))
       test.relay.pushEvent("ses_a", { id: "evt_32", type: "permission.v2.asked", data: { id: "per_1", action: "shell" } })
       await test.flush()
-      expect(test.store.state().notifications.map((entry) => entry.id)).toEqual(["agent-completed", "approval-requested"])
+      expect(test.store.state().notifications.map((entry) => entry.category)).toEqual(["approval-requested", "agent-completed"])
 
-      test.store.dismissNotification("agent-completed")
-      expect(test.store.state().notifications.map((entry) => entry.id)).toEqual(["approval-requested"])
+      const completedID = test.store.state().notifications.find((entry) => entry.category === "agent-completed")?.id
+      if (!completedID) throw new Error("missing completion notice")
+      test.store.dismissNotification(completedID)
+      expect(test.store.state().notifications.map((entry) => entry.category)).toEqual(["approval-requested"])
       test.store.dismissNotification("unknown")
-      expect(test.store.state().notifications.map((entry) => entry.id)).toEqual(["approval-requested"])
+      expect(test.store.state().notifications.map((entry) => entry.category)).toEqual(["approval-requested"])
     } finally {
       await test.stop()
     }

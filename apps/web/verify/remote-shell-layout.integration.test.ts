@@ -84,9 +84,9 @@ describe("remote shell layout", () => {
         const input = document.querySelector('.composer__input');
         input.value = 'Work only in Session A';
         input.dispatchEvent(new InputEvent('input', { bubbles: true }));
-        document.querySelectorAll('.session-row')[2]?.click();
+        document.querySelectorAll('.session-row')[1]?.click();
       })()`)
-      expect(await page.evaluate<string>(`document.querySelector('.conversation-breadcrumb strong')?.textContent ?? ''`)).toContain("Child: fix flaky suite")
+      expect(await page.evaluate<string>(`document.querySelector('.conversation-breadcrumb strong')?.textContent ?? ''`)).toContain("Archived: release notes")
       expect(await page.evaluate<string>(`document.querySelector('.composer__input')?.value ?? ''`)).toBe("")
       expect(await page.evaluate<boolean>(`document.querySelector('[aria-label="Send prompt"]')?.disabled === true`)).toBe(true)
       expect(await page.evaluate<number>(`window.remoteMutationReport().filter(request => request.operation === 'session.prompt').length`)).toBe(0)
@@ -103,7 +103,7 @@ describe("remote shell layout", () => {
     const paged = async () => (await output()).find((row) => row.command === "bun test --verbose")
     const click = (label: string) => page.evaluate(`(() => {
       const row = [...document.querySelectorAll('.shell')].find(shell => shell.querySelector('.shell__header code')?.textContent === 'bun test --verbose');
-      [...(row?.querySelectorAll('.shell__output button') ?? [])].find(button => button.textContent?.trim() === ${JSON.stringify(label)})?.click();
+      [...(row?.querySelectorAll('.transcript-shell-output button') ?? [])].find(button => button.textContent?.trim() === ${JSON.stringify(label)})?.click();
     })()`)
     try {
       expect((await paged())?.buttons).toContain("Show more")
@@ -147,7 +147,7 @@ describe("remote shell layout", () => {
       const paged = async () => (await output()).find((row) => row.command === "bun test --verbose")
       const click = (label: string) => page.evaluate(`(() => {
         const row = [...document.querySelectorAll('.shell')].find(shell => shell.querySelector('.shell__header code')?.textContent === 'bun test --verbose');
-        [...(row?.querySelectorAll('.shell__output button') ?? [])].find(button => button.textContent?.trim() === ${JSON.stringify(label)})?.click();
+        [...(row?.querySelectorAll('.transcript-shell-output button') ?? [])].find(button => button.textContent?.trim() === ${JSON.stringify(label)})?.click();
       })()`)
       try {
         await click("Show more")
@@ -216,8 +216,8 @@ describe("remote shell layout", () => {
       await Bun.sleep(50)
     }
     expect(await page.evaluate<number>(`document.querySelectorAll('.mutation--unknown .button').length`)).toBe(2)
-    await page.evaluate(`document.querySelectorAll('.session-row')[2]?.click()`)
-    expect(await page.evaluate<string>(`document.querySelector('.conversation-breadcrumb strong')?.textContent ?? ''`)).toContain("Child: fix flaky suite")
+    await page.evaluate(`document.querySelectorAll('.session-row')[1]?.click()`)
+    expect(await page.evaluate<string>(`document.querySelector('.conversation-breadcrumb strong')?.textContent ?? ''`)).toContain("Archived: release notes")
     expect(await page.evaluate<number>(`document.querySelectorAll('.mutation--unknown').length`)).toBe(0)
     expect(await page.evaluate<string>(`document.querySelector('.notice-strip--warning')?.textContent ?? ''`)).toBe("")
     await page.evaluate(`document.querySelectorAll('.session-row')[0]?.click()`)
@@ -355,7 +355,7 @@ describe("remote shell layout", () => {
     }
   }, 30_000)
 
-  test("keeps the mobile machine picker usable over the four-tab conversation workspace", async () => {
+  test("keeps the mobile machine picker usable over the five-tab conversation workspace", async () => {
     for (const theme of ["dark", "light"] as const) {
       const page = await fixture("scenario=conversation-workspace-390", 390, "Select Active Machine", theme, 620)
       await page.evaluate(`Promise.all([...document.querySelector('.custom-select__dialog .overlay__surface')?.getAnimations() ?? []].map(animation => animation.finished))`)
@@ -376,7 +376,7 @@ describe("remote shell layout", () => {
         };
       })()`)
       expect(state.brandVisible).toBe(true)
-      expect(state.tabs).toEqual(["Sessions", "Conversation", "Activity", "Settings"])
+      expect(state.tabs).toEqual(["Sessions", "Conversation", "Activity", "Usage", "Settings"])
       expect(state.sheet.bottom).toBeCloseTo(620, 0)
       expect(state.sheet.top).toBeLessThan(state.sheet.bottom)
       expect(state.options.map((option) => option.label)).toEqual(["Studio Mac", "Dev Linux"])
@@ -406,7 +406,7 @@ describe("remote shell layout", () => {
           height:composer?.getBoundingClientRect().height ?? 0,
           input:composer?.querySelector('.composer__input')?.getBoundingClientRect().height ?? 0,
           actions:[...composer?.querySelectorAll('button') ?? []].map(button=>({label:button.getAttribute('aria-label') ?? button.textContent.trim(),height:button.getBoundingClientRect().height})),
-          messages:document.querySelectorAll('.transcript > .message').length,
+          messages:document.querySelectorAll('.transcript > .transcript-message').length,
           overflow:document.documentElement.scrollWidth > innerWidth,
         };
       })()`)
@@ -461,14 +461,14 @@ describe("remote shell layout", () => {
         }))()`)
         expect(workspaceState.overflow).toBe(false)
         expect(workspaceState.trigger).toBeGreaterThanOrEqual(44)
-        expect(workspaceState.tabs).toBe(width < 768 ? 4 : 0)
+        expect(workspaceState.tabs).toBe(width < 768 ? 5 : 0)
         expect(await workspace.evaluate<string>(`document.documentElement.dataset.theme`)).toBe(theme)
         await workspace.close()
 
         const conversation = await fixture("scenario=conversation-tool-terminal-output-390", width, "Run sanity checks on worker threads.", theme, 901)
         const conversationState = await conversation.evaluate<{ readonly overflow: boolean; readonly messages: number; readonly input: number; readonly inputWidth: number; readonly send: number }>(`(() => ({
           overflow:document.documentElement.scrollWidth > innerWidth,
-          messages:document.querySelectorAll('.transcript > .message').length,
+          messages:document.querySelectorAll('.transcript > .transcript-message').length,
           input:document.querySelector('.composer__input')?.getBoundingClientRect().height ?? 0,
           inputWidth:document.querySelector('.composer__input')?.getBoundingClientRect().width ?? 0,
           send:document.querySelector('[aria-label="Send prompt"]')?.getBoundingClientRect().height ?? 0,

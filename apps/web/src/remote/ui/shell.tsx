@@ -1,4 +1,5 @@
-import { For, Show, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js"
+import { isSessionID } from "@ycoding-ai/remote"
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack, type JSX } from "solid-js"
 import { Link, useRouter } from "../../router/router"
 import { Chip } from "../../ui/chip"
 import { Icon, type IconName } from "../../ui/icon"
@@ -14,6 +15,7 @@ import {
   type RemoteMessageView,
   type SessionView,
 } from "../projection"
+import type { NotificationCategory } from "../preferences"
 import type { SessionInfoView } from "../store"
 import type { RemoteTransportStatus } from "../transport"
 import {
@@ -27,6 +29,7 @@ import {
   sessionProjectLabel,
   sessionStateChips,
   summarizeConnection,
+  workspaceLabels,
   type ConnectionTone,
   type DeviceAvailabilityView,
   type RemoteConnectionState,
@@ -39,7 +42,8 @@ import { projectOffice } from "../office/model"
 import { OfficeWorkspace } from "../office/OfficeWorkspace"
 import { createOfficeSettings, type OfficeSettingsStore, type WorkspacePresentation } from "../office/storage"
 import { Composer } from "./composer"
-import { NewSessionButton, NewSessionDialog } from "./new-session"
+import { NewSessionButton, NewSessionComposer } from "./new-session"
+import { UsagePage } from "./usage"
 import {
   AccountSettings,
   AppearanceSettings,
@@ -50,8 +54,12 @@ import {
   moveRadio,
 } from "./settings"
 import { ActivityRow, MessageRow, RequestCard } from "./conversation"
+import { SessionStatusBar } from "./status-bar"
 
-const views = ["/remote", "/remote/sessions", "/remote/activity", "/remote/settings"] as const
+const views = ["/remote", "/remote/sessions", "/remote/activity", "/remote/usage", "/remote/settings"] as const
+
+const newSessionHash = "new-session"
+const sessionHashPrefix = "session="
 
 export type RemoteView = (typeof views)[number]
 
@@ -63,7 +71,6 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
   const [navOpen, setNavOpen] = createSignal(false)
   const [railCollapsed, setRailCollapsed] = createSignal(false)
   const [activityOpen, setActivityOpen] = createSignal(false)
-  const [newSessionOpen, setNewSessionOpen] = createSignal(false)
   const tabletQuery = window.matchMedia("(min-width: 768px) and (max-width: 1023px)")
   const [tabletLayout, setTabletLayout] = createSignal(tabletQuery.matches)
   const updateTabletLayout = (event: MediaQueryListEvent) => setTabletLayout(event.matches)
@@ -90,17 +97,41 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
     }
     setNavOpen(true)
   }
+  const newSessionOpen = () => view === "/remote" && router.hash() === newSessionHash
   const openNewSession = () => {
     if (!canCreateSession()) return
-    setNewSessionOpen(true)
-    void remote.store.loadWorkspaces()
+    setNavOpen(false)
+    router.navigate(`/remote#${newSessionHash}`)
   }
+  const closeNewSession = () => router.navigate("/remote", { replace: true })
   const openSession = (sessionID: string) => {
-    setNewSessionOpen(false)
     setNavOpen(false)
     void remote.store.selectSession(sessionID)
-    router.navigate("/remote")
+    router.navigate("/remote", { replace: view === "/remote" && router.hash().length > 0 })
   }
+  const requestedSession = () => {
+    const hash = router.hash()
+    const sessionID = hash.startsWith(sessionHashPrefix) ? hash.slice(sessionHashPrefix.length) : undefined
+    return view === "/remote" && sessionID !== undefined && isSessionID(sessionID) ? sessionID : undefined
+  }
+  createEffect(() => {
+    const sessionID = requestedSession()
+    if (sessionID === undefined || state().transport.kind !== "open" || state().connection.kind !== "connected") return
+    untrack(() => openSession(sessionID))
+  })
+  const openFromAlert = (sessionID: unknown) => {
+    if (typeof sessionID === "string" && isSessionID(sessionID)) router.navigate(`/remote#${sessionHashPrefix}${sessionID}`)
+  }
+  const alertEvent = (event: Event) => openFromAlert(event instanceof CustomEvent ? Reflect.get(Object(event.detail), "sessionID") : undefined)
+  const workerMessage = (event: MessageEvent) => {
+    if (Reflect.get(Object(event.data), "type") === "ycoding:open-session") openFromAlert(Reflect.get(Object(event.data), "sessionID"))
+  }
+  window.addEventListener("ycoding:open-session", alertEvent)
+  navigator.serviceWorker?.addEventListener("message", workerMessage)
+  onCleanup(() => {
+    window.removeEventListener("ycoding:open-session", alertEvent)
+    navigator.serviceWorker?.removeEventListener("message", workerMessage)
+  })
 
   return (
     <Show when={entry() === "workspace"} fallback={<SignInScreen />}>
@@ -113,6 +144,7 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
           activityOpen={activityOpen()}
           onOpenNav={openSessionsNavigation}
           onOpenActivity={() => setActivityOpen(true)}
+          onOpenSession={openSession}
           view={view}
         />
 
@@ -129,27 +161,34 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
             <div class="workspace__scroll">
               <Notices />
               <Show when={view === "/remote"}>
-                <PresentationSwitch value={office.presentation()} onChange={office.present} />
                 <Show
-                  when={officeShown()}
+                  when={newSessionOpen() && canCreateSession()}
                   fallback={
-                    <ConversationView
-                      title={activeSession()?.title ?? noSessionTitle}
-                      canCreateSession={canCreateSession()}
-                      onNewSession={openNewSession}
-                    />
+                    <>
+                      <Show when={selected()}>
+                        <PresentationSwitch
+                          value={office.presentation()}
+                          attention={(state().view?.requests.length ?? 0) > 0}
+                          onChange={office.present}
+                        />
+                      </Show>
+                      <Show
+                        when={officeShown() && selected()}
+                        fallback={
+                          <ConversationView
+                            title={activeSession()?.title ?? noSessionTitle}
+                            canCreateSession={canCreateSession()}
+                            onNewSession={openNewSession}
+                            onCreated={openSession}
+                          />
+                        }
+                      >
+                        <OfficePresentation office={office} />
+                      </Show>
+                    </>
                   }
                 >
-                  <OfficePresentation
-                    office={office}
-                    inspector={
-                      <ConversationView
-                        title={activeSession()?.title ?? noSessionTitle}
-                        canCreateSession={canCreateSession()}
-                        onNewSession={openNewSession}
-                      />
-                    }
-                  />
+                  <NewSessionComposer onClose={closeNewSession} onCreated={openSession} />
                 </Show>
               </Show>
               <Show when={view === "/remote/sessions"}>
@@ -162,11 +201,15 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
               <Show when={view === "/remote/activity"}>
                 <ActivityPage />
               </Show>
+              <Show when={view === "/remote/usage"}>
+                <UsagePage />
+              </Show>
               <Show when={view === "/remote/settings"}>
                 <SettingsPage office={office} />
               </Show>
             </div>
-            <Show when={composition().showComposer}>
+            <Show when={composition().showComposer && !officeShown() && !newSessionOpen()}>
+              <SessionStatusBar />
               <Composer
                 sessionID={state().activeSessionID}
                 running={state().view?.status === "running"}
@@ -198,9 +241,6 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
           <Modal class="overlay--slideover" label="Activity" onClose={() => setActivityOpen(false)}>
             <ActivityPanel onNavigate={() => setActivityOpen(false)} />
           </Modal>
-        </Show>
-        <Show when={newSessionOpen()}>
-          <NewSessionDialog onClose={() => setNewSessionOpen(false)} onCreated={openSession} />
         </Show>
       </div>
     </Show>
@@ -324,14 +364,20 @@ export function awaitsApproval(view: SessionView | undefined, sessionID: string)
   return view.requests.some((request) => request.kind === "permission" || request.kind === "guardrail")
 }
 
+export function sessionNeedsAttention(session: SessionInfoView, view: SessionView | undefined): boolean {
+  if (session.attention === true) return true
+  return view !== undefined && view.id === session.id && view.requests.length > 0
+}
+
 /**
  * The chips one session row and the selected session's header row show: the status the
  * device reported, plus the fact that the loaded view is holding an unanswered approval.
  */
 export function sessionChips(session: SessionInfoView, view: SessionView | undefined): readonly SessionChip[] {
   const chips = sessionStateChips(summarizeSession(session, view))
-  if (!awaitsApproval(view, session.id)) return chips
-  return [{ label: "Waiting for approval", tone: "attention" }, ...chips]
+  if (awaitsApproval(view, session.id)) return [{ label: "Waiting for approval", tone: "attention" }, ...chips]
+  if (sessionNeedsAttention(session, view)) return [{ label: "Waiting for you", tone: "attention" }, ...chips]
+  return chips
 }
 
 /**
@@ -455,6 +501,7 @@ function RemoteHeader(props: {
   readonly activityOpen: boolean
   readonly onOpenNav: () => void
   readonly onOpenActivity: () => void
+  readonly onOpenSession: (sessionID: string) => void
   readonly view: RemoteView
 }): JSX.Element {
   const remote = useRemote()
@@ -463,6 +510,7 @@ function RemoteHeader(props: {
   const devices = useDeviceAvailability()
   const selectableDevices = () => state().devices.filter((device) => device.status === "active" && device.online)
   const pickerNote = () => devicePickerNote(state().devices)
+  const attention = useNavigationAttention()
   return (
     <header class="app-header">
       <div class="app-header__inner">
@@ -480,9 +528,26 @@ function RemoteHeader(props: {
           <img class="brand__mark" src="/brand/ycoding-mark.svg" alt="YCoding" width={28} height={28} />
         </Link>
         <nav class="remote-nav" aria-label="Remote workspace">
-          <Link href="/remote/sessions" class={`remote-nav__link${props.view === "/remote/sessions" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/sessions" ? "page" : undefined}>Sessions</Link>
-          <Link href="/remote" class={`remote-nav__link${props.view === "/remote" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote" ? "page" : undefined}>Conversation</Link>
+          <Link
+            href="/remote/sessions"
+            class={`remote-nav__link${props.view === "/remote/sessions" ? " remote-nav__link--active" : ""}`}
+            ariaCurrent={props.view === "/remote/sessions" ? "page" : undefined}
+            ariaLabel={attention().sessions ? "Sessions, a session is waiting for your decision" : undefined}
+          >
+            Sessions
+            <AttentionMark show={attention().sessions} />
+          </Link>
+          <Link
+            href="/remote"
+            class={`remote-nav__link${props.view === "/remote" ? " remote-nav__link--active" : ""}`}
+            ariaCurrent={props.view === "/remote" ? "page" : undefined}
+            ariaLabel={attention().conversation ? "Conversation, waiting for your decision" : undefined}
+          >
+            Conversation
+            <AttentionMark show={attention().conversation} />
+          </Link>
           <Link href="/remote/activity" class={`remote-nav__link${props.view === "/remote/activity" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/activity" ? "page" : undefined}>Activity</Link>
+          <Link href="/remote/usage" class={`remote-nav__link${props.view === "/remote/usage" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/usage" ? "page" : undefined}>Usage</Link>
           <Link href="/remote/settings" class={`remote-nav__link${props.view === "/remote/settings" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/settings" ? "page" : undefined}>Settings</Link>
         </nav>
         <div class="remote-device">
@@ -505,6 +570,7 @@ function RemoteHeader(props: {
           </span>
         </div>
         <div class="app-header__end">
+          <NotificationCenter onOpenSession={props.onOpenSession} />
           <button
             type="button"
             class="button button--ghost button--icon"
@@ -528,6 +594,142 @@ function RemoteHeader(props: {
         </div>
       </div>
     </header>
+  )
+}
+
+function useNavigationAttention() {
+  const remote = useRemote()
+  return () => ({
+    conversation: (remote.state().view?.requests.length ?? 0) > 0,
+    sessions: (remote.state().sessionStatus?.attention.size ?? 0) > 0,
+  })
+}
+
+function AttentionMark(props: { readonly show: boolean }): JSX.Element {
+  return (
+    <Show when={props.show}>
+      <span class="attention-dot" aria-hidden="true" />
+    </Show>
+  )
+}
+
+const notificationKinds: Record<NotificationCategory, { readonly icon: IconName; readonly label: string }> = {
+  "agent-completed": { icon: "check", label: "Stopped running" },
+  "approval-requested": { icon: "shield", label: "Waiting for your decision" },
+  "guardrail-blocked": { icon: "alert", label: "Guardrail review" },
+  error: { icon: "alert", label: "Step failed" },
+  "device-disconnected": { icon: "devices", label: "Machine disconnected" },
+}
+
+export function notificationAge(at: number, now: number): string {
+  const minutes = Math.floor((now - at) / 60_000)
+  if (minutes < 1) return "now"
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h`
+  return new Date(at).toLocaleDateString()
+}
+
+function NotificationCenter(props: { readonly onOpenSession: (sessionID: string) => void }): JSX.Element {
+  const remote = useRemote()
+  const [open, setOpen] = createSignal(false)
+  const notifications = () => remote.state().notifications
+  const unread = () => notifications().filter((notification) => !notification.read).length
+  let root: HTMLDivElement | undefined
+  let trigger: HTMLButtonElement | undefined
+  const close = (restoreFocus: boolean) => {
+    setOpen(false)
+    if (restoreFocus) trigger?.focus()
+  }
+  const toggle = () => {
+    if (open()) return close(false)
+    setOpen(true)
+    remote.store.markNotificationsRead()
+  }
+  const pointer = (event: PointerEvent) => {
+    if (open() && event.target instanceof Node && !root?.contains(event.target)) close(false)
+  }
+  const key = (event: KeyboardEvent) => {
+    if (event.key === "Escape" && open()) close(true)
+  }
+  document.addEventListener("pointerdown", pointer)
+  document.addEventListener("keydown", key)
+  onCleanup(() => {
+    document.removeEventListener("pointerdown", pointer)
+    document.removeEventListener("keydown", key)
+  })
+  return (
+    <div class="notification-center" ref={root}>
+      <button
+        ref={trigger}
+        type="button"
+        class={`button button--ghost button--icon notification-center__trigger${unread() > 0 ? " notification-center__trigger--unread" : ""}`}
+        aria-label={unread() > 0 ? `Notifications, ${unread()} unread` : "Notifications"}
+        aria-expanded={open()}
+        aria-controls="notification-panel"
+        onClick={toggle}
+      >
+        <Icon name="bell" />
+        <Show when={unread() > 0}>
+          <span class="notification-center__badge" aria-hidden="true">{unread() > 9 ? "9+" : unread()}</span>
+        </Show>
+      </button>
+      <Show when={open()}>
+        <section id="notification-panel" class="notification-panel" aria-label="Notifications">
+          <header class="notification-panel__head">
+            <h2 class="notification-panel__title">Notifications</h2>
+            <Show when={notifications().length > 0}>
+              <button type="button" class="button button--ghost button--small" onClick={() => remote.store.clearNotifications()}>
+                Clear all
+              </button>
+            </Show>
+          </header>
+          <Show
+            when={notifications().length > 0}
+            fallback={<p class="notification-panel__empty">Approvals, questions, finished work, and failures appear here.</p>}
+          >
+            <ul class="notification-panel__list">
+              <For each={notifications()}>
+                {(notification) => (
+                  <li class={`notification-item notification-item--${notification.category}`}>
+                    <button
+                      type="button"
+                      class="notification-item__open"
+                      disabled={notification.sessionID === undefined}
+                      onClick={() => {
+                        const sessionID = notification.sessionID
+                        if (sessionID === undefined) return
+                        close(false)
+                        props.onOpenSession(sessionID)
+                      }}
+                    >
+                      <span class="notification-item__icon" aria-hidden="true">
+                        <Icon name={notificationKinds[notification.category].icon} size={16} />
+                      </span>
+                      <span class="notification-item__body">
+                        <span class="notification-item__title">{notificationKinds[notification.category].label}</span>
+                        <span class="notification-item__detail">{notification.sessionTitle ?? notification.body}</span>
+                      </span>
+                      <time class="notification-item__time" datetime={new Date(notification.at).toISOString()}>
+                        {notificationAge(notification.at, Date.now())}
+                      </time>
+                    </button>
+                    <button
+                      type="button"
+                      class="button button--ghost button--icon notification-item__dismiss"
+                      aria-label={`Dismiss ${notificationKinds[notification.category].label}`}
+                      onClick={() => remote.store.dismissNotification(notification.id)}
+                    >
+                      <Icon name="close" size={14} />
+                    </button>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </Show>
+        </section>
+      </Show>
+    </div>
   )
 }
 
@@ -559,25 +761,6 @@ function Notices(): JSX.Element {
           </span>
         </p>
       </Show>
-      <For each={state().notifications}>
-        {(notification) => (
-          <div class="notice-strip" role="status">
-            <Icon name="bell" size={16} />
-            <span class="notice-strip__body">
-              <span class="notice-strip__title">{notification.title}</span>
-              <span>{notification.body}</span>
-            </span>
-            <button
-              type="button"
-              class="button button--ghost button--icon notice-strip__dismiss"
-              aria-label={`Dismiss ${notification.title}`}
-              onClick={() => remote.store.dismissNotification(notification.id)}
-            >
-              <Icon name="close" size={16} />
-            </button>
-          </div>
-        )}
-      </For>
     </>
   )
 }
@@ -732,7 +915,12 @@ function SessionRow(props: {
       }}
     >
       <span class="session-row__body">
-        <span class="session-row__title">{props.session.title}</span>
+        <span class="session-row__title">
+          <Show when={props.session.running === true}>
+            <span class="live-dot" aria-hidden="true" />
+          </Show>
+          <span class="session-row__name">{props.session.title}</span>
+        </span>
         <span class="session-row__meta">
           <span title={props.session.directory}>{sessionProjectLabel(props.session)}</span>
           <span class="session-row__status">
@@ -740,6 +928,9 @@ function SessionRow(props: {
           </span>
         </span>
       </span>
+      <Show when={sessionNeedsAttention(props.session, remote.state().view)}>
+        <span class="attention-dot session-row__attention" aria-hidden="true" />
+      </Show>
     </button>
   )
 }
@@ -761,11 +952,12 @@ function SessionSummaryRow(props: {
           disabled={props.readOnly}
           onClick={() => props.onSelectSession(props.session.id)}
         >
-          {props.session.title}
+          <Show when={props.session.running === true}>
+            <span class="live-dot" aria-hidden="true" />
+          </Show>
+          <span class="sessions-table__name">{props.session.title}</span>
+          <AttentionMark show={sessionNeedsAttention(props.session, remote.state().view)} />
         </button>
-      </span>
-      <span class="sessions-table__project" role="cell" title={props.session.directory}>
-        {sessionProjectLabel(props.session)}
       </span>
       <span class="sessions-table__status" role="cell">
         <For each={chips().slice(0, 1)}>{(chip) => <Chip label={chip.label} tone={chip.tone} />}</For>
@@ -859,6 +1051,7 @@ function ConversationView(props: {
   readonly title: string
   readonly canCreateSession: boolean
   readonly onNewSession: () => void
+  readonly onCreated: (sessionID: string) => void
 }): JSX.Element {
   const remote = useRemote()
   const state = () => remote.state()
@@ -876,25 +1069,32 @@ function ConversationView(props: {
     <Show
       when={state().activeSessionID !== undefined}
       fallback={
-        <>
-          <div class="page-head">
-            <div>
-              <h1 class="page-head__title">{availability()?.title ?? noSessionTitle}</h1>
-              <p class="page-head__support">
-                {availability()?.body ?? "Select a session to view its conversation."}
-              </p>
-            </div>
-          </div>
-          <div class="pane">
-            <Show when={blocked()}>
-              <DeviceActions view={devices} />
-            </Show>
-            <NewSessionButton disabled={!props.canCreateSession} onClick={props.onNewSession} />
-            <Link href="/docs/usage/remote" class="button button--secondary button--small">
-              How remote access works
-            </Link>
-          </div>
-        </>
+        <Show
+          when={props.canCreateSession && !blocked()}
+          fallback={
+            <>
+              <div class="page-head">
+                <div>
+                  <h1 class="page-head__title">{availability()?.title ?? noSessionTitle}</h1>
+                  <p class="page-head__support">
+                    {availability()?.body ?? "Select a session to view its conversation."}
+                  </p>
+                </div>
+              </div>
+              <div class="pane">
+                <Show when={blocked()}>
+                  <DeviceActions view={devices} />
+                </Show>
+                <NewSessionButton disabled={!props.canCreateSession} onClick={props.onNewSession} />
+                <Link href="/docs/usage/remote" class="button button--secondary button--small">
+                  How remote access works
+                </Link>
+              </div>
+            </>
+          }
+        >
+          <NewSessionComposer onCreated={props.onCreated} />
+        </Show>
       }
     >
       <div class="conversation-breadcrumb" aria-label="Selected workspace and session">
@@ -940,8 +1140,10 @@ const presentations: readonly { readonly id: WorkspacePresentation; readonly lab
 
 function PresentationSwitch(props: {
   readonly value: WorkspacePresentation
+  readonly attention: boolean
   readonly onChange: (value: WorkspacePresentation) => void
 }): JSX.Element {
+  const flagged = (id: WorkspacePresentation) => props.attention && id === "conversation"
   return (
     <div class="presentation-switch filters" role="radiogroup" aria-label="Workspace view">
       <For each={presentations}>
@@ -951,7 +1153,8 @@ function PresentationSwitch(props: {
             role="radio"
             aria-checked={props.value === option.id}
             tabIndex={props.value === option.id ? 0 : -1}
-            class={`filters__option${props.value === option.id ? " filters__option--active" : ""}`}
+            class={`filters__option${props.value === option.id ? " filters__option--active" : ""}${flagged(option.id) ? " filters__option--attention" : ""}`}
+            aria-label={flagged(option.id) ? `${option.label}, waiting for your decision` : undefined}
             onClick={() => props.onChange(option.id)}
             onKeyDown={(event) => moveRadio(event, index(), presentations.length, (next) => {
               const selected = presentations[next]
@@ -959,6 +1162,7 @@ function PresentationSwitch(props: {
             })}
           >
             {option.label}
+            <AttentionMark show={flagged(option.id)} />
           </button>
         )}
       </For>
@@ -966,7 +1170,7 @@ function PresentationSwitch(props: {
   )
 }
 
-function OfficePresentation(props: { readonly office: OfficeSettingsStore; readonly inspector: JSX.Element }): JSX.Element {
+function OfficePresentation(props: { readonly office: OfficeSettingsStore }): JSX.Element {
   const remote = useRemote()
   onMount(() => remote.store.watchTeam(true))
   onCleanup(() => remote.store.watchTeam(false))
@@ -976,9 +1180,12 @@ function OfficePresentation(props: { readonly office: OfficeSettingsStore; reado
     return state.view?.id === state.activeSessionID ? state.view?.requests.length ?? 0 : 0
   }
   const showRequests = () => {
-    const target = document.getElementById("pending-requests")
-    target?.scrollIntoView({ block: "start" })
-    target?.focus()
+    props.office.present("conversation")
+    requestAnimationFrame(() => {
+      const target = document.getElementById("pending-requests")
+      target?.scrollIntoView({ block: "start" })
+      target?.focus()
+    })
   }
   return (
     <OfficeWorkspace
@@ -990,7 +1197,6 @@ function OfficePresentation(props: { readonly office: OfficeSettingsStore; reado
       onNormalView={() => props.office.present("conversation")}
       onShowRequests={showRequests}
       onLoadMoreTeam={() => void remote.store.loadMoreTeam()}
-      inspector={props.inspector}
     />
   )
 }
@@ -1037,73 +1243,89 @@ function SessionsPage(props: {
   onCleanup(() => detachFeed())
   const sessions = () => remote.state().sessions
   const cached = () => cachedSessionsView(remote.state().connection, remote.state().sessions.length)
+  const workspaceTitle = () => {
+    const selected = remote.state().selectedWorkspaceID
+    return selected === undefined ? "Sessions" : workspaceLabels(remote.state().sessionGroups).get(selected) ?? "Sessions"
+  }
   return (
-    <div class="pane sessions-page" ref={feed}>
+    <div class="sessions-page" ref={feed}>
       <h1 class="visually-hidden">Sessions</h1>
-      <div class="sessions-page__toolbar">
-        <NewSessionButton disabled={!props.canCreateSession} onClick={props.onNewSession} />
-      </div>
-      <WorkspaceSelector />
       <Show
         when={remote.state().sessionGroups.length > 0 || remote.state().sessionListStatus === "loading"}
         fallback={
-          <Show when={remote.state().activeDeviceID !== undefined} fallback={<DeviceEmptyState />}>
-            <NoSessionsState />
-          </Show>
+          <div class="pane sessions-page__empty">
+            <div class="sessions-page__toolbar">
+              <NewSessionButton disabled={!props.canCreateSession} onClick={props.onNewSession} />
+            </div>
+            <Show when={remote.state().activeDeviceID !== undefined} fallback={<DeviceEmptyState />}>
+              <NoSessionsState />
+            </Show>
+          </div>
         }
       >
-        <Show when={cached()}>{(view) => <p class="panel__note">{view().note}</p>}</Show>
-        <div class="filter-bar">
-          <label class="field" style={{ flex: "1" }}>
-            <span class="visually-hidden">Filter sessions</span>
-            <input
-              class="input"
-              type="search"
-              placeholder="Search sessions…"
-              value={remote.state().sessionQuery}
-              disabled={remote.state().transport.kind !== "open" || cached() !== undefined}
-              onInput={(event) => remote.store.searchSessions(event.currentTarget.value)}
-            />
-          </label>
-          <span class="chip">{advertisedCount(sessions().length)} loaded</span>
-        </div>
-        <div class="session-filters" role="group" aria-label="Session status">
-          <For each={["all", "running", "idle"] as const}>
-            {(value) => (
-              <button
-                type="button"
-                  class={`session-filters__option${remote.state().sessionFilter === value ? " session-filters__option--active" : ""}`}
-                  aria-pressed={remote.state().sessionFilter === value}
+        <div class="sessions-page__layout">
+          <WorkspaceNav />
+          <section class="pane sessions-page__content" aria-labelledby="sessions-page-title">
+            <div class="sessions-page__toolbar">
+              <h2 id="sessions-page-title" class="sessions-page__title">{workspaceTitle()}</h2>
+              <NewSessionButton disabled={!props.canCreateSession} onClick={props.onNewSession} />
+            </div>
+            <div class="sessions-page__workspace-select">
+              <WorkspaceSelector />
+            </div>
+            <Show when={cached()}>{(view) => <p class="panel__note">{view().note}</p>}</Show>
+            <div class="filter-bar">
+              <label class="field" style={{ flex: "1" }}>
+                <span class="visually-hidden">Filter sessions</span>
+                <input
+                  class="input"
+                  type="search"
+                  placeholder="Search sessions…"
+                  value={remote.state().sessionQuery}
                   disabled={remote.state().transport.kind !== "open" || cached() !== undefined}
-                  onClick={() => remote.store.searchSessions(remote.state().sessionQuery, value)}
-              >
-                {value[0]?.toUpperCase()}{value.slice(1)}
-              </button>
-            )}
-          </For>
-        </div>
-        <Show when={sessions().length > 0} fallback={<NoSessionsState />}>
-          <div class="sessions-results">
-            <div class="sessions-table" role="table" aria-label="Sessions">
-              <div class="sessions-table__head" role="row">
-                <span role="columnheader">Title</span>
-                <span role="columnheader">Project</span>
-                <span role="columnheader">Status</span>
-                <span role="columnheader">Updated</span>
-              </div>
-              <For each={sessions()}>
-                {(session) => (
-                  <SessionSummaryRow
-                    session={session}
-                    readOnly={cached() !== undefined}
-                    onSelectSession={props.onSelectSession}
-                  />
+                  onInput={(event) => remote.store.searchSessions(event.currentTarget.value)}
+                />
+              </label>
+              <span class="chip">{advertisedCount(sessions().length)} loaded</span>
+            </div>
+            <div class="session-filters" role="group" aria-label="Session status">
+              <For each={["all", "running", "idle"] as const}>
+                {(value) => (
+                  <button
+                    type="button"
+                    class={`session-filters__option${remote.state().sessionFilter === value ? " session-filters__option--active" : ""}`}
+                    aria-pressed={remote.state().sessionFilter === value}
+                    disabled={remote.state().transport.kind !== "open" || cached() !== undefined}
+                    onClick={() => remote.store.searchSessions(remote.state().sessionQuery, value)}
+                  >
+                    {value[0]?.toUpperCase()}{value.slice(1)}
+                  </button>
                 )}
               </For>
             </div>
-          </div>
-        </Show>
-        <Show when={remote.state().sessionPageLoading}><p role="status">Loading more sessions…</p></Show>
+            <Show when={sessions().length > 0} fallback={<NoSessionsState />}>
+              <div class="sessions-results">
+                <div class="sessions-table" role="table" aria-label="Sessions">
+                  <div class="sessions-table__head" role="row">
+                    <span role="columnheader">Title</span>
+                    <span role="columnheader">Status</span>
+                    <span role="columnheader">Updated</span>
+                  </div>
+                  <For each={sessions()}>
+                    {(session) => (
+                      <SessionSummaryRow
+                        session={session}
+                        readOnly={cached() !== undefined}
+                        onSelectSession={props.onSelectSession}
+                      />
+                    )}
+                  </For>
+                </div>
+              </div>
+            </Show>
+            <Show when={remote.state().sessionPageLoading}><p role="status">Loading more sessions…</p></Show>
+          </section>
+        </div>
       </Show>
     </div>
   )
@@ -1111,18 +1333,53 @@ function SessionsPage(props: {
 
 function WorkspaceSelector(): JSX.Element {
   const remote = useRemote()
+  const labels = createMemo(() => workspaceLabels(remote.state().sessionGroups))
   return (
     <Show when={remote.state().sessionGroups.length > 0}>
-      <label class="field">
-        <span>Workspace / repository</span>
-        <select class="select" value={remote.state().selectedWorkspaceID ?? ""} disabled={remote.state().transport.kind !== "open" || remote.state().connection.kind === "offline"}
-          onChange={(event) => remote.store.selectWorkspace(event.currentTarget.value)}>
-          <For each={remote.state().sessionGroups}>{(group) => (
-            <option value={group.id}>{group.name ?? group.projectID} — {group.directory}{group.workspaceID ? ` · ${group.workspaceID}` : ""}</option>
-          )}</For>
-        </select>
-      </label>
+      <div class="workspace-select">
+        <span class="workspace-select__label">Workspace</span>
+        <CustomSelect
+          label="Workspace"
+          sheetTitle="Select workspace"
+          sheetSubtitle="Repositories with sessions on this machine"
+          placeholder="Select a workspace"
+          value={remote.state().selectedWorkspaceID}
+          disabled={remote.state().transport.kind !== "open" || remote.state().connection.kind === "offline"}
+          options={remote.state().sessionGroups.map((group) => ({ value: group.id, label: labels().get(group.id) ?? group.directory }))}
+          onChange={(workspaceID) => remote.store.selectWorkspace(workspaceID)}
+        />
+      </div>
     </Show>
+  )
+}
+
+function WorkspaceNav(): JSX.Element {
+  const remote = useRemote()
+  const labels = createMemo(() => workspaceLabels(remote.state().sessionGroups))
+  const disabled = () => remote.state().transport.kind !== "open" || remote.state().connection.kind === "offline"
+  return (
+    <nav class="workspace-nav" aria-label="Workspaces">
+      <p class="workspace-nav__title">Workspaces</p>
+      <ul class="workspace-nav__list">
+        <For each={remote.state().sessionGroups}>
+          {(group) => (
+            <li>
+              <button
+                type="button"
+                class={`workspace-nav__item${remote.state().selectedWorkspaceID === group.id ? " workspace-nav__item--active" : ""}`}
+                aria-current={remote.state().selectedWorkspaceID === group.id ? "true" : undefined}
+                title={group.directory}
+                disabled={disabled()}
+                onClick={() => remote.store.selectWorkspace(group.id)}
+              >
+                <Icon name="folder" size={16} />
+                <span class="workspace-nav__label">{labels().get(group.id)}</span>
+              </button>
+            </li>
+          )}
+        </For>
+      </ul>
+    </nav>
   )
 }
 
@@ -1332,12 +1589,16 @@ function ActivityList(): JSX.Element {
 }
 
 function BottomNav(props: { readonly view: RemoteView }): JSX.Element {
+  const attention = useNavigationAttention()
   const items: readonly { readonly view: RemoteView; readonly label: string; readonly icon: IconName }[] = [
     { view: "/remote/sessions", label: "Sessions", icon: "sessions" },
     { view: "/remote", label: "Conversation", icon: "chat" },
     { view: "/remote/activity", label: "Activity", icon: "activity" },
+    { view: "/remote/usage", label: "Usage", icon: "usage" },
     { view: "/remote/settings", label: "Settings", icon: "settings" },
   ]
+  const flagged = (view: RemoteView) =>
+    (view === "/remote" && attention().conversation) || (view === "/remote/sessions" && attention().sessions)
   return (
     <nav class="bottom-nav" aria-label="Workspace">
       <For each={items}>
@@ -1345,10 +1606,15 @@ function BottomNav(props: { readonly view: RemoteView }): JSX.Element {
           <Link
             href={item.view}
             class={`bottom-nav__item${props.view === item.view ? " bottom-nav__item--active" : ""}`}
-            ariaLabel={item.label}
+            ariaLabel={flagged(item.view) ? `${item.label}, waiting for your decision` : item.label}
             ariaCurrent={props.view === item.view ? "page" : undefined}
           >
-            <Icon name={item.icon} size={20} />
+            <span class="bottom-nav__icon">
+              <Icon name={item.icon} size={20} />
+              <Show when={flagged(item.view)}>
+                <span class="attention-dot" aria-hidden="true" />
+              </Show>
+            </span>
             <span>{item.label}</span>
           </Link>
         )}

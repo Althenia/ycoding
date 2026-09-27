@@ -74,6 +74,7 @@ export type OfficeActor = {
   readonly sessionID: string
   readonly kind: "session" | "task"
   readonly name: string
+  readonly role: string
   readonly title: string
   readonly selected: boolean
   readonly status: OfficeStatus

@@ -4,6 +4,7 @@ import {
   serializeEvent,
   serializeResponse,
   serializeSessions,
+  serializeStatus,
   type RemoteErrorCode,
   type RemoteRequest,
 } from "@ycoding-ai/remote"
@@ -41,6 +42,9 @@ export type RelayDoubleOptions = {
   readonly permissions?: readonly unknown[]
   readonly guardrailRequests?: readonly unknown[]
   readonly forms?: readonly unknown[]
+  readonly usageProviders?: readonly unknown[]
+  readonly usageSummary?: unknown
+  readonly usageReport?: (input: Readonly<Record<string, unknown>> | undefined) => unknown
 }
 
 export type RelayDouble = {
@@ -54,6 +58,7 @@ export type RelayDouble = {
   setMe: (value: unknown, status?: number) => void
   pushEvent: (sessionID: string, event: unknown) => void
   pushSessions: (sessionIDs: readonly string[]) => void
+  pushStatus: (running: readonly string[], attention: readonly string[]) => void
   dropConnections: (code: number, reason: string) => void
   stop: () => Promise<void>
 }
@@ -114,6 +119,22 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
       if (String(request.operation) === "session.active") {
         return { ok: true, value: { data: options.activeSessions ?? {} } }
       }
+      if (request.operation === "session.status") return { ok: true, value: { running: [], attention: [] } }
+      if (request.operation === "usage.providers") return { ok: true, value: { data: options.usageProviders ?? [
+        { providerID: "openai", label: "Codex", status: "available", source: "provider_api", stability: "stable", updatedAt: 1000,
+          windows: [{ id: "week", label: "Weekly", unit: "percent", used: 40, limit: 100 }] },
+      ] } }
+      if (request.operation === "usage.summary") return { ok: true, value: { data: options.usageSummary ?? {
+        logical: 1, physical: 1, helpers: 0, continued: 0, fallback: 0, cost: 0.02,
+        tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 1, write: 0 } },
+      } } }
+      if (request.operation === "usage.report") return { ok: true, value: { data: options.usageReport?.(request.input) ?? {
+        group: request.input?.group ?? "day", rows: [{ key: "2026-09-27", label: "2026-09-27", logical: 1, physical: 1,
+          helpers: 0, continued: 0, fallback: 0, cost: 0.02, costProvenance: "recorded",
+          tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 1, write: 0 } } }],
+        total: { logical: 1, physical: 1, helpers: 0, continued: 0, fallback: 0, cost: 0.02, costProvenance: "recorded",
+          tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 1, write: 0 } } }, rowCount: 1,
+      } } }
       if (request.operation === "session.messages") {
         return { ok: true, value: { data: options.messages?.[request.sessionID ?? ""] ?? [] } }
       }
@@ -324,6 +345,9 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
     },
     pushSessions: (_sessionIDs) => {
       for (const socket of sockets) socket.send(serializeSessions({ type: "sessions" }))
+    },
+    pushStatus: (running, attention) => {
+      for (const socket of sockets) socket.send(serializeStatus({ type: "status", running, attention }))
     },
     dropConnections: (code, reason) => {
       for (const socket of sockets) socket.close(code, reason)

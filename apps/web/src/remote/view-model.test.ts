@@ -17,6 +17,7 @@ import {
   shellOutputPaging,
   sessionProjectLabel,
   summarizeConnection,
+  workspaceLabels,
   type AccountReadState,
   type RemoteConnectionState,
   type RemoteSessionSummary,
@@ -157,6 +158,30 @@ describe("sessionProjectLabel", () => {
   test("falls back only to reported identity", () => {
     expect(sessionProjectLabel({ projectID: "prj_auth" })).toBe("prj_auth")
     expect(sessionProjectLabel({})).toBe("Not reported")
+  })
+})
+
+describe("workspaceLabels", () => {
+  test("names each workspace by its reported name or folder, never its project hash", () => {
+    const labels = workspaceLabels([
+      { id: "w1", projectID: "12fd42415fd3fa9c65332dd8ad2128cc83499df6", directory: "/Users/me/.agents" },
+      { id: "w2", projectID: "3e5803fe818b6335dfb7f71ec17671f3fa4cd538", directory: "/Users/me/Project/ycoding/", name: "YCoding" },
+    ])
+    expect(labels.get("w1")).toBe(".agents")
+    expect(labels.get("w2")).toBe("YCoding")
+  })
+
+  test("adds the parent folder only where two workspaces would share a label", () => {
+    const labels = workspaceLabels([
+      { id: "w1", projectID: "p1", directory: "/Users/me/Project/ycoding" },
+      { id: "w2", projectID: "p1", directory: "/Users/me/Project/ycoding.worktrees/office" },
+      { id: "w3", projectID: "p2", directory: "/Users/me/Archive/ycoding" },
+      { id: "w4", projectID: "p1", directory: "/Users/me/Project/ycoding/packages/schema" },
+    ])
+    expect(labels.get("w1")).toBe("ycoding (Project)")
+    expect(labels.get("w2")).toBe("office")
+    expect(labels.get("w3")).toBe("ycoding (Archive)")
+    expect(labels.get("w4")).toBe("schema")
   })
 })
 

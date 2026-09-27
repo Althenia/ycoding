@@ -1,5 +1,6 @@
 import { Show, createEffect, createSignal, onCleanup, onMount } from "solid-js"
-import type { OfficePreferences, OfficeSnapshot } from "./types"
+import { Icon } from "../../ui/icon"
+import type { OfficePreferences, OfficeRoomID, OfficeSnapshot } from "./types"
 import type { OfficeHandle } from "./create-game"
 import "./office.css"
 
@@ -8,6 +9,8 @@ export function OfficeCanvas(props: {
   readonly preferences: OfficePreferences
   readonly onSelectSession: (id: string) => void
   readonly onNormalView: () => void
+  readonly onLocations: (locations: Readonly<Record<string, OfficeRoomID | undefined>>) => void
+  readonly focusRequest?: { readonly actorID: string; readonly revision: number }
 }) {
   let host!: HTMLDivElement
   let handle: OfficeHandle | undefined
@@ -23,11 +26,16 @@ export function OfficeCanvas(props: {
     const current = input()
     handle?.update(current)
   })
+  createEffect(() => {
+    const request = props.focusRequest
+    if (request) handle?.focus(request.actorID)
+  })
   onMount(() => {
     void import("./create-game").then(({ mountOffice }) => {
       if (disposed) return
-      handle = mountOffice(host, input(), props.onSelectSession, setError)
+      handle = mountOffice(host, input(), props.onSelectSession, setError, props.onLocations)
       handle.update(input())
+      if (props.focusRequest) handle.focus(props.focusRequest.actorID)
       setLoading(false)
     }).catch(() => {
       if (!disposed) { setError("The office could not start. Your normal workspace is still available."); setLoading(false) }
@@ -41,11 +49,11 @@ export function OfficeCanvas(props: {
   })
   return <section class="office-stage" aria-label="Office visualization">
     <div class="office-camera-controls" aria-label="Office camera">
-      <button type="button" onClick={() => handle?.zoomBy(1.25)} aria-label="Zoom in">+</button>
-      <button type="button" onClick={() => handle?.zoomBy(0.8)} aria-label="Zoom out">−</button>
-      <button type="button" onClick={() => handle?.fit()}>Fit office</button>
-      <button type="button" onClick={() => handle?.follow()}>Follow selected</button>
-      <button type="button" onClick={props.onNormalView}>Normal view</button>
+      <button type="button" onClick={() => handle?.zoomBy(1.25)} aria-label="Zoom in" data-tooltip="Zoom in"><Icon name="plus" size={22} /></button>
+      <button type="button" onClick={() => handle?.zoomBy(0.8)} aria-label="Zoom out" data-tooltip="Zoom out"><Icon name="minus" size={22} /></button>
+      <button type="button" onClick={() => handle?.fit()} aria-label="Fit office" data-tooltip="Fit office"><Icon name="maximize" size={22} /></button>
+      <button type="button" onClick={() => handle?.follow()} aria-label="Follow selected" data-tooltip="Follow selected"><Icon name="crosshair" size={22} /></button>
+      <button type="button" onClick={props.onNormalView} aria-label="Back to conversation" data-tooltip="Back to conversation"><Icon name="chat" size={22} /></button>
     </div>
     <Show when={loading()}><p class="office-notice" role="status">Loading the office renderer…</p></Show>
     <Show when={error()}>{(message) => <p class="office-notice" role="alert">{message()} <button type="button" onClick={props.onNormalView}>Use normal view</button></p>}</Show>

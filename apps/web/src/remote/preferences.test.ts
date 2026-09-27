@@ -9,7 +9,11 @@ import {
   readNotificationPreferences,
   toggleNotificationChannel,
   writeNotificationPreferences,
+  readPreferredModel,
+  writePreferredModel,
+  defaultComposerModel,
 } from "./preferences"
+import type { CatalogView } from "./catalog"
 
 function storage(initial: Record<string, string> = {}) {
   const entries = new Map(Object.entries(initial))
@@ -34,6 +38,15 @@ describe("notification categories", () => {
       expect(category.label.length).toBeGreaterThan(0)
     }
   })
+})
+
+test("new sessions use a valid remembered model and variant, otherwise the catalog default", () => {
+  const catalog: CatalogView = { status: "ready", agents: [], commands: [], skills: [], references: [], resources: [], models: [{ providerID: "openai", id: "gpt", name: "GPT", variants: ["high", "medium"] }], defaultModel: { providerID: "openai", id: "gpt", variant: "high" } }
+  const target = storage()
+  expect(defaultComposerModel(catalog, readPreferredModel(target))).toEqual(catalog.defaultModel)
+  expect(writePreferredModel(target, { providerID: "openai", id: "gpt", variant: "medium" })).toBe(true)
+  expect(defaultComposerModel(catalog, readPreferredModel(target))).toEqual({ providerID: "openai", id: "gpt", variant: "medium" })
+  expect(defaultComposerModel(catalog, { providerID: "other", id: "unknown" })).toEqual(catalog.defaultModel)
 })
 
 describe("normalizeNotificationPreferences", () => {

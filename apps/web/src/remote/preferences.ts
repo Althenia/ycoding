@@ -1,4 +1,27 @@
 import { browserStorage, readStored, writeStored, type StorageLike } from "../lib/storage"
+import type { CatalogView } from "./catalog"
+import type { ModelRefView } from "./projection"
+
+const PREFERRED_MODEL_KEY = "ycoding.remote.preferred-model"
+
+export function readPreferredModel(storage: StorageLike | null | undefined = browserStorage()): ModelRefView | undefined {
+  const value = readStored(storage, PREFERRED_MODEL_KEY, (raw) => {
+    try { return JSON.parse(raw) as unknown } catch { return undefined }
+  })
+  if (typeof value !== "object" || value === null || !("providerID" in value) || !("id" in value)) return undefined
+  if (typeof value.providerID !== "string" || typeof value.id !== "string") return undefined
+  return { providerID: value.providerID, id: value.id, ...( "variant" in value && typeof value.variant === "string" ? { variant: value.variant } : {}) }
+}
+
+export function writePreferredModel(storage: StorageLike | null | undefined = browserStorage(), model: ModelRefView): boolean {
+  return writeStored(storage, PREFERRED_MODEL_KEY, JSON.stringify(model))
+}
+
+export function defaultComposerModel(catalog: CatalogView | undefined, preferred: ModelRefView | undefined): ModelRefView | undefined {
+  const option = catalog?.models.find((item) => item.providerID === preferred?.providerID && item.id === preferred.id)
+  if (option && (preferred?.variant === undefined || option.variants.includes(preferred.variant))) return preferred
+  return catalog?.defaultModel
+}
 
 export const NOTIFICATION_STORAGE_KEY = "ycoding.notifications"
 

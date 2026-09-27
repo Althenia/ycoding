@@ -73,8 +73,9 @@ test("renders original assets in one lazily mounted canvas and captures the requ
       expect(page.networkFailures()).toEqual([])
       expect(await page.evaluate<boolean>("document.documentElement.scrollWidth <= innerWidth")).toBe(true)
       const controls = await page.evaluate<readonly { readonly name: string; readonly width: number; readonly height: number }[]>("[...document.querySelectorAll('.office-camera-controls button')].map(button=>({name:button.getAttribute('aria-label')||button.textContent,width:button.getBoundingClientRect().width,height:button.getBoundingClientRect().height}))")
-      expect(controls.map((button) => button.name)).toEqual(["Zoom in", "Zoom out", "Fit office", "Follow selected", "Normal view"])
+      expect(controls.map((button) => button.name)).toEqual(["Zoom in", "Zoom out", "Fit office", "Follow selected", "Back to conversation"])
       expect(controls.every((button) => button.width >= 44 && button.height >= 44)).toBe(true)
+      expect(await page.evaluate<boolean>("[...document.querySelectorAll('.office-camera-controls button')].every(button=>button.textContent.trim()===''&&button.querySelector('svg')&&button.dataset.tooltip===button.getAttribute('aria-label'))")).toBe(true)
       const capture = join(captures, `${width}x${height}-${state}.png`)
       await Bun.write(capture, Buffer.from(await page.screenshot(), "base64"))
       expect((await Bun.file(capture).arrayBuffer()).byteLength).toBeGreaterThan(12_000)
@@ -116,7 +117,7 @@ test("DPR 2 renders every authored room at CSS zoom one, a full fit, and a phone
   await page.setViewport(1440, 900)
   await page.navigate(url("tool", "&inspectEngine=1&freeCamera=1"))
   await waitFor(page, "!!document.querySelector('.office-canvas-host canvas') && !document.querySelector('.office-notice[role=status]')")
-  await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Fit office')?.click()")
+  await page.evaluate<void>("document.querySelector('button[aria-label=\"Fit office\"]')?.click()")
   await Bun.sleep(90)
   expect(await page.evaluate<number>("window.__officeGame.scene.getScene('office').cameras.main.zoom")).toBeLessThan(2)
   const labels = await page.evaluate<readonly { readonly title: string; readonly left: number; readonly right: number }[]>("window.__officeGame.scene.getScene('office').children.list.filter(object=>object.type==='Text'&&object.visible&&['CEO OFFICE','RESEARCH LAB','QA LAB','DEVELOPER STUDIO','MEETING ROOM','RELAX LOUNGE'].includes(object.text)).map(object=>({title:object.text,left:object.x-object.displayWidth/2,right:object.x+object.displayWidth/2}))")
@@ -216,7 +217,7 @@ test("an immediate unmount cancels a pending lazy engine import", async () => {
 test("sprite click selects its real Session while a drag pans without selecting", async () => {
   const page = await requireBrowser().openPage()
   await page.navigate(url("tool", "&team=1&inspectEngine=1"))
-  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 3")
+  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 2")
   const selected = await page.evaluate<string>(`(() => {
     const scene=window.__officeGame.scene.getScene('office');
     const sprite=scene.children.list.find(object=>object.type==='Sprite'&&object.texture.key==='characters'&&object.name==='["fixture-device","session-b"]');
@@ -244,7 +245,7 @@ test("sprite click selects its real Session while a drag pans without selecting"
   expect(Math.abs(panned.x - before.x) + Math.abs(panned.y - before.y)).toBeGreaterThan(1)
   await Bun.sleep(100)
   expect(await page.evaluate<number>(`(()=>{const camera=window.__officeGame.scene.getScene('office').cameras.main;return Math.abs(camera.scrollX-(${panned.x}))+Math.abs(camera.scrollY-(${panned.y}))})()`)).toBeLessThan(1)
-  await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Follow selected')?.click()")
+  await page.evaluate<void>("document.querySelector('button[aria-label=\"Follow selected\"]')?.click()")
   await waitFor(page, `(()=>{const camera=window.__officeGame.scene.getScene('office').cameras.main;return Math.abs(camera.scrollX-(${panned.x}))+Math.abs(camera.scrollY-(${panned.y}))>1})()`)
   const followed = await page.evaluate<{ readonly x: number; readonly y: number }>("(()=>{const camera=window.__officeGame.scene.getScene('office').cameras.main;return{x:camera.scrollX,y:camera.scrollY}})()")
   expect(Math.abs(followed.x - panned.x) + Math.abs(followed.y - panned.y)).toBeGreaterThan(1)
@@ -291,7 +292,7 @@ test("visibility and reduced motion adopt the latest state without replaying a w
 test("a cue present during hydration does not replay a meeting", async () => {
   const page = await requireBrowser().openPage()
   await page.navigate(url("tool", "&team=1&inspectEngine=1"))
-  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 3")
+  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 2")
   const hydrated = await teamPositions(page)
   await advanceScene(page, 450)
   expect(await teamPositions(page)).toEqual(hydrated)
@@ -302,11 +303,11 @@ test("a cue present during hydration does not replay a meeting", async () => {
 test("room agent name pills remain distinct at the renderer boundary", async () => {
   const page = await requireBrowser().openPage()
   await page.navigate(url("tool", "&team=1&inspectEngine=1"))
-  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 3")
+  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 2")
   const bounds = await page.evaluate<{ readonly root: { readonly left: number; readonly right: number; readonly top: number; readonly bottom: number }; readonly task: { readonly left: number; readonly right: number; readonly top: number; readonly bottom: number } }>(`(() => {
     const labels=window.__officeGame.scene.getScene('office').children.list.filter(object=>object.type==='Text');
-    const root=labels.find(label=>label.text.startsWith('Developer'));
-    const task=labels.find(label=>label.text.startsWith('Reviewer'));
+    const root=labels.find(label=>label.text.includes(' · Developer'));
+    const task=labels.find(label=>label.text.includes(' · Reviewer'));
     if(!root||!task)throw new Error('Team labels missing');
     const box=label=>({left:label.x,right:label.x+label.displayWidth,top:label.y,bottom:label.y+label.displayHeight});
     return {root:box(root),task:box(task)};
@@ -319,7 +320,7 @@ test("room agent name pills remain distinct at the renderer boundary", async () 
 test("a new delegate cue brings supervisor and child into the meeting room and back", async () => {
   const page = await requireBrowser().openPage()
   await page.navigate(url("tool", "&team=1&inspectEngine=1&cue=0"))
-  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 3")
+  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 2")
   const initial = await teamPositions(page)
   const meeting = rooms.find((room) => room.id === "meeting")!
   await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle observed cue')?.click()")
@@ -368,7 +369,7 @@ test("a new delegate cue brings supervisor and child into the meeting room and b
 test("two simultaneous delegations start the supervisor and both children without a scene queue", async () => {
   const page = await requireBrowser().openPage()
   await page.navigate(url("tool", "&team=multi&inspectEngine=1&cue=0"))
-  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 4")
+  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 3")
   const before = await actorPositions(page)
   await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle observed cue')?.click()")
   expect(await page.evaluate<string>("document.querySelector('aside')?.dataset.cues")).toBe("2")
@@ -381,10 +382,29 @@ test("two simultaneous delegations start the supervisor and both children withou
   await page.close()
 }, 30_000)
 
+test("roster cards show real sprite, unique name and role, follow selection, and update current room during delegation", async () => {
+  const page = await requireBrowser().openPage()
+  await page.navigate(url("tool", "&team=1&cue=0&inspectEngine=1&workspace=1"))
+  await waitFor(page, "document.querySelectorAll('.office-roster__row').length===2&&window.__officeGame?.scene.getScene('office').latestFrames.length===2")
+  const cards = await page.evaluate<readonly { readonly name: string; readonly room: string; readonly sprite: string }[]>("[...document.querySelectorAll('.office-roster__row')].map(row=>({name:row.querySelector('.office-roster__name').textContent,room:row.querySelector('.office-roster__room').textContent,sprite:getComputedStyle(row.querySelector('.office-roster__sprite')).backgroundImage}))")
+  expect(new Set(cards.map((card) => card.name)).size).toBe(2)
+  expect(cards.every((card) => card.name.includes(' · ') && card.sprite.includes('characters'))).toBe(true)
+  expect(cards.some((card) => card.room === "QA lab")).toBe(true)
+  await page.evaluate<void>("document.querySelector('.office-roster__row[data-session-id=\"session-b\"]')?.click()")
+  await waitFor(page, "document.querySelector('#selected-session')?.textContent==='session-b'&&document.querySelector('.office-roster__row[data-session-id=\"session-b\"]')?.getAttribute('aria-current')==='true'")
+  await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle observed cue')?.click()")
+  const met = await page.evaluate<boolean>(`(() => {const scene=window.__officeGame.scene.getScene('office');for(let step=0;step<450;step++){scene.update(performance.now()+step*50,50);if(scene.latestFrames.find(frame=>frame.actor.sessionID==='session-b')?.room==='meeting')return true}return false})()`)
+  expect(met).toBe(true)
+  await waitFor(page, "document.querySelector('.office-roster__row[data-session-id=\"session-b\"] .office-roster__room')?.textContent==='Meeting room'")
+  await advanceScene(page, 550)
+  await waitFor(page, "document.querySelector('.office-roster__row[data-session-id=\"session-b\"] .office-roster__room')?.textContent==='QA lab'")
+  await page.close()
+}, 60_000)
+
 test("a report cue sends the child beside its supervisor, shows a report emote, and returns", async () => {
   const page = await requireBrowser().openPage()
   await page.navigate(url("tool", "&team=1&inspectEngine=1&cue=0&cueKind=report"))
-  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 3")
+  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 2")
   const initial = await teamPositions(page)
   await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle observed cue')?.click()")
   const reported = await page.evaluate<boolean>(`(() => {
@@ -410,7 +430,7 @@ test("a report cue sends the child beside its supervisor, shows a report emote, 
 test("a new research session enters through the glass lobby and leaves when removed", async () => {
   const page = await requireBrowser().openPage()
   await page.navigate(url("tool", "&arrival=1&inspectEngine=1"))
-  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 3")
+  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 1")
   await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle arriving session')?.click()")
   await waitFor(page, "window.__officeGame.scene.getScene('office').children.list.some(object=>object.type==='Sprite'&&object.name==='[\"fixture-device\",\"session-new\"]')")
   const entrance = (await actorPositions(page)).find((actor) => actor.id === '["fixture-device","session-new"]')!
@@ -431,7 +451,7 @@ test("a new research session enters through the glass lobby and leaves when remo
 test("reduced motion shows a brief factual cue badge without actor travel", async () => {
   const page = await requireBrowser().openPage()
   await page.navigate(url("tool", "&team=1&inspectEngine=1&cue=0"))
-  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 3")
+  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 2")
   const initial = await actorPositions(page)
   await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle reduced motion')?.click()")
   await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle observed cue')?.click()")
@@ -446,7 +466,7 @@ test("reduced motion shows a brief factual cue badge without actor travel", asyn
 test("returning from a hidden tab adopts a new cue without replaying travel", async () => {
   const page = await requireBrowser().openPage()
   await page.navigate(url("tool", "&team=1&inspectEngine=1&cue=0"))
-  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 3")
+  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 2")
   const initial = await actorPositions(page)
   await page.evaluate<void>(`(() => {
     window.__officeHidden=true;
@@ -463,7 +483,7 @@ test("returning from a hidden tab adopts a new cue without replaying travel", as
 test("offline freezes an active cue and reconnect adopts home without replay", async () => {
   const page = await requireBrowser().openPage()
   await page.navigate(url("tool", "&team=1&inspectEngine=1&cue=0"))
-  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 3")
+  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 2")
   const initial = await actorPositions(page)
   await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle observed cue')?.click()")
   for (let attempt = 0; attempt < 40; attempt++) {
@@ -484,12 +504,12 @@ test("offline freezes an active cue and reconnect adopts home without replay", a
   await page.close()
 }, 30_000)
 
-test("task badges distinguish waiting, failure, and explicit completion from ordinary idle", async () => {
+test("task badges distinguish waiting and failure, while completed children depart", async () => {
   const page = await requireBrowser().openPage()
   const poses: Record<string, string> = {}
-  for (const state of ["starting", "running", "cancelling", "waiting", "completed"] as const) {
+  for (const state of ["starting", "running", "cancelling", "waiting"] as const) {
     await page.navigate(url("tool", `&team=1&inspectEngine=1&taskState=${state}`))
-    await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 3")
+    await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 2")
     poses[state] = await page.evaluate<string>(`(() => {
       const sprite=window.__officeGame.scene.getScene('office').children.list.find(object=>object.type==='Sprite'&&object.name==='["fixture-device","session-b"]');
       if(!sprite)throw new Error('Task sprite missing');
@@ -499,14 +519,23 @@ test("task badges distinguish waiting, failure, and explicit completion from ord
   expect(poses.starting).toBe(poses.running)
   expect(poses.cancelling).toBe(poses.running)
   expect(poses.waiting).not.toBe(poses.running)
-  expect(poses.completed).not.toBe(poses.running)
-  for (const [state, marker] of [["waiting", "!"], ["failed", "×"], ["completed", "Completed"]] as const) {
+  for (const [state, marker] of [["waiting", "!"]] as const) {
     await page.navigate(url("tool", `&team=1&inspectEngine=1&taskState=${state}`))
-    await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 3")
+    await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 2")
     const texts = await page.evaluate<readonly string[]>("window.__officeGame.scene.getScene('office').children.list.filter(object=>object.type==='Text'&&object.visible).map(object=>object.text)")
     expect(texts).toContain("TASK")
     expect(texts.some((text) => text.includes(marker))).toBe(true)
   }
+  await page.navigate(url("tool", "&team=1&inspectEngine=1&taskState=failed"))
+  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 1")
+  await page.navigate(url("tool", "&team=1&inspectEngine=1&taskState=completed"))
+  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 1")
+  await page.navigate(url("tool", "&team=1&inspectEngine=1&transitionTask=1"))
+  await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 2")
+  await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle task completion')?.click()")
+  await waitFor(page, "window.__officeGame.scene.getScene('office').latestFrames.some(frame=>frame.actor.sessionID==='session-b'&&frame.leaving)")
+  await advanceScene(page, 500)
+  expect((await actorPositions(page)).some((actor) => actor.id === '["fixture-device","session-b"]')).toBe(false)
   await page.close()
 }, 30_000)
 

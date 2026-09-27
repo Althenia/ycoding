@@ -127,9 +127,10 @@ describe("service worker source", () => {
     expect(source).toContain("PRECACHE_URLS")
     expect(source).toContain("shouldHandleNavigation")
     expect(source).toContain("shouldCacheStaticAsset")
-    expect(source.includes("/api")).toBe(false)
-    expect(source.includes("/auth")).toBe(false)
-    expect(source.includes("/ws/")).toBe(false)
+    const fetchHandler = source.split('scope.addEventListener("fetch"')[1]?.split('scope.addEventListener("push"')[0] ?? ""
+    expect(fetchHandler).not.toContain("/api")
+    expect(fetchHandler).not.toContain("/auth")
+    expect(fetchHandler).not.toContain("/ws/")
   })
 
   test("declares no background mutation queue or deferred delivery", async () => {
@@ -137,7 +138,23 @@ describe("service worker source", () => {
     expect(source.includes("indexedDB")).toBe(false)
     expect(source.includes("periodicsync")).toBe(false)
     expect(source.includes('addEventListener("sync"')).toBe(false)
-    expect(source.includes("Notification")).toBe(false)
+    expect(source.includes("showTrigger")).toBe(false)
+    expect(source.includes("TimestampTrigger")).toBe(false)
+    const pushHandler = source.split('scope.addEventListener("push"')[1]?.split('scope.addEventListener("notificationclick"')[0] ?? ""
+    expect(pushHandler).toContain("scope.registration.showNotification(")
+    expect(source.match(/scope\.registration\.showNotification\(/g)).toHaveLength(1)
+    const clickHandler = source.split('scope.addEventListener("notificationclick"')[1]?.split('scope.addEventListener("pushsubscriptionchange"')[0] ?? ""
+    expect(clickHandler).toContain("current.focus()")
+    expect(clickHandler).toContain("scope.clients.openWindow(`/remote#session=")
+    expect(clickHandler).not.toContain("showNotification(")
+    expect(clickHandler).not.toContain("fetch(")
+    const changeHandler = source.split('scope.addEventListener("pushsubscriptionchange"')[1]?.split("function isRecord")[0] ?? ""
+    expect(changeHandler).toContain('fetch("/api/push/key", { credentials: "same-origin" })')
+    expect(changeHandler).toContain('fetch("/api/push/subscriptions", { method: "POST", credentials: "same-origin"')
+    expect(changeHandler).toContain('fetch("/api/push/subscriptions", { method: "DELETE", credentials: "same-origin"')
+    expect(source.replace(changeHandler, "")).not.toContain("/api")
+    expect(source).not.toContain("/auth")
+    expect(source).not.toContain("/ws/")
     // Cache names and blocked paths come from the shared policy, never literals.
     expect(source.includes('caches.open("')).toBe(false)
     // The offline fallback comes from the policy module rather than a literal.

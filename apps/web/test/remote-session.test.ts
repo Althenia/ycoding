@@ -212,15 +212,16 @@ describe("remote store integration", () => {
     })
     try {
       await store.load()
-      await waitFor(() => store.state().sessions.length === 50)
-      expect(store.state().sessions[0]?.id).toBe("ses_0")
-      expect(store.state().sessions.at(-1)?.id).toBe("ses_98")
+      await waitFor(() => store.state().sessions.length === 25)
+      expect(store.state().sessions[0]?.id).toBe("ses_48")
+      expect(store.state().sessions.at(-1)?.id).toBe("ses_0")
       expect(relay.requests.filter((request) => request.operation === "session.list")).toHaveLength(1)
+      expect(relay.requests.find((request) => request.operation === "session.list")?.input).toMatchObject({ order: "active", parentID: null, limit: 25 })
       await store.nextSessionsPage()
-      expect(store.state().sessions[50]?.id).toBe("ses_100")
-      expect(store.state().sessions).toHaveLength(100)
+      expect(store.state().sessions[0]?.id).toBe("ses_98")
+      expect(store.state().sessions).toHaveLength(50)
       store.selectWorkspace("wsp_web")
-      await waitFor(() => store.state().sessions[0]?.id === "ses_1")
+      await waitFor(() => store.state().sessions[0]?.id === "ses_49")
       expect(store.state().sessions.every((session) => session.projectID === "prj_web")).toBe(true)
     } finally {
       store.dispose()
@@ -245,7 +246,6 @@ describe("remote store integration", () => {
 
   test("create and delete invalidations supersede in-flight bounded Session pages", async () => {
     const oldPage = Promise.withResolvers<void>()
-    const createdPage = Promise.withResolvers<void>()
     let phase = "initial"
     let settledPages = 0
     const row = (id: string) => ({ id, title: id, time: { created: 1, updated: 1 } })
@@ -255,10 +255,6 @@ describe("remote store integration", () => {
         if (phase === "initial") {
           await oldPage.promise
           return { ok: true, value: { data: [row("ses_deleted")] } }
-        }
-        if (phase === "created") {
-          await createdPage.promise
-          return { ok: true, value: { data: [row("ses_deleted"), row("ses_stable")] } }
         }
         return { ok: true, value: { data: [row("ses_created"), row("ses_stable")] } }
       },
@@ -281,20 +277,16 @@ describe("remote store integration", () => {
       await waitFor(() => relay.requests.filter((request) => request.operation === "session.list").length === 1)
       phase = "created"
       relay.pushSessions([])
-      await waitFor(() => relay.requests.filter((request) => request.operation === "session.list").length === 2)
       phase = "deleted"
       relay.pushSessions([])
-      await waitFor(() => store.state().sessions.length === 2)
       oldPage.resolve()
-      createdPage.resolve()
-      await waitFor(() => settledPages >= 3)
+      await waitFor(() => settledPages >= 2 && store.state().sessions.length === 2)
       await Bun.sleep(20)
-      expect(relay.requests.filter((request) => request.operation === "session.list")).toHaveLength(3)
+      expect(relay.requests.filter((request) => request.operation === "session.list")).toHaveLength(2)
       expect(store.state().sessions.map((session) => session.id)).toEqual(["ses_created", "ses_stable"])
       expect(published.filter((ids) => ids.length > 0).every((ids) => ids.join(",") === "ses_created,ses_stable")).toBe(true)
     } finally {
       oldPage.resolve()
-      createdPage.resolve()
       unsubscribe()
       store.dispose()
       await relay.stop()
@@ -478,8 +470,7 @@ describe("remote store integration", () => {
     }
   })
 
-  test("keeps the current device connected when a replaced read carries agent unavailable", async () => {
-    let activeReads = 0
+  test("keeps the current device connected when a replaced list carried agent unavailable", async () => {
     let lists = 0
     const test = await harness({
       handler: async (request) => {
@@ -489,19 +480,12 @@ describe("remote store integration", () => {
             ? { ok: false, code: "agent_unavailable", message: "No local agent is connected" }
             : "default"
         }
-        if (request.operation === "session.active") {
-          activeReads += 1
-          if (activeReads === 1) await new Promise<void>(() => {})
-        }
         return "default" as const
       },
     })
     try {
       await test.store.load()
-      await test.runUntil(() => activeReads === 1)
-
-      // Closing the old transport settles its still-pending active read as unknown;
-      // its completed list result must still remain fenced from the replacement.
+      await test.runUntil(() => lists === 1 && test.store.state().connection.kind === "offline")
       test.store.connect("dev_2")
       await test.runUntil(() => test.store.state().activeDeviceID === "dev_2" && test.store.state().sessions.length === 2)
 
@@ -1034,7 +1018,7 @@ describe("remote store integration", () => {
 
   test("a replaced connection's late rejection cannot tear down the live connection", async () => {
     const test = await fakeConnectionHarness()
-    const alertIDs = () => test.store.state().notifications.map((entry) => entry.id)
+    const alertCategories = () => test.store.state().notifications.map((entry) => entry.category)
     try {
       await test.store.load()
       expect(test.sockets).toHaveLength(1)
@@ -1042,7 +1026,7 @@ describe("remote store integration", () => {
       await test.store.selectSession("ses_a")
       test.sockets[0]?.event("ses_a", { id: "evt_done", type: "session.execution.succeeded", data: {} })
       await test.flush()
-      expect(alertIDs()).toEqual(["agent-completed"])
+      expect(alertCategories()).toEqual(["agent-completed"])
 
       // The device switch replaces the socket, so the alerts it raised end with it.
       test.store.connect("dev_1")
@@ -1051,7 +1035,7 @@ describe("remote store integration", () => {
       await test.store.selectSession("ses_a")
       test.sockets[1]?.event("ses_a", { id: "evt_done_again", type: "session.execution.succeeded", data: {} })
       await test.flush()
-      expect(alertIDs()).toEqual(["agent-completed"])
+      expect(alertCategories()).toEqual(["agent-completed"])
 
       // A late 4401 from the replaced socket must not sign the browser out or end
       // the alerts of the connection that replaced it.
@@ -1061,7 +1045,7 @@ describe("remote store integration", () => {
       expect(test.store.state().owner?.id).toBe("user_1")
       expect(test.store.state().devices.map((device) => device.id)).toEqual(["dev_1"])
       expect(test.store.state().activeDeviceID).toBe("dev_1")
-      expect(alertIDs()).toEqual(["agent-completed"])
+      expect(alertCategories()).toEqual(["agent-completed"])
     } finally {
       await test.stop()
     }
@@ -1199,7 +1183,6 @@ describe("remote store integration", () => {
 
   test("does not let a replaced connection's session list repopulate the new connection", async () => {
     let lists = 0
-    let active = 0
     const test = await harness({
       handler: async (request) => {
         if (request.operation === "session.list") {
@@ -1209,19 +1192,12 @@ describe("remote store integration", () => {
           }
           return { ok: false, code: "internal_error", message: "the new device is not ready" }
         }
-        if (String(request.operation) === "session.active") {
-          active += 1
-          // The old connection's active read stays open, so its list result settles
-          // while the socket is still the one the store shows.
-          if (active === 1) await new Promise<void>(() => {})
-          return "default" as const
-        }
         return "default" as const
       },
     })
     try {
       await test.store.load()
-      await test.runUntil(() => lists === 1 && active === 1)
+      await test.runUntil(() => lists === 1 && test.store.state().sessions[0]?.title === "Old device session")
 
       test.store.connect("dev_2")
       await test.runUntil(() => test.store.state().transport.kind === "open" && lists === 2)
@@ -1259,11 +1235,10 @@ describe("remote store integration", () => {
       await test.store.load()
       await test.runUntil(() => lists === 1)
       test.relay.pushSessions(["ses_b"])
+      releaseOlder?.()
       await test.runUntil(() => lists === 2)
       await test.runUntil(() => test.store.state().sessions.length === 1)
       expect(test.store.state().sessions[0]?.title).toBe("Newer list")
-
-      releaseOlder?.()
       await Bun.sleep(50)
 
       expect(test.store.state().sessions.map((session) => session.title)).toEqual(["Newer list"])
@@ -1781,7 +1756,7 @@ describe("remote store integration", () => {
       test.relay.pushEvent("ses_a", { id: "evt_y", type: "session.context.observed", data: { source: "session-state", text: "…" } })
       await test.flush()
       expect(test.store.state().unhandledEvents).toBe(1)
-      expect(test.store.state().view?.messages).toHaveLength(0)
+      expect(test.store.state().view?.messages).toEqual([{ kind: "system", id: "evt_y", text: "…", source: "session-state", created: 1_000 }])
     } finally {
       await test.stop()
     }

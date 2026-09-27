@@ -1,8 +1,8 @@
 import type { RemoteDeviceInfo } from "@ycoding-ai/remote"
 
-export type RemoteScenarioName = "conversation-workspace" | "session-list" | "conversation-tool-terminal-output" | "activity-pending-decisions" | "permission-guardrail-hard-review-form-requests" | "empty-backend" | "selected-machine-offline" | "signed-out" | "devices-enrollment" | "autonomy-goal-notification-settings"
+export type RemoteScenarioName = "conversation-workspace" | "session-list" | "conversation-tool-terminal-output" | "activity-pending-decisions" | "permission-guardrail-hard-review-form-requests" | "empty-backend" | "selected-machine-offline" | "signed-out" | "devices-enrollment" | "autonomy-goal-notification-settings" | "usage-quotas"
 export type RemoteScenarioViewport = 1440 | 768 | 390
-export type RemoteScenarioView = "chat" | "sessions" | "activity" | "settings"
+export type RemoteScenarioView = "chat" | "sessions" | "activity" | "usage" | "settings"
 
 type WireSession = {
   readonly id: string
@@ -316,13 +316,13 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
     ...(viewport === 1440 || viewport === 390 ? { openControl: "device" as const } : {}),
     expectedText: viewport === 390
       ? ["Session bound to Studio Mac in auth.", "Verify non-blocking lock on expiration.", "Select Active Machine", "Studio Mac", "Dev Linux"]
-      : ["Token expiry refactor", "Workspace / repository", "auth", viewport === 768 ? "Run test suite against auth services." : "auth_guard.go"],
+      : ["Token expiry refactor", "Workspace", "auth", viewport === 768 ? "Run test suite against auth services." : "auth_guard.go"],
   }
   if (name === "session-list") return {
     ...common,
     view: "sessions",
     sessions: sessionListSessions,
-    expectedText: ["Async Auth Token Revocation Migration", "auth-gate", "Workspace / repository"],
+    expectedText: ["Async Auth Token Revocation Migration", "auth-gate"],
   }
   if (name === "conversation-tool-terminal-output") return {
     ...common,
@@ -332,7 +332,7 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
       ? ["session bus synchronization", "Test Suite Execution Output", "Diff Preview: session_bus.rs"]
       : viewport === 768
         ? ["Add defensive timeout handling", "write_file_patch", "5000ms handshake deadline"]
-        : ["Run sanity checks on worker threads.", "Checked worker threads.", "pool_spin_ok"],
+        : ["Run sanity checks on worker threads.", "Checked worker threads."],
   }
   if (name === "activity-pending-decisions") return {
     ...common,
@@ -360,12 +360,17 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
         ? ["human decision is required", "git reset --hard HEAD~12 && git push -f", "Multi-Choice Question Prompt", "syslog daemon bridge", "opentelemetry otlp-grpc", "prometheus metrics scrape"]
         : ["Write File Request", "/etc/systemd/system/ycoding-worker.service", "High Context Consumption", "Destructive Database Alteration & Git Force Push", "Select Target Runtime Architecture", "Enable Optional Test Harnesses", "Clarify Disambiguation Query"],
   }
+  if (name === "usage-quotas") return {
+      ...common,
+      view: "usage",
+      expectedText: ["Provider quotas", "OpenRouter · Pay as you go", "Balance", "$38.42", "GitHub Copilot", "AI credits", "Breakdown"],
+    }
   if (name === "empty-backend") return {
       ...common,
       view: "chat",
       emptyBackend: true,
       sessions: [],
-      expectedText: ["No sessions", "Start YCoding in your project folder on this machine."],
+      expectedText: ["New session", "Choose a previously opened repository and start a conversation."],
     }
   if (name === "selected-machine-offline") return {
       ...common,
@@ -420,7 +425,7 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
   }
 }
 
-const scenarioNames: readonly RemoteScenarioName[] = ["conversation-workspace", "session-list", "conversation-tool-terminal-output", "activity-pending-decisions", "permission-guardrail-hard-review-form-requests", "devices-enrollment", "autonomy-goal-notification-settings"]
+const scenarioNames: readonly RemoteScenarioName[] = ["conversation-workspace", "session-list", "conversation-tool-terminal-output", "activity-pending-decisions", "permission-guardrail-hard-review-form-requests", "devices-enrollment", "autonomy-goal-notification-settings", "usage-quotas"]
 const viewports: readonly RemoteScenarioViewport[] = [1440, 768, 390]
 
 export const REMOTE_SCENARIOS = [

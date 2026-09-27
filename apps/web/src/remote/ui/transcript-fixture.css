@@ -1,0 +1,5 @@
+.transcript-fixture { max-inline-size:840px; margin-inline:auto; padding:var(--yc-space-4); min-inline-size:0; }
+.transcript-fixture .transcript { padding:0; margin:0; list-style:none; }
+.transcript-fixture__controls { display:flex; gap:var(--yc-space-2); margin-block-end:var(--yc-space-3); }
+.transcript-fixture__controls button { min-block-size:44px; }
+.transcript-fixture .session-status { margin-block-start:var(--yc-space-4); }

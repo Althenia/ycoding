@@ -452,12 +452,14 @@ describe("session state reads", () => {
     expect((snapshot.messages[0] as { delivery?: string }).delivery).toBeUndefined()
   })
 
-  test("reports running sessions from the authoritative active read", async () => {
-    const test = await harness({ activeSessions: { ses_a: { type: "running" } } })
+  test("reports family-running roots from the authoritative status read", async () => {
+    const test = await harness({ handler: (request) => request.operation === "session.status"
+      ? { ok: true, value: { running: ["ses_a"], attention: [] } } : "default" })
     try {
       await test.store.load()
       await waitFor(() => test.store.state().sessions.length > 0)
-      expect(test.relay.requests.some((request) => String(request.operation) === "session.active")).toBe(true)
+      await waitFor(() => test.store.state().sessionStatus !== undefined)
+      expect(test.relay.requests.some((request) => request.operation === "session.status")).toBe(true)
       expect(test.store.state().sessions[0]?.running).toBe(true)
     } finally {
       await test.stop()
@@ -467,11 +469,12 @@ describe("session state reads", () => {
   test("leaves running unknown when the relay does not report it", async () => {
     const test = await harness({
       handler: (request) =>
-        String(request.operation) === "session.active" ? { ok: false, code: "unknown_operation", message: "unsupported" } : "default",
+        request.operation === "session.status" ? { ok: false, code: "unknown_operation", message: "unsupported" } : "default",
     })
     try {
       await test.store.load()
       await waitFor(() => test.store.state().sessions.length > 0)
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.status"))
       expect(test.store.state().sessions[0]?.running).toBeUndefined()
     } finally {
       await test.stop()

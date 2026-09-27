@@ -1,0 +1,9 @@
+.transcript-dot-trail { display:inline-flex; align-items:center; gap:3px; flex:none; vertical-align:middle; }
+.transcript-dot-trail span { inline-size:4px; block-size:4px; border-radius:1px; background:var(--yc-green-strong); opacity:.28; }
+.transcript-dot-trail span:nth-child(2) { opacity:1; }
+@media (prefers-reduced-motion:no-preference) {
+  .transcript-dot-trail span { animation:transcript-dot 360ms steps(1,end) infinite; }
+  .transcript-dot-trail span:nth-child(2) { animation-delay:-120ms; }
+  .transcript-dot-trail span:nth-child(3) { animation-delay:-240ms; }
+}
+@keyframes transcript-dot { 0%,33% { opacity:1; } 34%,100% { opacity:.28; } }

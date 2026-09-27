@@ -1,11 +1,15 @@
 import { For, Show, createMemo, createSignal, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
+import { catalogKey, modelDisplayLabel } from "../catalog"
 import { useRemote } from "../context"
 import {
-  modelLabel,
+  formatPartDuration,
+  noticeSummary,
   previewText,
   shellOutputNotice,
   toolShellID,
+  toolSummary,
+  toolTone,
   type ActivityItem,
   type AssistantPart,
   type FileChangeView,
@@ -17,6 +21,9 @@ import {
 } from "../projection"
 import { shellOutputPaging } from "../view-model"
 import { FormRequest } from "./form-request"
+import { Markdown } from "./markdown"
+import { DotTrail } from "./dot-trail"
+import "./transcript.css"
 
 type ToolPartView = Extract<AssistantPart, { kind: "tool" }>
 type AssistantMessageView = Extract<RemoteMessageView, { kind: "assistant" }>
@@ -30,18 +37,13 @@ export function partKey(part: AssistantPart): string {
   return part.kind === "tool" ? `tool:${part.callID}` : `${part.kind}:${part.ordinal}`
 }
 
-/**
- * Whether a tool row is open. A part that has settled opens by default, and an
- * explicit toggle wins from then on, so a projection update can neither collapse
- * what the reader opened nor reopen what they closed.
- */
 export function toolPartExpanded(input: {
   readonly touched: boolean
   readonly manual: boolean
   readonly status: ToolPartView["status"]
 }): boolean {
   if (input.touched) return input.manual
-  return input.status !== "running"
+  return false
 }
 
 /**
@@ -85,7 +87,7 @@ function ShellOutputSection(props: {
     return current.kind === "idle" ? undefined : current.label
   }
   return (
-    <div class="shell__output">
+    <div class="transcript-shell-output">
       <Show when={props.output !== undefined}>
         <BoundedText text={props.output?.text ?? ""} />
       </Show>
@@ -129,17 +131,19 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
   const expanded = () => toolPartExpanded({ touched: touched(), manual: manual(), status: props.part().status })
   const shellID = () => toolShellID(props.part())
   const statusLabel = () => {
+    if (props.part().name.toLowerCase() === "subagent" && props.part().structured?.status === "running") return "Background"
     if (props.part().status === "streaming") return "Preparing input"
     if (props.part().status === "running") return "Running"
     if (props.part().status === "completed") return "Completed"
     return "Failed"
   }
+  const duration = () => props.part().completed === undefined ? undefined : formatPartDuration(props.part().completed! - (props.part().ran ?? props.part().started ?? props.part().completed!))
   return (
-    <article class={`tool tool--${props.part().status}`}>
-      <header class="tool__header">
+    <article class={`transcript-tool transcript-tool--${toolTone(props.part())}`}>
+      <header class="transcript-tool__header">
         <button
           type="button"
-          class="tool__toggle"
+          class="transcript-tool__toggle"
           aria-expanded={expanded()}
           onClick={() => {
             const next = !expanded()
@@ -147,12 +151,14 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
             setTouched(true)
           }}
         >
+          <span class="transcript-tool__tag" aria-label={toolTone(props.part()) === "success" ? "Completed" : toolTone(props.part()) === "error" ? "Failed" : toolTone(props.part()) === "attention" ? "Needs attention" : "Running"}>{toolTone(props.part()) === "success" ? "✓" : toolTone(props.part()) === "attention" ? "Ⅱ" : toolTone(props.part()) === "error" ? "!" : <DotTrail />}</span>
+          <span class="transcript-tool__name" title={toolSummary(props.part())}>{toolSummary(props.part())}</span>
+          <span class="transcript-tool__status">{statusLabel()}{duration() ? ` · ${duration()}` : ""}</span>
           <Icon name={expanded() ? "chevron-down" : "chevron-right"} size={16} />
-          <span class="tool__name">{props.part().name}</span>
-          <span class="tool__status">{statusLabel()}</span>
         </button>
       </header>
       <Show when={expanded()}>
+        <div class="transcript-tool__body">
         <Show when={props.part().input !== undefined || props.part().inputText !== undefined}>
           <pre class="output" tabindex="0">
             <code>{props.part().inputText ?? JSON.stringify(props.part().input, null, 2)}</code>
@@ -165,27 +171,24 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
                 <code>{block.text}</code>
               </pre>
             ) : (
-              <p class="tool__note">
+              <p class="transcript-tool__note">
                 {block.type} content: {block.summary}
               </p>
             )
           }
         </For>
         <Show when={output().clientTruncated}>
-          <p class="tool__note">Showing the first 4,000 characters of available tool output in this browser.</p>
+          <p class="transcript-tool__note">Showing the first 4,000 characters of available tool output in this browser.</p>
         </Show>
         <Show when={output().sourceTruncated}>
-          <p class="tool__note">Tool output was truncated on the device.</p>
+          <p class="transcript-tool__note">Tool output was truncated on the device.</p>
         </Show>
         <Show when={shellID()}>
           {(id) => <ShellOutputSection shellID={id()} output={props.part().shellOutput} fetch={props.part().shellOutputFetch} />}
         </Show>
-        <Show when={props.part().error}>
-          <p class="tool__error" role="status">
-            {props.part().error}
-          </p>
-        </Show>
+        </div>
       </Show>
+      <Show when={props.part().error}><p class="transcript-tool__error" role="status"><span aria-hidden="true">↳ </span>{props.part().error}</p></Show>
     </article>
   )
 }
@@ -222,10 +225,10 @@ function PartView(props: { readonly parts: () => readonly AssistantPart[] }): JS
   return (
     <>
       <Show when={kind() === "text"}>
-        <p class="message__text">{partText(part())}</p>
+        <div class="transcript-message__text"><Markdown text={partText(part())} /></div>
       </Show>
       <Show when={kind() === "reasoning"}>
-        <ReasoningPart text={reasoning} />
+        <ReasoningPart text={reasoning} parts={props.parts} />
       </Show>
       <Show when={kind() === "tool"}>
         <ToolPart part={() => toolOf(part())!} />
@@ -234,17 +237,19 @@ function PartView(props: { readonly parts: () => readonly AssistantPart[] }): JS
   )
 }
 
-function ReasoningPart(props: { readonly text: () => string }): JSX.Element {
+function ReasoningPart(props: { readonly text: () => string; readonly parts: () => readonly AssistantPart[] }): JSX.Element {
   const [open, setOpen] = createSignal(false)
+  const duration = () => {
+    const items = props.parts().filter((item) => item.kind === "reasoning")
+    const first = items[0]
+    const last = items.findLast((item) => item.text.trim())
+    return first?.started !== undefined && last?.completed !== undefined ? ` · ${formatPartDuration(last.completed - first.started)}` : ""
+  }
   return (
-    <details class="reasoning" onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary>Reasoning <span class="reasoning__hint">Show details</span></summary>
+    <details class="transcript-reasoning" onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary aria-expanded={open()}><span class="transcript-reasoning__tag" aria-label={duration() ? "Completed" : "Thinking"}>{duration() ? "✓" : <DotTrail />}</span><span>Thought{duration()}</span><span class="transcript-reasoning__hint">{open() ? "Hide" : "Show"} details</span></summary>
       <Show when={open()}>
-        <div class="reasoning__body">{props.text().split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g).filter(Boolean).map((fragment) =>
-          fragment.startsWith("**") && fragment.endsWith("**") ? <strong>{fragment.slice(2, -2)}</strong>
-            : fragment.startsWith("`") && fragment.endsWith("`") ? <code>{fragment.slice(1, -1)}</code>
-            : fragment.startsWith("*") && fragment.endsWith("*") ? <em>{fragment.slice(1, -1)}</em> : fragment,
-        )}</div>
+        <div class="transcript-reasoning__body"><Markdown text={props.text()} /></div>
       </Show>
     </details>
   )
@@ -252,41 +257,39 @@ function ReasoningPart(props: { readonly text: () => string }): JSX.Element {
 
 export function MessageRow(props: { readonly message: () => RemoteMessageView }): JSX.Element {
   const kind = () => props.message().kind
+  const remote = useRemote()
+  const catalog = () => remote.state().catalogs[catalogKey({ sessionID: remote.state().activeSessionID ?? "" })]
+  const models = () => catalog()?.models ?? []
+  const agent = () => {
+    const id = assistantOf(props.message())?.agent
+    if (!id) return "YCoding"
+    return catalog()?.agents.find((option) => option.id === id)?.name ?? id.replace(/\b\w/g, (letter) => letter.toUpperCase())
+  }
+  const observation = () => {
+    const message = props.message()
+    return message.kind === "synthetic" || message.kind === "system" ? noticeSummary(message.source, message.text) : undefined
+  }
   return (
     <Show when={kind() !== "notice"} fallback={<p class="notice">{noticeText(props.message())}</p>}>
-      <article class={`message message--${kind()}`}>
+      <article class={`transcript-message transcript-message--${kind()}`}>
         <Show when={kind() === "user"}>
-          <div class="message__meta">
-            <Icon name="user" size={14} />
-            <span>You</span>
-            <Show when={userDelivery(props.message()) === "queue"}>
-              <span class="message__hint">queued</span>
-            </Show>
-          </div>
-          <p class="message__text">{userText(props.message())}</p>
-          <span class="message__receipt" aria-label={userState(props.message()) === "consumed" ? "Read by YCoding" : userState(props.message()) === "pending" ? "Pending delivery" : "Sent, not yet read"}>
+          <p class="transcript-message__bubble">{userText(props.message())}</p>
+          <span class="transcript-message__receipt" aria-label={userState(props.message()) === "consumed" ? "Read by YCoding" : userState(props.message()) === "pending" ? "Pending delivery" : "Sent, not yet read"}>
             <Show when={userState(props.message()) === "consumed"} fallback={<Show when={userState(props.message()) === "pending"} fallback={<Icon name="check" size={14} />}><span aria-hidden="true">◷</span></Show>}><span aria-hidden="true">✓✓</span></Show>
             {userState(props.message()) === "consumed" ? "Read" : userState(props.message()) === "pending" ? "Pending" : "Sent"}
+            <Show when={userDelivery(props.message()) === "queue"}><span>· queued</span></Show>
           </span>
         </Show>
 
         <Show when={kind() === "assistant"}>
-          <div class="message__meta">
-            <Icon name="terminal" size={14} />
-            <span>YCoding</span>
-            <Show when={assistantOf(props.message())?.agent}><span class="message__hint">{assistantOf(props.message())?.agent}</span></Show>
-            <Show when={modelLabel(assistantOf(props.message())?.model)}>
-              <span class="message__hint">{modelLabel(assistantOf(props.message())?.model)}</span>
-            </Show>
-            <Show when={assistantOf(props.message())?.error}>
-              <span class="message__error">{assistantOf(props.message())?.error}</span>
-            </Show>
-          </div>
+          <h3 class="transcript-message__agent">{agent()}<Show when={assistantOf(props.message())?.completed === undefined && !assistantOf(props.message())?.error}> <DotTrail /></Show></h3>
           <AssistantParts parts={() => assistantOf(props.message())?.parts ?? []} />
+          <Show when={assistantOf(props.message())?.error}><p class="transcript-message__error" role="status">{assistantOf(props.message())?.error}</p></Show>
+          <footer class="transcript-message__footer">{agent()}<Show when={assistantOf(props.message())?.model}>{(model) => <> · {modelDisplayLabel(model(), models())}<Show when={model().variant}> · {model().variant}</Show></>}</Show><Show when={assistantOf(props.message())?.completed}>{(end) => <> · {formatPartDuration(end() - (assistantOf(props.message())?.created ?? end()))}</>}</Show></footer>
         </Show>
 
         <Show when={kind() === "system" || kind() === "synthetic"}>
-          <p class="message__system">{systemText(props.message())}</p>
+          <Show when={observation()} fallback={<p class="transcript-message__system">{systemText(props.message())}</p>}>{(summary) => <details class="transcript-message__observation"><summary>{summary()}</summary><pre tabindex="0">{systemText(props.message())}</pre></details>}</Show>
         </Show>
 
         <Show when={kind() === "shell"}>

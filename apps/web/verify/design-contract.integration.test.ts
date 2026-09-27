@@ -40,6 +40,7 @@ describe("web design contract inventory", () => {
     const page = await requireBrowser().openPage()
     for (const path of SITEMAP_PATHS) {
       await page.navigate(url(path))
+      for (let attempt = 0; attempt < 50 && !(await page.evaluate<boolean>(`document.querySelector("#main") instanceof HTMLElement`)); attempt += 1) await Bun.sleep(100)
       const rendered = await page.evaluate<{ readonly title: string; readonly notFound: boolean; readonly overflow: boolean; readonly activeNav: string }>(`(() => {
         const main = document.querySelector("#main")
         if (!(main instanceof HTMLElement)) throw new Error("public route has no main landmark")
@@ -94,9 +95,11 @@ describe("web design contract inventory", () => {
       if (!state.signIn) expect(state.path).toContain(`app--${scenario.view === "chat" ? "conversation" : scenario.view}`)
       if (!state.signIn && scenario.view !== "chat") {
         expect(await page.evaluate<string>(`document.querySelector('.remote-nav a[aria-current="page"]')?.textContent?.trim() ?? ""`)).toBe(
-          scenario.view === "sessions" ? "Sessions" : scenario.view === "activity" ? "Activity" : "Settings",
+          scenario.view === "sessions" ? "Sessions" : scenario.view === "activity" ? "Activity" : scenario.view === "usage" ? "Usage" : "Settings",
         )
       }
+      const settled = `${JSON.stringify(scenario.expectedText)}.every((text) => document.body.innerText.includes(text))`
+      for (let attempt = 0; attempt < 50 && !(await page.evaluate<boolean>(settled)); attempt += 1) await Bun.sleep(100)
       const visibleText = await page.evaluate<string>("document.body.innerText")
       for (const expected of scenario.expectedText) {
         expect({ id: scenario.id, missing: visibleText.includes(expected) ? undefined : expected }).toEqual({ id: scenario.id, missing: undefined })

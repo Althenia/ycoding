@@ -29,6 +29,19 @@ export type IconName =
   | "file"
   | "user"
   | "key"
+  | "plus"
+  | "minus"
+  | "maximize"
+  | "crosshair"
+  | "arrow-left"
+  | "arrow-up"
+  | "folder"
+  | "sparkles"
+  | "cpu"
+  | "usage"
+  | "at"
+  | "hash"
+  | "slash"
 
 const paths: Record<IconName, readonly string[]> = {
   terminal: ["M4 7l4 5-4 5", "M12 17h8"],
@@ -59,6 +72,19 @@ const paths: Record<IconName, readonly string[]> = {
   file: ["M6 3h8l4 4v14H6z", "M14 3v4h4"],
   user: ["M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M4 21c0-4 3.6-6 8-6s8 2 8 6"],
   key: ["M15 5a5 5 0 1 1-4.6 7L9 13.5H6.5L5 15v2H3v-2l7.4-7.4A5 5 0 0 1 15 5z", "M16.5 8h.01"],
+  plus: ["M12 5v14", "M5 12h14"],
+  minus: ["M5 12h14"],
+  maximize: ["M4 9V4h5", "M20 9V4h-5", "M4 15v5h5", "M20 15v5h-5"],
+  crosshair: ["M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M12 3v4", "M12 17v4", "M3 12h4", "M17 12h4"],
+  "arrow-left": ["M19 12H5", "M11 6l-6 6 6 6"],
+  "arrow-up": ["M12 19V5", "M6 11l6-6 6 6"],
+  folder: ["M3 6h6l2 2h10v11H3z"],
+  sparkles: ["M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8z", "M18.5 14.5l.8 1.7 1.7.8-1.7.8-.8 1.7-.8-1.7-1.7-.8 1.7-.8z"],
+  cpu: ["M7 7h10v10H7z", "M10 10h4v4h-4z", "M9 3v4", "M15 3v4", "M9 17v4", "M15 17v4", "M3 9h4", "M3 15h4", "M17 9h4", "M17 15h4"],
+  at: ["M16 12a4 4 0 1 0-1.2 2.8", "M16 8v5.5a2.5 2.5 0 0 0 5 0V12a9 9 0 1 0-3.6 7.2"],
+  hash: ["M5 9h14", "M4 15h14", "M10 4L8 20", "M16 4l-2 16"],
+  slash: ["M16 4L8 20"],
+  usage: ["M4 17a8 8 0 1 1 16 0", "M12 17l4-5", "M12 17h.01"],
 }
 
 export function Icon(props: { readonly name: IconName; readonly size?: number; readonly class?: string }): JSX.Element {

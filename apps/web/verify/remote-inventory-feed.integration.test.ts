@@ -35,10 +35,14 @@ describe("remote inventory feed", () => {
     try {
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&inventoryCount=14501`)
       for (let attempt = 0; attempt < 50; attempt += 1) {
-        if (await page.evaluate<number>(`window.remoteInventoryReport?.().rows ?? 0`) === 50) break
+        if (await page.evaluate<number>(`window.remoteInventoryReport?.().rows ?? 0`) === 25) break
         await Bun.sleep(100)
       }
-      expect(await page.evaluate<number>(`document.querySelectorAll('.workspace__rail .session-row').length`)).toBe(50)
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        if (await page.evaluate<number>(`document.querySelectorAll('.workspace__rail .session-row').length`) === 25) break
+        await Bun.sleep(50)
+      }
+      expect(await page.evaluate<number>(`document.querySelectorAll('.workspace__rail .session-row').length`)).toBe(25)
       expect(await page.evaluate<string>(`document.querySelector('.conversation-breadcrumb strong')?.textContent ?? ''`)).toContain("Stream remote output safely")
       await page.evaluate(`(() => { const root = document.querySelector('.workspace__rail'); root.tabIndex = 0; root.focus(); })()`)
       await page.pressKey("End", "End", 35)
@@ -65,11 +69,11 @@ describe("remote inventory feed", () => {
     try {
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&inventoryCount=14501`)
       for (let attempt = 0; attempt < 50; attempt += 1) {
-        if (await page.evaluate<number>(`window.remoteInventoryReport?.().rows ?? 0`) === 50) break
+        if (await page.evaluate<number>(`window.remoteInventoryReport?.().rows ?? 0`) === 25) break
         await Bun.sleep(100)
       }
-      expect(await page.evaluate(`window.remoteInventoryReport()`)).toMatchObject({ requests: 1, rows: 50, groups: 2, next: true })
-      expect(await page.evaluate<number>(`document.querySelectorAll('.sessions-table__row').length`)).toBe(50)
+      expect(await page.evaluate(`window.remoteInventoryReport()`)).toMatchObject({ requests: 1, rows: 25, groups: 2, next: true })
+      expect(await page.evaluate<number>(`document.querySelectorAll('.sessions-table__row').length`)).toBe(25)
       await page.evaluate(`(() => { const root = document.querySelector('.workspace__scroll'); root.tabIndex = 0; root.focus(); })()`)
       await page.pressKey("End", "End", 35)
       for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -82,7 +86,7 @@ describe("remote inventory feed", () => {
         await Bun.sleep(60)
       }
       expect(await page.evaluate<number>(`window.remoteInventoryReport().requests`)).toBeGreaterThanOrEqual(5)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.sessions-table__row').length`)).toBeLessThanOrEqual(150)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.sessions-table__row').length`)).toBeLessThanOrEqual(75)
       const before = await page.evaluate<string>(`window.remoteInventoryReport().first`)
       await page.evaluate(`(() => { const root = document.querySelector('.workspace__scroll'); root.scrollTop = 0; root.dispatchEvent(new WheelEvent('wheel', { deltaY: -250, bubbles: true })); })()`)
       for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -90,14 +94,13 @@ describe("remote inventory feed", () => {
         await Bun.sleep(50)
       }
       expect(await page.evaluate<string>(`window.remoteInventoryReport().first`)).not.toBe(before)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.sessions-table__row').length`)).toBeLessThanOrEqual(150)
-      await page.evaluate(`document.querySelector('select')?.dispatchEvent(new Event('focus'))`)
-      await page.evaluate(`(() => { const select = document.querySelector('.sessions-page select'); select.value = 'workspace_other'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.sessions-table__row').length`)).toBeLessThanOrEqual(75)
+      await page.evaluate(`[...document.querySelectorAll('.workspace-nav__item')].find((item) => item.title === '/workspace/other')?.click()`)
       for (let attempt = 0; attempt < 40; attempt += 1) {
         if (await page.evaluate<boolean>(`document.querySelector('.sessions-table__row')?.textContent?.includes('Inventory Session 1') ?? false`)) break
         await Bun.sleep(50)
       }
-      expect(await page.evaluate<number>(`document.querySelectorAll('.sessions-table__row').length`)).toBe(50)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.sessions-table__row').length`)).toBe(25)
       expect(await page.evaluate<string>(`document.querySelector('.sessions-table__row')?.textContent ?? ''`)).toContain("Inventory Session 1")
     } finally {
       await page.close()

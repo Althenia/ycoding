@@ -14,8 +14,8 @@ test('empty is empty, never demo data', () => assert.deepEqual(model('empty').ac
 for (const [input, expected] of [['tool','tool'],['thinking','thinking'],['attention','attention'],['compacting','compacting'],['idle','idle'],['failed','failed'],['interrupted','interrupted'],['offline','offline'],['reconnecting','reconnecting']] as const) {
   test(`selected ${input} projects as ${expected}`, () => assert.equal(selected(input).status, expected))
 }
-test('missing summary activity is unknown, not idle', () => assert.equal(model().actors.find((a) => a.sessionID === 'session-b')!.status, 'unknown'))
-test('summary activity is labelled as a report', () => assert.equal(model().actors.find((a) => a.sessionID === 'session-c')!.bubble, 'Last reported: idle'))
+test('the selected root without live detail uses its reported running state', () => assert.equal(projectOffice({ ...scenario('tool'), selected: undefined }, preferences).actors[0]!.status, 'working'))
+test('the selected root can show its own last reported idle state', () => assert.equal(projectOffice({ ...scenario('tool'), activeSessionID: 'session-c', selected: undefined }, preferences).actors[0]!.bubble, 'Last reported: idle'))
 test('stale view for another session is ignored', () => {
   const result = projectOffice({ ...scenario('attention'), selected: { ...scenario('attention').selected!, id: 'not-selected' } }, preferences)
   assert.equal(result.actors[0]!.source, 'summary')
@@ -23,7 +23,8 @@ test('stale view for another session is ignored', () => {
 })
 test('a selected detail cannot affect an unselected session', () => {
   const result = projectOffice({ ...scenario('attention'), activeSessionID: 'session-b' }, preferences)
-  assert.equal(result.actors.find((a) => a.sessionID === 'session-a')!.source, 'summary')
+  assert.equal(result.actors.some((a) => a.sessionID === 'session-a'), false)
+  assert.equal(result.actors[0]!.source, 'summary')
 })
 test('historical tool activity does not make an idle session busy', () => {
   const input = scenario('tool')
@@ -41,20 +42,23 @@ test('bounded text preserves Unicode code points and removes controls', () => {
   assert.equal(shortText('😀😀😀😀', 3), '😀😀…')
   assert.equal(shortText('a\u202eb\nc', 20), 'a b c')
 })
-test('canvas bound counts overflow, selected always visible', () => {
-  const input = { ...scenario('overflow'), activeSessionID: 'session-39' }
+test('family actor bound counts only reported children and preserves selected child', () => {
+  const base = scenario('tool')
+  const members = Array.from({ length: 40 }, (_, index) => ({ sessionID: `session-${index}`, parentID: 'session-a', description: `Task ${index}`, state: 'running' as const }))
+  const input = { ...base, activeSessionID: 'session-39', selected: undefined, team: { rootID: 'session-a', status: 'ready' as const, members, cues: [], more: false } }
   const output = projectOffice(input, preferences)
   assert.equal(output.actors.length, maxOfficeActors)
-  assert.equal(output.overflow, 24)
+  assert.equal(output.overflow, 41 - maxOfficeActors)
   assert.ok(output.actors.some((actor) => actor.sessionID === 'session-39'))
+  assert.ok(output.actors.some((actor) => actor.sessionID === 'session-a'))
 })
-test('duplicate sessions never create duplicate avatars', () => {
+test('duplicate listed Sessions never create extra family avatars', () => {
   const input = scenario('tool')
-  assert.equal(projectOffice({ ...input, sessions: [...input.sessions, input.sessions[0]!] }, preferences).actors.length, 3)
+  assert.equal(projectOffice({ ...input, sessions: [...input.sessions, input.sessions[0]!] }, preferences).actors.length, 1)
 })
-test('archived sessions stay outside the canvas roster', () => {
+test('archived unrelated Sessions stay outside the selected Office', () => {
   const input = scenario('tool')
-  assert.equal(projectOffice({ ...input, sessions: input.sessions.map((s) => ({ ...s, archived: true })) }, preferences).actors.length, 0)
+  assert.deepEqual(projectOffice({ ...input, sessions: input.sessions.map((s) => ({ ...s, archived: true })) }, preferences).actors.map((actor) => actor.sessionID), ['session-a'])
 })
 test('owner or device changes have different scene scopes', () => {
   assert.notEqual(model().scope, projectOffice({ ...scenario('tool'), ownerID: 'other-owner' }, preferences).scope)

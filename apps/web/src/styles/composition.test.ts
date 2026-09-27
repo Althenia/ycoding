@@ -165,7 +165,7 @@ describe("responsive contract", () => {
       "--yc-radius-md": "4px",
       "--yc-radius-lg": "6px",
     })
-    for (const selector of [".app .pane__title", ".app .chip", ".remote-nav__link", ".tool__header", ".request__header"]) {
+    for (const selector of [".app .pane__title", ".app .chip", ".remote-nav__link", ".request__header"]) {
       expect({ selector, font: base(remote, selector)["font-family"] }).toEqual({ selector, font: "var(--yc-font-mono)" })
     }
     expect(base(remote, ".app .pane__title")["text-transform"]).toBe("uppercase")
@@ -215,6 +215,17 @@ describe("motion contract", () => {
     const base = await readStylesheet("base.css")
     const step = base.rules.filter((rule) => rule.header === "from" && rule.conditions.includes("@keyframes yc-enter"))
     expect(step.map((rule) => Object.keys(rule.declarations))).toEqual([["translate"]])
+  })
+
+  test("keeps public entrances visible until revealed and limits motion to transforms", async () => {
+    const site = await readStylesheet("site.css")
+    const docs = await readStylesheet("docs.css")
+    const publicRules = [...site.rules, ...docs.rules]
+    for (const rule of publicRules.filter((item) => item.header.includes(".motion-reveal") || item.header.includes(".hero__"))) {
+      expect(rule.declarations["opacity"]).not.toBe("0")
+    }
+    expect(publicRules.some((rule) => rule.header.includes(".motion-reveal--visible") && rule.conditions.includes("@media (prefers-reduced-motion: no-preference)") && rule.declarations["animation"]?.includes("yc-enter"))).toBe(true)
+    expect(publicRules.some((rule) => rule.declarations["transition"]?.includes("transform") || rule.declarations["transition"]?.includes("translate"))).toBe(true)
   })
 
   test("never hides content to prepare an animation", async () => {

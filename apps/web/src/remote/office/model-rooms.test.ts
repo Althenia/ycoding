@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { projectOffice } from "./model"
 import { defaultOfficePreferences } from "./preferences"
-import type { OfficeInput, SessionSummary, TeamMember } from "./types"
+import type { OfficeInput, TeamMember } from "./types"
 
 const base: OfficeInput = {
   ownerID: "user_1",
@@ -21,13 +21,13 @@ function task(sessionID: string, description: string, agent?: string): TeamMembe
 }
 
 describe("office responsibility rooms", () => {
-  test("top-level Sessions, including a placeholder parent, work in the CEO office", () => {
+  test("only the family root, including a placeholder parent, works in the CEO office", () => {
     expect(rooms({
       sessions: [
         { id: "ses_root", title: "Plan the release", agent: "build", archived: false, running: true },
         { id: "ses_review", title: "Review the parser", agent: "reviewer", archived: false, running: false },
       ],
-    })).toEqual({ ses_root: "ceo", ses_review: "ceo" })
+    })).toEqual({ ses_root: "ceo" })
     expect(rooms({
       sessions: [],
       activeSessionID: "ses_worker",
@@ -35,17 +35,12 @@ describe("office responsibility rooms", () => {
     })).toEqual({ ses_root: "ceo", ses_worker: "developer" })
   })
 
-  test("a listed child Session works where its agent name places it", () => {
-    const child = (id: string, agent: string | undefined, title: string): SessionSummary =>
-      ({ id, parentID: "ses_root", title, archived: false, ...(agent === undefined ? {} : { agent }) })
+  test("only reported child tasks work where their agent name places them", () => {
     expect(rooms({
-      sessions: [
-        base.sessions[0]!,
-        child("ses_qa", "code-reviewer", "Tidy the parser"),
-        child("ses_research", "explore", "Tidy the parser"),
-        child("ses_dev", "zeus", "Tidy the parser"),
-        child("ses_titled", undefined, "Investigate relay drops"),
-      ],
+      team: { rootID: "ses_root", status: "ready", more: false, cues: [], members: [
+        task("ses_qa", "Tidy the parser", "code-reviewer"), task("ses_research", "Tidy the parser", "explore"),
+        task("ses_dev", "Tidy the parser", "zeus"), task("ses_titled", "Investigate relay drops"),
+      ] },
     })).toEqual({ ses_root: "ceo", ses_qa: "qa", ses_research: "research", ses_dev: "developer", ses_titled: "research" })
   })
 

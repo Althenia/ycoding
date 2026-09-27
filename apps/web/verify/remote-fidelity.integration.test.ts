@@ -39,6 +39,7 @@ describe("remote responsive state behavior", () => {
       expect(await page.evaluate<boolean>(`document.querySelector('.custom-select__dialog')?.hasAttribute('open') ?? false`)).toBe(false)
       await page.evaluate(`document.querySelector('.skip-link')?.focus()`)
       await page.pressKey("Enter", "Enter", 13)
+      for (let attempt = 0; attempt < 20 && await page.evaluate<string>(`document.activeElement?.id ?? ''`) !== "remote-main"; attempt += 1) await Bun.sleep(50)
       expect(await page.evaluate<string>(`document.activeElement?.id ?? ''`)).toBe("remote-main")
     } finally {
       await page.close()
@@ -147,7 +148,7 @@ describe("remote responsive state behavior", () => {
     await selectSessionWorkspace(page, "db-pruner", "Postgres Partition Pruning Worker")
     const state = await page.evaluate<{ readonly headingVisible: boolean; readonly columns: number }>(`(() => { const heading=document.querySelector('.sessions-page .page-head'); const grid=document.querySelector('.sessions-table'); return {headingVisible:heading instanceof HTMLElement&&getComputedStyle(heading).display!=='none',columns:grid instanceof HTMLElement?getComputedStyle(grid).gridTemplateColumns.split(' ').length:0} })()`)
     expect(state.headingVisible).toBe(false)
-    expect(state.columns).toBe(2)
+    expect(state.columns).toBe(1)
     await page.close()
   }, 30_000)
 
@@ -164,15 +165,19 @@ describe("remote responsive state behavior", () => {
         readonly columns: number
         readonly minTargetHeight: number
         readonly overflowing: boolean
+        readonly tableWidth: number
+        readonly contentWidth: number
       }>(`(() => {
         const table = document.querySelector('.sessions-results')
         const rows = [...document.querySelectorAll('.sessions-table__row')]
         const targets = [...document.querySelectorAll('.sessions-table__select')]
         if (!(table instanceof HTMLElement) || !(rows[0] instanceof HTMLElement) || targets.length === 0) throw new Error('session list Sessions table missing')
-        const rect = table.getBoundingClientRect()
+        const layout = document.querySelector('.sessions-page__layout').getBoundingClientRect()
         return {
-          width: rect.width,
-          center: rect.left + rect.width / 2,
+          width: layout.width,
+          center: layout.left + layout.width / 2,
+          tableWidth: table.getBoundingClientRect().width,
+          contentWidth: document.querySelector('.sessions-page__content').getBoundingClientRect().width,
           viewport: innerWidth,
           rows: rows.length,
           columns: getComputedStyle(rows[0]).gridTemplateColumns.split(' ').length,
@@ -182,8 +187,9 @@ describe("remote responsive state behavior", () => {
       })()`)
       expect(state.width).toBeGreaterThanOrEqual(width - 128)
       expect(Math.abs(state.center - state.viewport / 2)).toBeLessThanOrEqual(2)
+      expect(state.tableWidth).toBeGreaterThanOrEqual(state.contentWidth - 2)
       expect(state.rows).toBe(1)
-      expect(state.columns).toBe(4)
+      expect(state.columns).toBe(3)
       expect(state.minTargetHeight).toBeGreaterThanOrEqual(44)
       expect(state.overflowing).toBe(false)
     }
@@ -234,7 +240,7 @@ describe("remote responsive state behavior", () => {
             rowHeight: row.getBoundingClientRect().height,
             statusOffset: status.getBoundingClientRect().top - title.getBoundingClientRect().top,
             title: title.textContent?.trim() ?? '',
-            project: row.querySelector('.sessions-table__project')?.textContent?.trim() ?? '',
+            project: document.querySelector('.sessions-page__title')?.textContent?.trim() ?? '',
             updated: row.querySelector('.sessions-table__updated')?.textContent?.trim() ?? '',
             targets: [...document.querySelectorAll('.sessions-table__select')].map(button => button.getBoundingClientRect().height),
             rowCount: document.querySelectorAll('.sessions-table__row').length,
@@ -250,7 +256,7 @@ describe("remote responsive state behavior", () => {
         expect(state.targets).toHaveLength(1)
         expect(state.targets.every((height) => height >= 44)).toBe(true)
         expect(state.rowCount).toBe(1)
-        expect(await page.evaluate<number>(`document.querySelectorAll('.sessions-page select option').length`)).toBe(4)
+        expect(await page.evaluate<number>(`document.querySelectorAll('.sessions-page .workspace-nav__item').length`)).toBe(4)
         expect(state.overflowing).toBe(false)
         await page.close()
       }
@@ -709,12 +715,23 @@ async function scenario(scenarioName: string, width: number, expected: string, t
 }
 
 async function selectSessionWorkspace(page: Awaited<ReturnType<NonNullable<typeof browser>["openPage"]>>, directory: string, expected: string, scope = ".sessions-page", row = ".sessions-table__row") {
-  await page.evaluate(`(() => {
-    const select = document.querySelector(${JSON.stringify(`${scope} select`)});
-    const option = [...select.options].find(item => item.textContent?.includes(${JSON.stringify(directory)}));
+  await page.evaluate(`(async () => {
+    const root = document.querySelector(${JSON.stringify(scope)});
+    const name = ${JSON.stringify(directory)};
+    const visible = (element) => element instanceof HTMLElement && element.getBoundingClientRect().width > 0;
+    const item = [...root.querySelectorAll('.workspace-nav__item')].find((entry) => visible(entry) && entry.title.split('/').at(-1) === name);
+    if (item) {
+      item.click();
+      return;
+    }
+    const trigger = [...root.querySelectorAll('.workspace-select [aria-label="Workspace"]')].find(visible);
+    if (!trigger) throw new Error('Workspace control missing');
+    trigger.click();
+    for (let attempt = 0; attempt < 40 && document.querySelectorAll('.custom-select__option').length === 0; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 25));
+    const option = [...document.querySelectorAll('.custom-select__option')].find((entry) => entry.textContent.replace(/^\\s*✓/, '').trim().startsWith(name));
     if (!option) throw new Error('Workspace option missing');
-    select.value = option.value;
-    select.dispatchEvent(new Event('change', { bubbles: true }));
+    option.click();
+    document.querySelector('.custom-select__confirm')?.click();
   })()`)
   for (let attempt = 0; attempt < 40; attempt += 1) {
     if (await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(`${scope} ${row}`)})?.textContent?.includes(${JSON.stringify(expected)}) ?? false`)) return

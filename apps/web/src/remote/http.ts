@@ -1,4 +1,4 @@
-import type { CreateEnrollmentResponse, MeResponse, RemoteDeviceInfo } from "@ycoding-ai/remote"
+import type { CreateEnrollmentResponse, MeResponse, RemoteDeviceInfo, PushKeyResponse, PushSubscriptionInput } from "@ycoding-ai/remote"
 
 export type RemoteHttpFailureReason = "http" | "unexpected-body" | "network"
 
@@ -68,6 +68,38 @@ export function createRemoteHttp(options: RemoteHttpOptions = {}): RemoteHttp {
     revokeDevice: (deviceID) =>
       json<void>(`/api/devices/${encodeURIComponent(deviceID)}/revoke`, { method: "POST" }),
     logout: () => json<void>("/api/auth/logout", { method: "POST" }),
+  }
+}
+
+export function createPushHttp(options: RemoteHttpOptions = {}) {
+  const base = options.baseURL ?? ""
+  const send = options.fetch ?? globalThis.fetch
+  const request = async (method: "GET" | "POST" | "DELETE", body?: unknown): Promise<RemoteHttpResult<unknown>> => {
+    try {
+      const response = await send(`${base}${method === "GET" ? "/api/push/key" : "/api/push/subscriptions"}`,
+        { method, credentials: "same-origin", ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }) })
+      if (!response.ok) return failure(response.status, await errorMessage(response), "http")
+      return { ok: true, value: method === "GET" ? await readJson(response) : undefined }
+    } catch (cause) {
+      return failure(0, cause instanceof Error ? cause.message : "The request could not be sent", "network")
+    }
+  }
+  return {
+    key: async (): Promise<RemoteHttpResult<PushKeyResponse>> => {
+      const result = await request("GET")
+      if (!result.ok) return result
+      if (!isRecord(result.value) || typeof result.value.publicKey !== "string" || result.value.publicKey.length === 0)
+        return failure(200, "The response was not an API document", "unexpected-body")
+      return { ok: true, value: { publicKey: result.value.publicKey } }
+    },
+    subscribe: async (input: PushSubscriptionInput): Promise<RemoteHttpResult<void>> => {
+      const result = await request("POST", input)
+      return result.ok ? { ok: true, value: undefined } : result
+    },
+    remove: async (endpoint: string): Promise<RemoteHttpResult<void>> => {
+      const result = await request("DELETE", { endpoint })
+      return result.ok ? { ok: true, value: undefined } : result
+    },
   }
 }
 

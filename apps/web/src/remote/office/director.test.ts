@@ -60,7 +60,7 @@ test("work and lounge transitions route on walkable cells and return to the rese
   expect(frame(director, initialActor.id).position).toEqual(center(layout.work.developer[0]!.cell))
 })
 
-test("new actors enter from the door with a 400 ms opacity ramp; task hydration is direct", () => {
+test("newly reported actors enter from the door with a 400 ms opacity ramp", () => {
   const layout = officeLayout()
   const director = new OfficeDirector(layout)
   const base = actor("root")
@@ -74,7 +74,78 @@ test("new actors enter from the door with a 400 ms opacity ramp; task hydration 
   expect(frame(director, "new").room).toBe("qa")
   const task = actor("task", { kind: "task", homeRoom: "research" })
   director.sync(snapshot([base, actor("new", { homeRoom: "qa" }), task], { team: { status: "ready", rootActorID: base.id, total: 1, shown: 1, more: false } }))
-  expect(frame(director, task.id).position).toEqual(center(layout.work.research[0]!.cell))
+  expect(cellAt(frame(director, task.id).position)).toEqual(layout.door)
+  expect(frame(director, task.id).opacity).toBe(0)
+})
+
+test("a newly reported child enters from the lobby and leaves after completion or cancellation", () => {
+  for (const taskState of ["completed", "cancelled"] as const) {
+    const layout = officeLayout()
+    const director = new OfficeDirector(layout)
+    const root = actor("root", { kind: "session", homeRoom: "ceo" })
+    const child = actor("child", { kind: "task", teamRootSessionID: root.sessionID, homeRoom: "qa", taskState: "running" })
+    const team = { status: "ready" as const, rootActorID: root.id, total: 1, shown: 1, more: false }
+    director.sync(snapshot([root], { team: { ...team, total: 0, shown: 0 } }))
+    director.sync(snapshot([root, child], { team }))
+    expect(cellAt(frame(director, child.id).position)).toEqual(layout.door)
+    expect(frame(director, child.id).opacity).toBe(0)
+    for (let step = 0; step < 500 && frame(director, child.id).moving; step++) run(director)
+    expect(frame(director, child.id).room).toBe("qa")
+    director.sync(snapshot([root, { ...child, status: "idle", taskState }], { team }))
+    expect(frame(director, child.id).leaving).toBe(true)
+    for (let step = 0; step < 500 && director.tick(0, false).some((item) => item.actor.id === child.id); step++) run(director)
+    expect(director.tick(0, false).some((item) => item.actor.id === child.id)).toBe(false)
+    expect(frame(director, root.id).leaving).toBe(false)
+  }
+})
+
+test("a terminal child reports to the supervisor before exiting and cannot reappear from the same report", () => {
+  const layout = officeLayout()
+  const director = new OfficeDirector(layout)
+  const root = actor("root", { homeRoom: "ceo" })
+  const child = actor("child", { kind: "task", teamRootSessionID: root.id, taskState: "running" })
+  const team = { status: "ready" as const, rootActorID: root.id, total: 1, shown: 1, more: false }
+  director.sync(snapshot([root, child], { team }))
+  const cue = { id: "report-terminal", kind: "report" as const, fromActorID: child.id, toActorID: root.id, outcome: "completed" as const }
+  const settled = snapshot([root, { ...child, status: "idle", taskState: "completed" }], { team, cues: [cue] })
+  director.sync(settled)
+  expect(frame(director, child.id).leaving).toBe(false)
+  expect(director.playCue(cue)).toBe(true)
+  let spoke = false
+  let departed = false
+  for (let step = 0; step < 600; step++) {
+    const frames = run(director)
+    spoke ||= frames.some((item) => item.actor.id === child.id && item.speech === "report")
+    departed ||= frames.some((item) => item.actor.id === child.id && item.leaving)
+    if (spoke && departed && !frames.some((item) => item.actor.id === child.id)) break
+  }
+  expect(spoke).toBe(true)
+  expect(departed).toBe(true)
+  expect(director.tick(0, false).some((item) => item.actor.id === child.id)).toBe(false)
+  director.sync(settled)
+  expect(director.tick(0, false).some((item) => item.actor.id === child.id)).toBe(false)
+  expect(frame(director, root.id).leaving).toBe(false)
+})
+
+test("a terminal update during delegation keeps the child headed to the meeting before departure", () => {
+  const layout = officeLayout()
+  const director = new OfficeDirector(layout)
+  const root = actor("root", { homeRoom: "ceo" })
+  const child = actor("child", { kind: "task", teamRootSessionID: root.id, homeRoom: "developer", taskState: "running" })
+  const team = { status: "ready" as const, rootActorID: root.id, total: 1, shown: 1, more: false }
+  director.sync(snapshot([root, child], { team }))
+  expect(director.playCue({ id: "delegate", kind: "delegate", fromActorID: root.id, toActorID: child.id })).toBe(true)
+  for (let step = 0; step < 20; step++) run(director)
+  director.sync(snapshot([root, { ...child, status: "idle", taskState: "completed" }], { team }))
+  let met = false
+  for (let step = 0; step < 600; step++) {
+    const frames = run(director)
+    const rootFrame = frames.find((item) => item.actor.id === root.id)
+    const childFrame = frames.find((item) => item.actor.id === child.id)
+    met ||= rootFrame?.room === "meeting" && childFrame?.room === "meeting" && childFrame.speech === "chat"
+  }
+  expect(met).toBe(true)
+  expect(director.tick(0, false).some((item) => item.actor.id === child.id)).toBe(false)
 })
 
 test("team root replacement drops old task actors and hydrates new task actors directly", () => {

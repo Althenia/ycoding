@@ -1,6 +1,8 @@
 import { For, Show, createMemo, createSignal } from "solid-js"
 import { render } from "solid-js/web"
+import "../src/styles/tokens.css"
 import { OfficeCanvas } from "../src/remote/office/OfficeCanvas"
+import { OfficeWorkspace } from "../src/remote/office/OfficeWorkspace"
 import { projectOffice } from "../src/remote/office/model"
 import { defaultOfficePreferences } from "../src/remote/office/preferences"
 import { scenario } from "../src/remote/office/scenarios.test-helper"
@@ -15,19 +17,20 @@ function Fixture() {
   const [zeroSize, setZeroSize] = createSignal(false)
   const [showTeamCue, setShowTeamCue] = createSignal(query.get("cue") !== "0")
   const [extraSession, setExtraSession] = createSignal(false)
-  const taskState = (["starting", "running", "waiting", "cancelling", "cancelled", "completed", "failed", "lost"] as const)
-    .find((state) => state === query.get("taskState")) ?? "running"
+  const [taskState, setTaskState] = createSignal(((["starting", "running", "waiting", "cancelling", "cancelled", "completed", "failed", "lost"] as const)
+    .find((value) => value === query.get("taskState")) ?? "running"))
   const snapshot = createMemo(() => {
     const current = scenario(state())
     return projectOffice({
     ...current,
     sessions: extraSession() ? [...current.sessions, { id: "session-new", parentID: "session-a", title: "New research task", agent: "Researcher", archived: false, running: true }] : current.sessions,
     activeSessionID: selected(),
-    ...(query.has("team") ? { team: {
+    ...(query.has("team") || query.has("arrival") ? { team: {
       rootID: "session-a", status: "ready" as const,
       members: [
-        { sessionID: "session-b", parentID: "session-a", description: "Review implementation", agent: "Reviewer", state: taskState },
+        ...(query.has("team") ? [{ sessionID: "session-b", parentID: "session-a", description: "Review implementation", agent: "Reviewer", state: taskState() }] : []),
         ...(query.get("team") === "multi" ? [{ sessionID: "session-d", parentID: "session-a", description: "Investigate model behavior", agent: "Researcher", state: "running" as const }] : []),
+        ...(extraSession() ? [{ sessionID: "session-new", parentID: "session-a", description: "New research task", agent: "Researcher", state: "running" as const }] : []),
       ],
       cues: showTeamCue() ? [query.get("cueKind") === "report"
         ? { id: "observed-report", kind: "reported" as const, childID: "session-b", outcome: "completed" as const }
@@ -49,13 +52,16 @@ function Fixture() {
       <button type="button" onClick={() => setPreferences({ ...preferences(), motion: preferences().motion === "system" ? "reduced" : "system" })}>Toggle reduced motion</button>
       <button type="button" onClick={() => setPreferences({ ...preferences(), quality: preferences().quality === "standard" ? "battery" : "standard" })}>Toggle quality</button>
       <Show when={query.has("team")}><button type="button" style={{ display: "none" }} onClick={() => setShowTeamCue(!showTeamCue())}>Toggle observed cue</button></Show>
+      <Show when={query.has("transitionTask")}><button type="button" onClick={() => setTaskState(taskState() === "running" ? "completed" : "running")}>Toggle task completion</button></Show>
       <Show when={query.has("arrival")}><button type="button" onClick={() => setExtraSession(!extraSession())}>Toggle arriving session</button></Show>
     </nav>
     <p>Selected session: <output id="selected-session">{selected()}</output>. Quality: <output id="office-quality">{preferences().quality}</output>. Motion: <output id="office-motion">{preferences().motion}</output>.</p>
     <input aria-label="Typing stays in the composer" placeholder="Keyboard input probe" />
     <div class="office-engine-host" classList={{ "office-zero": zeroSize() }} style={{ "max-width": "100%", "margin-top": "12px" }}>
       <Show when={mounted() && !normal()} fallback={<button type="button" onClick={() => { setNormal(false); setMounted(true) }}>Show office</button>}>
-        <OfficeCanvas snapshot={snapshot()} preferences={preferences()} onSelectSession={setSelected} onNormalView={() => setNormal(true)} />
+        <Show when={query.has("workspace")} fallback={<OfficeCanvas snapshot={snapshot()} preferences={preferences()} onSelectSession={setSelected} onNormalView={() => setNormal(true)} onLocations={() => {}} />}>
+          <OfficeWorkspace snapshot={snapshot()} preferences={preferences()} renderKey="fixture" requestCount={0} onSelectSession={setSelected} onNormalView={() => setNormal(true)} onShowRequests={() => setNormal(true)} onLoadMoreTeam={() => {}} />
+        </Show>
       </Show>
     </div>
     <aside aria-label="Office session roster" data-cues={snapshot().cues.length}><For each={snapshot().actors}>{(actor) => <button type="button" onClick={() => setSelected(actor.sessionID)}>{actor.name}: {actor.status}</button>}</For></aside>

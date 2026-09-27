@@ -376,11 +376,86 @@ const constraintsForm = {
   ],
 }
 
+const catalog = {
+  agents: [
+    { id: "GSD", name: "GSD", description: "All-round agent", mode: "primary", hidden: false },
+    { id: "architect", name: "architect", description: "Plans cross-package changes", mode: "primary", hidden: false, model: { providerID: "openai", id: "gpt-6-sol", variant: "medium" } },
+    { id: "reviewer", name: "reviewer", description: "Reviews a diff and reports findings", mode: "subagent", hidden: false },
+    { id: "btw", name: "btw", description: "Side question", mode: "subagent", hidden: false },
+    { id: "compaction", name: "compaction", mode: "primary", hidden: true },
+  ],
+  models: [
+    { providerID: "anthropic", providerName: "Anthropic", id: "claude-opus-5-5", name: "Claude Opus 5.5", variants: ["high", "max"], defaultVariant: "high" },
+    { providerID: "openai", providerName: "OpenAI", id: "gpt-6-sol", name: "GPT-6 Sol", variants: ["low", "medium", "high", "xhigh"], defaultVariant: "medium" },
+    { providerID: "openai", providerName: "OpenAI", id: "gpt-6-luna", name: "GPT-6 Luna", variants: ["none", "low", "medium", "high"], defaultVariant: "medium" },
+    { providerID: "openrouter", providerName: "OpenRouter", id: "perceptron/perceptron-mk1.5", name: "Perceptron Mk1.5", variants: [] },
+  ],
+  defaultModel: { providerID: "anthropic", id: "claude-opus-5-5", variant: "high" },
+  commands: [
+    { name: "plan", description: "Draft an implementation plan" },
+    { name: "review", description: "Review the working tree" },
+  ],
+  skills: [
+    { id: "frontend-workflow", name: "frontend-workflow", description: "Implement or review existing frontend UI", slash: true },
+    { id: "git-commit-message", name: "git-commit-message", description: "Write commit messages from inspected changes", slash: false },
+  ],
+  references: [{ name: "design-system", uri: "file:///workspace/design-system", description: "/workspace/design-system" }],
+  resources: [{ name: "Runbook", uri: "mcp://docs/runbook", description: "Operations runbook" }],
+}
+
+const fixtureFiles = [
+  { path: "apps/web/src/remote/store.ts", kind: "file" },
+  { path: "apps/web/src/remote/ui/composer.tsx", kind: "file" },
+  { path: "apps/web/src/remote", kind: "directory" },
+  { path: "packages/remote/src/index.ts", kind: "file" },
+  { path: "docs/runtime.md", kind: "file" },
+  { path: "README.md", kind: "file" },
+].map((file) => ({ ...file, uri: `file:///workspace/ycoding/${file.path}` }))
+
+const usageDay = 86_400_000
+const usageTokens = (scale: number) => ({ input: 42_000 * scale, output: 9_800 * scale, reasoning: 3_100 * scale, cache: { read: 18_400 * scale, write: 900 * scale } })
+const usageMetrics = (scale: number, cost?: number) => ({
+  logical: 12 * scale, physical: 13 * scale, helpers: scale, continued: 0, fallback: 0, tokens: usageTokens(scale), cacheReadReported: true,
+  ...(cost === undefined ? {} : { cost, costProvenance: "recorded" as const }),
+})
+const fixtureUsageProviders = (now: number) => [
+  { providerID: "openai", label: "Codex", profile: "Pro", status: "available", source: "provider_internal_api", stability: "best_effort", updatedAt: now - 60_000, windows: [
+    { id: "session", label: "Session", unit: "percent", used: 38, resetAt: now + 2 * 3_600_000, periodSeconds: 18_000 },
+    { id: "weekly", label: "Weekly", unit: "percent", used: 72, resetAt: now + 3 * usageDay, periodSeconds: 604_800 },
+  ] },
+  { providerID: "openrouter", label: "OpenRouter · Pay as you go", status: "available", source: "provider_api", stability: "stable", updatedAt: now - 30_000, windows: [
+    { id: "daily", label: "Today", unit: "usd", used: 1.84 },
+    { id: "weekly", label: "This Week", unit: "usd", used: 8.21 },
+    { id: "monthly", label: "This Month", unit: "usd", used: 27.65 },
+    { id: "credits", label: "Credits", unit: "usd", used: 61.58, limit: 100, remaining: 38.42 },
+    { id: "balance", label: "Balance", unit: "usd", remaining: 38.42 },
+  ] },
+  { providerID: "github-copilot", label: "GitHub Copilot", profile: "Pro", status: "available", source: "provider_internal_api", stability: "best_effort", updatedAt: now - 120_000, windows: [
+    { id: "credits", label: "AI credits", unit: "percent", used: 41, resetAt: now + 12 * usageDay },
+  ] },
+]
+const fixtureUsageReport = (input: Readonly<Record<string, unknown>> | undefined) => {
+  const group = typeof input?.group === "string" ? input.group : "model"
+  const from = typeof input?.from === "number" ? input.from : Date.now() - 29 * usageDay
+  const rows = group === "day"
+    ? Array.from({ length: 30 }, (_, index) => {
+      const key = new Date(from + index * usageDay).toISOString().slice(0, 10)
+      return { key, label: key, ...usageMetrics(1 + (index % 5), index % 7 === 0 ? undefined : 0.35 * (1 + (index % 5))) }
+    })
+    : [
+      { key: `${group}_a`, label: group === "model" ? "openai/gpt-6-sol" : group === "agent" ? "GSD" : group === "project" ? "ycoding" : "Stream remote output safely", ...usageMetrics(6, 18.4) },
+      { key: `${group}_b`, label: group === "model" ? "anthropic/claude-opus-5.5" : group === "agent" ? "explore" : group === "project" ? "db-pruner" : "Async Auth Token Revocation Migration", ...usageMetrics(3, 7.9) },
+      { key: `${group}_c`, label: group === "model" ? "openrouter/deepseek/deepseek-v4" : group === "agent" ? "compaction" : group === "project" ? "mesh" : "Archived: release notes", ...usageMetrics(1) },
+    ]
+  return { data: { group, rows, total: usageMetrics(10, 26.3), rowCount: rows.length } }
+}
+
 type Fixture = {
   readonly store: RemoteStore
   readonly drop: () => void
   readonly stream: () => void
   readonly team: () => void
+  readonly status: (running: readonly string[], attention: readonly string[]) => void
   readonly formRequests: () => readonly { readonly operation: string; readonly input: Readonly<Record<string, unknown>> | undefined }[]
   readonly mutationRequests: () => readonly { readonly operation: string; readonly input: Readonly<Record<string, unknown>> | undefined }[]
   readonly inventoryRequests: () => number
@@ -409,6 +484,8 @@ function createFixtureStore(): Fixture {
     projectID: string
     location: { directory: string }
     time: { created: number; updated: number }
+    agent?: string
+    model?: unknown
   }>()
   const groupOf = (value: unknown) => {
     const record = value as { readonly projectID?: string; readonly location?: { readonly directory?: string } }
@@ -468,10 +545,35 @@ function createFixtureStore(): Fixture {
   ): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
     operationCounts.set(operation, (operationCounts.get(operation) ?? 0) + 1)
     if (connectionMode === "offline") return { status: "failed", error: { code: "agent_unavailable", message: "No local agent is connected" } }
-    if (operation === "session.prompt" || operation === "session.autonomy.set" || operation === "session.guardrail.reply" || operation === "session.create") {
+    if ([
+      "session.prompt", "session.autonomy.set", "session.guardrail.reply", "session.create",
+      "session.command", "session.skill", "session.switchModel", "session.switchAgent",
+    ].includes(operation)) {
       mutationRequests.push({ operation, input })
     }
+    if (operation === "session.catalog" || operation === "workspace.catalog") return { status: "ok", value: catalog }
+    if (operation === "session.file.find" || operation === "workspace.file.find") {
+      const query = typeof input?.query === "string" ? input.query.toLowerCase() : ""
+      const limit = typeof input?.limit === "number" ? input.limit : 20
+      return { status: "ok", value: { files: fixtureFiles.filter((file) => file.path.toLowerCase().includes(query)).slice(0, limit) } }
+    }
+    if (operation === "session.status") return { status: "ok", value: {
+      running: emptyBackend ? [] : [sessionID],
+      attention: unreplied(permissions).length + unreplied(guardrails).length > 0 ? [sessionID] : [],
+    } }
+    if (operation === "usage.providers") return { status: "ok", value: { data: fixtureUsageProviders(Date.now()) } }
+    if (operation === "usage.summary") return { status: "ok", value: { data: usageMetrics(10, 26.3) } }
+    if (operation === "usage.report") return { status: "ok", value: fixtureUsageReport(input) }
+    if (operation === "session.command") return { status: "ok", value: { data: { ...input, admittedSeq: 44 } } }
+    if (operation === "session.skill" || operation === "session.switchModel" || operation === "session.switchAgent") return { status: "ok", value: null }
     if (operation === "workspace.list") {
+      if (accountParams.get("workspaces") === "many") return { status: "ok", value: { data: [
+        { id: "workspace_fixture", projectID: "prj_remote", directory: "/workspace/ycoding", name: "ycoding" },
+        { id: "workspace_agents", projectID: "12fd42415fd3fa9c65332dd8ad2128cc83499df6", directory: "/Users/me/.agents", name: ".agents" },
+        { id: "workspace_worktree", projectID: "3e5803fe818b6335dfb7f71ec17671f3fa4cd538", directory: "/Users/me/Project/ycoding.worktrees/office", name: "office" },
+        { id: "workspace_archive", projectID: "8139fb02d3972656a258b05074bf17af4f6a9a6a", directory: "/Users/me/Archive/ycoding", name: "ycoding" },
+        { id: "workspace_proxy", projectID: "6c9b1273dcfa1c7614271448a568d2e27f6db3d3", directory: "/Users/me/Project/llama-cpp-proxy-with-a-long-repository-name", name: "llama-cpp-proxy-with-a-long-repository-name" },
+      ] } }
       if (accountParams.get("workspaces") === "error" && input?.sessionsOnly !== true) return { status: "failed", error: { code: "internal_error", message: "Workspace inventory unavailable" } }
       if (input?.sessionsOnly === true && inventoryCount > 0) return { status: "ok", value: { data: workspaces } }
       if (input?.sessionsOnly === true) return { status: "ok", value: { data: [...new Map([...(emptyBackend ? [] : sessions), ...createdSessions.values()].map((session) => {
@@ -485,7 +587,8 @@ function createFixtureStore(): Fixture {
       if (!workspace || typeof input?.id !== "string") return { status: "failed", error: { code: "invalid_message", message: "Unknown workspace" } }
       if (accountParams.get("creation") === "failed") return { status: "failed", error: { code: "invalid_message", message: "Workspace directory is unavailable" } }
       const existing = createdSessions.get(input.id)
-      const created = existing ?? { id: input.id, title: "New session", projectID: workspace.projectID, location: { directory: workspace.directory }, time: { created: Date.now(), updated: Date.now() } }
+      const created = existing ?? { id: input.id, title: "New session", projectID: workspace.projectID, location: { directory: workspace.directory }, time: { created: Date.now(), updated: Date.now() },
+        ...(typeof input.agent === "string" ? { agent: input.agent } : {}), ...(input.model === undefined ? {} : { model: input.model }) }
       createdSessions.set(created.id, created)
       if (existing === undefined) setTimeout(() => handlers?.onSessions?.(), 0)
       if (accountParams.get("creation") === "unknown") return { status: "unknown", error: { code: "outcome_unknown", message: "Connection closed before creation settled" } }
@@ -518,7 +621,8 @@ function createFixtureStore(): Fixture {
           ...(offset + data.length < count ? { next: String(offset + data.length) } : {}) } } }
       }
       return { status: "ok", value: { data: [...createdSessions.values(), ...(emptyBackend ? [] : sessions)]
-        .filter((session) => input?.workspace === undefined || groupOf(session).id === input.workspace) } }
+        .filter((session) => input?.workspace === undefined || groupOf(session).id === input.workspace)
+        .filter((session) => input?.parentID !== null || (session as { readonly parentID?: string }).parentID === undefined) } }
     }
     if (operation === "session.active") return { status: "ok", value: { data: { [sessionID]: { type: "running" } } } }
     if (operation === "session.subagent.list") {
@@ -688,8 +792,10 @@ function createFixtureStore(): Fixture {
     }, 400)
   }
 
+  const status = (running: readonly string[], attention: readonly string[]) => handlers?.onSessionStatus?.({ running, attention })
+
   return {
-    store, drop, stream, team, formRequests: () => formRequests, mutationRequests: () => mutationRequests, inventoryRequests: () => inventoryRequests,
+    store, drop, stream, team, status, formRequests: () => formRequests, mutationRequests: () => mutationRequests, inventoryRequests: () => inventoryRequests,
     operationReport: () => ({ transports: transportsCreated, operations: Object.fromEntries(operationCounts) }),
   }
 }
@@ -706,7 +812,7 @@ async function openFixtureWorkspace(store: RemoteStore) {
   for (let attempt = 0; attempt < 40 && store.state().sessions.length === 0; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
-  await store.selectSession(sessionID)
+  if (store.state().activeSessionID === undefined) await store.selectSession(sessionID)
 }
 
 /** Selects the fixture device and lets the real store settle its rejected list read. */
@@ -785,13 +891,13 @@ function escapesClipping(element: Element): boolean {
  * holds, the device-limit notice, the page control, and the current request state.
  */
 function remoteShellOutputReport() {
-  return [...document.querySelectorAll(".shell__output")].map((element) => {
-    const container = element.closest(".shell, .tool")
+  return [...document.querySelectorAll(".transcript-shell-output")].map((element) => {
+    const container = element.closest(".shell, .transcript-tool")
     return {
       container: container?.classList.contains("shell") === true ? "shell" : "tool",
       command:
         container?.querySelector(".shell__header code")?.textContent ??
-        container?.querySelector(".tool__name")?.textContent ??
+        container?.querySelector(".transcript-tool__name")?.textContent ??
         "",
       output: element.querySelector("pre.output code")?.textContent ?? undefined,
       notices: [...element.querySelectorAll("p.shell__pending")].map((node) => node.textContent ?? ""),
@@ -831,6 +937,7 @@ function remoteMutationReport() {
 ;(window as typeof window & { remoteFormReport?: typeof remoteFormReport }).remoteFormReport = remoteFormReport
 ;(window as typeof window & { remoteMutationReport?: typeof remoteMutationReport }).remoteMutationReport = remoteMutationReport
 ;(window as typeof window & { remoteOperationReport?: typeof fixture.operationReport }).remoteOperationReport = fixture.operationReport
+;(window as typeof window & { remoteStatus?: typeof fixture.status }).remoteStatus = fixture.status
 
 const fixtureView = remoteScenarioData?.view ?? new URLSearchParams(window.location.search).get("view") ?? "chat"
 const fixturePath = fixtureView === "chat" ? "/remote" : `/remote/${fixtureView}`
@@ -872,6 +979,9 @@ function FixturePage() {
         </button>
         <button type="button" class="button button--secondary button--small" onClick={() => fixture.team()}>
           Simulate subagent handoff
+        </button>
+        <button type="button" class="button button--secondary button--small" onClick={() => fixture.status([], [sessionID, "ses_archived"])}>
+          Simulate status change
         </button>
       </div>
       <App createRemoteStore={() => fixture.store} />

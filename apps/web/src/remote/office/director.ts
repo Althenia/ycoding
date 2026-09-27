@@ -31,6 +31,7 @@ export class OfficeDirector {
   private readonly actors = new Map<string, ActorState>()
   private readonly briefings = new Map<string, Briefing>()
   private readonly reports = new Map<string, Report>()
+  private readonly departed = new Set<string>()
   private scope?: string
   private snapshot?: OfficeSnapshot
   private hydrated = false
@@ -50,33 +51,34 @@ export class OfficeDirector {
     const previous = this.snapshot
     this.snapshot = snapshot
     const rootChanged = previous?.team.rootActorID !== snapshot.team.rootActorID
-    const teamReady = snapshot.team.status === "ready" && previous?.team.status !== "ready"
     const visible = new Set(snapshot.actors.map((actor) => actor.id))
     for (const [id, state] of this.actors) {
       if (visible.has(id)) continue
       const immediate = snapshot.connection !== "ready" || state.actor.kind === "task" && rootChanged || this.reduced
       if (immediate || !this.hydrated) this.drop(id)
-      else {
-        state.leaving = true
-        state.leavingAge = 0
-        state.speech = undefined
-        state.lounge = undefined
-        this.move(state, this.layout.door)
-      }
+      else this.depart(state)
     }
     for (const actor of snapshot.actors) {
+      if (!terminalTask(actor)) this.departed.delete(actor.id)
       const state = this.actors.get(actor.id)
       if (state) {
         state.actor = actor
+        if (terminalTask(actor) && !state.leaving && !state.cue && !snapshot.cues.some((cue) => cue.kind === "report" && cue.fromActorID === actor.id)) {
+          this.departed.add(actor.id)
+          this.depart(state)
+          continue
+        }
         if (state.leaving) {
+          if (this.departed.has(actor.id)) continue
           state.leaving = false
           state.leavingAge = 0
           state.opacityAge = 400
         }
-        if (snapshot.connection === "ready" && actor.source !== "unavailable") this.routeDestination(state)
+        if (snapshot.connection === "ready" && actor.source !== "unavailable" && !state.cue) this.routeDestination(state)
         continue
       }
-      const direct = !this.hydrated || actor.kind === "task" && (rootChanged || teamReady) || snapshot.connection !== "ready" || this.reduced
+      if (this.departed.has(actor.id) || terminalTask(actor)) continue
+      const direct = !this.hydrated || actor.kind === "task" && rootChanged && previous?.team.rootActorID !== undefined || snapshot.connection !== "ready" || this.reduced
       this.add(actor, direct ? undefined : this.layout.door, !direct)
       if (!direct) this.routeDestination(this.actors.get(actor.id)!)
     }
@@ -175,7 +177,7 @@ export class OfficeDirector {
   private reduced = false
 
   private hydrate(snapshot: OfficeSnapshot): void {
-    for (const actor of snapshot.actors) this.add(actor)
+    for (const actor of snapshot.actors) if (!terminalTask(actor)) this.add(actor)
     this.hydrated = true
   }
 
@@ -277,7 +279,10 @@ export class OfficeDirector {
           briefing.talking = false
           briefing.activeChild = undefined
           if (children.every((state) => briefing.talked.includes(state.actor.id))) {
-            for (const child of children) this.routeDestination(child)
+            for (const child of children) {
+              if (terminalTask(child.actor)) { this.departed.add(child.actor.id); this.depart(child) }
+              else this.routeDestination(child)
+            }
             this.routeDestination(supervisor)
             briefing.returning = true
           }
@@ -308,7 +313,8 @@ export class OfficeDirector {
         if (report.timer <= 0) {
           child.speech = undefined
           supervisor.speech = undefined
-          this.routeDestination(child)
+          if (terminalTask(child.actor)) { this.departed.add(child.actor.id); this.depart(child) }
+          else this.routeDestination(child)
           this.routeDestination(supervisor)
           report.talking = false
           report.returning = true
@@ -390,7 +396,16 @@ export class OfficeDirector {
   private finishCueActor(state: ActorState): void {
     state.cue = undefined
     state.speech = undefined
+    if (terminalTask(state.actor)) { this.departed.add(state.actor.id); this.depart(state); return }
     this.routeDestination(state)
+  }
+
+  private depart(state: ActorState): void {
+    state.leaving = true
+    state.leavingAge = 0
+    state.speech = undefined
+    state.lounge = undefined
+    this.move(state, this.layout.door)
   }
 
   private drop(id: string): void {
@@ -401,6 +416,7 @@ export class OfficeDirector {
     this.actors.clear()
     this.briefings.clear()
     this.reports.clear()
+    this.departed.clear()
     this.hydrated = false
     this.elapsed = 0
     this.ambientClock = 0
@@ -414,6 +430,10 @@ export class OfficeDirector {
     state.random = nextHash(state.random)
     return state.random
   }
+}
+
+function terminalTask(actor: OfficeActor): boolean {
+  return actor.kind === "task" && (actor.taskState === "completed" || actor.taskState === "cancelled" || actor.taskState === "failed" || actor.taskState === "lost")
 }
 
 function center(layout: OfficeLayout, point: Point): Point {
