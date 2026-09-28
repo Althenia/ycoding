@@ -35,6 +35,11 @@ runs:
         bun-version-file: ${{ !steps.bun-url.outputs.url && 'package.json' || '' }}
         bun-download-url: ${{ steps.bun-url.outputs.url }}
 
+    - name: Keep the Bun cache on the workspace disk
+      if: runner.os == 'Windows'
+      shell: bash
+      run: echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-install-cache" >> "$GITHUB_ENV"
+
     - name: Get cache directory
       id: cache
       shell: bash
@@ -45,9 +50,7 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.cache.outputs.dir }}
-        key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-bun-
+        key: ${{ runner.os }}-${{ runner.arch }}-bun-${{ hashFiles('bun.lock') }}
 
     - name: Install setuptools for distutils compatibility
       run: python3 -m pip install setuptools || pip install setuptools || true
@@ -66,8 +69,8 @@ runs:
       shell: bash
 
     - name: Save Bun dependencies
-      if: steps.bun-cache.outputs.cache-hit != 'true' && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
+      if: steps.bun-cache.outputs.cache-hit != 'true' && github.event_name != 'pull_request' && github.event_name != 'pull_request_target' && !startsWith(github.ref, 'refs/tags/')
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.cache.outputs.dir }}
-        key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lock') }}
+        key: ${{ steps.bun-cache.outputs.cache-primary-key }}

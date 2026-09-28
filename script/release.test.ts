@@ -314,3 +314,37 @@ test("obsolete Pages publishing is replaced by the web asset publisher", async (
   expect(workflow).toContain("script/build-web-assets.test.ts")
   expect(workflow).not.toContain("script/pages.test.ts")
 })
+
+const setupBun = await Bun.file(path.join(import.meta.dir, "../.github/actions/setup-bun/action.yml")).text()
+
+test("Bun dependency caches are exact per OS and architecture and keyed only by the root lockfile", () => {
+  expect(setupBun).toContain("key: ${{ runner.os }}-${{ runner.arch }}-bun-${{ hashFiles('bun.lock') }}")
+  expect(setupBun).not.toContain("**/bun.lock")
+  expect(setupBun).not.toContain("restore-keys")
+})
+
+test("Windows keeps the Bun cache on the runner's workspace disk before resolving the cache directory", () => {
+  const beforeCacheDirectory = setupBun.split("- name: Get cache directory")[0] ?? ""
+  expect(beforeCacheDirectory).toContain("if: runner.os == 'Windows'")
+  expect(beforeCacheDirectory).toContain("BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-install-cache")
+})
+
+test("Bun caches save under the restored key and never from tag runs, whose caches later tags cannot restore", () => {
+  const save = setupBun.split("- name: Save Bun dependencies")[1] ?? ""
+  expect(save).toContain("!startsWith(github.ref, 'refs/tags/')")
+  expect(save).toContain("key: ${{ steps.bun-cache.outputs.cache-primary-key }}")
+})
+
+test("main keeps an exact Bun cache for every release runner", async () => {
+  const warm = await Bun.file(path.join(import.meta.dir, "../.github/workflows/bun-cache.yml")).text()
+  const runners = new Set(
+    [...workflow.matchAll(/(?:runner|runs-on): ([a-z][\w.-]+)/g)].map((match) => match[1]),
+  )
+  expect([...runners].sort()).toEqual(["macos-15-intel", "macos-26", "ubuntu-24.04", "windows-2025"])
+  expect(warm).toContain("    branches: [main]")
+  expect(warm).toContain("  workflow_dispatch:")
+  for (const runner of runners) expect(warm).toContain(`          - ${runner}`)
+  expect(warm).toContain("runs-on: ${{ matrix.runner }}")
+  expect(warm).toContain("uses: ./.github/actions/setup-bun")
+  expect(warm).toContain("install-flags: --frozen-lockfile")
+})
