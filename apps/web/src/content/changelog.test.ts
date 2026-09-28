@@ -13,11 +13,12 @@ describe("release entries", () => {
       changes: [
         { tag: "Added", text: "Choose the active machine and remove revoked devices from remote Settings, reopen Activity on your last Session after a reload, and hide the desktop Sessions sidebar." },
         { tag: "Added", text: "Switch remote Usage between UTC and local time, and see loading placeholders instead of blank areas while the remote workspace loads." },
-        { tag: "Changed", text: "Keep the remote connection in the machine's background server so it stays on with no TUI open; every TUI, ycoding remote connect, and the new ycoding remote disconnect switch the same connection." },
+        { tag: "Changed", text: "Keep the remote connection in the machine's background server so it stays on with no TUI open; every TUI, ycoding remote connect, and the new ycoding remote disconnect switch the same connection, and the server log records its diagnostics." },
         { tag: "Changed", text: "Show up to ten running and recently active Sessions in the Running and recent carousel, pin Conversation, Office, and Team above the scrolling workspace, and set autonomy and goals only from the Conversation status." },
         { tag: "Changed", text: "Move Office characters more calmly without emote icons, center the New session screen under the full logo, and show each alert once through the site's service worker." },
         { tag: "Fixed", text: "Load attachments of waiting prompts, open the Session chosen from New session, and show Sessions as running while their subagents work." },
         { tag: "Fixed", text: "Keep the remote status timer to the current run and clear it after a reconnect, stop repeating the YOLO level on phones, and restore dropped push subscriptions." },
+        { tag: "Fixed", text: "Show Device disconnected only when the selected machine goes offline, not when this browser's relay connection drops; the connection strip keeps the latest drop's code and reason." },
       ],
     })
   })
