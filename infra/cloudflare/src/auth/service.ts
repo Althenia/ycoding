@@ -374,6 +374,15 @@ export function createAuthService(store: AuthStore, options: { readonly now?: ()
       return { ok: true, value: { deviceID: input.deviceID } }
     },
 
+    async deleteRevokedDevices(userID: string, deviceID?: string) {
+      if (deviceID !== undefined) {
+        const device = await store.findDevice(deviceID)
+        if (device?.userID === userID && device.revokedAt === undefined) return { active: true }
+      }
+      await store.deleteRevokedDevices(userID, deviceID)
+      return { active: false }
+    },
+
     async authorizeClientCommand(sessionID: string, deviceID: string): Promise<Outcome<{ readonly userID: string }>> {
       const session = validateSession(await store.findBrowserSession(sessionID))
       if (!session.ok) return session

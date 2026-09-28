@@ -144,6 +144,10 @@ export function createRouter(deps: RouterDeps) {
       if (request.method !== "GET") return methodNotAllowed()
       return listDevices(deps, request)
     }
+    if (url.pathname === "/api/devices/revoked") {
+      if (request.method !== "DELETE") return methodNotAllowed()
+      return deleteRevokedDevices(deps, request)
+    }
     if (url.pathname === "/api/push/key") {
       if (request.method !== "GET") return methodNotAllowed()
       return pushKey(deps, request)
@@ -177,6 +181,11 @@ export function createRouter(deps: RouterDeps) {
     if (revoke) {
       if (request.method !== "POST") return methodNotAllowed()
       return revokeDevice(deps, request, revoke[1] ?? "")
+    }
+    const remove = /^\/api\/devices\/([A-Za-z0-9_-]{1,64})$/.exec(url.pathname)
+    if (remove) {
+      if (request.method !== "DELETE") return methodNotAllowed()
+      return deleteRevokedDevices(deps, request, remove[1])
     }
     const contentStream = /^\/api\/remote\/devices\/([A-Za-z0-9_-]{1,64})\/sessions\/([^/]+)\/(messages|attachments)\/([^/]+)$/.exec(url.pathname)
     if (contentStream) {
@@ -441,6 +450,16 @@ async function revokeDevice(deps: RouterDeps, request: Request, deviceID: string
   }
   await notifyRelay(deps, authenticated.session.userID, deviceID, "close-device")
   return jsonResponse({ deviceID })
+}
+
+async function deleteRevokedDevices(deps: RouterDeps, request: Request, deviceID?: string): Promise<Response> {
+  const guarded = requireMutationGuard(request)
+  if (guarded) return guarded
+  const authenticated = await requireSession(deps, request)
+  if (!authenticated.ok) return authenticated.response
+  const result = await deps.service.deleteRevokedDevices(authenticated.session.userID, deviceID)
+  if (result.active) return apiError(409, "invalid_message", "Revoke this device before removing it")
+  return new Response(null, { status: 204 })
 }
 
 async function connectClient(deps: RouterDeps, request: Request, url: URL): Promise<Response> {

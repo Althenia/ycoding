@@ -99,6 +99,7 @@ export type AuthStore = {
   readonly markDeviceSeen: (id: string, now: number) => Promise<void>
   /** Atomically revokes an owner's device and its credentials; false when not owned or already revoked. */
   readonly revokeDevice: (id: string, userID: string, now: number) => Promise<boolean>
+  readonly deleteRevokedDevices: (userID: string, deviceID?: string) => Promise<void>
   readonly insertEnrollment: (row: Omit<EnrollmentRow, "consumedAt" | "deviceID">) => Promise<void>
   readonly findEnrollment: (id: string) => Promise<EnrollmentRow | undefined>
   /** Atomically binds the enrollment to a device; false when already consumed. */

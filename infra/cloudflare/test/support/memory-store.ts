@@ -79,6 +79,15 @@ export function createMemoryAuthStore(): AuthStore {
         if (credential.deviceID === id) credentials.set(credentialID, { ...credential, revokedAt: now })
       return true
     },
+    deleteRevokedDevices: async (userID, deviceID) => {
+      const revoked = Array.from(devices.values()).filter((device) => device.userID === userID && device.revokedAt !== undefined && (deviceID === undefined || device.id === deviceID))
+      for (const device of revoked) {
+        devices.delete(device.id)
+        for (const [id, row] of credentials) if (row.deviceID === device.id) credentials.delete(id)
+        for (const [id, row] of challenges) if (row.deviceID === device.id) challenges.delete(id)
+        for (const [id, row] of enrollments) if (row.deviceID === device.id) enrollments.delete(id)
+      }
+    },
     insertEnrollment: async (row) => {
       enrollments.set(row.id, row)
     },

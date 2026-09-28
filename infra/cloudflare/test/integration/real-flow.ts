@@ -426,6 +426,21 @@ try {
   expect(identity.relayURL === workerOrigin, "the CLI identity was not bound to the relay origin")
   checks.push("real CLI credential module enrolled the device against the real relay")
 
+  const retiredEnrollment = await http.createEnrollment()
+  expect(retiredEnrollment.ok, "the relay could not create a second enrollment for cleanup")
+  if (!retiredEnrollment.ok) throw new Error(retiredEnrollment.message)
+  const retiredKey = await generateDeviceKey()
+  const retired = await enroll({ relayURL: workerOrigin, enrollmentID: retiredEnrollment.value.enrollmentID,
+    code: retiredEnrollment.value.code, name: "Retired Flow Device", privateKey: retiredKey.privateKey, publicKey: retiredKey.publicKey })
+  expect((await http.revokeDevice(retired.deviceID)).ok, "the retired device could not be revoked")
+  expect((await http.removeRevokedDevices(retired.deviceID)).ok, "the revoked device could not be removed")
+  expect((await http.removeRevokedDevices(retired.deviceID)).ok, "removing the same revoked device was not idempotent")
+  expect((await http.removeRevokedDevices()).ok, "removing all remaining revoked devices failed")
+  const afterRemoval = await http.devices()
+  expect(afterRemoval.ok && afterRemoval.value.some((entry) => entry.id === enrolled.deviceID) &&
+    !afterRemoval.value.some((entry) => entry.id === retired.deviceID), "cleanup changed an enrolled device or kept a revoked device")
+  checks.push("same-origin owner removed a revoked device idempotently without deleting the enrolled device")
+
   // The credential orchestrator is an Effect that persists through Global and
   // FileSystem. Those modules are reached through `createRequire` anchored to the
   // CLI package (the repo's existing pattern), so the harness runs the real
@@ -608,6 +623,9 @@ try {
   const report = await probeRequest("usage.report", { input: { group: "model", limit: 2 } })
   expect(report.status === "ok" && isRecord(report.value) && isRecord(report.value.data) && report.value.data.group === "model",
     `backend usage report failed: ${JSON.stringify(report)}`)
+  const localReport = await probeRequest("usage.report", { input: { group: "day", timeZone: "Asia/Kathmandu", limit: 2 } })
+  expect(localReport.status === "ok" && isRecord(localReport.value) && isRecord(localReport.value.data) && localReport.value.data.group === "day",
+    `local-time usage report failed: ${JSON.stringify(localReport)}`)
   checks.push("normalized provider quotas, retained summary, and grouped report crossed the real relay")
   const beforeCreate = providerRequests.length
   const createdID = await store.createSession({ workspaceID: candidate.id })

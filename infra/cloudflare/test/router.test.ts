@@ -561,6 +561,37 @@ describe("router: device enrollment and credentials", () => {
       online: false,
     })
   })
+
+  test("removes only the authenticated owner's revoked devices after a same-origin request", async () => {
+    const h = await harness()
+    const owner = await signIn(h, "owner-cleanup")
+    const other = await signIn(h, "other-cleanup")
+    const single = await enrollDevice(h, owner.userID, "Old laptop")
+    const remainder = await enrollDevice(h, owner.userID, "Old desktop")
+    const enrolled = await enrollDevice(h, owner.userID, "Current machine")
+    const foreign = await enrollDevice(h, other.userID, "Another account")
+    for (const device of [single, remainder]) await h.service.revokeDevice({ deviceID: device.deviceID, userID: owner.userID })
+    await h.service.revokeDevice({ deviceID: foreign.deviceID, userID: other.userID })
+    const singleURL = `${origin}/api/devices/${single.deviceID}`
+    const activeURL = `${origin}/api/devices/${enrolled.deviceID}`
+    const foreignURL = `${origin}/api/devices/${foreign.deviceID}`
+    const allURL = `${origin}/api/devices/revoked`
+    const remove = (url: string, token = owner.token, headers: Record<string, string> = sameOrigin) =>
+      h.router(new Request(url, { method: "DELETE", headers: { ...sessionCookie(token), ...headers } }))
+
+    expect((await h.router(new Request(singleURL, { method: "DELETE", headers: sameOrigin }))).status).toBe(401)
+    expect((await remove(singleURL, owner.token, crossSite)).status).toBe(403)
+    expect((await remove(singleURL, owner.token, {})).status).toBe(403)
+    expect((await remove(activeURL)).status).toBe(409)
+    expect((await remove(foreignURL)).status).toBe(204)
+    expect((await remove(singleURL)).status).toBe(204)
+    expect((await remove(singleURL)).status).toBe(204)
+    expect((await remove(allURL)).status).toBe(204)
+    expect((await remove(allURL)).status).toBe(204)
+    expect((await h.service.listDevices(owner.userID)).map((device) => device.id)).toEqual([enrolled.deviceID])
+    expect((await h.service.listDevices(other.userID)).map((device) => device.id)).toEqual([foreign.deviceID])
+    expect(h.relayCalls).toEqual([])
+  })
 })
 
 describe("router: websocket upgrades", () => {

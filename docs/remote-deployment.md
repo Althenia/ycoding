@@ -34,7 +34,7 @@ Perform a coordinated release in this order: stop existing `ycoding remote conne
 
 D1 stores authentication and device metadata and Web Push subscriptions only. It never stores transcripts, message projections, streaming deltas, tool output, Session contents, or file contents; Session data stays on the user's machine and crosses the relay as live WebSocket frames.
 
-Authenticated `GET /api/devices` and `GET /api/me` return each retained device with `online: boolean`. The Worker reads that value from the owner/device Durable Object's current authenticated agent connection; a revoked device and any failed presence read report `false`. `status`, `lastSeenAt`, and enrollment alone never mark a device online. Revoked and offline devices remain in these Settings-facing lists, while a connectable-device picker must select only `status: "active"` entries whose `online` value is `true`.
+Authenticated `GET /api/devices` and `GET /api/me` return each retained device with `online: boolean`. The Worker reads that value from the owner/device Durable Object's current authenticated agent connection; a revoked device and any failed presence read report `false`. `status`, `lastSeenAt`, and enrollment alone never mark a device online. Offline devices remain in these Settings-facing lists, and revoked devices remain until the owner removes them from Settings, while a connectable-device picker must select only `status: "active"` entries whose `online` value is `true`.
 
 | Table                            | Contents                                                                                                       |
 | -------------------------------- | -------------------------------------------------------------------------------------------------------------- |

@@ -228,6 +228,15 @@ export function createD1AuthStore(db: D1Database): AuthStore {
       return device !== undefined && changed(device)
     },
 
+    async deleteRevokedDevices(userID, deviceID) {
+      const filter = deviceID === undefined ? "user_id = ? AND revoked_at IS NOT NULL" : "user_id = ? AND revoked_at IS NOT NULL AND id = ?"
+      const values = deviceID === undefined ? [userID] : [userID, deviceID]
+      await db.batch([
+        db.prepare(`DELETE FROM enrollment WHERE device_id IN (SELECT id FROM device WHERE ${filter})`).bind(...values),
+        db.prepare(`DELETE FROM device WHERE ${filter}`).bind(...values),
+      ])
+    },
+
     async insertEnrollment(row) {
       await db
         .prepare("INSERT INTO enrollment (id, code_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)")
