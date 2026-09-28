@@ -1,5 +1,6 @@
 import fs from "fs/promises"
 import path from "path"
+import { pathToFileURL } from "url"
 import { describe, expect } from "bun:test"
 import { DateTime, Effect, Layer } from "effect"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -16,13 +17,15 @@ import { SkillTool } from "@ycoding-ai/core/tool/skill"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { tmpdir } from "./fixture/tmpdir"
-import { testLocationLayer } from "./fixture/mcp"
+import { location as testLocation } from "./fixture/location"
 import { Image } from "@ycoding-ai/core/image"
 import { it } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
 import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { ProjectArtifactSource } from "@ycoding-ai/core/project-artifact/source"
+import { LocationMutation } from "@ycoding-ai/core/location-mutation"
+import { ReadToolFileSystem } from "@ycoding-ai/core/tool/read-filesystem"
 import { toolIdentity, executeTool, registerToolPlugin, settleTool, toolDefinitions } from "./lib/tool"
 
 const skillToolNode = makeLocationNode({
@@ -36,6 +39,8 @@ const skillToolNode = makeLocationNode({
     PermissionV2.node,
     PluginRuntime.node,
     ProjectArtifactSource.node,
+    LocationMutation.node,
+    ReadToolFileSystem.node,
   ],
 })
 
@@ -49,12 +54,28 @@ describe("SkillTool", () => {
     ).pipe(
       Effect.flatMap((tmp) =>
         Effect.gen(function* () {
+          const external = yield* Effect.acquireRelease(
+            Effect.promise(() => tmpdir()),
+            (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+          )
           const directory = path.join(tmp.path, "effect")
           const location = path.join(directory, "SKILL.md")
           const reference = path.join(directory, "reference.md")
+          const outside = path.join(tmp.path, "outside.md")
+          const link = path.join(directory, "link.md")
+          const large = path.join(directory, "large.txt")
+          const externalSkillFile = path.join(external.path, "SKILL.md")
           yield* Effect.promise(() => fs.mkdir(directory, { recursive: true }))
           yield* Effect.promise(() =>
-            Promise.all([fs.writeFile(location, "unused"), fs.writeFile(reference, "reference")]),
+            Promise.all([
+              fs.writeFile(location, "unused"),
+              fs.writeFile(reference, "reference"),
+              fs.writeFile(outside, "outside secret"),
+              fs.symlink(outside, link),
+              fs.writeFile(large, "x".repeat(51 * 1024)),
+              fs.writeFile(externalSkillFile, "external skill file"),
+              fs.writeFile(path.join(external.path, "reference.md"), "external reference"),
+            ]),
           )
 
           const info: SkillV2.Info = {
@@ -131,17 +152,17 @@ describe("SkillTool", () => {
                 messages: () =>
                   Effect.succeed(
                     active
-                      ? [
+                      ? current.map((skill) =>
                           SessionMessage.Skill.make({
-                            id: SessionMessage.ID.make("msg_active_skill"),
+                            id: SessionMessage.ID.make(`msg_active_${skill.id}`),
                             type: "skill",
-                            skill: info.id,
-                            name: info.name,
-                            text: info.content,
-                            conflicts: info.conflicts,
+                            skill: skill.id,
+                            name: skill.name,
+                            text: skill.content,
+                            conflicts: skill.conflicts,
                             time: { created: DateTime.makeUnsafe(0) },
                           }),
-                        ]
+                        )
                       : [],
                   ),
                 prompt: unavailable,
@@ -186,7 +207,13 @@ describe("SkillTool", () => {
               [PermissionV2.node, permission],
               [SkillV2.node, skills],
               [MCP.node, Layer.mock(MCP.Service, {})],
-              [Location.node, testLocationLayer],
+              [
+                Location.node,
+                Layer.succeed(
+                  Location.Service,
+                  Location.Service.of(testLocation({ directory: AbsolutePath.make(tmp.path) })),
+                ),
+              ],
               [PluginRuntime.node, runtime],
               [ProjectArtifactSource.node, source],
               [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
@@ -208,11 +235,11 @@ describe("SkillTool", () => {
               }),
             ).toEqual({
               type: "text",
-              value: SkillTool.toModelOutput(info, [reference]),
+              value: SkillTool.toModelOutput(info, [large, link, reference]),
             })
             expect(SkillTool.toModelOutput(info, [reference])).toContain(`Base directory for this skill: ${directory}`)
             expect(SkillTool.toModelOutput(info, [reference])).toContain(
-              "Read supporting files with the read tool by absolute path",
+              "Read supporting files with the skill tool's resource input",
             )
             expect(
               yield* settleTool(registry, {
@@ -221,7 +248,7 @@ describe("SkillTool", () => {
                 call: { type: "tool-call", id: "call-skill-overflow", name: "skill", input: { id: "effect" } },
               }),
             ).toMatchObject({
-              result: { type: "text", value: SkillTool.toModelOutput(info, [reference]) },
+              result: { type: "text", value: SkillTool.toModelOutput(info, [large, link, reference]) },
               output: {
                 structured: {
                   name: "Effect",
@@ -241,23 +268,71 @@ describe("SkillTool", () => {
                 call: { type: "tool-call", id: "call-active-skill", name: "skill", input: { id: "effect" } },
               }),
             ).toEqual({ type: "text", value: "Skill Effect is already active for this session." })
-            expect(
-              yield* executeTool(registry, {
+            const resourceCall = (resource: string, id = "effect") =>
+              executeTool(registry, {
                 sessionID,
                 ...toolIdentity,
-                call: {
-                  type: "tool-call",
-                  id: "call-local-resource",
-                  name: "skill",
-                  input: { id: "effect", resource: "reference.md" },
-                },
-              }),
-            ).toEqual({
-              type: "error",
-              value: `Skill effect is not served over MCP; read ${reference} with the read tool`,
+                call: { type: "tool-call", id: `call-resource-${resource}`, name: "skill", input: { id, resource } },
+              })
+            expect(yield* resourceCall("reference.md")).toEqual({
+              type: "text",
+              value: `<skill_resource uri="${pathToFileURL(reference).href}" mime_type="text/markdown">\nreference\n</skill_resource>`,
             })
-            expect(assertions).toHaveLength(2)
+            expect(yield* resourceCall(reference)).toEqual({
+              type: "text",
+              value: `<skill_resource uri="${pathToFileURL(reference).href}" mime_type="text/markdown">\nreference\n</skill_resource>`,
+            })
+            for (const resource of ["../outside.md", link]) {
+              expect(yield* resourceCall(resource)).toEqual({
+                type: "error",
+                value: `Unable to read ${resource} for skill effect`,
+              })
+            }
+            expect(assertions.filter((item) => item.action === "read")).toHaveLength(2)
+            expect(yield* resourceCall(".")).toEqual({ type: "error", value: "Unable to read . for skill effect" })
+            expect(yield* resourceCall("large.txt")).toMatchObject({
+              type: "text",
+              value: expect.stringContaining("... (line truncated to 2000 chars)"),
+            })
+            permissionFailure = "denied"
+            expect(yield* resourceCall("reference.md")).toEqual({
+              type: "error",
+              value: "Unable to read reference.md for skill effect",
+            })
+            permissionFailure = undefined
+            expect(assertions.at(-1)).toMatchObject({ action: "read", resources: ["effect/reference.md"] })
+            const externalInfo: SkillV2.Info = {
+              ...info,
+              id: SkillV2.ID.make("external"),
+              name: SkillV2.Name.make("External"),
+              location: AbsolutePath.make(externalSkillFile),
+            }
+            current = [info, externalInfo]
+            permissionFailure = "denied"
+            expect(yield* resourceCall("reference.md", "external")).toEqual({
+              type: "error",
+              value: "Unable to read reference.md for skill external",
+            })
+            expect(assertions.at(-1)).toMatchObject({ action: "external_directory" })
+            permissionFailure = undefined
+            expect(yield* resourceCall("reference.md", "external")).toEqual({
+              type: "text",
+              value: `<skill_resource uri="${pathToFileURL(path.join(external.path, "reference.md")).href}" mime_type="text/markdown">\nexternal reference\n</skill_resource>`,
+            })
+            expect(assertions.slice(-2)).toMatchObject([
+              {
+                action: "external_directory",
+                resources: [path.join(external.path, "*")],
+                save: [path.join(external.path, "*")],
+              },
+              { action: "read", resources: [path.join(external.path, "reference.md")], save: ["*"] },
+            ])
             active = false
+            expect(yield* resourceCall("reference.md")).toEqual({ type: "error", value: "Unable to load skill effect" })
+            expect(yield* resourceCall("reference.md", "missing")).toEqual({
+              type: "error",
+              value: "Unable to load skill missing",
+            })
             expect(
               yield* executeTool(registry, {
                 sessionID,

@@ -29,6 +29,42 @@ const LocationInput = Schema.Struct({
 const Input = LocationInput
 const Output = Schema.Union([FileSystem.Content, ReadToolFileSystem.TextPage, ReadToolFileSystem.ListPage])
 
+export const authorize = Effect.fn("ReadTool.authorize")(function* (
+  services: {
+    readonly mutation: LocationMutation.Interface
+    readonly permission: PermissionV2.Interface
+    readonly reader: ReadToolFileSystem.Interface
+  },
+  file: string,
+  context: {
+    readonly sessionID: Parameters<PermissionV2.Interface["assert"]>[0]["sessionID"]
+    readonly agent: Parameters<PermissionV2.Interface["assert"]>[0]["agent"]
+    readonly messageID: string
+    readonly callID: string
+  },
+) {
+  const source = { type: "tool" as const, messageID: context.messageID, callID: context.callID }
+  const target = yield* services.mutation.resolve({ path: file, kind: "directory" })
+  if (target.externalDirectory)
+    yield* services.permission.assert({
+      ...LocationMutation.externalDirectoryPermission(target.externalDirectory),
+      sessionID: context.sessionID,
+      agent: context.agent,
+      source,
+    })
+  const absolute = AbsolutePath.make(target.canonical)
+  const type = yield* services.reader.inspect(absolute)
+  yield* services.permission.assert({
+    action: name,
+    resources: [target.resource],
+    save: ["*"],
+    sessionID: context.sessionID,
+    agent: context.agent,
+    source,
+  })
+  return { target, absolute, type }
+})
+
 export const Plugin = {
   id: "ycoding.tool.read",
   effect: Effect.fn("ReadTool.Plugin")(function* (ctx: PluginContext) {
@@ -64,35 +100,11 @@ export const Plugin = {
             },
             execute: (input, context) => {
               return Effect.gen(function* () {
-                const source = {
-                  type: "tool" as const,
-                  messageID: context.messageID,
-                  callID: context.callID,
-                }
-                const target = yield* mutation.resolve({ path: input.path, kind: "directory" })
-                const external = target.externalDirectory
-                if (external)
-                  yield* permission.assert({
-                    ...LocationMutation.externalDirectoryPermission(external),
-                    sessionID: context.sessionID,
-                    agent: context.agent,
-                    source,
-                  })
-                const resource = target.resource
-                const absolute = AbsolutePath.make(target.canonical)
-                const type = yield* reader.inspect(absolute)
-                yield* permission.assert({
-                  action: name,
-                  resources: [resource],
-                  save: ["*"],
-                  sessionID: context.sessionID,
-                  agent: context.agent,
-                  source,
-                })
+                const { target, absolute, type } = yield* authorize({ mutation, permission, reader }, input.path, context)
                 const content =
                   type === "directory"
                     ? yield* reader.list(absolute, { offset: input.offset, limit: input.limit })
-                    : yield* reader.read(absolute, resource, {
+                    : yield* reader.read(absolute, target.resource, {
                         offset: input.offset,
                         limit: input.limit,
                       })
@@ -122,7 +134,7 @@ export const Plugin = {
                   Effect.catchDefect(() => Effect.void),
                 )
                 if ("encoding" in content && content.encoding === "base64" && !SUPPORTED_IMAGE_MIMES.has(content.mime))
-                  return yield* Effect.fail(new ReadToolFileSystem.BinaryFileError({ resource }))
+                  return yield* Effect.fail(new ReadToolFileSystem.BinaryFileError({ resource: target.resource }))
                 return content
               }).pipe(
                 Effect.mapError((error) => {

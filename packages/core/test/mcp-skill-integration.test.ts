@@ -5,7 +5,9 @@ import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
+import { LocationMutation } from "@ycoding-ai/core/location-mutation"
 import { Image } from "@ycoding-ai/core/image"
+import { Location } from "@ycoding-ai/core/location"
 import { ConfigMCP } from "@ycoding-ai/core/config/mcp"
 import { MCP } from "@ycoding-ai/core/mcp/index"
 import { MCPClient } from "@ycoding-ai/core/mcp/client"
@@ -19,6 +21,7 @@ import { SkillV2 } from "@ycoding-ai/core/skill"
 import { SkillInstructions } from "@ycoding-ai/core/skill/instructions"
 import { SessionSkillStatus } from "@ycoding-ai/core/session/skill-status"
 import { SkillTool } from "@ycoding-ai/core/tool/skill"
+import { ReadToolFileSystem } from "@ycoding-ai/core/tool/read-filesystem"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { Effect, Layer, Schema } from "effect"
@@ -32,6 +35,7 @@ import {
 } from "./fixture/mcp-skills"
 import { imagePassthrough } from "./lib/image"
 import { registerToolPlugin, settleTool, toolIdentity } from "./lib/tool"
+import { testLocationLayer } from "./fixture/mcp"
 
 const SKILL_MD = skillBody(
   { name: "git-workflow", description: "Follow this team's Git conventions" },
@@ -62,6 +66,8 @@ const skillToolNode = makeLocationNode({
     PermissionV2.node,
     PluginRuntime.node,
     ProjectArtifactSource.node,
+    LocationMutation.node,
+    ReadToolFileSystem.node,
   ],
 })
 
@@ -235,6 +241,7 @@ describe("MCP skill model-facing integration", () => {
               [ProjectArtifactSource.node, Layer.mock(ProjectArtifactSource.Service, {})],
               [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
               [Image.node, imagePassthrough],
+              [Location.node, testLocationLayer],
             ],
           )
 

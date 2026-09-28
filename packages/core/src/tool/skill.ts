@@ -3,11 +3,13 @@ export * as SkillTool from "./skill"
 import type { Context as PluginContext } from "@ycoding-ai/plugin/effect/plugin"
 import { Buffer } from "node:buffer"
 import path from "path"
+import { pathToFileURL } from "url"
 import { ToolFailure } from "@ycoding-ai/ai"
 import { McpSkill } from "@ycoding-ai/schema/mcp-skill"
 import { Effect, Option, Schema } from "effect"
 import { ConfigMarkdown } from "../config/markdown"
 import { FSUtil } from "../fs-util"
+import { LocationMutation } from "../location-mutation"
 import { MCP } from "../mcp"
 import { MCPSkills } from "../mcp/skills"
 import { SkillV2 } from "../skill"
@@ -15,22 +17,19 @@ import { PermissionV2 } from "../permission"
 import { SessionMessage } from "../session/message"
 import { ProjectArtifactSource } from "../project-artifact/source"
 import { Tool } from "./tool"
+import { ReadTool } from "./read"
+import { ReadToolFileSystem } from "./read-filesystem"
 
 export const name = "skill"
 const FILE_LIMIT = 10
 
 export const Input = Schema.Struct({
   id: SkillV2.ID.annotate({ description: "The ID of the skill from the available skills list" }),
-  /**
-   * Optional supporting-file selector for an active MCP-served skill. Relative references resolve against
-   * the skill's root, exactly as on a filesystem. Only ever read from the held, digest-verified manifest
-   * for the skill's current content-bound approval. Local skills are read by absolute path with the read tool.
-   */
   resource: Schema.String.pipe(
     Schema.optional,
     Schema.annotate({
       description:
-        "Supporting file path relative to an active MCP-served skill's root. For local skills, read files with the read tool by absolute path instead.",
+        "Supporting file path for an active skill. Relative paths resolve from its base directory; local skills also accept absolute paths inside that directory.",
     }),
   ),
 })
@@ -65,7 +64,7 @@ export const toModelOutput = (skill: SkillV2.Info, files: ReadonlyArray<string>)
     skill.content.trim(),
     "",
     `Base directory for this skill: ${escapeXML(directory)}`,
-    "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory. Read supporting files with the read tool by absolute path under this base directory; do not use the skill tool's resource input or search for them.",
+    "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory. Read supporting files with the skill tool's resource input.",
     "Note: file list is sampled.",
     "",
     "<skill_files>",
@@ -229,7 +228,7 @@ const decodeText = (blob: string | undefined) => {
   }
 }
 
-const renderMcpResource = (file: McpSkill.File) => {
+const renderMcpResource = (file: { uri: string; mimeType?: string } & ({ text: string } | { blob: string })) => {
   const attributes = [
     `uri="${escapeXML(file.uri)}"`,
     ...(file.mimeType ? [`mime_type="${escapeXML(file.mimeType)}"`] : []),
@@ -246,6 +245,8 @@ export const Plugin = {
     const skills = yield* SkillV2.Service
     const mcp = yield* MCP.Service
     const permission = yield* PermissionV2.Service
+    const mutation = yield* LocationMutation.Service
+    const reader = yield* ReadToolFileSystem.Service
     const projectArtifactSource = yield* Effect.serviceOption(ProjectArtifactSource.Service)
     const runtime = yield* PluginRuntime.Service
     yield* ctx.tool
@@ -265,17 +266,37 @@ export const Plugin = {
                 const { SessionSkillStatus } = yield* Effect.promise(() => import("../session/skill-status"))
                 const statuses = SessionSkillStatus.list(messages, [])
                 const active = statuses.find((status) => status.id === input.id && status.state === "active")
-                // A supporting-resource read never reactivates: the skill is already loaded, and its
-                // content-bound approval was established when it was. The resource is served from the
-                // manifest held at that approval, so metadata changes cannot slip content in.
                 if (input.resource !== undefined) {
                   if (!active) return yield* unableToLoad(input.id)
                   if (!SkillV2.mcpSkillOrigin(input.id)) {
                     const local = (yield* skills.list()).find((skill) => skill.id === input.id)
                     if (!local) return yield* unableToLoad(input.id)
-                    return yield* new ToolFailure({
-                      message: `Skill ${input.id} is not served over MCP; read ${path.resolve(path.dirname(local.location), input.resource)} with the read tool`,
-                    })
+                    const reference = input.resource
+                    return yield* Effect.gen(function* () {
+                      const base = path.dirname(local.location)
+                      const target = path.resolve(base, reference)
+                      if (!FSUtil.contains(base, target)) return yield* resourceFailure(input.id, reference)
+                      const realBase = yield* fs.realPath(base)
+                      const realTarget = yield* fs.realPath(target)
+                      if (!FSUtil.contains(realBase, realTarget)) return yield* resourceFailure(input.id, reference)
+                      const authorized = yield* ReadTool.authorize({ mutation, permission, reader }, realTarget, context)
+                      if (authorized.type !== "file") return yield* resourceFailure(input.id, reference)
+                      const content = yield* reader.read(authorized.absolute, authorized.target.resource)
+                      return {
+                        name: active.name,
+                        directory: "",
+                        output: renderMcpResource(
+                          "encoding" in content && content.encoding === "base64"
+                            ? { uri: content.uri, mimeType: content.mime, blob: content.content }
+                            : {
+                                uri: "uri" in content ? content.uri : pathToFileURL(realTarget).href,
+                                mimeType: content.mime,
+                                text: content.content,
+                              },
+                        ),
+                        alreadyActive: true,
+                      }
+                    }).pipe(Effect.mapError((error) => resourceFailure(input.id, reference, error)))
                   }
                   return yield* readMcpResource({ mcp, permission }, input.id, input.resource, messages, context)
                 }
