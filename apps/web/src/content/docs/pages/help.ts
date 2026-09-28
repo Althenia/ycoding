@@ -111,7 +111,7 @@ export const helpPages: readonly DocPage[] = [
             items: [
               "**Symptom:** No device is available to select. **Cause:** The account is not signed in, the device is not enrolled, or its connector is not connected. **Fix:** Sign in, enroll the machine using the workspace's enrollment flow, then run `ycoding remote connect` on that machine.",
               "**Symptom:** The selected online device has an empty session list. **Cause:** There are no Sessions on that machine's local backend yet. **Fix:** Open a terminal in the project folder on that machine and run `ycoding` to create a Session, then refresh or reselect the device in the workspace.",
-              "**Symptom:** The machine went offline and its Sessions cannot be opened. **Cause:** The local connector is disconnected. The last session list stays visible as read-only until reconnect. **Fix:** On the machine, restore its network connection and restart `ycoding remote connect` if it exited; then reselect the device after it reports online.",
+              "**Symptom:** The machine went offline and its Sessions cannot be opened. **Cause:** The local connector is disconnected. The last session list stays visible as read-only until reconnect. **Fix:** On the machine, restore its network connection. If its remote connection is off or shows an error, turn it on again with `ycoding remote connect` or the TUI's Remote connection toggle; then reselect the device after it reports online.",
             ],
           },
           {

@@ -29,6 +29,8 @@ vocabulary changes the contract for all three at once.
 | `POST` | `/api/devices/token` | challenge signature | none (native agent) | Issue access + refresh credentials |
 | `POST` | `/api/devices/refresh` | refresh credential | none (native agent) | Rotate credentials |
 | `POST` | `/api/devices/:deviceID/revoke` | browser session | same-origin required | Revoke a device, its credentials, and its live sockets |
+| `DELETE` | `/api/devices/:deviceID` | browser session | same-origin required | Remove one revoked device record of this account; `409` for an active device |
+| `DELETE` | `/api/devices/revoked` | browser session | same-origin required | Remove every revoked device record of this account |
 | `GET` | `/ws/v3/client` | browser session cookie | same-origin required | Browser/phone relay connection |
 | `GET` | `/ws/v3/agent` | device access token | not required | Local agent relay connection |
 | `GET` | `/health` | none | not required | Database liveness probe |
@@ -73,7 +75,8 @@ JavaScript cannot set it):
 - Read-only `GET /api/*` routes **never** require `Origin` and never mutate state.
 - Mutating cookie-authenticated routes (`POST /api/auth/session/refresh`,
   `POST /api/auth/logout`, `POST /api/devices/enrollments`,
-  `POST /api/devices/:deviceID/revoke`) require a present, exactly matching
+  `POST /api/devices/:deviceID/revoke`, `DELETE /api/devices/:deviceID`,
+  `DELETE /api/devices/revoked`) require a present, exactly matching
   `Origin` (`https://<host>` for `https`, `http://<host>` on localhost
   development) and additionally reject `Sec-Fetch-Site: cross-site`.
 - Browser WebSocket upgrade `/ws/v3/client` requires the same exact same-origin
@@ -173,6 +176,12 @@ always re-checked for ownership.
 5. `POST /api/devices/:deviceID/revoke` (browser owner only) marks the device
    revoked, revokes its credentials, and notifies the device's Durable Object to
    close the agent and client sockets.
+6. `DELETE /api/devices/:deviceID` (browser owner only) removes that revoked
+   device record in one batch with its credentials, challenges, and linked
+   enrollment records, and answers `204`. The caller's own active device answers
+   `409` (revoke it first); an unknown, foreign, or already removed device answers
+   `204` without a change. `DELETE /api/devices/revoked` removes every revoked
+   device record of the owner the same way.
 
 ### 2.4 Authorization invariant
 
@@ -345,7 +354,7 @@ grouping and Session-list filters are derived from backend metadata.
 | `session.active` | no | `v2.session.active` | `GET /api/session/active` | — |
 | `usage.providers` | no | `v2.providerUsage.list` | `GET /api/provider/usage` | `refresh?` boolean |
 | `usage.summary` | no | `v2.usage.get` | `GET /api/usage` | — |
-| `usage.report` | no | `v2.usage.report` | `GET /api/usage/report` | `group`, `from?`, `to?`, `offset?`, `limit?`, `sort?`, `order?` |
+| `usage.report` | no | `v2.usage.report` | `GET /api/usage/report` | `group`, `timeZone?`, `from?`, `to?`, `offset?`, `limit?`, `sort?`, `order?` |
 | `session.status` | no | `v2.session.active`, pending Session permission/form/guardrail reads | Local active and pending-request GET routes | — |
 | `session.get` | yes | `v2.session.get` | `GET /api/session/:sessionID` | — |
 | `session.messages` | yes | `v2.message.list` | `GET /api/session/:sessionID/message` | — |
@@ -409,7 +418,9 @@ workspace choice; non-Git directories come from recorded directories and Session
 opaque ID of one backend-derived Session group; it never supplies an execution
 Location. `search` matches titles by default; `searchFields: "summary"` also
 matches agent and `provider/model#variant` labels. `status: "running" | "idle"`
-uses current backend activity; archived Sessions are not idle. Omitted status
+uses current backend activity: a root Session is running while any Session in
+its family runs, and a child Session by its own activity; archived Sessions are
+not idle. Omitted status
 includes all states. `order` accepts `"asc"`, `"desc"` (default), `"pinned"`, or `"active"`.
 Pinned order lists pins by ascending pin time, then unpinned Sessions by descending
 update time and ID. Its opaque cursors include the pin sort key and support both
@@ -508,7 +519,8 @@ is `{ data: ProviderUsage.Snapshot[] }` with the Location wrapper removed and
 each normalized snapshot unchanged. `usage.summary`
 returns `{ data: ProviderRequest.Summary }`. `usage.report` accepts the
 `ProviderRequest.ReportInput` groups `model`, `hour`, `day`, `month`, `session`,
-`project`, or `agent`, optional nonnegative UTC `from`/`to` with `from < to`,
+`project`, or `agent`, optional nonnegative UTC epoch-millisecond `from`/`to` with `from < to`,
+optional validated IANA `timeZone` for local hour/day/month buckets (omission groups in UTC),
 nonnegative `offset`, `limit` 1–200, and the Protocol sort/order values. It
 returns `{ data: ProviderRequest.Report }`; no browser-selected Location is
 accepted.
@@ -531,8 +543,9 @@ Location. The agent retains at most 20 MiB decoded per file, 40 MiB decoded
 and 64 upload IDs per connection; an upload expires 10 minutes after its latest chunk or use,
 and every agent disconnect clears the buffer. Invalid, out-of-order, duplicate,
 expired, oversized, or foreign-Session references fail before a local mutation.
-`session.attachment.read` serves only a digest on the verified Session's
-projected managed user-file references, through the local attachment store. Its
+`session.attachment.read` serves only a digest referenced by the verified
+Session's managed user files, in a projected user message or in an admitted
+prompt awaiting promotion, through the local attachment store. Its
 response is `{ mime, bytes, data }` with base64 `data`; reads are capped at 10
 MiB. An unreferenced, missing, damaged, or invalid stored file returns `not_found`
 with a bounded local warning for store failures; a malformed digest
