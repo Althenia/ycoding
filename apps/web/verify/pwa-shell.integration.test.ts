@@ -46,6 +46,49 @@ afterAll(async () => {
 })
 
 describe("built PWA shell in Chrome", () => {
+  test("renews an existing push subscription on /remote without opening Settings", async () => {
+    const page = await browser!.openPage()
+    try {
+      await page.allowServiceWorker()
+      await page.injectOnNewDocument(`(() => {
+        window.__pushPosts = [];
+        Object.defineProperty(Notification, 'permission', { configurable: true, get: () => 'granted' });
+        PushManager.prototype.getSubscription = async () => ({
+          endpoint: 'https://fcm.googleapis.com/send/local-test',
+          options: { applicationServerKey: Uint8Array.from([4, ...Array(64).fill(0)]).buffer },
+          getKey: name => new Uint8Array(name === 'p256dh' ? 65 : 16).buffer,
+        });
+        const send = window.fetch.bind(window);
+        window.fetch = (input, init) => {
+          if (input === '/api/push/key') return Promise.resolve(Response.json({ publicKey: 'BA' + 'A'.repeat(85) }));
+          if (input === '/api/push/subscriptions' && init?.method === 'POST') {
+            window.__pushPosts.push(JSON.parse(init.body));
+            return Promise.resolve(Response.json({}));
+          }
+          return send(input, init);
+        };
+      })()`)
+      await page.navigate(`${origin}/remote`)
+      const result = await page.evaluate<{ readonly path: string; readonly settingsMounted: boolean; readonly posts: readonly { readonly endpoint: string }[] }>(`(async () => {
+        for (let attempt = 0; attempt < 80 && window.__pushPosts.length === 0; attempt++) await new Promise(resolve => setTimeout(resolve, 50));
+        return { path: location.pathname, settingsMounted: Boolean(document.querySelector('#notification-settings')), posts: window.__pushPosts };
+      })()`)
+      expect(result.path).toBe("/remote")
+      expect(result.settingsMounted).toBe(false)
+      expect(result.posts).toMatchObject([{ endpoint: "https://fcm.googleapis.com/send/local-test" }])
+      expect(result.posts).toHaveLength(1)
+    } finally {
+      try {
+        await page.evaluate(`(async () => {
+          for (const registration of await navigator.serviceWorker.getRegistrations()) await registration.unregister();
+          for (const key of await caches.keys()) await caches.delete(key);
+        })()`)
+      } finally {
+        await page.close()
+      }
+    }
+  }, 30_000)
+
   test("resolves explicit light and system preferences before first paint", async () => {
     for (const [width, height] of [[320, 568], [390, 844], [430, 932], [768, 1024], [1024, 1366], [1280, 800], [1440, 900], [1920, 1080]] as const) {
       for (const [preference, scheme, expected] of [["light", "dark", "light"], ["system", "dark", "dark"], ["system", "light", "light"]] as const) {

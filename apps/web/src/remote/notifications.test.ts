@@ -310,6 +310,56 @@ describe("createDesktopNotifier", () => {
     })
   })
 
+  test("registers the built worker on demand when a granted alert arrives before page-load registration", async () => {
+    await withFakeNotificationAsync("granted", async () => {
+      const original = Reflect.get(globalThis, "navigator")
+      const worker = fakeWorkerRegistration()
+      const registered: string[] = []
+      Reflect.set(globalThis, "navigator", { serviceWorker: {
+        getRegistration: async () => undefined,
+        ready: Promise.resolve(worker.registration),
+        register: async (url: string, options: { type: string }) => {
+          registered.push(`${url}:${options.type}`)
+          return worker.registration
+        },
+      } })
+      try {
+        const notifier = createDesktopNotifier()
+        notifier.show({ title: "YCoding — work stopped", body: "A session stopped running.", tag: "ycoding-ses_a-agent-completed", sessionID: "ses_a" })
+        await Bun.sleep(0)
+        expect(registered).toEqual(["/sw.js:module"])
+        expect(worker.shown).toMatchObject([{ title: "YCoding — work stopped", options: { tag: "ycoding-ses_a-agent-completed", data: { sessionID: "ses_a" } } }])
+        notifier.dispose()
+      } finally {
+        Reflect.set(globalThis, "navigator", original)
+      }
+    })
+  })
+
+  test("waits for an installing worker to activate before posting a granted alert", async () => {
+    await withFakeNotificationAsync("granted", async () => {
+      const original = Reflect.get(globalThis, "navigator")
+      const worker = fakeWorkerRegistration()
+      const shownEarly: string[] = []
+      let activate: (value: typeof worker.registration) => void = () => undefined
+      const ready = new Promise<typeof worker.registration>((resolve) => { activate = resolve })
+      Reflect.set(globalThis, "navigator", { serviceWorker: {
+        getRegistration: async () => ({ active: null, showNotification: async () => { shownEarly.push("before activation") } }),
+        ready,
+      } })
+      try {
+        createDesktopNotifier().show({ title: "YCoding — work stopped", body: "A session stopped running.", tag: "ycoding-ses_a-agent-completed" })
+        await Bun.sleep(0)
+        expect(shownEarly).toEqual([])
+        activate(worker.registration)
+        await Bun.sleep(0)
+        expect(worker.shown).toMatchObject([{ title: "YCoding — work stopped" }])
+      } finally {
+        Reflect.set(globalThis, "navigator", original)
+      }
+    })
+  })
+
   test("closes only the alerts it raised when the connection ends", async () => {
     await withFakeNotificationAsync("granted", async () => {
       const worker = fakeWorkerRegistration()

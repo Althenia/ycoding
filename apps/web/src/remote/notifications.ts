@@ -83,9 +83,12 @@ export function createDesktopNotifier(registration: () => Promise<DesktopRegistr
   }
 }
 
-function workerRegistration(): Promise<DesktopRegistration | undefined> {
-  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return Promise.resolve(undefined)
-  return navigator.serviceWorker.getRegistration()
+async function workerRegistration(): Promise<DesktopRegistration | undefined> {
+  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return undefined
+  const registration = await navigator.serviceWorker.getRegistration()
+  if (registration?.active) return registration
+  if (!registration) await navigator.serviceWorker.register("/sw.js", { type: "module" })
+  return navigator.serviceWorker.ready
 }
 
 export type NotificationDeliveryOptions = {
