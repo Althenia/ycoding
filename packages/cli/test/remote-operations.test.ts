@@ -1519,6 +1519,20 @@ describe("session list paging", () => {
     expect(() => parseListQuery({ order: "active", cursor: Buffer.from(JSON.stringify({ id: "ses_root", time: 2, direction: "next" })).toString("base64url") })).toThrow()
   })
 
+  test("status filters classify a root by its family, so an idle root with a running subagent is running", () => {
+    const root = sessionInfo("ses_root", { updated: 2 })
+    const child = sessionInfo("ses_child", { updated: 5, parentID: "ses_root" })
+    const busy = sessionInfo("ses_busy", { updated: 3 })
+    const idle = sessionInfo("ses_idle", { updated: 4 })
+    const sessions = [root, child, busy, idle]
+    const running = new Set(["ses_child", "ses_busy"])
+    const ids = (status: "running" | "idle") =>
+      listPage(sessions, parseListQuery({ status, parentID: null, limit: 10 }), running).data.map((session) => session.id)
+    expect(ids("running")).toEqual(["ses_busy", "ses_root"])
+    expect(ids("idle")).toEqual(["ses_idle"])
+    expect(listPage(sessions, parseListQuery({ status: "running", parentID: "ses_root", limit: 10 }), running).data.map((session) => session.id)).toEqual(["ses_child"])
+  })
+
   test("distinguishes recorded workspace identities in the same directory", async () => {
     const first = { ...sessionInfo("ses_one", { updated: 1, directory: process.cwd() }), location: { directory: process.cwd(), workspaceID: "one" } }
     const second = { ...sessionInfo("ses_two", { updated: 2, directory: process.cwd() }), location: { directory: process.cwd(), workspaceID: "two" } }

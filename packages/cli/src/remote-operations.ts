@@ -1235,6 +1235,7 @@ export function listPage(sessions: readonly SessionInfo[], query: ListQuery, run
   const effectiveOrder = order === "pinned" || order === "active" ? order : direction === "previous" ? (order === "asc" ? "desc" : "asc") : order
   const byID = new Map(sessions.map((session) => [session.id, session]))
   const runningRoots = new Set(sessions.filter((session) => running?.has(session.id)).map((session) => rootSessionID(session, byID)).filter((id): id is string => id !== undefined))
+  const isRunning = (session: SessionInfo) => session.parentID === undefined ? runningRoots.has(session.id) : running?.has(session.id) === true
   const activeKey = (session: SessionInfo) => ({ id: session.id, time: session.time,
     running: session.parentID === undefined && runningRoots.has(session.id) })
   const needle = search?.toLowerCase()
@@ -1244,7 +1245,7 @@ export function listPage(sessions: readonly SessionInfo[], query: ListQuery, run
       ? [session.title, session.agent ?? "", ...(session.model === undefined ? [] : [`${session.model.providerID}/${session.model.id}${session.model.variant === undefined ? "" : `#${session.model.variant}`}`])]
         .some((value) => value.toLowerCase().includes(needle))
       : session.title.toLowerCase().includes(needle)))
-    .filter((session) => query.status === undefined || (query.status === "running" ? running?.has(session.id) === true : running?.has(session.id) !== true && session.time.archived === undefined))
+    .filter((session) => query.status === undefined || (query.status === "running" ? isRunning(session) : !isRunning(session) && session.time.archived === undefined))
     .filter((session) => (parentID === undefined ? true : (session.parentID ?? null) === parentID))
     .sort(order === "active" ? (left, right) => compareActiveSessions(activeKey(left), activeKey(right)) : order === "pinned" ? comparePinnedSessions : compareSessions)
   const ordered = effectiveOrder === "asc" || ((effectiveOrder === "pinned" || effectiveOrder === "active") && direction === "next") ? matching : matching.toReversed()
