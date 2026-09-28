@@ -942,6 +942,14 @@ const layer = Layer.effect(
           WHERE message.session_id = ${sessionID} AND message.type = 'user'
             AND json_extract(file.value, '$.content.type') = 'managed'
             AND json_extract(file.value, '$.content.digest') = ${digest}
+          UNION ALL
+          SELECT json_extract(file.value, '$.mime') AS mime,
+                 json_extract(file.value, '$.content.bytes') AS bytes,
+                 json_extract(file.value, '$.content.path') AS path
+          FROM session_pending AS pending, json_each(pending.data, '$.files') AS file
+          WHERE pending.session_id = ${sessionID} AND pending.type = 'user'
+            AND json_extract(file.value, '$.content.type') = 'managed'
+            AND json_extract(file.value, '$.content.digest') = ${digest}
           LIMIT 1
         `).pipe(Effect.orDie)
         if (!reference) return yield* new AttachmentReadError({ reason: "not-found" })

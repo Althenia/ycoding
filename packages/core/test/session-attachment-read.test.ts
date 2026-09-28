@@ -70,3 +70,27 @@ it.effect("reads only this Session's managed user files and bounds missing, inva
     expect(yield* Effect.flip(sessions.attachmentRead(sessionID, content.digest))).toMatchObject({ _tag: "Session.AttachmentReadError", reason: "not-found" })
   }),
 )
+
+it.effect("reads managed files of an admitted prompt before promotion, only within its Session", () =>
+  Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).onConflictDoNothing().run()
+    const pendingSession = SessionV2.ID.make("ses_attachment_pending")
+    const bystander = SessionV2.ID.make("ses_attachment_bystander")
+    yield* db.insert(SessionTable).values([
+      { id: pendingSession, project_id: Project.ID.global, directory: "/project", title: "Pending attachment" },
+      { id: bystander, project_id: Project.ID.global, directory: "/project", title: "Bystander" },
+    ]).run()
+    const bytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64")
+    const content = yield* store.import(bytes)
+    const sessions = yield* SessionV2.Service
+    yield* sessions.prompt({
+      sessionID: pendingSession,
+      text: "See the pending image",
+      files: [{ uri: `ycoding-attachment://sha256/${content.digest}`, name: "pending.png" }],
+      resume: false,
+    })
+    expect(yield* sessions.attachmentRead(pendingSession, content.digest)).toEqual({ mime: "image/png", bytes: bytes.byteLength, data: bytes.toString("base64") })
+    expect(yield* Effect.flip(sessions.attachmentRead(bystander, content.digest))).toMatchObject({ _tag: "Session.AttachmentReadError", reason: "not-found" })
+  }),
+)
