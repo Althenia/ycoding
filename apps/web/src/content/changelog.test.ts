@@ -6,6 +6,24 @@ const TAGS = ["Added", "Changed", "Fixed"] as const
 describe("release entries", () => {
   test("includes the latest TUI release at the top of the public changelog", () => {
     expect(RELEASES[0]).toEqual({
+      version: "0.7.10",
+      date: "2026-09-28",
+      title: "Machine-wide remote connection, Running and recent Sessions, and local-time Usage",
+      tags: ["Added", "Changed", "Fixed"],
+      changes: [
+        { tag: "Added", text: "Choose the active machine and remove revoked devices from remote Settings, reopen Activity on your last Session after a reload, and hide the desktop Sessions sidebar." },
+        { tag: "Added", text: "Switch remote Usage between UTC and local time, and see loading placeholders instead of blank areas while the remote workspace loads." },
+        { tag: "Changed", text: "Keep the remote connection in the machine's background server so it stays on with no TUI open; every TUI, ycoding remote connect, and the new ycoding remote disconnect switch the same connection." },
+        { tag: "Changed", text: "Show up to ten running and recently active Sessions in the Running and recent carousel, pin Conversation, Office, and Team above the scrolling workspace, and set autonomy and goals only from the Conversation status." },
+        { tag: "Changed", text: "Move Office characters more calmly without emote icons, center the New session screen under the full logo, and show each alert once through the site's service worker." },
+        { tag: "Fixed", text: "Load attachments of waiting prompts, open the Session chosen from New session, and show Sessions as running while their subagents work." },
+        { tag: "Fixed", text: "Keep the remote status timer to the current run and clear it after a reconnect, stop repeating the YOLO level on phones, and restore dropped push subscriptions." },
+      ],
+    })
+  })
+
+  test("retains the 0.7.9 release content", () => {
+    expect(RELEASES.find((item) => item.version === "0.7.9")).toEqual({
       version: "0.7.9",
       date: "2026-09-28",
       title: "Remote Team panel, live Office activity, and TUI workspaces",
@@ -212,7 +230,7 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 10)).toEqual(["0.7.9", "0.7.8", "0.7.7", "0.7.6", "0.7.5", "0.7.4", "0.7.3", "0.7.2", "0.7.1", "0.7.0"])
+    expect(versions.slice(0, 10)).toEqual(["0.7.10", "0.7.9", "0.7.8", "0.7.7", "0.7.6", "0.7.5", "0.7.4", "0.7.3", "0.7.2", "0.7.1"])
     expect(new Set(versions).size).toBe(versions.length)
     const sorted = [...versions].sort((a, b) => compare(b, a))
     expect(versions).toEqual(sorted)
