@@ -225,6 +225,35 @@ describe("remote team facts", () => {
     } finally { held.resolve("default"); await test.stop() }
   })
 
+  test("a refresh queued behind an in-flight read keeps the ready Office roster", async () => {
+    const second = Promise.withResolvers<RelayHandlerOutcome>()
+    const third = Promise.withResolvers<RelayHandlerOutcome>()
+    const ready: RelayHandlerOutcome = { ok: true, value: { data: [task("ses_child")], summary: { total: 1 }, cursor: {} } }
+    let reads = 0
+    const test = await setup(() => {
+      reads += 1
+      if (reads === 1) return ready
+      return reads === 2 ? second.promise : third.promise
+    })
+    const cue = (seq: number) => test.relay.pushEvent("ses_a", { id: `evt_team_refresh_${seq}`, type: "session.tool.progress", durable: { aggregateID: "ses_a", seq, version: 1 },
+      data: { sessionID: "ses_a", assistantMessageID: "msg_1", callID: `call_${seq}`, structured: { sessionID: "ses_child", status: "running" }, content: [] } })
+    try {
+      test.store.watchTeam(true)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().team?.status === "ready")
+      cue(1)
+      await waitFor(() => reads === 2)
+      cue(2)
+      await waitFor(() => test.store.state().view?.watermark === 2)
+      second.resolve(ready)
+      await waitFor(() => reads === 3)
+      expect(test.store.state().team).toMatchObject({ status: "ready", tasks: [{ sessionID: "ses_child" }] })
+      third.resolve(ready)
+      await waitFor(() => test.store.state().team?.pageLoading === false)
+      expect(test.store.state().team).toMatchObject({ status: "ready", tasks: [{ sessionID: "ses_child" }] })
+    } finally { second.resolve("default"); third.resolve("default"); await test.stop() }
+  })
+
   test("disabling Office during a pending snapshot cannot recreate team state on failure", async () => {
     const held = Promise.withResolvers<RelayHandlerOutcome>()
     const test = await setup(() => "default", undefined,

@@ -382,7 +382,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   let activityWatching = false
   let activityWatchToken = 0
   let teamRead: { readonly owner: RemoteTransport; readonly token: number; readonly rootID: string; readonly watchToken: number } | undefined
-  let pendingTeamRead: { readonly owner: RemoteTransport; readonly token: number; readonly rootID: string; readonly watchToken: number } | undefined
+  let pendingTeamRead: { readonly owner: RemoteTransport; readonly token: number; readonly rootID: string; readonly watchToken: number; readonly refresh: boolean } | undefined
   let cancelFamilyRefresh: (() => void) | undefined
   let familyReading = false
   let selectedEconomicsRead: { readonly owner: RemoteTransport; readonly token: number; readonly rootID: string; readonly childID: string } | undefined
@@ -698,7 +698,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const watchToken = teamWatchToken
     if (teamRead !== undefined) {
       if (cursor === undefined && (refresh || teamRead.owner !== owner || teamRead.token !== token ||
-        teamRead.rootID !== rootID || teamRead.watchToken !== watchToken)) pendingTeamRead = { owner, token, rootID, watchToken }
+        teamRead.rootID !== rootID || teamRead.watchToken !== watchToken)) pendingTeamRead = { owner, token, rootID, watchToken, refresh }
       return
     }
     if (token !== selectionToken || !isCurrentConnection(owner) || state.team?.rootID !== rootID || state.transport.kind !== "open") return
@@ -747,7 +747,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     pendingTeamRead = undefined
     if (teamWatching && pending !== undefined && teamRead === undefined && pending.watchToken === teamWatchToken && pending.token === selectionToken &&
       isCurrentConnection(pending.owner) && state.transport.kind === "open" && state.team?.rootID === pending.rootID && state.team.status !== "unsupported")
-      void loadTeam(pending.owner, pending.token, pending.rootID)
+      void loadTeam(pending.owner, pending.token, pending.rootID, undefined, pending.refresh)
   }
 
   const loadTeamEconomics = async (owner: RemoteTransport, token: number, rootID: string, sessionIDs: readonly string[]) => {
