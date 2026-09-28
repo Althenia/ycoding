@@ -72,6 +72,28 @@ describe("remote command surface", () => {
     })
   })
 
+  test("reports an unenrolled machine without contacting a local server", async () => {
+    const requests: string[] = []
+    const server = Bun.serve({
+      port: 0,
+      fetch: (request) => {
+        requests.push(new URL(request.url).pathname)
+        return new Response("unavailable", { status: 503 })
+      },
+    })
+    try {
+      await withHome(async (root) => {
+        const status = await run(isolatedEnv(root), ["remote", "status", "--server", server.url.href])
+        expect(status.exitCode).toBe(0)
+        expect(status.stdout).toContain("Not enrolled")
+        expect(status.stdout).not.toContain("Connection")
+      })
+      expect(requests).toEqual([])
+    } finally {
+      await server.stop(true)
+    }
+  })
+
   test("requires a relay origin and refuses a relay URL with a path before prompting", async () => {
     await withHome(async (root) => {
       const missing = await run(isolatedEnv(root), ["remote", "enroll", "enr_1"])

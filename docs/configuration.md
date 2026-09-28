@@ -151,7 +151,7 @@ In the browser, **New session** selects from existing repositories recorded by t
 | `ycoding remote enroll <enrollmentID> [--name <name>] [--relay <origin>] [--replace]`   | Enroll this machine with a relay. The one-use enrollment code is read from the terminal, never argv. |
 | `ycoding remote connect [--relay <origin>] [--server <url> \| --standalone]`            | Turn on the resolved server's remote connection and return once it is on; `--standalone` stays in the foreground until Ctrl-C. |
 | `ycoding remote disconnect [--server <url> \| --standalone]`                            | Turn off the resolved server's remote connection.                                                    |
-| `ycoding remote status [--server <url> \| --standalone]`                               | Show enrollment, credential validity, local server address, backend Session count, and the remote connection state. |
+| `ycoding remote status [--server <url> \| --standalone]`                               | Show enrollment, credential validity, local server address, backend Session count, and the remote connection state. An unenrolled machine reports only that it is not enrolled, without starting or contacting a local server. |
 | `ycoding remote sessions [--server <url> \| --standalone]`                             | List every Session in the backend through its authoritative Location.                                |
 
 `ycoding remote enroll` requires a relay origin, and `--replace` is required before an existing device identity can be overwritten. `ycoding remote connect` requires an enrolled device and refuses to bridge a local server over a LAN or public-network endpoint.

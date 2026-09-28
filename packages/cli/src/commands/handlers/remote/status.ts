@@ -14,7 +14,10 @@ export default Runtime.handler(
   RemoteCommand.commands.status,
   Effect.fn("cli.remote.status")(function* (input) {
     const identity = yield* RemoteCredentials.read()
-    if (identity === undefined) line("Not enrolled. Run `ycoding remote enroll <enrollmentID>` with a relay origin.")
+    if (identity === undefined) {
+      line("Not enrolled. Run `ycoding remote enroll <enrollmentID>` with a relay origin.")
+      return
+    }
     const resolved = yield* ServerConnection.resolve({
       server: Option.getOrUndefined(input.server),
       standalone: input.standalone,
@@ -31,9 +34,9 @@ export default Runtime.handler(
     process.stdout.write(
       [
         "",
-        `  Device        ${identity ? `${identity.name} (${identity.deviceID})` : "not enrolled"}`,
-        `  Relay         ${identity?.relayURL ?? "unreported"}`,
-        `  Credential    ${identity ? credentialState(identity) : "not enrolled"}`,
+        `  Device        ${identity.name} (${identity.deviceID})`,
+        `  Relay         ${identity.relayURL}`,
+        `  Credential    ${credentialState(identity)}`,
         `  Connection    ${remote.state}${remote.message ? ` · ${remote.message}` : ""}`,
         `  Local server  ${service}`,
         `  Sessions      ${sessions.length} backend session(s), all owner-accessible while connected`,
