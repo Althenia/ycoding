@@ -106,6 +106,8 @@ describe("remote and public product interactions", () => {
       expect(await workspace.evaluate<number>(`document.querySelectorAll('[role="listbox"]').length`)).toBe(1)
       expect(await workspace.evaluate<boolean>(`document.querySelector('dialog[aria-label="Select Active Machine"]')?.contains(document.activeElement) === true`)).toBe(true)
       await workspace.pressEscape()
+      expect(await workspace.evaluate<number>(`[...document.querySelectorAll('[role="listbox"]')].filter((listbox) => listbox.closest('[inert]') === null).length`)).toBe(0)
+      for (let attempt = 0; attempt < 20 && await workspace.evaluate<number>(`document.querySelectorAll('[role="listbox"]').length`) !== 0; attempt += 1) await Bun.sleep(50)
       expect(await workspace.evaluate<number>(`document.querySelectorAll('[role="listbox"]').length`)).toBe(0)
       expect(await workspace.evaluate<string>(`document.activeElement?.getAttribute('aria-label') ?? ''`)).toBe("Machine")
     } finally { await workspace.close() }

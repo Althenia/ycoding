@@ -328,6 +328,8 @@ test("Team tabs and row actions are keyboard operable, and Escape closes the pho
     await page.pressKey(" ", "Space", 32)
     expect(await page.evaluate<string[]>(`window.teamEvents()`)).toContain("open:ses_child")
     await page.pressEscape()
+    expect(await page.evaluate<boolean>(`(() => { const view = document.querySelector('.team-view'); return view === null || view.closest('dialog[inert]:not([open])') !== null })()`)).toBe(true)
+    for (let attempt = 0; attempt < 20 && await page.evaluate<boolean>(`document.querySelector('.team-view') !== null`); attempt += 1) await Bun.sleep(50)
     expect(await page.evaluate<boolean>(`document.querySelector('.team-view') === null`)).toBe(true)
   } finally { await page.close() }
 })

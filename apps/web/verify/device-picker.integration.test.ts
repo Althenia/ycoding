@@ -52,6 +52,11 @@ async function openPicker(width: number, machineName = "Studio Mac") {
   throw new Error("Machine picker did not finish loading")
 }
 
+async function waitUntilGone(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, selector: string) {
+  for (let attempt = 0; attempt < 30 && await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector)}) !== null`); attempt++) await Bun.sleep(20)
+  expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector)}) === null`)).toBe(true)
+}
+
 describe("machine picker", () => {
   test("keeps offline and unenrolled machine states nonselectable without hiding recovery actions", async () => {
     if (!browser) throw new Error("Chrome was not initialized")
@@ -208,18 +213,20 @@ describe("machine picker", () => {
       expect(await page.evaluate<string>(`document.querySelector('[aria-label="Machine"]')?.textContent?.trim() ?? ''`)).toBe("Studio Mac")
       expect(await page.evaluate<string>(`document.querySelector('[role="option"][aria-selected="true"]')?.textContent?.replace('✓', '').trim() ?? ''`)).toContain("Dev Linux")
       await page.pressEscape()
-      expect(await page.evaluate<boolean>(`document.querySelector('[role="listbox"]') === null && document.activeElement?.getAttribute('aria-label') === 'Machine'`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.querySelector('.custom-select__dialog')?.open === false && document.querySelector('.custom-select__dialog')?.inert === true && document.activeElement?.getAttribute('aria-label') === 'Machine'`)).toBe(true)
+      await waitUntilGone(page, ".custom-select__dialog")
       await page.pressKey("Enter", "Enter", 13)
       expect(await page.evaluate<string>(`document.querySelector('[role="option"][aria-selected="true"]')?.textContent ?? ''`)).toContain("Studio Mac")
       await page.evaluate(`document.querySelectorAll('[role="option"]')[1]?.click()`)
       await page.evaluate(`document.querySelector('[aria-label="Close Select Active Machine"]')?.click()`)
       expect(await page.evaluate<string>(`document.querySelector('[aria-label="Machine"]')?.textContent?.trim() ?? ''`)).toBe("Studio Mac")
+      await waitUntilGone(page, ".custom-select__dialog")
       await page.pressKey("Enter", "Enter", 13)
       await page.evaluate(`document.querySelectorAll('[role="option"]')[1]?.click()`)
       await page.evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Confirm Selection')?.click()`)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-label="Machine"]')?.textContent?.includes('Dev Linux') ?? false`); attempt += 1) await Bun.sleep(50)
       expect(await page.evaluate<string>(`document.querySelector('[aria-label="Machine"]')?.textContent?.trim() ?? ''`)).toBe("Dev Linux")
-      expect(await page.evaluate<boolean>(`document.querySelector('[role="listbox"]') === null`)).toBe(true)
+      await waitUntilGone(page, ".custom-select__dialog")
     } finally {
       await page.close()
     }
@@ -269,7 +276,8 @@ describe("machine picker", () => {
       expect(await page.evaluate<boolean>(`document.querySelector('dialog') === null`)).toBe(true)
       await page.evaluate(`document.querySelectorAll('[role="option"]')[1]?.click()`)
       expect(await page.evaluate<string>(`document.querySelector('[aria-label="Machine"]')?.textContent?.trim() ?? ''`)).toBe("Dev Linux")
-      expect(await page.evaluate<boolean>(`document.querySelector('[role="listbox"]') === null`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.querySelector('[aria-label="Machine"]')?.getAttribute('aria-expanded') === 'false' && document.querySelector('.custom-select__surface')?.inert === true`)).toBe(true)
+      await waitUntilGone(page, ".custom-select__surface")
     } finally {
       await page.close()
     }
@@ -280,9 +288,10 @@ describe("machine picker", () => {
     try {
       await page.evaluate(`document.querySelectorAll('[role="option"]')[1]?.click()`)
       await page.evaluate(`document.querySelector('dialog')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`)
-      expect(await page.evaluate<boolean>(`document.querySelector('dialog') === null`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.querySelector('dialog')?.open === false && document.querySelector('dialog')?.inert === true`)).toBe(true)
       expect(await page.evaluate<string>(`document.querySelector('[aria-label="Machine"]')?.textContent?.trim() ?? ''`)).toBe("Studio Mac")
       expect(await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label') ?? ''`)).toBe("Machine")
+      await waitUntilGone(page, "dialog")
     } finally {
       await page.close()
     }

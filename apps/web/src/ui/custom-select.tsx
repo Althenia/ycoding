@@ -29,6 +29,7 @@ export function CustomSelect(props: {
   const id = `custom-select-${crypto.randomUUID()}`
   const listboxID = `${id}-listbox`
   const [open, setOpen] = createSignal(false)
+  const [closing, setClosing] = createSignal(false)
   const [compact, setCompact] = createSignal(false)
   const [pendingValue, setPendingValue] = createSignal<string>()
   const [active, setActive] = createSignal(0)
@@ -38,11 +39,13 @@ export function CustomSelect(props: {
   let root: HTMLDivElement | undefined
   let trigger: HTMLButtonElement | undefined
   let surface: HTMLDivElement | undefined
+  let closeModal: (() => void) | undefined
+  let closeTimer: ReturnType<typeof setTimeout> | undefined
   let typeahead = ""
   let typeaheadTimer: ReturnType<typeof setTimeout> | undefined
 
   const openMenu = () => {
-    if (props.disabled || props.options.length === 0) return
+    if (props.disabled || closing() || props.options.length === 0) return
     setActive(selected() < 0 ? 0 : selected())
     setPendingValue(props.value)
     setOpen(true)
@@ -50,8 +53,12 @@ export function CustomSelect(props: {
     props.onOpen?.()
   }
   const closeMenu = (restoreFocus: boolean) => {
+    if (!open()) return
+    if (compact() && closeModal) { closeModal(); return }
+    if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) setClosing(true)
     setOpen(false)
-    if (restoreFocus) queueMicrotask(() => trigger?.focus())
+    if (restoreFocus) trigger?.focus()
+    if (closing()) closeTimer = setTimeout(() => setClosing(false), parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--yc-dur-quick")))
   }
   const choose = (index: number) => {
     const option = props.options[index]
@@ -68,7 +75,7 @@ export function CustomSelect(props: {
     setActive((index + props.options.length) % props.options.length)
   }
   const onKeyDown: JSX.EventHandler<HTMLElement, KeyboardEvent> = (event) => {
-    if (props.disabled) return
+    if (props.disabled || closing()) return
     if (event.key === "Escape" && open()) {
       event.preventDefault()
       closeMenu(true)
@@ -115,6 +122,8 @@ export function CustomSelect(props: {
     setCompact(media.matches)
     const resize = () => {
       if (open()) closeMenu(true)
+      if (closeTimer !== undefined) clearTimeout(closeTimer)
+      setClosing(false)
       setCompact(media.matches)
     }
     media.addEventListener("change", resize)
@@ -138,6 +147,7 @@ export function CustomSelect(props: {
   })
   onCleanup(() => {
     if (typeaheadTimer !== undefined) clearTimeout(typeaheadTimer)
+    if (closeTimer !== undefined) clearTimeout(closeTimer)
   })
   createEffect(() => {
     if (props.disabled && open()) closeMenu(false)
@@ -219,16 +229,17 @@ export function CustomSelect(props: {
         aria-haspopup={compact() ? "dialog" : "listbox"}
         aria-activedescendant={open() && !compact() ? `${listboxID}-${activeIndex()}` : undefined}
         disabled={props.disabled}
+        aria-disabled={closing()}
         onClick={() => (open() ? closeMenu(false) : openMenu())}
         onKeyDown={onKeyDown}
       >
         <span class="custom-select__value">{label()}</span>
         <Icon name="chevron-down" size={16} class="custom-select__chevron" />
       </button>
-      <Show when={open()}>
+      <Show when={open() || closing()}>
         <Portal>
           <Show when={compact()} fallback={
-            <div ref={surface} class={`custom-select__surface${props.surfaceClass ? ` ${props.surfaceClass}` : ""}`} style={{
+            <div ref={surface} class={`custom-select__surface${props.surfaceClass ? ` ${props.surfaceClass}` : ""}`} data-closing={closing() ? "" : undefined} aria-hidden={closing() ? "true" : undefined} inert={closing()} style={{
               "--custom-select-left": `${placement().left}px`,
               "--custom-select-top": `${placement().top}px`,
               "--custom-select-width": `${placement().width}px`,
@@ -242,7 +253,7 @@ export function CustomSelect(props: {
               {options()}
             </div>
           }>
-            <Modal class={`overlay--sheet custom-select__dialog${props.surfaceClass ? ` ${props.surfaceClass}` : ""}`} label={props.sheetTitle ?? props.label} onClose={() => closeMenu(true)}>
+            <Modal class={`overlay--sheet custom-select__dialog${props.surfaceClass ? ` ${props.surfaceClass}` : ""}`} label={props.sheetTitle ?? props.label} requestClose={(close) => closeModal = close} onDismiss={() => { setClosing(true); setOpen(false); trigger?.focus() }} onClose={() => setClosing(false)}>
               <p class="custom-select__subtitle">{props.sheetSubtitle ?? "Available options"}</p>
               {options()}
               <div class="custom-select__confirm-footer"><button

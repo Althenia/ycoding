@@ -1033,6 +1033,8 @@ describe("remote shell layout", () => {
       await page.evaluate(`document.querySelector('.custom-select__confirm')?.click()`)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-label="Machine"] .custom-select__value')?.textContent?.includes('Dev Linux') ?? false`); attempt += 1) await Bun.sleep(50)
       expect(await page.evaluate<string>(`document.querySelector('[aria-label="Machine"] .custom-select__value')?.textContent?.trim() ?? ''`)).toBe("Dev Linux")
+      expect(await page.evaluate<boolean>(`(() => { const dialog = document.querySelector('.custom-select__dialog'); return dialog === null || (!dialog.open && dialog.inert) })()`)).toBe(true)
+      for (let attempt = 0; attempt < 20 && await page.evaluate<boolean>(`document.querySelector('.custom-select__dialog') !== null`); attempt += 1) await Bun.sleep(50)
       expect(await page.evaluate<boolean>(`document.querySelector('.custom-select__dialog') === null`)).toBe(true)
       await page.close()
     }

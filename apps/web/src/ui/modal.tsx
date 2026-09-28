@@ -1,4 +1,4 @@
-import { onCleanup, onMount, type JSX } from "solid-js"
+import { createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { Icon } from "./icon"
 
 /**
@@ -22,13 +22,33 @@ export function Modal(props: {
   readonly label: string
   readonly header?: JSX.Element
   readonly onClose: () => void
+  readonly onDismiss?: () => void
+  readonly requestClose?: (close: () => void) => void
   readonly children: JSX.Element
 }) {
+  const [closing, setClosing] = createSignal(false)
   let element: HTMLDialogElement | undefined
+  let returnFocus: HTMLElement | null = null
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const close = () => {
+    if (closing()) return
+    setClosing(true)
+    if (element?.open) element.close()
+    props.onDismiss?.()
+    returnFocus?.focus()
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      props.onClose()
+      return
+    }
+    timer = setTimeout(props.onClose, parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--yc-dur-base")))
+  }
   onMount(() => {
+    returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
     element?.showModal()
+    props.requestClose?.(close)
   })
   onCleanup(() => {
+    if (timer !== undefined) clearTimeout(timer)
     if (element?.open) element.close()
   })
   return (
@@ -36,8 +56,11 @@ export function Modal(props: {
       ref={element}
       class={`overlay${props.class ? ` ${props.class}` : ""}`}
       aria-label={props.label}
-      onClose={props.onClose}
-      onCancel={props.onClose}
+      aria-hidden={closing() ? "true" : undefined}
+      inert={closing()}
+      data-closing={closing() ? "" : undefined}
+      onClose={() => { if (!closing()) close() }}
+      onCancel={(event) => { event.preventDefault(); close() }}
       onKeyDown={(event) => {
         if (event.key !== "Tab") return
         const controls = [...event.currentTarget.querySelectorAll<HTMLElement>(
@@ -57,7 +80,7 @@ export function Modal(props: {
             type="button"
             class="button button--ghost button--icon overlay__close"
             aria-label={`Close ${props.label}`}
-            onClick={props.onClose}
+            onClick={close}
           >
             <Icon name="close" />
           </button>

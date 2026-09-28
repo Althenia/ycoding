@@ -17,6 +17,7 @@ export function ComposerPicker(props: {
 }): JSX.Element {
   const id = `composer-picker-${crypto.randomUUID()}`
   const [open, setOpen] = createSignal(false)
+  const [closing, setClosing] = createSignal(false)
   const [query, setQuery] = createSignal("")
   const [active, setActive] = createSignal(0)
   const [compact, setCompact] = createSignal(false)
@@ -25,11 +26,15 @@ export function ComposerPicker(props: {
   let trigger: HTMLButtonElement | undefined
   let surface: HTMLDivElement | undefined
   let searchInput: HTMLInputElement | undefined
+  let closeTimer: ReturnType<typeof setTimeout> | undefined
 
   const close = (focus = false) => {
+    if (!open()) return
+    if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) setClosing(true)
     setOpen(false)
-    setQuery("")
-    if (focus) queueMicrotask(() => trigger?.focus())
+    if (focus) trigger?.focus()
+    if (closing()) closeTimer = setTimeout(() => { setClosing(false); setQuery("") }, parseFloat(getComputedStyle(document.documentElement).getPropertyValue(compact() ? "--yc-dur-base" : "--yc-dur-quick")))
+    else setQuery("")
   }
   const choose = (index: number) => {
     const option = filtered()[index]
@@ -42,6 +47,7 @@ export function ComposerPicker(props: {
     setActive((active() + delta + filtered().length) % filtered().length)
   }
   const keys: JSX.EventHandler<HTMLElement, KeyboardEvent> = (event) => {
+    if (closing()) return
     if (event.key === "Escape") {
       if (!open()) return
       event.preventDefault()
@@ -68,7 +74,7 @@ export function ComposerPicker(props: {
   onMount(() => {
     const media = window.matchMedia("(max-width: 767px)")
     setCompact(media.matches)
-    const resize = () => { setCompact(media.matches); close() }
+    const resize = () => { close(); if (closeTimer !== undefined) clearTimeout(closeTimer); setClosing(false); setCompact(media.matches) }
     const outside = (event: PointerEvent) => {
       if (open() && event.target instanceof Node && !surface?.contains(event.target) && !trigger?.contains(event.target)) close()
     }
@@ -86,13 +92,14 @@ export function ComposerPicker(props: {
   createEffect(() => {
     if (open()) queueMicrotask(() => { reposition(); searchInput?.focus() })
   })
+  onCleanup(() => { if (closeTimer !== undefined) clearTimeout(closeTimer) })
   return <div class="mini-picker">
-    <button ref={trigger} type="button" class="mini-picker__trigger" classList={{ "mini-picker__trigger--pending": props.pending }} role="combobox" aria-label={props.label} aria-description={props.pending ? "applies with your next send" : undefined} aria-haspopup="listbox" aria-expanded={open()} aria-controls={`${id}-list`} aria-activedescendant={open() && !props.searchable && filtered().length ? `${id}-${active()}` : undefined} disabled={props.disabled} onKeyDown={keys} onClick={() => { setActive(Math.max(0, filtered().findIndex((option) => option.value === props.value))); setOpen(!open()) }}>
+    <button ref={trigger} type="button" class="mini-picker__trigger" classList={{ "mini-picker__trigger--pending": props.pending }} role="combobox" aria-label={props.label} aria-description={props.pending ? "applies with your next send" : undefined} aria-haspopup="listbox" aria-expanded={open()} aria-controls={`${id}-list`} aria-activedescendant={open() && !props.searchable && filtered().length ? `${id}-${active()}` : undefined} disabled={props.disabled} aria-disabled={closing()} onKeyDown={keys} onClick={() => { if (closing()) return; setActive(Math.max(0, filtered().findIndex((option) => option.value === props.value))); if (open()) close(); else setOpen(true) }}>
       <Show when={props.icon}><Icon name={props.icon!} /></Show><span>{props.options.find((option) => option.value === props.value)?.label ?? props.placeholder}</span><Icon name="chevron-down" />
     </button>
-    <Show when={open()}><Portal>
-      <Show when={compact()}><div class="mini-picker__scrim" onClick={() => close()} /></Show>
-      <div ref={surface} class={`mini-picker__surface${compact() ? " mini-picker__surface--sheet" : ""}`} style={compact() ? undefined : { left: `${position().left}px`, top: `${position().top}px`, width: `${position().width}px` }} onKeyDown={keys}>
+    <Show when={open() || closing()}><Portal>
+      <Show when={compact()}><div class="mini-picker__scrim" classList={{ "mini-picker__scrim--closing": closing() }} inert={closing()} aria-hidden={closing() ? "true" : undefined} onClick={() => close()} /></Show>
+      <div ref={surface} class={`mini-picker__surface${compact() ? " mini-picker__surface--sheet" : ""}`} classList={{ "mini-picker__surface--closing": closing() }} inert={closing()} aria-hidden={closing() ? "true" : undefined} style={compact() ? undefined : { left: `${position().left}px`, top: `${position().top}px`, width: `${position().width}px` }} onKeyDown={keys}>
         <div class="mini-picker__heading"><strong>{props.label}</strong><button type="button" aria-label={`Close ${props.label}`} onClick={() => close(true)}><Icon name="close" /></button></div>
         <Show when={props.searchable}><input ref={searchInput} class="mini-picker__search" type="search" role="combobox" aria-label={`Search ${props.label}`} aria-autocomplete="list" aria-expanded="true" aria-controls={`${id}-list`} aria-activedescendant={filtered().length ? `${id}-${active()}` : undefined} placeholder="Search models…" value={query()} onInput={(event) => { setQuery(event.currentTarget.value); setActive(0) }} /></Show>
         <div id={`${id}-list`} role="listbox" aria-label={props.label} aria-activedescendant={filtered().length ? `${id}-${active()}` : undefined} class="mini-picker__list">

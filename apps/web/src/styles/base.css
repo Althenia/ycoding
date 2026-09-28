@@ -937,6 +937,30 @@ kbd {
   display: block;
 }
 
+.overlay[data-closing] {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: var(--yc-z-overlay);
+  inline-size: 100%;
+  block-size: 100%;
+  margin: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.overlay[data-closing]::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background: rgba(11, 15, 20, 0.45);
+}
+
+.overlay[data-closing] .overlay__surface {
+  z-index: 1;
+}
+
 .overlay__surface {
   position: fixed;
   background: var(--yc-surface-raised);
@@ -1083,6 +1107,18 @@ kbd {
     animation: yc-slide-in var(--yc-dur-base) var(--yc-ease-entrance) both;
   }
 
+  .overlay[data-closing]::before {
+    animation: yc-fade-out var(--yc-dur-quick) var(--yc-ease-exit) both;
+  }
+
+  .overlay[data-closing] .overlay__surface {
+    animation: yc-sheet-out var(--yc-dur-base) var(--yc-ease-exit) both;
+  }
+
+  .overlay--slideover[data-closing] .overlay__surface {
+    animation-name: yc-slide-out;
+  }
+
   /* The live marker pulses; the streaming label always carries the state as text. */
   .status-dot--pending,
   .status-dot--online {
@@ -1130,6 +1166,19 @@ kbd {
   }
 }
 
+@keyframes yc-sheet-out {
+  to {
+    opacity: 0;
+    translate: 0 24px;
+  }
+}
+
+@keyframes yc-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
 @keyframes yc-slide-in {
   from {
     translate: 24px 0;
@@ -1137,6 +1186,13 @@ kbd {
 
   to {
     translate: 0 0;
+  }
+}
+
+@keyframes yc-slide-out {
+  to {
+    opacity: 0;
+    translate: 24px 0;
   }
 }
 
@@ -1163,8 +1219,12 @@ kbd {
 
 @media (min-width: 768px) {
   @media (prefers-reduced-motion: no-preference) {
-    .overlay--dialog[open] .overlay__surface {
+    .overlay[open]:not(.overlay--sheet):not(.overlay--slideover) .overlay__surface {
       animation-name: yc-dialog-in;
+    }
+
+    .overlay[data-closing]:not(.overlay--sheet):not(.overlay--slideover) .overlay__surface {
+      animation-name: yc-dialog-out;
     }
   }
 }
@@ -1178,6 +1238,13 @@ kbd {
   to {
     opacity: 1;
     scale: 1;
+  }
+}
+
+@keyframes yc-dialog-out {
+  to {
+    opacity: 0;
+    scale: 0.98;
   }
 }
 

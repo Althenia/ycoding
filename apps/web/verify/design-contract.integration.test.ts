@@ -219,6 +219,8 @@ describe("web design contract inventory", () => {
     })()`)
     expect({ open: modal.open, focused: modal.focused, withinViewport: modal.withinViewport }, JSON.stringify(modal)).toEqual({ open: true, focused: true, withinViewport: true })
     await page.pressEscape()
+    expect(await page.evaluate<boolean>(`(() => { const dialog = document.querySelector('dialog[aria-label="Activity"]'); return dialog === null || (!dialog.open && dialog.inert) })()`)).toBe(true)
+    for (let attempt = 0; attempt < 20 && await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Activity"]') !== null`); attempt += 1) await Bun.sleep(50)
     expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Activity"]') === null`)).toBe(true)
     await page.close()
   }, 30_000)

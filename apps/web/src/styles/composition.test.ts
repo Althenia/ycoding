@@ -241,7 +241,7 @@ describe("motion contract", () => {
   })
 
   test("never hides content without the motion gate", async () => {
-    const overlayFades = ["@keyframes yc-fade-in", "@keyframes yc-dialog-in"]
+    const overlayFades = ["@keyframes yc-fade-in", "@keyframes yc-dialog-in", "@keyframes yc-sheet-out", "@keyframes yc-fade-out", "@keyframes yc-slide-out", "@keyframes yc-dialog-out"]
     for (const name of SURFACE_FILES) {
       const sheet = await readStylesheet(name)
       const zeroOpacity = sheet.rules
