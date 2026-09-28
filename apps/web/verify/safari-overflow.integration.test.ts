@@ -10,6 +10,7 @@ beforeAll(async () => {
   const created = await command("POST", "/session", { capabilities: { alwaysMatch: { browserName: "safari" } } })
   if (!isRecord(created) || typeof created.sessionId !== "string") throw new Error("Safari WebDriver did not create a session")
   sessionID = created.sessionId
+  await command("POST", `/session/${sessionID}/timeouts`, { implicit: 5_000 })
 })
 
 afterAll(async () => {
