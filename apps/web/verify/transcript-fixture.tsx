@@ -75,6 +75,9 @@ const imageMessages: readonly RemoteMessageView[] = [
     { name: "report.pdf", mime: "application/pdf", bytes: 1_024, digest: "b".repeat(64) },
     { name: "broken.png", mime: "image/png", bytes: 2_048, digest: "c".repeat(64) },
   ] },
+  { kind: "user", id: "msg_image_only", text: "", state: "consumed", created: 1, attachments: [
+    { name: "screen.png", mime: "image/png", bytes: 4_096, digest: "a".repeat(64) },
+  ] },
   { kind: "assistant", id: "msg_tool_image", created: 2, parts: [{ kind: "tool", callID: "call_image", name: "read", status: "completed", content: [
     { kind: "image", uri: plot.toDataURL("image/png"), mime: "image/png", name: "plot.png" },
   ] }] },
@@ -105,6 +108,9 @@ const imageSnapshot = () => readSnapshot({ sourceEpoch: "epoch_1", session: { id
     { name: "screen.png", mime: "image/png", content: { type: "managed", bytes: 4_096, digest: "a".repeat(64) } },
     { name: "report.pdf", mime: "application/pdf", content: { type: "managed", bytes: 1_024, digest: "b".repeat(64) } },
     { name: "broken.png", mime: "image/png", content: { type: "managed", bytes: 2_048, digest: "c".repeat(64) } },
+  ] },
+  { id: "msg_image_only", type: "user", text: "", time: { created: 1, consumed: 2 }, files: [
+    { name: "screen.png", mime: "image/png", content: { type: "managed", bytes: 4_096, digest: "a".repeat(64) } },
   ] },
   { id: "msg_tool_image", type: "assistant", time: { created: 2 }, content: [
     { type: "tool", id: "call_image", name: "read", state: { status: "completed", content: [{ type: "file", uri: plot.toDataURL("image/png"), mime: "image/png", name: "plot.png" }] } },

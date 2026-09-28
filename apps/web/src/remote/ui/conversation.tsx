@@ -358,7 +358,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
           <Show when={oversized()?.state === "error"}><button type="button" class="button button--ghost button--small" onClick={() => void remote.store.loadOversizedMessage(props.message().id)}>Retry full content</button></Show>
         </Show>
         <Show when={kind() === "user"}>
-          <p class="transcript-message__bubble">{userText(props.message())}</p>
+          <Show when={userText(props.message()).trim() !== ""}><p class="transcript-message__bubble">{userText(props.message())}</p></Show>
           <For each={attachmentKeys()}>{(key) => {
             const attachment = () => attachments()[Number(key.slice(0, key.indexOf(":")))]!
             const size = () => attachment().bytes < 1_024 ? `${attachment().bytes} B` : `${(attachment().bytes / 1_024).toFixed(1)} KB`

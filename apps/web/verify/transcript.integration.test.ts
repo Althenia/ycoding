@@ -155,6 +155,37 @@ describe("transcript rendering", () => {
     } finally { await page.close() }
   })
 
+  test("sizes user image thumbnails within the message column and omits an empty text bubble", async () => {
+    const page = await browser!.openPage()
+    try {
+      for (const theme of ["light", "dark"] as const) for (const [width, height] of [[390, 844], [1440, 900]]) {
+        await page.setViewport(width!, height!)
+        await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?images=1&theme=${theme}`)
+        for (let i = 0; i < 60 && !await page.evaluate<boolean>(`['msg_image', 'msg_image_only'].every((id) => document.querySelector('[data-message-id="' + id + '"] .transcript-image img')?.complete) && Boolean(document.querySelector('[data-message-id="msg_image"] .transcript-image__unavailable'))`); i++) await Bun.sleep(25)
+        const layout = await page.evaluate<{ readonly thumbnails: readonly { readonly width: number; readonly ratio: number; readonly painted: boolean; readonly inside: boolean }[]; readonly unavailableWidth: number; readonly emptyBubbles: number; readonly textBubbles: number }>(`(() => {
+          const thumbnails = ['msg_image', 'msg_image_only'].map((id) => {
+            const message = document.querySelector('[data-message-id="' + id + '"]').getBoundingClientRect()
+            const frame = document.querySelector('[data-message-id="' + id + '"] .transcript-attachment .transcript-image').getBoundingClientRect()
+            const image = document.querySelector('[data-message-id="' + id + '"] .transcript-image img').getBoundingClientRect()
+            return { width: Math.round(frame.width), ratio: Math.round(frame.width / frame.height * 100) / 100, painted: image.width > 100 && image.height > 50,
+              inside: frame.left >= message.left - 1 && frame.right <= message.right + 1 && frame.right <= innerWidth }
+          })
+          return { thumbnails, unavailableWidth: Math.round(document.querySelector('[data-message-id="msg_image"] .transcript-image__unavailable').getBoundingClientRect().width),
+            emptyBubbles: document.querySelectorAll('[data-message-id="msg_image_only"] .transcript-message__bubble').length,
+            textBubbles: document.querySelectorAll('[data-message-id="msg_image"] .transcript-message__bubble').length }
+        })()`)
+        for (const thumbnail of layout.thumbnails) {
+          expect(thumbnail.width).toBeGreaterThanOrEqual(240)
+          expect(thumbnail.width).toBeLessThanOrEqual(480)
+          expect(thumbnail.ratio).toBeCloseTo(16 / 9, 1)
+          expect(thumbnail).toMatchObject({ painted: true, inside: true })
+        }
+        expect(layout.unavailableWidth).toBeGreaterThanOrEqual(160)
+        expect({ emptyBubbles: layout.emptyBubbles, textBubbles: layout.textBubbles }).toEqual({ emptyBubbles: 0, textBubbles: 1 })
+      }
+    } finally { await page.close() }
+  })
+
   test("keeps loaded user and tool images mounted through streaming, reconciliation, older history, and reconnect", async () => {
     const page = await browser!.openPage()
     try {
