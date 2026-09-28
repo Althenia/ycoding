@@ -13,6 +13,12 @@
 .session-status__goal-count { display:inline-block; inline-size:3ch; text-align:center; opacity:.7; }
 .session-status__goal-count--inactive { visibility:hidden; }
 .session-status__popover { position:fixed; z-index:calc(var(--yc-z-overlay) + 2); max-block-size:min(420px,75dvh); overflow:auto; padding:var(--yc-space-3); border:1px solid var(--yc-border); border-radius:var(--yc-radius-xl); background:var(--yc-surface-raised); box-shadow:var(--yc-shadow-lg); color:var(--yc-text); }
+.session-status__popover { animation:session-status-in var(--yc-dur-base) var(--yc-ease-entrance) both; }
+.session-status__goal-popover { animation-name:session-status-goal-in; }
+.session-status__popover--leaving { animation:session-status-out var(--yc-dur-base) var(--yc-ease-exit) both; }
+@keyframes session-status-in { from { opacity:0; transform:translateY(8px) scale(.96); } to { opacity:1; transform:none; } }
+@keyframes session-status-goal-in { from { opacity:0; transform:translateY(8px) scale(.96); } to { opacity:1; transform:none; } }
+@keyframes session-status-out { to { opacity:0; transform:translateY(8px) scale(.96); } }
 .session-status__yolo-popover [role="radiogroup"] { display:grid; gap:var(--yc-space-1); }
 .session-status__yolo-popover [role="radio"] { display:grid; gap:var(--yc-space-1); inline-size:100%; min-block-size:44px; padding:var(--yc-space-2); border:1px solid var(--yc-border); border-radius:var(--yc-radius-md); background:var(--yc-surface-raised); color:var(--yc-text); text-align:start; cursor:pointer; }
 .session-status__yolo-popover [role="radio"][aria-checked="true"] { border-color:var(--yc-green-strong); background:var(--yc-green-soft); }
@@ -29,4 +35,3 @@
 @media (max-width:767px), (pointer:coarse) { .session-status__slot, .session-status__yolo-trigger, .session-status__goal-trigger { min-block-size:44px; } .session-status__yolo-trigger,.session-status__goal-trigger { min-inline-size:44px; } }
 @media (max-width:479px) { .session-status__slot { max-inline-size:98px; } .session-status__label { max-inline-size:70px; } }
 @media (max-width:479px) { .session-status__slot { max-inline-size:64px; } .session-status__yolo-full { display:none; } .session-status__yolo-compact { display:inline; } .session-status__label { position:absolute; inline-size:1px; block-size:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; } .session-status__mobile { display:block; } }
-@media (prefers-reduced-motion:reduce) { .session-status__slot { transition:none; } }

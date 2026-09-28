@@ -74,18 +74,77 @@ describe("notification center and live toasts", () => {
         expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification').length`)).toBe(1)
         await page.evaluate(`document.querySelector('.yc-notification__open').click()`)
         expect(await page.evaluate<string[]>(`window.remoteOpened()`)).toEqual(["ses_alpha"])
+        expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-center__trigger').getAttribute('aria-expanded') === 'false' && document.querySelector('.yc-notification-panel')?.inert === true`)).toBe(true)
+        await page.evaluate(`Promise.all([...document.querySelector('.yc-notification-panel').getAnimations()].map(animation => animation.finished))`)
         expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel') === null`)).toBe(true)
         await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
         await page.evaluate(`document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`)
+        await page.evaluate(`Promise.all([...document.querySelector('.yc-notification-panel').getAnimations()].map(animation => animation.finished))`)
         expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel') === null`)).toBe(true)
         await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
         await page.evaluate(`document.querySelector('.yc-notification-panel__action:last-child').click()`)
         expect(await page.evaluate<string>(`document.querySelector('.yc-notification-panel__empty strong')?.textContent ?? ''`)).toBe("You're all caught up")
         await page.pressEscape()
-        expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.yc-notification-center__trigger') && !document.querySelector('.yc-notification-panel')`)).toBe(true)
+        expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.yc-notification-center__trigger') && document.querySelector('.yc-notification-panel')?.inert === true`)).toBe(true)
+        await page.evaluate(`Promise.all([...document.querySelector('.yc-notification-panel').getAnimations()].map(animation => animation.finished))`)
+        expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel') === null`)).toBe(true)
       } finally { await page.close() }
     }
   }, 30_000)
+
+  test("notification center enters and exits over frames, then releases its inert closing layer", async () => {
+    for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"] as const) for (const reduce of [false, true]) {
+      const page = await open(width!, theme)
+      try {
+        await page.setViewport(width!, height!)
+        await page.setReducedMotion(reduce)
+        await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
+        const entering = await page.evaluate<{ duration: number; opacity: number; transform: string }>(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => { const panel = document.querySelector('.yc-notification-panel'), style = getComputedStyle(panel); resolve({ duration: parseFloat(style.animationDuration) * 1000, opacity: Number(style.opacity), transform: style.transform }); })))`)
+        if (reduce) expect(entering).toEqual({ duration: 0, opacity: 1, transform: "none" })
+        else {
+          expect(entering.duration).toBe(220)
+          expect(entering.opacity).toBeGreaterThan(0)
+          expect(entering.opacity).toBeLessThan(1)
+          expect(entering.transform).not.toBe("none")
+        }
+        await page.evaluate(`Promise.all([...document.querySelector('.yc-notification-panel').getAnimations()].map(animation => animation.finished))`)
+        await page.evaluate(`document.querySelector('.yc-notification-panel__action:last-child').focus(); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
+        expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.yc-notification-center__trigger') && document.querySelector('.yc-notification-center__trigger').getAttribute('aria-expanded') === 'false'`)).toBe(true)
+        const closing = await page.evaluate<{ expanded: string; inert: boolean; focused: boolean; duration: number; opacity: number; transform: string; tabbable: boolean }>(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => { const panel = document.querySelector('.yc-notification-panel'), style = panel && getComputedStyle(panel); resolve({ expanded: document.querySelector('.yc-notification-center__trigger').getAttribute('aria-expanded'), inert: panel?.inert ?? false, focused: document.activeElement === document.querySelector('.yc-notification-center__trigger'), duration: style ? parseFloat(style.animationDuration) * 1000 : 0, opacity: style ? Number(style.opacity) : 0, transform: style?.transform ?? 'none', tabbable: !!panel?.querySelector('button:not([tabindex="-1"])') && !panel.inert }); })))`)
+        expect(closing.expanded).toBe("false")
+        expect(closing.focused).toBe(true)
+        if (reduce) expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel') === null`)).toBe(true)
+        else {
+          expect(closing.inert).toBe(true)
+          expect(closing.tabbable).toBe(false)
+          expect(closing.duration).toBe(220)
+          expect(closing.opacity).toBeLessThan(1)
+          expect(closing.transform).not.toBe("none")
+          await page.evaluate(`Promise.all([...document.querySelector('.yc-notification-panel').getAnimations()].map(animation => animation.finished))`)
+          expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel') === null`)).toBe(true)
+        }
+      } finally { await page.close() }
+    }
+  }, 30_000)
+
+  test("a notification panel reopened during exit remains interactive", async () => {
+    const page = await open(390, "light")
+    try {
+      await page.setReducedMotion(false)
+      await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
+      await page.evaluate(`Promise.all([...document.querySelector('.yc-notification-panel').getAnimations()].map(animation => animation.finished))`)
+      await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click(); document.querySelector('.yc-notification-center__trigger').click()`)
+      expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-center__trigger').getAttribute('aria-expanded') === 'true' && document.querySelector('.yc-notification-panel')?.inert === false`)).toBe(true)
+      await Bun.sleep(260)
+      expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel') !== null && document.querySelector('.yc-notification-panel')?.inert === false`)).toBe(true)
+      await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click(); document.querySelector('.yc-notification-center__trigger').click()`)
+      await Bun.sleep(50)
+      await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
+      expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel')?.inert === true`)).toBe(true)
+      await Bun.sleep(50)
+      expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel')?.inert === true`)).toBe(true)
+    } finally { await page.close() }
+  })
 
   test("shows only new live notices as bounded polite toasts, pauses progress, and keeps center history on dismiss", async () => {
     const page = await open(390, "dark", "empty")

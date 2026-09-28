@@ -54,6 +54,7 @@
   transform-origin: top right;
   animation: yc-notification-in var(--yc-dur-base) var(--yc-ease-entrance) both;
 }
+.yc-notification-panel--leaving { animation: yc-notification-out var(--yc-dur-base) var(--yc-ease-exit) both; }
 
 .yc-notification-panel__head {
   display: flex;
@@ -285,6 +286,7 @@
 .yc-toast--leaving .yc-toast__progress { display: none; }
 
 @keyframes yc-notification-in { from { opacity: 0; transform: translateY(-8px) scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes yc-notification-out { to { opacity: 0; transform: translateY(-8px) scale(.96); } }
 @keyframes yc-notification-row-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes yc-toast-in { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
 @keyframes yc-toast-out { to { opacity: 0; transform: translateX(20px); } }
@@ -306,12 +308,4 @@
   .yc-toast { grid-template-columns: 34px minmax(0, 1fr) auto var(--yc-hit-min); }
   .yc-notification-panel__action { min-block-size: var(--yc-hit-min); }
   .yc-toast__open { min-block-size: var(--yc-hit-min); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .yc-notification-panel,
-  .yc-notification,
-  .yc-toast,
-  .yc-toast__progress { animation: none; transition: none; }
-  .yc-toast__progress { transform: scaleX(1); }
 }

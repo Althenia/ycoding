@@ -49,6 +49,7 @@ export function enqueueToasts(current: readonly RemoteNotificationView[], added:
 export function NotificationCenter(props: { readonly onOpenSession: (sessionID: string) => void }): JSX.Element {
   const remote = useRemote()
   const [open, setOpen] = createSignal(false)
+  const [leaving, setLeaving] = createSignal(false)
   const [newCount, setNewCount] = createSignal(0)
   const [clock, setClock] = createSignal(Date.now())
   onMount(() => {
@@ -62,10 +63,15 @@ export function NotificationCenter(props: { readonly onOpenSession: (sessionID: 
   let trigger: HTMLButtonElement | undefined
   const close = (restore: boolean) => {
     setOpen(false)
-    if (restore) trigger?.focus()
+    if (restore || (root?.querySelector(".yc-notification-panel")?.contains(document.activeElement) ?? false)) trigger?.focus()
+    setLeaving(!window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+  }
+  const finish = (event: AnimationEvent) => {
+    if (event.target === event.currentTarget && event.animationName === "yc-notification-out" && leaving()) setLeaving(false)
   }
   const toggle = () => {
     if (open()) return close(false)
+    setLeaving(false)
     setNewCount(unread())
     setClock(Date.now())
     setOpen(true)
@@ -107,8 +113,8 @@ export function NotificationCenter(props: { readonly onOpenSession: (sessionID: 
         <Icon name="bell" size={20} />
         <Show when={unread() > 0}><span class="yc-notification-center__badge" aria-hidden="true">{unread() > 9 ? "9+" : unread()}</span></Show>
       </button>
-      <Show when={open()}>
-        <section id="yc-notification-panel" class="yc-notification-panel" role="region" aria-label="Notifications">
+      <Show when={open() || leaving()}>
+        <section id="yc-notification-panel" class="yc-notification-panel" classList={{ "yc-notification-panel--leaving": leaving() }} role="region" aria-label="Notifications" aria-hidden={leaving() ? "true" : undefined} inert={leaving()} onAnimationEnd={finish} onAnimationCancel={finish}>
           <header class="yc-notification-panel__head">
             <h2>Notifications</h2>
             <Show when={newCount() > 0}><span class="yc-notification-panel__new">{newCount()} new</span></Show>

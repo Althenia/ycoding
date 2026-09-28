@@ -34,9 +34,12 @@ describe("notification presentation", () => {
     expect(enqueueToasts(added.slice(0, 3), [added[0]!]).map((item) => item.id)).toEqual(["four", "three", "two"])
   })
 
-  test("reduces notification motion to no animation", async () => {
+  test("reduces notification motion through the global reduced-motion rule", async () => {
     const css = await Bun.file(new URL("./notifications.css", import.meta.url)).text()
-    expect(css).toContain("@media (prefers-reduced-motion: reduce)")
-    expect(css.slice(css.indexOf("@media (prefers-reduced-motion: reduce)"))).toContain("animation: none")
+    const base = await Bun.file(new URL("../../styles/base.css", import.meta.url)).text()
+    expect(css).not.toContain("prefers-reduced-motion")
+    const reduced = base.slice(base.indexOf("@media (prefers-reduced-motion: reduce)"))
+    expect(reduced).toContain("animation-name: none !important")
+    expect(reduced).toContain("transition-duration: 0s !important")
   })
 })

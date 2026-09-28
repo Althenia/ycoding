@@ -15,6 +15,7 @@ export function ComposerStatus() {
   const remote = useRemote()
   const [now, setNow] = createSignal(Date.now())
   const [open, setOpen] = createSignal<"yolo" | "goal">()
+  const [leaving, setLeaving] = createSignal(false)
   const [draft, setDraft] = createSignal("")
   const [position, setPosition] = createSignal({ left: 8, top: 8, width: 320 })
   let yoloTrigger: HTMLButtonElement | undefined
@@ -42,9 +43,16 @@ export function ComposerStatus() {
   const goalActive = () => goal()?.status === "active"
   const yolo = () => view()?.autonomy?.yolo ?? 0
   const close = (focus = false) => {
+    if (!open() || leaving()) return
     const trigger = open() === "yolo" ? yoloTrigger : goalTrigger
+    if (focus || popover?.contains(document.activeElement)) trigger?.focus()
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) setOpen(undefined)
+    else setLeaving(true)
+  }
+  const finish = (event: AnimationEvent) => {
+    if (event.target !== event.currentTarget || event.animationName !== "session-status-out" || !leaving()) return
     setOpen(undefined)
-    if (focus) queueMicrotask(() => trigger?.focus())
+    setLeaving(false)
   }
   let sessionID = view()?.id
   createEffect(() => {
@@ -63,7 +71,8 @@ export function ComposerStatus() {
     setPosition({ left: Math.min(Math.max(8, rect.left), window.innerWidth - width - 8), top: rect.top - height >= 8 ? rect.top - height - 8 : Math.min(rect.bottom + 8, window.innerHeight - height - 8), width })
   }
   const toggle = (kind: "yolo" | "goal") => {
-    if (open() === kind) { close(true); return }
+    if (open() === kind && !leaving()) { close(true); return }
+    setLeaving(false)
     setOpen(kind)
     queueMicrotask(() => {
       reposition()
@@ -77,7 +86,7 @@ export function ComposerStatus() {
   }
   onMount(() => {
     const outside = (event: PointerEvent) => {
-      if (open() && event.target instanceof Node && !popover?.contains(event.target) && !yoloTrigger?.contains(event.target) && !goalTrigger?.contains(event.target)) close()
+      if (open() && !leaving() && event.target instanceof Node && !popover?.contains(event.target) && !yoloTrigger?.contains(event.target) && !goalTrigger?.contains(event.target)) close()
     }
     document.addEventListener("pointerdown", outside)
     window.addEventListener("resize", reposition)
@@ -93,9 +102,9 @@ export function ComposerStatus() {
       <Show when={visible()}><Show when={timed()}><DotTrail /></Show><span class="session-status__label">{stateText()}</span><span class="session-status__mobile" aria-hidden="true">{elapsed() || (/awaiting input/i.test(label()) ? "Wait" : stateText().split(" · ")[0])}</span></Show>
     </span>
     <Show when={view()?.autonomy}>
-    <button ref={yoloTrigger} type="button" class="session-status__yolo-trigger" aria-label="Autonomy level" aria-haspopup="dialog" aria-expanded={open() === "yolo"} onClick={() => toggle("yolo")}><span class="session-status__yolo-full">{yolo() ? `YOLO ${yolo()}` : "Standard"}</span><span class="session-status__yolo-compact" aria-hidden="true">Y{yolo()}</span></button>
-    <button ref={goalTrigger} type="button" class="session-status__goal-trigger" classList={{ "session-status__goal-trigger--active": goalActive() }} aria-label={goalActive() ? "Goal active" : "Goal off"} aria-haspopup="dialog" aria-expanded={open() === "goal"} onClick={() => toggle("goal")}>Goal <span class="session-status__goal-count" classList={{ "session-status__goal-count--inactive": !goalActive() }} aria-hidden="true">{goalActive() ? goal()?.iteration : 0}</span></button>
-    <Show when={open()}><div ref={popover} class="session-status__popover" classList={{ "session-status__yolo-popover": open() === "yolo", "session-status__goal-popover": open() === "goal" }} role="dialog" aria-label={open() === "yolo" ? "Autonomy level" : "Goal details"} style={{ left: `${position().left}px`, top: `${position().top}px`, width: `${position().width}px` }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); close(true) } }}>
+    <button ref={yoloTrigger} type="button" class="session-status__yolo-trigger" aria-label="Autonomy level" aria-haspopup="dialog" aria-expanded={open() === "yolo" && !leaving()} onClick={() => toggle("yolo")}><span class="session-status__yolo-full">{yolo() ? `YOLO ${yolo()}` : "Standard"}</span><span class="session-status__yolo-compact" aria-hidden="true">Y{yolo()}</span></button>
+    <button ref={goalTrigger} type="button" class="session-status__goal-trigger" classList={{ "session-status__goal-trigger--active": goalActive() }} aria-label={goalActive() ? "Goal active" : "Goal off"} aria-haspopup="dialog" aria-expanded={open() === "goal" && !leaving()} onClick={() => toggle("goal")}>Goal <span class="session-status__goal-count" classList={{ "session-status__goal-count--inactive": !goalActive() }} aria-hidden="true">{goalActive() ? goal()?.iteration : 0}</span></button>
+    <Show when={open()}><div ref={popover} class="session-status__popover" classList={{ "session-status__yolo-popover": open() === "yolo", "session-status__goal-popover": open() === "goal", "session-status__popover--leaving": leaving() }} role="dialog" aria-label={open() === "yolo" ? "Autonomy level" : "Goal details"} aria-hidden={leaving() ? "true" : undefined} inert={leaving()} style={{ left: `${position().left}px`, top: `${position().top}px`, width: `${position().width}px` }} onAnimationEnd={finish} onAnimationCancel={finish} onKeyDown={(event) => { if (event.key === "Escape" && !leaving()) { event.preventDefault(); close(true) } }}>
       <Show when={open() === "yolo"}><div role="radiogroup" aria-label="Autonomy level"><For each={levels}>{(option, index) => <button type="button" role="radio" aria-checked={yolo() === option.level} tabIndex={yolo() === option.level ? 0 : -1} onClick={() => void remote.store.setYolo(option.level)} onKeyDown={(event) => {
         const next = event.key === "ArrowRight" || event.key === "ArrowDown" ? (index() + 1) % levels.length : event.key === "ArrowLeft" || event.key === "ArrowUp" ? (index() - 1 + levels.length) % levels.length : event.key === "Home" ? 0 : event.key === "End" ? levels.length - 1 : undefined
         if (next === undefined) return
