@@ -8,7 +8,7 @@ import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { AppProcess } from "@ycoding-ai/core/process"
 import { randomBytes, randomUUID } from "node:crypto"
 import path from "node:path"
-import { Effect, FileSystem, Option, Redacted, Schedule, Schema } from "effect"
+import { Effect, FiberSet, FileSystem, Option, Redacted, Schedule, Schema } from "effect"
 import { HttpServer } from "effect/unstable/http"
 import { Env } from "./env"
 import { DatabaseRecovery } from "./services/database-recovery"
@@ -81,6 +81,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
       const instanceID = randomUUID()
       const global = yield* Global.Service
       const services = yield* Effect.context<FileSystem.FileSystem | Global.Service>()
+      const logRemoteDiagnostic = yield* FiberSet.makeRuntime()
       const server = yield* start(
         {
           client: process.env.YCODING_CLIENT ?? "cli",
@@ -138,6 +139,12 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
               if (url.hostname === "[::]") url.hostname = "[::1]"
               return Effect.runPromise(makeRemoteConnector({
                 endpoint: { url: url.toString(), auth: { type: "basic", username: "ycoding", password } },
+                onDiagnostic: (message) => {
+                  logRemoteDiagnostic(Effect.logWarning("remote connector diagnostic", {
+                    component: "remote-connector",
+                    detail: message,
+                  }))
+                },
               }).pipe(Effect.provide(services)))
             },
           })

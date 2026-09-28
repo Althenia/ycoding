@@ -59,8 +59,8 @@ export function createRemoteConnector(input: {
               bridge = undefined
               lock = undefined
             }
-          })().catch((error: unknown) => {
-            input.onDiagnostic?.(`Could not close terminal remote connection: ${error instanceof Error ? error.message : String(error)}`)
+          })().catch(() => {
+            input.onDiagnostic?.("Could not close terminal remote connection")
           })
         },
       })
@@ -70,8 +70,8 @@ export function createRemoteConnector(input: {
     })().catch(async (error: unknown) => {
       try {
         await bridge?.close()
-      } catch (closeError) {
-        input.onDiagnostic?.(`Could not close failed remote connection: ${closeError instanceof Error ? closeError.message : String(closeError)}`)
+      } catch {
+        input.onDiagnostic?.("Could not close failed remote connection")
       } finally {
         if (lock?.owned) await lock.release()
         bridge = undefined

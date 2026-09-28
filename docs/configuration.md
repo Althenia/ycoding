@@ -56,6 +56,8 @@ For source development on macOS, run `bun run build:computer-use` explicitly bef
 
 On POSIX systems, YCoding restricts its log directory to mode `0700` and the active YCoding log file to `0600`, whether that file is new or pre-existing. Startup repairs more-permissive modes without deleting or rewriting existing log content.
 
+The server-hosted remote connector writes warning-level diagnostics to the active YCoding log file in `$XDG_DATA_HOME/ycoding/log` with `component=remote-connector`. A relay-close entry records the close code and whether the connector reconnects; failure entries omit error details, so credentials, bearer tokens, and frame payloads never reach the log.
+
 When `$XDG_CONFIG_HOME` is `~/.config`, the global JSONC source is `~/.config/ycoding/ycoding.jsonc`. Compaction helper selection reads the merged runtime configuration from this normal discovery chain; it does not use a separate helper-only configuration file.
 
 ## Runtime configuration discovery and precedence

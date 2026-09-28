@@ -461,6 +461,9 @@ export class RemoteAgent {
 
   private onConnectionClosed(code: number | undefined) {
     if (this.state !== "live") return
+    const reconnect = code === undefined || !terminalCloseCodes.includes(code) ||
+      this.now() - this.lastAuthAttempt >= this.authRetryWindowMs
+    this.diagnostic(`relay connection closed (code ${code ?? "unreported"}); ${reconnect ? "reconnecting" : "not reconnecting"}`)
     this.subscriptions.clear()
     this.uploads.clear()
     this.abortRequests()
@@ -590,7 +593,5 @@ function isSessionInventoryEvent(event: unknown) {
 }
 
 function describe(error: unknown) {
-  if (error instanceof Error) return error.message
-  if (typeof error === "string") return error
-  return "unknown error"
+  return error instanceof Error || typeof error === "string" ? "operation failed" : "unknown error"
 }

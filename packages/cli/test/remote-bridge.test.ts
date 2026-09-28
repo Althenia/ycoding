@@ -443,6 +443,29 @@ describe("remote bridge", () => {
     await bridge.close()
   })
 
+  test("reports each relay close code and whether it will reconnect", async () => {
+    const test = harness({})
+    await test.bridge.connect()
+    try {
+      test.records[0].input.onClose(1012)
+      expect(test.diagnostics.filter((message) => message.includes("relay connection closed"))).toEqual([
+        "relay connection closed (code 1012); reconnecting",
+      ])
+    } finally { await test.bridge.close() }
+  })
+
+  test("diagnostics never include raw Error or string details from local failures", async () => {
+    for (const cause of [new Error("Bearer synthetic-token payload=private"), "Bearer synthetic-token payload=private"]) {
+      const test = harness({ results: { activeSessions: () => Promise.reject(cause) } })
+      await test.bridge.connect()
+      try {
+        await waitFor(() => test.diagnostics.find((message) => message.startsWith("could not read remote Session status")))
+        expect(test.diagnostics.join(" ")).not.toContain("synthetic-token")
+        expect(test.diagnostics.join(" ")).not.toContain("payload=private")
+      } finally { await test.bridge.close() }
+    }
+  })
+
   test("retries the inventory event stream with zero subscriptions and stops retrying after close", async () => {
     let created = false
     const { bridge, records, streams } = harness({ results: {
@@ -563,7 +586,7 @@ describe("remote bridge", () => {
 
   test("rotates the device credential once after an unauthorized close, then stops when the relay refuses it again", async () => {
     let credentials = 0
-    const { bridge, records, terminal } = harness({
+    const { bridge, records, diagnostics, terminal } = harness({
       credentials: async () => {
         credentials++
         return { accessToken: `token_${credentials}`, accessExpiresAt: 1_000_000 }
@@ -584,6 +607,10 @@ describe("remote bridge", () => {
     expect(records).toHaveLength(2)
     expect(bridge.currentState).toBe("terminal")
     expect(terminal).toHaveLength(1)
+    expect(diagnostics.filter((message) => message.includes("relay connection closed"))).toEqual([
+      `relay connection closed (code ${RemoteCloseCode.unauthorized}); reconnecting`,
+      `relay connection closed (code ${RemoteCloseCode.unauthorized}); not reconnecting`,
+    ])
 
     await bridge.close()
   })

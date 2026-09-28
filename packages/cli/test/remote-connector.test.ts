@@ -137,4 +137,31 @@ describe("shared remote connector", () => {
       await rm(directory, { recursive: true, force: true })
     }
   })
+
+  test("connector close diagnostics omit raw error details", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-remote-connector-"))
+    const diagnostics: string[] = []
+    let terminal: ((message: string) => void) | undefined
+    const connector = createRemoteConnector({
+      directory, notice: "Owner access", onDiagnostic: (message) => diagnostics.push(message),
+      makeBridge: (hooks) => {
+        terminal = hooks.onTerminal
+        return {
+          connect: async () => {},
+          close: async () => { throw new Error("Bearer synthetic-token payload=private") },
+        }
+      },
+    })
+    try {
+      await connector.start()
+      terminal?.("Relay rejected the device")
+      await connector.settled()
+      expect(diagnostics).toContain("Could not close terminal remote connection")
+      expect(diagnostics.join(" ")).not.toContain("synthetic-token")
+      expect(diagnostics.join(" ")).not.toContain("payload=private")
+    } finally {
+      await connector.stop().catch(() => undefined)
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
 })

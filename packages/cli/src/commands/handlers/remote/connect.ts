@@ -20,6 +20,7 @@ export function privateLocalServer(endpoint: Endpoint) {
 
 export const makeRemoteConnector = Effect.fn("cli.remote.connector")(function* (input: {
   endpoint: Endpoint
+  onDiagnostic?: (message: string) => void
 }) {
   const identity = yield* requireIdentity()
   const relayURL = yield* Effect.try(() => RemoteConfig.assertEnrolledRelay({
@@ -35,6 +36,7 @@ export const makeRemoteConnector = Effect.fn("cli.remote.connector")(function* (
   return createRemoteConnector({
     directory: global.data,
     notice,
+    onDiagnostic: input.onDiagnostic,
     makeBridge: (hooks) => new RemoteAgent({
       relayURL,
       local,
