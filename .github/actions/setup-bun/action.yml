@@ -1,5 +1,5 @@
 name: "Setup Bun"
-description: "Setup Bun with caching and install dependencies"
+description: "Setup Bun and install dependencies"
 inputs:
   install-flags:
     description: "Additional flags to pass to 'bun install'"
@@ -40,18 +40,6 @@ runs:
       shell: bash
       run: echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-install-cache" >> "$GITHUB_ENV"
 
-    - name: Get cache directory
-      id: cache
-      shell: bash
-      run: echo "dir=$(bun pm cache)" >> "$GITHUB_OUTPUT"
-
-    - name: Restore Bun dependencies
-      id: bun-cache
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: ${{ steps.cache.outputs.dir }}
-        key: ${{ runner.os }}-${{ runner.arch }}-bun-${{ hashFiles('bun.lock') }}
-
     - name: Install setuptools for distutils compatibility
       run: python3 -m pip install setuptools || pip install setuptools || true
       shell: bash
@@ -67,10 +55,3 @@ runs:
           bun install ${{ inputs.install-flags }}
         fi
       shell: bash
-
-    - name: Save Bun dependencies
-      if: steps.bun-cache.outputs.cache-hit != 'true' && github.event_name != 'pull_request' && github.event_name != 'pull_request_target' && !startsWith(github.ref, 'refs/tags/')
-      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: ${{ steps.cache.outputs.dir }}
-        key: ${{ steps.bun-cache.outputs.cache-primary-key }}
