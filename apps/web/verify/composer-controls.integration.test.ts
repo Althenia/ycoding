@@ -191,6 +191,39 @@ test("Conversation status controls change this Session's YOLO level and goal at 
   }
 }, 30_000)
 
+test("Goal is visibly off after completion and other terminal states while its control remains reachable", async () => {
+  for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width!, height!)
+      await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+      await wait(page, `document.querySelector('.mini-composer__mount .session-status__goal-trigger') !== null`)
+      await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; window.composerSetGoalStatus('active')`)
+      await Bun.sleep(600)
+      const measure = () => page.evaluate<{ name: string | null; color: string; background: string; yoloBackground: string; width: number; height: number; left: number }>(`(() => { const button=document.querySelector('.mini-composer__mount .session-status__goal-trigger'), yolo=document.querySelector('.mini-composer__mount .session-status__yolo-trigger'), style=getComputedStyle(button), rect=button.getBoundingClientRect(); return { name:button.getAttribute('aria-label'), color:style.color, background:style.backgroundColor, yoloBackground:getComputedStyle(yolo).backgroundColor, width:rect.width, height:rect.height, left:rect.left } })()`)
+      const active = await measure()
+      expect(active.name).toBe("Goal active")
+      expect(active.background).toBe(active.yoloBackground)
+      await Bun.write(new URL(`../../../.cache/tmp/composer-goal-active-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      for (const status of ["completed", "stopped", "exhausted", null] as const) {
+        await page.evaluate(`window.composerSetGoalStatus(${JSON.stringify(status)})`)
+        const off = await measure()
+        expect(off.name).toBe("Goal off")
+        expect(off.background).not.toBe(off.yoloBackground)
+        expect(off.color).not.toBe(active.color)
+        expect(Math.abs(off.width - active.width)).toBeLessThanOrEqual(1)
+        expect(Math.abs(off.height - active.height)).toBeLessThanOrEqual(1)
+        expect(Math.abs(off.left - active.left)).toBeLessThanOrEqual(1)
+        if (status !== "completed") continue
+        await Bun.write(new URL(`../../../.cache/tmp/composer-goal-off-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__goal-trigger')?.click()`)
+        expect(await page.evaluate<boolean>(`document.querySelector('.session-status__goal-popover input[aria-label="Goal"]') !== null`)).toBe(true)
+        await page.pressEscape()
+      }
+    } finally { await page.close() }
+  }
+}, 30_000)
+
 test("managed subagents keep a read-only context bar without autonomy actions", async () => {
   const page = await browser!.openPage()
   try {
@@ -304,6 +337,106 @@ test("model effort supports keyboard and pointer changes and reset to the catalo
   } finally { await page.close() }
 }, 30_000)
 
+test("lightning toggles paired fast models, preserves available effort, and keeps unsupported models selectable", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    await wait(page, `document.querySelector('.mini-composer__mount button[aria-label="Model"]:not([disabled])') !== null`)
+    await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.click()`)
+    await wait(page, `document.querySelector('button[aria-label="Fast model"]') !== null`)
+    const lightningOffset = await page.evaluate<number>(`document.querySelector('button[aria-label="Fast model"]').getBoundingClientRect().left - document.querySelector('.model-control__surface').getBoundingClientRect().left`)
+    expect(await page.evaluate<string>(`document.querySelector('button[aria-label="Fast model"]')?.getAttribute('aria-pressed')`)).toBe("false")
+    await page.evaluate(`document.querySelector('button[aria-label="Fast model"]')?.click()`)
+    expect(await page.evaluate<string>(`document.querySelector('button[aria-label="Fast model"]')?.getAttribute('aria-pressed')`)).toBe("true")
+    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("high")
+    expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.textContent`)).toContain("GPT-6 Sol")
+    await Bun.write(new URL("../../../.cache/tmp/composer-fast-desktop.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+    expect(await page.evaluate<number>(`window.composerRequests().length`)).toBe(0)
+    await type(page, ".mini-composer__mount textarea", "Use fast model")
+    await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Send prompt"]')?.click()`)
+    expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)?.input`)).toMatchObject({ model: { id: "gpt-6-sol-fast", variant: "high" } })
+    await page.evaluate(`document.querySelector('button[aria-label="Fast model"]')?.click()`)
+    expect(await page.evaluate<string>(`document.querySelector('button[aria-label="Fast model"]')?.getAttribute('aria-pressed')`)).toBe("false")
+    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("high")
+    await page.evaluate(`document.querySelector('button[aria-label="Fast model"]')?.click()`)
+    await page.evaluate(`document.querySelector('.model-control__switch')?.click()`)
+    await wait(page, `document.querySelector('.model-control__model') !== null`)
+    expect(await page.evaluate<string>(`[...document.querySelectorAll('.model-control__model')].find(item => item.textContent.includes('GPT-6 Sol') && !item.textContent.includes('Fast'))?.getAttribute('aria-selected')`)).toBe("true")
+    expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__model')].map(item => item.textContent.trim())`)).toEqual(expect.arrayContaining(["GLM Fast Latestglm-fast-latest", "Quant FP8 Fastquant-fp8-fast"]))
+    expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.model-control__model')].some(item => item.textContent.includes('gpt-6-sol-fast') || item.textContent.includes('claude-opus-5-5-fast'))`)).toBe(false)
+    await page.evaluate(`[...document.querySelectorAll('.model-control__model')].find(item => item.textContent.includes('Claude Opus 5.5'))?.click()`)
+    expect(await page.evaluate<string>(`document.querySelector('button[aria-label="Fast model"]')?.getAttribute('aria-pressed')`)).toBe("true")
+    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("high")
+    await type(page, ".mini-composer__mount textarea", "Use Claude fast")
+    await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Send prompt"]')?.click()`)
+    expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)?.input`)).toMatchObject({ model: { providerID: "anthropic", id: "claude-opus-5-5-fast", variant: "high" } })
+    await page.evaluate(`document.querySelector('.model-control__switch')?.click()`)
+    await page.evaluate(`[...document.querySelectorAll('.model-control__model')].find(item => item.textContent.includes('GPT-6 Lite'))?.click()`)
+    await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.click()`)
+    const unavailable = await page.evaluate<{ shown: boolean; reason: string | null; rect: number; offset: number }>(`(() => { const button=document.querySelector('button[aria-label="Fast model"]'), surface=document.querySelector('.model-control__surface'); return { shown:!!button, reason:button?.getAttribute('aria-description') ?? null, rect:button?.getBoundingClientRect().width ?? 0, offset:button.getBoundingClientRect().left - surface.getBoundingClientRect().left } })()`)
+    expect(unavailable.shown).toBe(true)
+    expect(unavailable.reason).toContain("No paired fast model")
+    expect(unavailable.rect).toBe(44)
+    expect(unavailable.offset).toBe(lightningOffset)
+    await Bun.write(new URL("../../../.cache/tmp/composer-fast-unavailable.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+    await type(page, ".mini-composer__mount textarea", "Use Lite")
+    await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Send prompt"]')?.click()`)
+    expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)?.input`)).toMatchObject({ model: { providerID: "openai", id: "gpt-6-lite" } })
+    await page.evaluate(`document.querySelector('.model-control__switch')?.click()`)
+    await page.evaluate(`[...document.querySelectorAll('.model-control__model')].find(item => item.textContent.includes('Quant FP8 Fast'))?.click()`)
+    await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.click()`)
+    expect(await page.evaluate<string>(`document.querySelector('.model-control__switch span')?.textContent`)).toBe("Quant FP8 Fast")
+    expect(await page.evaluate<string>(`document.querySelector('button[aria-label="Fast model"]')?.getAttribute('aria-disabled')`)).toBe("true")
+  } finally { await page.close() }
+}, 30_000)
+
+test("a Session already using a paired fast model displays its base and an active lightning on phone", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(390, 844)
+    await page.setCoarsePointer(true)
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html?model=fast`)
+    await wait(page, `document.querySelector('.composer__mobile-trigger:not([disabled])') !== null`)
+    expect(await page.evaluate<string>(`document.querySelector('.composer__mobile-trigger')?.textContent`)).toBe("GSD · GPT-6 Sol · high")
+    await page.evaluate(`document.querySelector('.composer__mobile-trigger')?.click()`)
+    await wait(page, `document.querySelector('.composer__selection-sheet button[aria-label="Model"]') !== null`)
+    await page.evaluate(`document.querySelector('.composer__selection-sheet button[aria-label="Model"]')?.click()`)
+    await wait(page, `document.querySelector('button[aria-label="Fast model"]') !== null`)
+    const geometry = await page.evaluate<{ target: boolean; contained: boolean; overflow: boolean; label: string; pressed: string | null }>(`(() => { const button=document.querySelector('button[aria-label="Fast model"]'), surface=document.querySelector('.model-control__surface'), control=button.getBoundingClientRect(), box=surface.getBoundingClientRect(); return { target:control.width>=44 && control.height>=44, contained:control.left>=box.left && control.right<=box.right, overflow:document.documentElement.scrollWidth>innerWidth, label:document.querySelector('.model-control__switch span')?.textContent ?? '', pressed:button.getAttribute('aria-pressed') } })()`)
+    expect(geometry).toEqual({ target: true, contained: true, overflow: false, label: "GPT-6 Sol", pressed: "true" })
+    await Bun.write(new URL("../../../.cache/tmp/composer-fast-phone.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+    await page.evaluate(`document.querySelector('button[aria-label="Fast model"]')?.click()`)
+    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("high")
+    expect(await page.evaluate<string>(`document.querySelector('button[aria-label="Fast model"]')?.getAttribute('aria-pressed')`)).toBe("false")
+  } finally { await page.close() }
+}, 30_000)
+
+test("every effort level has a distinct gradient and AA hero text in both themes", async () => {
+  const variants = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "custom"]
+  for (const theme of ["light", "dark"]) {
+    const page = await browser!.openPage()
+    try {
+      await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html?model=spectrum`)
+      await page.setReducedMotion(true)
+      await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
+      await wait(page, `document.querySelector('.mini-composer__mount button[aria-label="Model"]:not([disabled])') !== null`)
+      await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.click()`)
+      await wait(page, `document.querySelector('[role="slider"]') !== null`)
+      await page.evaluate(`document.querySelector('[role="slider"]')?.focus()`)
+      await page.pressKey("Home", "Home", 36)
+      const views: { level: string; gradient: string; color: string; background: string }[] = []
+      for (const [index] of variants.entries()) {
+        if (index) await page.pressKey("ArrowRight", "ArrowRight", 39)
+        views.push(await page.evaluate(`(() => { const surface=document.querySelector('.model-control__surface'), hero=surface.querySelector('.model-control__switch strong'), fill=surface.querySelector('.model-control__fill'); return { level:surface.dataset.level, gradient:getComputedStyle(fill).backgroundImage, color:getComputedStyle(hero).color, background:getComputedStyle(surface).backgroundColor } })()`))
+      }
+      expect(views.map((view) => view.level)).toEqual([...variants.slice(0, -1), "fallback"])
+      expect(new Set(views.map((view) => view.gradient)).size).toBe(8)
+      expect(views.every((view) => view.gradient.startsWith("linear-gradient"))).toBe(true)
+      for (const [index, view] of views.entries()) expect(contrast(view.color, view.background), `${theme} ${variants[index]}`).toBeGreaterThanOrEqual(4.5)
+    } finally { await page.close() }
+  }
+}, 30_000)
+
 test("effort thumb follows drag before snapping, keeps keyboard semantics and suppresses motion when requested", async () => {
   const page = await browser!.openPage()
   try {
@@ -321,6 +454,7 @@ test("effort thumb follows drag before snapping, keeps keyboard semantics and su
     expect(dragging.committed).toBe("low")
     await page.evaluate(`(() => { const slider=document.querySelector('[role="slider"]'), r=slider.getBoundingClientRect(); slider.dispatchEvent(new PointerEvent('pointerup', { bubbles:true, pointerId:7, clientX:r.left+r.width*.72, clientY:r.top+15 })); })()`)
     expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("medium")
+    await Bun.sleep(300)
     const mediumColor = await page.evaluate<string>(`getComputedStyle(document.querySelector('.model-control__switch strong')).color`)
     await page.pressKey("ArrowLeft", "ArrowLeft", 37)
     expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("low")
@@ -378,7 +512,9 @@ test("model search supports Enter, Escape back, and models without effort varian
     await page.pressKey("Enter", "Enter", 13)
     expect(await page.evaluate<boolean>(`document.querySelector('.model-control__surface') === null`)).toBe(true)
     await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.click()`)
-    expect(await page.evaluate<boolean>(`document.querySelector('[role="slider"]') === null && document.querySelector('input[aria-label="Search models"]') !== null`)).toBe(true)
+    expect(await page.evaluate<boolean>(`document.querySelector('[role="slider"]') === null && document.querySelector('button[aria-label="Fast model"]')?.getAttribute('aria-disabled') === 'true'`)).toBe(true)
+    await page.evaluate(`document.querySelector('.model-control__switch')?.click()`)
+    expect(await page.evaluate<boolean>(`document.querySelector('input[aria-label="Search models"]') !== null`)).toBe(true)
   } finally { await page.close() }
 }, 30_000)
 
@@ -587,3 +723,14 @@ async function wait(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBro
   throw new Error(`Timed out: ${expression}`)
 }
 async function ready() { return fetch(`http://127.0.0.1:${port}/verify/composer-fixture.html`).then((response) => response.ok, () => false) }
+
+function contrast(foreground: string, background: string) {
+  const luminance = (color: string) => {
+    const channels = color.match(/[\d.]+/g)?.slice(0, 3).map(Number) ?? []
+    if (channels.length !== 3) throw new Error(`Unsupported color: ${color}`)
+    return channels.map((channel) => channel / 255).map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
+      .reduce((total, channel, index) => total + channel * [0.2126, 0.7152, 0.0722][index]!, 0)
+  }
+  const values = [luminance(foreground), luminance(background)].sort((a, b) => b - a)
+  return (values[0]! + 0.05) / (values[1]! + 0.05)
+}

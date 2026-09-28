@@ -1,6 +1,34 @@
 import { describe, expect, test } from "bun:test"
-import { optionsForTrigger, applyMention, reconcileMentions, submission, triggerAt, orderedVariants } from "./composer-logic"
-import type { CatalogView } from "../catalog"
+import { optionsForTrigger, applyMention, reconcileMentions, submission, triggerAt, orderedVariants, visibleModels, pairedFastModel, switchFastModel, effortLevel } from "./composer-logic"
+import type { CatalogView, ModelOption } from "../catalog"
+
+const models: ModelOption[] = [
+  { providerID: "openai", id: "gpt-6-sol", name: "GPT-6 Sol", variants: ["low", "medium", "high"], defaultVariant: "high" },
+  { providerID: "openai", id: "gpt-6-sol-fast", name: "GPT-6 Sol Fast", variants: ["low", "high"], defaultVariant: "low" },
+  { providerID: "anthropic", id: "claude-opus-5-5", name: "Claude Opus 5.5", variants: ["high", "max"], defaultVariant: "high" },
+  { providerID: "anthropic", id: "claude-opus-5-5-fast", name: "Claude Opus 5.5 Fast", variants: ["medium", "high"], defaultVariant: "medium" },
+  { providerID: "openai", id: "gpt-6-lite", name: "GPT-6 Lite", variants: [] },
+  { providerID: "zai", id: "glm-fast-latest", name: "GLM Fast Latest", variants: [] },
+  { providerID: "openai", id: "quant-fp8-fast", name: "Quant FP8 Fast", variants: [] },
+]
+
+test("paired fast models hide from the picker and switch model identity without changing an offered effort", () => {
+  expect(visibleModels(models).map((item) => item.id)).toEqual(["gpt-6-sol", "claude-opus-5-5", "gpt-6-lite", "glm-fast-latest", "quant-fp8-fast"])
+  const normal = { providerID: "openai", id: "gpt-6-sol", variant: "high" }
+  const fast = { providerID: "openai", id: "gpt-6-sol-fast", variant: "high" }
+  expect(pairedFastModel(models, normal)).toMatchObject({ base: models[0], fast: models[1], active: false })
+  expect(switchFastModel(models, normal)).toEqual(fast)
+  expect(pairedFastModel(models, fast)).toMatchObject({ base: models[0], fast: models[1], active: true })
+  expect(switchFastModel(models, fast)).toEqual(normal)
+  expect(switchFastModel(models, { ...normal, variant: "medium" })).toEqual({ providerID: "openai", id: "gpt-6-sol-fast", variant: "low" })
+  expect(switchFastModel(models, { providerID: "anthropic", id: "claude-opus-5-5-fast", variant: "medium" })).toEqual({ providerID: "anthropic", id: "claude-opus-5-5", variant: "high" })
+  expect(pairedFastModel(models, { providerID: "zai", id: "glm-fast-latest" })).toBeUndefined()
+  expect(switchFastModel(models, { providerID: "openai", id: "gpt-6-lite" })).toBeUndefined()
+})
+
+test("effort levels map known variants exactly and unknown variants to one deterministic fallback", () => {
+  expect(["none", "minimal", "low", "medium", "high", "xhigh", "max", "CUSTOM"].map(effortLevel)).toEqual(["none", "minimal", "low", "medium", "high", "xhigh", "max", "fallback"])
+})
 
 const catalog: CatalogView = {
   status: "ready", agents: [

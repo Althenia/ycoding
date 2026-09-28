@@ -39,6 +39,7 @@ export function ComposerStatus() {
   const elapsed = () => current()?.executionStarted === undefined ? "" : `${Math.floor(Math.max(0, now() - current()!.executionStarted!) / 60_000)}:${String(Math.floor(Math.max(0, now() - current()!.executionStarted!) / 1000) % 60).padStart(2, "0")}`
   const visible = () => current()?.status === "running" || current()?.status === "failed"
   const goal = () => view()?.autonomy?.goal
+  const goalActive = () => goal()?.status === "active"
   const yolo = () => view()?.autonomy?.yolo ?? 0
   const close = (focus = false) => {
     const trigger = open() === "yolo" ? yoloTrigger : goalTrigger
@@ -93,7 +94,7 @@ export function ComposerStatus() {
     </span>
     <Show when={view()?.autonomy}>
     <button ref={yoloTrigger} type="button" class="session-status__yolo-trigger" aria-label="Autonomy level" aria-haspopup="dialog" aria-expanded={open() === "yolo"} onClick={() => toggle("yolo")}><span class="session-status__yolo-full">{yolo() ? `YOLO ${yolo()}` : "Standard"}</span><span class="session-status__yolo-compact" aria-hidden="true">Y{yolo()}</span></button>
-    <button ref={goalTrigger} type="button" class="session-status__goal-trigger" aria-haspopup="dialog" aria-expanded={open() === "goal"} onClick={() => toggle("goal")}>Goal <Show when={goal()?.status === "active"}><span class="session-status__goal-count">{goal()?.iteration}</span></Show></button>
+    <button ref={goalTrigger} type="button" class="session-status__goal-trigger" classList={{ "session-status__goal-trigger--active": goalActive() }} aria-label={goalActive() ? "Goal active" : "Goal off"} aria-haspopup="dialog" aria-expanded={open() === "goal"} onClick={() => toggle("goal")}>Goal <span class="session-status__goal-count" classList={{ "session-status__goal-count--inactive": !goalActive() }} aria-hidden="true">{goalActive() ? goal()?.iteration : 0}</span></button>
     <Show when={open()}><div ref={popover} class="session-status__popover" classList={{ "session-status__yolo-popover": open() === "yolo", "session-status__goal-popover": open() === "goal" }} role="dialog" aria-label={open() === "yolo" ? "Autonomy level" : "Goal details"} style={{ left: `${position().left}px`, top: `${position().top}px`, width: `${position().width}px` }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); close(true) } }}>
       <Show when={open() === "yolo"}><div role="radiogroup" aria-label="Autonomy level"><For each={levels}>{(option, index) => <button type="button" role="radio" aria-checked={yolo() === option.level} tabIndex={yolo() === option.level ? 0 : -1} onClick={() => void remote.store.setYolo(option.level)} onKeyDown={(event) => {
         const next = event.key === "ArrowRight" || event.key === "ArrowDown" ? (index() + 1) % levels.length : event.key === "ArrowLeft" || event.key === "ArrowUp" ? (index() - 1 + levels.length) % levels.length : event.key === "Home" ? 0 : event.key === "End" ? levels.length - 1 : undefined

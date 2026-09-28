@@ -20,9 +20,14 @@ const catalog: CatalogView = {
   ],
   models: [
     { providerID: "anthropic", providerName: "Anthropic", id: "claude-opus-5-5", name: "Claude Opus 5.5", variants: ["high", "max"], defaultVariant: "high" },
+    { providerID: "anthropic", providerName: "Anthropic", id: "claude-opus-5-5-fast", name: "Claude Opus 5.5 Fast", variants: ["medium", "high"], defaultVariant: "medium" },
     { providerID: "openai", providerName: "OpenAI", id: "gpt-6-sol", name: "GPT-6 Sol", variants: ["low", "medium", "high"], defaultVariant: "high" },
+    { providerID: "openai", providerName: "OpenAI", id: "gpt-6-sol-fast", name: "GPT-6 Sol Fast", variants: ["low", "high"], defaultVariant: "low" },
     { providerID: "anthropic", providerName: "Anthropic", id: "claude-haiku-5-5", name: "Claude Haiku 5.5", variants: ["low", "high"], defaultVariant: "high" },
     { providerID: "openai", providerName: "OpenAI", id: "gpt-6-lite", name: "GPT-6 Lite", variants: [] },
+    { providerID: "openai", providerName: "OpenAI", id: "glm-fast-latest", name: "GLM Fast Latest", variants: [] },
+    { providerID: "openai", providerName: "OpenAI", id: "quant-fp8-fast", name: "Quant FP8 Fast", variants: [] },
+    { providerID: "openai", providerName: "OpenAI", id: "effort-spectrum", name: "Effort Spectrum", variants: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "custom"], defaultVariant: "medium" },
   ],
   commands: [{ name: "plan", description: "Plan work" }],
   skills: [{ id: "frontend-workflow", name: "Frontend workflow", slash: true }, { id: "audit", name: "Audit", slash: false }, ...Array.from({ length: 63 }, (_, index) => ({ id: `skill-${String(index).padStart(2, "0")}`, name: `Skill ${index}`, slash: false }))],
@@ -34,7 +39,7 @@ const workspace = { id: "work_one", projectID: "project_hash", directory: "/work
 const other = { id: "work_two", projectID: "other_hash", directory: "/workspace/other", name: "Other repository" }
 const [state, setState] = createSignal<RemoteStoreState>({
   connection: { kind: "connected", deviceName: "Fixture" }, transport: { kind: "open" }, workspaceStatus: "ready", workspaces: [workspace, other],
-  selectedSessionInfo: { id: "ses_fixture", title: "Fixture", agent: "gsd", model: { providerID: "openai", id: "gpt-6-sol", variant: "high" }, updatedAt: 1, archived: false },
+  selectedSessionInfo: { id: "ses_fixture", title: "Fixture", agent: "gsd", model: new URLSearchParams(location.search).get("model") === "spectrum" ? { providerID: "openai", id: "effort-spectrum", variant: "medium" } : { providerID: "openai", id: new URLSearchParams(location.search).get("model") === "fast" ? "gpt-6-sol-fast" : "gpt-6-sol", variant: "high" }, updatedAt: 1, archived: false },
   activeSessionID: "ses_fixture", drafts: {}, mutations: [], catalogs: { [catalogKey({ sessionID: "ses_fixture" })]: catalog, [catalogKey({ workspaceID: "work_one" })]: catalog, [catalogKey({ workspaceID: "work_two" })]: catalog },
   view: { ...createSessionView("ses_fixture"), autonomy: { mode: "normal", yolo: 0 } },
   devices: [], advertised: [], sessions: [], sessionGroups: [], sessionQuery: "", sessionFilter: "all", sessionListStatus: "ready", sessionPageLoading: false, sessionHasNext: false, sessionHasPrevious: false,
@@ -75,6 +80,7 @@ Object.assign(window, { composerRequests: () => requests, composerState: () => s
 Object.assign(window, { composerSwitchSession: () => update({ ...state(), activeSessionID: "ses_other", view: createSessionView("ses_other") }) })
 Object.assign(window, { composerClearAutonomy: () => update({ ...state(), view: { ...state().view!, autonomy: undefined } }) })
 Object.assign(window, { composerSetWorkspaceLoading: (loading: boolean) => update({ ...state(), workspaceStatus: loading ? "loading" : "ready" }) })
+Object.assign(window, { composerSetGoalStatus: (status: "active" | "completed" | "stopped" | "exhausted" | null) => update({ ...state(), view: { ...state().view!, autonomy: { mode: status === "active" ? "goal" : "normal", yolo: 3, ...(status ? { goal: { text: "Finish task", status, iteration: 2, noProgress: 0, maxNoProgress: 3 } } : {}) } } }) })
 
 function Fixture() {
   const [created, setCreated] = createSignal("")

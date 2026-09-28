@@ -5,7 +5,7 @@ import { catalogKey, type CatalogTarget, type CatalogView, type FileOption } fro
 import { useRemote } from "../context"
 import { defaultComposerModel, readPreferredModel, writePreferredModel } from "../preferences"
 import type { ModelRefView } from "../projection"
-import { applyMention, optionsForTrigger, reconcileMentions, submission, triggerAt, type MentionPart } from "./composer-logic"
+import { applyMention, optionsForTrigger, pairedFastModel, reconcileMentions, submission, triggerAt, type MentionPart } from "./composer-logic"
 import { ComposerPicker } from "./composer-picker"
 import { attachmentLimit, encodeAttachment, type ComposerAttachment } from "./composer-attachment"
 import { ModelControl } from "./model-control"
@@ -58,7 +58,7 @@ export function MiniComposer(props: {
   const primaryAgents = () => (catalog()?.agents ?? []).filter((item) => item.mode !== "subagent" && !item.hidden)
   const agentPending = () => !!current() && selectedAgent() !== current()?.agent
   const modelPending = () => !!current() && !!selectedModel() && (selectedModel()?.providerID !== current()?.model?.providerID || selectedModel()?.id !== current()?.model?.id || selectedModel()?.variant !== current()?.model?.variant)
-  const mobileLabel = () => `${primaryAgents().find((item) => item.id === selectedAgent())?.name ?? selectedAgent() ?? "Default agent"} · ${catalog()?.models.find((item) => item.providerID === selectedModel()?.providerID && item.id === selectedModel()?.id)?.name ?? selectedModel()?.id ?? "Model"}${selectedModel()?.variant ? ` · ${selectedModel()?.variant}` : ""}`
+  const mobileLabel = () => `${primaryAgents().find((item) => item.id === selectedAgent())?.name ?? selectedAgent() ?? "Default agent"} · ${pairedFastModel(catalog()?.models ?? [], selectedModel())?.base.name ?? catalog()?.models.find((item) => item.providerID === selectedModel()?.providerID && item.id === selectedModel()?.id)?.name ?? selectedModel()?.id ?? "Model"}${selectedModel()?.variant ? ` · ${selectedModel()?.variant}` : ""}`
   const trigger = createMemo(() => closed() ? undefined : triggerAt(props.text, cursor()))
   const options = () => trigger() ? optionsForTrigger(trigger()!.trigger, trigger()!.query, catalog(), fileResult()) : []
   createEffect(() => {

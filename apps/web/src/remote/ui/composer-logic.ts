@@ -1,4 +1,4 @@
-import { type AgentAttachmentInput, type CatalogView, type FileAttachmentInput, type FileOption } from "../catalog"
+import { type AgentAttachmentInput, type CatalogView, type FileAttachmentInput, type FileOption, type ModelOption } from "../catalog"
 import type { ModelRefView } from "../projection"
 
 export type Trigger = "/" | "@" | "$" | "#"
@@ -15,6 +15,31 @@ export function orderedVariants(variants: readonly string[]): string[] {
     const right = intensity.indexOf(b.toLowerCase())
     return (left < 0 ? intensity.length : left) - (right < 0 ? intensity.length : right)
   })
+}
+
+export function visibleModels(models: readonly ModelOption[]): ModelOption[] {
+  return models.filter((item) => !item.id.endsWith("-fast") || !models.some((base) => base.providerID === item.providerID && base.id === item.id.slice(0, -5)))
+}
+
+export function pairedFastModel(models: readonly ModelOption[], selected: ModelRefView | undefined) {
+  const current = models.find((item) => item.providerID === selected?.providerID && item.id === selected.id)
+  if (!current) return undefined
+  const base = current.id.endsWith("-fast") ? models.find((item) => item.providerID === current.providerID && item.id === current.id.slice(0, -5)) : current
+  const fast = base && models.find((item) => item.providerID === base.providerID && item.id === `${base.id}-fast`)
+  return base && fast ? { base, fast, active: current.id === fast.id } : undefined
+}
+
+export function switchFastModel(models: readonly ModelOption[], selected: ModelRefView | undefined): ModelRefView | undefined {
+  const pair = pairedFastModel(models, selected)
+  if (!pair) return undefined
+  const target = pair.active ? pair.base : pair.fast
+  const variant = selected?.variant && target.variants.includes(selected.variant) ? selected.variant : target.defaultVariant
+  return { providerID: target.providerID, id: target.id, ...(variant ? { variant } : {}) }
+}
+
+export function effortLevel(variant: string | undefined) {
+  const level = variant?.toLowerCase()
+  return level === "none" || level === "minimal" || level === "low" || level === "medium" || level === "high" || level === "xhigh" || level === "max" ? level : "fallback"
 }
 
 export function triggerAt(text: string, cursor: number): { trigger: Trigger; start: number; query: string } | undefined {
