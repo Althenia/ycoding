@@ -22,6 +22,22 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.7.11",
+    date: "2026-09-28",
+    title: "Speed and context in the remote composer, visible image attachments, and steadier remote views",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "See the latest generation speed and a context-window ring beside the model in the remote composer, with a context bar in the phone model picker, and see generation speed in the TUI sidebar." },
+      { tag: "Added", text: "See compactions as dividers with Session-wide totals in remote Conversation, and switch a model to its fast counterpart with the lightning toggle." },
+      { tag: "Changed", text: "Keep the remote workspace mounted while you move between views, start Conversation history at the latest completed compaction like the TUI, and leave New session without a close button." },
+      { tag: "Changed", text: "Animate pickers, sheets, dialogs, the notification center, and composer panels in and out, hide the Sessions sidebar at tablet widths, and give each effort level its own color." },
+      { tag: "Fixed", text: "Show attached images as thumbnails instead of a tiny mark, attach large images from an iPhone, and offer Retry for an image that has not loaded after two minutes." },
+      { tag: "Fixed", text: "Name the Session in each in-app notice, keep Team and Office subagents shown during refreshes, and keep Session rows, the carousel, and the todo panel steady while they update." },
+      { tag: "Fixed", text: "Show desktop alerts before the service worker is ready, load Usage after switching machines, stop the notification center from flickering, and pad the installed app and Home Screen icon." },
+      { tag: "Fixed", text: "Send TUI notifications before the terminal reports focus, clear the composer after /goal, label only cancelled tool calls as cancelled, and read local skill files through the skill tool." },
+    ],
+  },
+  {
     version: "0.7.10",
     date: "2026-09-28",
     title: "Machine-wide remote connection, Running and recent Sessions, and local-time Usage",
