@@ -73,8 +73,7 @@ function validTimestamp(value: number | undefined) {
 }
 
 function isCancelledToolError(error: ToolLifecycleInput["error"]) {
-  if (!error) return false
-  return /abort|cancel|interrupt|kill/.test(`${error.type ?? ""} ${error.message ?? ""}`.toLowerCase())
+  return error?.type === "aborted"
 }
 
 export function ToolLifecycleStatus(props: { lifecycle: ToolLifecycleInput }) {

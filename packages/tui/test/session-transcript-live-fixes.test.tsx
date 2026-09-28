@@ -438,6 +438,35 @@ const lifecycleTranscript = [
         },
         time: { created: lifecycleStart, ran: lifecycleStart, completed: lifecycleEnd },
       },
+      {
+        type: "tool",
+        id: "call_skill_failed",
+        name: "skill",
+        state: {
+          status: "error",
+          input: { name: "gpt-subgent-routing" },
+          content: [],
+          structured: {},
+          error: {
+            type: "tool.execution",
+            message: "Skill gpt-subgent-routing is not served over MCP; read /Users/x/.config/ycoding/skills/…",
+          },
+        },
+        time: { created: lifecycleStart, ran: lifecycleStart, completed: lifecycleEnd },
+      },
+      ...["cancelled", "killed", "interrupted", "aborted"].map((word) => ({
+        type: "tool" as const,
+        id: `call_message_${word}`,
+        name: `project_${word}`,
+        state: {
+          status: "error" as const,
+          input: {},
+          content: [],
+          structured: {},
+          error: { type: "tool.execution", message: `Operation ${word}` },
+        },
+        time: { created: lifecycleStart, ran: lifecycleStart, completed: lifecycleEnd },
+      })),
     ],
     finish: "tool-calls",
     time: { created: lifecycleStart },
@@ -1130,6 +1159,9 @@ test("renders one durable lifecycle grammar for execute, exploration, shell, CLI
     expect(row("project_plan")).toContain("done · 2m14s")
     expect(row("project_publish")).toContain("failed · 2m14s")
     expect(row("project_cancel")).toContain("cancelled · 2m14s")
+    expect(row("skill")).toContain("failed · 2m14s")
+    for (const word of ["cancelled", "killed", "interrupted", "aborted"])
+      expect(row(`project_${word}`)).toContain("failed · 2m14s")
     expect(row("project_cancel").indexOf("!!")).toBe(3)
     expect(row("sleep 300")).toContain("cancelled · killed · 2m14s")
     const markerColor = (text: string) => {
