@@ -134,7 +134,7 @@ describe("remote navigation", () => {
       await page.setViewport(1440, 900)
       await page.evaluate(`[...document.querySelectorAll(".presentation-switch .filters__option")].find((option) => option.textContent.trim().startsWith("Office")).click()`)
       await until(page, `document.querySelector(".presentation-switch .filters__option--active")?.textContent.trim().startsWith("Office")`)
-      expect(await page.evaluate<boolean>(`document.querySelector(".composer") === null && document.querySelector(".workspace__main .conversation-pane") === null`)).toBe(true)
+      expect(await page.evaluate<boolean>(`(() => { const conversation=document.querySelector('.remote-conversation-view'); const composer=document.querySelector('.composer-resident'); return conversation?.inert === true && conversation?.getAttribute('aria-hidden') === 'true' && conversation.classList.contains('route-panel--exiting') && composer !== null && getComputedStyle(composer).display === 'none' })()`)).toBe(true)
       await page.evaluate(`[...document.querySelectorAll(".presentation-switch .filters__option")].find((option) => option.textContent.trim().startsWith("Conversation")).click()`)
       await until(page, `document.querySelector(".composer") !== null`)
     } finally {
@@ -247,6 +247,154 @@ describe("remote navigation", () => {
       await page.close()
     }
   }, 180_000)
+
+  test("remote routes retain the shell and resident Conversation through navigation", async () => {
+    for (const [width, height] of [[1440, 900], [390, 844]] as const) for (const theme of themes) {
+      const page = await requireBrowser().openPage()
+      try {
+        await page.setViewport(width, height)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}`)
+        await until(page, `document.querySelector('.conversation-pane .transcript-message') !== null && document.querySelector('.composer') !== null`)
+        await page.evaluate(`window.routeProbe = { app: document.querySelector('.app'), header: document.querySelector('.app-header'), main: document.querySelector('.workspace__main'), scroll: document.querySelector('.workspace__scroll'), message: document.querySelector('.conversation-pane .transcript-message'), composer: document.querySelector('.composer'), entrance: document.querySelector('.conversation-pane .transcript-message').getAnimations({subtree:true})[0] }`)
+        for (const route of ["/remote/activity", "/remote/usage", "/remote/settings", "/remote"]) {
+          await page.evaluate(`[...document.querySelectorAll('a[href="${route}"]')].find(link => link.getBoundingClientRect().width > 0)?.click()`)
+          await until(page, `location.pathname === '${route}'`)
+          expect(await page.evaluate<boolean>(`(() => { const p=window.routeProbe; return p.app===document.querySelector('.app') && p.header===document.querySelector('.app-header') && p.main===document.querySelector('.workspace__main') && p.scroll===document.querySelector('.workspace__scroll') && p.message===document.querySelector('.conversation-pane .transcript-message') && p.composer===document.querySelector('.composer') })()`)).toBe(true)
+        }
+        expect(await page.evaluate<boolean>(`window.routeProbe.entrance === window.routeProbe.message.getAnimations({subtree:true})[0]`)).toBe(true)
+        expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+      } finally { await page.close() }
+    }
+  }, 60_000)
+
+  test("route swaps make the outgoing view inert and animate only when motion is allowed", async () => {
+    const page = await requireBrowser().openPage()
+    try {
+      for (const [width, height] of [[1440, 900], [390, 844]] as const) for (const theme of themes) for (const reduced of [false, true]) {
+        await page.setViewport(width, height)
+        await page.setReducedMotion(reduced)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}`)
+        await until(page, `document.querySelector('.conversation-pane .transcript-message') !== null`)
+        const transition = await page.evaluate<{ readonly exiting: boolean; readonly entering: boolean; readonly duration: string; readonly hidden: boolean; readonly oldVisibility: string; readonly frames: readonly number[] }>(`new Promise(resolve => { [...document.querySelectorAll('a[href="/remote/activity"]')].find(link => link.getBoundingClientRect().width > 0)?.click(); queueMicrotask(() => { const old=document.querySelector('.route-panel--exiting'); const next=document.querySelector('.route-panel--active, .route-panel--entering'); const report={exiting:old?.inert === true && old?.getAttribute('aria-hidden') === 'true', entering:next !== null, duration:next ? getComputedStyle(next).transitionDuration : '', hidden:old?.contains(document.activeElement) ?? false, oldVisibility:old ? getComputedStyle(old).contentVisibility : ''}; const frames=[]; const sample=() => { frames.push(Number(getComputedStyle(document.querySelector('.route-panel--active, .route-panel--entering')).opacity)); if(frames.length === 5) resolve({...report,frames}); else requestAnimationFrame(sample) }; requestAnimationFrame(sample) }) })`)
+        expect(await page.evaluate<string>(`location.pathname`)).toBe("/remote/activity")
+        expect(transition.exiting).toBe(true)
+        expect(transition.entering).toBe(true)
+        expect(transition.hidden).toBe(false)
+        expect(transition.duration.split(",").every((duration) => duration.trim() === (reduced ? "0s" : "0.22s"))).toBe(true)
+        expect(transition.oldVisibility).toBe(reduced ? "hidden" : "visible")
+        if (reduced) expect(transition.frames.every((opacity) => opacity === 1)).toBe(true)
+        else expect(new Set(transition.frames).size).toBeGreaterThan(1)
+        await until(page, `document.querySelector('.route-panel--exiting') === null`)
+        expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+      }
+    } finally { await page.close() }
+  }, 90_000)
+
+  test("Team closes semantically at once, returns focus, then settles its exit", async () => {
+    const page = await requireBrowser().openPage()
+    try {
+      for (const [width, height] of [[1440, 900]] as const) for (const theme of themes) for (const reduced of [false, true]) {
+        await page.setViewport(width, height)
+        await page.setReducedMotion(reduced)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}&team=two`)
+        await until(page, `document.querySelector('[aria-label="Open Team"]') !== null && document.querySelector('.conversation-pane') !== null`)
+        const entrance = await page.evaluate<{ readonly duration: string; readonly frames: readonly number[] }>(`new Promise(resolve => { document.querySelector('[aria-label="Open Team"]').click(); queueMicrotask(() => { const panel=document.querySelector('.team-control__panel'); const duration=panel ? getComputedStyle(panel).transitionDuration : ''; const frames=[]; const sample=() => { frames.push(Number(getComputedStyle(panel).opacity)); if(frames.length===5) resolve({duration,frames}); else requestAnimationFrame(sample) }; requestAnimationFrame(sample) }) })`)
+        expect(entrance.duration.split(",").every((duration) => duration.trim() === (reduced ? "0s" : "0.22s"))).toBe(true)
+        if (reduced) expect(entrance.frames.every((opacity) => opacity === 1)).toBe(true)
+        else expect(new Set(entrance.frames).size).toBeGreaterThan(1)
+        await until(page, `document.querySelector('.team-view__header [aria-label="Close Team"]') !== null`)
+        await page.evaluate(`document.querySelector('.team-view__header [aria-label="Close Team"]').click()`)
+        const exit = await page.evaluate<{ readonly inert: boolean; readonly hidden: boolean; readonly focused: boolean; readonly duration: string; readonly contentVisibility: string }>(`(() => { const layer=document.querySelector('.team-control--exiting'); return {inert:layer?.inert === true, hidden:layer?.getAttribute('aria-hidden') === 'true', focused:document.activeElement === document.querySelector('[aria-label="Open Team"]'), duration:layer ? getComputedStyle(layer).transitionDuration : '', contentVisibility:layer ? getComputedStyle(layer).contentVisibility : ''} })()`)
+        expect(exit.inert && exit.hidden && exit.focused).toBe(true)
+        expect(exit.duration.split(",").every((duration) => duration.trim() === (reduced ? "0s" : "0.22s"))).toBe(true)
+        expect(exit.contentVisibility).toBe(reduced ? "hidden" : "visible")
+        await until(page, `document.querySelector('.team-control--exiting') === null`)
+      }
+    } finally { await page.close() }
+  }, 90_000)
+
+  test("new-session swap keeps the selected draft through route navigation", async () => {
+    const page = await requireBrowser().openPage()
+    try {
+      for (const [width, height] of [[1440, 900], [390, 844]] as const) for (const theme of themes) {
+        await page.setViewport(width, height)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}`)
+        await until(page, `document.querySelector('.mini-composer__mount textarea') !== null`)
+        await page.evaluate(`(() => { const draft=document.querySelector('.mini-composer__mount textarea'); draft.value='Keep this draft'; draft.dispatchEvent(new Event('input',{bubbles:true})); window.draftProbe=draft })()`)
+        if (width < 768) {
+          await page.evaluate(`document.querySelector('[aria-label="Open sessions"]')?.click()`)
+          await until(page, `document.querySelector('.overlay--sessions-sheet .new-session__trigger') !== null`)
+        }
+        await page.evaluate(`([...document.querySelectorAll('.new-session__trigger')].find(button => button.getBoundingClientRect().width > 0))?.click()`)
+        await until(page, `document.querySelector('.new-session-composer') !== null`)
+        expect(await page.evaluate<boolean>(`(() => { const old=document.querySelector('.remote-conversation-view'); const composer=document.querySelector('.composer-resident'); return old?.inert===true && old?.getAttribute('aria-hidden')==='true' && getComputedStyle(composer).display==='none' && window.draftProbe===document.querySelector('.mini-composer__mount textarea') && window.draftProbe.value==='Keep this draft' })()`)).toBe(true)
+        await page.evaluate(`document.querySelector('${width >= 768 ? ".remote-nav__link" : ".bottom-nav__item"}[href="/remote/sessions"]')?.click()`)
+        await until(page, `location.pathname === '/remote/sessions'`)
+        expect(await page.evaluate<boolean>(`(() => { const old=[...document.querySelectorAll('.route-panel--exiting')].find(panel=>panel.querySelector('.new-session-composer')); return old?.inert===true && old?.getAttribute('aria-hidden')==='true' && window.draftProbe===document.querySelector('.mini-composer__mount textarea') && window.draftProbe.value==='Keep this draft' })()`)).toBe(true)
+        await page.evaluate(`document.querySelector('${width >= 768 ? ".remote-nav__link" : ".bottom-nav__item"}[href="/remote"]')?.click()`)
+        await until(page, `location.pathname === '/remote' && document.querySelector('.remote-conversation-view:not([inert])') !== null && document.querySelector('.mini-composer__mount textarea')?.value === 'Keep this draft'`)
+      }
+    } finally { await page.close() }
+  }, 90_000)
+
+  test("known selected Sessions keep shell tracks while the first transcript settles", async () => {
+    for (const [width, height] of [[1440, 900], [390, 844]] as const) for (const theme of themes) {
+      const page = await requireBrowser().openPage()
+      try {
+        await page.setViewport(width, height)
+        await page.injectOnNewDocument(`window.shellHandoff=[]; document.addEventListener('DOMContentLoaded', () => { const seen=new Set(); new MutationObserver(() => { const app=document.querySelector('.app--selected'); if(!app) return; const stage=document.querySelector('.transcript-message') ? 'ready' : document.querySelector('.workspace__scroll .loading-placeholder--screen') ? 'loading' : 'unready'; if(seen.has(stage)) return; seen.add(stage); const main=document.querySelector('.workspace__main')?.getBoundingClientRect(); const rail=document.querySelector('.workspace__rail')?.getBoundingClientRect(); const controls=[...document.querySelectorAll('.workspace__topbar button:not([disabled]), .mini-composer__mount button:not([disabled])')].some(button=>button.getBoundingClientRect().width>0 && !button.closest('[inert]') && getComputedStyle(button).display!=='none'); window.shellHandoff.push({stage,mainLeft:main?.left,mainWidth:main?.width,railWidth:rail?.width ?? 0,placeholderHeight:document.querySelector('.workspace__scroll .loading-placeholder--screen')?.getBoundingClientRect().height ?? 0,controls}) }).observe(document.body,{subtree:true,childList:true,attributes:true}) })`)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}&inventoryCount=80&sessionListDelay=1800`)
+        await until(page, `window.shellHandoff?.some(item => item.stage === 'ready')`)
+        const stages = await page.evaluate<readonly { readonly stage: string; readonly mainLeft: number; readonly mainWidth: number; readonly railWidth: number; readonly placeholderHeight: number; readonly controls: boolean }[]>(`window.shellHandoff`)
+        const loading = stages.find((item) => item.stage === "loading")
+        const ready = stages.find((item) => item.stage === "ready")
+        expect(loading?.placeholderHeight).toBeGreaterThan(0)
+        expect(loading?.controls).toBe(false)
+        expect(Math.abs((loading?.mainLeft ?? 0) - (ready?.mainLeft ?? 0))).toBeLessThanOrEqual(1)
+        expect(Math.abs((loading?.mainWidth ?? 0) - (ready?.mainWidth ?? 0))).toBeLessThanOrEqual(1)
+        if (width >= 768) expect(Math.abs((loading?.railWidth ?? 0) - (ready?.railWidth ?? 0))).toBeLessThanOrEqual(1)
+      } finally { await page.close() }
+    }
+  }, 90_000)
+
+  test("managed child view keeps the parent draft resident and restores it on return", async () => {
+    const page = await requireBrowser().openPage()
+    try {
+      for (const [width, height] of [[1440, 900], [390, 844]] as const) for (const theme of themes) for (const reduced of [false, true]) {
+        await page.setViewport(width, height)
+        await page.setReducedMotion(reduced)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&theme=${theme}`)
+        await until(page, `document.querySelector('.mini-composer__mount textarea') !== null && document.querySelector('[aria-label="Open Team"]') !== null`)
+        await page.evaluate(`(() => { const draft=document.querySelector('.mini-composer__mount textarea'); draft.value='Parent draft remains'; draft.dispatchEvent(new Event('input',{bubbles:true})); window.parentDraft=draft; document.querySelector('[aria-label="Open Team"]').click() })()`)
+        await until(page, `document.querySelector('.team-view__task[data-session-id="ses_child"] [data-action="open"]') !== null`)
+        await page.evaluate(`document.querySelector('.team-view__task[data-session-id="ses_child"] [data-action="open"]').click()`)
+        await until(page, `document.querySelector('.subagent-bar [aria-label="Main session"]') !== null`)
+        expect(await page.evaluate<boolean>(`(() => { const parent=document.querySelector('.composer-resident'); return window.parentDraft===parent?.querySelector('textarea') && window.parentDraft.value==='Parent draft remains' && parent?.inert===true && parent?.getAttribute('aria-hidden')==='true' })()`)).toBe(true)
+        await page.evaluate(`document.querySelector('.subagent-bar [aria-label="Main session"]').click()`)
+        await until(page, `document.querySelector('.mini-composer__mount textarea') !== null && document.querySelector('.subagent-bar') === null`)
+        expect(await page.evaluate<boolean>(`window.parentDraft===document.querySelector('.mini-composer__mount textarea') && window.parentDraft.value==='Parent draft remains'`)).toBe(true)
+      }
+    } finally { await page.close() }
+  }, 90_000)
+
+  test("Conversation returns to its resident transcript scroll anchor after another view", async () => {
+    const page = await requireBrowser().openPage()
+    try {
+      for (const [width, height] of [[1440, 900], [390, 844]] as const) for (const theme of themes) {
+        await page.setViewport(width, height)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}`)
+        await until(page, `document.querySelector('.conversation-pane .transcript-message') !== null`)
+        const before = await page.evaluate<number>(`(() => { const scroll=document.querySelector('.workspace__scroll'); scroll.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:-300})); scroll.scrollTop=300; scroll.dispatchEvent(new Event('scroll')); window.anchorMessage=document.querySelector('.conversation-pane .transcript-message'); return scroll.scrollTop })()`)
+        expect(before).toBeGreaterThanOrEqual(250)
+        await page.evaluate(`[...document.querySelectorAll('a[href="/remote/activity"]')].find(link=>link.getBoundingClientRect().width>0)?.click()`)
+        await until(page, `location.pathname === '/remote/activity' && document.querySelector('.route-panel--exiting') === null`)
+        await page.evaluate(`[...document.querySelectorAll('a[href="/remote"]')].find(link=>link.getBoundingClientRect().width>0)?.click()`)
+        await until(page, `location.pathname === '/remote' && document.querySelector('.route-panel--exiting') === null`)
+        const after = await page.evaluate<{ readonly scrollTop: number; readonly sameMessage: boolean }>(`({ scrollTop:document.querySelector('.workspace__scroll').scrollTop, sameMessage:window.anchorMessage===document.querySelector('.conversation-pane .transcript-message') })`)
+        expect(Math.abs(after.scrollTop - before) <= 1 && after.sameMessage).toBe(true)
+      }
+    } finally { await page.close() }
+  }, 60_000)
 })
 
 async function capture(page: { screenshot(): Promise<string> }, name: string) {

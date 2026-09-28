@@ -313,7 +313,7 @@ test("managed subagents keep a read-only context bar without autonomy actions", 
     await wait(page, `document.querySelector('.conversation-breadcrumb strong') !== null`)
     await page.evaluate(`location.hash='#session=ses_child'`)
     await wait(page, `document.querySelector('.subagent-bar') !== null`)
-    expect(await page.evaluate<boolean>(`document.querySelector('.subagent-bar .session-status__yolo-trigger,.subagent-bar .session-status__goal-trigger,.workspace__main .composer') === null`)).toBe(true)
+    expect(await page.evaluate<boolean>(`document.querySelector('.subagent-bar .session-status__yolo-trigger,.subagent-bar .session-status__goal-trigger') === null && [...document.querySelectorAll('.workspace__main .composer')].every((element) => element.getClientRects().length === 0 || element.closest('[inert]') !== null)`)).toBe(true)
   } finally { await page.close() }
 }, 30_000)
 

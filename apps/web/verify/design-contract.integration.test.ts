@@ -69,7 +69,11 @@ describe("web design contract inventory", () => {
   test("renders every live remote fixture state within its route and viewport", async () => {
     const routeSource = await Bun.file(new URL("../src/app.tsx", import.meta.url)).text()
     const routerPaths = [...routeSource.matchAll(/path:\s*"([^"]+)"/g)].map((match) => match[1]!)
-    const remoteRoutes = routerPaths.filter((path) => path.startsWith("/remote"))
+    const remoteRouteList = routeSource.match(/const remoteRoutes = \[([^\]]*)\] as const/)?.[1]
+    expect(remoteRouteList).toBeDefined()
+    expect(routeSource).toContain("remoteRoutes.some((route) => route === router.path())")
+    const listedRoutes = [...(remoteRouteList ?? "").matchAll(/"(\/remote(?:\/[^"]*)?)"/g)].map((match) => match[1]!)
+    const remoteRoutes = [...new Set([...routerPaths, ...listedRoutes].filter((path) => path.startsWith("/remote")))]
     const fixtureViews = new Set(REMOTE_SCENARIOS.map((scenario) => fixturePath(scenario.view)))
     expect([...fixtureViews].filter((path) => !remoteRoutes.includes(path))).toEqual([])
     expect(remoteRoutes.filter((path) => !fixtureViews.has(path))).toEqual([])

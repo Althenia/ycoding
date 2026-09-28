@@ -106,7 +106,7 @@ test("shell output loading keeps a terminal-sized placeholder until its page set
   } finally { await page.close() }
 })
 
-test("loading placeholders suppress fast flashes, stay static for reduced motion, and preserve panel geometry", async () => {
+test("loading placeholders wait 140 ms in both motion modes and never flash for fast reads", async () => {
   const page = await browser!.openPage()
   try {
     for (const reduce of [false, true]) {
@@ -115,26 +115,22 @@ test("loading placeholders suppress fast flashes, stay static for reduced motion
       for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('.team-view__header') !== null`); attempt += 1) await Bun.sleep(50)
       await page.evaluate(`window.finishLoading()`)
       const loadedHeight = await page.evaluate<number>(`document.querySelector('.team-view__task').getBoundingClientRect().height`)
-      const initial = await page.evaluate<{ readonly opacity: string; readonly surfaceOpacity: string; readonly animation: string; readonly height: number }>(`(() => { window.startLoading(); const shape = document.querySelector('#team-panel-subagents .loading-placeholder__shape'); const bar = shape.querySelector('.loading-placeholder__bar'); return { opacity: getComputedStyle(bar).opacity, surfaceOpacity: getComputedStyle(shape).opacity, animation: getComputedStyle(bar).animationName, height: shape.getBoundingClientRect().height } })()`)
+      const initial = await page.evaluate<{ readonly visibility: string; readonly height: number }>(`(() => { window.startLoading(); const shape = document.querySelector('#team-panel-subagents .loading-placeholder__shape'); return { visibility: getComputedStyle(shape).visibility, height: shape.getBoundingClientRect().height } })()`)
       expect(Math.abs(initial.height - loadedHeight)).toBeLessThanOrEqual(1)
-      if (reduce) {
-        expect(initial.opacity).toBe("1")
-        expect(initial.surfaceOpacity).toBe("1")
-        expect(initial.animation).toBe("none")
-      } else {
-        expect(initial.opacity).toBe("0")
-        expect(initial.surfaceOpacity).toBe("0")
-        expect(await page.evaluate<number>(`new Promise((resolve, reject) => {
-          const start = performance.now()
-          const read = () => {
-            const opacity = Number(getComputedStyle(document.querySelector('#team-panel-subagents .loading-placeholder__bar')).opacity)
-            if (opacity > 0.9) return resolve(opacity)
-            if (performance.now() - start > 1500) return reject(new Error('Loading placeholder stayed hidden'))
-            requestAnimationFrame(read)
-          }
-          read()
-        })`)).toBeGreaterThan(0.9)
-      }
+      expect(initial.visibility).toBe("hidden")
+      await page.evaluate(`window.finishLoading()`)
+      await Bun.sleep(180)
+      expect(await page.evaluate<boolean>(`document.querySelector('#team-panel-subagents .loading-placeholder') === null`)).toBe(true)
+      const delayed = await page.evaluate<{ readonly elapsed: number; readonly animation: string }>(`new Promise((resolve, reject) => {
+        window.startLoading(); const start = performance.now();
+        const read = () => { const shape = document.querySelector('#team-panel-subagents .loading-placeholder__shape');
+          if (shape && getComputedStyle(shape).visibility === 'visible') return resolve({ elapsed: performance.now() - start, animation: getComputedStyle(shape.querySelector('.loading-placeholder__bar')).animationName });
+          if (performance.now() - start > 1000) return reject(new Error('Loading placeholder stayed hidden'));
+          requestAnimationFrame(read);
+        }; read();
+      })`)
+      expect(delayed.elapsed).toBeGreaterThanOrEqual(130)
+      expect(delayed.animation === "none").toBe(reduce)
     }
   } finally { await page.close() }
 })

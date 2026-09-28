@@ -11,7 +11,7 @@ export function NewSessionButton(props: { readonly disabled: boolean; readonly o
   return <button type="button" class="button button--primary new-session__trigger" disabled={props.disabled} onClick={props.onClick}>New session</button>
 }
 
-export function NewSessionComposer(props: { readonly onClose?: () => void; readonly onCreated: (sessionID: string) => void }): JSX.Element {
+export function NewSessionComposer(props: { readonly onCreated: (sessionID: string) => void }): JSX.Element {
   const remote = useRemote()
   const [workspaceID, setWorkspaceID] = createSignal("")
   const [text, setText] = createSignal("")
@@ -44,7 +44,7 @@ export function NewSessionComposer(props: { readonly onClose?: () => void; reado
     if (mounted && sessionID) props.onCreated(sessionID)
   }
   return <section class="new-session-composer" aria-label="New session">
-    <div class="new-session-composer__header"><h2 class="visually-hidden">New session</h2><div class="new-session-composer__brand"><BrandMark /></div><Show when={props.onClose}><button class="new-session-composer__close" type="button" aria-label="Close new session" onClick={props.onClose}><Icon name="close" /></button></Show></div>
+    <div class="new-session-composer__header"><h2 class="visually-hidden">New session</h2><div class="new-session-composer__brand"><BrandMark /></div></div>
     <Show when={!connected()}><p role="status">Connect to an online machine to create a session.</p></Show>
     <Show when={state().workspaceStatus === "error"}><p role="alert">{state().workspaceError ?? "Repositories could not be loaded."}</p></Show>
     <Show when={state().workspaceStatus === "ready" && !state().workspaces.length}><p role="status">No previously opened repositories are available. Open a repository locally once, then refresh.</p></Show>

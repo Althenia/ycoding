@@ -14,30 +14,12 @@ const routes = [
   { path: "/docs", render: (_params: Readonly<Record<string, string>>) => <DocsIndexPage /> },
   { path: "/docs/*slug", render: (params: Readonly<Record<string, string>>) => <DocsPage slug={params.slug ?? ""} /> },
   { path: "/changelog", render: (_params: Readonly<Record<string, string>>) => <ChangelogPage /> },
-  { path: "/remote", render: (_params: Readonly<Record<string, string>>) => <RemoteShell path="/remote" /> },
-  {
-    path: "/remote/sessions",
-    render: (_params: Readonly<Record<string, string>>) => <RemoteShell path="/remote/sessions" />,
-  },
-  {
-    path: "/remote/activity",
-    render: (_params: Readonly<Record<string, string>>) => <RemoteShell path="/remote/activity" />,
-  },
-  {
-    path: "/remote/usage",
-    render: (_params: Readonly<Record<string, string>>) => <RemoteShell path="/remote/usage" />,
-  },
-  {
-    path: "/remote/settings",
-    render: (_params: Readonly<Record<string, string>>) => <RemoteShell path="/remote/settings" />,
-  },
 ] as const
+const remoteRoutes = ["/remote", "/remote/sessions", "/remote/activity", "/remote/usage", "/remote/settings"] as const
 
 /** Renders the matched route, applies its head metadata, resets scroll on navigation, and honours documentation anchors. */
 function Outlet(): JSX.Element {
   const router = useRouter()
-  useRouteMetadata(() => router.path())
-  useDocAnchor(() => router.hash())
 
   createEffect(() => {
     const path = router.path()
@@ -55,15 +37,17 @@ function Outlet(): JSX.Element {
 
 export function App(props: { readonly createRemoteStore?: () => RemoteStore }): JSX.Element {
   const router = useRouter()
+  useRouteMetadata(() => router.path())
+  useDocAnchor(() => router.hash())
   const preference = window.matchMedia("(prefers-reduced-motion: no-preference)")
   let second = 0
   const first = requestAnimationFrame(() => {
     second = requestAnimationFrame(() => {
-      if (preference.matches && !router.path().startsWith("/remote")) document.documentElement.dataset.motion = "on"
+      if (preference.matches) document.documentElement.dataset.motion = "on"
     })
   })
   const updateMotion = () => {
-    if (preference.matches && !router.path().startsWith("/remote")) document.documentElement.dataset.motion = "on"
+    if (preference.matches) document.documentElement.dataset.motion = "on"
     else delete document.documentElement.dataset.motion
   }
   preference.addEventListener("change", updateMotion)
@@ -90,7 +74,9 @@ export function App(props: { readonly createRemoteStore?: () => RemoteStore }): 
       }
     >
       <RemoteProvider createStore={props.createRemoteStore}>
-        <Outlet />
+        <Show when={remoteRoutes.some((route) => route === router.path())} fallback={<NotFoundPage />}>
+          <RemoteShell path={() => router.path()} />
+        </Show>
       </RemoteProvider>
     </Show>
   )

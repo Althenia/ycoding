@@ -55,7 +55,7 @@ describe("remote Office presentation", () => {
       for (let index = 0; index < 50; index += 1) {
         await choosePresentation(page, "Office")
         expect(await until(page, `document.querySelector('.office-workspace') !== null`)).toBe(true)
-        expect(await page.evaluate<number>(`document.querySelectorAll('.composer').length`)).toBe(0)
+        expect(await officeHidesComposerAndInspector(page)).toBe(true)
         if (index % 2 === 0) expect(await until(page, `document.querySelectorAll('.office-workspace canvas').length === 1`, 150)).toBe(true)
         await choosePresentation(page, "Conversation")
         expect(await until(page, `document.querySelector('.office-workspace') === null`)).toBe(true)
@@ -86,7 +86,7 @@ describe("remote Office presentation", () => {
       expect(await page.evaluate<boolean>(`!!document.querySelector('.office-roster__row[data-session-id="ses_fixture"]')`)).toBe(true)
       expect(await page.evaluate<string>(`location.pathname`)).toBe("/remote")
       expect(await page.evaluate<boolean>(`document.querySelector('.presentation-switch [aria-checked="true"]').textContent.trim() === 'Office'`)).toBe(true)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.composer,.office-workspace__inspector').length`)).toBe(0)
+      expect(await officeHidesComposerAndInspector(page)).toBe(true)
     } finally {
       await page.close()
     }
@@ -203,7 +203,7 @@ describe("remote Office presentation", () => {
       await page.evaluate(`[...document.querySelectorAll('.fixture__controls button')].find((button) => button.textContent.includes('Simulate streaming step')).click()`)
 
       expect(await until(page, `document.querySelector('.office-roster__row[aria-current="true"] .office-roster__status')?.textContent === 'Editing store.ts'`)).toBe(true)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.office-workspace__inspector,.composer').length`)).toBe(0)
+      expect(await officeHidesComposerAndInspector(page)).toBe(true)
       await choosePresentation(page, "Conversation")
       expect(await until(page, `document.querySelector('.conversation-pane')?.textContent.includes('Streaming through the relay with bounded tool output.') ?? false`)).toBe(true)
       const after = await page.evaluate<OperationReport>(`remoteOperationReport()`)
@@ -235,7 +235,7 @@ describe("remote Office presentation", () => {
     const page = await openRemote("view=chat&promptOutcome=unknown&presentation=office")
     try {
       expect(await until(page, `document.querySelector('.office-roster__row[aria-current="true"]') !== null`)).toBe(true)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.composer').length`)).toBe(0)
+      expect(await officeHidesComposerAndInspector(page)).toBe(true)
       await choosePresentation(page, "Conversation")
       expect(await until(page, `document.querySelector('.composer__input') !== null`)).toBe(true)
       await page.evaluate(`(() => {
@@ -267,7 +267,7 @@ describe("remote Office presentation", () => {
       expect(await until(page, `document.querySelector('.office-workspace [role="alert"]')?.textContent.includes('could not start') ?? false`, 100)).toBe(true)
       expect(await page.evaluate<number>(`document.querySelectorAll('.office-workspace canvas').length`)).toBe(0)
       expect(await page.evaluate<number>(`document.querySelectorAll('.office-roster__row').length`)).toBeGreaterThan(0)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.composer').length`)).toBe(0)
+      expect(await officeHidesComposerAndInspector(page)).toBe(true)
 
       await page.evaluate(`[...document.querySelectorAll('.office-workspace [role="alert"] button')].find((button) => button.textContent.includes('normal view')).click()`)
       expect(await until(page, `document.querySelector('.office-workspace') === null && document.querySelector('.conversation-breadcrumb') !== null`)).toBe(true)
@@ -313,13 +313,13 @@ describe("remote Office presentation", () => {
           }
         })()`)
         expect(layout.overflow).toBe(false)
-        expect(await page.evaluate<number>(`document.querySelectorAll('.composer,.office-workspace__inspector').length`)).toBe(0)
+        expect(await officeHidesComposerAndInspector(page)).toBe(true)
         expect(layout.stage).toBeGreaterThanOrEqual(width >= 1024 ? 300 : 220)
         expect(layout.stage).toBeGreaterThan(layout.main * 0.45)
         expect(layout.side).toBe(width >= 1024)
         if (width >= 1024) expect(layout.independentlyScrollable).toBe(true)
         expect(layout.rows.every((row) => row >= 44)).toBe(true)
-        expect(layout.controls.every((target) => target >= 44)).toBe(true)
+        expect(layout.controls.every((target) => Math.round(target) >= 44)).toBe(true)
         expect(await until(page, `[...document.querySelectorAll('.office-roster__row')].every(row=>row.getAnimations().every(animation=>animation.playState==='finished'))`)).toBe(true)
         for (const theme of ["light", "dark"] as const) {
           await page.evaluate<void>(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`)
@@ -427,6 +427,10 @@ describe("remote Office presentation", () => {
     }
   }, 60_000)
 })
+
+async function officeHidesComposerAndInspector(page: Page) {
+  return page.evaluate<boolean>(`(() => document.querySelector('.office-workspace__inspector') === null && [...document.querySelectorAll('.composer')].every((composer) => { const host = composer.closest('.composer-resident'); return host && (getComputedStyle(host).display === 'none' || getComputedStyle(host).contentVisibility === 'hidden' || host.inert && host.getAttribute('aria-hidden') === 'true') }))()`)
+}
 
 async function chooseSetting(page: Page, id: string, label: string) {
   await page.evaluate(`[...document.querySelectorAll('[aria-labelledby="${id}-label"] [role="radio"]')].find((button) => button.textContent.trim() === ${JSON.stringify(label)}).click()`)

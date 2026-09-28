@@ -23,7 +23,7 @@ export function promptPreview(text: string): string {
   return normalized.length > 90 ? `${normalized.slice(0, 89)}…` : normalized
 }
 
-export function TranscriptNavigation(props: { readonly messages: () => readonly RemoteMessageView[] }): JSX.Element {
+export function TranscriptNavigation(props: { readonly messages: () => readonly RemoteMessageView[]; readonly active?: boolean }): JSX.Element {
   const remote = useRemote()
   const [away, setAway] = createSignal(false)
   const [scrollTop, setScrollTop] = createSignal(0)
@@ -51,10 +51,11 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
   let loadingOlder = false
   let sessionID: string | undefined
   let frame = 0
+  const active = () => props.active !== false
 
   const distance = () => scrollRoot ? Math.max(0, scrollRoot.scrollHeight - scrollRoot.clientHeight - scrollRoot.scrollTop) : 0
   const showPromptsInView = () => {
-    if (!wrapper || !scrollRoot) return
+    if (!active() || !wrapper || !scrollRoot) return
     const viewport = scrollRoot.getBoundingClientRect()
     const next = new Set([...wrapper.querySelectorAll<HTMLElement>("[data-prompt-id]")].filter((row) => {
       const bounds = row.getBoundingClientRect()
@@ -63,13 +64,14 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     setVisible((previous) => previous.size === next.size && [...next].every((id) => previous.has(id)) ? previous : next)
   }
   const pin = () => {
-    if (!scrollRoot || !following) return
+    if (!active() || !scrollRoot || !following) return
     scrollRoot.scrollTop = scrollRoot.scrollHeight
     setAway(false)
     setScrollTop(scrollRoot.scrollTop)
     showPromptsInView()
   }
   const schedule = () => {
+    if (!active()) return
     cancelAnimationFrame(frame)
     frame = requestAnimationFrame(() => {
       pin()
@@ -78,19 +80,20 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     })
   }
   const loadOlder = async (preserve: boolean) => {
-    if (!scrollRoot || !wrapper || loadingOlder || checkpoint() || remote.state().history?.status === "loading" || !remote.state().history?.before) return
+    if (!active() || !scrollRoot || !wrapper || loadingOlder || checkpoint() || remote.state().history?.status === "loading" || !remote.state().history?.before) return
     loadingOlder = true
     const anchor = preserve ? [...wrapper.querySelectorAll<HTMLElement>("[data-message-id]")].find((row) => row.getBoundingClientRect().bottom > scrollRoot!.getBoundingClientRect().top) : undefined
     const top = anchor?.getBoundingClientRect().top
     try {
       await remote.store.loadOlderMessages()
       requestAnimationFrame(() => {
-        if (scrollRoot && anchor?.isConnected && top !== undefined) scrollRoot.scrollTop += anchor.getBoundingClientRect().top - top
+        if (active() && scrollRoot && anchor?.isConnected && top !== undefined) scrollRoot.scrollTop += anchor.getBoundingClientRect().top - top
         showPromptsInView()
       })
     } finally { loadingOlder = false }
   }
   const onScroll = () => {
+    if (!active()) return
     if (contentUpdate && following) return
     if (jumpingTop) {
       setScrollTop(scrollRoot?.scrollTop ?? 0)
@@ -106,7 +109,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     showPromptsInView()
     if (scrollRoot && scrollRoot.scrollTop < 120 && remote.state().history?.status === "idle") void loadOlder(true)
   }
-  const onUserScroll = () => { jumping = false; jumpingTop = false; contentUpdate = false }
+  const onUserScroll = () => { if (!active()) return; jumping = false; jumpingTop = false; contentUpdate = false }
   const jumpToBottom = () => {
     if (!scrollRoot) return
     following = followState(following, { kind: "jump", distance: distance() })
@@ -144,30 +147,47 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     scrollRoot = wrapper?.closest<HTMLElement>(".workspace__scroll") ?? undefined
     const container = wrapper?.closest<HTMLElement>(".workspace__main")
     if (!scrollRoot || !container || !wrapper) return
+    const root = scrollRoot
+    const content = wrapper
     setJumpSlot(container.querySelector<HTMLElement>(".conversation-jump-slot") ?? undefined)
     const observer = new ResizeObserver(() => {
+      if (!active()) return
       if (following) pin()
       showPromptsInView()
     })
-    observer.observe(wrapper)
-    observer.observe(scrollRoot)
-    observer.observe(container)
-    scrollRoot.addEventListener("scroll", onScroll, { passive: true })
-    scrollRoot.addEventListener("wheel", onUserScroll, { passive: true })
-    scrollRoot.addEventListener("touchstart", onUserScroll, { passive: true })
-    scrollRoot.addEventListener("pointerdown", onUserScroll, { passive: true })
-    schedule()
-    onCleanup(() => {
+    let observing = false
+    const stop = () => {
+      if (!observing) return
+      observing = false
       observer.disconnect()
-      scrollRoot?.removeEventListener("scroll", onScroll)
-      scrollRoot?.removeEventListener("wheel", onUserScroll)
-      scrollRoot?.removeEventListener("touchstart", onUserScroll)
-      scrollRoot?.removeEventListener("pointerdown", onUserScroll)
+      root.removeEventListener("scroll", onScroll)
+      root.removeEventListener("wheel", onUserScroll)
+      root.removeEventListener("touchstart", onUserScroll)
+      root.removeEventListener("pointerdown", onUserScroll)
       cancelAnimationFrame(frame)
-    })
+    }
+    const start = () => {
+      if (!active() || observing) return
+      observing = true
+      observer.observe(content)
+      observer.observe(root)
+      observer.observe(container)
+      root.addEventListener("scroll", onScroll, { passive: true })
+      root.addEventListener("wheel", onUserScroll, { passive: true })
+      root.addEventListener("touchstart", onUserScroll, { passive: true })
+      root.addEventListener("pointerdown", onUserScroll, { passive: true })
+      following = followState(following, { kind: "scroll", distance: distance() })
+      setAway(!following)
+      setScrollTop(root.scrollTop)
+      schedule()
+    }
+    start()
+    createEffect(() => { if (active()) start(); else stop() })
+    onCleanup(stop)
   })
 
   createEffect(() => {
+    const activeNow = active()
     const current = remote.state().activeSessionID
     ids()
     rows()
@@ -177,8 +197,8 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
       jumping = false
       jumpingTop = false
     }
-    contentUpdate = following
-    schedule()
+    contentUpdate = activeNow && following
+    if (activeNow) schedule()
   })
 
   return <div class="transcript-navigation" classList={{ "transcript-navigation--empty": rows().length === 0 }} ref={wrapper}>

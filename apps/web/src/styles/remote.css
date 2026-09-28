@@ -297,16 +297,38 @@ body:has(.app) {
   position: relative;
   min-inline-size: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) auto;
   min-block-size: 0;
 }
 
 .workspace__scroll {
+  position: relative;
   overflow-y: auto;
   padding: var(--yc-space-5) var(--yc-gutter) var(--yc-space-8);
   min-inline-size: 0;
   min-block-size: 0;
 }
+
+.route-panel { position: relative; min-block-size: 100%; opacity: 1; transform: translateY(0); transition: opacity var(--yc-dur-base) var(--yc-ease-standard), transform var(--yc-dur-base) var(--yc-ease-standard); }
+.route-panel--exiting { position: absolute; inset: 0; pointer-events: none; }
+:root[data-motion="on"] .route-panel--entering { opacity: 0; transform: translateY(8px); }
+:root[data-motion="on"] .route-panel--exiting { opacity: 0; transform: translateY(-8px); }
+:root:not([data-motion="on"]) .route-panel--exiting { content-visibility: hidden; }
+.route-panel--idle { display: none; }
+.route-panel:has(> .new-session-composer) { display: flex; flex-direction: column; }
+.route-panel > .new-session-composer { flex: 1; }
+.remote-conversation-view.route-panel--idle { position: absolute; inset: 0; display: block; block-size: 100%; overflow: hidden; content-visibility: hidden; pointer-events: none; }
+.remote-conversation-view.route-panel--exiting { block-size: 100%; overflow: hidden; }
+.app--office .remote-conversation-view.route-panel--exiting,
+.app--conversation:not(.app--office) .route-panel--exiting:has(> .office-workspace) { content-visibility: hidden; }
+.app:not(.app--conversation) .workspace__main > :is(.composer-resident, .subagent-resident),
+.app--office .workspace__main > :is(.composer-resident, .subagent-resident),
+.app--new-session .workspace__main > :is(.composer-resident, .subagent-resident),
+.app--selected-loading .workspace__main > :is(.composer-resident, .subagent-resident) { display: none; }
+.composer-resident.route-panel--idle { position: absolute; inset: auto 0 0; display: block; content-visibility: hidden; pointer-events: none; }
+:is(.composer-resident, .subagent-resident).route-panel--exiting { inset: auto 0 0; }
+.app--selected-loading .workspace__topbar > * { clip-path: inset(100%); }
 
 .workspace__topbar {
   display: flex;
@@ -1187,7 +1209,7 @@ body:has(.app) {
 }
 
 /* Notices keep the top of the column; the explanation centers in the space below. */
-.app--empty .workspace__scroll > .empty-conversation {
+.app--empty .workspace__scroll > .remote-conversation-view > .empty-conversation {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1204,7 +1226,7 @@ body:has(.app) {
 }
 
 .app--empty .empty-conversation > *,
-.app--empty .workspace__scroll > .new-session-composer {
+.app--empty .workspace__scroll > .remote-conversation-view > .new-session-composer {
   inline-size: min(100%, 640px);
   margin-inline: auto;
 }
@@ -1316,18 +1338,23 @@ body:has(.app) {
 /* Notices, breadcrumb, transcript, pending requests, and the composer share the
    conversation column's edges at every width. */
 .app--conversation.app--selected .workspace__scroll > *,
+.app--conversation.app--selected .workspace__scroll > .remote-conversation-view > *,
 .app--conversation.app--selected .composer > *,
 .app--conversation.app--selected .todo-panel__inner {
   inline-size: min(100%, var(--remote-column));
   margin-inline: auto;
 }
+.app--conversation.app--selected .workspace__scroll > .remote-conversation-view { inline-size: 100%; margin-inline: 0; }
+.app--conversation.app--selected .workspace__scroll > .route-panel > .new-session-composer { inline-size: min(100%, 640px); }
 
 @media (min-width: 1024px) {
   .app--conversation.app--selected .workspace__scroll > *,
+  .app--conversation.app--selected .workspace__scroll > .remote-conversation-view > *,
   .app--conversation.app--selected .composer > *,
   .app--conversation.app--selected .todo-panel__inner {
     inline-size: min(calc(100% - var(--yc-space-12)), var(--remote-column));
   }
+  .app--conversation.app--selected .workspace__scroll > .remote-conversation-view { inline-size: 100%; margin-inline: 0; }
 }
 
 /* The page already sits inside the workspace gutter; a second pane inset would
@@ -2342,7 +2369,14 @@ body:has(.app) {
   border-radius: var(--yc-radius-lg);
   background: var(--yc-surface);
   box-shadow: var(--yc-shadow-lg);
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity var(--yc-dur-base) var(--yc-ease-standard), transform var(--yc-dur-base) var(--yc-ease-standard);
 }
+.team-control__panel.team-control--exiting { pointer-events: none; }
+:root[data-motion="on"] .team-control__panel.team-control--entering { opacity: 0; transform: translateY(8px); }
+:root[data-motion="on"] .team-control__panel.team-control--exiting { opacity: 0; transform: translateY(-8px); }
+:root:not([data-motion="on"]) .team-control__panel.team-control--exiting { content-visibility: hidden; }
 
 :root { --yc-phone-layout: 0; }
 @media (max-width: 767px), (max-height: 599px) and (pointer: coarse) {

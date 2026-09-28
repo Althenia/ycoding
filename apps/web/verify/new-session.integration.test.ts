@@ -23,6 +23,7 @@ test("new session opens in the main area with repository names, selected model a
     await page.evaluate(`document.querySelector('.sessions-page__toolbar .new-session__trigger')?.click()`)
     await wait(page, `document.querySelector('.workspace__main .new-session-composer textarea') !== null`)
     expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="New session"]') === null`)).toBe(true)
+    await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]:not([disabled])') !== null`)
     await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Repository"]')?.click()`)
     await wait(page, `document.querySelector('.mini-picker__surface [role="option"]') !== null`)
     expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.mini-picker__surface [role="option"]')].map(item => item.textContent.trim())`)).toEqual(["YCoding", "Other repository"])
@@ -64,6 +65,7 @@ test("new-session hero centers in both Conversation placements and remains top-s
         await page.evaluate(`document.querySelector('.workspace__rail .pane__head--sessions button')?.click()`)
       }
       await wait(page, `document.querySelector('.workspace__scroll .new-session-composer textarea') !== null`)
+      if (width === 390 || width === 1440) expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer__close, .new-session-composer [aria-label="Close new session"]') === null`)).toBe(true)
       const measure = () => page.evaluate<{ centerX: number; centerY: number; repositoryEdge: number; heroRatio: number; mark: number; name: number; fullLockup: boolean; ordered: boolean; overflow: boolean }>(`(() => { const scroll=document.querySelector('.workspace__scroll'), block=scroll.querySelector('.new-session-composer'), brand=block.querySelector('.new-session-composer__brand'), repository=block.querySelector('.new-session-composer__repository'), card=block.querySelector('.composer__row'), mark=brand.querySelector('img'), name=brand.querySelector('.brand__name'), descriptor=brand.querySelector('.brand__descriptor'), s=scroll.getBoundingClientRect(), b=block.getBoundingClientRect(), a=brand.getBoundingClientRect(), c=card.getBoundingClientRect(), r=repository.getBoundingClientRect(); return { centerX:Math.abs((b.left+b.right-s.left-s.right)/2), centerY:Math.abs((a.top+c.bottom-s.top-s.bottom)/2), repositoryEdge:Math.abs(r.left-c.left), heroRatio:a.width/c.width, mark:mark.getBoundingClientRect().height, name:parseFloat(getComputedStyle(name).fontSize), fullLockup:!!descriptor && descriptor.getBoundingClientRect().height>0, ordered:a.bottom<=r.top && r.bottom<=c.top, overflow:document.documentElement.scrollWidth>innerWidth || scroll.scrollWidth>scroll.clientWidth+1 } })()`)
       const layout = await measure()
       expect(layout.centerX).toBeLessThanOrEqual(8)
@@ -113,6 +115,44 @@ test("repository loading holds the picker's box and keeps Refresh in place", asy
     } finally { await page.close() }
   }
 }, 30_000)
+
+test("phone Sessions sheet returns focus to its opener and opens Conversation from New session", async () => {
+  for (const theme of ["light", "dark"]) for (const [reduced, method] of [[false, "close"], [false, "select"], [false, "new-session"], [true, "close"]] as const) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(390, 844)
+      await page.setReducedMotion(reduced)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}`)
+      await wait(page, `document.querySelector('.app-header__menu[aria-label="Open sessions"]') !== null`)
+      await page.evaluate(`(() => { const trigger=document.querySelector('.app-header__menu'); window.sessionsOpener=trigger; trigger.focus() })()`)
+      await page.pressKey(" ", "Space", 32)
+      await wait(page, `document.querySelector('dialog.overlay--sessions-sheet[open] .session-row') !== null`)
+      if (method === "close") await page.evaluate(`document.querySelector('.overlay--sessions-sheet .overlay__close').click()`)
+      if (method === "select") await page.evaluate(`[...document.querySelectorAll('.overlay--sessions-sheet .session-row')].find((row) => row.textContent.includes('Archived: release notes'))?.click()`)
+      if (method === "new-session") await page.evaluate(`document.querySelector('.overlay--sessions-sheet .new-session__trigger').click()`)
+      expect(await page.evaluate<boolean>(`document.activeElement === window.sessionsOpener && window.sessionsOpener.getAttribute('aria-expanded') === 'false'`)).toBe(true)
+      if (reduced) expect(await page.evaluate<boolean>(`document.querySelector('dialog.overlay--sessions-sheet') === null`)).toBe(true)
+      else {
+        expect(await page.evaluate<boolean>(`(() => { const sheet=document.querySelector('dialog.overlay--sessions-sheet'); return sheet?.inert === true && sheet?.getAttribute('aria-hidden') === 'true' && !sheet.open })()`)).toBe(true)
+        for (let attempt = 0; attempt < 30 && await page.evaluate<boolean>(`document.querySelector('dialog.overlay--sessions-sheet') !== null`); attempt += 1) await Bun.sleep(25)
+        expect(await page.evaluate<boolean>(`document.querySelector('dialog.overlay--sessions-sheet') === null`)).toBe(true)
+      }
+      if (method === "select") {
+        await wait(page, `document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('Archived: release notes') === true`)
+        expect(await page.evaluate<boolean>(`document.activeElement === window.sessionsOpener`)).toBe(true)
+      }
+      if (method === "new-session") {
+        await wait(page, `document.querySelector('.new-session-composer textarea') !== null`)
+        await page.evaluate(`window.sessionsOpener.focus()`)
+        await page.pressKey(" ", "Space", 32)
+        await wait(page, `document.querySelector('dialog.overlay--sessions-sheet[open] .session-row') !== null`)
+        await page.evaluate(`[...document.querySelectorAll('.overlay--sessions-sheet .session-row')].find((row) => row.textContent.includes('Archived: release notes'))?.click()`)
+        await wait(page, `document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('Archived: release notes') === true`)
+        await wait(page, `document.activeElement === document.querySelector('.remote-conversation-view .conversation-breadcrumb')`)
+      }
+    } finally { await page.close() }
+  }
+}, 90_000)
 
 async function type(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, selector: string, text: string) {
   await page.evaluate(`(() => { const field = document.querySelector(${JSON.stringify(selector)}); field.focus(); field.value = ${JSON.stringify(text)}; field.dispatchEvent(new InputEvent('input', { bubbles: true })); })()`)

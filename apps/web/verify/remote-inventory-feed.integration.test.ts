@@ -95,6 +95,8 @@ describe("remote inventory feed", () => {
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&inventoryCount=240&sessionListDelay=900`)
         for (let attempt = 0; attempt < 80 && await page.evaluate<number>(`document.querySelectorAll('.sessions-table__row').length`) !== 25; attempt++) await Bun.sleep(50)
         for (let attempt = 0; attempt < 80 && await page.evaluate<number>(`document.querySelectorAll('.running-sessions__item').length`) !== 10; attempt++) await Bun.sleep(25)
+        for (let attempt = 0; attempt < 100 && !await page.evaluate<boolean>(`window.remoteInventoryReport().listStatus === 'ready' && document.querySelector('.conversation-pane .transcript-message') !== null`); attempt++) await Bun.sleep(50)
+        expect(await page.evaluate<boolean>(`window.remoteInventoryReport().listStatus === 'ready' && document.querySelector('.conversation-pane .transcript-message') !== null`)).toBe(true)
         const before = await page.evaluate<{ height: number; scrollHeight: number; top: number }>(`(() => { const root = document.querySelector('.workspace__scroll'); root.scrollTop = 180; window.staleRow = [...document.querySelectorAll('.sessions-table__row')].find(row => row.textContent.includes('Inventory Session 0')); return { height: document.querySelector('.sessions-results').getBoundingClientRect().height, scrollHeight: root.scrollHeight, top: window.staleRow.getBoundingClientRect().top }; })()`)
         await page.evaluate(`(() => { const input = document.querySelector('.sessions-page input[type=search]'); input.value = 'Inventory Session 0'; input.dispatchEvent(new InputEvent('input', { bubbles:true })); })()`)
         for (const delay of [0, 140, 360]) {

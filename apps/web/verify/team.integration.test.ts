@@ -33,7 +33,7 @@ test("Office-selected managed child opens read-only Conversation instead of a pr
     for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.office-roster__row[data-session-id="ses_child"]')?.getAttribute('aria-current') === 'true'`); attempt += 1) await Bun.sleep(50)
     await page.evaluate(`document.querySelector('.presentation-switch [role="radio"]:first-child').click()`)
     for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb strong')?.textContent.includes('Child: fix flaky suite') ?? false`); attempt += 1) await Bun.sleep(50)
-    expect(await page.evaluate<boolean>(`document.querySelector('.composer, .mini-composer__mount') === null`)).toBe(true)
+    expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.composer, .mini-composer__mount')].every((element) => element.getClientRects().length === 0 || element.closest('[inert]') !== null)`)).toBe(true)
     expect(await page.evaluate<boolean>(`document.querySelector('.subagent-bar [aria-label="Main session"]') !== null`)).toBe(true)
   } finally { await page.close() }
 }, 20_000)
@@ -337,3 +337,60 @@ test("Team tabs and row actions are keyboard operable, and Escape closes the pho
     expect(await page.evaluate<boolean>(`document.querySelector('.team-view') === null`)).toBe(true)
   } finally { await page.close() }
 })
+
+test("phone Team sheet closes through its inert exit and returns focus for every dismissal", async () => {
+  if (!browser) throw new Error("Browser not started")
+  for (const theme of ["light", "dark"]) for (const [reduced, method] of [[false, "team-button"], [false, "modal-button"], [false, "escape"], [false, "backdrop"], [false, "open-child"], [true, "team-button"]] as const) {
+    const page = await browser.openPage()
+    try {
+      await page.setViewport(390, 844)
+      await page.setReducedMotion(reduced)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&theme=${theme}`)
+      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`(() => { const trigger=document.querySelector('[aria-label="Open Team"]'); return trigger !== null && !trigger.closest('[inert]') && trigger.getBoundingClientRect().width > 0 })()`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`(() => { const trigger=document.querySelector('[aria-label="Open Team"]'); window.teamOpener=trigger; trigger.focus() })()`)
+      expect(await page.evaluate<boolean>(`document.activeElement === window.teamOpener`)).toBe(true)
+      await page.pressKey(" ", "Space", 32)
+      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('dialog.team-view__sheet[open]') !== null`); attempt += 1) await Bun.sleep(25)
+      expect(await page.evaluate<boolean>(`document.querySelector('dialog.team-view__sheet[open]') !== null`)).toBe(true)
+      if (method === "team-button") await page.evaluate(`document.querySelector('.team-view__header [aria-label="Close Team"]').click()`)
+      if (method === "modal-button") await page.evaluate(`document.querySelector('.team-view__sheet .overlay__head [aria-label="Close Team"]').click()`)
+      if (method === "escape") await page.pressEscape()
+      if (method === "backdrop") await page.evaluate(`document.querySelector('dialog.team-view__sheet').click()`)
+      if (method === "open-child") await page.evaluate(`document.querySelector('.team-view__task[data-session-id="ses_child"] [data-action="open"]').click()`)
+      expect(await page.evaluate<boolean>(`document.activeElement === window.teamOpener && window.teamOpener.getAttribute('aria-expanded') === 'false'`)).toBe(true)
+      if (reduced) expect(await page.evaluate<boolean>(`document.querySelector('dialog.team-view__sheet') === null`)).toBe(true)
+      else {
+        const exit = await page.evaluate<{ readonly inert: boolean | undefined; readonly hidden: string | null | undefined; readonly open: boolean | undefined; readonly duration: string | undefined }>(`(() => { const dialog=document.querySelector('dialog.team-view__sheet'); return { inert:dialog?.inert, hidden:dialog?.getAttribute('aria-hidden'), open:dialog?.open, duration:dialog ? getComputedStyle(dialog.querySelector('.overlay__surface')).animationDuration : undefined } })()`)
+        expect({ theme, reduced, method, ...exit }).toEqual({ theme, reduced, method, inert: true, hidden: "true", open: false, duration: "0.22s" })
+        if (method === "escape") continue
+        let removed = false
+        for (let attempt = 0; attempt < 30; attempt += 1) {
+          removed = await page.evaluate<boolean>(`document.querySelector('dialog.team-view__sheet') === null`)
+          if (removed) break
+          await Bun.sleep(25)
+        }
+        expect(removed).toBe(true)
+      }
+      if (method === "open-child") expect(await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('Child: fix flaky suite') === true`)).toBe(true)
+    } finally { await page.close() }
+  }
+}, 90_000)
+
+test("phone Team reopens a fresh sheet before its previous exit completes", async () => {
+  if (!browser) throw new Error("Browser not started")
+  for (const theme of ["light", "dark"]) {
+    const page = await browser.openPage()
+    try {
+      await page.setViewport(390, 844)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&theme=${theme}`)
+      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`(() => { const trigger=document.querySelector('[aria-label="Open Team"]'); return trigger !== null && !trigger.closest('[inert]') && trigger.getBoundingClientRect().width > 0 })()`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`document.querySelector('[aria-label="Open Team"]').focus()`)
+      await page.pressKey(" ", "Space", 32)
+      expect(await page.evaluate<boolean>(`document.querySelector('dialog.team-view__sheet[open]') !== null`)).toBe(true)
+      await page.evaluate(`document.querySelector('dialog.team-view__sheet .overlay__close').click()`)
+      expect(await page.evaluate<boolean>(`document.querySelector('dialog.team-view__sheet[data-closing][inert]') !== null && document.activeElement?.getAttribute('aria-label') === 'Open Team'`)).toBe(true)
+      await page.pressKey(" ", "Space", 32)
+      expect(await page.evaluate<boolean>(`document.querySelectorAll('dialog.team-view__sheet').length === 1 && document.querySelector('dialog.team-view__sheet[open]:not([data-closing])') !== null`)).toBe(true)
+    } finally { await page.close() }
+  }
+}, 20_000)
