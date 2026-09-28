@@ -7,7 +7,7 @@ type Pending = { readonly method: string; readonly resolve: (value: unknown) => 
 
 export async function launchBrowser(executable: string, width: number, height: number) {
   const profile = mkdtempSync(join(tmpdir(), "ycoding-web-verify-"))
-  const child = spawn(executable, ["--headless", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--disable-gpu", "--hide-scrollbars", "about:blank"], { stdio: ["ignore", "pipe", "pipe"] })
+  const child = spawn(executable, ["--headless", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--disable-gpu", "--enable-unsafe-swiftshader", "--hide-scrollbars", "about:blank"], { stdio: ["ignore", "pipe", "pipe"] })
   const endpoint = await devtoolsEndpoint(child)
   const socket = new WebSocket(endpoint)
   await new Promise<void>((resolve, reject) => {
