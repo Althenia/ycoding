@@ -82,6 +82,11 @@ test("allows only image data URIs with matching supported MIME types in tool out
   ])
 })
 
+test("keeps a large canonical inline tool image", () => {
+  const uri = `data:image/png;base64,${Buffer.alloc(8 * 1024 * 1024, 42).toString("base64")}`
+  expect(readToolContent([{ type: "file", mime: "image/png", uri }])).toEqual([{ kind: "image", uri, mime: "image/png" }])
+})
+
 test("extracts only durable live subagent delegation and terminal notification identities", () => {
   expect(readTeamCue({ id: "evt_1", type: "session.tool.progress", durable: { aggregateID: "ses_root", seq: 1 }, data: {
     sessionID: "ses_root", assistantMessageID: "msg_1", callID: "call_1", structured: { sessionID: "ses_child", status: "running" },

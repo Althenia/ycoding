@@ -1,4 +1,4 @@
-import { RemoteLimits, serializeRequest } from "@ycoding-ai/remote"
+import { RemoteLimits, isWellFormedBase64, serializeRequest } from "@ycoding-ai/remote"
 import type { FileAttachmentInput } from "./catalog"
 import type { RemoteTransport } from "./transport"
 
@@ -47,7 +47,7 @@ function encodedBytes(uri: string) {
   const comma = uri.indexOf(",")
   const encoded = comma < 0 ? "" : uri.slice(comma + 1)
   if (comma < 0 || !/^data:[^,;]+(?:;[^,;]+)*;base64,/i.test(uri.slice(0, comma + 1)) ||
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded) || !encoded.length)
+    !isWellFormedBase64(encoded) || !encoded.length)
     throw new Error("Attachment data is not canonical base64.")
   const bytes = encoded.length / 4 * 3 - (encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0)
   if (bytes > RemoteLimits.maxAttachmentBytes) throw new Error("Each attachment must be 20 MiB or smaller.")

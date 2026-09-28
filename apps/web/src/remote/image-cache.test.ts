@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { expect, jest, test } from "bun:test"
 import { createRemoteHttp } from "./http"
 import { createRemoteStore } from "./store"
 
@@ -39,6 +39,39 @@ test("rejects an invalid image response and permits an explicit retry", async ()
     expect(await store.loadImageSource(image)).toBe("data:image/png;base64,AAEC")
     expect(calls).toBe(2)
   } finally { store.dispose() }
+})
+
+test("loads an 8 MiB managed image response", async () => {
+  const data = Buffer.alloc(8 * 1024 * 1024, 42).toString("base64")
+  const store = createRemoteStore({
+    http: createRemoteHttp(),
+    createTransport: () => { throw new Error("No relay needed") },
+    fetch: async () => Response.json({ mime: "image/png", bytes: 8 * 1024 * 1024, data }),
+  })
+  try {
+    expect(await store.loadImageSource({ deviceID: "dev_1", sessionID: "ses_a", digest: "a".repeat(64), mime: "image/png" })).toBe(`data:image/png;base64,${data}`)
+  } finally { store.dispose() }
+})
+
+test("a stalled managed image read settles and can be retried", async () => {
+  jest.useFakeTimers()
+  let calls = 0
+  const store = createRemoteStore({
+    http: createRemoteHttp(),
+    createTransport: () => { throw new Error("No relay needed") },
+    fetch: async (_input, init) => {
+      if (++calls > 1) return Response.json({ mime: "image/png", bytes: 3, data: "AAEC" })
+      return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }))
+    },
+  })
+  const image = { deviceID: "dev_1", sessionID: "ses_a", digest: "a".repeat(64), mime: "image/png" }
+  try {
+    const pending = store.loadImageSource(image)
+    jest.advanceTimersByTime(120_001)
+    expect(await pending.then(() => "loaded", () => "unavailable")).toBe("unavailable")
+    expect(await store.loadImageSource(image)).toBe("data:image/png;base64,AAEC")
+    expect(calls).toBe(2)
+  } finally { store.dispose(); jest.useRealTimers() }
 })
 
 test("changing Sessions aborts pending image reads and clears the previous Session cache", async () => {

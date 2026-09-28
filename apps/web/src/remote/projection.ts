@@ -7,7 +7,7 @@
  */
 
 import type { Form } from "../../../../packages/schema/src/form"
-import { RemoteLimits, type RemoteCompactionHistory } from "@ycoding-ai/remote"
+import { RemoteLimits, isWellFormedBase64, type RemoteCompactionHistory } from "@ycoding-ai/remote"
 
 /** `packages/schema` `Model.Ref`: an object, never a plain string. */
 export type ModelRefView = {
@@ -1006,7 +1006,7 @@ export function readToolContent(content: unknown): readonly ToolContentBlock[] {
       const mime = stringField(item.mime)
       const uri = stringField(item.uri)
       if (mime !== undefined && imageMimes.has(mime) && uri !== undefined &&
-        uri.startsWith(`data:${mime};base64,`) && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(uri.slice(`data:${mime};base64,`.length)))
+        uri.startsWith(`data:${mime};base64,`) && isWellFormedBase64(uri.slice(`data:${mime};base64,`.length)))
         return [{ kind: "image", uri, mime, ...(stringField(item.name) === undefined ? {} : { name: stringField(item.name) }) }]
       return [{ kind: "other", type, summary: stringField(item.name) ?? "File" }]
     }

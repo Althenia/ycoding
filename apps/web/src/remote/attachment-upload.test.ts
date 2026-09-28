@@ -33,6 +33,30 @@ test("uploads a large image in ordered bounded chunks before replacing its promp
   expect(progress.at(-1)).toBe(100)
 })
 
+test("uploads an 8 MiB image without rejecting valid base64 on JavaScriptCore", async () => {
+  const data = Buffer.alloc(8 * 1024 * 1024, 42).toString("base64")
+  let chunks = 0
+  const files = await uploadAttachments({ sessionID: "ses_1", files: [{ uri: `data:image/png;base64,${data}` }], request: async (_operation, request) => {
+    chunks++
+    const uploadID = request?.input?.uploadID
+    if (typeof uploadID !== "string") throw new Error("Missing upload ID")
+    return { status: "ok" as const, value: request?.input?.last ? { uri: `ycoding-upload://${uploadID}` } : { received: 1 } }
+  } })
+  expect(chunks).toBeGreaterThan(300)
+  expect(files[0]?.uri).toStartWith("ycoding-upload://")
+})
+
+test("rejects malformed base64 uploads before sending any chunks", async () => {
+  for (const data of ["AA!A", "AA=A", "AAA", ""]) {
+    let chunks = 0
+    await uploadAttachments({ sessionID: "ses_1", files: [{ uri: `data:image/png;base64,${data}` }], request: async () => {
+      chunks++
+      return { status: "ok" as const, value: null }
+    } }).then(() => { throw new Error("Malformed upload was accepted") }, (error: unknown) => expect(String(error)).toContain("Attachment data is not canonical base64."))
+    expect(chunks).toBe(0)
+  }
+})
+
 test("upload cancellation and a failed chunk never produce a sendable reference", async () => {
   const data = Buffer.alloc(50_000, 42).toString("base64")
   const controller = new AbortController()

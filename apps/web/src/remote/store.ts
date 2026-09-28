@@ -1,4 +1,4 @@
-import { RemoteLimits, type CreateEnrollmentResponse, type RemoteDeviceInfo, type RemoteFamilyActivity, type RemoteOperation, type RemoteWorkspaceInfo } from "@ycoding-ai/remote"
+import { RemoteLimits, isWellFormedBase64, type CreateEnrollmentResponse, type RemoteDeviceInfo, type RemoteFamilyActivity, type RemoteOperation, type RemoteWorkspaceInfo } from "@ycoding-ai/remote"
 import { catalogKey, readCatalog, readFileFind, type AgentAttachmentInput, type CatalogTarget, type CatalogView, type FileAttachmentInput, type FileFindResult } from "./catalog"
 import { signInURL, type RemoteHttp, type RemoteHttpResult, type SignInProvider } from "./http"
 import {
@@ -2406,6 +2406,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const cached = imageSources.get(input.digest)
       if (cached !== undefined) return cached.mime === input.mime ? cached.promise : Promise.reject(new Error("Invalid attachment"))
       const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 120_000)
       const promise = (async () => {
         const response = await (options.fetch ?? fetch)(`/api/remote/devices/${encodeURIComponent(input.deviceID)}/sessions/${encodeURIComponent(input.sessionID)}/attachments/${input.digest}`,
           { credentials: "same-origin", signal: controller.signal })
@@ -2414,13 +2415,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         if (typeof payload !== "object" || payload === null || !("mime" in payload) || !("data" in payload) || !("bytes" in payload) ||
           payload.mime !== input.mime || typeof payload.bytes !== "number" || !Number.isSafeInteger(payload.bytes) || payload.bytes < 0 || payload.bytes > 10 * 1024 * 1024 ||
           typeof payload.data !== "string" || payload.data.length > 14 * 1024 * 1024 ||
-          !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(payload.data) || controller.signal.aborted)
+          !isWellFormedBase64(payload.data) || controller.signal.aborted)
           throw new Error("Invalid attachment")
         return `data:${input.mime};base64,${payload.data}`
       })().catch((error: unknown) => {
         if (imageSources.get(input.digest)?.promise === promise) imageSources.delete(input.digest)
         throw error
-      })
+      }).finally(() => clearTimeout(timeout))
       imageSources.set(input.digest, { mime: input.mime, controller, promise })
       return promise
     },
