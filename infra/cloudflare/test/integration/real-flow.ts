@@ -94,6 +94,7 @@ try {
   let providerTurn: {
     readonly tool?: { readonly id: string; readonly name: string; readonly input: Readonly<Record<string, unknown>> }
     readonly text: string
+    readonly prompt?: string
   } = {
     text: providerText,
   }
@@ -104,10 +105,14 @@ try {
     fetch: async (request) => {
       const url = new URL(request.url)
       if (!url.pathname.endsWith("/chat/completions")) return new Response("not found", { status: 404 })
-      providerRequests.push(await request.json())
+      const body: unknown = await request.json()
+      providerRequests.push(body)
       const encoder = new TextEncoder()
-      const turn = providerTurn
-      providerTurn = { text: providerFollowUpText }
+      const prompt = providerTurn.prompt
+      const selected = prompt === undefined || (isRecord(body) && Array.isArray(body.messages) && body.messages.some((message) =>
+        isRecord(message) && message.role === "user" && typeof message.content === "string" && message.content.startsWith(prompt)))
+      const turn = selected ? providerTurn : { text: providerFollowUpText }
+      if (selected) providerTurn = { text: providerFollowUpText }
       const frames = turn.tool === undefined
         ? [deltaChunk({ role: "assistant" }), deltaChunk({ content: turn.text }), finishChunk("stop")]
         : (() => {
@@ -118,7 +123,7 @@ try {
               finishChunk("tool_calls"),
             ]
           })()
-      const hold = providerMode === "hold" && turn.tool === undefined
+      const hold = providerMode === "hold" && selected && turn.tool === undefined
       const stream = new ReadableStream({
         async start(controller) {
           for (const frame of frames) controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`))
@@ -658,7 +663,7 @@ try {
   }
   await store.setYolo(2)
   providerFollowUpText = "Reply after the YOLO-approved shell call."
-  providerTurn = { tool: { id: "call_flow_yolo", name: "shell", input: { command: "touch yolo-approved.txt" } }, text: "" }
+  providerTurn = { tool: { id: "call_flow_yolo", name: "shell", input: { command: "touch yolo-approved.txt" } }, text: "", prompt: "Run the harmless YOLO approval check" }
   await store.sendPrompt({ text: "Run the harmless YOLO approval check", delivery: "steer" })
   await waitFor(() => existsSync(join(openedWorkspace, "yolo-approved.txt")) ? true : undefined,
     30_000, "YOLO 2 did not automatically approve the ask-permission shell call")
@@ -782,6 +787,7 @@ try {
       },
     },
     text: "",
+    prompt: "Ask the composed-flow question",
   }
   await store.sendPrompt({ text: "Ask the composed-flow question", delivery: "steer" })
   const pendingForm = await waitFor(
@@ -895,7 +901,7 @@ try {
 
   const raiseApproval = async (command: string, label: string, followUp: string) => {
     providerFollowUpText = followUp
-    providerTurn = { tool: { id: `call_flow_${label}`, name: "shell", input: { command } }, text: "" }
+    providerTurn = { tool: { id: `call_flow_${label}`, name: "shell", input: { command } }, text: "", prompt: `run ${command}` }
     const prompted = await probeRequest("session.prompt", {
       sessionID,
       input: { id: `msg_approval_${label}`, text: `run ${command}` },
@@ -1002,7 +1008,7 @@ try {
 
   const guardrailReviewFor = async (command: string, label: string) => {
     providerFollowUpText = `Stand-in reply after guardrail ${label}.`
-    providerTurn = { tool: { id: `call_guard_${label}`, name: "shell", input: { command } }, text: "" }
+    providerTurn = { tool: { id: `call_guard_${label}`, name: "shell", input: { command } }, text: "", prompt: `run ${command}` }
     const prompted = await probeRequest("session.prompt", {
       sessionID: guardSessionID,
       input: { id: `msg_guard_${label}`, text: `run ${command}` },
@@ -1155,6 +1161,7 @@ try {
   /* --------------------------------------- interrupt through the real service */
 
   providerMode = "hold"
+  providerTurn = { text: providerText, prompt: "hold the stream open" }
   const executing = await probeRequest("session.prompt", {
     sessionID,
     input: { id: "msg_real_flow_interrupt", text: "hold the stream open" },
@@ -1182,7 +1189,21 @@ try {
 
   await Bun.sleep(RemoteLimits.clientRateWindowMs + 1)
   providerMode = "normal"
-  providerTurn = { tool: { id: "call_real_flow_child_question", name: "subagent_report", input: { action: "question", text: "Which environment should I verify?" } }, text: "" }
+  providerTurn = { tool: { id: "call_real_flow_child_question", name: "subagent_report", input: { action: "question", text: "Which environment should I verify?" } }, text: "", prompt: "Ask which environment to verify" }
+  const beforeCompetitor = providerRequests.length
+  const competingPrompt = await server.request(`/api/session/${hiddenSessionID}/prompt`, { method: "POST",
+    headers: { "content-type": "application/json", "x-ycoding-directory": workspace },
+    body: JSON.stringify({ id: "msg_real_flow_competing", text: "Answer the unrelated hidden Session" }) })
+  expect(competingPrompt.ok, `competing Session prompt failed: ${competingPrompt.status}`)
+  const competingRequest = await waitFor(() => providerRequests.slice(beforeCompetitor).find((body) =>
+    isRecord(body) && Array.isArray(body.messages) && body.messages.some((message) =>
+      isRecord(message) && message.role === "user" && typeof message.content === "string" && message.content.startsWith("Answer the unrelated hidden Session"))),
+  30_000, "the unrelated Session never reached the provider")
+  expect(isRecord(competingRequest) && Array.isArray(competingRequest.messages) &&
+    !JSON.stringify(competingRequest.tools ?? []).includes("subagent_report"), "the competing provider request was not an unrelated root request")
+  await waitFor(async () => (await local.messages(hiddenSessionID, { directory: workspace })).some((message) =>
+    message.type === "assistant" && JSON.stringify(message).includes(providerFollowUpText)) ? true : undefined,
+  30_000, "the unrelated Session did not receive the follow-up text")
   const launchedQuestion = await server.request(`/api/session/${sessionID}/subagent`, { method: "POST",
     headers: { "content-type": "application/json", "x-ycoding-directory": workspace },
     body: JSON.stringify({ parentAssistantMessageID: "msg_real_flow_team_parent", toolCallID: "call_real_flow_team_question", agent: "flow-child",
@@ -1210,7 +1231,7 @@ try {
   checks.push("managed child question/answer and bounded economics crossed the real relay; unrelated economics was refused")
 
   providerMode = "hold"
-  providerTurn = { text: "Child held until cancellation." }
+  providerTurn = { text: "Child held until cancellation.", prompt: "Wait for the parent to cancel" }
   const launchedCancel = await server.request(`/api/session/${sessionID}/subagent`, { method: "POST",
     headers: { "content-type": "application/json", "x-ycoding-directory": workspace },
     body: JSON.stringify({ parentAssistantMessageID: "msg_real_flow_team_parent", toolCallID: "call_real_flow_team_cancel", agent: "flow-child",
