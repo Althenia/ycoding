@@ -161,7 +161,7 @@ export function NotificationCenter(props: { readonly onOpenSession: (sessionID: 
   )
 }
 
-function Toast(props: { readonly notification: RemoteNotificationView; readonly onOpenSession: (id: string) => void; readonly onDismiss: (id: string) => void }): JSX.Element {
+function Toast(props: { readonly notification: () => RemoteNotificationView; readonly onOpenSession: (id: string) => void; readonly onDismiss: (id: string) => void }): JSX.Element {
   const [paused, setPaused] = createSignal(false)
   const [leaving, setLeaving] = createSignal(false)
   let root: HTMLDivElement | undefined
@@ -173,7 +173,7 @@ function Toast(props: { readonly notification: RemoteNotificationView; readonly 
     if (leaving()) return
     clearTimeout(timer)
     setLeaving(true)
-    exitTimer = setTimeout(() => props.onDismiss(props.notification.id), 220)
+    exitTimer = setTimeout(() => props.onDismiss(props.notification().id), 220)
   }
   const resume = () => {
     if (!paused() || leaving()) return
@@ -190,11 +190,11 @@ function Toast(props: { readonly notification: RemoteNotificationView; readonly 
   timer = setTimeout(dismiss, remaining)
   onCleanup(() => { clearTimeout(timer); clearTimeout(exitTimer) })
   return (
-    <div ref={root} class={`yc-toast yc-toast--${props.notification.category}${paused() ? " yc-toast--paused" : ""}${leaving() ? " yc-toast--leaving" : ""}`} onMouseEnter={pause} onMouseLeave={() => { if (!root?.contains(document.activeElement)) resume() }} onFocusIn={pause} onFocusOut={(event) => { if (!(event.relatedTarget instanceof Node) || !root?.contains(event.relatedTarget)) resume() }}>
-      <span class="yc-toast__icon" aria-hidden="true"><Icon name={kinds[props.notification.category].icon} size={18} /></span>
-      <div class="yc-toast__body"><strong>{kinds[props.notification.category].label}</strong><span>{props.notification.sessionTitle ?? props.notification.body}</span></div>
-      <Show when={props.notification.sessionID}><button type="button" class="yc-toast__open" onClick={() => { props.onOpenSession(props.notification.sessionID!); dismiss() }}>Open</button></Show>
-      <button type="button" class="yc-toast__close" aria-label={`Dismiss ${kinds[props.notification.category].label} toast`} onClick={dismiss}><Icon name="close" size={14} /></button>
+    <div ref={root} class={`yc-toast yc-toast--${props.notification().category}${paused() ? " yc-toast--paused" : ""}${leaving() ? " yc-toast--leaving" : ""}`} onMouseEnter={pause} onMouseLeave={() => { if (!root?.contains(document.activeElement)) resume() }} onFocusIn={pause} onFocusOut={(event) => { if (!(event.relatedTarget instanceof Node) || !root?.contains(event.relatedTarget)) resume() }}>
+      <span class="yc-toast__icon" aria-hidden="true"><Icon name={kinds[props.notification().category].icon} size={18} /></span>
+      <div class="yc-toast__body"><strong>{kinds[props.notification().category].label}</strong><span>{props.notification().sessionTitle ?? props.notification().body}</span></div>
+      <Show when={props.notification().sessionID}><button type="button" class="yc-toast__open" onClick={() => { const sessionID = props.notification().sessionID; if (sessionID) props.onOpenSession(sessionID); dismiss() }}>Open</button></Show>
+      <button type="button" class="yc-toast__close" aria-label={`Dismiss ${kinds[props.notification().category].label} toast`} onClick={dismiss}><Icon name="close" size={14} /></button>
       <span class="yc-toast__progress" aria-hidden="true" />
     </div>
   )
@@ -208,12 +208,16 @@ export function NotificationToasts(props: { readonly onOpenSession: (sessionID: 
     const entries = remote.state().notifications
     const added = newlyAddedNotifications(seen, entries)
     seen = new Set(entries.map((entry) => entry.id))
-    if (added.length) setQueue((current) => enqueueToasts(current, added))
+    setQueue((current) => {
+      const next = added.length ? enqueueToasts(current, added) : current
+      const updated = next.map((entry) => entries.find((item) => item.id === entry.id) ?? entry)
+      return updated.every((entry, index) => entry === next[index]) ? next : updated
+    })
   })
   return (
     <Show when={queue().length > 0}>
       <aside class="yc-toasts" role="status" aria-live="polite" aria-label="New notifications">
-        <For each={queue()}>{(entry) => <Toast notification={entry} onOpenSession={props.onOpenSession} onDismiss={(id) => setQueue((current) => current.filter((item) => item.id !== id))} />}</For>
+        <For each={queue().map((entry) => entry.id)}>{(id) => <Toast notification={() => remote.state().notifications.find((entry) => entry.id === id) ?? queue().find((entry) => entry.id === id)!} onOpenSession={props.onOpenSession} onDismiss={(dismissed) => setQueue((current) => current.filter((entry) => entry.id !== dismissed))} />}</For>
       </aside>
     </Show>
   )

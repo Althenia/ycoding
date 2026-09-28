@@ -100,6 +100,7 @@ export type NotificationDeliveryOptions = {
 export type NotificationDelivery = {
   readonly deliver: (category: NotificationCategory, context?: { readonly sessionID?: string; readonly sessionTitle?: string }) => void
   readonly entries: () => readonly RemoteNotificationView[]
+  readonly setSessionTitle: (sessionID: string, title: string) => boolean
   readonly dismiss: (id: string) => void
   readonly markRead: () => void
   readonly clear: () => void
@@ -130,6 +131,11 @@ export function createNotificationDelivery(options: NotificationDeliveryOptions 
       ].slice(0, 50)
     },
     entries: () => entries,
+    setSessionTitle: (sessionID, title) => {
+      if (!entries.some((entry) => entry.sessionID === sessionID && entry.sessionTitle === undefined)) return false
+      entries = entries.map((entry) => entry.sessionID === sessionID && entry.sessionTitle === undefined ? { ...entry, sessionTitle: title } : entry)
+      return true
+    },
     dismiss: (id) => {
       entries = entries.filter((entry) => entry.id !== id)
     },

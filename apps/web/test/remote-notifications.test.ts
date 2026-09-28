@@ -13,7 +13,7 @@ import {
 } from "../src/remote/preferences"
 import { createRemoteStore, type RemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
-import { startRelayDouble, waitFor, type RelayDouble } from "./relay-double"
+import { startRelayDouble, waitFor, type RelayDouble, type RelayRequestHandler } from "./relay-double"
 
 type Harness = {
   readonly store: RemoteStore
@@ -65,6 +65,7 @@ async function harness(options: {
   readonly messages?: Record<string, readonly unknown[]>
   readonly permissions?: readonly unknown[]
   readonly guardrailRequests?: readonly unknown[]
+  readonly handler?: RelayRequestHandler
   /** Overrides the enrolled devices so a case can switch between two of them. */
   readonly devices?: readonly RemoteDeviceInfo[]
 } = {}): Promise<Harness> {
@@ -76,6 +77,7 @@ async function harness(options: {
     messages: options.messages,
     permissions: options.permissions,
     guardrailRequests: options.guardrailRequests,
+    handler: options.handler,
     me: { user: { id: "user_1" }, session: { expiresAt: 4_102_444_800_000 }, devices },
   })
   const preferences = mutedStorage(options.muted ?? [])
@@ -171,6 +173,57 @@ async function needDecision(test: Harness, sessionID = "ses_a") {
 }
 
 describe("remote notification delivery", () => {
+  test("a stopped root outside the resident Sessions page takes its carousel title without a detail read", async () => {
+    const test = await harness({ handler: (request) => {
+      if (request.operation === "session.list" && request.input?.status === "running") return { ok: true, value: { data: [{ id: "ses_far", title: "Cross-workspace work", time: { created: 1, updated: 2 } }] } }
+      if (request.operation === "session.list" && request.input?.status === "idle") return { ok: true, value: { data: [] } }
+      return "default"
+    } })
+    try {
+      await test.openSession()
+      await test.runUntil(() => test.store.state().carouselSessions?.some((row) => row.id === "ses_far") === true)
+      expect(test.store.state().sessions.some((row) => row.id === "ses_far")).toBe(false)
+      await stopRoot(test, "ses_far")
+      expect(test.store.state().notifications[0]).toMatchObject({ sessionID: "ses_far", sessionTitle: "Cross-workspace work" })
+      expect(test.relay.requests.filter((request) => request.operation === "session.get" && request.sessionID === "ses_far")).toHaveLength(0)
+      expect(test.alerts[0]?.body).toBe("A session stopped running.")
+    } finally { await test.stop() }
+  })
+
+  test("coalesces one detail read for unresolved notices and fills retained copies in place", async () => {
+    const detail = Promise.withResolvers<Awaited<ReturnType<RelayRequestHandler>>>()
+    const test = await harness({ handler: (request) => request.operation === "session.get" && request.sessionID === "ses_far" ? detail.promise : "default" })
+    try {
+      await test.openSession()
+      await stopRoot(test, "ses_far")
+      await test.runUntil(() => test.relay.requests.filter((request) => request.operation === "session.get" && request.sessionID === "ses_far").length === 1)
+      await needDecision(test, "ses_far")
+      const notices = test.store.state().notifications.filter((entry) => entry.sessionID === "ses_far")
+      expect(notices).toHaveLength(2)
+      test.store.markNotificationsRead()
+      detail.resolve({ ok: true, value: { data: { id: "ses_far", title: "Unlisted root", time: { created: 1, updated: 2 } } } })
+      await test.runUntil(() => test.store.state().notifications.filter((entry) => entry.sessionID === "ses_far").every((entry) => entry.sessionTitle === "Unlisted root"))
+      expect(test.store.state().notifications.filter((entry) => entry.sessionID === "ses_far").map((entry) => [entry.id, entry.read])).toEqual(notices.map((entry) => [entry.id, true]))
+      expect(test.relay.requests.filter((request) => request.operation === "session.get" && request.sessionID === "ses_far")).toHaveLength(1)
+      expect(test.alerts.every((alert) => !alert.body.includes("Unlisted root"))).toBe(true)
+    } finally { detail.resolve("default"); await test.stop() }
+  }, 15_000)
+
+  test("a failed detail read keeps fixed copy and is not retried by later notices", async () => {
+    const test = await harness({ handler: (request) => request.operation === "session.get" && request.sessionID === "ses_far"
+      ? { ok: false, code: "session_not_allowed", message: "Unavailable" } : "default" })
+    try {
+      await test.openSession()
+      await stopRoot(test, "ses_far")
+      await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.get" && request.sessionID === "ses_far"))
+      await needDecision(test, "ses_far")
+      expect(test.store.state().notifications.filter((entry) => entry.sessionID === "ses_far").map((entry) => [entry.sessionTitle, entry.body])).toEqual([
+        [undefined, "A session is waiting for your decision."], [undefined, "A session stopped running."],
+      ])
+      expect(test.relay.requests.filter((request) => request.operation === "session.get" && request.sessionID === "ses_far")).toHaveLength(1)
+    } finally { await test.stop() }
+  }, 15_000)
+
   test("one root stop published as an event and a status transition raises one notice", async () => {
     const test = await harness()
     try {

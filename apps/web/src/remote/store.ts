@@ -7,6 +7,7 @@ import {
   type NotificationDelivery,
   type RemoteNotificationView,
 } from "./notifications"
+import type { NotificationCategory } from "./preferences"
 import {
   applySessionEvent,
   canReplyToRequest,
@@ -336,6 +337,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   const createMessageID = options.createMessageID ?? defaultMessageID
   const deviceName = options.deviceName ?? ((deviceID: string) => deviceID)
   const delivery = options.notificationDelivery ?? createNotificationDelivery()
+  const notificationTitles = new Map<string, string | undefined>()
 
   let state: RemoteStoreState = {
     connection: { kind: "loading" },
@@ -488,7 +490,27 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
 
   const endAlerts = (retainMachineOffline = false) => {
     delivery.dispose(retainMachineOffline)
+    if (!retainMachineOffline) notificationTitles.clear()
     setState({ notifications: delivery.entries() })
+  }
+
+  const notifySession = (category: NotificationCategory, sessionID: string) => {
+    const title = notificationSessionTitle(state, sessionID) ?? notificationTitles.get(sessionID) ??
+      delivery.entries().find((entry) => entry.sessionID === sessionID)?.sessionTitle
+    if (title !== undefined) notificationTitles.set(sessionID, title)
+    delivery.deliver(category, { sessionID, ...(title === undefined ? {} : { sessionTitle: title }) })
+    if (title !== undefined || notificationTitles.has(sessionID) || !delivery.entries().some((entry) => entry.sessionID === sessionID && entry.sessionTitle === undefined)) return
+    const owner = transport
+    if (owner === undefined || !isCurrentConnection(owner)) return
+    notificationTitles.set(sessionID, undefined)
+    void owner.request("session.get", { sessionID, timeoutMs: 5_000 }).then((outcome) => {
+      if (!isCurrentConnection(owner) || outcome.status !== "ok") return
+      const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
+      const resolved = readSessionInfo(data)
+      if (resolved?.id !== sessionID) return
+      notificationTitles.set(sessionID, resolved.title)
+      if (delivery.setSessionTitle(sessionID, resolved.title)) setState({ notifications: delivery.entries() })
+    }, () => undefined)
   }
 
   const reportMachineOffline = () => {
@@ -586,8 +608,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       // Alerts follow the events that reach the projection: a dropped duplicate
       // raises nothing, and the snapshot paths below never call this loop.
       const category = notificationCategory(item.event)
-      if (category !== undefined) delivery.deliver(category, { sessionID: item.sessionID,
-        sessionTitle: state.sessions.find((row) => row.id === item.sessionID)?.title ?? state.selectedSessionInfo?.title })
+      if (category !== undefined) notifySession(category, item.sessionID)
       const at = now()
       const next = applySessionEvent(view, item.event, at)
       if (typeof item.event === "object" && item.event !== null && Reflect.get(item.event, "type") === "session.compaction.ended") recordCovered(view, next)
@@ -1379,8 +1400,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const changed = previous === undefined || previous.running.size !== status.running.size || previous.attention.size !== status.attention.size ||
       [...status.running].some((id) => !previous.running.has(id)) || [...status.attention].some((id) => !previous.attention.has(id))
     if ((statusBaseline || reconnectStatus?.owner === owner) && comparison !== undefined) {
-      for (const id of status.attention) if (!comparison.attention.has(id)) delivery.deliver("approval-requested", { sessionID: id, sessionTitle: state.sessions.find((row) => row.id === id)?.title })
-      for (const id of comparison.running) if (!status.running.has(id)) delivery.deliver("agent-completed", { sessionID: id, sessionTitle: state.sessions.find((row) => row.id === id)?.title })
+      for (const id of status.attention) if (!comparison.attention.has(id)) notifySession("approval-requested", id)
+      for (const id of comparison.running) if (!status.running.has(id)) notifySession("agent-completed", id)
     }
     reconnectStatus = undefined
     statusBaseline = true
@@ -2822,6 +2843,15 @@ function readUsageReport(value: unknown, group: UsageReportInput["group"]): Usag
     typeof Reflect.get(row, "label") === "string" && readUsageMetrics(row) !== undefined &&
     ((Reflect.get(row, "cost") === undefined) === (Reflect.get(row, "costProvenance") === undefined)))) return undefined
   return value as UsageReport
+}
+
+export function notificationSessionTitle(state: {
+  readonly sessions: readonly { readonly id: string; readonly title: string }[]
+  readonly carouselSessions?: readonly { readonly id: string; readonly title: string }[]
+  readonly selectedSessionInfo?: { readonly id: string; readonly title: string }
+}, sessionID: string): string | undefined {
+  return state.sessions.find((row) => row.id === sessionID)?.title ?? state.carouselSessions?.find((row) => row.id === sessionID)?.title ??
+    (state.selectedSessionInfo?.id === sessionID ? state.selectedSessionInfo.title : undefined)
 }
 
 export function readSessionInfo(value: unknown, options: { readonly running?: boolean; readonly attention?: boolean } = {}): SessionInfoView | undefined {

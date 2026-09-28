@@ -36,6 +36,26 @@ async function open(width: number, theme: "light" | "dark", initial = "seeded") 
 }
 
 describe("notification center and live toasts", () => {
+  test("an unresolved Session title updates its visible row and toast without restarting either", async () => {
+    for (const [width, theme] of [[390, "light"], [1440, "dark"]] as const) {
+      const page = await open(width, theme, "empty")
+      try {
+        await page.evaluate(`window.remoteNotify('agent-completed', 'ses_alpha', false)`)
+        for (let attempt = 0; attempt < 30 && !await page.evaluate<boolean>(`document.querySelector('.yc-toast__body span') !== null`); attempt += 1) await Bun.sleep(30)
+        await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
+        expect(await page.evaluate<{ row: string; toast: string }>(`({ row: document.querySelector('.yc-notification__open span')?.textContent, toast: document.querySelector('.yc-toast__body span')?.textContent })`)).toEqual({ row: "An action needs attention.", toast: "An action needs attention." })
+        await page.evaluate(`window.noticeRow = document.querySelector('.yc-notification'); window.noticeToast = document.querySelector('.yc-toast'); window.remoteResolveTitle('ses_alpha', 'Alpha Session')`)
+        expect(await page.evaluate<{ row: string; toast: string; sameRow: boolean; sameToast: boolean }>(`({ row: document.querySelector('.yc-notification__open span')?.textContent, toast: document.querySelector('.yc-toast__body span')?.textContent, sameRow: document.querySelector('.yc-notification') === window.noticeRow, sameToast: document.querySelector('.yc-toast') === window.noticeToast })`)).toEqual({ row: "Alpha Session", toast: "Alpha Session", sameRow: true, sameToast: true })
+        await page.pressEscape()
+        await page.evaluate(`Promise.all([...document.querySelector('.yc-notification-panel').getAnimations()].map(animation => animation.finished))`)
+        await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
+        expect(await page.evaluate<string>(`document.querySelector('.yc-notification__open span')?.textContent ?? ''`)).toBe("Alpha Session")
+        await page.evaluate(`document.querySelector('.yc-notification__dismiss').click()`)
+        expect(await page.evaluate<string>(`document.querySelector('.yc-toast__body span')?.textContent ?? ''`)).toBe("Alpha Session")
+      } finally { await page.close() }
+    }
+  }, 15_000)
+
   test("live status, clock, read, and reconnect updates preserve an open center and its settled rows", async () => {
     for (const [width, height] of [[390, 844], [1440, 900]] as const) for (const theme of ["light", "dark"] as const) {
       const page = await browser!.openPage()

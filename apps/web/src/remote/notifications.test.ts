@@ -15,6 +15,7 @@ import {
   type DesktopAlert,
   type DesktopNotifier,
 } from "./notifications"
+import { notificationSessionTitle } from "./store"
 
 /** The DOM global is replaced for the duration of the check, then restored. */
 type NotificationGlobal = { Notification?: typeof Notification }
@@ -159,7 +160,27 @@ describe("notificationCategory", () => {
   })
 })
 
+test("an event for another Session never borrows the selected Session title", () => {
+  const state = { sessions: [], carouselSessions: [], selectedSessionInfo: { id: "ses_selected", title: "Selected work" } }
+  expect(notificationSessionTitle(state, "ses_other")).toBeUndefined()
+  expect(notificationSessionTitle(state, "ses_selected")).toBe("Selected work")
+})
+
 describe("createNotificationDelivery", () => {
+  test("fills retained notices for one Session without changing IDs, read state, or desktop copy", () => {
+    const test = deliveryWith({})
+    test.delivery.deliver("agent-completed", { sessionID: "ses_a" })
+    test.delivery.deliver("approval-requested", { sessionID: "ses_a" })
+    test.delivery.deliver("error", { sessionID: "ses_b" })
+    test.delivery.markRead()
+    const before = test.delivery.entries().map((entry) => [entry.id, entry.read, entry.category])
+    expect(test.delivery.setSessionTitle("ses_a", "Named work")).toBe(true)
+    expect(test.delivery.entries().map((entry) => [entry.id, entry.read, entry.category])).toEqual(before)
+    expect(test.delivery.entries().map((entry) => entry.sessionTitle)).toEqual([undefined, "Named work", "Named work"])
+    expect(test.delivery.setSessionTitle("ses_a", "Different title")).toBe(false)
+    expect(test.recorder.alerts.every((alert) => !alert.body.includes("Named work"))).toBe(true)
+  })
+
   test("raises one in-app notice and one desktop alert for one event", () => {
     const test = deliveryWith({})
     test.delivery.deliver("agent-completed")
