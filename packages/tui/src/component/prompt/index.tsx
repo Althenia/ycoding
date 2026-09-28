@@ -253,6 +253,7 @@ const stashed = new WeakMap<
   object,
   { prompt: PromptInfo; cursor: number; temporaryAttachments?: Map<string, ClipboardTemporary> }
 >()
+const activePrompts = new WeakMap<object, { clear: (sessionID: string | undefined, prompt: PromptInfo) => void }>()
 
 function argumentSlash(input: string, commands: readonly KeymapCommand[]) {
   const head = parseSlashHead(input, /\s/)
@@ -1017,14 +1018,27 @@ export function Prompt(props: PromptProps) {
   onMount(() => {
     const saved = stashed.get(client)
     stashed.delete(client)
-    if (store.prompt.text) return
-    if (saved && (saved.prompt.text || (saved.prompt.files?.length ?? 0) > 0)) {
+    if (!store.prompt.text && saved && (saved.prompt.text || (saved.prompt.files?.length ?? 0) > 0)) {
       for (const [uri, temporary] of saved.temporaryAttachments ?? []) temporaryAttachments.set(uri, temporary)
       input.setText(saved.prompt.text)
       setStore("prompt", saved.prompt)
       restoreExtmarksFromPrompt(saved.prompt)
       input.cursorOffset = saved.cursor
     }
+    const owner = {
+      clear(sessionID: string | undefined, prompt: PromptInfo) {
+        if (
+          props.sessionID === sessionID &&
+          store.prompt.text === prompt.text &&
+          (store.prompt.files?.length ?? 0) === (prompt.files?.length ?? 0) &&
+          store.prompt.pasted.length === prompt.pasted.length
+        ) clearPrompt(false)
+      },
+    }
+    activePrompts.set(client, owner)
+    onCleanup(() => {
+      if (activePrompts.get(client) === owner) activePrompts.delete(client)
+    })
   })
 
   onCleanup(() => {
@@ -2286,18 +2300,30 @@ export function Prompt(props: PromptProps) {
     return
   }
 
-  function clearPrompt() {
+  function clearPrompt(recordHistory = true) {
     if (
-      store.prompt.text.trim().length >= DRAFT_RETENTION_MIN_CHARS ||
-      store.prompt.pasted.length > 0 ||
-      (store.prompt.files?.length ?? 0) > 0 ||
-      (store.prompt.agents?.length ?? 0) > 0
+      recordHistory && (
+        store.prompt.text.trim().length >= DRAFT_RETENTION_MIN_CHARS ||
+        store.prompt.pasted.length > 0 ||
+        (store.prompt.files?.length ?? 0) > 0 ||
+        (store.prompt.agents?.length ?? 0) > 0
+      )
     ) {
       if (![...(store.prompt.files ?? [])].some((file) => temporaryAttachments.has(file.uri)))
         history.append({
           ...store.prompt,
           mode: store.mode,
         })
+    }
+    if (disposed) {
+      const saved = stashed.get(client)
+      if (saved?.prompt.text === store.prompt.text) {
+        stashed.delete(client)
+        for (const temporary of saved.temporaryAttachments?.values() ?? []) void temporary.cleanup().catch(() => {})
+      }
+      activePrompts.get(client)?.clear(props.sessionID, unwrap(store.prompt))
+      setStore("prompt", emptyPrompt())
+      return
     }
     void releaseTemporaryAttachments()
     input.clear()
