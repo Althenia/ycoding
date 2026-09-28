@@ -168,8 +168,6 @@ body:has(.app) {
 
 @media (min-width: 1024px) {
   .app-header__rail-toggle { display: inline-flex; }
-  .app--conversation.app--selected.app--rail-collapsed .workspace { grid-template-columns: minmax(0, 1fr); }
-  .app--conversation.app--selected.app--rail-collapsed .workspace__rail { display: none; }
 }
 
 .app-header__inner {
@@ -553,6 +551,18 @@ body:has(.app) {
   justify-content: space-between;
   gap: var(--yc-space-2);
 }
+
+.workspace__rail .pane__head--sessions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--yc-hit-min);
+  grid-template-areas: "title collapse" "new new";
+}
+
+.workspace__rail .pane__head--sessions .pane__title { grid-area: title; }
+.workspace__rail .pane__head--sessions .new-session__trigger { grid-area: new; justify-self: start; }
+.session-panel__collapse { grid-area: collapse; display: grid; place-items: center; inline-size: var(--yc-hit-min); block-size: var(--yc-hit-min); border: var(--yc-border-width) solid var(--yc-border); border-radius: var(--yc-radius-md); background: var(--yc-surface-raised); color: var(--yc-text-muted); cursor: pointer; }
+.session-panel__collapse:hover { color: var(--yc-text); background: var(--yc-surface-sunken); }
+.session-panel__collapse:focus-visible { outline: 2px solid var(--yc-focus); outline-offset: 2px; }
 
 .page-head {
   display: grid;
@@ -1545,12 +1555,24 @@ body:has(.app) {
 @media (min-width: 768px) {
   .app--conversation.app--selected .workspace {
     grid-template-columns: minmax(220px, 256px) minmax(0, 1fr);
+    transition: grid-template-columns var(--yc-dur-base) var(--yc-ease-standard);
   }
 
   .app--conversation.app--selected .workspace__rail {
     display: block;
     overflow-y: auto;
     min-block-size: 0;
+    min-inline-size: 0;
+  }
+
+  .app--conversation.app--selected.app--rail-collapsed .workspace {
+    grid-template-columns: minmax(0px, 0px) minmax(0, 1fr);
+  }
+
+  .app--conversation.app--selected.app--rail-collapsed .workspace__rail {
+    overflow: hidden;
+    border-inline-end: 0;
+    pointer-events: none;
   }
 
   .remote-nav {
@@ -1602,13 +1624,6 @@ body:has(.app) {
     display: inline-flex;
   }
 
-  .app--conversation.app--selected.app--rail-collapsed .workspace {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .app--conversation.app--selected.app--rail-collapsed .workspace__rail {
-    display: none;
-  }
 }
 
 @media (max-width: 767px) {
@@ -2173,6 +2188,7 @@ body:has(.app) {
 }
 
 .presentation-switch.filters {
+  position: relative;
   display: inline-flex;
   gap: var(--yc-space-1);
   padding: var(--yc-space-1);
@@ -2180,6 +2196,23 @@ body:has(.app) {
   border-radius: var(--yc-radius-md);
   background: var(--yc-surface-sunken);
 }
+
+.presentation-switch__options { display: contents; }
+
+.presentation-switch__indicator {
+  position: absolute;
+  z-index: 0;
+  inset-block: calc(var(--yc-space-1) + var(--yc-border-width));
+  inset-inline-start: 0;
+  inline-size: var(--presentation-width);
+  transform: translateX(var(--presentation-left));
+  border: var(--yc-border-width) solid var(--yc-border-strong);
+  border-radius: var(--yc-radius-sm);
+  background: var(--yc-surface-raised);
+  pointer-events: none;
+}
+
+.presentation-switch__indicator--ready { transition: transform var(--yc-dur-base) var(--yc-ease-standard), inline-size var(--yc-dur-base) var(--yc-ease-standard); }
 
 .presentation-switch .filters__option,
 .office-settings .filters__option {
@@ -2189,14 +2222,20 @@ body:has(.app) {
 }
 
 .presentation-switch .filters__option {
+  position: relative;
+  z-index: 1;
   justify-content: center;
+  font-weight: var(--yc-weight-semibold);
 }
 
 .presentation-switch .filters__option--active {
-  border-color: var(--yc-border-strong);
-  background: var(--yc-surface-raised);
+  border-color: transparent;
+  background: transparent;
   color: var(--yc-text);
 }
+
+.workspace__topbar [aria-label="Open Team"] { transition: background-color var(--yc-dur-base) var(--yc-ease-standard), border-color var(--yc-dur-base) var(--yc-ease-standard), color var(--yc-dur-base) var(--yc-ease-standard); }
+.workspace__topbar [aria-label="Open Team"][aria-expanded="true"] { border-color: var(--yc-green-strong); background: var(--yc-green-soft); color: var(--yc-green-strong); }
 
 .office-settings .list__control.filters {
   display: flex;

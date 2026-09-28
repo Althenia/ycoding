@@ -195,8 +195,8 @@ describe("remote shell layout", () => {
       await page.evaluate(`document.querySelector('.session-status__goal-popover button')?.click()`)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`window.remoteMutationReport().some(item => item.operation === 'session.goal.stop')`); attempt += 1) await Bun.sleep(50)
       expect(await page.evaluate<unknown>(`window.remoteMutationReport().find(item => item.operation === 'session.goal.stop')`)).toEqual({ operation: "session.goal.stop", input: { goal: null } })
-      for (let attempt = 0; attempt < 40 && await page.evaluate<boolean>(`document.querySelector('.session-status__goal-count') !== null`); attempt += 1) await Bun.sleep(50)
-      expect(await page.evaluate<{ readonly goal: boolean; readonly yolo: string }>(`({ goal: document.querySelector('.session-status__goal-count') !== null, yolo: document.querySelector('.session-status__yolo-full')?.textContent ?? '' })`)).toEqual({ goal: false, yolo: "YOLO 3" })
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.session-status__goal-trigger')?.getAttribute('aria-label') === 'Goal off'`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<{ readonly goal: string | null; readonly countVisible: boolean; readonly yolo: string }>(`({ goal: document.querySelector('.session-status__goal-trigger')?.getAttribute('aria-label') ?? null, countVisible:getComputedStyle(document.querySelector('.session-status__goal-count')).visibility !== 'hidden', yolo: document.querySelector('.session-status__yolo-full')?.textContent ?? '' })`)).toEqual({ goal: "Goal off", countVisible: false, yolo: "YOLO 3" })
     } finally { await page.close() }
   }, 15_000)
 
@@ -226,7 +226,7 @@ describe("remote shell layout", () => {
       const page = await browser!.openPage()
       try {
         await page.setViewport(width, height)
-        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=${view}&inventoryCount=80&sessionListDelay=4000`)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=${view}&inventoryCount=80&sessionListDelay=8000`)
         for (let attempt = 0; attempt < 100 && !await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector + ' .loading-placeholder--session')}) !== null`); attempt += 1) await Bun.sleep(50)
         expect(await page.evaluate<{ readonly count: number; readonly announcements: number; readonly busy: boolean; readonly table: boolean }>(`(() => { const root = document.querySelector(${JSON.stringify(selector)}); return {
           count: root?.querySelectorAll('.loading-placeholder--session').length ?? 0,
@@ -237,11 +237,12 @@ describe("remote shell layout", () => {
         expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector + ' .loading-placeholder--session')})?.getBoundingClientRect().height >= 64 && document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
         for (let attempt = 0; attempt < 20 && await page.evaluate<number>(`Number(getComputedStyle(document.querySelector(${JSON.stringify(selector + ' .loading-placeholder__shape')})).opacity)`) < 0.9; attempt += 1) await Bun.sleep(25)
         await Bun.write(new URL(`../../../.cache/tmp/shell-loading-${view}-${width}x${height}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
-        for (let attempt = 0; attempt < 100 && await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector + ' .loading-placeholder--session')}) !== null`); attempt += 1) await Bun.sleep(50)
-        expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector + ' .loading-placeholder--session')}) === null && document.querySelectorAll(${JSON.stringify(view === 'sessions' ? '.sessions-table__row' : '.workspace__rail .session-row')}).length > 0`)).toBe(true)
+        const settled = `document.querySelector(${JSON.stringify(selector + ' .loading-placeholder--session')}) === null && document.querySelectorAll(${JSON.stringify(view === 'sessions' ? '.sessions-table__row' : '.workspace__rail .session-row')}).length > 0`
+        for (let attempt = 0; attempt < 300 && !await page.evaluate<boolean>(settled); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<boolean>(settled)).toBe(true)
       } finally { await page.close() }
     }
-  }, 25_000)
+  }, 60_000)
 
   test("keeps resident Session rows during a same-machine inventory refresh", async () => {
     for (const [width, height] of [[1440, 900], [390, 844]] as const) {
@@ -447,6 +448,80 @@ describe("remote shell layout", () => {
     }
   }, 30_000)
 
+  test("collapses and restores the selected Session rail from its header across desktop and tablet sizes", async () => {
+    for (const [width, height] of [[1024, 768], [1180, 820], [1280, 800], [1440, 900], [1920, 1080], [820, 1180]] as const) for (const theme of ["light", "dark"] as const) {
+      const page = await browser!.openPage()
+      try {
+        await page.injectOnNewDocument(`if (!sessionStorage.getItem('rail-test-started')) { localStorage.removeItem('ycoding.remote.desktopRailCollapsed'); sessionStorage.setItem('rail-test-started','1') }`)
+        await page.setViewport(width, height)
+        const address = `http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}`
+        await page.navigate(address)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.workspace__rail .pane__head--sessions') !== null && document.querySelector('.conversation-breadcrumb') !== null`); attempt += 1) await Bun.sleep(50)
+        const geometry = () => page.evaluate<{ rail: number; main: number; overflow: boolean; transition: string }>(`(() => { const rail=document.querySelector('.workspace__rail'), main=document.querySelector('.workspace__main'), workspace=document.querySelector('.workspace'); return { rail:rail.getBoundingClientRect().width, main:main.getBoundingClientRect().width, overflow:document.documentElement.scrollWidth>innerWidth, transition:getComputedStyle(workspace).transitionDuration } })()`)
+        const initial = await geometry()
+        expect(initial.rail).toBeGreaterThan(200)
+        expect(initial.overflow).toBe(false)
+        expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail button[aria-label="Hide sessions sidebar"]')?.getBoundingClientRect().width >= 44`)).toBe(true)
+        expect(initial.transition).not.toBe("0s")
+        await page.evaluate(`document.querySelector('.workspace__rail button[aria-label="Hide sessions sidebar"]')?.click()`)
+        for (let attempt = 0; attempt < 30 && (await geometry()).rail > 1; attempt += 1) await Bun.sleep(20)
+        const collapsed = await geometry()
+        expect(collapsed.rail).toBeLessThanOrEqual(1)
+        expect(collapsed.main).toBeGreaterThanOrEqual(initial.main + initial.rail - 2)
+        expect(collapsed.overflow).toBe(false)
+        expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail')?.inert === true && document.querySelector('.workspace__rail')?.getAttribute('aria-hidden') === 'true'`)).toBe(true)
+        expect(await page.evaluate<boolean>(`document.querySelector('.app-header button[aria-label="Show sessions sidebar"][aria-expanded="false"]')?.getBoundingClientRect().width >= 44`)).toBe(true)
+        await Bun.write(new URL(`../../../.cache/tmp/rail-collapsed-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        await page.navigate(address)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb') !== null`); attempt += 1) await Bun.sleep(50)
+        expect((await geometry()).rail).toBeLessThanOrEqual(1)
+        await page.evaluate(`document.querySelector('.app-header button[aria-label="Show sessions sidebar"]')?.click()`)
+        for (let attempt = 0; attempt < 30 && Math.abs((await geometry()).rail - initial.rail) > 1; attempt += 1) await Bun.sleep(20)
+        const restored = await geometry()
+        expect(restored.rail).toBeGreaterThan(200)
+        expect(Math.abs(restored.main - initial.main)).toBeLessThanOrEqual(2)
+        expect(restored.overflow).toBe(false)
+        expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail')?.inert === false && document.querySelector('.workspace__rail')?.getAttribute('aria-hidden') !== 'true'`)).toBe(true)
+        await Bun.write(new URL(`../../../.cache/tmp/rail-restored-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        await page.setReducedMotion(true)
+        expect((await geometry()).transition).toBe("0s")
+      } finally { await page.close() }
+    }
+  }, 120_000)
+
+  test("Conversation and Office selection slides without moving the pinned Team control", async () => {
+    for (const width of [1440, 820]) {
+      const page = await fixture("view=chat", width, "Team")
+      try {
+        const measure = () => page.evaluate<{ left: number; width: number; target: number; targetWidth: number; duration: string; property: string; switchWidth: number; switchHeight: number; teamLeft: number; teamDuration: string }>(`(() => { const switcher=document.querySelector('.presentation-switch'), selected=switcher.querySelector('[aria-checked="true"]'), indicator=switcher.querySelector('.presentation-switch__indicator'), team=document.querySelector('.workspace__topbar [aria-label="Open Team"]'); const r=indicator?.getBoundingClientRect(), s=selected.getBoundingClientRect(), bar=switcher.getBoundingClientRect(); return { left:r?.left ?? -1, width:r?.width ?? 0, target:s.left, targetWidth:s.width, duration:indicator ? getComputedStyle(indicator).transitionDuration : '0s', property:indicator ? getComputedStyle(indicator).transitionProperty : '', switchWidth:bar.width, switchHeight:bar.height, teamLeft:team.getBoundingClientRect().left, teamDuration:getComputedStyle(team).transitionDuration } })()`)
+        for (let attempt = 0; attempt < 20; attempt += 1) { const current = await measure(); if (Math.abs(current.left - current.target) <= 1 && Math.abs(current.width - current.targetWidth) <= 1) break; await Bun.sleep(20) }
+        const initial = await measure()
+        expect(Math.abs(initial.left - initial.target)).toBeLessThanOrEqual(1)
+        expect(Math.abs(initial.width - initial.targetWidth)).toBeLessThanOrEqual(1)
+        expect(initial.duration).not.toBe("0s")
+        expect(initial.property).toContain("transform")
+        await page.evaluate(`document.querySelector('.presentation-switch [role="radio"]:last-child')?.click()`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.presentation-switch [role="radio"]:last-child')?.getAttribute('aria-checked') === 'true'`); attempt += 1) await Bun.sleep(50)
+        for (let attempt = 0; attempt < 30; attempt += 1) { const current = await measure(); if (Math.abs(current.left - current.target) <= 1 && Math.abs(current.width - current.targetWidth) <= 1) break; await Bun.sleep(20) }
+        const office = await measure()
+        expect(Math.abs(office.left - office.target)).toBeLessThanOrEqual(1)
+        expect(Math.abs(office.width - office.targetWidth)).toBeLessThanOrEqual(1)
+        expect(Math.abs(office.switchWidth - initial.switchWidth)).toBeLessThanOrEqual(1)
+        expect(Math.abs(office.switchHeight - initial.switchHeight)).toBeLessThanOrEqual(1)
+        expect(Math.abs(office.teamLeft - initial.teamLeft)).toBeLessThanOrEqual(1)
+        expect(office.teamDuration).not.toBe("0s")
+        await Bun.write(new URL(`../../../.cache/tmp/presentation-switch-${width}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        await page.evaluate(`document.querySelector('.workspace__topbar [aria-label="Open Team"]')?.click()`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.workspace__topbar [aria-label="Open Team"]')?.getAttribute('aria-expanded') === 'true'`); attempt += 1) await Bun.sleep(25)
+        expect(await page.evaluate<string>(`document.querySelector('.workspace__topbar [aria-label="Open Team"]')?.getAttribute('aria-expanded')`)).toBe("true")
+        await page.setReducedMotion(true)
+        const reduced = await measure()
+        expect(reduced.duration).toBe("0s")
+        expect(reduced.teamDuration).toBe("0s")
+      } finally { await page.close() }
+    }
+  }, 30_000)
+
   test("keeps the phone Team bar above scrolling Conversation content while Office stays hidden", async () => {
     const page = await fixture("view=chat&team=two", 390, "Team", undefined, 844)
     try {
@@ -622,7 +697,8 @@ describe("remote shell layout", () => {
       expect(initial).toMatchObject({ status: "Connected — Relay session active for Studio Mac.", title: "Stream remote output safely", draft: "Keep this unsent draft", disabled: false })
 
       await page.evaluate(`document.querySelector('.fixture__controls button:nth-child(2)')?.click()`)
-      expect(await page.evaluate<{ readonly status: string; readonly disabled: boolean }>(`window.reconnectSamples.at(-1)`)).toMatchObject({ status: "Connecting — Opening the relay connection.", disabled: true })
+      const drop = " · Last browser relay drop (1006): synthetic disconnect"
+      expect(await page.evaluate<{ readonly status: string; readonly disabled: boolean }>(`window.reconnectSamples.at(-1)`)).toMatchObject({ status: `Connecting — Opening the relay connection.${drop}`, disabled: true })
       for (let attempt = 0; attempt < 30; attempt += 1) {
         if (await page.evaluate<boolean>(`document.querySelector('.notice-strip')?.textContent?.includes('Reconnected.') ?? false`)) break
         await Bun.sleep(50)
@@ -632,7 +708,7 @@ describe("remote shell layout", () => {
         window.reconnectObserver.disconnect();
         return window.reconnectSamples;
       })()`)
-      expect(samples.at(-1)).toMatchObject({ status: initial.status, title: initial.title, draft: initial.draft, disabled: false })
+      expect(samples.at(-1)).toMatchObject({ status: `${initial.status}${drop}`, title: initial.title, draft: initial.draft, disabled: false })
       expect(samples.some((sample) => sample.status.startsWith("Connecting"))).toBe(true)
       expect(samples.every((sample) => sample.title === initial.title && sample.draft === initial.draft && !sample.status.startsWith("Signed out"))).toBe(true)
       expect(samples.every((sample) => Math.abs(sample.top - samples[0]!.top) <= 1 && Math.abs(sample.height - samples[0]!.height) <= 1)).toBe(true)

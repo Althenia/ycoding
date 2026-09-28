@@ -67,7 +67,7 @@ const newSessionHash = "new-session"
 const sessionHashPrefix = "session="
 const lastSessionsKey = "ycoding.remote.lastSessions"
 const restoredStores = new WeakMap<RemoteStore, { deviceID?: string; attempted?: string }>()
-const desktopRailKey = "ycoding.remote.desktopRailCollapsed"
+const sessionRailKey = "ycoding.remote.desktopRailCollapsed"
 
 export type RemoteView = (typeof views)[number]
 
@@ -77,15 +77,14 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
   const remote = useRemote()
   const router = useRouter()
   const [navOpen, setNavOpen] = createSignal(false)
-  const [railCollapsed, setRailCollapsed] = createSignal(false)
   const storage = browserStorage()
-  const [desktopRailCollapsed, setDesktopRailCollapsed] = createSignal(readStored(storage, desktopRailKey, (value) => value === "true") ?? false)
+  const [railCollapsed, setRailCollapsed] = createSignal(readStored(storage, sessionRailKey, (value) => value === "true") ?? false)
   let lastSessions = readStored(storage, lastSessionsKey, readLastSessions) ?? {}
   const restored = restoredStores.get(remote.store) ?? { deviceID: undefined, attempted: undefined }
   restoredStores.set(remote.store, restored)
-  const toggleDesktopRail = () => {
-    setDesktopRailCollapsed((collapsed) => {
-      writeStored(storage, desktopRailKey, String(!collapsed))
+  const toggleRail = () => {
+    setRailCollapsed((collapsed) => {
+      writeStored(storage, sessionRailKey, String(!collapsed))
       return !collapsed
     })
   }
@@ -165,7 +164,7 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
   const canCreateSession = () => state().connection.kind === "connected" && state().transport.kind === "open"
   const openSessionsNavigation = () => {
     if (tabletRailToggle()) {
-      setRailCollapsed((collapsed) => !collapsed)
+      toggleRail()
       return
     }
     setNavOpen(true)
@@ -225,15 +224,15 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
 
   return (
     <Show when={entry() === "workspace"} fallback={<SignInScreen />}>
-      <div class={`app app--${viewClass}${selected() ? " app--selected" : view === "/remote" ? " app--empty" : ""}${(tabletLayout() ? railCollapsed() : desktopRailCollapsed()) ? " app--rail-collapsed" : ""}${officeShown() ? " app--office" : ""}`}>
+      <div class={`app app--${viewClass}${selected() ? " app--selected" : view === "/remote" ? " app--empty" : ""}${railCollapsed() ? " app--rail-collapsed" : ""}${officeShown() ? " app--office" : ""}`}>
         <a class="skip-link" href="#remote-main">Skip to content</a>
         <RemoteHeader
           navExpanded={navExpanded()}
           navLabel={navLabel()}
           navControls={tabletRailToggle() ? "session-rail" : undefined}
           desktopRailVisible={view === "/remote" && selected()}
-          desktopRailCollapsed={desktopRailCollapsed()}
-          onToggleDesktopRail={toggleDesktopRail}
+          railCollapsed={railCollapsed()}
+          onToggleRail={toggleRail}
           activityOpen={activityOpen()}
           onOpenNav={openSessionsNavigation}
           onOpenActivity={() => setActivityOpen(true)}
@@ -245,8 +244,8 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
 
         <div class="workspace">
           <Show when={composition().showSessionRail}>
-            <aside id="session-rail" class="workspace__rail" aria-label="Sessions">
-              <SessionPanel canCreateSession={canCreateSession()} onNewSession={openNewSession} onSelectSession={openSession} />
+            <aside id="session-rail" class="workspace__rail" aria-label="Sessions" aria-hidden={railCollapsed() ? "true" : undefined} inert={railCollapsed()}>
+              <SessionPanel canCreateSession={canCreateSession()} onNewSession={openNewSession} onSelectSession={openSession} onCollapse={toggleRail} />
             </aside>
           </Show>
 
@@ -632,8 +631,8 @@ function RemoteHeader(props: {
   readonly navLabel: string
   readonly navControls?: string
   readonly desktopRailVisible: boolean
-  readonly desktopRailCollapsed: boolean
-  readonly onToggleDesktopRail: () => void
+  readonly railCollapsed: boolean
+  readonly onToggleRail: () => void
   readonly activityOpen: boolean
   readonly onOpenNav: () => void
   readonly onOpenActivity: () => void
@@ -685,8 +684,8 @@ function RemoteHeader(props: {
         </nav>
         <Show when={props.desktopRailVisible}>
           <button type="button" class="button button--ghost button--icon app-header__rail-toggle"
-            aria-label={props.desktopRailCollapsed ? "Show sessions sidebar" : "Hide sessions sidebar"}
-            aria-expanded={!props.desktopRailCollapsed} aria-controls="session-rail" onClick={props.onToggleDesktopRail}>
+            aria-label={props.railCollapsed ? "Show sessions sidebar" : "Hide sessions sidebar"}
+            aria-expanded={!props.railCollapsed} aria-controls="session-rail" onClick={props.onToggleRail}>
             <Icon name="panel-left" />
           </button>
         </Show>
@@ -823,6 +822,7 @@ function SessionPanel(props: {
   readonly onNewSession: () => void
   readonly onSelectSession: (sessionID: string) => void
   readonly onNavigate?: () => void
+  readonly onCollapse?: () => void
 }): JSX.Element {
   const remote = useRemote()
   const state = () => remote.state()
@@ -852,6 +852,7 @@ function SessionPanel(props: {
       <div class="pane__head pane__head--sessions">
         <p class="pane__title">Sessions</p>
         <NewSessionButton disabled={!props.canCreateSession} onClick={props.onNewSession} />
+        <Show when={props.onCollapse}><button type="button" class="session-panel__collapse" aria-label="Hide sessions sidebar" aria-expanded="true" aria-controls="session-rail" onClick={props.onCollapse}><Icon name="panel-left" /></button></Show>
       </div>
       <Show
         when={
@@ -1171,8 +1172,28 @@ function PresentationSwitch(props: {
   readonly onChange: (value: WorkspacePresentation) => void
 }): JSX.Element {
   const flagged = (id: WorkspacePresentation) => props.attention && id === "conversation"
+  const [indicator, setIndicator] = createSignal({ left: 0, width: 0, ready: false })
+  let switcher: HTMLDivElement | undefined
+  const positionIndicator = () => {
+    const selected = switcher?.querySelector<HTMLButtonElement>('[role="radio"][aria-checked="true"]')
+    if (selected) setIndicator({ left: selected.offsetLeft, width: selected.offsetWidth, ready: true })
+  }
+  createEffect(() => { props.value; queueMicrotask(positionIndicator) })
+  onMount(() => {
+    positionIndicator()
+    const observer = new ResizeObserver(positionIndicator)
+    if (switcher) {
+      observer.observe(switcher)
+      switcher.querySelectorAll('[role="radio"]').forEach((button) => observer.observe(button))
+    }
+    window.addEventListener("resize", positionIndicator)
+    onCleanup(() => { observer.disconnect(); window.removeEventListener("resize", positionIndicator) })
+  })
   return (
-    <div class="presentation-switch filters" role="radiogroup" aria-label="Workspace view">
+    <div ref={switcher} class="presentation-switch filters" role="radiogroup" aria-label="Workspace view"
+      style={{ "--presentation-left": `${indicator().left}px`, "--presentation-width": `${indicator().width}px` }}>
+      <span class="presentation-switch__indicator" classList={{ "presentation-switch__indicator--ready": indicator().ready }} aria-hidden="true" />
+      <div class="presentation-switch__options">
       <For each={presentations}>
         {(option, index) => (
           <button
@@ -1193,6 +1214,7 @@ function PresentationSwitch(props: {
           </button>
         )}
       </For>
+      </div>
     </div>
   )
 }
