@@ -17,6 +17,15 @@ describe("notification presentation", () => {
     expect(groups[1]?.items[0]).toBe(entries[1])
   })
 
+  test("keeps notice IDs and day groups stable across re-reads and minute updates", () => {
+    const entries = [notice("first", today - 3 * 60_000), notice("second", today - 8 * 60_000)]
+    const before = groupNotifications(entries, today)
+    const after = groupNotifications(entries.map((entry) => ({ ...entry, read: true })), today + 60_000)
+    expect(after.map((group) => group.label)).toEqual(before.map((group) => group.label))
+    expect(after.flatMap((group) => group.items.map((entry) => entry.id))).toEqual(["first", "second"])
+    expect(after[0]?.items.every((entry) => entry.read)).toBe(true)
+  })
+
   test("uses short relative labels before calendar dates and clamps future timestamps", () => {
     expect(notificationAge(today + 1000, today)).toBe("now")
     expect(notificationAge(today - 2 * 60_000, today)).toBe("2m")

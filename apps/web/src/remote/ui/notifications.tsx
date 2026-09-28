@@ -126,27 +126,32 @@ export function NotificationCenter(props: { readonly onOpenSession: (sessionID: 
           </header>
           <Show when={notifications().length > 0} fallback={<div class="yc-notification-panel__empty"><Icon name="check" size={22} /><strong>You're all caught up</strong><span>New activity will appear here.</span></div>}>
             <div class="yc-notification-panel__scroll">
-              <For each={groups()}>{(group) => (
-                <section class="yc-notification-group" aria-label={group.label}>
-                  <h3>{group.label}</h3>
-                  <ul><For each={group.items}>{(entry) => (
-                    <li class={`yc-notification yc-notification--${entry.category}${entry.read ? " yc-notification--read" : ""}`}>
-                      <span class="yc-notification__unread" aria-hidden={entry.read} aria-label={entry.read ? undefined : "Unread"} />
-                      <span class="yc-notification__icon" aria-hidden="true"><Icon name={kinds[entry.category].icon} size={16} /></span>
-                      <button type="button" class="yc-notification__open" disabled={!entry.sessionID} onClick={() => {
-                        if (!entry.sessionID) return
-                        close(false)
-                        props.onOpenSession(entry.sessionID)
-                      }}>
-                        <strong>{kinds[entry.category].label}</strong>
-                        <span>{entry.sessionTitle ?? entry.body}</span>
-                      </button>
-                      <time datetime={new Date(entry.at).toISOString()}>{notificationAge(entry.at, clock())}</time>
-                      <button type="button" class="yc-notification__dismiss" aria-label={`Dismiss ${kinds[entry.category].label}`} onClick={(event) => dismiss(entry.id, event)}><Icon name="close" size={14} /></button>
-                    </li>
-                  )}</For></ul>
+              <For each={groups().map((group) => group.label)}>{(label) => {
+                const entries = () => groups().find((group) => group.label === label)?.items ?? []
+                return <section class="yc-notification-group" aria-label={label}>
+                  <h3>{label}</h3>
+                  <ul><For each={entries().map((entry) => entry.id)}>{(id) => {
+                    const entry = () => entries().find((item) => item.id === id)
+                    return <Show when={entry()}>{(item) => (
+                      <li class={`yc-notification yc-notification--${item().category}${item().read ? " yc-notification--read" : ""}`}>
+                        <span class="yc-notification__unread" aria-hidden={item().read} aria-label={item().read ? undefined : "Unread"} />
+                        <span class="yc-notification__icon" aria-hidden="true"><Icon name={kinds[item().category].icon} size={16} /></span>
+                        <button type="button" class="yc-notification__open" disabled={!item().sessionID} onClick={() => {
+                          const sessionID = item().sessionID
+                          if (!sessionID) return
+                          close(false)
+                          props.onOpenSession(sessionID)
+                        }}>
+                          <strong>{kinds[item().category].label}</strong>
+                          <span>{item().sessionTitle ?? item().body}</span>
+                        </button>
+                        <time datetime={new Date(item().at).toISOString()}>{notificationAge(item().at, clock())}</time>
+                        <button type="button" class="yc-notification__dismiss" aria-label={`Dismiss ${kinds[item().category].label}`} onClick={(event) => dismiss(id, event)}><Icon name="close" size={14} /></button>
+                      </li>
+                    )}</Show>
+                  }}</For></ul>
                 </section>
-              )}</For>
+              }}</For>
             </div>
             <p class="yc-notification-panel__foot"><Icon name="check" size={14} /> You're all caught up</p>
           </Show>

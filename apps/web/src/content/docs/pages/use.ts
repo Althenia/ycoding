@@ -479,7 +479,7 @@ export const usePages: readonly DocPage[] = [
           {
             kind: "list",
             items: [
-              "The bell opens a notification center grouped by day. Opening it marks current notices read; Mark all read, Clear all, and per-item dismissal manage the list. Selecting a notice opens its Session. The center animates open and closed; its closing layer cannot receive focus or input, closing returns focus to the bell immediately, and reduced motion removes the exit delay.",
+              "The bell opens a notification center grouped by day. Opening it marks current notices read; Mark all read, Clear all, and per-item dismissal manage the list. Selecting a notice opens its Session. While the center stays open, ages and read states update in place, and live or reconnect updates add only newly reported notices. The center animates open and closed; its closing layer cannot receive focus or input, closing returns focus to the bell immediately, and reduced motion removes the exit delay.",
               "New live in-app notices appear as at most three temporary toasts below the header for about six seconds. Hovering or focusing pauses dismissal; Open goes to that Session, and dismissing a toast leaves its center notice intact. Loading history or reconnecting does not replay toasts.",
               "Settings provides independent workspace and desktop switches for each category.",
               "The browser requests desktop-notification permission only when you press its permission button. Desktop alerts use generic text rather than Session details.",

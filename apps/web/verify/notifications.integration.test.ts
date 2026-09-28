@@ -36,6 +36,88 @@ async function open(width: number, theme: "light" | "dark", initial = "seeded") 
 }
 
 describe("notification center and live toasts", () => {
+  test("live status, clock, read, and reconnect updates preserve an open center and its settled rows", async () => {
+    for (const [width, height] of [[390, 844], [1440, 900]] as const) for (const theme of ["light", "dark"] as const) {
+      const page = await browser!.openPage()
+      try {
+        await page.setViewport(width, height)
+        await page.injectOnNewDocument(`(() => {
+          const now = Date.now.bind(Date); let offset = 0;
+          const interval = window.setInterval.bind(window); const minutes = [];
+          Date.now = () => now() + offset;
+          window.setInterval = (callback, delay, ...args) => {
+            if (delay === 60000 && typeof callback === 'function') minutes.push(() => callback(...args));
+            return interval(callback, delay, ...args);
+          };
+          window.advanceNoticeMinutes = (count) => { offset += count * 60000; minutes.forEach(tick => tick()); };
+        })()`)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}`)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`(window.remoteOperationReport?.().operations['session.status'] ?? 0) > 0 && document.querySelector('.yc-notification-center__trigger') !== null`); attempt += 1) await Bun.sleep(50)
+        await page.evaluate(`window.remoteStatus(['ses_fixture','ses_a','ses_b','ses_c'], []); window.remoteStatus(['ses_a','ses_b','ses_c'], []); window.advanceNoticeMinutes(2); window.remoteStatus(['ses_b','ses_c'], []); window.advanceNoticeMinutes(2); window.remoteStatus(['ses_c'], []); window.advanceNoticeMinutes(1); window.remoteStatus([], []); window.advanceNoticeMinutes(3)`)
+        expect(await page.evaluate<number>(`Number(document.querySelector('.yc-notification-center__badge')?.textContent)`)).toBe(4)
+        await page.evaluate(`(() => {
+          window.addedNoticeRows = new Set(); window.removedNoticeRows = new Set();
+          new MutationObserver(records => records.forEach(record => {
+            for (const node of record.addedNodes) if (node instanceof Element) {
+              if (node.matches('.yc-notification')) window.addedNoticeRows.add(node);
+              node.querySelectorAll('.yc-notification').forEach(row => window.addedNoticeRows.add(row));
+            }
+            for (const node of record.removedNodes) if (node instanceof Element) {
+              if (node.matches('.yc-notification')) window.removedNoticeRows.add(node);
+              node.querySelectorAll('.yc-notification').forEach(row => window.removedNoticeRows.add(row));
+            }
+          })).observe(document.querySelector('.yc-notification-center'), { childList: true, subtree: true });
+          document.querySelector('.yc-notification-center__trigger').click();
+        })()`)
+        await page.evaluate(`Promise.allSettled([...document.querySelectorAll('.yc-notification-panel, .yc-notification')].flatMap(node => node.getAnimations()).map(animation => animation.finished))`)
+        await Bun.sleep(300)
+        const initial = await page.evaluate<{ added: number; removed: number; ages: readonly string[]; label: string; unread: number }>(`(() => {
+          window.noticePanel = document.querySelector('.yc-notification-panel');
+          window.noticeRows = [...document.querySelectorAll('.yc-notification')];
+          return { added: window.addedNoticeRows.size, removed: window.removedNoticeRows.size, ages: [...document.querySelectorAll('.yc-notification time')].map(node => node.textContent), label: document.querySelector('.yc-notification-panel__new')?.textContent ?? '', unread: document.querySelectorAll('.yc-notification__unread:not([aria-hidden="true"])').length };
+        })()`)
+        const sample = `(() => {
+          const panel = document.querySelector('.yc-notification-panel'), rows = [...document.querySelectorAll('.yc-notification')], rect = panel.getBoundingClientRect();
+          return { retained: window.noticeRows.every(node => rows.includes(node)), panelSame: panel === window.noticePanel,
+            activeRows: rows.filter(node => node.getAnimations().some(animation => animation.playState === 'running')).length,
+            age: rows.map(node => node.querySelector('time')?.textContent), badge: document.querySelector('.yc-notification-center__badge')?.textContent ?? '',
+            label: document.querySelector('.yc-notification-panel__new')?.textContent ?? '', rect: [rect.left, rect.top, rect.width, rect.height],
+            added: window.addedNoticeRows.size, removed: window.removedNoticeRows.size };
+        })()`
+        const before = await page.evaluate<{ rect: readonly number[] }>(sample)
+        await page.evaluate(`window.remoteStatus([], [])`)
+        const status = await page.evaluate<{ retained: boolean; panelSame: boolean; activeRows: number; rect: readonly number[]; added: number; removed: number }>(sample)
+        await page.evaluate(`window.advanceNoticeMinutes(1)`)
+        const tick = await page.evaluate<{ retained: boolean; panelSame: boolean; activeRows: number; age: readonly string[]; rect: readonly number[]; added: number; removed: number }>(sample)
+        await page.evaluate(`window.remoteStatus(['ses_new'], []); window.remoteStatus([], [])`)
+        await page.evaluate(`Promise.allSettled([...document.querySelectorAll('.yc-notification')].flatMap(node => node.getAnimations()).map(animation => animation.finished))`)
+        const newNotice = await page.evaluate<{ retained: boolean; panelSame: boolean; activeRows: number; rect: readonly number[]; badge: string; added: number; removed: number }>(sample)
+        await page.evaluate(`document.querySelector('.yc-notification-panel__action:first-of-type').click()`)
+        const read = await page.evaluate<{ retained: boolean; panelSame: boolean; activeRows: number; rect: readonly number[]; badge: string; added: number; removed: number }>(sample)
+        const snapshotReads = await page.evaluate<number>(`window.remoteOperationReport().operations['session.snapshot'] ?? 0`)
+        await page.evaluate(`[...document.querySelectorAll('.fixture__controls button')].find(button => button.textContent?.includes('Simulate disconnect and reconnect')).click()`)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.status-strip__body')?.textContent?.startsWith('Connected —') === true`); attempt += 1) await Bun.sleep(50)
+        const reconnect = await page.evaluate<{ retained: boolean; panelSame: boolean; activeRows: number; rect: readonly number[]; added: number; removed: number }>(sample)
+        expect(initial).toEqual({ added: 4, removed: 0, ages: ["3m", "4m", "6m", "8m"], label: "4 new", unread: 0 })
+        for (const update of [status, tick, newNotice, read, reconnect]) {
+          expect(update.retained).toBe(true)
+          expect(update.panelSame).toBe(true)
+          expect(update.activeRows).toBe(0)
+        }
+        expect(status.rect).toEqual(before.rect)
+        expect(tick.rect).toEqual(before.rect)
+        expect(newNotice.badge).toBe("1")
+        expect(read.badge).toBe("")
+        expect(read.rect).toEqual(newNotice.rect)
+        expect(reconnect.rect).toEqual(newNotice.rect)
+        expect(reconnect.added).toBe(5)
+        expect(reconnect.removed).toBe(0)
+        expect(await page.evaluate<number>(`window.remoteOperationReport().operations['session.snapshot'] ?? 0`)).toBeGreaterThan(snapshotReads)
+        expect(tick.age).toEqual(["4m", "5m", "7m", "9m"])
+      } finally { await page.close() }
+    }
+  }, 60_000)
+
   test("attributes a browser relay reconnect in the connection strip without a machine-disconnected notice", async () => {
     if (!browser) throw new Error("Browser not started")
     const page = await browser.openPage()
