@@ -7,7 +7,6 @@ import { Config } from "../../config"
 import { ServerConnection } from "../../services/server-connection"
 import { UpdatePreflight } from "../../services/update-preflight"
 import { Updater } from "../../services/updater"
-import { inspectRemoteLock } from "./remote/lock"
 
 export interface Input {
   readonly directory: Option.Option<string>
@@ -82,25 +81,6 @@ export const runTui = Effect.fnUntraced(function* (input: Input) {
       resolve: (spec) => runPromise(npm.add(spec, { subpaths: ["tui"] }).pipe(Effect.map((result) => result.entrypoint))),
     },
     terminalHandoff: () => preflight.finish(),
-    remote: {
-      inspect: async () => {
-        const pid = await inspectRemoteLock(Global.make().data)
-        return pid === undefined
-          ? { state: "off" as const }
-          : { state: "other-process" as const, message: `Remote is on in another process (PID ${pid})` }
-      },
-      create: async () => {
-        const { makeRemoteConnector } = await import("./remote/connect")
-        return Effect.runPromise(Effect.scoped(makeRemoteConnector({
-          endpoint: server.endpoint,
-          onDiagnostic: (message) => log("info", message, { component: "remote" }),
-          onTerminal: (message) => log("error", message, { component: "remote" }),
-        }).pipe(
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Global.Service, Global.make()),
-        )))
-      },
-    },
     log,
   }).pipe(Effect.provide(LayerNode.compile(Global.node)))
 })

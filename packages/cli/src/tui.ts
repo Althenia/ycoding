@@ -12,6 +12,7 @@ const handlers = Runtime.handlers(TuiCommand, {
   remote: {
     enroll: () => import("./commands/handlers/remote/enroll"),
     connect: () => import("./commands/handlers/remote/connect"),
+    disconnect: () => import("./commands/handlers/remote/disconnect"),
     status: () => import("./commands/handlers/remote/status"),
     sessions: () => import("./commands/handlers/remote/sessions"),
   },

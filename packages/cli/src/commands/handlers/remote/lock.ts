@@ -8,14 +8,6 @@ export function remoteLockPath(directory: string) {
   return path.join(directory, "remote-connector.lock")
 }
 
-export async function inspectRemoteLock(directory: string) {
-  const pid = await readOwner(remoteLockPath(directory)).catch((error: unknown) => {
-    if (errorCode(error) === "ENOENT") return undefined
-    throw error
-  })
-  return pid !== undefined && processAlive(pid) ? pid : undefined
-}
-
 export async function acquireRemoteLock(
   directory: string,
   input: { pid?: number; alive?: (pid: number) => boolean } = {},

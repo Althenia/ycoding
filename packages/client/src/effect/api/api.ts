@@ -332,6 +332,7 @@ type Endpoint5_32Request = Parameters<RawClient["server.session"]["session.usage
 export type Endpoint5_32Input = {
   readonly sessionID: Endpoint5_32Request["params"]["sessionID"]
   readonly group: Endpoint5_32Request["query"]["group"]
+  readonly timeZone?: Endpoint5_32Request["query"]["timeZone"]
   readonly from?: Endpoint5_32Request["query"]["from"]
   readonly to?: Endpoint5_32Request["query"]["to"]
   readonly offset?: Endpoint5_32Request["query"]["offset"]
@@ -1846,6 +1847,7 @@ export type UsageGetOperation<E = never> = () => Effect.Effect<Endpoint32_0Outpu
 type Endpoint32_1Request = Parameters<RawClient["server.usage"]["usage.report"]>[0]
 export type Endpoint32_1Input = {
   readonly group: Endpoint32_1Request["query"]["group"]
+  readonly timeZone?: Endpoint32_1Request["query"]["timeZone"]
   readonly from?: Endpoint32_1Request["query"]["from"]
   readonly to?: Endpoint32_1Request["query"]["to"]
   readonly offset?: Endpoint32_1Request["query"]["offset"]
@@ -1859,6 +1861,19 @@ export type UsageReportOperation<E = never> = (input: Endpoint32_1Input) => Effe
 export interface UsageApi<E = never> {
   readonly get: UsageGetOperation<E>
   readonly report: UsageReportOperation<E>
+}
+
+export type Endpoint33_0Output = EffectValue<ReturnType<RawClient["server.remote"]["remote.get"]>>["data"]
+export type RemoteGetOperation<E = never> = () => Effect.Effect<Endpoint33_0Output, E>
+
+type Endpoint33_1Request = Parameters<RawClient["server.remote"]["remote.set"]>[0]
+export type Endpoint33_1Input = { readonly enabled: Endpoint33_1Request["payload"]["enabled"] }
+export type Endpoint33_1Output = EffectValue<ReturnType<RawClient["server.remote"]["remote.set"]>>["data"]
+export type RemoteSetOperation<E = never> = (input: Endpoint33_1Input) => Effect.Effect<Endpoint33_1Output, E>
+
+export interface RemoteApi<E = never> {
+  readonly get: RemoteGetOperation<E>
+  readonly set: RemoteSetOperation<E>
 }
 
 export interface AppApi<E = never> {
@@ -1895,4 +1910,5 @@ export interface AppApi<E = never> {
   readonly browser: BrowserApi<E>
   readonly isolatedBrowser: IsolatedBrowserApi<E>
   readonly usage: UsageApi<E>
+  readonly remote: RemoteApi<E>
 }

@@ -4580,6 +4580,7 @@ export type SessionUsageReportInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
   readonly group: {
     readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly timeZone?: string | undefined
     readonly from?: number | undefined
     readonly to?: number | undefined
     readonly offset?: number | undefined
@@ -4597,8 +4598,29 @@ export type SessionUsageReportInput = {
       | undefined
     readonly order?: "asc" | "desc" | undefined
   }["group"]
+  readonly timeZone?: {
+    readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly timeZone?: string | undefined
+    readonly from?: number | undefined
+    readonly to?: number | undefined
+    readonly offset?: number | undefined
+    readonly limit?: number | undefined
+    readonly sort?:
+      | "key"
+      | "tokens"
+      | "cost"
+      | "steps"
+      | "input"
+      | "output"
+      | "reasoning"
+      | "cacheRead"
+      | "cacheWrite"
+      | undefined
+    readonly order?: "asc" | "desc" | undefined
+  }["timeZone"]
   readonly from?: {
     readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly timeZone?: string | undefined
     readonly from?: number | undefined
     readonly to?: number | undefined
     readonly offset?: number | undefined
@@ -4618,6 +4640,7 @@ export type SessionUsageReportInput = {
   }["from"]
   readonly to?: {
     readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly timeZone?: string | undefined
     readonly from?: number | undefined
     readonly to?: number | undefined
     readonly offset?: number | undefined
@@ -4637,6 +4660,7 @@ export type SessionUsageReportInput = {
   }["to"]
   readonly offset?: {
     readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly timeZone?: string | undefined
     readonly from?: number | undefined
     readonly to?: number | undefined
     readonly offset?: number | undefined
@@ -4656,6 +4680,7 @@ export type SessionUsageReportInput = {
   }["offset"]
   readonly limit?: {
     readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly timeZone?: string | undefined
     readonly from?: number | undefined
     readonly to?: number | undefined
     readonly offset?: number | undefined
@@ -4675,6 +4700,7 @@ export type SessionUsageReportInput = {
   }["limit"]
   readonly sort?: {
     readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly timeZone?: string | undefined
     readonly from?: number | undefined
     readonly to?: number | undefined
     readonly offset?: number | undefined
@@ -4694,6 +4720,7 @@ export type SessionUsageReportInput = {
   }["sort"]
   readonly order?: {
     readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly timeZone?: string | undefined
     readonly from?: number | undefined
     readonly to?: number | undefined
     readonly offset?: number | undefined
@@ -7932,6 +7959,7 @@ export type UsageGetOutput = { data: ProviderRequestSummary }["data"]
 export type UsageReportInput = {
   readonly group: {
     readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly timeZone?: string | undefined
     readonly from?: number | undefined
     readonly to?: number | undefined
     readonly offset?: number | undefined
@@ -7949,8 +7977,29 @@ export type UsageReportInput = {
       | undefined
     readonly order?: "asc" | "desc" | undefined
   }["group"]
+  readonly timeZone?: {
+    readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly timeZone?: string | undefined
+    readonly from?: number | undefined
+    readonly to?: number | undefined
+    readonly offset?: number | undefined
+    readonly limit?: number | undefined
+    readonly sort?:
+      | "key"
+      | "tokens"
+      | "cost"
+      | "steps"
+      | "input"
+      | "output"
+      | "reasoning"
+      | "cacheRead"
+      | "cacheWrite"
+      | undefined
+    readonly order?: "asc" | "desc" | undefined
+  }["timeZone"]
   readonly from?: {
     readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly timeZone?: string | undefined
     readonly from?: number | undefined
     readonly to?: number | undefined
     readonly offset?: number | undefined
@@ -7970,6 +8019,7 @@ export type UsageReportInput = {
   }["from"]
   readonly to?: {
     readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly timeZone?: string | undefined
     readonly from?: number | undefined
     readonly to?: number | undefined
     readonly offset?: number | undefined
@@ -7989,6 +8039,7 @@ export type UsageReportInput = {
   }["to"]
   readonly offset?: {
     readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly timeZone?: string | undefined
     readonly from?: number | undefined
     readonly to?: number | undefined
     readonly offset?: number | undefined
@@ -8008,6 +8059,7 @@ export type UsageReportInput = {
   }["offset"]
   readonly limit?: {
     readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly timeZone?: string | undefined
     readonly from?: number | undefined
     readonly to?: number | undefined
     readonly offset?: number | undefined
@@ -8027,6 +8079,7 @@ export type UsageReportInput = {
   }["limit"]
   readonly sort?: {
     readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly timeZone?: string | undefined
     readonly from?: number | undefined
     readonly to?: number | undefined
     readonly offset?: number | undefined
@@ -8046,6 +8099,7 @@ export type UsageReportInput = {
   }["sort"]
   readonly order?: {
     readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly timeZone?: string | undefined
     readonly from?: number | undefined
     readonly to?: number | undefined
     readonly offset?: number | undefined
@@ -8066,3 +8120,13 @@ export type UsageReportInput = {
 }
 
 export type UsageReportOutput = { data: ProviderRequestReport }["data"]
+
+export type RemoteGetOutput = {
+  data: { state: "off" | "connecting" | "on" | "error"; message?: string | undefined }
+}["data"]
+
+export type RemoteSetInput = { readonly enabled: { readonly enabled: boolean }["enabled"] }
+
+export type RemoteSetOutput = {
+  data: { state: "off" | "connecting" | "on" | "error"; message?: string | undefined }
+}["data"]

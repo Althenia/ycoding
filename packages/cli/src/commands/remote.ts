@@ -29,7 +29,7 @@ export const RemoteCommand = Spec.make("remote", {
       },
     }),
     Spec.make("connect", {
-      description: "Connect this machine to the relay and serve backend sessions",
+      description: "Enable this server's remote connection",
       params: {
         ...ServerParams,
         relay: Flag.string("relay").pipe(
@@ -37,6 +37,10 @@ export const RemoteCommand = Spec.make("remote", {
           Flag.optional,
         ),
       },
+    }),
+    Spec.make("disconnect", {
+      description: "Disable this server's remote connection",
+      params: ServerParams,
     }),
     Spec.make("status", {
       description: "Show device enrollment and backend session access",

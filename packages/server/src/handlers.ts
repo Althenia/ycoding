@@ -33,6 +33,7 @@ import { ProjectArtifactHandler } from "./handlers/project-artifact"
 import { EventFeed } from "./event-feed"
 import { BrowserHandler } from "./handlers/browser"
 import { IsolatedBrowserHandler } from "./handlers/isolated-browser"
+import { RemoteHandler } from "./handlers/remote"
 
 export const handlers = Layer.mergeAll(
   HealthHandler,
@@ -68,4 +69,5 @@ export const handlers = Layer.mergeAll(
   ProjectArtifactHandler,
   BrowserHandler,
   IsolatedBrowserHandler,
+  RemoteHandler,
 )

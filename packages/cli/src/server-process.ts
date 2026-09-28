@@ -79,6 +79,8 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
             : randomBytes(32).toString("base64url")
       if (!password) return yield* Effect.fail(new Error("Missing server password"))
       const instanceID = randomUUID()
+      const global = yield* Global.Service
+      const services = yield* Effect.context<FileSystem.FileSystem | Global.Service>()
       const server = yield* start(
         {
           client: process.env.YCODING_CLIENT ?? "cli",
@@ -125,6 +127,21 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
                   return yield* register(address, password, instanceID, serviceOptions.file, shutdown)
                 }),
             },
+        async (address, password) => {
+          const { createRemoteHost } = await import("./remote-host")
+          return createRemoteHost({
+            file: path.join(global.state, "remote.json"),
+            create: async () => {
+              const { makeRemoteConnector } = await import("./commands/handlers/remote/connect")
+              const url = new URL(HttpServer.formatAddress(address))
+              if (url.hostname === "0.0.0.0") url.hostname = "127.0.0.1"
+              if (url.hostname === "[::]") url.hostname = "[::1]"
+              return Effect.runPromise(makeRemoteConnector({
+                endpoint: { url: url.toString(), auth: { type: "basic", username: "ycoding", password } },
+              }).pipe(Effect.provide(services)))
+            },
+          })
+        },
       ).pipe(
         Effect.catch((error) => {
           if (serviceOptions === undefined || port === undefined || !addressInUse(error)) return Effect.fail(error)

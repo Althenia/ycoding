@@ -17,6 +17,7 @@ import { createRoutes } from "./routes"
 import { ServerInfo } from "./server-info"
 import { Status } from "./service-status"
 import type { ServerOptions } from "./options"
+import { RemoteConnection } from "./remote-connection"
 
 export interface Lifecycle<E = never, R = never> {
   readonly instanceID: string
@@ -35,6 +36,7 @@ type App = Effect.Effect<
 export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
   options: ServerOptions,
   lifecycle?: Lifecycle<E, R>,
+  remoteFactory?: (address: HttpServer.Address, password: string) => Promise<RemoteConnection.Interface>,
 ) {
   const password = options.password
   if (!password) return yield* Effect.fail(new Error("Missing server password"))
@@ -73,6 +75,12 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
   )
 
   const boot = Effect.gen(function* () {
+    const remote = remoteFactory
+      ? yield* Effect.promise(() => remoteFactory(bound.http.address, password))
+      : RemoteConnection.unavailable
+    yield* Effect.addFinalizer(() => Effect.promise(() => remote.shutdown())).pipe(
+      Effect.provideService(Scope.Scope, applicationScope),
+    )
     const context = yield* Layer.buildWithScope(
       createRoutes(
         {
@@ -86,6 +94,7 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
           return ServerInfo.connectionURLs(`http://${host}:${address.port}`, hostname)
         },
         sourceEpoch,
+        remote,
       ).pipe(Layer.provide(NodeHttpServer.layerHttpServices)),
       applicationScope,
     )

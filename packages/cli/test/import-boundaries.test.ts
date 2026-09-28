@@ -101,6 +101,7 @@ describe("CLI frontend import boundaries", () => {
           file !== "packages/cli/src/commands/handlers/serve-shared.ts" &&
           file !== "packages/cli/src/commands/handlers/remote/enroll.ts" &&
           file !== "packages/cli/src/commands/handlers/remote/connect.ts" &&
+          file !== "packages/cli/src/commands/handlers/remote/disconnect.ts" &&
           file !== "packages/cli/src/commands/handlers/remote/connector.ts" &&
           file !== "packages/cli/src/commands/handlers/remote/lock.ts" &&
           file !== "packages/cli/src/commands/handlers/remote/status.ts" &&

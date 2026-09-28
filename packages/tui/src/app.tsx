@@ -90,7 +90,7 @@ import { destroyRenderer } from "./util/renderer"
 import { cliErrorMessage, errorFormat, errorMessage } from "./util/error"
 import { writeHeapSnapshot } from "node:v8"
 import { saveCustomEndpoint } from "./custom-endpoint-save"
-import { RemoteProvider, type RemoteConnectorPort } from "./remote-connector"
+import { RemoteProvider, type RemoteStatus } from "./remote-connector"
 
 const themePerformance = DevTools.register({ id: "theme-performance", title: "Theme performance" })
 
@@ -166,7 +166,7 @@ export type TuiInput = {
     | undefined
   >
   log?: LogSink
-  remote?: { create: () => Promise<RemoteConnectorPort>; inspect?: () => Promise<{ state: "off" | "other-process"; message?: string }> }
+  remote?: { get: () => Promise<RemoteStatus>; set: (enabled: boolean) => Promise<RemoteStatus> }
 }
 
 export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
@@ -344,11 +344,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                 <LocationProvider>
                                                   <ThemeProvider mode={mode}>
                                                     <LocalProvider>
-                                                      <RemoteProvider
-                                                        create={input.remote?.create}
-                                                        inspect={input.remote?.inspect}
-                                                        registerFinalizer={(dispose) => { finalizers.add(dispose) }}
-                                                      >
+                                                      <RemoteProvider server={input.remote}>
                                                       <PromptStashProvider>
                                                         <DialogProvider>
                                                           <FrecencyProvider>

@@ -1,5 +1,6 @@
 import { expect } from "bun:test"
 import { ServerProcess } from "@ycoding-ai/server/process"
+import type { RemoteConnection } from "@ycoding-ai/server/remote-connection"
 import { Effect, Exit, Logger, Scope } from "effect"
 import { createServer } from "node:net"
 import { deltaChunk, finishChunk } from "../../ai/test/lib/openai-chunks"
@@ -39,6 +40,7 @@ export type ProviderStandIn = {
 
 export type IsolatedServerOptions = {
   readonly provider?: ProviderFixture
+  readonly remote?: RemoteConnection.Interface
 }
 
 export async function startServer(directory: string, options: IsolatedServerOptions = {}) {
@@ -59,7 +61,7 @@ export async function startServer(directory: string, options: IsolatedServerOpti
     },
     models: { fetch: false },
     fs: { filewatcher: false, fff: false },
-  }).pipe(Effect.provideService(Scope.Scope, scope))
+  }, undefined, options.remote ? async () => options.remote! : undefined).pipe(Effect.provideService(Scope.Scope, scope))
   // Runtime-owned request markers are supplied when the assembled router dispatches.
   const starting = startingRaw as Effect.Effect<Effect.Success<typeof startingRaw>, Effect.Error<typeof startingRaw>>
   try {

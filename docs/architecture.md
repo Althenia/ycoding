@@ -154,7 +154,7 @@ The TUI keeps bounded read models. It does not own canonical Session state.
 
 `infra/cloudflare` owns the `ycoding-cloud` Worker configuration, D1 binding, and SQLite-backed `DeviceRelay` declaration. A relay instance is addressed by `userId:deviceId`; the smoke implementation fixes those identifiers and serializes per-WebSocket role and connection metadata so hibernation never depends on ordinary JavaScript memory.
 
-The local outbound WebSocket client is process-owned in `packages/cli`. It is transport-only and opt-in for the smoke protocol. Core remains the owner of durable Sessions, Location-scoped execution, tools, filesystem access, and model calls; the TUI remains a client and never owns the remote connection's agent Session.
+The local outbound WebSocket client is process-owned in `packages/cli`. It is transport-only and opt-in for the smoke protocol. The server process that hosts the local backend owns it: `packages/cli` creates one remote host per server listener, the managed service or a `--standalone` private server, and passes `packages/server` a narrow status and on/off interface that backs the authenticated `/api/remote` routes, so Server never imports the connector. Core remains the owner of durable Sessions, Location-scoped execution, tools, filesystem access, and model calls; the TUI remains a client and never owns the remote connection's agent Session.
 
 ## Runtime flow
 

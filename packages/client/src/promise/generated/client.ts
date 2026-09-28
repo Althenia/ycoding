@@ -350,6 +350,9 @@ import type {
   UsageGetOutput,
   UsageReportInput,
   UsageReportOutput,
+  RemoteGetOutput,
+  RemoteSetInput,
+  RemoteSetOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -987,6 +990,7 @@ export function make(options: ClientOptions) {
             path: `/api/session/${encodeURIComponent(input.sessionID)}/usage/report`,
             query: {
               group: input["group"],
+              timeZone: input["timeZone"],
               from: input["from"],
               to: input["to"],
               offset: input["offset"],
@@ -2849,6 +2853,7 @@ export function make(options: ClientOptions) {
             path: `/api/usage/report`,
             query: {
               group: input["group"],
+              timeZone: input["timeZone"],
               from: input["from"],
               to: input["to"],
               offset: input["offset"],
@@ -2856,6 +2861,25 @@ export function make(options: ClientOptions) {
               sort: input["sort"],
               order: input["order"],
             },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+    },
+    remote: {
+      get: (requestOptions?: RequestOptions) =>
+        request<{ readonly data: RemoteGetOutput }>(
+          { method: "GET", path: `/api/remote`, successStatus: 200, declaredStatuses: [401, 400], empty: false },
+          requestOptions,
+        ).then((value) => value.data),
+      set: (input: RemoteSetInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: RemoteSetOutput }>(
+          {
+            method: "PUT",
+            path: `/api/remote`,
+            body: { enabled: input["enabled"] },
             successStatus: 200,
             declaredStatuses: [401, 400],
             empty: false,

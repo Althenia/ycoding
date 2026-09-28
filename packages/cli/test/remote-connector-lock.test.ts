@@ -2,22 +2,9 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
-import { acquireRemoteLock, inspectRemoteLock, remoteLockPath } from "../src/commands/handlers/remote/lock"
+import { acquireRemoteLock, remoteLockPath } from "../src/commands/handlers/remote/lock"
 
 describe("remote connector lock", () => {
-  test("inspection distinguishes a live holder from an idle machine", async () => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-remote-lock-"))
-    try {
-      expect(await inspectRemoteLock(directory)).toBeUndefined()
-      const lock = await acquireRemoteLock(directory)
-      expect(lock.owned).toBe(true)
-      expect(await inspectRemoteLock(directory)).toBe(process.pid)
-      if (lock.owned) await lock.release()
-      expect(await inspectRemoteLock(directory)).toBeUndefined()
-    } finally {
-      await rm(directory, { recursive: true, force: true })
-    }
-  })
 
   test("acquires, reports another live process, and releases on stop", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-remote-lock-"))
@@ -41,7 +28,6 @@ describe("remote connector lock", () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-remote-lock-"))
     try {
       await writeFile(remoteLockPath(directory), JSON.stringify({ pid: 999_999_999, token: "dead" }), { mode: 0o600 })
-      expect(await inspectRemoteLock(directory)).toBeUndefined()
       const lock = await acquireRemoteLock(directory, { pid: 333, alive: () => false })
       expect(lock).toMatchObject({ owned: true })
       if (lock.owned) await lock.release()

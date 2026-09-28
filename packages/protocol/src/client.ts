@@ -36,6 +36,7 @@ export const groupNames = {
   "server.health": "health",
   "server.server": "server",
   "server.usage": "usage",
+  "server.remote": "remote",
   "server.debug": "debug",
   "server.location": "location",
   "server.agent": "agent",

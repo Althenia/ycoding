@@ -1,177 +1,103 @@
 import { createContext, createSignal, onCleanup, onMount, useContext, type ParentProps } from "solid-js"
-import path from "node:path"
+import type { Remote } from "@ycoding-ai/schema/remote"
 import { Keymap } from "./context/keymap"
-import { useTuiPaths } from "./context/runtime"
+import { useClient } from "./context/client"
 import { useToast } from "./ui/toast"
 import { useTheme } from "./context/theme"
-import { useLog } from "./context/log"
-import { createRemotePreferenceRepository } from "./remote-preference"
 import type { PaletteStatusCommand } from "./component/command-palette"
 
-export type RemoteStatus = {
-  state: "off" | "connecting" | "on" | "other-process" | "error"
-  message?: string
-  notice?: string
-}
+export type RemoteStatus = Remote.Status
 
-export type RemoteConnectorPort = {
-  notice: string
-  status: () => RemoteStatus
-  subscribe: (listener: (status: RemoteStatus) => void) => () => void
-  start: () => Promise<void>
-  stop: () => Promise<void>
+type RemoteServer = {
+  get: () => Promise<RemoteStatus>
+  set: (enabled: boolean) => Promise<RemoteStatus>
 }
 
 type RemoteContextValue = {
   status: () => RemoteStatus
-  connect: () => Promise<void>
-  disconnect: () => Promise<void>
+  toggle: () => Promise<void>
 }
 
 const Context = createContext<RemoteContextValue>()
 const unavailable: RemoteContextValue = {
   status: () => ({ state: "off" }),
-  connect: async () => {},
-  disconnect: async () => {},
+  toggle: async () => {},
 }
 
 export function useRemote() {
   return useContext(Context) ?? unavailable
 }
 
-export function RemoteProvider(props: ParentProps<{
-  create?: () => Promise<RemoteConnectorPort>
-  inspect?: () => Promise<RemoteStatus>
-  registerFinalizer?: (dispose: () => Promise<void>) => void
-}>) {
+export function RemoteProvider(props: ParentProps<{ server?: RemoteServer }>) {
+  const server = props.server ?? (() => {
+    const client = useClient()
+    return {
+      get: () => client.api.remote.get(),
+      set: (enabled: boolean) => client.api.remote.set({ enabled }),
+    }
+  })()
   const toast = useToast()
-  const log = useLog({ component: "remote" })
-  const paths = useTuiPaths()
-  const repository = createRemotePreferenceRepository(path.join(paths.state, "remote.json"))
   const [status, setStatus] = createSignal<RemoteStatus>({ state: "off" })
-  let connector: RemoteConnectorPort | undefined
-  let unsubscribe: (() => void) | undefined
   let generation = 0
-  let pending: Promise<void> | undefined
+  let disposed = false
   let poll: ReturnType<typeof setInterval> | undefined
 
-  async function inspect() {
-    if (!props.inspect || !["off", "other-process"].includes(status().state)) return
+  async function refresh() {
+    const cycle = generation
     try {
-      const next = await props.inspect()
-      if (["off", "other-process"].includes(status().state)) setStatus(next)
+      const next = await server.get()
+      if (!disposed && cycle === generation) setStatus(next)
     } catch (error) {
-      setStatus({ state: "error", message: error instanceof Error ? error.message : String(error) })
+      if (!disposed && cycle === generation)
+        setStatus({ state: "error", message: error instanceof Error ? error.message : String(error) })
     }
   }
 
-  function connect(save = true) {
-    if (pending) return pending
+  async function toggle() {
     const cycle = ++generation
-    const task = (async () => {
-      try {
-        if (save) await repository.save(true)
-        if (cycle !== generation || status().state === "on") return
-        setStatus({ state: "connecting" })
-        const next = connector ?? await props.create?.()
-        if (!next) throw new Error("Remote connector is unavailable in this TUI")
-        if (cycle !== generation) {
-          await next.stop()
-          return
-        }
-        connector = next
-        unsubscribe ??= connector.subscribe((value) => {
-          if (value.state === "off" && status().state === "connecting") return
-          setStatus(value)
-          if (value.state === "error" && value.message)
-            toast.show({ variant: "error", title: "Remote connection", message: value.message, duration: 6000 })
-        })
-        toast.show({ variant: "info", title: "Remote access", message: connector.notice, duration: 6000 })
-        await connector.start()
-        if (cycle !== generation) await connector.stop()
-      } catch (error) {
-        if (cycle !== generation) return
-        const message = error instanceof Error ? error.message : String(error)
-        setStatus({ state: "error", message })
-        toast.show({ variant: "error", title: "Remote connection", message, duration: 6000 })
-      }
-    })()
-    pending = task
-    void task.then(() => { if (pending === task) pending = undefined })
-    return task
-  }
-
-  async function disconnect() {
-    generation++
+    const enabled = status().state !== "on"
     try {
-      await repository.save(false)
-      await connector?.stop()
-      setStatus({ state: "off" })
-      await inspect()
+      const next = await server.set(enabled)
+      if (!disposed && cycle === generation) {
+        setStatus(next)
+        if (enabled && (next.state === "connecting" || next.state === "on"))
+          toast.show({ variant: "info", title: "Remote access", message: "Connecting grants the machine owner access to every existing and future Session on this backend.", duration: 6000 })
+      }
     } catch (error) {
+      if (disposed || cycle !== generation) return
       const message = error instanceof Error ? error.message : String(error)
       setStatus({ state: "error", message })
       toast.show({ variant: "error", title: "Remote connection", message, duration: 6000 })
     }
   }
 
-  async function dispose() {
-    generation++
-    unsubscribe?.()
-    await pending
-    await connector?.stop()
-  }
-
   onMount(() => {
-    props.registerFinalizer?.(dispose)
-    poll = setInterval(() => { void inspect() }, 2_000)
-    void repository.load().then((enabled) => enabled ? connect(false) : inspect()).catch((error) => {
-      setStatus({ state: "error", message: error instanceof Error ? error.message : String(error) })
-    })
+    void refresh()
+    poll = setInterval(() => { void refresh() }, 2_000)
   })
   onCleanup(() => {
+    disposed = true
     if (poll) clearInterval(poll)
-    void dispose().catch((error) => log.error("Could not stop remote connector", { error }))
   })
 
-  return <Context.Provider value={{ status, connect: () => connect(), disconnect }}><RemoteCommands />{props.children}</Context.Provider>
+  return <Context.Provider value={{ status, toggle }}><RemoteCommands />{props.children}</Context.Provider>
 }
 
 function RemoteCommands() {
   const remote = useRemote()
-  const toast = useToast()
   const command = {
     id: "remote.toggle",
     title: "Remote connection",
     group: "Remote",
     palette: true,
     paletteStatus: () => <RemotePaletteStatus status={remote.status} />,
-    run: () => {
-      const status = remote.status()
-      if (status.state === "other-process") {
-        toast.show({ variant: "info", title: "Remote connection", message: status.message ?? "Remote is on in another process" })
-        return
-      }
-      if (status.state === "on") {
-        void remote.disconnect()
-        return
-      }
-      void remote.connect()
-    },
+    run: () => { void remote.toggle() },
   } satisfies PaletteStatusCommand
-  Keymap.createLayer(() => ({
-    mode: "global",
-    commands: [command],
-  }))
+  Keymap.createLayer(() => ({ mode: "global", commands: [command] }))
   return null
 }
 
 function RemotePaletteStatus(props: { status: () => RemoteStatus }) {
   const { themeV2 } = useTheme().contextual("elevated")
-  const active = () => props.status().state === "on" || props.status().state === "other-process"
-  const label = () => {
-    const state = props.status().state
-    return state === "other-process" ? "on elsewhere" : state
-  }
-  return <span style={{ fg: active() ? themeV2.text.feedback.success.default : themeV2.text.subdued }}>● {label()}</span>
+  return <span style={{ fg: props.status().state === "on" ? themeV2.text.feedback.success.default : themeV2.text.subdued }}>● {props.status().state}</span>
 }

@@ -456,6 +456,7 @@ type Endpoint5_32Request = Parameters<RawClient["server.session"]["session.usage
 type Endpoint5_32Input = {
   readonly sessionID: Endpoint5_32Request["params"]["sessionID"]
   readonly group: Endpoint5_32Request["query"]["group"]
+  readonly timeZone?: Endpoint5_32Request["query"]["timeZone"]
   readonly from?: Endpoint5_32Request["query"]["from"]
   readonly to?: Endpoint5_32Request["query"]["to"]
   readonly offset?: Endpoint5_32Request["query"]["offset"]
@@ -468,6 +469,7 @@ const Endpoint5_32 = (raw: RawClient["server.session"]) => (input: Endpoint5_32I
     params: { sessionID: input["sessionID"] },
     query: {
       group: input["group"],
+      timeZone: input["timeZone"],
       from: input["from"],
       to: input["to"],
       offset: input["offset"],
@@ -2313,6 +2315,7 @@ const Endpoint32_0 = (raw: RawClient["server.usage"]) => () =>
 type Endpoint32_1Request = Parameters<RawClient["server.usage"]["usage.report"]>[0]
 type Endpoint32_1Input = {
   readonly group: Endpoint32_1Request["query"]["group"]
+  readonly timeZone?: Endpoint32_1Request["query"]["timeZone"]
   readonly from?: Endpoint32_1Request["query"]["from"]
   readonly to?: Endpoint32_1Request["query"]["to"]
   readonly offset?: Endpoint32_1Request["query"]["offset"]
@@ -2324,6 +2327,7 @@ const Endpoint32_1 = (raw: RawClient["server.usage"]) => (input: Endpoint32_1Inp
   raw["usage.report"]({
     query: {
       group: input["group"],
+      timeZone: input["timeZone"],
       from: input["from"],
       to: input["to"],
       offset: input["offset"],
@@ -2337,6 +2341,22 @@ const Endpoint32_1 = (raw: RawClient["server.usage"]) => (input: Endpoint32_1Inp
   )
 
 const adaptGroup32 = (raw: RawClient["server.usage"]) => ({ get: Endpoint32_0(raw), report: Endpoint32_1(raw) })
+
+const Endpoint33_0 = (raw: RawClient["server.remote"]) => () =>
+  raw["remote.get"]({}).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint33_1Request = Parameters<RawClient["server.remote"]["remote.set"]>[0]
+type Endpoint33_1Input = { readonly enabled: Endpoint33_1Request["payload"]["enabled"] }
+const Endpoint33_1 = (raw: RawClient["server.remote"]) => (input: Endpoint33_1Input) =>
+  raw["remote.set"]({ payload: { enabled: input["enabled"] } }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+const adaptGroup33 = (raw: RawClient["server.remote"]) => ({ get: Endpoint33_0(raw), set: Endpoint33_1(raw) })
 
 const adaptClient = (raw: RawClient) => ({
   health: adaptGroup0(raw["server.health"]),
@@ -2372,6 +2392,7 @@ const adaptClient = (raw: RawClient) => ({
   browser: adaptGroup30(raw["server.browser"]),
   isolatedBrowser: adaptGroup31(raw["server.isolatedBrowser"]),
   usage: adaptGroup32(raw["server.usage"]),
+  remote: adaptGroup33(raw["server.remote"]),
 })
 
 export const make = (options?: { readonly baseUrl?: URL | string }) =>

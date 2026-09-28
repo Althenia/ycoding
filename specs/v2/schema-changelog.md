@@ -2,6 +2,24 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-09-28: Add Server-Owned Remote Connection
+
+- Add `Remote.Status` (`state`: `off`, `connecting`, `on`, or `error`; optional `message`).
+- Add `GET /api/remote`, returning `{ data: Remote.Status }` for the machine's remote connection hosted by this server process.
+- Add `PUT /api/remote` with payload `{ enabled }`, which persists the machine-global on/off choice, starts or stops the hosted connection, and returns `{ data: Remote.Status }`. Both operations use the normal local Server authorization and are not relay operations.
+
+Compatibility:
+
+- The shapes and operations are additive. Promise and Effect client surfaces are regenerated from the assembled `HttpApi`.
+
+## 2026-09-28: Add Usage Report Time Zones
+
+- Add optional `timeZone` to the usage report input: an IANA time zone of at most 128 characters; an unknown zone is an invalid request. With a zone, hour, day, and month groups use local keys, and local hour keys carry their offset, so a repeated daylight-saving hour forms two groups ordered by instant.
+
+Compatibility:
+
+- The field is additive; omitting it keeps UTC groups. Promise and Effect client surfaces are regenerated from the assembled `HttpApi`.
+
 ## 2026-09-27: Add Project Directory Inventory and Forget
 
 - Add `Project.InventoryEntry` (`projectID`, optional `projectName`, `projectWorktree`, `directory`, optional `strategy`, `sessions`, `timeActive`, `available`) and `Project.InventoryAnchor`.

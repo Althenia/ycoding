@@ -57,7 +57,7 @@ describe("remote command surface", () => {
   test("exposes enrollment, connection, status, and backend session commands", async () => {
     const help = await run({}, ["remote", "--help"])
     expect(help.exitCode).toBe(0)
-    for (const command of ["enroll", "connect", "status", "sessions"]) {
+    for (const command of ["enroll", "connect", "disconnect", "status", "sessions"]) {
       expect(help.stdout).toContain(command)
     }
     expect(help.stdout).not.toContain("  allow")
@@ -128,5 +128,48 @@ describe("remote command surface", () => {
       await server.close()
       await fs.rm(directory, { recursive: true, force: true })
     }
+  }, 60_000)
+
+  test("connects, reports, and disconnects the remote switch on one isolated server", async () => {
+    await withHome(async (root) => {
+      let state: "off" | "on" = "off"
+      const enabled: boolean[] = []
+      let shutdowns = 0
+      const server = await startServer(root, { remote: {
+        status: async () => ({ state }),
+        set: async (value) => { enabled.push(value); state = value ? "on" : "off"; return { state } },
+        shutdown: async () => { shutdowns++ },
+      } })
+      try {
+        const denied = await fetch(`${server.base}/api/remote`, {
+          method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: true }),
+        })
+        expect(denied.status).toBe(401)
+        expect(enabled).toEqual([])
+        const identity = {
+          deviceID: "dev_fixture", name: "fixture", relayURL: "https://relay.example",
+          publicKey: { kty: "EC", crv: "P-256", x: "fixture", y: "fixture" },
+          privateKey: { kty: "EC", crv: "P-256", x: "fixture", y: "fixture", d: "fixture" },
+          enrolledAt: 1,
+        }
+        await fs.mkdir(path.join(root, "state", "ycoding"), { recursive: true })
+        await fs.writeFile(path.join(root, "state", "ycoding", "remote-device.json"), JSON.stringify(identity), { mode: 0o600 })
+        const env = isolatedEnv(root, { YCODING_PASSWORD: password })
+        const connect = await run(env, ["remote", "connect", "--server", server.base])
+        expect(connect.exitCode, connect.output).toBe(0)
+        expect(connect.stdout).toContain("all backend Sessions are available to its owner")
+        expect(connect.stdout).toContain("Remote connection on")
+        const status = await run(env, ["remote", "status", "--server", server.base])
+        expect(status.exitCode, status.output).toBe(0)
+        expect(status.stdout).toContain("Connection    on")
+        const disconnect = await run(env, ["remote", "disconnect", "--server", server.base])
+        expect(disconnect.exitCode, disconnect.output).toBe(0)
+        expect(disconnect.stdout).toContain("Remote connection off")
+        expect(enabled).toEqual([true, false])
+      } finally {
+        await server.close()
+      }
+      expect(shutdowns).toBe(1)
+    })
   }, 60_000)
 })

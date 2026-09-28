@@ -20,6 +20,7 @@ import { PluginGroup } from "./groups/plugin.js"
 import { HealthGroup } from "./groups/health.js"
 import { ServerGroup } from "./groups/server.js"
 import { UsageGroup } from "./groups/usage.js"
+import { RemoteGroup } from "./groups/remote.js"
 import { DebugGroup } from "./groups/debug.js"
 import { PtyGroup } from "./groups/pty.js"
 import { ShellGroup } from "./groups/shell.js"
@@ -94,6 +95,7 @@ type ApiGroups<
   | typeof HealthGroup
   | typeof ServerGroup
   | typeof UsageGroup
+  | typeof RemoteGroup
   | typeof DebugGroup
   | LocationGroups<LocationId>
   | FormGroups<LocationId, LocationService, FormLocationId, FormLocationService>
@@ -187,6 +189,7 @@ const makeApiFromGroup = <
     .add(makeBrowserGroup(sessionLocationMiddleware))
     .add(makeIsolatedBrowserGroup(sessionLocationMiddleware))
     .add(UsageGroup)
+    .add(RemoteGroup)
     .annotateMerge(
       OpenApi.annotations({
         title: "ycoding HttpApi",

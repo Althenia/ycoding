@@ -8,7 +8,7 @@ import { RemoteAgent } from "../src/remote-bridge"
 import { createLocalServer } from "../src/remote-local"
 
 describe("shared remote connector", () => {
-  test("refuses a nonprivate TUI backend before bridging it to the relay", () => {
+  test("refuses a nonprivate server backend before bridging it to the relay", () => {
     expect(() => privateLocalServer({ url: "http://192.0.2.10:4096" })).toThrow()
     expect(() => privateLocalServer({ url: "http://127.0.0.1:4096" })).not.toThrow()
   })
@@ -90,6 +90,7 @@ describe("shared remote connector", () => {
       await rm(directory, { recursive: true, force: true })
     }
   })
+
 
   test("two simultaneous starts admit only one bridge", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-remote-connector-"))

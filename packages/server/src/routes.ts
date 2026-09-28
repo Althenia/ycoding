@@ -52,6 +52,7 @@ import type { ServerOptions } from "./options"
 import { randomUUID } from "node:crypto"
 import { processIdentityLayer } from "./process-identity"
 import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
+import { RemoteConnection } from "./remote-connection"
 
 const applicationServices = LayerNode.group([
   Database.node,
@@ -82,6 +83,7 @@ export function createRoutes(
   options: ServerOptions = {},
   serviceURLs: () => ReadonlyArray<string> = () => [],
   sourceEpoch: ServiceStatus.Epoch = ServiceStatus.Epoch.make(randomUUID()),
+  remote: RemoteConnection.Interface = RemoteConnection.unavailable,
 ) {
   return makeRoutes(
     options.password
@@ -90,6 +92,7 @@ export function createRoutes(
     options,
     serviceURLs,
     sourceEpoch,
+    remote,
   )
 }
 
@@ -97,7 +100,7 @@ export function createEmbeddedRoutes(
   options: ServerOptions = {},
   sourceEpoch: ServiceStatus.Epoch = ServiceStatus.Epoch.make(randomUUID()),
 ) {
-  return makeRoutes(ServerAuth.Config.configLayer({ password: Option.none() }), options, () => [], sourceEpoch)
+  return makeRoutes(ServerAuth.Config.configLayer({ password: Option.none() }), options, () => [], sourceEpoch, RemoteConnection.unavailable)
 }
 
 function makeRoutes<AuthError, AuthServices>(
@@ -105,6 +108,7 @@ function makeRoutes<AuthError, AuthServices>(
   options: ServerOptions,
   serviceURLs: () => ReadonlyArray<string>,
   sourceEpoch: ServiceStatus.Epoch,
+  remote: RemoteConnection.Interface,
 ) {
   const pluginRuntimeCell = PluginRuntime.makeCell()
   const replacements: LayerNode.Replacements = [
@@ -150,7 +154,7 @@ function makeRoutes<AuthError, AuthServices>(
         ServerInfo.layer(serviceURLs),
       )
       return HttpApiBuilder.layer(Api, { openapiPath: "/openapi.json" }).pipe(
-        Layer.provide(handlers.pipe(Layer.provide(services), Layer.provide(processIdentityLayer(sourceEpoch)))),
+        Layer.provide(handlers.pipe(Layer.provide(services), Layer.provide(processIdentityLayer(sourceEpoch)), Layer.provide(Layer.succeed(RemoteConnection.Service, remote)))),
         Layer.provide(formLocationLayer),
         Layer.provide(sessionLocationLayer),
         Layer.provide(layer),

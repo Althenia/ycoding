@@ -24,8 +24,8 @@ export function DialogStatus(props: DialogStatusProps = {}) {
         { title: "Bun", footer: props.bunVersion ?? process.versions.bun ?? "unknown", category: "Runtime", value: "bun" },
         {
           title: "Remote",
-          description: remote.status().message ?? remote.status().notice,
-          footer: remote.status().state === "other-process" ? "On in another process" : remote.status().state,
+          description: remote.status().message,
+          footer: remote.status().state,
           state: remote.status().state === "error" ? "error" as const : remote.status().state === "on" ? "connected" as const : undefined,
           category: "Services",
           value: "remote",
