@@ -7,6 +7,7 @@
  */
 
 import type { Form } from "../../../../packages/schema/src/form"
+import { RemoteLimits, type RemoteCompactionHistory } from "@ycoding-ai/remote"
 
 /** `packages/schema` `Model.Ref`: an object, never a plain string. */
 export type ModelRefView = {
@@ -170,6 +171,8 @@ export type RemoteMessageView =
       readonly jobID?: string
       readonly failureCode?: string
       readonly trigger?: string
+      readonly metrics?: RemoteCompactionHistory["data"][number]["metrics"]
+      readonly created?: number
       readonly summary?: string
       readonly error?: string
     }
@@ -245,6 +248,7 @@ export type SessionView = {
   readonly retry?: { readonly attempt: number; readonly at: number; readonly code: string }
   readonly executionStarted?: number
   readonly messages: readonly RemoteMessageView[]
+  readonly compactionHistory?: RemoteCompactionHistory
   readonly requests: readonly PendingRequestView[]
   /** Latest recorded patch per changed path, from the ledger read and live records. */
   readonly fileChanges: readonly FileChangeView[]
@@ -388,7 +392,7 @@ export function transcriptPartVisible(part: AssistantPart): boolean {
 export function transcriptMessageVisible(message: RemoteMessageView): boolean {
   if ((message.kind === "system" || message.kind === "synthetic") && (message.source === "session-state" || message.source === "team-view")) return false
   if (message.kind === "synthetic") return Boolean(message.description?.trim())
-  if (message.kind === "compaction") return message.jobID === undefined && (message.status !== "failed" || message.failureCode === "aborted")
+  if (message.kind === "compaction") return message.status === "running" || message.status === "completed" || message.status === "failed" && (message.failureCode === "cancelled" || message.failureCode === "superseded" || message.jobID === undefined && message.failureCode === "aborted")
   if (message.kind === "assistant") return message.parts.some(transcriptPartVisible) || message.completed !== undefined || message.error !== undefined || message.retry !== undefined
   return true
 }
@@ -396,8 +400,7 @@ export function transcriptMessageVisible(message: RemoteMessageView): boolean {
 export function visibleTranscriptMessages(messages: readonly RemoteMessageView[]): readonly RemoteMessageView[] {
   const visible = messages.filter(transcriptMessageVisible)
   const pendingInput = (message: RemoteMessageView) => message.kind === "user" && message.state === "pending" || message.kind === "synthetic" && message.pending === true
-  const pendingCompaction = (message: RemoteMessageView) => message.kind === "compaction" && (message.status === "pending" || message.status === "running")
-  return [...visible.filter((message) => !pendingInput(message) && !pendingCompaction(message)), ...visible.filter(pendingCompaction), ...visible.filter(pendingInput)]
+  return [...visible.filter((message) => !pendingInput(message)), ...visible.filter(pendingInput)]
 }
 
 export function classifySyntheticNotice(message: RemoteMessageView):
@@ -854,12 +857,13 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         created: now,
       })
     case "session.compaction.admitted":
+      return withCompaction(view, data, "pending", event.created ?? now)
     case "session.compaction.started":
-      return withCompaction(view, data, "running")
+      return withCompaction(view, data, "running", event.created ?? now)
     case "session.compaction.ended":
-      return withCompaction(view, data, "completed")
+      return withCompaction(view, data, "completed", event.created ?? now)
     case "session.compaction.failed":
-      return withCompaction(view, data, "failed", readError(data.error)?.message)
+      return withCompaction(view, data, "failed", event.created ?? now, readError(data.error)?.message)
     case "session.synthetic":
       return pushMessage(view, {
         kind: "synthetic",
@@ -1105,12 +1109,12 @@ function bump(view: SessionView): SessionView {
 
 function readEvent(
   payload: unknown,
-): { readonly type: string; readonly id?: string; readonly data: Record<string, unknown> } | undefined {
+): { readonly type: string; readonly id?: string; readonly created?: number; readonly data: Record<string, unknown> } | undefined {
   if (!isRecord(payload)) return undefined
   const type = stringField(payload.type)
   if (type === undefined) return undefined
   if (!isRecord(payload.data)) return undefined
-  return { type, id: stringField(payload.id), data: payload.data }
+  return { type, id: stringField(payload.id), created: numberField(payload.created), data: payload.data }
 }
 
 function applyAdmitted(view: SessionView, data: Record<string, unknown>, now: number): SessionView {
@@ -1309,25 +1313,84 @@ function applyFileChange(view: SessionView, data: Record<string, unknown>, now: 
 function withCompaction(
   view: SessionView,
   data: Record<string, unknown>,
-  status: "running" | "completed" | "failed",
+  status: "pending" | "running" | "completed" | "failed",
+  created: number,
   error?: string,
 ): SessionView {
-  const id = stringField(data.jobID) ?? stringField(data.inputID) ?? `compaction_${view.messages.length}`
+  const jobID = stringField(data.jobID)
+  const existing = view.messages.find((message) => message.kind === "compaction" && (message.jobID === jobID && jobID !== undefined || message.id === jobID))
+  const id = existing?.id ?? jobID ?? stringField(data.inputID) ?? `compaction_${view.messages.length}`
   const trigger = stringField(data.reason) ?? stringField(data.trigger)
-  const existing = view.messages.find((message) => message.id === id)
+  const messageTrigger = trigger ?? (existing?.kind === "compaction" ? existing.trigger : undefined)
   const boundary = isRecord(data.boundary) ? stringField(data.boundary.messageID) : undefined
+  const metrics = readCompactionMetrics(data.metrics)
   const message: Extract<RemoteMessageView, { kind: "compaction" }> = {
     kind: "compaction",
     id,
     status,
-    ...(stringField(data.jobID) ? { jobID: stringField(data.jobID) } : {}),
+    ...(jobID ? { jobID } : {}),
     ...(status === "failed" ? { failureCode: stringField(data.code) ?? readError(data.error)?.code } : {}),
     ...(status === "completed" && boundary !== undefined ? { boundaryMessageID: boundary } : {}),
-    ...(trigger === undefined ? {} : { trigger }),
+    ...(messageTrigger === undefined ? {} : { trigger: messageTrigger }),
+    ...(metrics ? { metrics } : {}),
+    created: existing?.kind === "compaction" && existing.created !== undefined ? existing.created : created,
     ...(error === undefined ? {} : { error }),
   }
   const updated = existing ? replaceMessage(view, message) : pushMessage(view, message)
-  return { ...updated, messages: visibleTranscript(updated.messages) }
+  return { ...updated, messages: visibleTranscript(updated.messages),
+    ...(view.compactionHistory === undefined || jobID === undefined ? {} : { compactionHistory: updateCompactionHistory(view.compactionHistory, message) }) }
+}
+
+function updateCompactionHistory(history: RemoteCompactionHistory, message: Extract<RemoteMessageView, { kind: "compaction" }>): RemoteCompactionHistory {
+  if (message.jobID === undefined) return history
+  const prior = history.data.find((entry) => entry.jobID === message.jobID)
+  if (prior && (prior.status === "completed" || prior.status === "failed") && (message.status === "pending" || message.status === "running")) return history
+  const entry = { jobID: message.jobID, trigger: message.trigger ?? prior?.trigger ?? "", status: message.status,
+    created: message.created ?? prior?.created ?? 0,
+    ...(message.status === "completed" && (message.metrics ?? prior?.metrics) ? { metrics: message.metrics ?? prior?.metrics } : {}),
+    ...(message.status === "failed" && message.failureCode ? { code: message.failureCode } : {}) }
+  const entries = prior === undefined ? [...history.data, entry] : history.data.map((item) => item.jobID === message.jobID ? entry : item)
+  const saved = (item: typeof entry | typeof prior) => item?.status === "completed" && item.metrics ? item.metrics.inputTokens - item.metrics.retainedTokens : 0
+  const omitted = entries.length > RemoteLimits.maxCompactionHistory ? entries[0] : undefined
+  return { data: entries.slice(-RemoteLimits.maxCompactionHistory),
+    truncated: history.truncated || omitted !== undefined,
+    completedBefore: history.completedBefore + (omitted?.status === "completed" && omitted.metrics ? 1 : 0),
+    completedCount: history.completedCount + Number(entry.status === "completed" && entry.metrics !== undefined) - Number(prior?.status === "completed" && prior.metrics !== undefined),
+    totalSavedTokens: history.totalSavedTokens + saved(entry) - saved(prior) }
+}
+
+function readCompactionMetrics(value: unknown): NonNullable<RemoteCompactionHistory["data"][number]["metrics"]> | undefined {
+  if (!isRecord(value)) return undefined
+  if (!nonNegativeInteger(value.excludedMessages) || !nonNegativeInteger(value.excludedParts) || !nonNegativeInteger(value.inputTokens) || !nonNegativeInteger(value.retainedTokens)) return undefined
+  return { excludedMessages: value.excludedMessages, excludedParts: value.excludedParts, inputTokens: value.inputTokens, retainedTokens: value.retainedTokens }
+}
+
+function nonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+}
+
+export function readCompactionHistory(value: unknown): RemoteCompactionHistory | undefined {
+  if (!isRecord(value) || !Array.isArray(value.data) || value.data.length > RemoteLimits.maxCompactionHistory || typeof value.truncated !== "boolean" ||
+    typeof value.completedBefore !== "number" || !Number.isSafeInteger(value.completedBefore) || value.completedBefore < 0 ||
+    typeof value.completedCount !== "number" || !Number.isSafeInteger(value.completedCount) || value.completedCount < 0 ||
+    typeof value.totalSavedTokens !== "number" || !Number.isSafeInteger(value.totalSavedTokens)) return undefined
+  const data = value.data.map((item): RemoteCompactionHistory["data"][number] | undefined => {
+    if (!isRecord(item) || typeof item.jobID !== "string" || !/^cmp_[A-Za-z0-9_-]+$/.test(item.jobID) ||
+      typeof item.trigger !== "string" || item.trigger.length === 0 || item.trigger.length > 64 ||
+      (item.status !== "pending" && item.status !== "running" && item.status !== "completed" && item.status !== "failed") ||
+      typeof item.created !== "number" || !Number.isSafeInteger(item.created) || item.created < 0) return undefined
+    const status = item.status
+    const metrics = status === "completed" ? readCompactionMetrics(item.metrics) : undefined
+    const code = status === "failed" ? stringField(item.code) : undefined
+    if (status === "completed" && !metrics || status === "failed" && (code === undefined || code.length > 64)) return undefined
+    return { jobID: item.jobID, trigger: item.trigger, status, created: item.created,
+      ...(metrics ? { metrics } : {}), ...(code ? { code } : {}) }
+  })
+  if (data.some((item) => item === undefined)) return undefined
+  const entries = data.filter((item): item is NonNullable<typeof item> => item !== undefined)
+  const completed = entries.filter((item) => item.status === "completed")
+  if (value.completedBefore + completed.length !== value.completedCount || !value.truncated && value.completedBefore > 0) return undefined
+  return { data: entries, truncated: value.truncated, completedBefore: value.completedBefore, completedCount: value.completedCount, totalSavedTokens: value.totalSavedTokens }
 }
 
 export function visibleTranscript(messages: readonly RemoteMessageView[]): readonly RemoteMessageView[] {
@@ -1449,8 +1512,9 @@ export function readProjectedMessage(value: unknown): RemoteMessageView | undefi
     const status = stringField(value.status)
     if (status !== "pending" && status !== "running" && status !== "failed" && status !== "completed") return undefined
     const summary = stringField(value.summary)
-    const trigger = stringField(value.reason)
+    const trigger = stringField(value.trigger) ?? stringField(value.reason)
     const boundary = isRecord(value.boundary) ? stringField(value.boundary.messageID) : undefined
+    const metrics = readCompactionMetrics(value.metrics)
     return {
       kind: "compaction",
       id,
@@ -1459,6 +1523,8 @@ export function readProjectedMessage(value: unknown): RemoteMessageView | undefi
       ...(status === "failed" ? { failureCode: stringField(value.code) ?? readError(value.error)?.code } : {}),
       ...(status === "completed" && boundary !== undefined ? { boundaryMessageID: boundary } : {}),
       ...(trigger === undefined ? {} : { trigger }),
+      ...(metrics === undefined ? {} : { metrics }),
+      ...(isRecord(value.time) && typeof value.time.created === "number" ? { created: value.time.created } : {}),
       ...(summary === undefined ? {} : { summary: boundedText(summary).text }),
     }
   }

@@ -358,6 +358,7 @@ grouping and Session-list filters are derived from backend metadata.
 | `session.status` | no | `v2.session.active`, pending Session permission/form/guardrail reads | Local active and pending-request GET routes | — |
 | `session.get` | yes | `v2.session.get` | `GET /api/session/:sessionID` | — |
 | `session.messages` | yes | `v2.message.list` | `GET /api/session/:sessionID/message` | — |
+| `session.compaction.list` | yes | `v2.message.list` | `GET /api/session/:sessionID/message` at the verified Session Location | — |
 | `session.snapshot` | yes | `v2.session.snapshot` | `GET /api/session/:sessionID/snapshot` | `limit?` (1–200), `before?` (requires limit; at most 256 chars) |
 | `session.attachment.read` | yes | `v2.session.attachment.read` | `GET /api/session/:sessionID/attachment/:digest` | `digest` (64 lowercase hex) |
 | `session.message.stream` | yes | `v2.session.message` | `GET /api/session/:sessionID/message/:messageID` | `messageID` (HTTP stream relay-internal request) |
@@ -397,6 +398,8 @@ grouping and Session-list filters are derived from backend metadata.
 | `session.goal.set` | yes | `v2.session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `goal` (non-empty string), `maxNoProgress?` |
 | `session.goal.stop` | yes | `v2.session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `goal: null` |
 | `session.create` | no | `v2.session.create`, `v2.project.current` | `POST /api/session`, `GET /api/project/current` | `id`, `workspace`, `agent?`, `model?` |
+
+`session.compaction.list` returns `{ data, truncated, completedBefore, completedCount, totalSavedTokens }`. `data` contains the latest 100 job-backed compaction messages in chronological order, each with `jobID`, `trigger`, `status`, `created` (milliseconds), and completed `metrics` or failure `code` where applicable. `truncated` marks omitted older jobs; `completedBefore` counts completed jobs omitted from `data`. `completedCount` and `totalSavedTokens` cover all completed jobs, including omitted ones; savings is the sum of `inputTokens - retainedTokens`. The connector verifies the Session against its recorded Location, excludes message content and error text, and accepts no caller-selected path, cursor, or Location.
 
 `workspace.list` returns `{ data: RemoteWorkspaceInfo[] }`, where each item is
 `{ id, projectID, directory, workspaceID?, name? }`. Without `sessionsOnly: true`,
@@ -582,8 +585,9 @@ successful `session.skill`, `session.switchModel`, and `session.switchAgent`
 NoContent operations return `null`.
 
 For operations mapped to one local route, response `value` is that route's HTTP
-JSON body: no field renaming or second schema. `workspace.list` is the
-agent-derived inventory described above. A `204 NoContent` response becomes
+JSON body, except `session.compaction.list`, which projects the message list into
+the bounded history above. `workspace.list` is the agent-derived inventory
+described above. A `204 NoContent` response becomes
 `{"ok":true,"value":null}`. A local error response becomes
 `{"ok":false,"error":{"code":...,"message":...}}` with a stable contract code.
 Required reconnect reads — `session.snapshot` (the Protocol `SessionProjection`

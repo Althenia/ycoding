@@ -33,9 +33,9 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
   const [jumpSlot, setJumpSlot] = createSignal<HTMLElement>()
   const targets = () => navigationTargets(scrollTop(), !away())
   const rows = createMemo(() => visibleTranscriptMessages(props.messages()))
-  const ids = createMemo(() => rows().map((message) => message.id))
+  const ids = createMemo(() => rows().map((message) => message.kind === "compaction" && message.jobID ? message.jobID : message.id))
   const prompts = createMemo(() => rows().filter((message): message is Extract<RemoteMessageView, { kind: "user" }> => message.kind === "user"))
-  const message = (id: string) => rows().find((entry) => entry.id === id)!
+  const message = (id: string) => rows().find((entry) => (entry.kind === "compaction" && entry.jobID ? entry.jobID : entry.id) === id)!
   const preview = (id: string) => {
     const item = message(id)
     return item.kind === "user" ? promptPreview(item.text) : ""

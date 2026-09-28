@@ -35,6 +35,7 @@ const historyMode = new URLSearchParams(location.search).has("history")
 const imagesMode = new URLSearchParams(location.search).has("images")
 const oversizedMode = new URLSearchParams(location.search).has("oversized")
 const pendingOversized = new URLSearchParams(location.search).get("oversized") === "pending"
+const compactionMode = new URLSearchParams(location.search).get("compaction")
 const raw = "first line\n" + "x".repeat(20_000) + "\n... output truncated; full content saved to /private/fixture/tool-output.txt ..."
 const outputMessages: readonly RemoteMessageView[] = [{ kind: "assistant", id: "msg_tool", created: 1, parts: [
   { kind: "tool", callID: "call_store", name: "read", status: "completed", content: [{ kind: "text", text: raw.replace(/\.\.\. output truncated; full content saved to [^\r\n]*/g, "[full output retained on the device]"), sourceTruncated: true }], structured: { truncated: true } },
@@ -78,6 +79,12 @@ const imageMessages: readonly RemoteMessageView[] = [
     { kind: "image", uri: plot.toDataURL("image/png"), mime: "image/png", name: "plot.png" },
   ] }] },
 ]
+const compressionMetrics = { excludedMessages: 11, excludedParts: 1, inputTokens: 1_000, retainedTokens: 400 }
+const compactionMessages: readonly RemoteMessageView[] = [
+  { kind: "user", id: "msg_before", text: "Before compression", state: "consumed", created: 1 },
+  { kind: "compaction", id: "cmp_live", jobID: "cmp_live", status: "running", created: 3 },
+  { kind: "user", id: "msg_after", text: "Neighbouring row remains in place", state: "consumed", created: 4 },
+]
 let imageFetches = 0
 if (imagesMode) {
   const originalFetch = window.fetch.bind(window)
@@ -104,7 +111,11 @@ const imageSnapshot = () => readSnapshot({ sourceEpoch: "epoch_1", session: { id
     ...(streamedImageText ? [{ type: "text", text: streamedImageText }] : []),
   ] },
 ] })?.messages ?? imageMessages
-const [messages, setMessages] = createSignal(synthetic ? syntheticMessages(synthetic === "compacted") : toolOutput ? outputMessages : historyMode ? navigationMessages.slice(12) : imagesMode ? imageMessages : oversizedMode ? [{ kind: "oversized", id: "msg_big", projected: !pendingOversized, state: pendingOversized ? "pending" : "loading" }] as const : navigation ? navigationMessages : runningStep ? runningMessages : visibility ? visibilityMessages : notification ? notificationMessages : initial)
+const [messages, setMessages] = createSignal(synthetic ? syntheticMessages(synthetic === "compacted") : toolOutput ? outputMessages : historyMode ? navigationMessages.slice(12) : imagesMode ? imageMessages : oversizedMode ? [{ kind: "oversized", id: "msg_big", projected: !pendingOversized, state: pendingOversized ? "pending" : "loading" }] as const : navigation ? navigationMessages : runningStep ? runningMessages : visibility ? visibilityMessages : notification ? notificationMessages : compactionMode ? compactionMessages : initial)
+const [compactionHistory, setCompactionHistory] = createSignal(compactionMode && compactionMode !== "old" ? {
+  data: [{ jobID: "cmp_old", trigger: "auto", status: "completed" as const, metrics: { ...compressionMetrics, inputTokens: 500, retainedTokens: 200 }, created: 2 }, { jobID: "cmp_live", trigger: "manual", status: "running" as const, created: 3 }],
+  truncated: compactionMode === "truncated", completedBefore: compactionMode === "truncated" ? 2 : 0, completedCount: compactionMode === "truncated" ? 3 : 1, totalSavedTokens: compactionMode === "truncated" ? 900 : 300,
+} : undefined)
 const [history, setHistory] = createSignal<{ readonly status: "idle"; readonly before?: string }>(historyMode ? { status: "idle", before: "older" } : { status: "idle" })
 
 function syntheticMessages(compacted: boolean): readonly RemoteMessageView[] {
@@ -118,7 +129,7 @@ if (!root) throw new Error("Missing transcript root")
 const store = createRemoteStore({ http: createRemoteHttp({ fetch: Object.assign(async () => new Response(null, { status: 401 }), { preconnect: () => {} }) }), createTransport: () => { throw new Error("Fixture transport must not connect") } })
 const fixtureState = { ...store.state(), activeSessionID: "ses_a", activeDeviceID: "dev_1" }
 const listeners = new Set<() => void>()
-Object.defineProperty(store, "state", { value: () => ({ ...fixtureState, history: history() }) })
+Object.defineProperty(store, "state", { value: () => ({ ...fixtureState, history: history(), view: compactionMode ? { ...createSessionView("ses_a"), compactionHistory: compactionHistory() } : fixtureState.view }) })
 Object.defineProperty(store, "subscribe", { value: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener) } })
 Object.defineProperty(store, "loadOlderMessages", { value: async () => {
   if (!history().before) return
@@ -127,6 +138,17 @@ Object.defineProperty(store, "loadOlderMessages", { value: async () => {
   listeners.forEach((listener) => listener())
 } })
 Object.defineProperty(store, "loadOversizedMessage", { value: async () => setMessages([{ kind: "user", id: "msg_big", text: "Recovered full content", state: "consumed", created: 2 }]) })
+if (compactionMode) Object.assign(window, { compactionUpdate: () => {
+  setMessages((current) => current.map((message) => message.kind === "compaction" ? { ...message, id: "msg_compact", status: "completed", trigger: "manual", metrics: compressionMetrics } : message))
+  if (compactionMode !== "old") setCompactionHistory({ data: [
+    { jobID: "cmp_old", trigger: "auto", status: "completed", metrics: { ...compressionMetrics, inputTokens: 500, retainedTokens: 200 }, created: 2 },
+    { jobID: "cmp_live", trigger: "manual", status: "completed", metrics: compressionMetrics, created: 3 },
+  ], truncated: compactionMode === "truncated", completedBefore: compactionMode === "truncated" ? 2 : 0, completedCount: compactionMode === "truncated" ? 4 : 2, totalSavedTokens: compactionMode === "truncated" ? 1_500 : 900 })
+  listeners.forEach((listener) => listener())
+} })
+if (compactionMode) Object.assign(window, { compactionFail: () => {
+  setMessages((current) => current.map((message) => message.kind === "compaction" ? { ...message, status: "failed", failureCode: "cancelled" } : message))
+} })
 if (imagesMode) Object.assign(window, {
   imageFetchCount: () => imageFetches,
   imageUpdate: (kind: "stream" | "live" | "reconcile" | "prepend" | "reconnect" | "corrupt-tool" | "repair-tool") => {

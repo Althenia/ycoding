@@ -166,6 +166,87 @@ async function fakeConnectionHarness() {
 }
 
 describe("remote store integration", () => {
+  test("reads complete compaction totals only for a selected Session with a compaction row", async () => {
+    const metrics = { excludedMessages: 4, excludedParts: 0, inputTokens: 1_000, retainedTokens: 400 }
+    const test = await harness({
+      messages: { ses_a: [
+        { id: "msg_before", type: "user", text: "Work", time: { created: 1 } },
+        { id: "msg_compact", type: "compaction", jobID: "cmp_latest", trigger: "manual", status: "completed", revision: 1, boundary: { messageID: "msg_before", seq: 1 }, metrics, time: { created: 2 } },
+      ] },
+      handler: (request) => request.operation === "session.compaction.list"
+        ? { ok: true, value: { data: [
+          { jobID: "cmp_old", trigger: "auto", status: "completed", metrics: { ...metrics, inputTokens: 500, retainedTokens: 200 }, created: 0 },
+          { jobID: "cmp_latest", trigger: "manual", status: "completed", metrics, created: 2 },
+        ], truncated: false, completedBefore: 0, completedCount: 2, totalSavedTokens: 900 } }
+        : "default",
+    })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.some((session) => session.id === "ses_b"))
+      await test.store.selectSession("ses_b")
+      expect(test.relay.requests.filter((request) => request.operation === "session.compaction.list")).toHaveLength(0)
+      await test.store.selectSession("ses_a")
+      await test.runUntil(() => test.store.state().view?.compactionHistory?.totalSavedTokens === 900)
+      expect(test.store.state().view?.compactionHistory?.completedCount).toBe(2)
+      expect(test.relay.requests.filter((request) => request.operation === "session.compaction.list").map((request) => request.sessionID)).toEqual(["ses_a"])
+    } finally { await test.stop() }
+  })
+
+  test("shows a live compaction and falls back silently when an older connector cannot list history", async () => {
+    const test = await harness({ handler: (request) => request.operation === "session.compaction.list"
+      ? { ok: false, code: "unknown_operation", message: "Update device" } : "default" })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.some((session) => session.id === "ses_a"))
+      await test.store.selectSession("ses_a")
+      expect(test.relay.requests.filter((request) => request.operation === "session.compaction.list")).toHaveLength(0)
+      test.relay.pushEvent("ses_a", { type: "session.compaction.started", data: { sessionID: "ses_a", jobID: "cmp_live" }, created: 10 })
+      await test.runUntil(() => test.store.state().view?.messages.some((message) => message.kind === "compaction" && message.status === "running") ?? false)
+      await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.compaction.list"))
+      expect(test.store.state().view?.compactionHistory).toBeUndefined()
+      expect(test.store.state().view?.messages.find((message) => message.kind === "compaction")).toMatchObject({ jobID: "cmp_live", status: "running" })
+      expect(test.store.state().notice).toBeUndefined()
+    } finally { await test.stop() }
+  })
+
+  test("updates a loaded compaction total once from a live completion without another history read", async () => {
+    const metrics = { excludedMessages: 4, excludedParts: 0, inputTokens: 1_000, retainedTokens: 400 }
+    const test = await harness({ messages: { ses_a: [{ id: "msg_compact", type: "compaction", jobID: "cmp_live", trigger: "auto", status: "running", time: { created: 2 } }] },
+      handler: (request) => request.operation === "session.compaction.list" ? { ok: true, value: { data: [{ jobID: "cmp_live", trigger: "auto", status: "running", created: 2 }], truncated: false, completedBefore: 0, completedCount: 0, totalSavedTokens: 0 } } : "default" })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.some((session) => session.id === "ses_a"))
+      await test.store.selectSession("ses_a")
+      await test.runUntil(() => test.store.state().view?.compactionHistory?.data.length === 1)
+      for (let index = 0; index < 2; index++) test.relay.pushEvent("ses_a", { type: "session.compaction.ended", data: { sessionID: "ses_a", jobID: "cmp_live", metrics, boundary: { messageID: "msg_before", seq: 1 } }, created: 3 })
+      await test.runUntil(() => test.store.state().view?.compactionHistory?.completedCount === 1)
+      expect(test.store.state().view?.compactionHistory?.totalSavedTokens).toBe(600)
+      expect(test.relay.requests.filter((request) => request.operation === "session.compaction.list")).toHaveLength(1)
+    } finally { await test.stop() }
+  })
+
+  test("does not publish a compaction history after selecting another Session", async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const test = await harness({ messages: { ses_a: [{ id: "msg_compact", type: "compaction", jobID: "cmp_old", trigger: "manual", status: "running", time: { created: 2 } }] },
+      handler: async (request) => {
+        if (request.operation !== "session.compaction.list") return "default" as const
+        await gate
+        return { ok: true as const, value: { data: [{ jobID: "cmp_old", trigger: "manual", status: "running", created: 2 }], truncated: false, completedBefore: 0, completedCount: 0, totalSavedTokens: 0 } }
+      } })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.some((session) => session.id === "ses_a"))
+      await test.store.selectSession("ses_a")
+      await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.compaction.list"))
+      await test.store.selectSession("ses_b")
+      release()
+      await test.flush()
+      expect(test.store.state().view?.id).toBe("ses_b")
+      expect(test.store.state().view?.compactionHistory).toBeUndefined()
+    } finally { release(); await test.stop() }
+  })
+
   test("parses explicit workspace identity from the backend Session Location", () => {
     expect(readSessionInfo({ id: "ses_a", projectID: "prj_a", title: "A", time: { updated: 2 }, location: { directory: "/work", workspaceID: "wsp_explicit" } }))
       .toMatchObject({ id: "ses_a", projectID: "prj_a", directory: "/work", workspaceID: "wsp_explicit" })

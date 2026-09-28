@@ -59,6 +59,15 @@ test("one-message stream requests accept only an indexed Session message ID", ()
     expect(parseClientMessage(JSON.stringify({ ...frame, input })).ok).toBe(false)
 })
 
+test("compaction history is a read-only Session-scoped operation with no caller placement or paging fields", () => {
+  const request = { type: "request", id: "req_compactions", operation: "session.compaction.list", sessionID: "ses_1" }
+  expect(parseClientMessage(JSON.stringify(request))).toMatchObject({ ok: true, value: request })
+  expect(parseRelayToAgentMessage(JSON.stringify(request))).toMatchObject({ ok: true, value: request })
+  expect(parseClientMessage(JSON.stringify({ ...request, sessionID: undefined }))).toMatchObject({ ok: false, error: { code: "session_required" } })
+  for (const input of [{ limit: 1 }, { directory: "/tmp" }, { workspaceID: "wsp_1" }, {}])
+    expect(parseClientMessage(JSON.stringify({ ...request, input })).ok).toBe(false)
+})
+
 test("Team operations stay root-scoped with bounded child, shell, side-chat, and economics inputs", () => {
   const request = (operation: string, input?: unknown) => ({ type: "request", id: "team_1", sessionID: "ses_root", operation,
     ...(input === undefined ? {} : { input }) })
@@ -430,6 +439,7 @@ describe("remote operations", () => {
       "session.active",
       "session.get",
       "session.messages",
+      "session.compaction.list",
       "session.snapshot",
       "session.attachment.read",
       "session.message.stream",
@@ -517,6 +527,7 @@ describe("remote operations", () => {
 
     const reads: readonly RemoteOperation[] = [
       "session.snapshot",
+      "session.compaction.list",
       "session.permission.list",
       "session.guardrail.status",
       "session.guardrail.request.list",

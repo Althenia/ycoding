@@ -21,6 +21,64 @@ beforeAll(async () => {
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
 describe("transcript rendering", () => {
+  test("keeps a compaction divider stationary and preserves neighbours across completion at phone and desktop sizes in both themes", async () => {
+    const page = await browser!.openPage()
+    try {
+      for (const theme of ["light", "dark"] as const) for (const [width, height] of [[390, 844], [1440, 900]]) {
+        await page.setViewport(width!, height!)
+        await page.setReducedMotion(theme === "dark")
+        await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?compaction=history&theme=${theme}`)
+        for (let i = 0; i < 40 && !await page.evaluate(`document.querySelector('.transcript-compaction__label')`); i++) await Bun.sleep(50)
+        expect(await page.evaluate<string>(`document.querySelector('.transcript-compaction__label')?.textContent ?? ''`)).toBe("~ compacting · manual")
+        const before = await page.evaluate<{ top: number; height: number }>(`(() => { window.neighbour = document.querySelector('[data-message-id="msg_after"]'); window.divider = document.querySelector('[data-message-id="cmp_live"]'); return { top: window.neighbour.getBoundingClientRect().top, height: window.divider.getBoundingClientRect().height } })()`)
+        await page.evaluate(`window.compactionUpdate()`)
+        for (let i = 0; i < 40 && !await page.evaluate(`document.querySelector('.transcript-compaction__label')?.textContent?.includes('compacted')`); i++) await Bun.sleep(25)
+        const after = await page.evaluate<{ top: number; height: number; same: boolean; sameDivider: boolean; text: string; overflow: boolean }>(`(() => { const row = document.querySelector('[data-message-id="cmp_live"]') ?? document.querySelector('[data-message-id="msg_compact"]'); return { top: document.querySelector('[data-message-id="msg_after"]').getBoundingClientRect().top, height: row.getBoundingClientRect().height, same: window.neighbour === document.querySelector('[data-message-id="msg_after"]'), sameDivider: window.divider === row, text: row.textContent, overflow: document.documentElement.scrollWidth > innerWidth } })()`)
+        expect(after.same).toBe(true)
+        expect(after.sameDivider).toBe(true)
+        expect(Math.abs(after.top - before.top)).toBeLessThanOrEqual(2)
+        expect(Math.abs(after.height - before.height)).toBeLessThanOrEqual(2)
+        expect(after.text).toContain("~ compacted · 11 items excluded · 1k → 400 tokens")
+        expect(after.text).toContain("~900 tokens saved total")
+        expect(after.text).toContain("Compression #2 (~600 tokens removed, 60% reduction)")
+        expect(after.overflow).toBe(false)
+        if (theme === "dark") expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.transcript-compaction__details')).transitionDuration`)).toBe("0s")
+      }
+    } finally { await page.close() }
+  }, 20_000)
+
+  test("shows per-compaction numbers without total or numbering on an older connector", async () => {
+    const page = await browser!.openPage()
+    try {
+      for (const theme of ["light", "dark"] as const) for (const [width, height] of [[390, 844], [1440, 900]]) {
+        await page.setViewport(width!, height!)
+        await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?compaction=old&theme=${theme}`)
+        for (let i = 0; i < 40 && !await page.evaluate(`document.querySelector('.transcript-compaction__label')`); i++) await Bun.sleep(50)
+        await page.evaluate(`window.compactionUpdate()`)
+        const text = await page.evaluate<string>(`document.querySelector('[data-message-id="cmp_live"]')?.textContent ?? document.querySelector('[data-message-id="msg_compact"]')?.textContent ?? ''`)
+        expect(text).toContain("~ compacted · 11 items excluded · 1k → 400 tokens")
+        expect(text).toContain("~600 tokens removed, 60% reduction")
+        expect(text).not.toContain("tokens saved total")
+        expect(text).not.toContain("Compression #")
+      }
+    } finally { await page.close() }
+  }, 20_000)
+
+  test("keeps exact numbering after a truncated history and shows a cancelled job without a completed summary", async () => {
+    const page = await browser!.openPage()
+    try {
+      await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?compaction=truncated`)
+      for (let i = 0; i < 40 && !await page.evaluate(`document.querySelector('.transcript-compaction__label')`); i++) await Bun.sleep(50)
+      await page.evaluate(`window.compactionUpdate()`)
+      const text = await page.evaluate<string>(`document.querySelector('[data-message-id="cmp_live"]')?.textContent ?? ''`)
+      expect(text).toContain("Compression #4 (~600 tokens removed, 60% reduction)")
+      expect(text).toContain("~2k tokens saved total")
+      await page.evaluate(`window.compactionFail()`)
+      expect(await page.evaluate<string>(`document.querySelector('.transcript-compaction__label')?.textContent ?? ''`)).toBe("~ compaction cancelled")
+      expect(await page.evaluate<string>(`document.querySelector('[data-message-id="cmp_live"]')?.textContent ?? ''`)).not.toContain("tokens saved total")
+    } finally { await page.close() }
+  })
+
   test("keeps an oversized message in place while loading and offers retry after failure", async () => {
     const page = await browser!.openPage()
     try {
@@ -472,17 +530,18 @@ describe("transcript rendering", () => {
 
   test("large synthetic completed boundary bounds mounted transcript nodes", async () => {
     if (!browser) throw new Error("Browser not started")
-    const counts: { readonly messages: number; readonly nodes: number; readonly reasoningBodies: number }[] = []
+    const counts: { readonly messages: number; readonly nodes: number; readonly reasoningBodies: number; readonly compactions: number }[] = []
     for (const synthetic of ["full", "compacted"]) {
       const page = await browser.openPage()
       try {
         await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?synthetic=${synthetic}`)
         for (let i = 0; i < 80 && await page.evaluate<number>(`document.querySelectorAll('.transcript-message').length`) < (synthetic === "full" ? 1_200 : 120); i++) await Bun.sleep(50)
-        counts.push(await page.evaluate(`({ messages: document.querySelectorAll('.transcript-message').length, nodes: document.querySelectorAll('*').length, reasoningBodies: document.querySelectorAll('.transcript-reasoning__body').length })`))
+        counts.push(await page.evaluate(`({ messages: document.querySelectorAll('.transcript-message').length, nodes: document.querySelectorAll('*').length, reasoningBodies: document.querySelectorAll('.transcript-reasoning__body').length, compactions: document.querySelectorAll('.transcript-compaction').length })`))
       } finally { await page.close() }
     }
     expect(counts[0]?.messages).toBe(1_200)
-    expect(counts[1]?.messages).toBe(120)
+    expect(counts[1]?.messages).toBe(121)
+    expect(counts.map((count) => count.compactions)).toEqual([0, 1])
     expect(counts[1]!.nodes).toBeLessThan(counts[0]!.nodes / 2)
     console.log(`Synthetic transcript DOM: full ${counts[0]!.nodes} nodes, compacted ${counts[1]!.nodes} nodes`)
     expect(counts.map((count) => count.reasoningBodies)).toEqual([0, 0])

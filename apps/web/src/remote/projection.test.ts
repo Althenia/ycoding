@@ -19,6 +19,7 @@ import {
   mergeShellOutputSnapshot,
   previewText,
   readAutonomy,
+  readCompactionHistory,
   readFileChangeEvent,
   readFileChangeList,
   readMessageList,
@@ -196,10 +197,30 @@ test("hides internal observations, empty synthetic rows, and non-display compact
   expect(transcriptMessageVisible({ kind: "synthetic", id: "t", text: "team", source: "team-view", description: "TeamView update", created: 2 })).toBe(false)
   expect(transcriptMessageVisible({ kind: "synthetic", id: "e", text: "raw", description: "  ", created: 3 })).toBe(false)
   expect(transcriptMessageVisible({ kind: "synthetic", id: "n", text: "notification", description: "Subagent notification", metadata: { source: "subagent_notification", type: "completed" }, created: 4 })).toBe(true)
-  expect(transcriptMessageVisible({ kind: "compaction", id: "c", status: "completed", jobID: "cmp_1" })).toBe(false)
+  expect(transcriptMessageVisible({ kind: "compaction", id: "c", status: "completed", jobID: "cmp_1" })).toBe(true)
+  expect(transcriptMessageVisible({ kind: "compaction", id: "r", status: "running", jobID: "cmp_1" })).toBe(true)
+  expect(transcriptMessageVisible({ kind: "compaction", id: "p", status: "pending", jobID: "cmp_1" })).toBe(false)
+  expect(transcriptMessageVisible({ kind: "compaction", id: "x", status: "failed", jobID: "cmp_1", failureCode: "cancelled" })).toBe(true)
+  expect(transcriptMessageVisible({ kind: "compaction", id: "x", status: "failed", jobID: "cmp_1", failureCode: "provider_failed" })).toBe(false)
   expect(transcriptMessageVisible({ kind: "compaction", id: "f", status: "failed", failureCode: "provider_failed" })).toBe(false)
   expect(transcriptMessageVisible({ kind: "compaction", id: "a", status: "failed", failureCode: "aborted" })).toBe(true)
   expect(transcriptMessageVisible({ kind: "compaction", id: "l", status: "completed" })).toBe(true)
+})
+
+test("reads a bounded compaction history without exposing totals for malformed or unsupported responses", () => {
+  const metrics = { excludedMessages: 11, excludedParts: 1, inputTokens: 1_000, retainedTokens: 400 }
+  expect(readCompactionHistory({ data: [{ jobID: "cmp_1", trigger: "manual", status: "completed", metrics, created: 12 }], truncated: false, completedBefore: 0, completedCount: 1, totalSavedTokens: 600 })).toEqual({
+    data: [{ jobID: "cmp_1", trigger: "manual", status: "completed", metrics, created: 12 }], truncated: false, completedBefore: 0, completedCount: 1, totalSavedTokens: 600,
+  })
+  expect(readCompactionHistory({ data: [], truncated: false, completedBefore: 0, completedCount: 1, totalSavedTokens: 600 })).toBeUndefined()
+  expect(readCompactionHistory({ data: [{ jobID: "cmp_1", trigger: "manual", status: "completed", metrics: { ...metrics, retainedTokens: "400" }, created: 12 }], truncated: false, completedBefore: 0, completedCount: 1, totalSavedTokens: 600 })).toBeUndefined()
+})
+
+test("keeps one live compaction row and its metrics through start and completion", () => {
+  const started = applySessionEvent(createSessionView("ses_a"), { type: "session.compaction.started", data: { sessionID: "ses_a", jobID: "cmp_1" }, created: 12 }, 12)
+  expect(started.messages).toMatchObject([{ kind: "compaction", id: "cmp_1", status: "running", created: 12 }])
+  const completed = applySessionEvent(started, { type: "session.compaction.ended", data: { sessionID: "ses_a", jobID: "cmp_1", metrics: { excludedMessages: 11, excludedParts: 1, inputTokens: 1_000, retainedTokens: 400 }, boundary: { messageID: "msg_before", seq: 1 } }, created: 15 }, 15)
+  expect(completed.messages).toMatchObject([{ kind: "compaction", id: "cmp_1", status: "completed", created: 12, metrics: { inputTokens: 1_000, retainedTokens: 400 } }])
 })
 
 test("hides whitespace parts, goal tools, and completed duplicate skill loads", () => {

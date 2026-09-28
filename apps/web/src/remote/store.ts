@@ -18,6 +18,7 @@ import {
   openedPartKey,
   readAggregateID,
   readAutonomy,
+  readCompactionHistory,
   readEventSequence,
   readFileChangeEvent,
   readFileChangeList,
@@ -435,6 +436,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
    */
   let fileChangeRead: { readonly sessionID: string; readonly live: FileChangeView[] } | undefined
   let todoRead: { readonly sessionID: string; live?: readonly TodoView[] } | undefined
+  let compactionRead: { readonly token: number; readonly live: { readonly event: unknown; readonly at: number }[] } | undefined
+  let compactionAttemptedToken: number | undefined
   const requestReads = new Set<{ readonly sessionID: string; readonly live: { readonly event: unknown; readonly at: number }[] }>()
   let cancelBatch: (() => void) | undefined
   let queued: { readonly sessionID: string; readonly event: unknown }[] = []
@@ -585,6 +588,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (typeof item.event === "object" && item.event !== null && Reflect.get(item.event, "type") === "session.compaction.ended") recordCovered(view, next)
       unhandled += next.unhandledEvents - view.unhandledEvents
       view = sequence.seq === undefined ? next : { ...next, watermark: sequence.seq }
+      if (compactionRead?.token === selectionToken && typeof type === "string" && type.startsWith("session.compaction.") &&
+        (type === "session.compaction.admitted" || type === "session.compaction.started" || type === "session.compaction.ended" || type === "session.compaction.failed"))
+        compactionRead.live.push({ event: item.event, at })
       const todos = eventTodos(item.event, item.sessionID)
       if (todos !== undefined) {
         state = { ...state, todos }
@@ -618,6 +624,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       teamCues,
     }
     notify()
+    if (batch.some((item) => typeof item.event === "object" && item.event !== null && Reflect.get(item.event, "type") === "session.compaction.started") &&
+      state.activeSessionID !== undefined) void loadCompactionHistory(state.activeSessionID, selectionToken)
     if (gap) void reloadSnapshot(state.activeSessionID, selectionToken)
     oversizedIDs.forEach((id) => {
       oversizedReads.get(id)?.abort()
@@ -1154,6 +1162,24 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     return active.request("session.snapshot", { sessionID, input: { limit: historyPageSize, ...(before === undefined ? {} : { before }) } })
   }
 
+  const loadCompactionHistory = async (sessionID: string, token: number) => {
+    const owner = transport
+    if (!owner || token !== selectionToken || state.activeSessionID !== sessionID || compactionAttemptedToken === token ||
+      !state.view?.messages.some((message) => message.kind === "compaction" && message.jobID && message.status !== "pending")) return
+    compactionAttemptedToken = token
+    const read = { token, live: [] as { readonly event: unknown; readonly at: number }[] }
+    compactionRead = read
+    try {
+      const outcome = await owner.request("session.compaction.list", { sessionID, timeoutMs: 5_000 }).catch(() => undefined)
+      if (token !== selectionToken || compactionRead !== read || state.activeSessionID !== sessionID || outcome?.status !== "ok" || state.view === undefined) return
+      const loaded = readCompactionHistory(outcome.value)
+      if (loaded === undefined) return
+      const current = read.live.reduce<SessionView>((view, item) => applySessionEvent(view, item.event, item.at),
+        { ...createSessionView(sessionID), compactionHistory: loaded })
+      setState({ view: { ...state.view, compactionHistory: current.compactionHistory } })
+    } finally { if (compactionRead === read) compactionRead = undefined }
+  }
+
   const historyFailure = (outcome: Exclude<RemoteRequestOutcome, { status: "ok" }>) =>
     outcome.status === "failed" && (outcome.error.code === "invalid_message" || outcome.error.code === "unknown_operation")
       ? "Update the connected device to read windowed Session history."
@@ -1185,6 +1211,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const existing = new Set(page.messages.map((message) => message.id))
     setState({ view: { ...view, messages: visibleTranscript([...page.messages, ...view.messages.filter((message) => !existing.has(message.id))]) },
       history: { status: "idle", ...(page.before === undefined ? {} : { before: page.before }) } })
+    void loadCompactionHistory(sessionID, token)
   }
 
   const loadOversizedMessage = async (messageID: string) => {
@@ -1259,6 +1286,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       for (const event of owned.events) view = applyEvent(view, event, true)
       owned.replayed.forEach((key) => sealed?.parts.delete(key))
       setState({ view, history: { status: "idle", ...(applied.before === undefined ? {} : { before: applied.before }) } })
+      void loadCompactionHistory(sessionID, token)
       view.messages.filter((message) => message.kind === "oversized" && message.state === "pending").forEach((message) => { void loadOversizedMessage(message.id) })
       const owner = transport
       if (teamWatching && owner !== undefined && state.team !== undefined) void loadTeam(owner, token, state.team.rootID, undefined, true)
@@ -1636,6 +1664,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
             model: view.model ?? state.selectedSessionInfo.model, modelLabel: modelLabel(view.model) ?? state.selectedSessionInfo.modelLabel,
             ...(applied.parentID === undefined ? {} : { parentID: applied.parentID }) }
         : state.selectedSessionInfo })
+      void loadCompactionHistory(sessionID, token)
       if (teamWatching && !retained) void loadTeam(active, token, teamRootID)
       if (retained && activityWatching) void loadFamilyActivity(active, teamRootID)
     } finally {
@@ -2717,6 +2746,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     // A new socket starts unsubscribed, so ownership follows this response and only
     // while the same selection still owns the view.
     subscribedSessionID = resubscribed.status === "ok" ? sessionID : undefined
+    compactionAttemptedToken = undefined
     const reloaded = await reloadSnapshot(sessionID, token)
     if (!isCurrentConnection(owner)) return
     await loadSessionReads(sessionID, token)

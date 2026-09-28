@@ -402,7 +402,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
         </Show>
 
         <Show when={kind() === "compaction"}>
-          <p class="notice">{compactionText(props.message())}</p>
+          <CompactionDivider message={props.message} />
         </Show>
       </article>
     </Show>
@@ -561,11 +561,49 @@ const shellStatus = (message: RemoteMessageView) => {
   const shell = shellOf(message)
   return shell === undefined ? "" : `${shell.status}${shell.exit === undefined ? "" : ` (exit ${shell.exit})`}`
 }
-const compactionText = (message: RemoteMessageView) => {
-  if (message.kind !== "compaction") return ""
-  const trigger = message.trigger === undefined ? "" : ` (${message.trigger})`
-  const error = message.error === undefined ? "" : `: ${message.error}`
-  return `Compaction ${message.status}${trigger}${error}`
+function compactTokenCount(tokens: number) {
+  return tokens < 1_000 ? new Intl.NumberFormat().format(tokens) : `${Math.round(tokens / 1_000)}k`
+}
+
+function CompactionDivider(props: { readonly message: () => RemoteMessageView }): JSX.Element {
+  const remote = useRemote()
+  const current = () => { const message = props.message(); return message.kind === "compaction" ? message : undefined }
+  const history = () => remote.state().view?.compactionHistory
+  const entry = () => history()?.data.find((item) => item.jobID === current()?.jobID)
+  const metrics = () => current()?.metrics ?? entry()?.metrics
+  const saved = () => metrics() ? metrics()!.inputTokens - metrics()!.retainedTokens : 0
+  const reduction = () => metrics()?.inputTokens ? Math.round(saved() / metrics()!.inputTokens * 100) : 0
+  const ordinal = () => {
+    const found = history()?.data.findIndex((item) => item.jobID === current()?.jobID) ?? -1
+    if (found < 0) return undefined
+    return history()!.completedBefore + history()!.data.slice(0, found + 1).filter((item) => item.status === "completed" && item.metrics !== undefined).length
+  }
+  const trigger = () => current()?.trigger ?? entry()?.trigger
+  const label = () => {
+    const message = current()
+    if (!message) return ""
+    if (message.status === "pending") return "~ compaction pending"
+    if (message.status === "running") return `~ compacting${trigger() ? ` · ${trigger()}` : ""}`
+    if (message.status === "completed") return metrics()
+      ? `~ compacted · ${metrics()!.excludedMessages} items excluded · ${compactTokenCount(metrics()!.inputTokens)} → ${compactTokenCount(metrics()!.retainedTokens)} tokens`
+      : "~ compacted"
+    if (message.failureCode === "cancelled") return "~ compaction cancelled"
+    if (message.failureCode === "superseded") return "~ compaction superseded"
+    return ""
+  }
+  const completed = () => current()?.status === "completed" && metrics() !== undefined
+  return <div class={`transcript-compaction${completed() ? " transcript-compaction--completed" : ""}`}>
+    <div class="transcript-compaction__heading"><span class="transcript-compaction__rule" /><strong class="transcript-compaction__label">{label()}</strong><span class="transcript-compaction__rule" /></div>
+    <div class="transcript-compaction__details" aria-hidden={!completed()}>
+      <p class="transcript-compaction__total">{completed() && history() ? `~${compactTokenCount(history()!.totalSavedTokens)} tokens saved total` : ""}</p>
+      <div class="transcript-compaction__bar" role="img" aria-label={completed() ? `${reduction()}% of input tokens removed` : undefined}>
+        <span class="transcript-compaction__removed" style={{ width: `${Math.max(0, Math.min(100, reduction()))}%` }} />
+        <span class="transcript-compaction__retained" />
+      </div>
+      <p class="transcript-compaction__number">{completed() ? `${ordinal() === undefined ? "" : `Compression #${ordinal()} (`}~${compactTokenCount(saved())} tokens removed, ${reduction()}% reduction${ordinal() === undefined ? "" : ")"}` : ""}</p>
+      <p class="transcript-compaction__items">{completed() ? `Items: ${metrics()!.excludedMessages} messages compressed · ${new Date(current()!.created ?? entry()?.created ?? 0).toLocaleString()}` : ""}</p>
+    </div>
+  </div>
 }
 const permissionAction = (request: PendingRequestView) => (request.kind === "permission" ? request.action : "")
 const guardrailAction = (request: PendingRequestView) => (request.kind === "guardrail" ? request.action : "")

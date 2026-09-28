@@ -40,6 +40,7 @@ export const remoteOperations = [
   "session.active",
   "session.get",
   "session.messages",
+  "session.compaction.list",
   "session.snapshot",
   "session.attachment.read",
   "session.message.stream",
@@ -92,6 +93,7 @@ export const remoteOperations = [
 export const remoteSessionOperations = [
   "session.get",
   "session.messages",
+  "session.compaction.list",
   "session.snapshot",
   "session.attachment.read",
   "session.message.stream",
@@ -135,6 +137,21 @@ export const remoteSessionOperations = [
 
 export type RemoteOperation = (typeof remoteOperations)[number]
 
+export type RemoteCompactionHistory = {
+  readonly data: readonly {
+    readonly jobID: string
+    readonly trigger: string
+    readonly status: "pending" | "running" | "completed" | "failed"
+    readonly metrics?: { readonly excludedMessages: number; readonly excludedParts: number; readonly inputTokens: number; readonly retainedTokens: number }
+    readonly created: number
+    readonly code?: string
+  }[]
+  readonly truncated: boolean
+  readonly completedBefore: number
+  readonly completedCount: number
+  readonly totalSavedTokens: number
+}
+
 export type RemoteFamilyActivity = {
   readonly sessionID: string
   readonly executing: boolean
@@ -167,6 +184,7 @@ export const RemoteLimits = {
   maxSessionListPage: 200,
   maxStatusSessions: 500,
   maxFamilyMembers: 16,
+  maxCompactionHistory: 100,
   maxSubscriptionsPerClient: 64,
   maxRequestIDChars: 64,
   maxSessionIDChars: 128,
@@ -412,6 +430,7 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
 }
 
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
+  if (operation === "session.compaction.list") return input === undefined
   if (operation === "session.snapshot") return input === undefined || (isRecord(input) &&
     typeof input.limit === "number" && Number.isSafeInteger(input.limit) && input.limit >= 1 && input.limit <= 200 &&
     (input.before === undefined || (typeof input.before === "string" && input.before.length > 0 && input.before.length <= 256)) &&
