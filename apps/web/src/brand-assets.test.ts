@@ -4,6 +4,7 @@ const copies = [
   { local: "../public/brand/ycoding-mark.svg", canonical: "../../../assets/brand/ycoding-mark.svg" },
   { local: "../public/icons/icon-256.png", canonical: "../../../assets/brand/ycoding-icon-256.png" },
   { local: "../public/icons/icon-512.png", canonical: "../../../assets/brand/ycoding-icon-512.png" },
+  { local: "../public/icons/icon-maskable-512.png", canonical: "../../../assets/brand/ycoding-icon-maskable-512.png" },
 ] as const
 
 async function digest(url: URL) {
@@ -17,5 +18,15 @@ describe("canonical brand assets", () => {
       const canonical = await digest(new URL(asset.canonical, import.meta.url))
       expect(local).toBe(canonical)
     }
+  })
+
+  test("installed-app and home-screen icons use the padded maskable variant", async () => {
+    const manifest = await Bun.file(new URL("../public/manifest.webmanifest", import.meta.url)).json()
+    const icons: readonly { readonly src: string; readonly sizes: string; readonly type: string; readonly purpose: string }[] = manifest.icons
+    expect(icons.filter((icon) => icon.purpose.split(" ").includes("maskable"))).toEqual([
+      { src: "/icons/icon-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+    ])
+    const html = await Bun.file(new URL("../index.html", import.meta.url)).text()
+    expect(html).toContain('<link rel="apple-touch-icon" href="/icons/icon-maskable-512.png" />')
   })
 })

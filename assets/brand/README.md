@@ -12,6 +12,7 @@ Canonical design source: Penpot page **09 YCoding Brand**.
 | `ycoding-wordmark.svg` | Mark, `YCoding` wordmark, and terminal-product descriptor. |
 | `ycoding-mark-256.png`, `ycoding-mark-512.png` | Transparent raster derivatives. |
 | `ycoding-icon-256.png`, `ycoding-icon-512.png` | Dark app-icon raster derivatives. |
+| `ycoding-icon-maskable.svg`, `ycoding-icon-maskable-512.png` | Full-bleed dark icon with the branch Y scaled into the central 80% maskable safe zone, for installed web apps and home-screen icons that the platform masks. |
 
 ## Visual contract
 
@@ -22,7 +23,7 @@ Canonical design source: Penpot page **09 YCoding Brand**.
 - Rule: `#3A404A`
 - Canvas: `#1B1E23`
 
-The geometry is an original Y-shaped branch with an amber execution junction. It must remain recognizable as a one-color silhouette and as the three-line terminal fallback:
+The color mark is a pixel Y in Trace. The app icons draw an original Y-shaped branch with an amber execution junction, and the monochrome mark is its one-color silhouette. Both must remain recognizable as the three-line terminal fallback:
 
 ```text
 █   █

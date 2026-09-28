@@ -61,7 +61,7 @@ The built `dist/` is served at the product origin with an SPA fallback to `index
 
 ## Brand assets
 
-`public/brand/ycoding-mark.svg`, `public/icons/icon-256.png`, and `public/icons/icon-512.png` are byte-identical copies of the canonical files in `assets/brand`. `src/brand-assets.test.ts` fails if a copy drifts; regeneration belongs to the repository brand generator, not this package.
+`public/brand/ycoding-mark.svg`, `public/icons/icon-256.png`, `public/icons/icon-512.png`, and `public/icons/icon-maskable-512.png` are byte-identical copies of the canonical files in `assets/brand`. The manifest declares the full-bleed `icon-maskable-512.png` as its only maskable icon, and it is also the `apple-touch-icon`, so platform masks keep padding around the mark. `src/brand-assets.test.ts` fails if a copy drifts; regeneration belongs to the repository brand generator, not this package.
 
 ## Verification
 
