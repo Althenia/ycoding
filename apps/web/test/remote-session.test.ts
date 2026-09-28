@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { canReplyToRequest, sessionStatusLabel } from "../src/remote/projection"
+import { canReplyToRequest, sessionStatusLabel, visibleTranscriptMessages } from "../src/remote/projection"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore, readSessionInfo, type RemoteStore } from "../src/remote/store"
 import { createRemoteTransport, type RemoteTransport, type RemoteTransportStatus } from "../src/remote/transport"
@@ -166,6 +166,72 @@ async function fakeConnectionHarness() {
 }
 
 describe("remote store integration", () => {
+  test("loads exactly through the completed checkpoint and never requests the cursor before it", async () => {
+    const metrics = { excludedMessages: 5, excludedParts: 0, inputTokens: 1_000, retainedTokens: 400 }
+    const pages: Record<string, { readonly before?: string; readonly messages: readonly unknown[] }> = {
+      newest: { before: "middle", messages: [{ id: "msg_after", type: "user", text: "after", time: { created: 9 } }] },
+      middle: { before: "checkpoint", messages: [{ id: "msg_middle", type: "user", text: "middle", time: { created: 8 } }] },
+      checkpoint: { before: "covered", messages: [
+        { id: "msg_complete", type: "compaction", jobID: "cmp_done", trigger: "manual", status: "completed", revision: 1, boundary: { messageID: "msg_covered", seq: 2 }, metrics, time: { created: 3 } },
+        { id: "msg_retained", type: "user", text: "retained", time: { created: 4 } },
+      ] },
+    }
+    const test = await harness({ handler: (request) => request.operation === "session.snapshot"
+      ? { ok: true, value: { session: { id: request.sessionID }, watermark: { seq: 10 }, ...pages[typeof request.input?.before === "string" ? request.input.before : "newest"] } }
+      : "default" })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.some((session) => session.id === "ses_a"))
+      await test.store.selectSession("ses_a")
+      await test.store.loadOlderMessages()
+      await test.store.loadOlderMessages()
+      expect(test.store.state().history?.before).toBeUndefined()
+      expect(visibleTranscriptMessages(test.store.state().view?.messages ?? []).map((message) => message.id)).toEqual(["msg_complete", "msg_retained", "msg_middle", "msg_after"])
+      await test.store.loadOlderMessages()
+      expect(test.relay.requests.filter((request) => request.operation === "session.snapshot").map((request) => request.input?.before)).toEqual([undefined, "middle", "checkpoint"])
+    } finally { await test.stop() }
+  })
+
+  test("does not page beyond an initial checkpoint, including when a newer compaction is running", async () => {
+    const test = await harness({ handler: (request) => request.operation === "session.snapshot"
+      ? { ok: true, value: { session: { id: request.sessionID }, watermark: { seq: 10 }, before: "covered", messages: [
+        { id: "msg_complete", type: "compaction", jobID: "cmp_done", trigger: "manual", status: "completed", revision: 1, boundary: { messageID: "msg_covered", seq: 2 }, metrics: { excludedMessages: 2, excludedParts: 0, inputTokens: 100, retainedTokens: 40 }, time: { created: 3 } },
+        { id: "msg_running", type: "compaction", jobID: "cmp_new", trigger: "manual", status: "running", time: { created: 4 } },
+      ] } }
+      : "default" })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.some((session) => session.id === "ses_a"))
+      await test.store.selectSession("ses_a")
+      await test.store.loadOlderMessages()
+      expect(test.store.state().history?.before).toBeUndefined()
+      expect(visibleTranscriptMessages(test.store.state().view?.messages ?? []).map((message) => message.id)).toEqual(["msg_running"])
+      expect(test.relay.requests.filter((request) => request.operation === "session.snapshot")).toHaveLength(1)
+    } finally { await test.stop() }
+  })
+
+  test("continues paging without a completed checkpoint for pending, running and failed compactions", async () => {
+    const statuses = ["pending", "running", "failed"] as const
+    for (const status of statuses) {
+      const test = await harness({ handler: (request) => request.operation === "session.snapshot"
+        ? { ok: true, value: { session: { id: request.sessionID }, watermark: { seq: 10 },
+          ...(request.input?.before ? {} : { before: "older" }), messages: request.input?.before ? [
+            { id: "msg_old", type: "user", text: "old", time: { created: 1 } },
+          ] : [{ id: "msg_compact", type: "compaction", jobID: "cmp_new", trigger: "manual", status,
+            ...(status === "failed" ? { code: "provider_failed", error: { type: "compaction.failed", message: "Failed" } } : {}), time: { created: 2 } }] } }
+        : "default" })
+      try {
+        await test.store.load()
+        await test.runUntil(() => test.store.state().sessions.some((session) => session.id === "ses_a"))
+        await test.store.selectSession("ses_a")
+        await test.store.loadOlderMessages()
+        expect(test.store.state().history?.before).toBeUndefined()
+        expect(test.store.state().view?.messages.some((message) => message.id === "msg_old")).toBe(true)
+        expect(test.relay.requests.filter((request) => request.operation === "session.snapshot").map((request) => request.input?.before)).toEqual([undefined, "older"])
+      } finally { await test.stop() }
+    }
+  })
+
   test("reads complete compaction totals only for a selected Session with a compaction row", async () => {
     const metrics = { excludedMessages: 4, excludedParts: 0, inputTokens: 1_000, retainedTokens: 400 }
     const test = await harness({

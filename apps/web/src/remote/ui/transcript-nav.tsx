@@ -2,7 +2,7 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, 
 import { Portal } from "solid-js/web"
 import { Icon } from "../../ui/icon"
 import { useRemote } from "../context"
-import { visibleTranscriptMessages, type RemoteMessageView } from "../projection"
+import { hasCompactionCheckpoint, visibleTranscriptMessages, type RemoteMessageView } from "../projection"
 import { MessageRow } from "./conversation"
 import { LoadingPlaceholder } from "./loading"
 import "./transcript-nav.css"
@@ -33,6 +33,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
   const [jumpSlot, setJumpSlot] = createSignal<HTMLElement>()
   const targets = () => navigationTargets(scrollTop(), !away())
   const rows = createMemo(() => visibleTranscriptMessages(props.messages()))
+  const checkpoint = createMemo(() => hasCompactionCheckpoint(props.messages()))
   const ids = createMemo(() => rows().map((message) => message.kind === "compaction" && message.jobID ? message.jobID : message.id))
   const prompts = createMemo(() => rows().filter((message): message is Extract<RemoteMessageView, { kind: "user" }> => message.kind === "user"))
   const message = (id: string) => rows().find((entry) => (entry.kind === "compaction" && entry.jobID ? entry.jobID : entry.id) === id)!
@@ -77,7 +78,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     })
   }
   const loadOlder = async (preserve: boolean) => {
-    if (!scrollRoot || !wrapper || loadingOlder || remote.state().history?.status === "loading" || !remote.state().history?.before) return
+    if (!scrollRoot || !wrapper || loadingOlder || checkpoint() || remote.state().history?.status === "loading" || !remote.state().history?.before) return
     loadingOlder = true
     const anchor = preserve ? [...wrapper.querySelectorAll<HTMLElement>("[data-message-id]")].find((row) => row.getBoundingClientRect().bottom > scrollRoot!.getBoundingClientRect().top) : undefined
     const top = anchor?.getBoundingClientRect().top
@@ -190,9 +191,9 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
         <Show when={hovered()}>{(id) => <div class="transcript-navigation__tooltip" role="tooltip" style={{ top: `${tooltipTop()}px` }}>{preview(id())}</div>}</Show>
       </Show>
     </div>
-    <Show when={remote.state().history?.status === "loading"}><div class="transcript-navigation__history-loading"><LoadingPlaceholder kind="history" label="Loading older messages…" /></div></Show>
-    <Show when={remote.state().history?.status === "idle" && !remote.state().history?.before}><p class="transcript-navigation__beginning">Beginning of conversation</p></Show>
-    <Show when={remote.state().history?.status === "error"}><p class="transcript-navigation__history-error" role="alert">{remote.state().history?.error} <button type="button" onClick={() => void loadOlder(true)}>Retry older history</button></p></Show>
+    <Show when={!checkpoint() && remote.state().history?.status === "loading"}><div class="transcript-navigation__history-loading"><LoadingPlaceholder kind="history" label="Loading older messages…" /></div></Show>
+    <Show when={!checkpoint() && remote.state().history?.status === "idle" && !remote.state().history?.before}><p class="transcript-navigation__beginning">Beginning of conversation</p></Show>
+    <Show when={!checkpoint() && remote.state().history?.status === "error"}><p class="transcript-navigation__history-error" role="alert">{remote.state().history?.error} <button type="button" onClick={() => void loadOlder(true)}>Retry older history</button></p></Show>
     <ol class="transcript"><For each={ids()}>{(id) => <li class="transcript-navigation__item" data-message-id={id} data-prompt-id={message(id).kind === "user" ? id : undefined} tabindex={message(id).kind === "user" ? -1 : undefined}><MessageRow message={() => message(id)} /></li>}</For></ol>
     <Show when={jumpSlot()}>{(slot) => <Portal mount={slot()}><div class="transcript-navigation__mobile-controls" classList={{ "transcript-navigation__mobile-controls--visible": targets().top || targets().bottom }}><Show when={targets().top}><button type="button" aria-label="Jump to top" onClick={jumpToTop}><Icon name="arrow-up" size={18} /></button></Show><Show when={targets().bottom}><button type="button" aria-label="Jump to latest" onClick={jumpToBottom}><Icon name="arrow-down" size={18} /></button></Show></div></Portal>}</Show>
   </div>

@@ -498,6 +498,34 @@ describe("snapshot readers", () => {
     expect(readSnapshot({ session: {}, messages, watermark: { seq: 8 } })?.messages.at(-1)).toMatchObject({ state: "consumed" })
   })
 
+  test("keeps the completed checkpoint behind a newer running row but renders only that newer row", () => {
+    const messages = [
+      { id: "msg_before", type: "user", text: "covered", time: { created: 1 } },
+      completedCompaction("msg_complete", "cmp_done", "msg_before", 1, 2),
+      { id: "msg_retained", type: "user", text: "retained", time: { created: 3 } },
+      { id: "msg_running", type: "compaction", jobID: "cmp_new", trigger: "manual", status: "running", time: { created: 4 } },
+      { id: "msg_after", type: "user", text: "after", time: { created: 5 } },
+    ]
+    const snapshot = readSnapshot({ session: {}, messages: messages.slice(1), before: "older" })!
+    expect(snapshot.messages.map((message) => message.id)).toEqual(["msg_complete", "msg_retained", "msg_running", "msg_after"])
+    expect(visibleTranscriptMessages(snapshot.messages).map((message) => message.id)).toEqual(["msg_retained", "msg_running", "msg_after"])
+    expect(readSnapshot({ session: {}, messages })?.messages.map((message) => message.id)).toEqual(["msg_complete", "msg_retained", "msg_running", "msg_after"])
+  })
+
+  test("replaces the older compaction row with the new job and retains that job key on completion", () => {
+    const initial = readSnapshot({ session: {}, messages: [
+      { id: "msg_before", type: "user", text: "covered", time: { created: 1 } },
+      completedCompaction("msg_complete", "cmp_done", "msg_before", 1, 2),
+      { id: "msg_retained", type: "user", text: "retained", time: { created: 3 } },
+    ] })!.messages
+    const running = applySessionEvent({ ...createSessionView("ses_a"), messages: initial }, { type: "session.compaction.started", data: { sessionID: "ses_a", jobID: "cmp_new" }, created: 4 }, 4)
+    expect(visibleTranscriptMessages(running.messages).filter((message) => message.kind === "compaction").map((message) => message.jobID)).toEqual(["cmp_new"])
+    const completed = applySessionEvent(running, { type: "session.compaction.ended", data: { sessionID: "ses_a", jobID: "cmp_new", boundary: { messageID: "msg_retained", seq: 3 }, metrics: { excludedMessages: 1, excludedParts: 0, inputTokens: 100, retainedTokens: 40 } }, created: 5 }, 5)
+    expect(completed.messages.map((message) => message.id)).toEqual(["cmp_new"])
+    expect(visibleTranscriptMessages(completed.messages).map((message) => message.id)).toEqual(["cmp_new"])
+    expect(completed.messages[0]).toMatchObject({ jobID: "cmp_new", status: "completed", created: 4 })
+  })
+
   test("retains history when completion has no resident boundary or compaction is pending or failed", () => {
     const base = [
       { id: "msg_before", type: "user", text: "keep", time: { created: 1 } },

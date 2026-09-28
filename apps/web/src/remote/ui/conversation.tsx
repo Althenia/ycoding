@@ -579,6 +579,13 @@ function CompactionDivider(props: { readonly message: () => RemoteMessageView })
     return history()!.completedBefore + history()!.data.slice(0, found + 1).filter((item) => item.status === "completed" && item.metrics !== undefined).length
   }
   const trigger = () => current()?.trigger ?? entry()?.trigger
+  const timestamp = () => {
+    const date = new Date(current()?.created ?? entry()?.created ?? 0)
+    const now = new Date()
+    const time = date.toLocaleTimeString(undefined, { timeStyle: "short" })
+    return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate()
+      ? time : `${time} · ${date.toLocaleDateString()}`
+  }
   const label = () => {
     const message = current()
     if (!message) return ""
@@ -601,7 +608,7 @@ function CompactionDivider(props: { readonly message: () => RemoteMessageView })
         <span class="transcript-compaction__retained" />
       </div>
       <p class="transcript-compaction__number">{completed() ? `${ordinal() === undefined ? "" : `Compression #${ordinal()} (`}~${compactTokenCount(saved())} tokens removed, ${reduction()}% reduction${ordinal() === undefined ? "" : ")"}` : ""}</p>
-      <p class="transcript-compaction__items">{completed() ? `Items: ${metrics()!.excludedMessages} messages compressed · ${new Date(current()!.created ?? entry()?.created ?? 0).toLocaleString()}` : ""}</p>
+      <p class="transcript-compaction__items">{completed() ? `Items: ${metrics()!.excludedMessages} messages compressed · ${timestamp()}` : ""}</p>
     </div>
   </div>
 }

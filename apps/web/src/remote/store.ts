@@ -13,6 +13,7 @@ import {
   createSessionView,
   ephemeralAssistantID,
   ephemeralPartKey,
+  hasCompactionCheckpoint,
   mergeFileChanges,
   modelLabel,
   openedPartKey,
@@ -1192,6 +1193,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const before = state.history?.before
     const owner = transport
     if (!sessionID || !before || !owner || state.history?.status === "loading") return
+    if (hasCompactionCheckpoint(state.view?.messages ?? [])) {
+      setState({ history: { status: "idle" } })
+      return
+    }
     const token = selectionToken
     setState({ history: { status: "loading", before } })
     const outcome = await readSnapshotPayload(sessionID, before)
@@ -1209,8 +1214,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (view === undefined) return
     olderMessageIDs = new Set([...olderMessageIDs, ...page.messages.map((message) => message.id)])
     const existing = new Set(page.messages.map((message) => message.id))
-    setState({ view: { ...view, messages: visibleTranscript([...page.messages, ...view.messages.filter((message) => !existing.has(message.id))]) },
-      history: { status: "idle", ...(page.before === undefined ? {} : { before: page.before }) } })
+    const messages = visibleTranscript([...page.messages, ...view.messages.filter((message) => !existing.has(message.id))])
+    setState({ view: { ...view, messages },
+      history: { status: "idle", ...(hasCompactionCheckpoint(messages) || page.before === undefined ? {} : { before: page.before }) } })
     void loadCompactionHistory(sessionID, token)
   }
 
@@ -1285,7 +1291,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       let view = applied.view
       for (const event of owned.events) view = applyEvent(view, event, true)
       owned.replayed.forEach((key) => sealed?.parts.delete(key))
-      setState({ view, history: { status: "idle", ...(applied.before === undefined ? {} : { before: applied.before }) } })
+      setState({ view, history: { status: "idle", ...(hasCompactionCheckpoint(view.messages) || applied.before === undefined ? {} : { before: applied.before }) } })
       void loadCompactionHistory(sessionID, token)
       view.messages.filter((message) => message.kind === "oversized" && message.state === "pending").forEach((message) => { void loadOversizedMessage(message.id) })
       const owner = transport
@@ -1656,7 +1662,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       selectionReadyToken = token
       const teamRootID = applied.parentID ?? state.selectedSessionInfo?.parentID ?? sessionID
       const retained = sameFamily && teamRootID === state.team?.rootID
-      setState({ view, history: { status: "idle", ...(applied.before === undefined ? {} : { before: applied.before }) }, team: teamWatching ? retained ? state.team : emptyTeam(teamRootID, "loading") : undefined,
+      setState({ view, history: { status: "idle", ...(hasCompactionCheckpoint(view.messages) || applied.before === undefined ? {} : { before: applied.before }) }, team: teamWatching ? retained ? state.team : emptyTeam(teamRootID, "loading") : undefined,
         familyActivity: activityWatching ? retained ? state.familyActivity : { rootID: teamRootID, status: "loading", members: [] } : undefined,
         teamCues: retained ? state.teamCues : [],
         selectedSessionInfo: state.selectedSessionInfo?.id === sessionID

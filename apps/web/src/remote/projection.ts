@@ -398,7 +398,8 @@ export function transcriptMessageVisible(message: RemoteMessageView): boolean {
 }
 
 export function visibleTranscriptMessages(messages: readonly RemoteMessageView[]): readonly RemoteMessageView[] {
-  const visible = messages.filter(transcriptMessageVisible)
+  const latestCompaction = messages.findLast((message) => message.kind === "compaction" && transcriptMessageVisible(message))?.id
+  const visible = messages.filter((message) => transcriptMessageVisible(message) && (message.kind !== "compaction" || message.id === latestCompaction))
   const pendingInput = (message: RemoteMessageView) => message.kind === "user" && message.state === "pending" || message.kind === "synthetic" && message.pending === true
   return [...visible.filter((message) => !pendingInput(message)), ...visible.filter(pendingInput)]
 }
@@ -1402,7 +1403,12 @@ export function visibleTranscript(messages: readonly RemoteMessageView[]): reado
   }, -1)
   const retained = boundary < 0 ? messages : messages.filter((message, index) => index > boundary || message.kind === "compaction")
   const latestCompaction = retained.findLast((message) => message.kind === "compaction")?.id
-  return latestCompaction === undefined ? retained : retained.filter((message) => message.kind !== "compaction" || message.id === latestCompaction)
+  const checkpoint = retained.findLast((message) => message.kind === "compaction" && message.status === "completed" && !!message.boundaryMessageID)?.id
+  return retained.filter((message) => message.kind !== "compaction" || message.id === latestCompaction || message.id === checkpoint)
+}
+
+export function hasCompactionCheckpoint(messages: readonly RemoteMessageView[]): boolean {
+  return messages.some((message) => message.kind === "compaction" && message.status === "completed" && !!message.boundaryMessageID)
 }
 
 /** Mirrors one tool call into the activity stream so the panel reflects live work. */
