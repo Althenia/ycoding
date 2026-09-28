@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, type JSX } from "solid-js"
+import { For, Show, createMemo, createRenderEffect, createSignal, onCleanup, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
 import type { TodoView } from "../store"
 import "./todo-panel.css"
@@ -18,6 +18,30 @@ export function TodoPanel(props: { readonly todos?: readonly TodoView[] }): JSX.
     try { return localStorage.getItem(storageKey) === "true" } catch { return false }
   })())
   const summary = createMemo(() => todoSummary(props.todos ?? []))
+  const [shownTodos, setShownTodos] = createSignal(props.todos ?? [])
+  const [present, setPresent] = createSignal(summary().visible)
+  const [closing, setClosing] = createSignal(false)
+  let panel: HTMLElement | undefined
+  let closeTimer: number | undefined
+  createRenderEffect(() => {
+    if (summary().visible) {
+      setShownTodos(props.todos ?? [])
+      if (closeTimer !== undefined) clearTimeout(closeTimer)
+      closeTimer = undefined
+      setClosing(false)
+      setPresent(true)
+      return
+    }
+    if (!present() || closing()) return
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) { setPresent(false); return }
+    setClosing(true)
+    if (!panel) { setPresent(false); setClosing(false); return }
+    if (panel.contains(document.activeElement) && document.activeElement instanceof HTMLElement) document.activeElement.blur()
+    const duration = getComputedStyle(panel).getPropertyValue("--yc-dur-base").trim()
+    const milliseconds = duration.endsWith("ms") ? Number.parseFloat(duration) : Number.parseFloat(duration) * 1_000
+    closeTimer = window.setTimeout(() => { closeTimer = undefined; setPresent(false); setClosing(false) }, Number.isFinite(milliseconds) ? milliseconds : 220)
+  })
+  onCleanup(() => { if (closeTimer !== undefined) clearTimeout(closeTimer) })
   const toggle = () => {
     const next = !expanded()
     setExpanded(next)
@@ -25,10 +49,10 @@ export function TodoPanel(props: { readonly todos?: readonly TodoView[] }): JSX.
   }
   const marker = (status: TodoView["status"]) => status === "completed" ? "✓" : status === "in_progress" ? "●" : status === "cancelled" ? "–" : "○"
 
-  return <Show when={summary().visible}>
-    <section class="todo-panel" aria-label="Session todo list">
+  return <Show when={present()}>
+    <section ref={panel} class={`todo-panel${closing() ? " todo-panel--closing" : ""}`} aria-label="Session todo list" aria-hidden={closing()} inert={closing()}>
       <div class="todo-panel__inner">
-        <button class="todo-panel__toggle" type="button" aria-expanded={expanded()} aria-controls="session-todo-items" onClick={toggle}>
+        <button class="todo-panel__toggle" type="button" aria-expanded={expanded()} aria-controls="session-todo-items" disabled={closing()} onClick={toggle}>
           <span class="todo-panel__heading">Todo list</span>
           <span class="todo-panel__progress">{summary().progress}</span>
           <Show when={!expanded() && summary().active}><span class="todo-panel__active">{summary().active}</span></Show>
@@ -36,7 +60,7 @@ export function TodoPanel(props: { readonly todos?: readonly TodoView[] }): JSX.
         </button>
         <div class={`todo-panel__drawer${expanded() ? " todo-panel__drawer--open" : ""}`} id="session-todo-items" aria-hidden={!expanded()} inert={!expanded()}>
           <ul class="todo-panel__list">
-            <For each={props.todos}>{(todo) => <li class={`todo-panel__item todo-panel__item--${todo.status}`}>
+            <For each={shownTodos()}>{(todo) => <li class={`todo-panel__item todo-panel__item--${todo.status}`}>
               <span class="todo-panel__marker" aria-hidden="true">{marker(todo.status)}</span>
               <span class="todo-panel__text">{todo.content}</span>
             </li>}</For>

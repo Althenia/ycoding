@@ -180,6 +180,7 @@ export type RemoteStoreState = {
   readonly advertised: readonly string[]
   readonly sessions: readonly SessionInfoView[]
   readonly carouselSessions?: readonly (SessionInfoView & { readonly workspaceName: string })[]
+  readonly carouselStatus?: "idle" | "loading" | "ready" | "error"
   readonly sessionStatus?: { readonly running: ReadonlySet<string>; readonly attention: ReadonlySet<string> }
   readonly catalogs: Readonly<Record<string, CatalogView>>
   readonly usage: UsageState
@@ -188,6 +189,7 @@ export type RemoteStoreState = {
   readonly sessionQuery: string
   readonly sessionFilter: "all" | "running" | "idle"
   readonly sessionListStatus: "idle" | "loading" | "ready" | "error"
+  readonly sessionRowsStale?: boolean
   readonly sessionPageLoading: boolean
   readonly sessionHasNext: boolean
   readonly sessionHasPrevious: boolean
@@ -341,12 +343,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     advertised: [],
     sessions: [],
     carouselSessions: [],
+    carouselStatus: "idle",
     catalogs: {},
     usage: emptyUsage(),
     sessionGroups: [],
     sessionQuery: "",
     sessionFilter: "all",
     sessionListStatus: "idle",
+    sessionRowsStale: false,
     sessionPageLoading: false,
     sessionHasNext: false,
     sessionHasPrevious: false,
@@ -879,7 +883,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       statusReadOwner = undefined
       statusFrameRevision += 1
       statusBaseline = false
-      setState({ sessionStatus: undefined, carouselSessions: [] })
+      setState({ sessionStatus: undefined, carouselSessions: [], carouselStatus: "loading" })
       if (lastStatusKind !== "idle" && lastStatusKind !== "connecting") {
         clearCatalogs()
         clearUsage()
@@ -1422,6 +1426,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
 
   const loadCarouselSessions = async (owner: RemoteTransport, revision: number) => {
+    if (state.carouselSessions?.length === 0 && state.carouselStatus !== "loading" && state.carouselStatus !== "ready") setState({ carouselStatus: "loading" })
     const rows = (value: unknown, running: boolean) => readSessionInfoList(value).flatMap((entry) => {
       const session = readSessionInfo(entry)
       return session !== undefined && session.parentID === undefined ? [{ ...session, running }] : []
@@ -1432,18 +1437,18 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const current = await owner.request("session.list", { input: { limit: carouselLimit, order: "desc", status: "running", parentID: null } })
     if (!isCurrentConnection(owner) || revision !== carouselRevision) return
     if (current.status !== "ok") {
-      setState({ notice: describeOutcome(current, "Running Sessions") })
+      setState({ notice: describeOutcome(current, "Running Sessions"), carouselStatus: "error" })
       return
     }
     const running = [...new Map(rows(current.value, true).map((row) => [row.id, row])).values()].slice(0, carouselLimit)
     const recent = running.length === carouselLimit ? undefined : await owner.request("session.list", { input: { limit: carouselLimit, order: "desc", status: "idle", parentID: null } })
     if (!isCurrentConnection(owner) || revision !== carouselRevision) return
     if (recent !== undefined && recent.status !== "ok") {
-      setState({ notice: describeOutcome(recent, "Recent Sessions"), carouselSessions: withWorkspaceNames(running) })
+      setState({ notice: describeOutcome(recent, "Recent Sessions"), carouselSessions: withWorkspaceNames(running), carouselStatus: "error" })
       return
     }
     const combined = [...new Map([...running, ...(recent === undefined ? [] : rows(recent.value, false))].map((row) => [row.id, row])).values()].slice(0, carouselLimit)
-    setState({ carouselSessions: withWorkspaceNames(combined) })
+    setState({ carouselSessions: withWorkspaceNames(combined), carouselStatus: "ready" })
   }
 
   const loadSessions = async (token: number, cursor?: string, direction: "next" | "previous" = "next") => {
@@ -1488,13 +1493,17 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     sessionPages = cursor === undefined ? [page] : direction === "next"
       ? [...sessionPages, page].slice(-retainedSessionPages)
       : [page, ...sessionPages].slice(0, retainedSessionPages)
-    const sessions = withOpenRoot(sortSessions(sessionPages.flatMap((item) => item.rows)))
+    const sessions = withOpenRoot(sortSessions(sessionPages.flatMap((item) => item.rows))).map((item) => {
+      const previous = state.sessions.find((row) => row.id === item.id)
+      return previous !== undefined && JSON.stringify(previous) === JSON.stringify(item) ? previous : item
+    })
     setState({
       ...recoveredConnection(active),
       sessions,
       advertised: sessions.map((session) => session.id),
       selectedSessionInfo: sessions.find((session) => session.id === state.activeSessionID) ?? state.selectedSessionInfo,
       sessionListStatus: "ready",
+      sessionRowsStale: false,
       sessionPageLoading: false,
       sessionHasPrevious: sessionPages[0]?.previous !== undefined,
       sessionHasNext: sessionPages.at(-1)?.next !== undefined,
@@ -1523,7 +1532,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     setState({ ...recoveredConnection(owner), sessionGroups: groups, selectedWorkspaceID,
       carouselSessions: state.carouselSessions?.map((row) => ({ ...row, workspaceName: groups.find((group) =>
         group.projectID === row.projectID && group.directory === row.directory && group.workspaceID === row.workspaceID)?.name ?? row.workspaceName })),
-      ...(sameWorkspace ? {} : { sessions: [], advertised: [], sessionHasNext: false, sessionHasPrevious: false }),
+      ...(sameWorkspace ? {} : { sessions: [], advertised: [], sessionRowsStale: false, sessionHasNext: false, sessionHasPrevious: false }),
       sessionListStatus: selectedWorkspaceID === undefined ? "ready" : "loading" })
     if (selectedWorkspaceID !== undefined) await loadSessions(token)
     if (statusReloadLocal || carouselRefreshPending) void reloadStatusFirstPage(owner)
@@ -1558,7 +1567,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       cancelSearch = undefined
       sessionsToken += 1
       sessionPages = []
-      setState({ sessionQuery: "", sessionFilter: "all", sessions: [], advertised: [], sessionListStatus: "loading", sessionHasNext: false, sessionHasPrevious: false })
+      setState({ sessionQuery: "", sessionFilter: "all", sessions: [], advertised: [], sessionListStatus: "loading", sessionRowsStale: false, sessionHasNext: false, sessionHasPrevious: false })
     }
     selectionReadyToken = undefined
     selectionFailedToken = undefined
@@ -1883,6 +1892,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       advertised: [],
       sessions: [],
       carouselSessions: [],
+      carouselStatus: "idle",
+      sessionRowsStale: false,
       sessionGroups: [],
       selectedWorkspaceID: undefined,
       selectedSessionInfo: undefined,
@@ -2061,11 +2072,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       queued = []
       sessionsToken += 1
       workspacesToken += 1
-      setState({ activeDeviceID: deviceID, transport: { kind: "idle" }, sessions: [], carouselSessions: [], sessionStatus: undefined, advertised: [], activeSessionID: undefined, view: undefined, notice: undefined, drafts,
+      setState({ activeDeviceID: deviceID, transport: { kind: "idle" }, sessions: [], carouselSessions: [], carouselStatus: "loading", sessionStatus: undefined, advertised: [], activeSessionID: undefined, view: undefined, notice: undefined, drafts,
         lastRelayDrop: state.activeDeviceID === deviceID ? state.lastRelayDrop : undefined,
         team: undefined, familyActivity: undefined, teamCues: [], todos: undefined,
         sessionGroups: [], selectedWorkspaceID: undefined, selectedSessionInfo: undefined, sessionQuery: "", sessionFilter: "all",
-        sessionListStatus: "idle", sessionPageLoading: false, sessionHasNext: false, sessionHasPrevious: false,
+        sessionListStatus: "idle", sessionRowsStale: false, sessionPageLoading: false, sessionHasNext: false, sessionHasPrevious: false,
         workspaces: [], workspaceStatus: "idle", workspaceError: undefined,
         sessionCreation: creation?.status === "creating" ? { ...creation, status: "unknown", message: "The connection changed before creation settled. Check or retry this session explicitly." } : creation,
       })
@@ -2272,7 +2283,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       cancelSearch?.()
       sessionsToken += 1
       sessionPages = []
-      setState({ selectedWorkspaceID: workspaceID, sessions: [], advertised: [], sessionListStatus: "loading", sessionHasNext: false, sessionHasPrevious: false })
+      setState({ selectedWorkspaceID: workspaceID, sessions: [], advertised: [], sessionListStatus: "loading", sessionRowsStale: false, sessionHasNext: false, sessionHasPrevious: false })
       void loadSessions(sessionsToken)
     },
     searchSessions: (query, filter = state.sessionFilter) => {
@@ -2280,8 +2291,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (state.sessionQuery === query && state.sessionFilter === filter) return
       cancelSearch?.()
       sessionsToken += 1
-      sessionPages = []
-      setState({ sessionQuery: query, sessionFilter: filter, sessions: [], advertised: [], sessionListStatus: "loading", sessionHasNext: false, sessionHasPrevious: false })
+      setState({ sessionQuery: query, sessionFilter: filter, sessionListStatus: "loading", sessionRowsStale: state.sessions.length > 0, sessionHasNext: false, sessionHasPrevious: false })
       cancelSearch = schedule(() => {
         cancelSearch = undefined
         void loadSessions(sessionsToken)

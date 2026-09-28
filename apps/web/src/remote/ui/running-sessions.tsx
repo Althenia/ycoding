@@ -4,6 +4,7 @@ import "./running-sessions.css"
 
 export function RunningSessions(props: {
   readonly sessions: readonly (SessionInfoView & { readonly workspaceName: string })[]
+  readonly loading?: boolean
   readonly onSelectSession: (sessionID: string) => void
 }): JSX.Element {
   const [active, setActive] = createSignal(0)
@@ -40,8 +41,8 @@ export function RunningSessions(props: {
     frame = requestAnimationFrame(measure)
     onCleanup(() => { observer.disconnect(); window.removeEventListener("resize", measure); cancelAnimationFrame(frame) })
   })
-  return <Show when={props.sessions.length > 0}>
-    <section class="running-sessions" aria-labelledby="running-sessions-title">
+  return <Show when={props.loading || props.sessions.length > 0}>
+    <section class={`running-sessions${props.loading ? " running-sessions--loading" : " running-sessions--ready"}`} aria-labelledby="running-sessions-title" aria-busy={props.loading === true}>
       <h2 id="running-sessions-title">Running and recent</h2>
       <ul class="running-sessions__list" ref={track} onScroll={measure} onWheel={() => { target = undefined }} onTouchStart={() => { target = undefined }}>
         <For each={props.sessions}>

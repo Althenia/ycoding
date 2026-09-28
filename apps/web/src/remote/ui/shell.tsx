@@ -902,11 +902,12 @@ function SessionPanel(props: {
               </div>
             </Show>
           }>
-            <div class="session-list">
+            <div class="session-list" aria-busy={state().sessionRowsStale === true}>
               <For each={state().sessions}>
                 {(session) => (
                   <SessionRow
                     session={session}
+                    readOnly={state().sessionRowsStale === true}
                     onSelectSession={props.onSelectSession}
                     onNavigate={props.onNavigate}
                   />
@@ -1288,7 +1289,7 @@ function SessionsPage(props: {
   return (
     <div class="sessions-page" ref={feed}>
       <h1 class="visually-hidden">Sessions</h1>
-      <RunningSessions sessions={remote.state().carouselSessions ?? []} onSelectSession={props.onSelectSession} />
+      <RunningSessions sessions={remote.state().carouselSessions ?? []} loading={remote.state().carouselStatus === "loading"} onSelectSession={props.onSelectSession} />
       <Show
         when={remote.state().sessionGroups.length > 0 || remote.state().sessionListStatus === "loading"}
         fallback={
@@ -1353,7 +1354,7 @@ function SessionsPage(props: {
                 </div>
               </Show>
             }>
-              <div class="sessions-results">
+              <div class="sessions-results" aria-busy={remote.state().sessionRowsStale === true}>
                 <div class="sessions-table" role="table" aria-label="Sessions">
                   <div class="sessions-table__head" role="row">
                     <span role="columnheader">Title</span>
@@ -1364,7 +1365,7 @@ function SessionsPage(props: {
                     {(session) => (
                       <SessionSummaryRow
                         session={session}
-                        readOnly={cached() !== undefined}
+                        readOnly={cached() !== undefined || remote.state().sessionRowsStale === true}
                         onSelectSession={props.onSelectSession}
                       />
                     )}

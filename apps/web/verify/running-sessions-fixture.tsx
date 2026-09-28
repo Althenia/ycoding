@@ -1,4 +1,4 @@
-import { createSignal } from "solid-js"
+import { batch, createSignal } from "solid-js"
 import { render } from "solid-js/web"
 import { RunningSessions } from "../src/remote/ui/running-sessions"
 import type { SessionInfoView } from "../src/remote/store"
@@ -16,9 +16,10 @@ const entries: readonly (SessionInfoView & { readonly workspaceName: string })[]
 ].slice(0, requestedCount !== null && [0, 1, 2, 7].includes(Number(requestedCount)) ? Number(requestedCount) : 2)
 const selected: string[] = []
 const [current, setCurrent] = createSignal(params.has("dynamic") ? [] : entries)
-Object.assign(window, { runningSelected: () => selected.slice(), runningSetCount: (count: number) => setCurrent(entries.slice(0, count)) })
+const [loading, setLoading] = createSignal(params.has("dynamic"))
+Object.assign(window, { runningSelected: () => selected.slice(), runningSetCount: (count: number) => batch(() => { setCurrent(entries.slice(0, count)); setLoading(false) }), runningLoading: () => loading() })
 const root = document.getElementById("app")
 if (!root) throw new Error("Missing running Sessions fixture root")
 render(() => <main data-running-fixture style={{ "max-width": "70rem", margin: "0 auto", padding: "var(--yc-space-5) var(--yc-gutter)" }}>
-  <RunningSessions sessions={current()} onSelectSession={(sessionID) => selected.push(sessionID)} />
+  <RunningSessions sessions={current()} loading={loading()} onSelectSession={(sessionID) => selected.push(sessionID)} />
 </main>, root)

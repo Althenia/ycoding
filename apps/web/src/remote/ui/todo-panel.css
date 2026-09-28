@@ -1,5 +1,6 @@
 .app--conversation.app--selected .workspace__main { grid-template-rows:minmax(0,1fr) auto auto; }
-.todo-panel { min-inline-size:0; padding:0 var(--yc-gutter); }
+.todo-panel { min-inline-size:0; max-block-size:calc(min(240px,30dvh) + 80px); padding:0 var(--yc-gutter); overflow:hidden; opacity:1; transition:max-block-size var(--yc-dur-base) var(--yc-ease-exit),opacity var(--yc-dur-base) var(--yc-ease-exit); }
+.todo-panel--closing { max-block-size:0; opacity:0; pointer-events:none; }
 .todo-panel__inner { inline-size:min(100%,var(--remote-column)); margin-inline:auto; border:1px solid var(--yc-border); border-radius:var(--yc-radius-lg); background:var(--yc-surface-raised); color:var(--yc-text); overflow:hidden; }
 .todo-panel__toggle { display:flex; align-items:center; gap:var(--yc-space-2); inline-size:100%; min-block-size:40px; padding:var(--yc-space-2) var(--yc-space-3); border:0; background:transparent; color:inherit; text-align:start; cursor:pointer; font:var(--yc-weight-medium) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-sans); }
 .todo-panel__toggle:hover { background:var(--yc-surface); }
@@ -22,4 +23,3 @@
 .todo-panel__item--cancelled { color:var(--yc-text-muted); }
 .todo-panel__item--cancelled .todo-panel__text { text-decoration:line-through; }
 @media (pointer:coarse) { .todo-panel__toggle { min-block-size:44px; } }
-@media (prefers-reduced-motion:reduce) { .todo-panel__drawer,.todo-panel__chevron { transition:none; } }

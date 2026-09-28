@@ -232,6 +232,95 @@ describe("remote store integration", () => {
     }
   })
 
+  test("exposes an unresolved first carousel read and releases it after an authoritative empty result", async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const test = await harness({ handler: async (request) => {
+      if (request.operation !== "session.list" || request.input?.workspace !== undefined) return "default" as const
+      if (request.input?.status === "running") await gate
+      return { ok: true as const, value: { data: [] } }
+    } })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.list" && request.input?.status === "running"))
+      expect(test.store.state().carouselStatus).toBe("loading")
+      expect(test.store.state().carouselSessions).toEqual([])
+      release()
+      await test.runUntil(() => test.store.state().carouselStatus === "ready")
+      expect(test.store.state().carouselSessions).toEqual([])
+    } finally { release(); await test.stop() }
+  })
+
+  test("keeps resident Sessions stable through a delayed filter until the keyed result settles", async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const test = await harness({ handler: async (request) => {
+      if (request.operation !== "session.list" || request.input?.search !== "Alpha") return "default" as const
+      await gate
+      return { ok: true as const, value: { data: [{ id: "ses_a", title: "Alpha session", agent: "god", model: { providerID: "openai", id: "gpt-5" }, time: { created: 1, updated: 2 } }] } }
+    } })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length === 2)
+      const first = test.store.state().sessions.find((session) => session.id === "ses_a")
+      test.store.searchSessions("Alpha")
+      expect(test.store.state().sessionListStatus).toBe("loading")
+      expect(test.store.state().sessionRowsStale).toBe(true)
+      expect(test.store.state().sessions).toHaveLength(2)
+      await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.list" && request.input?.search === "Alpha"))
+      expect(test.store.state().sessions).toHaveLength(2)
+      release()
+      await test.runUntil(() => test.store.state().sessionListStatus === "ready" && test.store.state().sessions.length === 1)
+      expect(test.store.state().sessionRowsStale).toBe(false)
+      expect(test.store.state().sessions[0]).toBe(first)
+    } finally { release(); await test.stop() }
+  })
+
+  test("selects a resident Session from another surface while a delayed search is pending", async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const test = await harness({ handler: async (request) => {
+      if (request.operation !== "session.list" || request.input?.search !== "Alpha") return "default" as const
+      await gate
+      return { ok: true as const, value: { data: [] } }
+    } })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length === 2)
+      test.store.searchSessions("Alpha")
+      await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.list" && request.input?.search === "Alpha"))
+      await test.store.selectSession("ses_a")
+      expect(test.store.state().activeSessionID).toBe("ses_a")
+      expect(test.store.state().sessionQuery).toBe("")
+      expect(test.store.state().sessionRowsStale).toBe(false)
+    } finally { release(); await test.stop() }
+  })
+
+  test("status-driven first-page refresh of an unchanged query never marks resident rows stale", async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let workspaceReads = 0
+    const test = await harness({ handler: async (request) => {
+      if (request.operation !== "session.list" || request.input?.workspace === undefined) return "default" as const
+      workspaceReads += 1
+      if (workspaceReads > 1) await gate
+      return "default" as const
+    } })
+    try {
+      await test.store.load()
+      await test.runUntil(() => workspaceReads === 1 && test.store.state().sessions.length === 2 && test.store.state().sessionStatus !== undefined)
+      expect(test.store.state().sessionRowsStale).toBe(false)
+      test.relay.pushStatus(["ses_unlisted"], [])
+      await test.runUntil(() => workspaceReads >= 2)
+      expect(test.store.state().sessionListStatus).toBe("loading")
+      expect(test.store.state().sessionRowsStale).toBe(false)
+      expect(test.store.state().sessions).toHaveLength(2)
+      release()
+      await test.runUntil(() => test.store.state().sessionListStatus === "ready")
+      expect(test.store.state().sessionRowsStale).toBe(false)
+    } finally { release(); await test.stop() }
+  })
+
   test("reads complete compaction totals only for a selected Session with a compaction row", async () => {
     const metrics = { excludedMessages: 4, excludedParts: 0, inputTokens: 1_000, retainedTokens: 400 }
     const test = await harness({

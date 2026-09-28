@@ -128,7 +128,7 @@ describe("running Sessions across workspaces", () => {
     try {
       await page.setViewport(390, 844)
       await page.navigate(`http://127.0.0.1:${port}/verify/running-sessions-fixture.html?dynamic=1&count=2`)
-      expect(await page.evaluate<boolean>(`document.querySelector('.running-sessions') === null`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.querySelector('.running-sessions')?.getAttribute('aria-busy') === 'true'`)).toBe(true)
       await page.evaluate(`window.runningSetCount(2)`)
       for (let attempt = 0; attempt < 30 && await page.evaluate<number>(`document.querySelectorAll('.running-sessions__pagination button').length`) !== 2; attempt += 1) await Bun.sleep(20)
       expect(await page.evaluate<number>(`document.querySelectorAll('.running-sessions__pagination button').length`)).toBe(2)
@@ -137,4 +137,35 @@ describe("running Sessions across workspaces", () => {
       expect(await page.evaluate<number>(`document.querySelectorAll('.running-sessions__pagination button').length`)).toBe(0)
     } finally { await page.close() }
   })
+
+  test("reserves the first unresolved carousel and reveals or releases it without shifting following content", async () => {
+    const page = await browser!.openPage()
+    try {
+      for (const theme of ["light", "dark"] as const) for (const [width, height] of [[390, 844], [1440, 900]]) for (const reduced of [false, true]) {
+        await page.setViewport(width!, height!)
+        await page.setColorScheme(theme)
+        await page.setReducedMotion(reduced)
+        await page.navigate(`http://127.0.0.1:${port}/verify/running-sessions-fixture.html?dynamic=1&count=2&theme=${theme}`)
+        const pending = await page.evaluate<{ busy: boolean; cards: number; height: number; headingTop: number }>(`(() => { const parent = document.querySelector('[data-running-fixture]'); const following = document.createElement('h3'); following.textContent = 'Following heading'; parent.appendChild(following); window.following = following; const section = document.querySelector('.running-sessions'); return { busy: section?.getAttribute('aria-busy') === 'true', cards: section?.querySelectorAll('.running-sessions__item').length ?? 0, height: section?.getBoundingClientRect().height ?? 0, headingTop: following.getBoundingClientRect().top }; })()`)
+        expect(pending.busy).toBe(true)
+        expect(pending.cards).toBe(0)
+        expect(pending.height).toBeGreaterThanOrEqual(150)
+        await page.evaluate(`window.runningSetCount(2)`)
+        for (let attempt = 0; attempt < 40 && await page.evaluate<number>(`document.querySelectorAll('.running-sessions__item').length`) !== 2; attempt++) await Bun.sleep(20)
+        const revealed = await page.evaluate<{ headingTop: number; height: number; busy: boolean; name: string; duration: string }>(`(() => { const section = document.querySelector('.running-sessions'); const list = section.querySelector('.running-sessions__list'); return { headingTop: window.following.getBoundingClientRect().top, height: section.getBoundingClientRect().height, busy: section.getAttribute('aria-busy') === 'true', name: getComputedStyle(list).animationName, duration: getComputedStyle(list).animationDuration }; })()`)
+        expect(revealed.busy).toBe(false)
+        expect(Math.abs(revealed.headingTop - pending.headingTop)).toBeLessThanOrEqual(2)
+        expect(Math.abs(revealed.height - pending.height)).toBeLessThanOrEqual(2)
+        if (theme === "light" && width === 390 && !reduced) console.info("carousel reveal geometry", JSON.stringify({ pending, revealed }))
+        expect(reduced ? revealed.name === 'none' : revealed.name !== 'none').toBe(true)
+        if (!reduced) expect(revealed.duration).toBe("0.22s")
+        await page.navigate(`http://127.0.0.1:${port}/verify/running-sessions-fixture.html?dynamic=1&count=0&theme=${theme}`)
+        const beforeEmpty = await page.evaluate<number>(`(() => { const section = document.querySelector('.running-sessions'); return section?.getBoundingClientRect().height ?? 0 })()`)
+        expect(beforeEmpty).toBeGreaterThanOrEqual(150)
+        await page.evaluate(`window.runningSetCount(0)`)
+        expect(await page.evaluate<boolean>(`document.querySelector('.running-sessions') === null`)).toBe(true)
+        expect(await page.evaluate<number>(`document.querySelector('[data-running-fixture]').getBoundingClientRect().height`)).toBeLessThan(beforeEmpty)
+      }
+    } finally { await page.close() }
+  }, 30_000)
 })
