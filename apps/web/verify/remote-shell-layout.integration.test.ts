@@ -28,6 +28,258 @@ afterAll(async () => {
 })
 
 describe("remote shell layout", () => {
+  test("offers running and recent Sessions in Activity and keeps events on that page after selection", async () => {
+    for (const [width, height] of [[1440, 900], [390, 844]] as const) {
+      const page = await browser!.openPage()
+      try {
+        await page.injectOnNewDocument(`localStorage.removeItem('ycoding.remote.lastSessions')`)
+        await page.setViewport(width, height)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=activity&noSelection=1`)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.activity-page__events') !== null && document.querySelector('.running-sessions__item') !== null`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<boolean>(`document.querySelector('.activity-page__events .running-sessions__item[aria-label^="Open Stream remote output safely"]') !== null`)).toBe(true)
+        expect(await page.evaluate<boolean>(`document.querySelector('.activity-page__events .empty__title')?.textContent?.trim() === 'No session selected'`)).toBe(false)
+        expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+        await Bun.write(new URL(`../../../.cache/tmp/activity-picker-${width}x${height}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        await page.evaluate(`document.querySelector('.activity-page__events .running-sessions__item[aria-label^="Open Stream remote output safely"]')?.click()`)
+        for (let attempt = 0; attempt < 80 && await page.evaluate<number>(`document.querySelectorAll('.activity-page__events .activity-row').length`) === 0; attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<{ readonly path: string; readonly pending: string }>(`({ path: location.pathname, pending: document.querySelector('.activity-page__decisions h2')?.textContent?.trim() ?? '' })`)).toEqual({ path: "/remote/activity", pending: "Pending decisions" })
+        expect(await page.evaluate<number>(`document.querySelectorAll('.activity-page__events .activity-row').length`)).toBeGreaterThan(0)
+      } finally { await page.close() }
+    }
+  }, 15_000)
+
+  test("offers running roots before recent idle roots in Activity when no Session is selected", async () => {
+    const page = await browser!.openPage()
+    try {
+      await page.injectOnNewDocument(`localStorage.removeItem('ycoding.remote.lastSessions')`)
+      await page.setViewport(1440, 900)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=session-list-1440&noSelection=1`)
+      for (let attempt = 0; attempt < 80 && await page.evaluate<number>(`document.querySelectorAll('.running-sessions__item').length`) !== 4; attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`document.querySelector('.remote-nav a[href="/remote/activity"]')?.click()`)
+      for (let attempt = 0; attempt < 80 && await page.evaluate<number>(`document.querySelectorAll('.activity-page__events .running-sessions__item').length`) !== 4; attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll('.activity-page__events .running-sessions__status')].map(item => item.textContent.trim())`)).toEqual([
+        "Running", "Running", expect.stringContaining("Last active"), expect.stringContaining("Last active"),
+      ])
+      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+    } finally { await page.close() }
+  }, 15_000)
+
+  test("restores the last opened machine Session's Activity events after a full reload", async () => {
+    for (const [width, height] of [[1440, 900], [390, 844]] as const) {
+      const page = await browser!.openPage()
+      try {
+        await page.injectOnNewDocument(`if (!sessionStorage.getItem('activity-restore-started')) { localStorage.removeItem('ycoding.remote.lastSessions'); sessionStorage.setItem('activity-restore-started', '1') }`)
+        await page.setViewport(width, height)
+        const address = `http://127.0.0.1:${port}/verify/remote.html?view=activity&noSelection=1`
+        await page.navigate(address)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.activity-page__events .running-sessions__item') !== null`); attempt += 1) await Bun.sleep(50)
+        await page.evaluate(`document.querySelector('.activity-page__events .running-sessions__item[aria-label^="Open Stream remote output safely"]')?.click()`)
+        for (let attempt = 0; attempt < 80 && await page.evaluate<number>(`document.querySelectorAll('.activity-page__events .activity-row').length`) === 0; attempt += 1) await Bun.sleep(50)
+        const before = await page.evaluate<string>(`document.querySelector('.activity-page__events .activity-row')?.textContent?.trim() ?? ''`)
+        expect(before.length).toBeGreaterThan(0)
+        const saved = await page.evaluate<string | null>(`localStorage.getItem('ycoding.remote.lastSessions')`)
+        expect(JSON.parse(saved ?? "{}")).toMatchObject({ dev_studio: "ses_fixture" })
+        await page.navigate(address)
+        for (let attempt = 0; attempt < 80 && await page.evaluate<string>(`document.querySelector('.activity-page__events .activity-row')?.textContent?.trim() ?? ''`) !== before; attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<string>(`document.querySelector('.activity-page__events .activity-row')?.textContent?.trim() ?? ''`)).toBe(before)
+      } finally { await page.close() }
+    }
+  }, 25_000)
+
+  test("does not restore the previous machine's Activity on a device switch", async () => {
+    for (const [width, height] of [[1440, 900], [390, 844]] as const) {
+      const page = await browser!.openPage()
+      try {
+        await page.injectOnNewDocument(`localStorage.setItem('ycoding.remote.lastSessions', JSON.stringify({ dev_laptop: 'ses_fixture' }))`)
+        await page.setViewport(width, height)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=activity&noSelection=1`)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.activity-page__events .running-sessions__item') !== null`); attempt += 1) await Bun.sleep(50)
+        await page.evaluate(`document.querySelector('.activity-page__events .running-sessions__item[aria-label^="Open Stream remote output safely"]')?.click()`)
+        for (let attempt = 0; attempt < 80 && await page.evaluate<number>(`document.querySelectorAll('.activity-page__events .activity-row').length`) === 0; attempt += 1) await Bun.sleep(50)
+        await page.evaluate(`document.querySelector('.remote-nav a[href="/remote/settings"]')?.click()`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]') !== null`); attempt += 1) await Bun.sleep(50)
+        await page.evaluate(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.click()`)
+        await page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option => option.textContent?.includes('Laptop'))?.click()`)
+        if (width === 390) await page.evaluate(`document.querySelector('.custom-select__confirm')?.click()`)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.textContent?.includes('Laptop') === true`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<string>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.textContent?.trim() ?? ''`)).toBe("Laptop")
+        expect(await page.evaluate<unknown>(`JSON.parse(localStorage.getItem('ycoding.remote.lastSessions') ?? '{}')`)).toEqual({})
+        await page.evaluate(`document.querySelector('.remote-nav a[href="/remote/activity"]')?.click()`)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.activity-page__events .running-sessions__item') !== null`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<{ readonly events: number; readonly picker: boolean; readonly path: string }>(`({ events: document.querySelectorAll('.activity-page__events .activity-row').length, picker: document.querySelector('.activity-page__events .running-sessions__item') !== null, path: location.pathname })`)).toEqual({ events: 0, picker: true, path: "/remote/activity" })
+      } finally { await page.close() }
+    }
+  }, 25_000)
+
+  test("does not auto-restore on returning to a machine after switching away", async () => {
+    const page = await browser!.openPage()
+    try {
+      await page.injectOnNewDocument(`localStorage.setItem('ycoding.remote.lastSessions', JSON.stringify({ dev_studio: 'ses_fixture', dev_laptop: 'ses_fixture' }))`)
+      await page.setViewport(1440, 900)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=settings&noSelection=1`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.textContent?.includes('Studio Mac') === true`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.click()`)
+      await page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option => option.textContent?.includes('Laptop'))?.click()`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.textContent?.includes('Laptop') === true`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<string>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.textContent?.trim() ?? ''`)).toBe("Laptop")
+      await page.evaluate(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.click()`)
+      await page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option => option.textContent?.includes('Studio Mac'))?.click()`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.textContent?.includes('Studio Mac') === true`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<string>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.textContent?.trim() ?? ''`)).toBe("Studio Mac")
+      expect(await page.evaluate<unknown>(`JSON.parse(localStorage.getItem('ycoding.remote.lastSessions') ?? '{}')`)).toEqual({})
+      await page.evaluate(`document.querySelector('.remote-nav a[href="/remote/activity"]')?.click()`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.activity-page__events .running-sessions__item') !== null`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<{ readonly events: number; readonly picker: boolean }>(`({ events: document.querySelectorAll('.activity-page__events .activity-row').length, picker: document.querySelector('.activity-page__events .running-sessions__item') !== null })`)).toEqual({ events: 0, picker: true })
+    } finally { await page.close() }
+  }, 20_000)
+
+  test("removes the phone and desktop running dots and timer after a missed terminal reconnect", async () => {
+    for (const [width, height] of [[1440, 900], [390, 844]] as const) {
+      const page = await fixture("view=chat", width, "Stream remote output safely", undefined, height)
+      try {
+        const statusReads = await page.evaluate<number>(`window.remoteOperationReport().operations['session.status'] ?? 0`)
+        await page.evaluate(`window.remoteMissTerminal()`)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.session-status__slot .transcript-dot-trail') !== null && /^[0-9]+:[0-9]{2}$/.test(document.querySelector('.session-status__mobile')?.textContent?.trim() ?? '')`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<boolean>(`document.querySelector('.session-status__slot .transcript-dot-trail') !== null && /^[0-9]+:[0-9]{2}$/.test(document.querySelector('.session-status__mobile')?.textContent?.trim() ?? '')`)).toBe(true)
+        await page.evaluate(`document.querySelector('.fixture__controls button:nth-child(2)')?.click()`)
+        for (let attempt = 0; attempt < 100 && !await page.evaluate<boolean>(`document.querySelector('.session-status__slot')?.classList.contains('session-status__slot--empty') === true && (window.remoteOperationReport().operations['session.status'] ?? 0) > ${statusReads} && document.querySelector('.status-strip__body')?.textContent?.includes('Connected') === true`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<{ readonly empty: boolean; readonly dots: boolean; readonly label: string; readonly timer: string }>(`({ empty: document.querySelector('.session-status__slot')?.classList.contains('session-status__slot--empty') === true, dots: document.querySelector('.session-status__slot .transcript-dot-trail') !== null, label: document.querySelector('.session-status__label')?.textContent?.trim() ?? '', timer: document.querySelector('.session-status__mobile')?.textContent?.trim() ?? '' })`)).toEqual({ empty: true, dots: false, label: "", timer: "" })
+      } finally { await page.close() }
+    }
+  }, 20_000)
+
+  test("clears the saved Session when its machine no longer serves it", async () => {
+    const page = await browser!.openPage()
+    try {
+      await page.injectOnNewDocument(`localStorage.setItem('ycoding.remote.lastSessions', JSON.stringify({ dev_studio: 'ses_fixture' }))`)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=activity&noSelection=1&removedSession=ses_fixture`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.status-strip__body')?.textContent?.includes('Connected') === true && document.querySelector('.activity-page__events') !== null`); attempt += 1) await Bun.sleep(50)
+      for (let attempt = 0; attempt < 80 && await page.evaluate<boolean>(`JSON.parse(localStorage.getItem('ycoding.remote.lastSessions') ?? '{}').dev_studio !== undefined`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<unknown>(`JSON.parse(localStorage.getItem('ycoding.remote.lastSessions') ?? '{}')`)).toEqual({})
+      expect(await page.evaluate<{ readonly events: number; readonly explanation: boolean }>(`({ events: document.querySelectorAll('.activity-page__events .activity-row').length, explanation: document.querySelector('.activity-page__events')?.textContent?.includes('No running or recent Sessions') === true })`)).toEqual({ events: 0, explanation: true })
+    } finally { await page.close() }
+  }, 15_000)
+
+  test("clears the browser's remembered machine Sessions on sign-out", async () => {
+    const page = await browser!.openPage()
+    try {
+      await page.injectOnNewDocument(`localStorage.removeItem('ycoding.remote.lastSessions')`)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=activity&noSelection=1`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.activity-page__events .running-sessions__item') !== null`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`document.querySelector('.activity-page__events .running-sessions__item[aria-label^="Open Stream remote output safely"]')?.click()`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`JSON.parse(localStorage.getItem('ycoding.remote.lastSessions') ?? '{}').dev_studio === 'ses_fixture'`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`document.querySelector('.remote-nav a[href="/remote/settings"]')?.click()`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="account-settings"] button')?.textContent?.includes('Sign out') === true`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<boolean>(`[...document.querySelectorAll('[aria-labelledby="account-settings"] button')].some(button => button.textContent?.includes('Sign out'))`)).toBe(true)
+      await page.evaluate(`[...document.querySelectorAll('[aria-labelledby="account-settings"] button')].find(button => button.textContent?.includes('Sign out'))?.click()`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('main.sign-in') !== null`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<boolean>(`document.querySelector('main.sign-in') !== null`)).toBe(true)
+      expect(await page.evaluate<unknown>(`JSON.parse(localStorage.getItem('ycoding.remote.lastSessions') ?? '{}')`)).toEqual({})
+    } finally { await page.close() }
+  }, 15_000)
+
+  test("records goal inputs and keeps the selected YOLO level through goal set and stop", async () => {
+    const page = await fixture("view=chat", 1440, "Stream remote output safely")
+    try {
+      await page.evaluate(`document.querySelector('.workspace__main .session-status__yolo-trigger')?.click()`)
+      await page.evaluate(`[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].find(button => button.textContent?.includes('YOLO 3'))?.click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.session-status__yolo-trigger')?.textContent?.includes('YOLO 3') === true`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`document.querySelector('.workspace__main .session-status__goal-trigger')?.click()`)
+      await page.evaluate(`(() => { const input = document.querySelector('.session-status__goal-popover input[aria-label="Goal"]'); input.value = 'Ship a reliable Session'; input.dispatchEvent(new InputEvent('input', { bubbles: true })); input.closest('form')?.requestSubmit(); })()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`window.remoteMutationReport().some(item => item.operation === 'session.goal.set')`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<unknown>(`window.remoteMutationReport().find(item => item.operation === 'session.goal.set')`)).toEqual({ operation: "session.goal.set", input: { goal: "Ship a reliable Session" } })
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.session-status__goal-count')?.textContent === '0'`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<{ readonly goal: string; readonly yolo: string }>(`({ goal: document.querySelector('.session-status__goal-count')?.textContent ?? '', yolo: document.querySelector('.session-status__yolo-full')?.textContent ?? '' })`)).toEqual({ goal: "0", yolo: "YOLO 3" })
+      await page.evaluate(`document.querySelector('.workspace__main .session-status__goal-trigger')?.click()`)
+      expect(await page.evaluate<string>(`document.querySelector('.session-status__goal-popover')?.textContent ?? ''`)).toContain("Ship a reliable Session")
+      await page.evaluate(`document.querySelector('.session-status__goal-popover button')?.click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`window.remoteMutationReport().some(item => item.operation === 'session.goal.stop')`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<unknown>(`window.remoteMutationReport().find(item => item.operation === 'session.goal.stop')`)).toEqual({ operation: "session.goal.stop", input: { goal: null } })
+      for (let attempt = 0; attempt < 40 && await page.evaluate<boolean>(`document.querySelector('.session-status__goal-count') !== null`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<{ readonly goal: boolean; readonly yolo: string }>(`({ goal: document.querySelector('.session-status__goal-count') !== null, yolo: document.querySelector('.session-status__yolo-full')?.textContent ?? '' })`)).toEqual({ goal: false, yolo: "YOLO 3" })
+    } finally { await page.close() }
+  }, 15_000)
+
+  test("shows one screen loading placeholder only while the first account and connection read is pending", async () => {
+    for (const [width, height] of [[1440, 900], [820, 1180], [390, 844]] as const) {
+      const page = await browser!.openPage()
+      try {
+        await page.setViewport(width, height)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&noSelection=1&accountDelay=3500`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.workspace__main .loading-placeholder--screen') !== null`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<{ readonly screen: number; readonly announced: number; readonly duplicate: number }>(`(() => ({
+          screen: document.querySelectorAll('.workspace__main .loading-placeholder--screen').length,
+          announced: document.querySelectorAll('.workspace__main .loading-placeholder--screen[role="status"]').length,
+          duplicate: document.querySelectorAll('.app-header .loading-placeholder--screen,.workspace__rail .loading-placeholder--screen').length,
+        }))()`)).toEqual({ screen: 1, announced: 1, duplicate: 0 })
+        expect(await page.evaluate<boolean>(`document.querySelector('.loading-placeholder--screen')?.getBoundingClientRect().height >= 240 && document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+        for (let attempt = 0; attempt < 20 && await page.evaluate<number>(`Number(getComputedStyle(document.querySelector('.loading-placeholder--screen .loading-placeholder__shape')).opacity)`) < 0.9; attempt += 1) await Bun.sleep(25)
+        await Bun.write(new URL(`../../../.cache/tmp/shell-loading-screen-${width}x${height}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        for (let attempt = 0; attempt < 80 && await page.evaluate<boolean>(`document.querySelector('.workspace__main .loading-placeholder--screen') !== null`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<boolean>(`document.querySelector('.workspace__main .loading-placeholder--screen') === null && document.querySelector('.new-session-composer') !== null`)).toBe(true)
+      } finally { await page.close() }
+    }
+  }, 20_000)
+
+  test("holds one announced Session skeleton group in the page and rail until the first list settles", async () => {
+    for (const [width, height, view, selector] of [[1440, 900, "sessions", ".sessions-results .sessions-table"], [1440, 900, "chat", ".workspace__rail .session-list"], [390, 844, "sessions", ".sessions-results .sessions-table"]] as const) {
+      const page = await browser!.openPage()
+      try {
+        await page.setViewport(width, height)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=${view}&inventoryCount=80&sessionListDelay=4000`)
+        for (let attempt = 0; attempt < 100 && !await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector + ' .loading-placeholder--session')}) !== null`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<{ readonly count: number; readonly announcements: number; readonly busy: boolean; readonly table: boolean }>(`(() => { const root = document.querySelector(${JSON.stringify(selector)}); return {
+          count: root?.querySelectorAll('.loading-placeholder--session').length ?? 0,
+          announcements: root?.querySelectorAll('.loading-placeholder--session[role="status"]').length ?? 0,
+          busy: root?.getAttribute('aria-busy') === 'true' || root?.closest('[aria-busy="true"]') !== null,
+          table: root?.getAttribute('role') === 'table',
+        } })()`)).toEqual({ count: 3, announcements: 1, busy: true, table: false })
+        expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector + ' .loading-placeholder--session')})?.getBoundingClientRect().height >= 64 && document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+        for (let attempt = 0; attempt < 20 && await page.evaluate<number>(`Number(getComputedStyle(document.querySelector(${JSON.stringify(selector + ' .loading-placeholder__shape')})).opacity)`) < 0.9; attempt += 1) await Bun.sleep(25)
+        await Bun.write(new URL(`../../../.cache/tmp/shell-loading-${view}-${width}x${height}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        for (let attempt = 0; attempt < 100 && await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector + ' .loading-placeholder--session')}) !== null`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector + ' .loading-placeholder--session')}) === null && document.querySelectorAll(${JSON.stringify(view === 'sessions' ? '.sessions-table__row' : '.workspace__rail .session-row')}).length > 0`)).toBe(true)
+      } finally { await page.close() }
+    }
+  }, 25_000)
+
+  test("keeps resident Session rows during a same-machine inventory refresh", async () => {
+    for (const [width, height] of [[1440, 900], [390, 844]] as const) {
+      const page = await browser!.openPage()
+      try {
+        await page.setViewport(width, height)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&inventoryCount=80&sessionListDelay=1800`)
+        for (let attempt = 0; attempt < 80 && await page.evaluate<number>(`document.querySelectorAll('.sessions-table__row').length`) < 25; attempt += 1) await Bun.sleep(50)
+        const before = await page.evaluate<{ readonly rows: number; readonly title: string; readonly requests: number }>(`({ rows: document.querySelectorAll('.sessions-table__row').length, title: document.querySelector('.sessions-table__row')?.textContent?.trim() ?? '', requests: window.remoteInventoryReport().workspaceRequests })`)
+        expect(before.rows).toBeGreaterThanOrEqual(25)
+        await page.evaluate(`window.remoteInvalidateSessions()`)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`window.remoteInventoryReport().listStatus === 'loading' && window.remoteInventoryReport().workspaceRequests > ${before.requests}`); attempt += 1) await Bun.sleep(25)
+        expect(await page.evaluate<{ readonly rows: number; readonly title: string; readonly loading: boolean; readonly placeholder: boolean; readonly fits: boolean }>(`({ rows: document.querySelectorAll('.sessions-table__row').length, title: document.querySelector('.sessions-table__row')?.textContent?.trim() ?? '', loading: window.remoteInventoryReport().listStatus === 'loading', placeholder: document.querySelector('.sessions-results .loading-placeholder') !== null, fits: document.documentElement.scrollWidth <= innerWidth })`)).toEqual({ rows: before.rows, title: before.title, loading: true, placeholder: false, fits: true })
+      } finally { await page.close() }
+    }
+  }, 15_000)
+
+  test("keeps existing Session rows while a next-page skeleton is loading", async () => {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(1440, 900)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&inventoryCount=80&sessionListDelay=3500`)
+      for (let attempt = 0; attempt < 80 && await page.evaluate<number>(`document.querySelectorAll('.sessions-table__row').length`) < 25; attempt += 1) await Bun.sleep(50)
+      const existing = await page.evaluate<number>(`document.querySelectorAll('.sessions-table__row').length`)
+      await page.evaluate(`(() => { const root = document.querySelector('.workspace__scroll'); root.tabIndex = 0; root.focus(); })()`)
+      await page.pressKey("End", "End", 35)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.sessions-page__content .loading-placeholder--session') !== null`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<{ readonly rows: number; readonly placeholders: number; readonly label: string }>(`(() => ({
+        rows: document.querySelectorAll('.sessions-table__row').length,
+        placeholders: document.querySelectorAll('.sessions-page__content .loading-placeholder--session[role="status"]').length,
+        label: document.querySelector('.sessions-page__content .loading-placeholder--session')?.textContent?.trim() ?? '',
+      }))()`)).toEqual({ rows: existing, placeholders: 1, label: "Loading more sessions…" })
+      await Bun.write(new URL(`../../../.cache/tmp/shell-loading-next-page-1440x900.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      for (let attempt = 0; attempt < 80 && await page.evaluate<boolean>(`document.querySelector('.sessions-page__content .loading-placeholder--session') !== null`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<boolean>(`document.querySelectorAll('.sessions-table__row').length > ${existing} && document.querySelector('.sessions-page__content .loading-placeholder--session') === null`)).toBe(true)
+    } finally { await page.close() }
+  }, 15_000)
+
   test("places running Sessions before the workspace heading on the Sessions page", async () => {
     const page = await browser!.openPage()
     try {
@@ -121,8 +373,8 @@ describe("remote shell layout", () => {
         for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`window.remoteStatus && document.querySelector('.sessions-page__title')`); attempt += 1) await Bun.sleep(50)
         for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.running-sessions__item') !== null`); attempt += 1) await Bun.sleep(50)
         await page.evaluate(`window.remoteStatus(['ses_fixture', 'ses_telemetry'], [])`)
-        for (let attempt = 0; attempt < 160 && await page.evaluate<number>(`document.querySelectorAll('.running-sessions__item').length`) !== 2; attempt += 1) await Bun.sleep(50)
-        expect(await page.evaluate<number>(`document.querySelectorAll('.running-sessions__item').length`)).toBe(2)
+        for (let attempt = 0; attempt < 160 && await page.evaluate<number>(`document.querySelectorAll('.running-sessions__item').length`) !== 4; attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<number>(`document.querySelectorAll('.running-sessions__item').length`)).toBe(4)
         await page.evaluate(`[...document.querySelectorAll('.running-sessions__item')].find(button => button.textContent.includes('Telemetry Event'))?.click()`)
         for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.app--conversation.app--selected') !== null`); attempt += 1) await Bun.sleep(50)
         if (width === 390) {
@@ -139,6 +391,143 @@ describe("remote shell layout", () => {
     }
   }, 30_000)
 
+  test("pins the combined presentation and Team bar above scrolling Conversation and Office content", async () => {
+    for (const [width, height] of [[1440, 900], [820, 1180]] as const) {
+      const page = await fixture("view=chat&team=two", width, "Team", undefined, height)
+      try {
+        await page.evaluate(`(() => {
+          document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove();
+          const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden';
+        })()`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb') !== null && document.querySelector('.transcript-message') !== null`); attempt += 1) await Bun.sleep(50)
+        await page.evaluate(`(() => { const scroll = document.querySelector('.workspace__scroll'); scroll.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -200 })); scroll.scrollTop = 0; })()`)
+        const layout = () => page.evaluate<{ readonly combined: boolean; readonly top: number; readonly bottom: number; readonly scrollTop: number; readonly scrollBoxTop: number; readonly firstRowTop: number }>(`(() => {
+          const bar = document.querySelector('.workspace__topbar'); const scroll = document.querySelector('.workspace__scroll');
+          return { combined: bar?.parentElement === document.querySelector('.workspace__main') && Boolean(bar?.querySelector('.presentation-switch') && bar?.querySelector('[aria-label="Open Team"]')),
+            top: bar?.getBoundingClientRect().top ?? -1, bottom: bar?.getBoundingClientRect().bottom ?? -1,
+            scrollTop: scroll.scrollTop, scrollBoxTop: scroll.getBoundingClientRect().top,
+            firstRowTop: document.querySelector('.conversation-breadcrumb')?.getBoundingClientRect().top ?? -1 };
+        })()`)
+        const initial = await layout()
+        expect(initial.combined).toBe(true)
+        expect(initial.bottom).toBeLessThanOrEqual(initial.scrollBoxTop + 1)
+        expect(initial.firstRowTop).toBeGreaterThanOrEqual(initial.scrollBoxTop)
+        const transcriptRow = await page.evaluate<{ readonly scrollTop: number; readonly top: number }>(`(() => { const scroll = document.querySelector('.workspace__scroll'); const row = document.querySelector('.transcript-message'); scroll.scrollTop = Math.max(1, row.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 4); return { scrollTop: scroll.scrollTop, top: row.getBoundingClientRect().top }; })()`)
+        expect(transcriptRow.scrollTop).toBeGreaterThan(0)
+        expect(transcriptRow.top).toBeGreaterThanOrEqual(initial.bottom)
+        await Bun.write(new URL(`../../../.cache/tmp/pinned-bar-conversation-${width}x${height}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        await page.evaluate(`(() => { document.querySelector('.conversation-pane').style.minHeight = '1900px'; const scroll = document.querySelector('.workspace__scroll'); scroll.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -200 })); scroll.scrollTop = scroll.scrollHeight; })()`)
+        const conversation = await layout()
+        expect(conversation.scrollTop).toBeGreaterThan(200)
+        expect(Math.abs(conversation.top - initial.top)).toBeLessThanOrEqual(1)
+        const jump = width >= 1024 ? '.transcript-navigation__desktop-controls [aria-label="Jump to top"]' : '.transcript-navigation__mobile-controls [aria-label="Jump to top"]'
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(jump)}) !== null`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(jump)}) !== null`)).toBe(true)
+        await page.evaluate(`document.querySelector(${JSON.stringify(jump)})?.click()`)
+        for (let attempt = 0; attempt < 80 && (await layout()).scrollTop > 8; attempt += 1) await Bun.sleep(20)
+        expect((await layout()).scrollTop).toBeLessThanOrEqual(8)
+        await page.evaluate(`document.querySelector('.presentation-switch [role="radio"]:last-child')?.click()`)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.office-workspace canvas') !== null`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<boolean>(`document.querySelector('.office-workspace canvas') !== null`)).toBe(true)
+        await page.evaluate(`document.querySelector('.office-workspace').style.minHeight = '1900px'`)
+        const officeRow = await page.evaluate<{ readonly scrollTop: number; readonly top: number }>(`(() => { const scroll = document.querySelector('.workspace__scroll'); const row = document.querySelector('.office-workspace__canvas'); scroll.scrollTop = Math.max(1, row.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 4); return { scrollTop: scroll.scrollTop, top: row.getBoundingClientRect().top }; })()`)
+        expect(officeRow.scrollTop).toBeGreaterThan(0)
+        expect(officeRow.top).toBeGreaterThanOrEqual(initial.bottom)
+        await page.evaluate(`(() => { const scroll = document.querySelector('.workspace__scroll'); scroll.scrollTop = scroll.scrollHeight; })()`)
+        const office = await layout()
+        expect(office.scrollTop).toBeGreaterThan(200)
+        expect(Math.abs(office.top - initial.top)).toBeLessThanOrEqual(1)
+        expect(office.combined).toBe(true)
+        await Bun.write(new URL(`../../../.cache/tmp/pinned-bar-office-${width}x${height}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        await page.evaluate(`document.querySelector('.presentation-switch [role="radio"]:last-child')?.focus()`)
+        await page.pressKey("Home", "Home", 36)
+        expect(await page.evaluate<boolean>(`document.querySelector('.presentation-switch [role="radio"]:first-child')?.getAttribute('aria-checked') === 'true' && document.querySelector('.conversation-pane') !== null`)).toBe(true)
+        expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.presentation-switch [role="radio"]:first-child') && getComputedStyle(document.activeElement).outlineStyle !== 'none'`)).toBe(true)
+      } finally { await page.close() }
+    }
+  }, 30_000)
+
+  test("keeps the phone Team bar above scrolling Conversation content while Office stays hidden", async () => {
+    const page = await fixture("view=chat&team=two", 390, "Team", undefined, 844)
+    try {
+      await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.transcript-message') !== null`); attempt += 1) await Bun.sleep(50)
+      const initial = await page.evaluate<{ readonly top: number; readonly bottom: number; readonly scrollBoxTop: number; readonly hasTeam: boolean; readonly hasOffice: boolean }>(`(() => { const bar = document.querySelector('.workspace__topbar'); return { top: bar.getBoundingClientRect().top, bottom: bar.getBoundingClientRect().bottom, scrollBoxTop: document.querySelector('.workspace__scroll').getBoundingClientRect().top, hasTeam: bar.querySelector('[aria-label="Open Team"]') !== null, hasOffice: bar.querySelector('.presentation-switch') !== null }; })()`)
+      expect(initial.hasTeam).toBe(true)
+      expect(initial.hasOffice).toBe(false)
+      expect(initial.bottom).toBeLessThanOrEqual(initial.scrollBoxTop + 1)
+      const visible = await page.evaluate<{ readonly scrollTop: number; readonly top: number; readonly barTop: number }>(`(() => { const scroll = document.querySelector('.workspace__scroll'); const row = document.querySelector('.transcript-message'); document.querySelector('.conversation-pane').style.minHeight = '1900px'; scroll.scrollTop = Math.max(1, row.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 4); return { scrollTop: scroll.scrollTop, top: row.getBoundingClientRect().top, barTop: document.querySelector('.workspace__topbar').getBoundingClientRect().top }; })()`)
+      expect(visible.scrollTop).toBeGreaterThan(0)
+      expect(visible.barTop).toBeCloseTo(initial.top, 0)
+      expect(visible.top).toBeGreaterThanOrEqual(initial.bottom)
+      await page.evaluate(`document.querySelector('.workspace__scroll').scrollTop = document.querySelector('.workspace__scroll').scrollHeight`)
+      expect(await page.evaluate<number>(`document.querySelector('.workspace__topbar').getBoundingClientRect().top`)).toBeCloseTo(initial.top, 0)
+    } finally { await page.close() }
+  }, 15_000)
+
+  test("shows running roots before recent cross-workspace Sessions on desktop and phone", async () => {
+    for (const [width, height] of [[1440, 900], [390, 844]] as const) {
+      const page = await fixture(`scenario=session-list-${width}`, width, "Async Auth Token Revocation Migration")
+      try {
+        await page.setViewport(width, height)
+        for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.running-sessions__item') !== null`); attempt += 1) await Bun.sleep(50)
+        await page.evaluate(`window.remoteStatus(['ses_fixture', 'ses_telemetry'], [])`)
+        for (let attempt = 0; attempt < 160 && await page.evaluate<number>(`document.querySelectorAll('.running-sessions__item').length`) !== 4; attempt += 1) await Bun.sleep(50)
+        const cards = await page.evaluate<readonly { readonly title: string; readonly running: boolean; readonly lastActive: boolean }[]>(`[...document.querySelectorAll('.running-sessions__item')].map(card => ({ title: card.querySelector('.running-sessions__title')?.textContent?.trim() ?? '', running: card.querySelector('.running-sessions__status')?.textContent?.trim() === 'Running', lastActive: card.querySelector('.running-sessions__status time[datetime]') !== null }))`)
+        expect(cards).toEqual([
+          { title: "Async Auth Token Revocation Migration", running: true, lastActive: false },
+          { title: "Telemetry Event Buffer Flush Daemon", running: true, lastActive: false },
+          { title: "Redis Cache Cluster Rebalancing Spec", running: false, lastActive: true },
+          { title: "Postgres Partition Pruning Worker", running: false, lastActive: true },
+        ])
+        expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+        await Bun.write(new URL(`../../../.cache/tmp/running-recent-${width}x${height}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      } finally { await page.close() }
+    }
+  }, 30_000)
+
+  test("keeps a main-idle root running when its subagent executes", async () => {
+    for (const [width, height] of [[1440, 900], [390, 844]] as const) {
+      const page = await fixture(`scenario=session-list-${width}&carouselFamily=1`, width, "Async Auth Token Revocation Migration")
+      try {
+        await page.setViewport(width, height)
+        await page.evaluate(`window.remoteStatus(['ses_fixture', 'ses_telemetry', 'ses_postgres'], [])`)
+        for (let attempt = 0; attempt < 160 && await page.evaluate<number>(`document.querySelectorAll('.running-sessions__item').length`) !== 4; attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<readonly { readonly title: string; readonly running: boolean }[]>(`[...document.querySelectorAll('.running-sessions__item')].map(card => ({ title: card.querySelector('.running-sessions__title')?.textContent?.trim() ?? '', running: card.querySelector('.running-sessions__status')?.textContent?.trim() === 'Running' }))`)).toEqual([
+          { title: "Async Auth Token Revocation Migration", running: true },
+          { title: "Telemetry Event Buffer Flush Daemon", running: true },
+          { title: "Postgres Partition Pruning Worker", running: true },
+          { title: "Redis Cache Cluster Rebalancing Spec", running: false },
+        ])
+      } finally { await page.close() }
+    }
+  }, 30_000)
+
+  test("opens another Session from New session without leaving its composer in history", async () => {
+    for (const [width, height] of [[1440, 900], [390, 844]] as const) {
+      const page = await fixture("view=chat", width, "Stream remote output safely", undefined, height)
+      try {
+        if (width === 390) {
+          await page.evaluate(`document.querySelector('.app-header__menu')?.click()`)
+          for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.overlay--sessions-sheet[open] .session-row') !== null`); attempt += 1) await Bun.sleep(50)
+          await page.evaluate(`document.querySelector('.overlay--sessions-sheet .pane__head button')?.click()`)
+        } else await page.evaluate(`document.querySelector('.workspace__rail .pane__head button')?.click()`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.new-session-composer') !== null`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<string>(`location.hash`)).toBe("#new-session")
+        if (width === 390) {
+          await page.evaluate(`document.querySelector('.app-header__menu')?.click()`)
+          for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.overlay--sessions-sheet[open] .session-row') !== null`); attempt += 1) await Bun.sleep(50)
+          await page.evaluate(`[...document.querySelectorAll('.overlay--sessions-sheet .session-row')].find(row => row.textContent.includes('Archived: release notes'))?.click()`)
+        } else await page.evaluate(`[...document.querySelectorAll('.workspace__rail .session-row')].find(row => row.textContent.includes('Archived: release notes'))?.click()`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('Archived: release notes') ?? false`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<{ readonly hash: string; readonly composer: boolean; readonly title: string }>(`({ hash: location.hash, composer: document.querySelector('.new-session-composer') !== null, title: document.querySelector('.conversation-breadcrumb strong')?.textContent?.trim() ?? '' })`)).toEqual({ hash: "", composer: false, title: "Archived: release notes" })
+        await page.evaluate(`history.back()`)
+        await Bun.sleep(100)
+        expect(await page.evaluate<boolean>(`location.hash === '' && document.querySelector('.new-session-composer') === null && document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('Archived: release notes') === true`)).toBe(true)
+      } finally { await page.close() }
+    }
+  }, 30_000)
+
   test("follows a deep-linked Session's workspace instead of the previously browsed workspace", async () => {
     const page = await browser!.openPage()
     try {
@@ -147,6 +536,7 @@ describe("remote shell layout", () => {
       for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb strong') !== null`); attempt += 1) await Bun.sleep(50)
       await page.evaluate(`location.hash = '#session=ses_indexer'`)
       for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('Query batch indexer') ?? false`); attempt += 1) await Bun.sleep(50)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.workspace__rail .session-panel__workspace h3')?.textContent?.trim() === 'indexer' && document.querySelector('.workspace__rail .session-row--active .session-row__name')?.textContent?.trim() === 'Query batch indexer'`); attempt += 1) await Bun.sleep(50)
       const state = await page.evaluate<{ readonly heading: string; readonly active: string; readonly selector: boolean }>(`(() => ({ heading: document.querySelector('.workspace__rail .session-panel__workspace h3')?.textContent?.trim() ?? '', active: document.querySelector('.workspace__rail .session-row--active .session-row__name')?.textContent?.trim() ?? '', selector: Boolean(document.querySelector('.workspace__rail .workspace-select .custom-select__trigger')) }))()`)
       expect(state).toEqual({ heading: "indexer", active: "Query batch indexer", selector: false })
     } finally { await page.close() }
@@ -406,6 +796,8 @@ describe("remote shell layout", () => {
   test("uses the SVG chevron primitive without polluting the Device control name at compact and desktop widths", async () => {
     for (const width of [390, 1440] as const) {
       const page = await fixture("scenario=conversation-workspace-768", width, "Studio Mac")
+      await page.evaluate(`document.querySelector('a[href="/remote/settings"]')?.click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]') !== null`); attempt += 1) await Bun.sleep(50)
       const state = await page.evaluate<{
         readonly controlName: string
         readonly glyph: boolean
@@ -506,7 +898,7 @@ describe("remote shell layout", () => {
         if (fixture instanceof HTMLElement) { fixture.style.minHeight='0'; fixture.style.height='100dvh'; fixture.style.overflow='hidden'; }
         const elements=[document.scrollingElement,...document.querySelectorAll('.app,.workspace,.workspace__main,.workspace__scroll')].filter(element=>element instanceof HTMLElement);
         const scrollOwners=elements.filter(element=>element.scrollHeight > element.clientHeight + 1 && ['auto','scroll'].includes(getComputedStyle(element).overflowY)).length;
-        const surfaces=[...document.querySelectorAll('.settings > *, .settings__section, .settings__guardrail-note')].filter(element=>element instanceof HTMLElement&&element.getBoundingClientRect().width>0).slice(0,5).map(element=>{const box=element.getBoundingClientRect();return {left:box.left,right:box.right}});
+        const surfaces=[...document.querySelectorAll('.settings__section')].filter(element=>element instanceof HTMLElement&&element.getBoundingClientRect().width>0).slice(0,5).map(element=>{const box=element.getBoundingClientRect();return {left:box.left,right:box.right}});
         const scroll=document.querySelector('.workspace__scroll');
         if (scroll instanceof HTMLElement) scroll.scrollTop=scroll.scrollHeight;
         const final=[...document.querySelectorAll('.workspace__scroll button')].at(-1)?.getBoundingClientRect();
@@ -530,9 +922,12 @@ describe("remote shell layout", () => {
     }
   }, 30_000)
 
-  test("keeps the mobile machine picker usable over the five-tab conversation workspace", async () => {
+  test("keeps the mobile Settings machine picker usable with five-tab navigation", async () => {
     for (const theme of ["dark", "light"] as const) {
-      const page = await fixture("scenario=conversation-workspace-390", 390, "Select Active Machine", theme, 620)
+      const page = await fixture("scenario=conversation-workspace-390", 390, "Token expiry refactor", theme, 620)
+      await page.evaluate(`document.querySelector('a[href="/remote/settings"]')?.click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]') !== null`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.click()`)
       await page.evaluate(`Promise.all([...document.querySelector('.custom-select__dialog .overlay__surface')?.getAnimations() ?? []].map(animation => animation.finished))`)
       const state = await page.evaluate<{
         readonly brandVisible: boolean
@@ -560,6 +955,7 @@ describe("remote shell layout", () => {
       await page.evaluate(`document.querySelector('.custom-select__option[aria-selected="false"]')?.click()`)
       expect(await page.evaluate<string>(`document.querySelector('[aria-label="Machine"] .custom-select__value')?.textContent?.trim() ?? ''`)).toBe("Studio Mac")
       await page.evaluate(`document.querySelector('.custom-select__confirm')?.click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-label="Machine"] .custom-select__value')?.textContent?.includes('Dev Linux') ?? false`); attempt += 1) await Bun.sleep(50)
       expect(await page.evaluate<string>(`document.querySelector('[aria-label="Machine"] .custom-select__value')?.textContent?.trim() ?? ''`)).toBe("Dev Linux")
       expect(await page.evaluate<boolean>(`document.querySelector('.custom-select__dialog') === null`)).toBe(true)
       await page.close()
@@ -632,13 +1028,14 @@ describe("remote shell layout", () => {
     for (const width of [320, 390, 768, 1440] as const) {
       for (const theme of ["dark", "light"] as const) {
         const workspace = await fixture("scenario=conversation-workspace-390", width, "Token expiry refactor", theme, 901)
-        const workspaceState = await workspace.evaluate<{ readonly overflow: boolean; readonly trigger: number; readonly tabs: number }>(`(() => ({
+        const workspaceState = await workspace.evaluate<{ readonly overflow: boolean; readonly headerPickerAbsent: boolean; readonly statusVisible: boolean; readonly tabs: number }>(`(() => ({
           overflow:document.documentElement.scrollWidth > innerWidth,
-          trigger:document.querySelector('[aria-label="Machine"]')?.getBoundingClientRect().height ?? 0,
+          headerPickerAbsent:document.querySelector('.app-header [aria-label="Machine"]') === null,
+          statusVisible:(document.querySelector('.app-header .remote-connection')?.getBoundingClientRect().width ?? 0) > 0,
           tabs:[...document.querySelectorAll('.bottom-nav__item')].filter(item=>item.getBoundingClientRect().width>0).length,
         }))()`)
         expect(workspaceState.overflow).toBe(false)
-        expect(workspaceState.trigger).toBeGreaterThanOrEqual(44)
+        expect(workspaceState.headerPickerAbsent && workspaceState.statusVisible).toBe(true)
         expect(workspaceState.tabs).toBe(width < 768 ? 5 : 0)
         expect(await workspace.evaluate<string>(`document.documentElement.dataset.theme`)).toBe(theme)
         await workspace.close()

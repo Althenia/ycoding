@@ -1,13 +1,25 @@
-import { Show, createEffect, createSignal, onCleanup } from "solid-js"
+import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js"
 import { useRemote } from "../context"
 import { sessionStatusLabel, sessionStatusTimed } from "../projection"
 import { DotTrail } from "./dot-trail"
 import "./status-bar.css"
 
+const levels = [
+  { level: 0 as const, label: "Standard", detail: "Manual questions and approval requests." },
+  { level: 1 as const, label: "YOLO 1", detail: "Automatically answers questions." },
+  { level: 2 as const, label: "YOLO 2", detail: "Answers questions and approves tool permissions." },
+  { level: 3 as const, label: "YOLO 3", detail: "Also approves ordinary guardrail reviews." },
+]
+
 export function ComposerStatus() {
   const remote = useRemote()
   const [now, setNow] = createSignal(Date.now())
-  const [goalOpen, setGoalOpen] = createSignal(false)
+  const [open, setOpen] = createSignal<"yolo" | "goal">()
+  const [draft, setDraft] = createSignal("")
+  const [position, setPosition] = createSignal({ left: 8, top: 8, width: 320 })
+  let yoloTrigger: HTMLButtonElement | undefined
+  let goalTrigger: HTMLButtonElement | undefined
+  let popover: HTMLDivElement | undefined
   const view = () => remote.state().view
   const current = () => {
     const selected = view()
@@ -23,15 +35,75 @@ export function ComposerStatus() {
     onCleanup(() => clearInterval(timer))
   })
   const label = () => current() ? sessionStatusLabel(current()!, now(), waiting()) : "ready"
+  const stateText = () => label().replace(/^(?:YOLO \d+(?: \+ Goal)?|Goal) · (?:auto-approve|autonomous) · /, "").replace(/\? awaiting input/i, "Waiting for your decision").replace(/cooking/i, "Running")
   const elapsed = () => current()?.executionStarted === undefined ? "" : `${Math.floor(Math.max(0, now() - current()!.executionStarted!) / 60_000)}:${String(Math.floor(Math.max(0, now() - current()!.executionStarted!) / 1000) % 60).padStart(2, "0")}`
   const visible = () => current()?.status === "running" || current()?.status === "failed"
   const goal = () => view()?.autonomy?.goal
   const yolo = () => view()?.autonomy?.yolo ?? 0
-  return <div class="session-status" role="status" aria-label="Session status">
-    <span class="session-status__slot" classList={{ "session-status__slot--empty": !visible(), "session-status__slot--attention": /awaiting input|failed|provider error/i.test(label()) }}>
-      <Show when={visible()}><Show when={timed()}><DotTrail /></Show><span class="session-status__label">{label().replace(/^(?:YOLO \d+(?: \+ Goal)?|Goal) · (?:auto-approve|autonomous) · /, "").replace(/\? awaiting input/i, "Waiting for your decision").replace(/cooking/i, "Running")}</span><span class="session-status__mobile" aria-hidden="true">{elapsed() || (/awaiting input/i.test(label()) ? "Wait" : label().split(" · ")[0])}</span></Show>
+  const close = (focus = false) => {
+    const trigger = open() === "yolo" ? yoloTrigger : goalTrigger
+    setOpen(undefined)
+    if (focus) queueMicrotask(() => trigger?.focus())
+  }
+  let sessionID = view()?.id
+  createEffect(() => {
+    const next = view()
+    if (sessionID === next?.id && next?.autonomy) return
+    sessionID = next?.id
+    close()
+    setDraft("")
+  })
+  const reposition = () => {
+    const trigger = open() === "yolo" ? yoloTrigger : goalTrigger
+    if (!trigger || !popover) return
+    const rect = trigger.getBoundingClientRect()
+    const width = Math.min(320, window.innerWidth - 16)
+    const height = popover.offsetHeight
+    setPosition({ left: Math.min(Math.max(8, rect.left), window.innerWidth - width - 8), top: rect.top - height >= 8 ? rect.top - height - 8 : Math.min(rect.bottom + 8, window.innerHeight - height - 8), width })
+  }
+  const toggle = (kind: "yolo" | "goal") => {
+    if (open() === kind) { close(true); return }
+    setOpen(kind)
+    queueMicrotask(() => {
+      reposition()
+      if (kind === "yolo") popover?.querySelector<HTMLButtonElement>('[role="radio"][aria-checked="true"]')?.focus()
+      else {
+        const input = popover?.querySelector<HTMLInputElement>("input")
+        if (input) input.focus()
+        else popover?.querySelector<HTMLButtonElement>("button")?.focus()
+      }
+    })
+  }
+  onMount(() => {
+    const outside = (event: PointerEvent) => {
+      if (open() && event.target instanceof Node && !popover?.contains(event.target) && !yoloTrigger?.contains(event.target) && !goalTrigger?.contains(event.target)) close()
+    }
+    document.addEventListener("pointerdown", outside)
+    window.addEventListener("resize", reposition)
+    window.addEventListener("scroll", reposition, true)
+    onCleanup(() => {
+      document.removeEventListener("pointerdown", outside)
+      window.removeEventListener("resize", reposition)
+      window.removeEventListener("scroll", reposition, true)
+    })
+  })
+  return <div class="session-status" role="group" aria-label="Session status and autonomy">
+    <span class="session-status__slot" role="status" classList={{ "session-status__slot--empty": !visible(), "session-status__slot--attention": /awaiting input|failed|provider error/i.test(label()) }}>
+      <Show when={visible()}><Show when={timed()}><DotTrail /></Show><span class="session-status__label">{stateText()}</span><span class="session-status__mobile" aria-hidden="true">{elapsed() || (/awaiting input/i.test(label()) ? "Wait" : stateText().split(" · ")[0])}</span></Show>
     </span>
-    <Show when={yolo() > 0}><span class="session-status__yolo" title={`YOLO ${yolo()} · auto-approve`}>YOLO {yolo()}</span></Show>
-    <Show when={goal()?.status === "active"}><div class="session-status__goal"><button type="button" class="session-status__goal-trigger" aria-expanded={goalOpen()} onClick={() => setGoalOpen(!goalOpen())}>Goal <span class="session-status__goal-count">{goal()?.iteration}</span></button><Show when={goalOpen()}><div class="session-status__goal-popover" role="dialog" aria-label="Goal details"><p>{goal()?.text}</p><span>{goal()?.status} · iteration {goal()?.iteration} · no progress {goal()?.noProgress}/{goal()?.maxNoProgress}</span><button type="button" onClick={() => { setGoalOpen(false); void remote.store.stopGoal() }}>Stop goal</button></div></Show></div></Show>
+    <Show when={view()?.autonomy}>
+    <button ref={yoloTrigger} type="button" class="session-status__yolo-trigger" aria-label="Autonomy level" aria-haspopup="dialog" aria-expanded={open() === "yolo"} onClick={() => toggle("yolo")}><span class="session-status__yolo-full">{yolo() ? `YOLO ${yolo()}` : "Standard"}</span><span class="session-status__yolo-compact" aria-hidden="true">Y{yolo()}</span></button>
+    <button ref={goalTrigger} type="button" class="session-status__goal-trigger" aria-haspopup="dialog" aria-expanded={open() === "goal"} onClick={() => toggle("goal")}>Goal <Show when={goal()?.status === "active"}><span class="session-status__goal-count">{goal()?.iteration}</span></Show></button>
+    <Show when={open()}><div ref={popover} class="session-status__popover" classList={{ "session-status__yolo-popover": open() === "yolo", "session-status__goal-popover": open() === "goal" }} role="dialog" aria-label={open() === "yolo" ? "Autonomy level" : "Goal details"} style={{ left: `${position().left}px`, top: `${position().top}px`, width: `${position().width}px` }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); close(true) } }}>
+      <Show when={open() === "yolo"}><div role="radiogroup" aria-label="Autonomy level"><For each={levels}>{(option, index) => <button type="button" role="radio" aria-checked={yolo() === option.level} tabIndex={yolo() === option.level ? 0 : -1} onClick={() => void remote.store.setYolo(option.level)} onKeyDown={(event) => {
+        const next = event.key === "ArrowRight" || event.key === "ArrowDown" ? (index() + 1) % levels.length : event.key === "ArrowLeft" || event.key === "ArrowUp" ? (index() - 1 + levels.length) % levels.length : event.key === "Home" ? 0 : event.key === "End" ? levels.length - 1 : undefined
+        if (next === undefined) return
+        event.preventDefault()
+        void remote.store.setYolo(levels[next]!.level)
+        queueMicrotask(() => popover?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next]?.focus())
+      }}><strong>{option.label}</strong><span>{option.detail}</span></button>}</For></div><p class="session-status__guardrail-note">Hard guardrail reviews always require a human decision, even at level 3.</p></Show>
+      <Show when={open() === "goal"}><Show when={goal()?.status === "active"} fallback={<form onSubmit={(event) => { event.preventDefault(); if (!draft().trim()) return; void remote.store.setGoal(draft().trim()); setDraft(""); close(true) }}><label for="session-status-goal">Goal</label><input id="session-status-goal" type="text" aria-label="Goal" placeholder="Describe the objective" value={draft()} onInput={(event) => setDraft(event.currentTarget.value)} /><button type="submit" disabled={!draft().trim()}>Set goal</button></form>}><p>{goal()?.text}</p><span>{goal()?.status} · iteration {goal()?.iteration} · no progress {goal()?.noProgress}/{goal()?.maxNoProgress}</span><button type="button" onClick={() => { close(true); void remote.store.stopGoal() }}>Stop goal</button></Show></Show>
+    </div></Show>
+    </Show>
   </div>
 }

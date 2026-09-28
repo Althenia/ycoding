@@ -164,6 +164,14 @@ body:has(.app) {
   flex: none;
 }
 
+.app-header__rail-toggle { display: none; }
+
+@media (min-width: 1024px) {
+  .app-header__rail-toggle { display: inline-flex; }
+  .app--conversation.app--selected.app--rail-collapsed .workspace { grid-template-columns: minmax(0, 1fr); }
+  .app--conversation.app--selected.app--rail-collapsed .workspace__rail { display: none; }
+}
+
 .app-header__inner {
   padding-inline: var(--yc-gutter);
 }
@@ -300,6 +308,17 @@ body:has(.app) {
   padding: var(--yc-space-5) var(--yc-gutter) var(--yc-space-8);
   min-inline-size: 0;
   min-block-size: 0;
+}
+
+.workspace__topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--yc-space-2);
+  min-inline-size: 0;
+  padding: var(--yc-space-2) var(--yc-gutter);
+  border-block-end: var(--yc-border-width) solid var(--yc-border);
+  background: var(--yc-surface);
 }
 
 .new-session {
@@ -1268,6 +1287,10 @@ body:has(.app) {
   grid-template-rows: minmax(0, 1fr) auto auto auto;
 }
 
+.app--conversation.app--selected .workspace__main:has(> .workspace__topbar) {
+  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+}
+
 .conversation-jump-slot { display: none; }
 
 @media (max-width: 1023px) {
@@ -1462,6 +1485,8 @@ body:has(.app) {
   font-size: var(--yc-size-xs);
 }
 
+.device-cleanup-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--yc-space-2); }
+
 .device-table {
   display: grid;
   border: var(--yc-border-width) solid var(--yc-border);
@@ -1512,34 +1537,10 @@ body:has(.app) {
   inline-size: min(100%, 420px);
 }
 
-.autonomy-choices {
-  display: grid;
-  gap: var(--yc-space-2);
-}
+.appearance-segments .filters__option { gap: var(--yc-space-2); justify-content: center; }
+.appearance-segments .filters__option svg { flex: none; }
 
-.autonomy-choice {
-  display: grid;
-  gap: 2px;
-  inline-size: 100%;
-  min-block-size: var(--yc-hit-min);
-  padding: var(--yc-space-3);
-  border: var(--yc-border-width) solid var(--yc-border);
-  border-radius: var(--yc-radius-md);
-  background: var(--yc-surface-raised);
-  color: inherit;
-  text-align: start;
-  cursor: pointer;
-}
-
-.autonomy-choice span {
-  color: var(--yc-text-muted);
-  font-size: var(--yc-size-xs);
-}
-
-.autonomy-choice--active {
-  border-color: var(--yc-green-strong);
-  background: var(--yc-green-soft);
-}
+.settings__section[aria-labelledby="machine-settings"] .remote-device__select { inline-size: min(100%, 320px); }
 
 @media (min-width: 768px) {
   .app--conversation.app--selected .workspace {
@@ -2081,12 +2082,6 @@ body:has(.app) {
   margin-inline-start: 0;
 }
 
-.settings__guardrail-note {
-  padding: var(--yc-space-3);
-  border-inline-start: 3px solid var(--yc-green-strong);
-  background: var(--yc-surface-sunken);
-}
-
 /* Enrollment is a one-use code or command the reader copies, not transcribes. */
 .enrollment {
   display: grid;
@@ -2178,9 +2173,12 @@ body:has(.app) {
 }
 
 .presentation-switch.filters {
-  display: flex;
+  display: inline-flex;
   gap: var(--yc-space-1);
-  margin-block-end: var(--yc-space-4);
+  padding: var(--yc-space-1);
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-md);
+  background: var(--yc-surface-sunken);
 }
 
 .presentation-switch .filters__option,
@@ -2188,6 +2186,16 @@ body:has(.app) {
   inline-size: auto;
   min-block-size: var(--yc-hit-min);
   padding-inline: var(--yc-space-4);
+}
+
+.presentation-switch .filters__option {
+  justify-content: center;
+}
+
+.presentation-switch .filters__option--active {
+  border-color: var(--yc-border-strong);
+  background: var(--yc-surface-raised);
+  color: var(--yc-text);
 }
 
 .office-settings .list__control.filters {
@@ -2280,12 +2288,6 @@ body:has(.app) {
   display: inline-flex;
   align-items: center;
   gap: var(--yc-space-2);
-}
-
-.team-control__toolbar {
-  display: flex;
-  justify-content: flex-end;
-  margin-block-end: var(--yc-space-2);
 }
 
 .team-control__panel {

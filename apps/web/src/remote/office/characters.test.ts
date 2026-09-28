@@ -6,10 +6,8 @@ import {
   characterFeet,
   characterFrameHeight,
   characterFrameWidth,
-  emoteFrameSize,
-  emotes,
 } from "./sprites"
-import { characterSheet, emoteSheet } from "../../../script/office-art/characters"
+import { characterSheet } from "../../../script/office-art/characters"
 
 function frameBytes(pixels: Uint8Array, sheetWidth: number, x: number, y: number, width: number, height: number) {
   const frame = new Uint8Array(width * height * 4)
@@ -57,7 +55,6 @@ describe("Office character art", () => {
 
   test("repeated generation produces the same byte stream", () => {
     expect(characterSheet().pixels).toEqual(characterSheet().pixels)
-    expect(emoteSheet().pixels).toEqual(emoteSheet().pixels)
   })
 
   test("side profiles narrow the torso, stride, and sit facing sideways", () => {
@@ -84,27 +81,5 @@ describe("Office character art", () => {
     expect(clearAboveHand).toEqual([true, true, true, true])
     const visibleHand = Array.from({ length: 7 }, (_, y) => wave[((y + 6) * characterFrameWidth + 25) * 4 + 3]).some((alpha) => alpha === 255)
     expect(visibleHand).toBe(true)
-  })
-})
-
-describe("Office emotes", () => {
-  test("has seven non-empty and pairwise different icons in contract order", () => {
-    const sheet = emoteSheet()
-    expect(sheet.width).toBe(emoteFrameSize * emotes.length)
-    expect(sheet.height).toBe(emoteFrameSize)
-    expect(sheet.pixels.length).toBe(sheet.width * sheet.height * 4)
-    const frames = emotes.map((_, column) => frameBytes(sheet.pixels, sheet.width, column * emoteFrameSize, 0, emoteFrameSize, emoteFrameSize))
-    expect(frames.every((frame) => frame.some((_, index) => index % 4 === 3 && frame[index] === 255))).toBe(true)
-    expect(new Set(frames.map((frame) => Buffer.from(frame).toString("base64"))).size).toBe(emotes.length)
-  })
-
-  test("thought emote has a lobed cloud and two trailing circles", () => {
-    const sheet = emoteSheet()
-    const opaque = (x: number, y: number) => sheet.pixels[(y * sheet.width + emotes.indexOf("thinking") * emoteFrameSize + x) * 4 + 3] === 255
-    expect(opaque(14, 2)).toBe(true)
-    expect(opaque(5, 2)).toBe(false)
-    expect(opaque(6, 19)).toBe(true)
-    expect(opaque(2, 22)).toBe(true)
-    expect(opaque(9, 20)).toBe(false)
   })
 })

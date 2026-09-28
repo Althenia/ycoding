@@ -71,15 +71,16 @@ scope.addEventListener("notificationclick", (event: { notification: { data?: unk
   event.notification.close()
   event.waitUntil((async () => {
     const data = event.notification.data
-    if (!isRecord(data) || !isSessionID(data.sessionID)) {
-      await scope.clients.openWindow("/remote")
-      return
-    }
     const clients = await scope.clients.matchAll({ type: "window", includeUncontrolled: true })
     const current = clients.find((client) => {
       const url = new URL(client.url)
       return url.origin === scope.location.origin && (url.pathname === "/remote" || url.pathname.startsWith("/remote/"))
     })
+    if (!isRecord(data) || !isSessionID(data.sessionID)) {
+      if (current && await current.focus().then(() => true, () => false)) return
+      await scope.clients.openWindow("/remote")
+      return
+    }
     if (current) {
       const delivered = await current.focus().then(() => {
         current.postMessage({ type: "ycoding:open-session", sessionID: data.sessionID })

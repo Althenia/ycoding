@@ -76,6 +76,28 @@ if (machineName !== null) devices = devices.map((device, index) => index === 0 ?
 if (deviceMode === "none") devices = []
 if (deviceMode === "offline") devices = devices.map((device) => ({ ...device, online: false }))
 if (deviceMode === "revoked") devices = devices.map((device) => ({ ...device, status: "revoked", online: false }))
+if (accountParams.get("deviceCleanup") === "two") devices = [...devices, {
+  id: "dev_backup", name: "Backup Mac", createdAt: 4, status: "revoked", online: false, revokedAt: Date.now() - 86_400_000,
+}]
+
+const cleanupRequests: string[] = []
+let cleanupFailed = false
+const originalFetch = window.fetch.bind(window)
+window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+  const pathname = new URL(input instanceof Request ? input.url : String(input), window.location.origin).pathname
+  if (init?.method === "DELETE" && pathname.startsWith("/api/devices/")) {
+    const id = pathname.slice("/api/devices/".length)
+    cleanupRequests.push(id === "revoked" ? "all" : id)
+    if (accountParams.get("deviceCleanupFailure") === "once" && !cleanupFailed) {
+      cleanupFailed = true
+      return Response.json({ error: { message: "Device cleanup is unavailable" } }, { status: 503 })
+    }
+    devices = devices.filter((device) => device.status !== "revoked" || id !== "revoked" && device.id !== id)
+    return new Response(null, { status: 204 })
+  }
+  return originalFetch(input, init)
+}, { preconnect: () => {} })
+Object.assign(window, { remoteCleanupReport: () => cleanupRequests })
 
 const syntheticHttp: RemoteHttp = {
   me: async () => {
@@ -95,6 +117,7 @@ const syntheticHttp: RemoteHttp = {
     )
     return ok(undefined)
   },
+  removeRevokedDevices: async () => ok(undefined),
   logout: async () => ok(undefined),
 }
 
@@ -105,8 +128,15 @@ const defaultSessions = [
   ...(accountParams.get("team") === "two" ? [{ id: "ses_second", title: "Child: inspect source", parentID: sessionID, time: { created: ago(20), updated: ago(2) } }] : []),
   ...(accountParams.get("team") === "two" ? [{ id: "ses_btw", title: "Side question", parentID: sessionID, agent: "btw", time: { created: ago(19), updated: ago(2) } }] : []),
 ]
-const sessions = remoteScenarioData?.sessions ?? defaultSessions
+const sessions = [...(remoteScenarioData?.sessions ?? defaultSessions), ...(accountParams.has("carouselFamily") ? [{
+  id: "ses_postgres_child", title: "Inspect Postgres indexes", parentID: "ses_postgres", projectID: "project-auth",
+  location: { directory: "/workspace/db-pruner" }, time: { created: ago(15), updated: ago(2) }, running: true,
+}] : [])]
+const removedSessionID = accountParams.get("removedSession")
 const inventoryCount = Math.min(15_000, Math.max(0, Number(accountParams.get("inventoryCount") ?? 0) || 0))
+const sessionListDelayMs = Number(accountParams.get("sessionListDelay") ?? 0)
+let statusRunning = new Set(inventoryCount > 0 ? ["ses_inventory_14000"] : sessions.filter((session) => session.running).map((session) =>
+  "parentID" in session && typeof session.parentID === "string" ? session.parentID : session.id))
 
 const longOutput = Array.from({ length: 60 }, (_, index) => `line ${index + 1}: bun test test/remote-sync.test.ts --filter case-${index}`).join("\n")
 
@@ -470,6 +500,8 @@ type Fixture = {
   readonly teamPrompt: (id: string) => Promise<string>
   readonly createdSideChatID: () => string | undefined
   readonly status: (running: readonly string[], attention: readonly string[]) => void
+  readonly invalidateSessions: () => void
+  readonly missTerminal: () => void
   readonly formRequests: () => readonly { readonly operation: string; readonly input: Readonly<Record<string, unknown>> | undefined }[]
   readonly mutationRequests: () => readonly { readonly operation: string; readonly input: Readonly<Record<string, unknown>> | undefined }[]
   readonly inventoryRequests: () => number
@@ -482,6 +514,7 @@ function createFixtureStore(): Fixture {
   let open = true
   let streamed = false
   let nextSeq = 43
+  let snapshotWatermark = 42
   let teamReported = false
   let teamCancelState: "running" | "cancelling" | "cancelled" = "running"
   let teamShellKilled = false
@@ -491,6 +524,7 @@ function createFixtureStore(): Fixture {
   const mutationRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
   const inventoryInputs: Readonly<Record<string, unknown>>[] = []
   let transportsCreated = 0
+  let currentYolo = remoteScenarioData?.autonomy.yolo ?? 2
   const operationCounts = new Map<string, number>()
   const workspaces = [
     { id: "workspace_fixture", projectID: "prj_remote", directory: "/workspace/ycoding", name: "YCoding" },
@@ -566,7 +600,7 @@ function createFixtureStore(): Fixture {
     if (accountParams.get("teamControls") === "unsupported" && ["session.team.economics", "session.team.shell.list", "session.team.shell.kill", "session.side-chat.list", "session.side-chat.create", "session.subagent.cancel", "session.subagent.answer"].includes(operation))
       return { status: "failed", error: { code: "unknown_operation", message: "Update YCoding on this machine" } }
     if ([
-      "session.prompt", "session.autonomy.set", "session.guardrail.reply", "session.create",
+      "session.prompt", "session.autonomy.set", "session.goal.set", "session.goal.stop", "session.guardrail.reply", "session.create",
       "session.command", "session.skill", "session.switchModel", "session.switchAgent",
       "session.subagent.cancel", "session.subagent.answer", "session.team.shell.kill", "session.side-chat.create",
     ].includes(operation)) {
@@ -579,7 +613,7 @@ function createFixtureStore(): Fixture {
       return { status: "ok", value: { files: fixtureFiles.filter((file) => file.path.toLowerCase().includes(query)).slice(0, limit) } }
     }
     if (operation === "session.status") return { status: "ok", value: {
-      running: emptyBackend ? [] : [sessionID],
+      running: emptyBackend ? [] : [...statusRunning],
       attention: unreplied(permissions).length + unreplied(guardrails).length > 0 ? [sessionID] : [],
     } }
     if (operation === "usage.providers") return { status: "ok", value: { data: fixtureUsageProviders(Date.now()) } }
@@ -618,6 +652,8 @@ function createFixtureStore(): Fixture {
       return delay > 0 ? new Promise((resolve) => setTimeout(() => resolve(result), delay)) : result
     }
     if (operation === "session.get") {
+      if (targetSessionID === removedSessionID || emptyBackend && !createdSessions.has(targetSessionID))
+        return { status: "failed", error: { code: "session_not_allowed", message: "Session not found" } }
       const info = createdSessions.get(targetSessionID) ?? sessions.find((item) => item.id === targetSessionID)
       return info ? { status: "ok", value: { data: info } } : { status: "failed", error: { code: "session_not_allowed", message: "Session not found" } }
     }
@@ -631,19 +667,27 @@ function createFixtureStore(): Fixture {
         const ids = input?.status === "running" ? [14_000] : typeof input?.search === "string"
           ? Number.isInteger(sought) && sought >= 0 && sought < inventoryCount && (input.status !== "idle" || sought !== 14_000) ? [sought] : []
           : undefined
-        const count = ids === undefined ? odd ? Math.floor(inventoryCount / 2) : Math.ceil(inventoryCount / 2)
+        const count = ids === undefined ? input?.workspace === undefined ? inventoryCount : odd ? Math.floor(inventoryCount / 2) : Math.ceil(inventoryCount / 2)
           : ids.filter((id) => id % 2 === Number(odd)).length
         const data = Array.from({ length: Math.min(limit, Math.max(0, count - offset)) }, (_, index) => {
-          const number = ids === undefined ? (offset + index) * 2 + Number(odd) : ids[offset + index]!
-          return { id: `ses_inventory_${number}`, title: `Inventory Session ${number}`, projectID: odd ? "prj_other" : "prj_remote",
-            location: { directory: odd ? "/workspace/other" : "/workspace/ycoding" }, time: { created: number, updated: inventoryCount - number } }
+          const number = ids === undefined ? input?.workspace === undefined ? offset + index : (offset + index) * 2 + Number(odd) : ids[offset + index]!
+          const other = number % 2 === 1
+          return { id: `ses_inventory_${number}`, title: `Inventory Session ${number}`, projectID: other ? "prj_other" : "prj_remote",
+            location: { directory: other ? "/workspace/other" : "/workspace/ycoding" }, time: { created: number, updated: inventoryCount - number } }
         })
-        return { status: "ok", value: { data, cursor: { ...(offset > 0 ? { previous: String(Math.max(0, offset - limit)) } : {}),
+        const result = { status: "ok" as const, value: { data, cursor: { ...(offset > 0 ? { previous: String(Math.max(0, offset - limit)) } : {}),
           ...(offset + data.length < count ? { next: String(offset + data.length) } : {}) } } }
+        return input?.workspace !== undefined && sessionListDelayMs > 0
+          ? new Promise<RemoteRequestOutcome>((resolve) => setTimeout(() => resolve(result), sessionListDelayMs)) : result
       }
       return { status: "ok", value: { data: [...createdSessions.values(), ...(emptyBackend ? [] : sessions)]
+        .filter((session) => session.id !== removedSessionID)
         .filter((session) => input?.workspace === undefined || groupOf(session).id === input.workspace)
-        .filter((session) => input?.parentID !== null || (session as { readonly parentID?: string }).parentID === undefined) } }
+        .filter((session) => input?.parentID !== null || (session as { readonly parentID?: string }).parentID === undefined)
+        .filter((session) => input?.status === "running" ? statusRunning.has(session.id)
+          : input?.status === "idle" ? !statusRunning.has(session.id) && Reflect.get(session.time, "archived") === undefined : true)
+        .sort((left, right) => input?.order === "desc" ? right.time.updated - left.time.updated : 0)
+        .slice(0, typeof input?.limit === "number" ? input.limit : undefined) } }
     }
     if (operation === "session.active") return { status: "ok", value: { data: { [sessionID]: { type: "running" } } } }
     if (operation === "session.subagent.list") {
@@ -692,7 +736,7 @@ function createFixtureStore(): Fixture {
           sourceEpoch: "epoch_fixture",
           session: createdSessions.get(targetSessionID) ?? sessions.find((item) => item.id === targetSessionID),
           messages: targetSessionID === sessionID ? messages : [],
-          watermark: { type: "log.synced", aggregateID: targetSessionID, seq: targetSessionID === sessionID ? 42 : 0 },
+          watermark: { type: "log.synced", aggregateID: targetSessionID, seq: targetSessionID === sessionID ? snapshotWatermark : 0 },
         },
       }
     }
@@ -743,9 +787,16 @@ function createFixtureStore(): Fixture {
       ? { status: "unknown", error: { code: "outcome_unknown", message: "Synthetic unknown prompt outcome" } }
       : { status: "ok", value: { data: { ...input, admittedSeq: 43 } } }
     if (operation === "session.shell.output") return shellOutputPage(input)
-    if (operation === "session.goal.set" || operation === "session.goal.stop" || operation === "session.autonomy.set") {
-      return { status: "ok", value: { data: { mode: "normal", yolo: typeof input?.yolo === "number" ? input.yolo : 2 } } }
+    if (operation === "session.autonomy.set") {
+      if (typeof input?.yolo === "number") currentYolo = input.yolo
+      return { status: "ok", value: { data: { mode: "normal", yolo: currentYolo } } }
     }
+    if (operation === "session.goal.set") {
+      if (typeof input?.goal !== "string") return { status: "failed", error: { code: "invalid_message", message: "Goal text is required" } }
+      return { status: "ok", value: { data: { mode: "goal", yolo: currentYolo,
+        goal: { text: input.goal, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } } } }
+    }
+    if (operation === "session.goal.stop") return { status: "ok", value: { data: { mode: "normal", yolo: currentYolo } } }
     return { status: "ok", value: null }
   }
 
@@ -844,10 +895,17 @@ function createFixtureStore(): Fixture {
     }, 400)
   }
 
-  const status = (running: readonly string[], attention: readonly string[]) => handlers?.onSessionStatus?.({ running, attention })
+  const status = (running: readonly string[], attention: readonly string[]) => {
+    statusRunning = new Set(running)
+    handlers?.onSessionStatus?.({ running, attention })
+  }
 
   return {
-    store, drop, stream, team, teamCancelled: () => {
+    store, drop, stream, team, invalidateSessions: () => handlers?.onSessions?.(), missTerminal: () => {
+      handlers?.onEvent?.(sessionID, { type: "session.execution.started", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { sessionID } })
+      statusRunning = new Set()
+      snapshotWatermark = nextSeq++
+    }, teamCancelled: () => {
       teamCancelState = "cancelled"
       handlers?.onEvent?.(sessionID, { id: "evt_team_cancelled", type: "session.synthetic", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 },
         data: { sessionID, messageID: "msg_team_cancelled", text: "Subagent cancelled", metadata: { source: "subagent_notification", childID: "ses_child", type: "cancelled", revision: 3 } } })
@@ -865,7 +923,8 @@ Object.assign(window, { remoteInventoryReport: () => ({ requests: fixture.invent
   groups: fixture.store.state().sessionGroups.length, next: fixture.store.state().sessionHasNext,
   first: fixture.store.state().sessions[0]?.id, last: fixture.store.state().sessions.at(-1)?.id, inputs: fixture.inventoryInputs(),
   firstListed: fixture.store.state().sessions.find((session) => session.id.startsWith("ses_inventory_"))?.id,
-  workspaceRequests: fixture.inventoryInputs().filter((input) => input.workspace !== undefined).length }) })
+  workspaceRequests: fixture.inventoryInputs().filter((input) => input.workspace !== undefined).length,
+  listStatus: fixture.store.state().sessionListStatus }), remoteInvalidateSessions: fixture.invalidateSessions })
 
 /** Picks the device and session a user would pick, so the fixture opens on a live workspace. */
 async function openFixtureWorkspace(store: RemoteStore) {
@@ -1003,6 +1062,7 @@ function remoteMutationReport() {
   cancelled: fixture.teamCancelled, prompt: fixture.teamPrompt, createdID: fixture.createdSideChatID,
 }
 ;(window as typeof window & { remoteStatus?: typeof fixture.status }).remoteStatus = fixture.status
+;(window as typeof window & { remoteMissTerminal?: typeof fixture.missTerminal }).remoteMissTerminal = fixture.missTerminal
 
 const fixtureView = remoteScenarioData?.view ?? new URLSearchParams(window.location.search).get("view") ?? "chat"
 const fixturePath = fixtureView === "chat" ? "/remote" : `/remote/${fixtureView}`
@@ -1010,16 +1070,10 @@ window.history.replaceState(null, "", `${fixturePath}${window.location.search}`)
 
 function FixturePage() {
   onMount(() => {
-    if (remoteScenarioData?.openControl === undefined) return
+    if (remoteScenarioData?.openControl === undefined || remoteScenarioData.openControl === "device") return
     let attempts = 0
     const open = () => {
       attempts += 1
-      if (remoteScenarioData.openControl === "device") {
-        const button = document.querySelector<HTMLButtonElement>('[aria-label="Machine"]')
-        if (button !== null && !button.disabled) button.click()
-        if ((button !== null && !button.disabled) || attempts === 40) clearInterval(timer)
-        return
-      }
       const button = [...document.querySelectorAll<HTMLButtonElement>("button")]
         .find((button) => button.textContent?.includes("Create enrollment code"))
       if (button !== undefined) button.click()

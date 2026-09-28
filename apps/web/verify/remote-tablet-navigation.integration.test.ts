@@ -27,6 +27,27 @@ afterAll(async () => {
 })
 
 describe("tablet remote navigation", () => {
+  test("collapses the desktop Sessions rail, expands it, and remembers the choice after reload", async () => {
+    const page = await requireBrowser().openPage()
+    try {
+      await page.setViewport(1440, 900)
+      const url = `http://127.0.0.1:${port}/verify/remote.html?scenario=conversation-workspace-1440`
+      await page.navigate(url)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('#session-rail') !== null`); attempt += 1) await Bun.sleep(50)
+      const toggle = `.app-header button[aria-controls="session-rail"]`
+      expect(await page.evaluate<{ readonly label: string | null; readonly expanded: string | null }>(`(() => { const button = document.querySelector(${JSON.stringify(toggle)}); return { label: button?.getAttribute('aria-label') ?? null, expanded: button?.getAttribute('aria-expanded') ?? null }; })()`)).toEqual({ label: "Hide sessions sidebar", expanded: "true" })
+      expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(toggle)})?.getBoundingClientRect().width >= 44 && document.querySelector(${JSON.stringify(toggle)})?.getBoundingClientRect().height >= 44`)).toBe(true)
+      await page.evaluate(`document.querySelector(${JSON.stringify(toggle)})?.click()`)
+      expect(await page.evaluate<boolean>(`getComputedStyle(document.querySelector('#session-rail')).display === 'none' && document.querySelector('.workspace__main').getBoundingClientRect().width > innerWidth * .85`)).toBe(true)
+      expect(await page.evaluate<string>(`document.querySelector(${JSON.stringify(toggle)})?.getAttribute('aria-label') ?? ''`)).toBe("Show sessions sidebar")
+      await page.navigate(url)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('#session-rail') !== null`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<boolean>(`getComputedStyle(document.querySelector('#session-rail')).display === 'none' && document.querySelector(${JSON.stringify(toggle)})?.getAttribute('aria-expanded') === 'false'`)).toBe(true)
+      await page.evaluate(`document.querySelector(${JSON.stringify(toggle)})?.click()`)
+      expect(await page.evaluate<boolean>(`getComputedStyle(document.querySelector('#session-rail')).display !== 'none' && document.querySelector(${JSON.stringify(toggle)})?.getAttribute('aria-expanded') === 'true'`)).toBe(true)
+    } finally { await page.close() }
+  }, 30_000)
+
   test("keeps route navigation visible and lets the selected conversation rail collapse and reopen", async () => {
     const page = await requireBrowser().openPage()
     await page.setViewport(768, 900)

@@ -8,8 +8,10 @@ test("service worker shows one notification per push including malformed and foc
   const posted: unknown[] = []
   const calls: Request[] = []
   let focusFails = false
+  let focused = 0
   const windowClient = { visibilityState: "visible", focused: true, url: "https://relay.test/remote", focus: async () => {
     if (focusFails) throw new Error("window closed")
+    focused += 1
   },
     postMessage: (message: unknown) => posted.push(message) }
   const windowClients: typeof windowClient[] = [windowClient]
@@ -41,7 +43,12 @@ test("service worker shows one notification per push including malformed and foc
     expect(shown).toHaveLength(2)
     expect(shown[1]).toEqual(shown[0])
     await emit("notificationclick", { notification: { close: () => undefined } })
+    expect(opened).toBe("")
+    expect(focused).toBe(1)
+    windowClients.length = 0
+    await emit("notificationclick", { notification: { close: () => undefined } })
     expect(opened).toBe("/remote")
+    windowClients.push(windowClient)
     opened = ""
     const payload = { category: "approval-requested", sessionID: "ses_1", deviceID: "dev_1" }
     await emit("push", { data: { json: () => payload } })

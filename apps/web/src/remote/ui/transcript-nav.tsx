@@ -4,6 +4,7 @@ import { Icon } from "../../ui/icon"
 import { useRemote } from "../context"
 import { visibleTranscriptMessages, type RemoteMessageView } from "../projection"
 import { MessageRow } from "./conversation"
+import { LoadingPlaceholder } from "./loading"
 import "./transcript-nav.css"
 
 export function followState(following: boolean, event: { readonly kind: "scroll" | "content" | "jump" | "top" | "session"; readonly distance: number }): boolean {
@@ -189,6 +190,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
         <Show when={hovered()}>{(id) => <div class="transcript-navigation__tooltip" role="tooltip" style={{ top: `${tooltipTop()}px` }}>{preview(id())}</div>}</Show>
       </Show>
     </div>
+    <Show when={remote.state().history?.status === "loading"}><div class="transcript-navigation__history-loading"><LoadingPlaceholder kind="history" label="Loading older messages…" /></div></Show>
     <Show when={remote.state().history?.status === "idle" && !remote.state().history?.before}><p class="transcript-navigation__beginning">Beginning of conversation</p></Show>
     <Show when={remote.state().history?.status === "error"}><p class="transcript-navigation__history-error" role="alert">{remote.state().history?.error} <button type="button" onClick={() => void loadOlder(true)}>Retry older history</button></p></Show>
     <ol class="transcript"><For each={ids()}>{(id) => <li class="transcript-navigation__item" data-message-id={id} data-prompt-id={message(id).kind === "user" ? id : undefined} tabindex={message(id).kind === "user" ? -1 : undefined}><MessageRow message={() => message(id)} /></li>}</For></ol>

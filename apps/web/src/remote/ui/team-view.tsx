@@ -1,6 +1,7 @@
 import { For, Show, createEffect, createMemo, createSignal, type JSX } from "solid-js"
 import { Modal } from "../../ui/modal"
 import { TeamAnswerForm } from "./subagent-bar"
+import { LoadingPlaceholder } from "./loading"
 import { canCancelSubagent, formatCacheHit, formatElapsed, isActiveSubagent, shellRows, taskRows, type TeamActionOutcome, type TeamPanelData, type TeamShellOutput } from "./team-model"
 import "./team-view.css"
 
@@ -116,8 +117,8 @@ export function TeamView(props: {
       </button>}</For>
     </div>
     <Show when={error()}>{(message) => <p class="team-view__error" role="alert">{message()}</p>}</Show>
-    <div id="team-panel-subagents" role="tabpanel" aria-label="Subagents" hidden={tab() !== "subagents"} inert={tab() !== "subagents"}>
-        <Show when={props.data().status === "ready"} fallback={<p role="status">{props.data().status === "unsupported" ? "Update YCoding on this machine to manage subagents." : props.data().status === "error" ? "Subagents could not be loaded." : "Loading subagents…"}</p>}>
+    <div id="team-panel-subagents" role="tabpanel" aria-label="Subagents" aria-busy={props.data().status === "loading"} hidden={tab() !== "subagents"} inert={tab() !== "subagents"}>
+        <Show when={props.data().status === "ready"} fallback={props.data().status === "loading" ? <LoadingPlaceholder kind="team" label="Loading subagents…" /> : <p role="status">{props.data().status === "unsupported" ? "Update YCoding on this machine to manage subagents." : "Subagents could not be loaded."}</p>}>
           <Show when={!controlsAvailable()}><p role="status">{props.data().shellStatus === "unsupported" && props.data().sideChatStatus === "unsupported" ? "Update YCoding on this machine to manage subagents." : "Checking Team controls…"}</p></Show>
           <ul class="team-view__list"><For each={rows()}>{(id) => id.startsWith("section:")
             ? <li class="team-view__section"><h3>{id === "section:active" ? "ACTIVE" : "INACTIVE"}</h3></li>
@@ -137,10 +138,11 @@ export function TeamView(props: {
           <Show when={props.data().next}><button type="button" class="team-view__more" disabled={props.data().pageLoading} onClick={() => runRead(props.onLoadOlder)}>
             {props.data().pageLoading ? "Loading older…" : `+${Math.max(0, (props.data().total ?? props.data().tasks.length) - props.data().tasks.length)} more · Load older`}
           </button></Show>
+          <Show when={props.data().pageLoading}><LoadingPlaceholder kind="team" label="Loading older subagents…" /></Show>
         </Show>
     </div>
     <div id="team-panel-shell" role="tabpanel" aria-label="Shell" hidden={tab() !== "shell"} inert={tab() !== "shell"}>
-        <Show when={props.data().shellStatus === "ready"} fallback={<p role="status">{props.data().shellStatus === "unsupported" ? "Update YCoding on this machine to manage shells." : "Shells could not be loaded."}</p>}>
+        <Show when={props.data().shellStatus === "ready"} fallback={props.data().shellStatus === "loading" ? <LoadingPlaceholder kind="team" label="Loading shells…" /> : <p role="status">{props.data().shellStatus === "unsupported" ? "Update YCoding on this machine to manage shells." : "Shells could not be loaded."}</p>}>
           <ul class="team-view__list"><For each={shells()}>{(id) => id.startsWith("owner:")
             ? <li class="team-view__owner"><h3>{ownerLabel(id.slice(6))}</h3></li>
             : <li class="team-view__shell" data-shell-id={id}>
@@ -150,13 +152,14 @@ export function TeamView(props: {
               <Show when={shell(id).status === "running"}><button type="button" data-action="kill" disabled={working() !== undefined} onClick={() => setConfirm({ kind: "kill", id, label: shell(id).command })}>Kill</button></Show></div>
           </li>}</For></ul>
           <Show when={props.data().shellTruncated}><p role="status">Showing the first 50 family shells. More are running on this machine.</p></Show>
-          <Show when={output()}>{(current) => <section class="team-view__output" aria-label="Shell output"><h3>Output</h3><pre tabindex="0">{current().page?.text ?? (current().loading ? "Loading output…" : "No output reported.")}</pre>
+          <Show when={output()}>{(current) => <section class="team-view__output" aria-label="Shell output"><h3>Output</h3><Show when={current().page?.text} fallback={current().loading ? <LoadingPlaceholder kind="output" label="Loading output…" /> : <pre tabindex="0">No output reported.</pre>}>{(text) => <pre tabindex="0">{text()}</pre>}</Show>
+            <Show when={current().page && current().loading}><LoadingPlaceholder kind="history" label="Loading more output…" /></Show>
             <Show when={current().page && current().page!.cursor < current().page!.size}><button type="button" disabled={current().loading} onClick={() => readOutput(current().ownerID, current().shellID, current().page?.cursor)}>Load more output</button></Show>
             <Show when={current().page?.truncated}><p>Output was truncated on the device.</p></Show></section>}</Show>
         </Show>
     </div>
     <div id="team-panel-side-chats" role="tabpanel" aria-label="Side chats" hidden={tab() !== "side-chats"} inert={tab() !== "side-chats"}>
-        <Show when={props.data().sideChatStatus === "ready"} fallback={<p role="status">{props.data().sideChatStatus === "unsupported" ? "Update YCoding on this machine to use side chats." : "Side chats could not be loaded."}</p>}>
+        <Show when={props.data().sideChatStatus === "ready"} fallback={props.data().sideChatStatus === "loading" ? <LoadingPlaceholder kind="team" label="Loading side chats…" /> : <p role="status">{props.data().sideChatStatus === "unsupported" ? "Update YCoding on this machine to use side chats." : "Side chats could not be loaded."}</p>}>
           <button type="button" data-action="new-side-chat" disabled={working() !== undefined} onClick={() => {
             if (working() !== undefined) return
             const rootID = props.data().rootID
@@ -170,6 +173,7 @@ export function TeamView(props: {
             <button type="button" data-action="open" onClick={() => props.onOpenSideChat(id)}>Open</button>
           </li>}</For></ul>
           <Show when={props.data().sideChatNext}><button type="button" data-action="older-side-chats" disabled={props.data().sideChatLoading} onClick={() => runRead(props.onLoadOlderSideChats)}>{props.data().sideChatLoading ? "Loading older…" : "Load older side chats"}</button></Show>
+          <Show when={props.data().sideChatLoading}><LoadingPlaceholder kind="team" label="Loading older side chats…" /></Show>
         </Show>
     </div>
   </section>

@@ -13,9 +13,6 @@ export const characterColumns = {
   wave: [11],
 } as const
 
-export const emoteFrameSize = 24
-export const emotes = ["chat", "attention", "done", "failed", "thinking", "delegate", "report"] as const
-
 export function characterFrame(appearance: number, direction: (typeof characterDirections)[number], column: number): number {
   return (appearance * characterDirections.length + characterDirections.indexOf(direction)) * characterColumnCount + column
 }

@@ -1,10 +1,27 @@
 import { expect, test } from "bun:test"
-import { enablePush, disablePush, readPushState, pushSupport, pushStatusView, type PushPlatform } from "./push"
+import { enablePush, disablePush, syncPushState, pushSupport, pushStatusView, type PushPlatform } from "./push"
+
+type FixtureSubscription = { endpoint: string; getKey: (name: string) => ArrayBuffer | null; unsubscribe: () => Promise<boolean>;
+  options?: { applicationServerKey: ArrayBuffer | null } }
+
+function serverKey() {
+  const key = new Uint8Array(65)
+  key[0] = 4
+  return key
+}
+
+function existingSubscription(h: ReturnType<typeof fixture>, key: Uint8Array<ArrayBuffer>): FixtureSubscription {
+  return { endpoint: "https://fcm.googleapis.com/send/existing", getKey: (name) => new Uint8Array(name === "p256dh" ? 65 : 16).buffer,
+    options: { applicationServerKey: key.buffer.slice(0) },
+    unsubscribe: async () => { h.calls.push("unsubscribe-existing"); h.setSubscription(null); return true } }
+}
 
 function fixture() {
   const calls: string[] = []
+  const registered: string[] = []
+  const removed: string[] = []
   let permission: NotificationPermission = "default"
-  let subscription: { endpoint: string; getKey: (name: string) => ArrayBuffer | null; unsubscribe: () => Promise<boolean> } | null = null
+  let subscription: FixtureSubscription | null = null
   const bytes = (size: number) => new Uint8Array(size).buffer
   const platform: PushPlatform = {
     secure: true, supported: true, installed: true,
@@ -22,11 +39,11 @@ function fixture() {
   }
   const http = {
     key: async () => ({ ok: true as const, value: { publicKey: "BA" + "A".repeat(85) } }),
-    subscribe: async () => { calls.push("register"); return { ok: true as const, value: undefined } },
-    remove: async () => { calls.push("remove"); return { ok: true as const, value: undefined } },
+    subscribe: async (input: { readonly endpoint: string }) => { calls.push("register"); registered.push(input.endpoint); return { ok: true as const, value: undefined } },
+    remove: async (endpoint: string) => { calls.push("remove"); removed.push(endpoint); return { ok: true as const, value: undefined } },
   }
-  return { platform, http, calls, setPermission: (value: NotificationPermission) => { permission = value },
-    setSubscription: (value: typeof subscription) => { subscription = value } }
+  return { platform, http, calls, registered, removed, setPermission: (value: NotificationPermission) => { permission = value },
+    setSubscription: (value: FixtureSubscription | null) => { subscription = value } }
 }
 
 test("push support distinguishes secure installed capability and permission denial", async () => {
@@ -36,11 +53,11 @@ test("push support distinguishes secure installed capability and permission deni
   test.setPermission("denied")
   expect(pushSupport(test.platform)).toBe("blocked")
   test.setPermission("default")
-  expect(await readPushState(test.platform, test.http)).toBe("off")
+  expect(await syncPushState(test.platform, test.http)).toBe("off")
   const unavailable = { ...test.http, key: async () => ({ ok: false as const, status: 503, kind: "http" as const, message: "Web Push is unavailable" }) }
-  expect(await readPushState(test.platform, unavailable)).toBe("unavailable")
+  expect(await syncPushState(test.platform, unavailable)).toBe("unavailable")
   const unauthenticated = { ...test.http, key: async () => ({ ok: false as const, status: 401, kind: "http" as const, message: "Sign in" }) }
-  expect(await readPushState(test.platform, unauthenticated)).toBe("error")
+  expect(await syncPushState(test.platform, unauthenticated)).toBe("error")
 })
 
 test("push Settings labels every capability and permission state without claiming delivery while blocked", () => {
@@ -55,8 +72,8 @@ test("push Settings labels every capability and permission state without claimin
 test("a granted device with a revoked browser subscription shows push off and offers re-enable", async () => {
   const h = fixture()
   h.setPermission("granted")
-  expect(await readPushState(h.platform, h.http)).toBe("needs-setup")
-  expect(pushStatusView(await readPushState(h.platform, h.http)).detail).toContain("no active subscription")
+  expect(await syncPushState(h.platform, h.http)).toBe("needs-setup")
+  expect(pushStatusView(await syncPushState(h.platform, h.http)).detail).toContain("no active subscription")
   expect(await enablePush(h.platform, h.http)).toEqual({ status: "on" })
   expect(h.calls).toEqual(["permission", "subscribe", "register"])
 })
@@ -65,9 +82,46 @@ test("push enable requests permission on click, registers only after subscribe, 
   const test = fixture()
   expect(await enablePush(test.platform, test.http)).toEqual({ status: "on" })
   expect(test.calls).toEqual(["permission", "subscribe", "register"])
-  expect(await readPushState(test.platform, test.http)).toBe("on")
+  expect(await syncPushState(test.platform, test.http)).toBe("on")
   expect(await disablePush(test.platform, test.http)).toEqual({ status: "off" })
-  expect(test.calls).toEqual(["permission", "subscribe", "register", "remove", "unsubscribe"])
+  expect(test.calls).toEqual(["permission", "subscribe", "register", "register", "remove", "unsubscribe"])
+})
+
+test("sync re-registers this device's existing subscription with the relay on every workspace load", async () => {
+  const h = fixture()
+  h.setPermission("granted")
+  h.setSubscription(existingSubscription(h, serverKey()))
+  expect(await syncPushState(h.platform, h.http)).toBe("on")
+  expect(h.calls).toEqual(["register"])
+  expect(h.registered).toEqual(["https://fcm.googleapis.com/send/existing"])
+})
+
+test("sync replaces a subscription made for a rotated server key before registering it", async () => {
+  const h = fixture()
+  h.setPermission("granted")
+  const rotated = serverKey()
+  rotated[1] = 9
+  h.setSubscription(existingSubscription(h, rotated))
+  expect(await syncPushState(h.platform, h.http)).toBe("on")
+  expect(h.calls).toEqual(["unsubscribe-existing", "subscribe", "register", "remove"])
+  expect(h.registered).toEqual(["https://fcm.googleapis.com/send/a"])
+  expect(h.removed).toEqual(["https://fcm.googleapis.com/send/existing"])
+})
+
+test("sync reports a relay rejection instead of claiming push is on", async () => {
+  const h = fixture()
+  h.setPermission("granted")
+  h.setSubscription(existingSubscription(h, serverKey()))
+  const failing = { ...h.http, subscribe: async () => ({ ok: false as const, status: 500, kind: "http" as const, message: "Failed" }) }
+  expect(await syncPushState(h.platform, failing)).toBe("error")
+})
+
+test("sync leaves an ungranted or unsubscribed device untouched", async () => {
+  const h = fixture()
+  expect(await syncPushState(h.platform, h.http)).toBe("off")
+  h.setPermission("granted")
+  expect(await syncPushState(h.platform, h.http)).toBe("needs-setup")
+  expect(h.calls).toEqual([])
 })
 
 test("push registration failure rolls back a newly created browser subscription", async () => {

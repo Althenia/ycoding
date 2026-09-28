@@ -16,6 +16,7 @@ export type RemoteHttp = {
   readonly devices: () => Promise<RemoteHttpResult<readonly RemoteDeviceInfo[]>>
   readonly createEnrollment: () => Promise<RemoteHttpResult<CreateEnrollmentResponse>>
   readonly revokeDevice: (deviceID: string) => Promise<RemoteHttpResult<void>>
+  readonly removeRevokedDevices: (deviceID?: string) => Promise<RemoteHttpResult<void>>
   readonly logout: () => Promise<RemoteHttpResult<void>>
 }
 
@@ -67,6 +68,8 @@ export function createRemoteHttp(options: RemoteHttpOptions = {}): RemoteHttp {
       json<CreateEnrollmentResponse>("/api/devices/enrollments", { method: "POST" }, readEnrollment),
     revokeDevice: (deviceID) =>
       json<void>(`/api/devices/${encodeURIComponent(deviceID)}/revoke`, { method: "POST" }),
+    removeRevokedDevices: (deviceID) =>
+      json<void>(deviceID === undefined ? "/api/devices/revoked" : `/api/devices/${encodeURIComponent(deviceID)}`, { method: "DELETE" }),
     logout: () => json<void>("/api/auth/logout", { method: "POST" }),
   }
 }

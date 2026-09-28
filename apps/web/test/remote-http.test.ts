@@ -24,6 +24,23 @@ describe("signInURL", () => {
 })
 
 describe("remote HTTP integration", () => {
+  test("removes one or all revoked devices with same-origin DELETE and reports refusal", async () => {
+    const sent: { readonly url: string; readonly method: string | undefined; readonly credentials: RequestCredentials | undefined }[] = []
+    const http = createRemoteHttp({ fetch: Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      sent.push({ url: typeof input === "string" ? input : input instanceof URL ? input.href : input.url, method: init?.method, credentials: init?.credentials })
+      return sent.length === 3 ? Response.json({ error: { message: "Revoke this device before removing it" } }, { status: 409 })
+        : new Response(null, { status: 204 })
+    }, { preconnect: () => {} }) })
+    expect(await http.removeRevokedDevices("dev_old")).toEqual({ ok: true, value: undefined })
+    expect(await http.removeRevokedDevices()).toEqual({ ok: true, value: undefined })
+    expect(await http.removeRevokedDevices("dev_current")).toEqual({ ok: false, status: 409, message: "Revoke this device before removing it", kind: "http" })
+    expect(sent).toEqual([
+      { url: "/api/devices/dev_old", method: "DELETE", credentials: "same-origin" },
+      { url: "/api/devices/revoked", method: "DELETE", credentials: "same-origin" },
+      { url: "/api/devices/dev_current", method: "DELETE", credentials: "same-origin" },
+    ])
+  })
+
   test("reads owner, session expiry, and devices from /api/me", async () => {
     const relay = await startRelayDouble()
     try {

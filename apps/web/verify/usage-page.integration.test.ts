@@ -77,7 +77,7 @@ test("provider allowances, spend, chart and breakdown reflow without overflow ac
         }
         if (width === 390 && theme === "light") {
           expect(await page.evaluate<unknown>(`window.usageRequests().find(item => item.operation === 'usage.report' && item.input?.limit === 200)?.input`)).toMatchObject({ group: "model", limit: 200, sort: "cost", order: "desc" })
-          await page.evaluate(`document.querySelector('.usage-toggle button:last-child')?.click()`)
+          await page.evaluate(`document.querySelector('.usage-distribution .usage-toggle button:last-child')?.click()`)
           expect(await page.evaluate<string>(`document.querySelector('.usage-donut__total')?.textContent ?? ''`)).toBe("91,840")
           expect(await page.evaluate<number>(`document.querySelectorAll('.usage-donut__arc').length`)).toBe(3)
           await page.evaluate(`document.querySelector('.usage-distribution__table-toggle')?.click()`)
@@ -116,6 +116,8 @@ test("usage waits for a connected machine and loads after connection opens", asy
     await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?offline`)
     await wait(page, `document.querySelector('.usage-page')?.textContent?.includes('Connect to a machine to see usage.') === true`)
     expect(await page.evaluate<number>(`window.usageRequests().length`)).toBe(0)
+    expect(await page.evaluate<number>(`document.querySelectorAll('.usage-page .loading-placeholder').length`)).toBe(0)
+    expect(await page.evaluate<number>(`document.querySelectorAll('.usage-page [role="status"]').length`)).toBe(1)
     await page.evaluate(`window.usageConnect()`)
     await wait(page, `document.querySelectorAll('.usage-provider').length === 5`)
     expect(await page.evaluate<number>(`window.usageRequests().length`)).toBe(5)
@@ -212,12 +214,14 @@ test("chart details respond to hover, keyboard focus, and tap inside each card",
       await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html`)
       await wait(page, `document.querySelectorAll('.usage-chart__bar').length === 30 && document.querySelectorAll('.usage-donut__arc').length === 2`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
-      await page.evaluate(`document.querySelector('.usage-chart__bar:last-of-type')?.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true, pointerType: 'mouse' }))`)
-      const daily = await page.evaluate<{ text: string; inside: boolean; name: string | null }>(`(() => { const card = document.querySelector('.usage-chart'); const tip = card.querySelector('.usage-chart__tooltip'); const bar = card.querySelector('.usage-chart__bar:last-of-type'); const a = card.getBoundingClientRect(); const b = tip?.getBoundingClientRect(); return { text: tip?.textContent ?? '', inside: !!b && b.left >= a.left && b.right <= a.right && b.top >= a.top && b.bottom <= a.bottom, name: bar?.getAttribute('aria-label') ?? null }; })()`)
+      await page.evaluate(`document.querySelector('.usage-chart')?.scrollIntoView({ block: 'center' })`)
+      await page.evaluate(`(() => { const bar = document.querySelector('.usage-chart__bar:first-of-type'); const r = bar.getBoundingClientRect(); bar.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true, pointerType: 'mouse', clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 })); })()`)
+      const daily = await page.evaluate<{ text: string; inside: boolean; distance: number; name: string | null }>(`(() => { const card = document.querySelector('.usage-chart'); const tip = card.querySelector('.usage-chart__tooltip'); const bar = card.querySelector('.usage-chart__bar:first-of-type'); const a = card.getBoundingClientRect(); const b = tip?.getBoundingClientRect(); const r = bar.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; return { text: tip?.textContent ?? '', inside: !!b && b.left >= a.left && b.right <= a.right && b.top >= a.top && b.bottom <= a.bottom && b.left >= 0 && b.right <= innerWidth && b.top >= 0 && b.bottom <= innerHeight, distance: b ? Math.hypot(Math.max(b.left - x, 0, x - b.right), Math.max(b.top - y, 0, y - b.bottom)) : Infinity, name: bar?.getAttribute('aria-label') ?? null }; })()`)
       expect(daily.text).toContain("requests")
       expect(daily.text).toContain("tokens")
       expect(daily.text).toContain("$")
       expect(daily.inside).toBe(true)
+      expect(daily.distance).toBeLessThan(25)
       expect(daily.name).toContain("requests")
       if (width === 390 && theme === "light") {
         await page.evaluate(`document.querySelector('.usage-chart')?.scrollIntoView({ block: 'center' })`)
@@ -228,12 +232,14 @@ test("chart details respond to hover, keyboard focus, and tap inside each card",
       expect(await page.evaluate<string>(`document.querySelector('.usage-chart__tooltip')?.textContent ?? ''`)).toMatch(/\d{4}-\d{2}-\d{2}/)
       await page.evaluate(`document.querySelector('.usage-chart__bar:last-of-type')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))`)
       expect(await page.evaluate<string>(`document.querySelector('.usage-chart__tooltip')?.textContent ?? ''`)).toContain("requests")
-      await page.evaluate(`document.querySelector('.usage-donut__arc')?.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true, pointerType: 'mouse' }))`)
-      const provider = await page.evaluate<{ text: string; inside: boolean; name: string | null }>(`(() => { const card = document.querySelector('.usage-distribution'); const tip = card.querySelector('.usage-distribution__tooltip'); const arc = card.querySelector('.usage-donut__arc'); const a = card.getBoundingClientRect(); const b = tip?.getBoundingClientRect(); return { text: tip?.textContent ?? '', inside: !!b && b.left >= a.left && b.right <= a.right && b.top >= a.top && b.bottom <= a.bottom, name: arc?.getAttribute('aria-label') ?? null }; })()`)
+      await page.evaluate(`document.querySelector('.usage-distribution')?.scrollIntoView({ block: 'center' })`)
+      await page.evaluate(`(() => { const arc = document.querySelector('.usage-donut__arc'); const r = arc.getBoundingClientRect(); arc.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true, pointerType: 'mouse', clientX: r.right - 20, clientY: r.top + r.height / 2 })); })()`)
+      const provider = await page.evaluate<{ text: string; inside: boolean; distance: number; name: string | null }>(`(() => { const card = document.querySelector('.usage-distribution'); const tip = card.querySelector('.usage-distribution__tooltip'); const arc = card.querySelector('.usage-donut__arc'); const a = card.getBoundingClientRect(); const b = tip?.getBoundingClientRect(); const r = arc.getBoundingClientRect(); const x = r.right - 20, y = r.top + r.height / 2; return { text: tip?.textContent ?? '', inside: !!b && b.left >= a.left && b.right <= a.right && b.top >= a.top && b.bottom <= a.bottom && b.left >= 0 && b.right <= innerWidth && b.top >= 0 && b.bottom <= innerHeight, distance: b ? Math.hypot(Math.max(b.left - x, 0, x - b.right), Math.max(b.top - y, 0, y - b.bottom)) : Infinity, name: arc?.getAttribute('aria-label') ?? null }; })()`)
       expect(provider.text).toContain("Codex")
       expect(provider.text).toContain("$")
       expect(provider.text).toContain("%")
       expect(provider.inside).toBe(true)
+      expect(provider.distance).toBeLessThan(25)
       expect(provider.name).toContain("Codex")
       if (width === 1440 && theme === "dark") {
         await page.evaluate(`document.querySelector('.usage-distribution')?.scrollIntoView({ block: 'center' })`)
@@ -245,7 +251,7 @@ test("chart details respond to hover, keyboard focus, and tap inside each card",
       await page.evaluate(`document.querySelectorAll('.usage-donut__arc')[1]?.dispatchEvent(new MouseEvent('click', { bubbles: true }))`)
       expect(await page.evaluate<string>(`document.querySelector('.usage-distribution__tooltip')?.textContent ?? ''`)).toContain("OpenRouter")
       if (width === 390 && theme === "light") {
-        await page.evaluate(`document.querySelector('.usage-toggle button:last-child')?.click()`)
+        await page.evaluate(`document.querySelector('.usage-distribution .usage-toggle button:last-child')?.click()`)
         await page.evaluate(`document.querySelector('.usage-donut__arc')?.focus()`)
         expect(await page.evaluate<string>(`document.querySelector('.usage-distribution__tooltip')?.textContent ?? ''`)).toContain("$10.00")
         expect(await page.evaluate<string>(`document.querySelector('.usage-distribution__tooltip')?.textContent ?? ''`)).toContain("tokens")
@@ -346,6 +352,121 @@ test("a device switch, explicit disconnect, or sign-out clears the previous mach
     } finally { await page.close() }
   }
 })
+
+test("UTC and Local report choices persist and never label UTC data as local", async () => {
+  for (const width of [390, 1440]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width, 844)
+      await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html`)
+      await wait(page, `document.querySelectorAll('.usage-donut__arc').length === 2`)
+      expect(await page.evaluate<string>(`document.querySelector('.usage-chart h3')?.textContent ?? ''`)).toContain("UTC")
+      await page.evaluate(`document.querySelector('[aria-label="Usage time zone"] button:last-child')?.click()`)
+      const zone = await page.evaluate<string>(`Intl.DateTimeFormat().resolvedOptions().timeZone`)
+      await wait(page, `window.usageRequests().filter(item => item.operation === 'usage.report' && item.input?.timeZone === ${JSON.stringify(zone)}).length >= 3`)
+      expect(await page.evaluate<string>(`document.querySelector('.usage-chart h3')?.textContent ?? ''`)).toContain(zone)
+      expect(await page.evaluate<string>(`document.querySelector('.usage-distribution h3')?.textContent ?? ''`)).toContain(zone)
+      expect(await page.evaluate<string>(`document.querySelector('.usage-head [aria-label="Usage time zone"] button:last-child')?.getAttribute('aria-pressed') ?? ''`)).toBe("true")
+      const bounds = await page.evaluate<{ day: { from: number; to: number }; month: { from: number }; breakdown: { from: number; to: number }; overflow: boolean }>(`(() => {
+        const reports = window.usageRequests().filter(item => item.operation === 'usage.report' && item.input?.timeZone === ${JSON.stringify(zone)}).map(item => item.input);
+        const day = reports.find(item => item.group === 'day');
+        const month = reports.find(item => item.group === 'model' && item.limit === 200);
+        const breakdown = reports.find(item => item.group === 'model' && item.limit === 25);
+        return { day: { from: day.from, to: day.to }, month: { from: month.from }, breakdown: { from: breakdown.from, to: breakdown.to }, overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth };
+      })()`)
+      expect(bounds.breakdown).toEqual(bounds.day)
+      expect(bounds.month.from).toBeLessThan(bounds.day.to)
+      expect(bounds.overflow).toBe(false)
+      if (width === 390) await Bun.write(new URL("../../../.cache/tmp/usage-local-390.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html`)
+      await wait(page, `document.querySelectorAll('.usage-donut__arc').length === 2`)
+      expect(await page.evaluate<string>(`document.querySelector('.usage-head [aria-label="Usage time zone"] button:last-child')?.getAttribute('aria-pressed') ?? ''`)).toBe("true")
+      await page.evaluate(`window.usageDowngrade()`)
+      await wait(page, `document.querySelector('.usage-chart .usage-message')?.textContent?.includes('Update YCoding') === true`)
+      expect(await page.evaluate<{ tiles: number; arcs: number; rows: number }>(`({ tiles: document.querySelectorAll('.usage-tile').length, arcs: document.querySelectorAll('.usage-donut__arc').length, rows: document.querySelectorAll('.usage-breakdown tbody tr').length })`)).toEqual({ tiles: 0, arcs: 0, rows: 0 })
+      await page.evaluate(`document.querySelector('[aria-label="Usage time zone"] button:first-child')?.click()`)
+      await wait(page, `document.querySelector('.usage-chart h3')?.textContent?.includes('UTC') === true`)
+    } finally { await page.close() }
+  }
+  const old = await browser!.openPage()
+  try {
+    await old.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?old-zone`)
+    await wait(old, `document.querySelectorAll('.usage-tile').length === 3`)
+    await old.evaluate(`document.querySelector('[aria-label="Usage time zone"] button:last-child')?.click()`)
+    await wait(old, `document.querySelector('.usage-chart .usage-message')?.textContent?.includes('Update YCoding') === true`)
+    expect(await old.evaluate<number>(`document.querySelectorAll('.usage-tile').length`)).toBe(0)
+    expect(await old.evaluate<string>(`document.querySelector('.usage-chart h3')?.textContent ?? ''`)).toContain("Local")
+    await old.evaluate(`document.querySelector('[aria-label="Usage time zone"] button:first-child')?.click()`)
+  } finally { await old.close() }
+}, 180_000)
+
+test("unknown Usage reads keep good panels while one recovery read settles, then surface a failed retry", async () => {
+  for (const width of [390, 1440]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width, 844)
+      await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?unknown-usage`)
+      await wait(page, `document.querySelectorAll('.usage-provider').length === 5 && document.querySelectorAll('.usage-tile').length === 3 && document.querySelectorAll('.usage-donut__arc').length === 2`)
+      await page.evaluate(`window.usageOutage()`)
+      expect(await page.evaluate<{ providers: number; tiles: number; arcs: number; rows: number; alerts: number; requests: number }>(`({
+        providers: document.querySelectorAll('.usage-provider').length, tiles: document.querySelectorAll('.usage-tile').length,
+        arcs: document.querySelectorAll('.usage-donut__arc').length, rows: document.querySelectorAll('.usage-breakdown tbody tr').length,
+        alerts: document.querySelectorAll('.usage-page [role="alert"]').length, requests: window.usageRequests().length,
+      })`)).toEqual({ providers: 5, tiles: 3, arcs: 2, rows: 25, alerts: 0, requests: 5 })
+      await page.evaluate(`window.usageAgentBack(false)`)
+      await wait(page, `window.usageRequests().length === 10`)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.usage-page [role="alert"]').length`)).toBe(0)
+      await page.evaluate(`window.usageOutage()`)
+      await page.evaluate(`window.usageAgentBack(true)`)
+      await wait(page, `window.usageRequests().length === 15`)
+      expect(await page.evaluate<{ providers: number; tiles: number; arcs: number; rows: number; alerts: string[] }>(`({
+        providers: document.querySelectorAll('.usage-provider').length, tiles: document.querySelectorAll('.usage-tile').length,
+        arcs: document.querySelectorAll('.usage-donut__arc').length, rows: document.querySelectorAll('.usage-breakdown tbody tr').length,
+        alerts: [...document.querySelectorAll('.usage-page [role="alert"]')].map(item => item.textContent ?? ''),
+      })`)).toMatchObject({ providers: 5, tiles: 3, arcs: 2, rows: 25, alerts: [expect.stringContaining("retry failed"), expect.stringContaining("retry failed"), expect.stringContaining("retry failed"), expect.stringContaining("retry failed")] })
+    } finally { await page.close() }
+  }
+}, 180_000)
+
+test("first Usage reads reserve visible placeholders without replacing settled cards or refresh data", async () => {
+  for (const width of [390, 1440]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width, 844)
+      await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?initial-loading&refresh-cycle`)
+      await wait(page, `window.usageRequests().length === 5 && document.querySelectorAll('.usage-page .loading-placeholder').length === 4`)
+      const pending = await page.evaluate<{ kinds: string[]; labels: string[]; statuses: number; heights: number[]; cards: number[]; overflow: boolean }>(`(() => {
+        const placeholders = [...document.querySelectorAll('.usage-page .loading-placeholder')];
+        return { kinds: placeholders.map(item => [...item.classList].find(name => name.startsWith('loading-placeholder--'))), labels: placeholders.map(item => item.textContent.trim()),
+          statuses: document.querySelectorAll('.usage-page [role="status"]').length,
+          heights: placeholders.map(item => item.getBoundingClientRect().height),
+          cards: [...document.querySelectorAll('.usage-chart, .usage-distribution')].map(item => item.getBoundingClientRect().height),
+          overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth };
+      })()`)
+      expect(pending.kinds).toEqual(["loading-placeholder--usage", "loading-placeholder--chart", "loading-placeholder--chart", "loading-placeholder--usage"])
+      expect(pending.labels).toEqual(["Loading provider quotas…", "Loading daily spend…", "Loading monthly usage…", "Loading breakdown…"])
+      expect(pending.statuses).toBe(4)
+      expect(pending.heights.every((height) => height >= 64)).toBe(true)
+      expect(pending.overflow).toBe(false)
+      await page.evaluate(`window.usageCards = [...document.querySelectorAll('.usage-chart, .usage-distribution, .usage-breakdown')]; window.usageReleaseInitial()`)
+      await wait(page, `document.querySelectorAll('.usage-provider').length === 5 && document.querySelectorAll('.usage-donut__arc').length === 2 && document.querySelectorAll('.usage-breakdown tbody tr').length === 25`)
+      const settled = await page.evaluate<{ placeholders: number; sameCards: boolean; cards: number[]; overflow: boolean }>(`({
+        placeholders: document.querySelectorAll('.usage-page .loading-placeholder').length,
+        sameCards: window.usageCards.every(node => node.isConnected && document.querySelector('.usage-page')?.contains(node)),
+        cards: [...document.querySelectorAll('.usage-chart, .usage-distribution')].map(item => item.getBoundingClientRect().height),
+        overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+      })`)
+      expect(settled).toMatchObject({ placeholders: 0, sameCards: true, overflow: false })
+      expect(settled.cards.map((height, index) => Math.abs(height - pending.cards[index]!)).every((difference) => difference <= 64)).toBe(true)
+      await page.evaluate(`window.usageReconnect()`)
+      await wait(page, `window.usageRequests().length === 10`)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.usage-page .loading-placeholder').length`)).toBe(0)
+      await page.evaluate(`window.usageReleaseReload()`)
+      await wait(page, `document.querySelector('.usage-provider:first-child .usage-window__top')?.textContent?.includes('39%') === true`)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.usage-page .loading-placeholder').length`)).toBe(0)
+    } finally { await page.close() }
+  }
+}, 180_000)
 
 async function wait(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, expression: string) {
   for (let index = 0; index < 50; index++) { if (await page.evaluate<boolean>(expression)) return; await Bun.sleep(100) }

@@ -2,15 +2,32 @@ import { appearanceFor } from "./sprites"
 import { findPath } from "./navigation"
 import type { ActorFrame, ActorSpeech, OfficeActor, OfficeCue, OfficeHomeRoom, OfficeLayout, OfficeSnapshot, OfficeSpot, Point } from "./types"
 
+const movementTiming = {
+  activityCommitMs: 3_000,
+  workMinimumDwellMs: 5_000,
+  idleLoungeDelayMs: 6_000,
+  easingMs: 400,
+  tilesPerSecond: 4.5,
+} as const
+
 type ActorState = {
   actor: OfficeActor
+  appliedActivity: OfficeActor["activity"]
+  activityCandidate: OfficeActor["activity"]
+  activityPending: boolean
+  activityAge: number
+  idlePending: boolean
+  idleAge: number
   position: Point
   direction: ActorFrame["direction"]
+  speed: number
   path: Point[]
   target: Point
   work: OfficeSpot
   workRoom: OfficeHomeRoom | "meeting"
   workDwell: number
+  roomDwell: number
+  entersWorkRoom: boolean
   lounge?: OfficeSpot
   blocked: boolean
   leaving: boolean
@@ -64,7 +81,19 @@ export class OfficeDirector {
       if (!terminalTask(actor)) this.departed.delete(actor.id)
       const state = this.actors.get(actor.id)
       if (state) {
+        const previousStatus = state.actor.status
+        const previousSource = state.actor.source
+        const returned = state.leaving
         state.actor = actor
+        this.trackActivity(state, actor.activity)
+        if (previousStatus !== "idle" && actor.status === "idle") {
+          state.idlePending = true
+          state.idleAge = 0
+        }
+        if (actor.status !== "idle") {
+          state.idlePending = false
+          state.idleAge = 0
+        }
         if (terminalTask(actor) && !state.leaving && !state.cue && !snapshot.cues.some((cue) => cue.kind === "report" && cue.fromActorID === actor.id)) {
           this.departed.add(actor.id)
           this.depart(state)
@@ -76,7 +105,8 @@ export class OfficeDirector {
           state.leavingAge = 0
           state.opacityAge = 400
         }
-        if (snapshot.connection === "ready" && actor.source !== "unavailable" && !state.cue) this.routeDestination(state)
+        if (snapshot.connection === "ready" && actor.source !== "unavailable" && !state.cue
+          && (returned || previousSource === "unavailable" || previousStatus === "idle" && actor.status !== "idle")) this.routeDestination(state)
         continue
       }
       if (this.departed.has(actor.id) || terminalTask(actor)) continue
@@ -144,6 +174,7 @@ export class OfficeDirector {
       state.dwell = 8_000
       state.opacityAge = 400
       state.path = []
+      state.speed = 0
       state.blocked = false
       if (state.actor.source !== "unavailable") {
         state.target = this.destination(state.actor, state)
@@ -167,9 +198,23 @@ export class OfficeDirector {
         if (!state.speechAge) state.speech = undefined
       }
       state.legAge += state.cue ? delta : 0
+      if (!state.cue && !state.leaving && this.layout.roomAt(cellAt(this.layout, state.position)) === state.workRoom) {
+        state.roomDwell = Math.max(0, state.roomDwell - delta)
+      }
+      if (state.activityPending && !state.cue && !state.leaving && this.snapshot?.connection === "ready") {
+        state.activityAge += delta
+        this.commitActivity(state)
+      }
+      if (state.idlePending && state.actor.status === "idle" && !state.cue && !state.leaving && this.snapshot?.connection === "ready") {
+        state.idleAge += delta
+        if (state.idleAge >= movementTiming.idleLoungeDelayMs) {
+          state.idlePending = false
+          this.routeDestination(state)
+        }
+      }
       this.advance(state, delta, reducedMotion || this.snapshot?.connection !== "ready")
       if (!state.path.length && !state.cue && !state.leaving && state.actor.status === "idle" && this.isLounge(state)) state.dwell -= delta
-      if (!state.path.length && !state.cue && !state.leaving && (state.actor.activity === "research" || state.actor.activity === "verify")) state.workDwell -= delta
+      if (!state.path.length && !state.cue && !state.leaving && (state.appliedActivity === "research" || state.appliedActivity === "verify")) state.workDwell -= delta
     }
     this.advanceChoreography(delta)
     if (!reducedMotion && this.snapshot?.connection === "ready") this.ambient()
@@ -190,8 +235,10 @@ export class OfficeDirector {
     const lounge = actor.status === "idle" ? this.claimLounge(actor) : undefined
     const position = start ?? (actor.status === "idle" ? lounge!.cell : work.cell)
     const state: ActorState = {
-      actor, position: center(this.layout, position), direction: "down", path: [], target: position,
-      work, workRoom, workDwell: 1_500, lounge, blocked: false, leaving: false, opacityAge: arrival ? 0 : 400,
+      actor, appliedActivity: actor.activity, activityCandidate: actor.activity, activityPending: false, activityAge: 0,
+      idlePending: false, idleAge: 0, position: center(this.layout, position), direction: "down", speed: 0, path: [], target: position,
+      work, workRoom, workDwell: 1_500, roomDwell: start || actor.status === "idle" ? 0 : movementTiming.workMinimumDwellMs, entersWorkRoom: false,
+      lounge, blocked: false, leaving: false, opacityAge: arrival ? 0 : 400,
       leavingAge: 0, legAge: 0, legDeadline: 4_000, speechAge: 0, dwell: 8_000 + this.randomFor(actor.sessionID) % 8_001,
       random: hash(actor.sessionID), lastChat: -20_000,
     }
@@ -204,6 +251,34 @@ export class OfficeDirector {
     if (actor.activity === "verify") return "qa"
     if (actor.activity === "implement") return "developer"
     return actor.homeRoom
+  }
+
+  private trackActivity(state: ActorState, activity: OfficeActor["activity"]): void {
+    if (activity === state.appliedActivity) {
+      state.activityCandidate = activity
+      state.activityPending = false
+      state.activityAge = 0
+      return
+    }
+    if (state.activityPending && state.activityCandidate === activity) return
+    state.activityCandidate = activity
+    state.activityPending = true
+    state.activityAge = 0
+  }
+
+  private commitActivity(state: ActorState): void {
+    if (state.activityAge < movementTiming.activityCommitMs) return
+    const activity = state.activityCandidate
+    const room = this.workRoom({ ...state.actor, activity })
+    if (activity !== "hold" && room !== state.workRoom && state.roomDwell > 0) return
+    state.appliedActivity = activity
+    state.activityPending = false
+    state.activityAge = 0
+    if (activity === "hold" || room === state.workRoom) return
+    state.workRoom = room
+    state.work = this.claimWork({ ...state.actor, activity }, room)
+    state.workDwell = 1_500
+    if (state.actor.status !== "idle") this.routeDestination(state)
   }
 
   private claimWork(actor: OfficeActor, room: OfficeHomeRoom | "meeting"): OfficeSpot {
@@ -221,19 +296,18 @@ export class OfficeDirector {
 
   private destination(actor: OfficeActor, state = this.actors.get(actor.id)): Point {
     if (actor.status === "idle") return state?.lounge?.cell ?? this.claimLounge(actor).cell
-    if (actor.activity === "hold" && state) return state.target
+    if (state?.appliedActivity === "hold") return state.target
     return state?.work.cell ?? this.claimWork(actor, this.workRoom(actor)).cell
   }
 
   private routeDestination(state: ActorState): void {
     if (state.actor.source === "unavailable" || state.leaving) return
-    if (state.actor.status === "idle" && !state.lounge) state.lounge = this.claimLounge(state.actor)
-    if (state.actor.status !== "idle") state.lounge = undefined
-    if (state.actor.status !== "idle" && state.actor.activity !== "hold" && state.workRoom !== this.workRoom(state.actor)) {
-      state.workRoom = this.workRoom(state.actor)
-      state.work = this.claimWork(state.actor, state.workRoom)
-      state.workDwell = 1_500
+    if (state.actor.status === "idle") {
+      state.idlePending = false
+      state.idleAge = 0
+      if (!state.lounge) state.lounge = this.claimLounge(state.actor)
     }
+    if (state.actor.status !== "idle") state.lounge = undefined
     const target = this.destination(state.actor, state)
     if (same(target, state.target)) return
     this.move(state, target)
@@ -244,13 +318,24 @@ export class OfficeDirector {
     state.target = target
     state.path = path ? [...path] : []
     state.blocked = path === undefined
+    state.speed = 0
     state.legAge = 0
-    state.legDeadline = (path?.length ?? 0) * 1000 / 4.5 + 4_000
+    state.legDeadline = (path?.length ?? 0) * 1000 / movementTiming.tilesPerSecond + 4_000
+    state.entersWorkRoom = this.layout.roomAt(cellAt(this.layout, state.position)) !== state.workRoom && this.layout.roomAt(target) === state.workRoom
   }
 
   private advance(state: ActorState, delta: number, reducedMotion: boolean): void {
     if (!state.path.length || reducedMotion || this.snapshot?.connection !== "ready") return
-    let distance = delta * this.layout.tileSize * 4.5 / 1000
+    const maxSpeed = this.layout.tileSize * movementTiming.tilesPerSecond / 1000
+    const acceleration = maxSpeed / movementTiming.easingMs
+    const first = center(this.layout, state.path[0]!)
+    const remaining = Math.hypot(first.x - state.position.x, first.y - state.position.y) + (state.path.length - 1) * this.layout.tileSize
+    const targetSpeed = Math.min(maxSpeed, Math.sqrt(2 * acceleration * remaining))
+    const nextSpeed = targetSpeed < state.speed
+      ? Math.max(targetSpeed, state.speed - acceleration * delta)
+      : Math.min(targetSpeed, state.speed + acceleration * delta)
+    let distance = Math.min(remaining, (state.speed + nextSpeed) / 2 * delta)
+    state.speed = nextSpeed
     while (state.path.length && distance > 0) {
       const target = center(this.layout, state.path[0]!)
       const dx = target.x - state.position.x
@@ -260,6 +345,8 @@ export class OfficeDirector {
         state.position = target
         state.path.shift()
         distance -= length
+        if (!state.path.length && state.entersWorkRoom) state.roomDwell = movementTiming.workMinimumDwellMs
+        if (!state.path.length) state.entersWorkRoom = false
         if (!state.path.length && state.actor.status === "idle" && this.isLounge(state)) state.dwell = 8_000 + this.nextRandom(state) % 8_001
         continue
       }
@@ -267,6 +354,7 @@ export class OfficeDirector {
       state.position = { x: state.position.x + dx / length * distance, y: state.position.y + dy / length * distance }
       distance = 0
     }
+    if (!state.path.length) state.speed = 0
   }
 
   private advanceChoreography(delta: number): void {
@@ -345,7 +433,7 @@ export class OfficeDirector {
 
   private ambient(): void {
     for (const state of this.actors.values()) {
-      if ((state.actor.activity === "research" || state.actor.activity === "verify") && state.actor.status !== "idle" && state.actor.source !== "unavailable"
+      if ((state.appliedActivity === "research" || state.appliedActivity === "verify") && state.actor.status !== "idle" && state.actor.source !== "unavailable"
         && !state.path.length && !state.cue && !state.leaving && state.workDwell <= 0) {
         const spots = this.layout.work[state.workRoom === "meeting" ? state.actor.homeRoom : state.workRoom]
           .filter((spot) => !same(spot.cell, state.work.cell))
@@ -398,7 +486,7 @@ export class OfficeDirector {
       appearance: appearanceFor(state.actor.sessionID),
       position: state.position,
       direction: state.path.length ? state.direction : other && mayFaceOther ? face(state.position, other.position) : spot?.facing ?? state.direction,
-      pose: state.path.length && !reducedMotion ? "walk" : state.speech ? "talk" : workStatus && atWork && (state.actor.activity === "implement" || state.actor.activity === undefined) ? "type" : pose,
+      pose: state.path.length && !reducedMotion ? "walk" : state.speech ? "talk" : workStatus && atWork && (state.appliedActivity === "implement" || state.appliedActivity === undefined) ? "type" : pose,
       moving: state.path.length > 0 && !reducedMotion && state.actor.source !== "unavailable",
       blocked: state.blocked,
       room: this.layout.roomAt(cell),

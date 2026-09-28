@@ -261,77 +261,71 @@ describe("createNotificationDelivery", () => {
 })
 
 describe("createDesktopNotifier", () => {
-  test("opens the owning Session on click without putting its title in desktop copy", () => {
-    const original = Object.getOwnPropertyDescriptor(globalThis, "window")
-    const received: string[] = []
-    let focused = 0
-    const windowTarget = Object.assign(new EventTarget(), { focus: () => { focused += 1 } })
-    windowTarget.addEventListener("ycoding:open-session", (event) => {
-      if (event instanceof CustomEvent) received.push(event.detail.sessionID)
-    })
-    Object.defineProperty(globalThis, "window", { configurable: true, value: windowTarget })
-    try {
-      withFakeNotification("granted", () => {
-        const delivery = createNotificationDelivery({
-          preferences: () => normalizeNotificationPreferences(undefined), desktop: createDesktopNotifier(),
-        })
-        delivery.deliver("approval-requested", { sessionID: "ses_a", sessionTitle: "Private Session" })
-        expect(FakeNotification.instances[0]?.title).toBe(NOTIFICATION_TEXT["approval-requested"].title)
-        expect(FakeNotification.instances[0]?.body).toBe(NOTIFICATION_TEXT["approval-requested"].body)
-        expect(FakeNotification.instances[0]?.body).not.toContain("Private Session")
-        expect(FakeNotification.instances[0]?.onclick).toBeFunction()
-        FakeNotification.instances[0]?.onclick?.()
-        expect(focused).toBe(1)
-        expect(received).toEqual(["ses_a"])
-        expect(FakeNotification.instances[0]?.closed).toBe(true)
-        expect(FakeNotification.instances[0]?.onclick).toBeNull()
-        delivery.dispose()
+  test("shows each alert through the service worker, keyed like the push alert for the same Session", async () => {
+    await withFakeNotificationAsync("granted", async () => {
+      const worker = fakeWorkerRegistration()
+      const delivery = createNotificationDelivery({
+        preferences: () => normalizeNotificationPreferences(undefined), desktop: createDesktopNotifier(async () => worker.registration),
       })
-    } finally {
-      if (original) Object.defineProperty(globalThis, "window", original)
-      else Reflect.deleteProperty(globalThis, "window")
-    }
+      delivery.deliver("approval-requested", { sessionID: "ses_a", sessionTitle: "Private Session" })
+      delivery.deliver("error")
+      await Bun.sleep(0)
+      expect(worker.shown.map((item) => [item.title, item.options.tag, item.options.data])).toEqual([
+        [NOTIFICATION_TEXT["approval-requested"].title, "ycoding-ses_a-approval-requested", { sessionID: "ses_a" }],
+        [NOTIFICATION_TEXT.error.title, "ycoding-remote-error", undefined],
+      ])
+      expect(worker.shown[0]?.options.body).toBe(NOTIFICATION_TEXT["approval-requested"].body)
+      expect(worker.shown[0]?.options.body).not.toContain("Private Session")
+      expect(FakeNotification.instances).toHaveLength(0)
+      delivery.dispose()
+    })
   })
-  test("never requests permission and stays silent until the browser already granted it", () => {
-    withFakeNotification("default", () => {
-      // The whole delivery path is exercised, not just the notifier: nothing may
-      // prompt the browser, and an ungranted browser stays silent.
+
+  test("never requests permission and stays silent until the browser already granted it", async () => {
+    await withFakeNotificationAsync("default", async () => {
+      const worker = fakeWorkerRegistration()
       const delivery = createNotificationDelivery({
         preferences: () => normalizeNotificationPreferences(undefined),
-        desktop: createDesktopNotifier(),
+        desktop: createDesktopNotifier(async () => worker.registration),
       })
       for (const category of NOTIFICATION_CATEGORIES) delivery.deliver(category.id)
+      await Bun.sleep(0)
       expect(delivery.entries()).toHaveLength(NOTIFICATION_CATEGORIES.length)
-      expect(FakeNotification.instances).toHaveLength(0)
+      expect(worker.shown).toHaveLength(0)
       expect(FakeNotification.permissionRequests).toBe(0)
       delivery.dispose()
     })
   })
 
-  test("replaces a live alert for the same category and closes every alert on dispose", () => {
-    withFakeNotification("granted", () => {
-      const notifier = createDesktopNotifier()
-      notifier.show({ title: "first", body: "same category", tag: "ycoding-error", sessionID: "ses_a" })
-      notifier.show({ title: "second", body: "same category", tag: "ycoding-error", sessionID: "ses_b" })
-      notifier.show({ title: "other", body: "other category", tag: "ycoding-device-disconnected" })
-      expect(FakeNotification.instances).toHaveLength(3)
-      expect(FakeNotification.instances[0]?.closed).toBe(true)
-      expect(FakeNotification.instances[0]?.onclick).toBeNull()
-      expect(FakeNotification.instances[1]?.closed).toBe(false)
+  test("closes only the alerts it raised when the connection ends", async () => {
+    await withFakeNotificationAsync("granted", async () => {
+      const worker = fakeWorkerRegistration()
+      await worker.registration.showNotification("pushed", { tag: "ycoding-ses_z-agent-completed" })
+      const notifier = createDesktopNotifier(async () => worker.registration)
+      notifier.show({ title: "first", body: "same Session", tag: "ycoding-ses_a-error", sessionID: "ses_a" })
+      notifier.show({ title: "second", body: "same Session", tag: "ycoding-ses_a-error", sessionID: "ses_a" })
+      notifier.show({ title: "other", body: "no Session", tag: "ycoding-remote-device-disconnected" })
+      await Bun.sleep(0)
+      expect([...worker.open.keys()].sort()).toEqual(["ycoding-remote-device-disconnected", "ycoding-ses_a-error", "ycoding-ses_z-agent-completed"])
       notifier.dispose()
-      expect(FakeNotification.instances[1]?.closed).toBe(true)
-      expect(FakeNotification.instances[2]?.closed).toBe(true)
-      expect(FakeNotification.instances[1]?.onclose).toBeNull()
-      expect(FakeNotification.instances[1]?.onclick).toBeNull()
+      await Bun.sleep(0)
+      expect([...worker.open.keys()]).toEqual(["ycoding-ses_z-agent-completed"])
     })
   })
 
-  test("survives a browser that refuses to construct an alert", () => {
-    withFakeNotification("granted", () => {
-      FakeNotification.refuseToConstruct = true
-      const notifier = createDesktopNotifier()
-      expect(() => notifier.show({ title: "YCoding", body: "body", tag: "ycoding-error" })).not.toThrow()
-      notifier.dispose()
+  test("stays silent without a service worker or when the worker refuses an alert", async () => {
+    await withFakeNotificationAsync("granted", async () => {
+      const absent = createDesktopNotifier(async () => undefined)
+      expect(() => absent.show({ title: "YCoding", body: "body", tag: "ycoding-remote-error" })).not.toThrow()
+      absent.dispose()
+      const refusing = createDesktopNotifier(async () => ({
+        showNotification: () => Promise.reject(new Error("refused")),
+        getNotifications: () => Promise.reject(new Error("refused")),
+      }))
+      refusing.show({ title: "YCoding", body: "body", tag: "ycoding-remote-error" })
+      refusing.dispose()
+      await Bun.sleep(0)
+      expect(FakeNotification.instances).toHaveLength(0)
     })
   })
 
@@ -340,12 +334,41 @@ describe("createDesktopNotifier", () => {
     const original = scope.Notification
     delete scope.Notification
     try {
-      const test = deliveryWith({ notifier: createDesktopNotifier() })
+      let requested = 0
+      const test = deliveryWith({ notifier: createDesktopNotifier(async () => { requested += 1; return undefined }) })
       test.delivery.deliver("error")
       expect(test.delivery.entries()).toHaveLength(1)
+      expect(requested).toBe(0)
       test.delivery.dispose()
     } finally {
       if (original !== undefined) scope.Notification = original
     }
   })
 })
+
+async function withFakeNotificationAsync(permission: NotificationPermission, run: () => Promise<void>): Promise<void> {
+  const scope = globalThis as NotificationGlobal
+  const original = scope.Notification
+  FakeNotification.reset(permission)
+  scope.Notification = FakeNotification as unknown as typeof Notification
+  try {
+    await run()
+  } finally {
+    if (original === undefined) delete scope.Notification
+    else scope.Notification = original
+  }
+}
+
+function fakeWorkerRegistration() {
+  const shown: { readonly title: string; readonly options: NotificationOptions }[] = []
+  const open = new Map<string, { readonly tag: string; close: () => void }>()
+  const registration = {
+    showNotification: async (title: string, options: NotificationOptions = {}) => {
+      shown.push({ title, options })
+      const tag = options.tag ?? ""
+      open.set(tag, { tag, close: () => { open.delete(tag) } })
+    },
+    getNotifications: async () => [...open.values()],
+  }
+  return { registration, shown, open }
+}

@@ -22,7 +22,7 @@ describe("remote product-state scenarios", () => {
     expect(remoteScenario(new URLSearchParams("scenario=conversation-workspace-390"))).toMatchObject({
       view: "chat",
       openControl: "device",
-      expectedText: expect.arrayContaining(["Session bound to Studio Mac in auth.", "Select Active Machine"]),
+      expectedText: expect.arrayContaining(["Session bound to Studio Mac in auth.", "Studio Mac"]),
     })
     expect(remoteScenario(new URLSearchParams("scenario=empty-backend-1440"))).toMatchObject({ account: "ok", connection: "open", emptyBackend: true })
     expect(remoteScenario(new URLSearchParams("scenario=selected-machine-offline-768"))).toMatchObject({ account: "ok", connection: "offline" })

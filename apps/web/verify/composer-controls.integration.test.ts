@@ -56,6 +56,23 @@ test("phone tool-running status text stays inside its pill and footer", async ()
   }
 }, 30_000)
 
+test("phone status shows the Session state, never the autonomy level shown beside it", async () => {
+  for (const [status, expected] of [["tool-yolo", "tool running"], ["family-yolo", "Running"]] as const) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(390, 844)
+      await page.setCoarsePointer(true)
+      await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+      await wait(page, `document.querySelector('.mini-composer__mount .session-status__yolo-trigger') !== null`)
+      await page.evaluate(`window.composerSetStatus(${JSON.stringify(status)})`)
+      await wait(page, `document.querySelector('.mini-composer__mount .session-status__mobile') !== null`)
+      const shown = await page.evaluate<{ mobile: string; trigger: string }>(`(() => ({ mobile: document.querySelector('.mini-composer__mount .session-status__mobile')?.textContent ?? '', trigger: document.querySelector('.mini-composer__mount .session-status__yolo-trigger .session-status__yolo-full')?.textContent ?? '' }))()`)
+      expect(shown.trigger).toBe("YOLO 3")
+      expect(shown.mobile).toBe(expected)
+    } finally { await page.close() }
+  }
+}, 30_000)
+
 test("phone selection lives above the card while its footer stays on one line", async () => {
   for (const [width, height] of [[360, 780], [390, 844], [430, 932], [820, 1180]]) for (const theme of ["light", "dark"]) {
     const page = await browser!.openPage()
@@ -132,6 +149,115 @@ test("status stays inside a fixed-height composer and pending picks survive unre
   } finally { await page.close() }
 }, 30_000)
 
+test("Conversation status controls change this Session's YOLO level and goal at desktop and phone widths", async () => {
+  for (const [width, height] of [[1440, 900], [390, 844]]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width!, height!)
+      await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+      await wait(page, `document.querySelector('.mini-composer__mount .session-status__yolo-trigger') !== null`)
+      if (width === 390) expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.mini-composer__mount .session-status__yolo-trigger,.mini-composer__mount .session-status__goal-trigger')].every(button => { const rect=button.getBoundingClientRect(); return rect.width>=44 && rect.height>=44 })`)).toBe(true)
+      await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__yolo-trigger')?.click()`)
+      await wait(page, `document.querySelector('.session-status__yolo-popover [role="radiogroup"]') !== null`)
+      await Bun.write(new URL(`../../../.cache/tmp/composer-autonomy-${width}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].map(item => item.querySelector('strong')?.textContent)`)).toEqual(["Standard", "YOLO 1", "YOLO 2", "YOLO 3"])
+      expect(await page.evaluate<string>(`document.querySelector('.session-status__yolo-popover')?.textContent`)).toContain("Hard guardrail reviews always require a human decision, even at level 3.")
+      if (width === 390) expect(await page.evaluate<boolean>(`(() => { const panel=document.querySelector('.session-status__yolo-popover').getBoundingClientRect(), note=document.querySelector('.session-status__guardrail-note').getBoundingClientRect(); return note.bottom<=panel.bottom+1 })()`)).toBe(true)
+      await page.evaluate(`document.querySelector('.session-status__yolo-popover [role="radio"][aria-checked="true"]')?.focus()`)
+      await page.pressKey("ArrowRight", "ArrowRight", 39)
+      expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toEqual({ operation: "session.autonomy.set", input: { yolo: 1 } })
+      await page.evaluate(`[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].find(item => item.textContent.includes('YOLO 3'))?.click()`)
+      expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toEqual({ operation: "session.autonomy.set", input: { yolo: 3 } })
+      await page.evaluate(`document.querySelector('.session-status__yolo-popover [role="radio"][aria-checked="true"]')?.focus()`)
+      await page.pressKey("Home", "Home", 36)
+      expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toEqual({ operation: "session.autonomy.set", input: { yolo: 0 } })
+      await page.pressKey("End", "End", 35)
+      expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toEqual({ operation: "session.autonomy.set", input: { yolo: 3 } })
+      await page.pressEscape()
+      expect(await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label')`)).toBe("Autonomy level")
+      await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__goal-trigger')?.click()`)
+      await wait(page, `document.querySelector('.session-status__goal-popover input[aria-label="Goal"]') !== null`)
+      await Bun.write(new URL(`../../../.cache/tmp/composer-goal-${width}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      expect(await page.evaluate<boolean>(`(() => { const rect=document.querySelector('.session-status__goal-popover').getBoundingClientRect(); return rect.left>=0 && rect.right<=innerWidth && rect.top>=0 && rect.bottom<=innerHeight })()`)).toBe(true)
+      await type(page, ".session-status__goal-popover input[aria-label='Goal']", "Ship the next release")
+      await page.evaluate(`document.querySelector('.session-status__goal-popover button')?.click()`)
+      expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toEqual({ operation: "session.goal.set", input: { goal: "Ship the next release" } })
+      await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__goal-trigger')?.click()`)
+      expect(await page.evaluate<string>(`document.querySelector('.session-status__goal-popover')?.textContent`)).toContain("Ship the next release")
+      await page.evaluate(`document.querySelector('.session-status__goal-popover button')?.click()`)
+      expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toEqual({ operation: "session.goal.stop", input: { goal: null } })
+      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth<=innerWidth`)).toBe(true)
+    } finally { await page.close() }
+  }
+}, 30_000)
+
+test("managed subagents keep a read-only context bar without autonomy actions", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
+    await wait(page, `document.querySelector('.conversation-breadcrumb strong') !== null`)
+    await page.evaluate(`location.hash='#session=ses_child'`)
+    await wait(page, `document.querySelector('.subagent-bar') !== null`)
+    expect(await page.evaluate<boolean>(`document.querySelector('.subagent-bar .session-status__yolo-trigger,.subagent-bar .session-status__goal-trigger,.workspace__main .composer') === null`)).toBe(true)
+  } finally { await page.close() }
+}, 30_000)
+
+test("a Session switch closes its autonomy picker without carrying a goal draft to another Session", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    await wait(page, `document.querySelector('.mini-composer__mount .session-status__goal-trigger') !== null`)
+    await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__goal-trigger')?.click()`)
+    await type(page, ".session-status__goal-popover input[aria-label='Goal']", "Only for first Session")
+    await page.evaluate(`window.composerSwitchSession()`)
+    expect(await page.evaluate<boolean>(`document.querySelector('.session-status__goal-popover') === null`)).toBe(true)
+    expect(await page.evaluate<boolean>(`window.composerRequests().every(item => item.operation !== 'session.goal.set')`)).toBe(true)
+  } finally { await page.close() }
+}, 30_000)
+
+test("unreported Session autonomy does not appear as a Standard selection", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    await wait(page, `document.querySelector('.mini-composer__mount .session-status__yolo-trigger') !== null`)
+    await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__yolo-trigger')?.click(); window.composerClearAutonomy()`)
+    expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount .session-status__yolo-trigger,.mini-composer__mount .session-status__goal-trigger,.session-status__popover') === null`)).toBe(true)
+  } finally { await page.close() }
+}, 30_000)
+
+test("Conversation autonomy controls issue Session-scoped relay operations", async () => {
+  for (const width of [1440, 390]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width, 844)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
+      await wait(page, `document.querySelector('.workspace__main .session-status__yolo-trigger') !== null`)
+      await page.evaluate(`document.querySelector('.workspace__main .session-status__yolo-trigger')?.click()`)
+      await page.evaluate(`[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].find(item => item.textContent.includes('YOLO 2'))?.click()`)
+      await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.autonomy.set')`)
+      expect(await page.evaluate<unknown>(`window.remoteMutationReport().find(item => item.operation === 'session.autonomy.set')`)).toMatchObject({ operation: "session.autonomy.set", input: { yolo: 2 } })
+      await page.evaluate(`document.querySelector('.workspace__main .session-status__goal-trigger')?.click()`)
+      await wait(page, `document.querySelector('.session-status__goal-popover input[aria-label="Goal"]') !== null`)
+      await type(page, ".session-status__goal-popover input[aria-label='Goal']", "Ship a reliable Session")
+      await page.evaluate(`document.querySelector('.session-status__goal-popover button')?.click()`)
+      await wait(page, `(window.remoteOperationReport().operations['session.goal.set'] ?? 0) === 1`)
+    } finally { await page.close() }
+
+    const active = await browser!.openPage()
+    try {
+      await active.setViewport(width, 844)
+      await active.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=autonomy-goal-notification-settings-${width === 390 ? 390 : 1440}`)
+      await wait(active, `document.querySelector('a[href="/remote"]') !== null`)
+      await active.evaluate(`document.querySelector('a[href="/remote"]')?.click()`)
+      await wait(active, `document.querySelector('.workspace__main .session-status__goal-trigger')?.textContent?.includes('Goal') === true`)
+      await active.evaluate(`document.querySelector('.workspace__main .session-status__goal-trigger')?.click()`)
+      await wait(active, `document.querySelector('.session-status__goal-popover button')?.textContent === 'Stop goal'`)
+      await active.evaluate(`document.querySelector('.session-status__goal-popover button')?.click()`)
+      await wait(active, `(window.remoteOperationReport().operations['session.goal.stop'] ?? 0) === 1`)
+    } finally { await active.close() }
+  }
+}, 45_000)
+
 test("brand and repository actions replace the visible new-session heading", async () => {
   const page = await browser!.openPage()
   try {
@@ -171,10 +297,61 @@ test("model effort supports keyboard and pointer changes and reset to the catalo
     await page.evaluate(`document.querySelector('[role="slider"]')?.focus()`)
     await page.pressKey("Home", "Home", 36)
     expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("low")
-    await page.evaluate(`(() => { const slider = document.querySelector('[role="slider"]'); const rect = slider.getBoundingClientRect(); slider.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, clientX: rect.right - 1, clientY: rect.top + 4 })); })()`)
+    await page.evaluate(`(() => { const slider = document.querySelector('[role="slider"]'); const rect = slider.getBoundingClientRect(); slider.setPointerCapture=()=>{}; slider.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, clientX: rect.right - 1, clientY: rect.top + 4 })); slider.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: rect.right - 1, clientY: rect.top + 4 })); })()`)
     expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("high")
     await page.evaluate(`document.querySelector('button[aria-label="Reset reasoning effort"]')?.click()`)
     expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("high")
+  } finally { await page.close() }
+}, 30_000)
+
+test("effort thumb follows drag before snapping, keeps keyboard semantics and suppresses motion when requested", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    await wait(page, `document.querySelector('.mini-composer__mount button[aria-label="Model"]:not([disabled])') !== null`)
+    await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.click()`)
+    await page.evaluate(`document.querySelector('[role="slider"]')?.focus()`)
+    await page.pressKey("Home", "Home", 36)
+    await page.evaluate(`(() => { const slider=document.querySelector('[role="slider"]'), r=slider.getBoundingClientRect(); slider.setPointerCapture=()=>{}; slider.dispatchEvent(new PointerEvent('pointerdown', { bubbles:true, pointerId:7, clientX:r.left, clientY:r.top+15 })); slider.dispatchEvent(new PointerEvent('pointermove', { bubbles:true, pointerId:7, clientX:r.left+r.width*.72, clientY:r.top+15 })); })()`)
+    const dragging = await page.evaluate<{ position: number; committed: string; fill: number }>(`(() => { const slider=document.querySelector('[role="slider"]'), thumb=slider.querySelector('.model-control__thumb'), fill=slider.querySelector('.model-control__fill'), track=slider.querySelector('.model-control__track').getBoundingClientRect(), t=thumb.getBoundingClientRect(); return { position:(t.left+t.width/2-track.left)/track.width, committed:slider.getAttribute('aria-valuetext'), fill:fill.getBoundingClientRect().width/track.width } })()`)
+    expect(dragging.position).toBeGreaterThan(.65)
+    expect(dragging.position).toBeLessThan(.8)
+    expect(dragging.fill).toBeGreaterThan(.65)
+    expect(dragging.fill).toBeLessThan(.8)
+    expect(dragging.committed).toBe("low")
+    await page.evaluate(`(() => { const slider=document.querySelector('[role="slider"]'), r=slider.getBoundingClientRect(); slider.dispatchEvent(new PointerEvent('pointerup', { bubbles:true, pointerId:7, clientX:r.left+r.width*.72, clientY:r.top+15 })); })()`)
+    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("medium")
+    const mediumColor = await page.evaluate<string>(`getComputedStyle(document.querySelector('.model-control__switch strong')).color`)
+    await page.pressKey("ArrowLeft", "ArrowLeft", 37)
+    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("low")
+    await page.pressKey("End", "End", 35)
+    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("high")
+    await Bun.sleep(300)
+    const normal = await page.evaluate<{ color: string; transition: string; target: number }>(`(() => { const surface=document.querySelector('.model-control__surface'), fill=surface.querySelector('.model-control__fill'), slider=surface.querySelector('[role="slider"]'); return { color:getComputedStyle(surface.querySelector('.model-control__switch strong')).color, transition:getComputedStyle(fill).transitionDuration, target:slider.getBoundingClientRect().height } })()`)
+    expect(normal.target).toBeGreaterThanOrEqual(44)
+    expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.model-control__hero button')].every(button => { const rect=button.getBoundingClientRect(); return rect.width>=44 && rect.height>=44 })`)).toBe(true)
+    expect(normal.transition).not.toBe("0s")
+    expect(normal.color).not.toBe(mediumColor)
+    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.model-control__sparkles')).animationName`)).toBe("composer-twinkle")
+    await page.setReducedMotion(true)
+    const reduced = await page.evaluate<{ transition: string; animation: string }>(`(() => { const surface=document.querySelector('.model-control__surface'), fill=surface.querySelector('.model-control__fill'); return { transition:getComputedStyle(fill).transitionDuration, animation:getComputedStyle(surface.querySelector('.model-control__sparkles')).animationDuration } })()`)
+    expect(reduced.transition).toBe("0s")
+    expect(reduced.animation).toBe("0s")
+  } finally { await page.close() }
+}, 30_000)
+
+test("model providers have a stronger divider and inset model rows without changing other pickers", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    await wait(page, `document.querySelector('.mini-composer__mount button[aria-label="Model"]:not([disabled])') !== null`)
+    await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.click(); document.querySelector('.model-control__switch')?.click()`)
+    await wait(page, `document.querySelector('.model-control__provider') !== null`)
+    const style = await page.evaluate<{ weight: number; modelWeight: number; divider: string; inset: number; agentUnchanged: boolean }>(`(() => { const header=document.querySelector('.model-control__provider'), model=header.nextElementSibling, list=document.querySelector('.model-control__surface .mini-picker__list'); return { weight:Number(getComputedStyle(header).fontWeight), modelWeight:Number(getComputedStyle(model).fontWeight), divider:getComputedStyle(header).borderBottomStyle, inset:model.getBoundingClientRect().left-header.getBoundingClientRect().left, agentUnchanged:!document.querySelector('.mini-picker__group:not(.model-control__provider)') } })()`)
+    expect(style.weight).toBeGreaterThanOrEqual(style.modelWeight)
+    expect(style.divider).toBe("solid")
+    expect(style.inset).toBeGreaterThanOrEqual(12)
+    expect(style.agentUnchanged).toBe(true)
   } finally { await page.close() }
 }, 30_000)
 
@@ -299,6 +476,7 @@ test("composer states and effort surface retain layout at four sizes in both the
       if (width! < 480) await page.evaluate(`document.querySelector('.composer__mobile-trigger')?.click()`)
       await page.evaluate(`document.querySelector(${JSON.stringify(width! < 480 ? '.composer__selection-sheet button[aria-label="Model"]' : '.mini-composer__mount .composer__controls button[aria-label="Model"]')})?.click()`)
       await wait(page, `document.querySelector('.model-control__surface') !== null`)
+      expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.model-control__surface')).animationName`)).toBe("none")
       await Bun.write(new URL(`../../../.cache/tmp/composer-effort-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
     } finally { await page.close() }
   }

@@ -158,7 +158,7 @@ describe("remote team facts", () => {
       expect(ids).toContain("ses_19")
       expect(Array.isArray(ids) ? ids.length : Infinity).toBeLessThanOrEqual(15)
     } finally { await test.stop() }
-  }, 10_000)
+  }, 20_000)
 
   test("selecting a child in the same root retains its ready team and family activity", async () => {
     const test = await setup(() => ({ ok: true, value: { data: [task("ses_child")], summary: { total: 1 }, cursor: {} } }), (id) => ({

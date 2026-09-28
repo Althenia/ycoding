@@ -7,6 +7,95 @@ const center = (cell: { x: number; y: number }) => ({ x: cell.x * 32 + 16, y: ce
 const cellAt = (point: { x: number; y: number }) => ({ x: Math.floor(point.x / 32), y: Math.floor(point.y / 32) })
 const run = (director: OfficeDirector, ms = 50) => director.tick(ms, false)
 const frame = (director: OfficeDirector, id: string) => director.tick(0, false).find((item) => item.actor.id === id)!
+const tickFor = (director: OfficeDirector, duration: number) => {
+  for (let elapsed = 0; elapsed < duration; elapsed += 50) run(director, Math.min(50, duration - elapsed))
+}
+
+test("an activity flip shorter than three seconds does not commit a room change", () => {
+  const layout = officeLayout()
+  const director = new OfficeDirector(layout)
+  const actorState = actor("stable-flip", { activity: "implement", homeRoom: "developer" })
+  director.sync(snapshot([actorState]))
+  tickFor(director, 5_000)
+  const original = frame(director, actorState.id).position
+  director.sync(snapshot([{ ...actorState, activity: "research" }]))
+  tickFor(director, 2_900)
+  expect(frame(director, actorState.id)).toMatchObject({ room: "developer", moving: false })
+  expect(frame(director, actorState.id).position).toEqual(original)
+  director.sync(snapshot([actorState]))
+  tickFor(director, 3_100)
+  expect(frame(director, actorState.id)).toMatchObject({ room: "developer", moving: false })
+})
+
+test("an activity change commits when stable for three seconds", () => {
+  const layout = officeLayout()
+  const director = new OfficeDirector(layout)
+  const actorState = actor("stable-room", { activity: "implement", homeRoom: "developer" })
+  director.sync(snapshot([actorState]))
+  tickFor(director, 5_000)
+  director.sync(snapshot([{ ...actorState, activity: "research" }]))
+  tickFor(director, 2_999)
+  expect(frame(director, actorState.id).room).toBe("developer")
+  run(director, 1)
+  expect(frame(director, actorState.id).moving).toBe(true)
+})
+
+test("an actor dwells five seconds after arriving before another activity-driven room move", () => {
+  const layout = officeLayout()
+  const director = new OfficeDirector(layout)
+  const actorState = actor("room-dwell", { activity: "implement", homeRoom: "developer" })
+  director.sync(snapshot([actorState]))
+  tickFor(director, 5_000)
+  director.sync(snapshot([{ ...actorState, activity: "research" }]))
+  tickFor(director, 3_000)
+  for (let step = 0; step < 500 && frame(director, actorState.id).moving; step++) run(director)
+  expect(frame(director, actorState.id).room).toBe("research")
+  director.sync(snapshot([{ ...actorState, activity: "verify" }]))
+  tickFor(director, 3_000)
+  tickFor(director, 1_999)
+  expect(frame(director, actorState.id)).toMatchObject({ room: "research", moving: false })
+  run(director, 1)
+  expect(frame(director, actorState.id).moving).toBe(true)
+})
+
+test("continuous idle waits six seconds before the Lounge walk and resuming work cancels the wait", () => {
+  const layout = officeLayout()
+  const actorState = actor("idle-delay", { status: "working", homeRoom: "developer" })
+  const director = new OfficeDirector(layout)
+  director.sync(snapshot([actorState]))
+  director.sync(snapshot([{ ...actorState, status: "idle" }]))
+  tickFor(director, 5_999)
+  expect(frame(director, actorState.id)).toMatchObject({ room: "developer", moving: false })
+  run(director, 1)
+  expect(frame(director, actorState.id).moving).toBe(true)
+  for (let step = 0; step < 500 && frame(director, actorState.id).moving; step++) run(director)
+  expect(frame(director, actorState.id).room).toBe("lounge")
+
+  const resumed = new OfficeDirector(layout)
+  resumed.sync(snapshot([actorState]))
+  resumed.sync(snapshot([{ ...actorState, status: "idle" }]))
+  tickFor(resumed, 3_000)
+  resumed.sync(snapshot([actorState]))
+  tickFor(resumed, 6_000)
+  expect(frame(resumed, actorState.id)).toMatchObject({ room: "developer", moving: false })
+})
+
+test("walking eases in from rest and slows before reaching its work destination", () => {
+  const layout = officeLayout()
+  const director = new OfficeDirector(layout)
+  const actorState = actor("eased", { activity: "implement", homeRoom: "developer" })
+  director.sync(snapshot([actorState]))
+  tickFor(director, 5_000)
+  director.sync(snapshot([{ ...actorState, activity: "research" }]))
+  tickFor(director, 3_000)
+  const samples: { x: number; y: number }[] = []
+  for (let step = 0; step < 300 && frame(director, actorState.id).moving; step++) {
+    samples.push(run(director).find((item) => item.actor.id === actorState.id)!.position)
+  }
+  const speeds = samples.slice(1).map((position, index) => Math.hypot(position.x - samples[index]!.x, position.y - samples[index]!.y))
+  expect(speeds[0]).toBeLessThan(Math.max(...speeds))
+  expect(speeds.at(-1)).toBeLessThan(Math.max(...speeds))
+})
 
 test("navigation uses injected walkability and excludes its start", () => {
   const layout = officeLayout()
@@ -61,6 +150,7 @@ test("a root becomes idle independently of working children and keeps actor trav
   const child = actor("child", { kind: "task", homeRoom: "qa", status: "tool", activity: "verify" })
   director.sync(snapshot([root, child]))
   director.sync(snapshot([{ ...root, status: "idle", activity: undefined, bubble: undefined }, child]))
+  tickFor(director, 6_000)
   const walking = run(director).find((frame) => frame.actor.id === root.id)!
   expect(walking.moving).toBe(true)
   const position = walking.position
@@ -108,6 +198,9 @@ test("selected research and QA verification roam their stations while implementa
     expect(visited.size, activity).toBeGreaterThanOrEqual(2)
     expect(frame(director, active.id).room).toBe(room)
     director.sync(snapshot([{ ...active, activity: "hold" }]))
+    tickFor(director, 3_000)
+    for (let step = 0; step < 200 && frame(director, active.id).moving; step++) run(director)
+    tickFor(director, 3_000)
     for (let step = 0; step < 200 && frame(director, active.id).moving; step++) run(director)
     const held = frame(director, active.id).position
     for (let step = 0; step < 200; step++) run(director)
@@ -118,6 +211,7 @@ test("selected research and QA verification roam their stations while implementa
   director.sync(snapshot([builder]))
   expect(frame(director, builder.id)).toMatchObject({ room: "developer", pose: "type" })
   director.sync(snapshot([{ ...builder, activity: "coordinate" }]))
+  tickFor(director, 5_000)
   for (let step = 0; step < 500 && frame(director, builder.id).moving; step++) run(director)
   expect(frame(director, builder.id).room).toBe("meeting")
   const reduced = new OfficeDirector(officeLayout())
@@ -367,6 +461,7 @@ test("sync is idempotent, actor order is irrelevant, and identical walking updat
     director.sync(snapshot([{ ...one, status: "idle" }, two]))
     run(director)
   }
+  tickFor(director, 5_000)
   for (let index = 0; index < 500 && frame(director, one.id).moving; index++) run(director)
   expect(frame(director, one.id).room).toBe("lounge")
 })
@@ -383,12 +478,15 @@ test("offline freezes a route and ready resumes it; scope loss drops everyone an
   for (let index = 0; index < 20; index++) run(director)
   expect(frame(director, item.id).position).toEqual(frozen)
   director.sync(snapshot([{ ...item, status: "idle" }]))
+  tickFor(director, 5_950)
   for (let index = 0; index < 500 && frame(director, item.id).moving; index++) run(director)
   expect(frame(director, item.id).room).toBe("lounge")
   director.sync(snapshot([{ ...item, status: "working" }]))
   const before = frame(director, item.id).position
   const after = director.tick(100_000, false).find((current) => current.actor.id === item.id)!.position
-  expect(Math.hypot(after.x - before.x, after.y - before.y)).toBeCloseTo(layout.tileSize * 4.5 * 50 / 1000, 10)
+  const distance = Math.hypot(after.x - before.x, after.y - before.y)
+  expect(distance).toBeGreaterThan(0)
+  expect(distance).toBeLessThanOrEqual(layout.tileSize * 4.5 * 50 / 1000)
   director.sync(snapshot([], { scope: "" }))
   expect(director.tick(0, false)).toEqual([])
 })

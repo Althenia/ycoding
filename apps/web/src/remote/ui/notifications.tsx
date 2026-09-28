@@ -1,6 +1,8 @@
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, type JSX } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { Icon, type IconName } from "../../ui/icon"
 import { useRemote } from "../context"
+import { createPushHttp } from "../http"
+import { browserPushPlatform, syncPushState } from "../push"
 import type { RemoteNotificationView } from "../notifications"
 import type { NotificationCategory } from "../preferences"
 import "./notifications.css"
@@ -49,6 +51,10 @@ export function NotificationCenter(props: { readonly onOpenSession: (sessionID: 
   const [open, setOpen] = createSignal(false)
   const [newCount, setNewCount] = createSignal(0)
   const [clock, setClock] = createSignal(Date.now())
+  onMount(() => {
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return
+    void syncPushState(browserPushPlatform(), createPushHttp())
+  })
   const notifications = () => remote.state().notifications
   const unread = () => notifications().filter((entry) => !entry.read).length
   const groups = createMemo(() => groupNotifications(notifications(), clock()))

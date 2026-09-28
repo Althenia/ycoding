@@ -27,6 +27,7 @@ import { FormRequest } from "./form-request"
 import { Markdown } from "./markdown"
 import { DotTrail } from "./dot-trail"
 import { ImagePreview, UserImage } from "./image"
+import { LoadingPlaceholder } from "./loading"
 import "./transcript.css"
 
 type ToolPartView = Extract<AssistantPart, { kind: "tool" }>
@@ -106,13 +107,14 @@ function ShellOutputSection(props: {
   const paging = () => shellOutputPaging(props.output, props.fetch)
   const status = () => {
     const current = paging().status
-    return current.kind === "idle" ? undefined : current.label
+    return current.kind === "idle" || current.kind === "loading" ? undefined : current.label
   }
   return (
     <div class="transcript-shell-output">
       <Show when={props.output !== undefined}>
         <BoundedText text={props.output?.text ?? ""} />
       </Show>
+      <Show when={props.fetch?.state === "loading"}><LoadingPlaceholder kind={props.output === undefined ? "output" : "history"} label={props.output === undefined ? "Loading output…" : "Loading more output…"} /></Show>
       <Show when={props.output === undefined ? undefined : shellOutputNotice(props.output)}>
         {(notice) => <p class="shell__pending">{notice()}</p>}
       </Show>

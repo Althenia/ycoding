@@ -50,49 +50,42 @@ export type DesktopNotifier = {
   readonly dispose: () => void
 }
 
+export type DesktopRegistration = {
+  readonly showNotification: (title: string, options?: NotificationOptions) => Promise<void>
+  readonly getNotifications: () => Promise<readonly { readonly tag: string; close: () => void }[]>
+}
+
 /**
- * Wraps the browser notification API. It never requests permission: the settings
- * page asks explicitly, and an ungranted or unavailable browser stays silent.
+ * Shows alerts through the service worker registration, the notification path that
+ * installed phone apps support too, so the worker's click handler opens the Session.
+ * It never requests permission: the settings page asks explicitly, and an ungranted
+ * browser or a page without a registered worker stays silent.
  */
-export function createDesktopNotifier(): DesktopNotifier {
-  const open = new Map<string, Notification>()
-  const release = (tag: string, notification: Notification) => {
-    if (open.get(tag) === notification) open.delete(tag)
-    notification.onclose = null
-    notification.onerror = null
-    notification.onclick = null
-  }
+export function createDesktopNotifier(registration: () => Promise<DesktopRegistration | undefined> = workerRegistration): DesktopNotifier {
+  const raised = new Set<string>()
   return {
     show: (alert) => {
       if (typeof Notification === "undefined" || Notification.permission !== "granted") return
-      // One alert per category: the same tag replaces the previous one on screen.
-      const previous = open.get(alert.tag)
-      if (previous !== undefined) previous.close()
-      try {
-        const notification = new Notification(alert.title, { body: alert.body, tag: alert.tag })
-        open.set(alert.tag, notification)
-        notification.onclose = () => release(alert.tag, notification)
-        notification.onerror = () => release(alert.tag, notification)
-        if (alert.sessionID !== undefined) notification.onclick = () => {
-          window.focus()
-          window.dispatchEvent(new CustomEvent("ycoding:open-session", { detail: { sessionID: alert.sessionID } }))
-          notification.close()
-        }
-      } catch {
-        // A browser that refuses to construct an alert must not break the event stream.
-      }
+      raised.add(alert.tag)
+      void registration().then((worker) => worker?.showNotification(alert.title, {
+        body: alert.body, tag: alert.tag, icon: "/icons/icon-256.png", badge: "/icons/icon-256.png",
+        ...(alert.sessionID === undefined ? {} : { data: { sessionID: alert.sessionID } }),
+      })).catch(() => undefined)
     },
     dispose: () => {
-      const closing = [...open]
-      open.clear()
-      for (const [, notification] of closing) {
-        notification.onclose = null
-        notification.onerror = null
-        notification.onclick = null
-        notification.close()
-      }
+      const tags = new Set(raised)
+      raised.clear()
+      if (tags.size === 0) return
+      void registration().then((worker) => worker?.getNotifications()).then((open) => {
+        for (const notification of open ?? []) if (tags.has(notification.tag)) notification.close()
+      }).catch(() => undefined)
     },
   }
+}
+
+function workerRegistration(): Promise<DesktopRegistration | undefined> {
+  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return Promise.resolve(undefined)
+  return navigator.serviceWorker.getRegistration()
 }
 
 export type NotificationDeliveryOptions = {
@@ -120,8 +113,10 @@ export function createNotificationDelivery(options: NotificationDeliveryOptions 
   return {
     deliver: (category, context) => {
       const preference = preferences()[category]
-      if (preference.desktop) desktop.show({ ...NOTIFICATION_TEXT[category], tag: `ycoding-remote-${category}`,
-        ...(context?.sessionID === undefined ? {} : { sessionID: context.sessionID }) })
+      if (preference.desktop) desktop.show({ ...NOTIFICATION_TEXT[category],
+        ...(context?.sessionID === undefined
+          ? { tag: `ycoding-remote-${category}` }
+          : { tag: `ycoding-${context.sessionID}-${category}`, sessionID: context.sessionID }) })
       if (!preference["in-app"]) return
       const text = NOTIFICATION_TEXT[category]
       entries = [

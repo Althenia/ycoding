@@ -2,7 +2,7 @@
   "name": "YCoding",
   "short_name": "YCoding",
   "description": "Terminal coding agent: documentation, changelog, and the remote workspace.",
-  "start_url": "/",
+  "start_url": "/remote",
   "scope": "/",
   "display": "standalone",
   "background_color": "#0b1115",

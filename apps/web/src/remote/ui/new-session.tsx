@@ -5,6 +5,7 @@ import { MiniComposer, type ComposerSubmission } from "./composer"
 import { ComposerPicker } from "./composer-picker"
 import { BrandMark } from "../../ui/site"
 import { Icon } from "../../ui/icon"
+import { LoadingPlaceholder } from "./loading"
 
 export function NewSessionButton(props: { readonly disabled: boolean; readonly onClick: () => void }): JSX.Element {
   return <button type="button" class="button button--primary new-session__trigger" disabled={props.disabled} onClick={props.onClick}>New session</button>
@@ -43,12 +44,11 @@ export function NewSessionComposer(props: { readonly onClose?: () => void; reado
     if (mounted && sessionID) props.onCreated(sessionID)
   }
   return <section class="new-session-composer" aria-label="New session">
-    <div class="new-session-composer__header"><h2 class="visually-hidden">New session</h2><div class="new-session-composer__brand"><BrandMark compact /></div><Show when={props.onClose}><button class="new-session-composer__close" type="button" aria-label="Close new session" onClick={props.onClose}><Icon name="close" /></button></Show></div>
+    <div class="new-session-composer__header"><h2 class="visually-hidden">New session</h2><div class="new-session-composer__brand"><BrandMark /></div><Show when={props.onClose}><button class="new-session-composer__close" type="button" aria-label="Close new session" onClick={props.onClose}><Icon name="close" /></button></Show></div>
     <Show when={!connected()}><p role="status">Connect to an online machine to create a session.</p></Show>
-    <Show when={state().workspaceStatus === "loading"}><p role="status">Loading previously opened repositories…</p></Show>
     <Show when={state().workspaceStatus === "error"}><p role="alert">{state().workspaceError ?? "Repositories could not be loaded."}</p></Show>
     <Show when={state().workspaceStatus === "ready" && !state().workspaces.length}><p role="status">No previously opened repositories are available. Open a repository locally once, then refresh.</p></Show>
-    <div class="new-session-composer__repository"><ComposerPicker label="Repository" icon="folder" placeholder="Choose repository" value={workspaceID()} options={state().workspaces.map((item) => ({ value: item.id, label: labels().get(item.id) ?? item.name ?? "Repository" }))} disabled={!connected()} onChange={setWorkspaceID} />
+    <div class="new-session-composer__repository"><Show when={state().workspaceStatus === "loading"} fallback={<ComposerPicker label="Repository" icon="folder" placeholder="Choose repository" value={workspaceID()} options={state().workspaces.map((item) => ({ value: item.id, label: labels().get(item.id) ?? item.name ?? "Repository" }))} disabled={!connected()} onChange={setWorkspaceID} />}><LoadingPlaceholder kind="repository" label="Loading previously opened repositories…" /></Show>
       <button type="button" class="new-session-composer__refresh" aria-label="Refresh repositories" title="Refresh repositories" disabled={!connected() || state().workspaceStatus === "loading"} onClick={() => void remote.store.loadWorkspaces()}><Icon name="refresh" /></button>
     </div>
     <Show when={creation()?.status === "creating"}><p role="status">Creating session…</p></Show>

@@ -315,7 +315,7 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
     messages: conversationWorkspaceMessages(viewport),
     ...(viewport === 1440 || viewport === 390 ? { openControl: "device" as const } : {}),
     expectedText: viewport === 390
-      ? ["Session bound to Studio Mac in auth.", "Verify non-blocking lock on expiration.", "Select Active Machine", "Studio Mac", "Dev Linux"]
+      ? ["Session bound to Studio Mac in auth.", "Verify non-blocking lock on expiration.", "Studio Mac"]
       : ["Token expiry refactor", "Workspace", "auth", viewport === 768 ? "Run test suite against auth services." : "auth_guard.go"],
   }
   if (name === "session-list") return {
@@ -412,9 +412,6 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
     },
     expectedText: [
       "Appearance",
-      "Autonomy",
-      viewport === 768 ? "YOLO 1" : "YOLO 2",
-      viewport === 1440 ? "Refactor remote settings pane for responsive review board" : viewport === 768 ? "Refactor telemetry UI" : "Mobile refactor",
       "Notifications",
       "Agent completed",
       "Approval requested",

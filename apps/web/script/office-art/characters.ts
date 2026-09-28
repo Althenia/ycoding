@@ -4,8 +4,6 @@ import {
   characterDirections,
   characterFrameHeight,
   characterFrameWidth,
-  emoteFrameSize,
-  emotes,
 } from "../../src/remote/office/sprites"
 
 export type PixelSheet = { readonly width: number; readonly height: number; readonly pixels: Uint8Array }
@@ -465,79 +463,6 @@ export function characterSheet(): PixelSheet {
     for (let direction = 0; direction < characterDirections.length; direction++) for (let column = 0; column < characterColumnCount; column++) {
       const frame = drawPerson(look, direction, column)
       for (let y = 0; y < frame.height; y++) sheet.pixels.set(frame.pixels.subarray(y * frame.width * 4, (y + 1) * frame.width * 4), ((appearance * characterDirections.length + direction) * characterFrameHeight * sheet.width + y * sheet.width + column * characterFrameWidth) * 4)
-    }
-  }
-  return { width: sheet.width, height: sheet.height, pixels: sheet.pixels }
-}
-
-function bubble(art: Canvas, x: number) {
-  const ink = "#344b53"
-  art.rect(x + 4, 2, 16, 18, ink)
-  art.rect(x + 2, 4, 20, 14, ink)
-  art.rect(x + 6, 19, 4, 3, ink)
-  art.rect(x + 4, 4, 16, 14, "#fff9e9")
-  art.rect(x + 3, 6, 18, 10, "#fff9e9")
-  art.rect(x + 6, 18, 3, 2, "#fff9e9")
-  art.rect(x + 5, 5, 9, 2, "#ffffff")
-}
-
-function thoughtCloud(art: Canvas, x: number) {
-  const ink = "#344b53"
-  for (const [cx, cy, rx, ry] of [[8, 11, 5, 6], [14, 9, 6, 7], [19, 12, 4, 5], [12, 15, 8, 4]] as const) art.oval(x + cx, cy, rx, ry, ink)
-  for (const [cx, cy, rx, ry] of [[8, 11, 4, 5], [14, 9, 5, 6], [19, 12, 3, 4], [12, 15, 7, 3]] as const) art.oval(x + cx, cy, rx, ry, "#fff9e9")
-  art.oval(x + 6, 20, 1.5, 1.5, ink)
-  art.pixel(x + 6, 20, "#fff9e9")
-  art.oval(x + 2, 22, 1, 1, ink)
-  art.rect(x + 9, 9, 5, 1, "#ffffff")
-}
-
-export function emoteSheet(): PixelSheet {
-  const sheet = canvas(emoteFrameSize * emotes.length, emoteFrameSize)
-  for (let i = 0; i < emotes.length; i++) {
-    const x = i * emoteFrameSize
-    if (i === 4) thoughtCloud(sheet, x)
-    else bubble(sheet, x)
-    if (i === 0) for (const dx of [7, 11, 15]) sheet.rect(x + dx, 11, 3, 3, "#344b53")
-    if (i === 1) {
-      sheet.rect(x + 9, 7, 6, 7, "#b46e36")
-      sheet.rect(x + 10, 7, 4, 5, "#f3b54c")
-      sheet.rect(x + 10, 15, 4, 3, "#b46e36")
-      sheet.rect(x + 11, 15, 2, 2, "#f3b54c")
-    }
-    if (i === 2 || i === 6) {
-      if (i === 2) {
-        sheet.rect(x + 6, 11, 3, 4, "#378665")
-        sheet.rect(x + 9, 14, 3, 3, "#378665")
-        sheet.rect(x + 12, 11, 3, 4, "#378665")
-        sheet.rect(x + 15, 8, 3, 4, "#378665")
-      } else {
-        sheet.rect(x + 7, 6, 11, 12, "#587785")
-        sheet.rect(x + 9, 7, 7, 10, "#fff9e9")
-        sheet.rect(x + 10, 9, 5, 1, "#8ba8ad")
-        sheet.rect(x + 10, 11, 4, 1, "#8ba8ad")
-        sheet.rect(x + 11, 14, 2, 2, "#378665")
-        sheet.rect(x + 13, 15, 2, 2, "#378665")
-        sheet.pixel(x + 16, 13, "#378665")
-      }
-    }
-    if (i === 3) {
-      for (let step = 0; step < 7; step++) {
-        sheet.rect(x + 7 + step, 7 + step, 2, 2, "#c4645c")
-        sheet.rect(x + 15 - step, 7 + step, 2, 2, "#c4645c")
-      }
-    }
-    if (i === 4) {
-      sheet.rect(x + 7, 10, 3, 3, "#75848b")
-      sheet.rect(x + 11, 10, 3, 3, "#75848b")
-      sheet.rect(x + 15, 10, 3, 3, "#75848b")
-    }
-    if (i === 5) {
-      sheet.rect(x + 8, 8, 9, 10, "#546d81")
-      sheet.rect(x + 10, 6, 5, 3, "#344b53")
-      sheet.rect(x + 11, 7, 3, 2, "#e6ba78")
-      sheet.rect(x + 10, 11, 5, 1, "#fff9e9")
-      sheet.rect(x + 10, 14, 5, 1, "#fff9e9")
-      sheet.rect(x + 16, 12, 3, 3, "#d6ab68")
     }
   }
   return { width: sheet.width, height: sheet.height, pixels: sheet.pixels }

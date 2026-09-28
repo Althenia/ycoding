@@ -42,7 +42,7 @@ describe("remote data", () => {
       expect(transitions()).toEqual([["agent-completed", "ses_a"], ["approval-requested", "ses_b"]])
     } finally { await test.stop() }
   })
-  test("loads every running root across workspaces with cursor pages and names", async () => {
+  test("loads running roots across workspaces with names before recent rows", async () => {
     const row = (id: string, projectID: string, directory: string, parentID?: string) => ({ id, title: `Session ${id}`,
       projectID, location: { directory }, ...(parentID ? { parentID } : {}), time: { created: 1, updated: 2 } })
     const test = await setup((request) => {
@@ -52,22 +52,23 @@ describe("remote data", () => {
         { id: "wsp_b", projectID: "prj_b", directory: "/work/b", name: "Beta" },
         { id: "wsp_c", projectID: "prj_c", directory: "/work/c", name: "Gamma" },
       ] } }
-      if (request.operation === "session.list" && request.input?.status === "running") return request.input.cursor === "next"
-        ? { ok: true, value: { data: [row("ses_r3", "prj_c", "/work/c")] } }
-        : { ok: true, value: { data: [row("ses_r1", "prj_a", "/work/a"), row("ses_child", "prj_a", "/work/a", "ses_r1"), row("ses_r2", "prj_b", "/work/b")], cursor: { next: "next" } } }
+      if (request.operation === "session.list" && request.input?.status === "running") return { ok: true, value: {
+        data: [row("ses_r1", "prj_a", "/work/a"), row("ses_r2", "prj_b", "/work/b"), row("ses_r3", "prj_c", "/work/c")], cursor: {},
+      } }
+      if (request.operation === "session.list" && request.input?.status === "idle") return { ok: true, value: { data: [] } }
       return "default"
     })
     try {
       await test.store.load()
-      await waitFor(() => test.store.state().runningSessions?.length === 3)
-      expect(test.store.state().runningSessions?.map((session) => [session.id, session.workspaceName])).toEqual([
+      await waitFor(() => test.store.state().carouselSessions?.length === 3)
+      expect(test.store.state().carouselSessions?.map((session) => [session.id, session.workspaceName])).toEqual([
         ["ses_r1", "Alpha"], ["ses_r2", "Beta"], ["ses_r3", "Gamma"],
       ])
       const reads = test.relay.requests.filter((request) => request.operation === "session.list" && request.input?.status === "running")
-      expect(reads).toHaveLength(2)
-      expect(reads[0]?.input).toMatchObject({ order: "active", status: "running", parentID: null, limit: 200 })
+      expect(reads).toHaveLength(1)
+      expect(reads[0]?.input).toMatchObject({ order: "desc", status: "running", parentID: null, limit: 10 })
       expect(reads[0]?.input).not.toHaveProperty("workspace")
-      expect(reads[1]?.input?.cursor).toBe("next")
+      expect(test.relay.requests.some((request) => request.operation === "session.list" && request.input?.status === "idle" && request.input.workspace === undefined)).toBe(true)
       await test.store.selectSession("ses_r2")
       expect(test.store.state().activeSessionID).toBe("ses_r2")
       expect(test.relay.requests.some((request) => request.operation === "session.subscribe" && request.sessionID === "ses_r2")).toBe(true)
@@ -80,21 +81,22 @@ describe("remote data", () => {
         const running = request.input.cursor === undefined ? current : []
         return { ok: true, value: { data: running.map((id) => ({ id, title: id, projectID: "prj_a", location: { directory: "/work/a" }, time: { created: 1, updated: 2 } })) } }
       }
+      if (request.operation === "session.list" && request.input?.status === "idle") return { ok: true, value: { data: [] } }
       return "default"
     })
     let current = ["ses_r1"]
     try {
       await test.store.load()
-      await waitFor(() => test.store.state().runningSessions?.[0]?.id === "ses_r1")
+      await waitFor(() => test.store.state().carouselSessions?.[0]?.id === "ses_r1")
       current = ["ses_r2"]
       test.relay.pushStatus(["ses_r2"], [])
       current = ["ses_r3"]
       test.relay.pushStatus(["ses_r3"], [])
       await waitFor(() => test.store.state().sessionStatus?.running.has("ses_r3") === true)
-      expect(test.store.state().runningSessions).toEqual([])
+      expect(test.store.state().carouselSessions?.map((session) => [session.id, session.running])).toEqual([["ses_r1", false]])
       await Bun.sleep(50)
       expect(test.relay.requests.filter((request) => request.operation === "session.list" && request.input?.status === "running")).toHaveLength(1)
-      await waitFor(() => test.store.state().runningSessions?.[0]?.id === "ses_r3", 6_500)
+      await waitFor(() => test.store.state().carouselSessions?.[0]?.id === "ses_r3", 6_500)
       expect(test.relay.requests.filter((request) => request.operation === "session.list" && request.input?.status === "running")).toHaveLength(2)
     } finally { await test.stop() }
   }, 8_000)

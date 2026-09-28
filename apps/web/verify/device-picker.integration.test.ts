@@ -37,8 +37,15 @@ async function openPicker(width: number, machineName = "Studio Mac") {
   const page = await browser.openPage()
   await page.setViewport(width, 844)
   await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=conversation-workspace-${width === 1440 ? 1440 : 390}${machineName === "Studio Mac" ? "" : `&machineName=${encodeURIComponent(machineName)}`}`)
+  for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('.remote-nav a[href="/remote/settings"]') !== null`); attempt += 1) await Bun.sleep(50)
+  await page.evaluate(`document.querySelector('.remote-nav a[href="/remote/settings"]')?.click()`)
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (await page.evaluate<boolean>(`document.querySelectorAll('[role="option"]').length === 2 && document.querySelector('[aria-label="Machine"]')?.textContent?.trim() === ${JSON.stringify(machineName)}`)) return page
+    if (await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.textContent?.trim() === ${JSON.stringify(machineName)}`)) break
+    await Bun.sleep(50)
+  }
+  await page.evaluate(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.click()`)
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (await page.evaluate<boolean>(`document.querySelectorAll('[role="option"]').length === 2`)) return page
     await Bun.sleep(50)
   }
   await page.close()
@@ -46,6 +53,59 @@ async function openPicker(width: number, machineName = "Studio Mac") {
 }
 
 describe("machine picker", () => {
+  test("keeps offline and unenrolled machine states nonselectable without hiding recovery actions", async () => {
+    if (!browser) throw new Error("Chrome was not initialized")
+    for (const [mode, placeholder] of [["offline", "No machines online"], ["none", "No machine enrolled"]] as const) {
+      const page = await browser.openPage()
+      try {
+        await page.setViewport(390, 844)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=settings&devices=${mode}`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]') !== null`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<{ readonly disabled: boolean; readonly label: string }>(`(() => { const trigger = document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]'); return { disabled: trigger?.disabled ?? false, label: trigger?.textContent?.trim() ?? '' }; })()`)).toEqual({ disabled: true, label: placeholder })
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&devices=${mode}`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.empty__title') !== null`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<boolean>(`document.body.innerText.includes(${JSON.stringify(mode === "offline" ? "ycoding remote connect" : "No machine is enrolled")})`)).toBe(true)
+      } finally { await page.close() }
+    }
+  }, 30_000)
+
+  test("keeps offline and revoked machine notes beside the Settings picker", async () => {
+    if (!browser) throw new Error("Chrome was not initialized")
+    for (const width of [1440, 390] as const) {
+      const page = await browser.openPage()
+      try {
+        await page.setViewport(width, width === 390 ? 844 : 900)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=devices-enrollment-${width}`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]') !== null`); attempt += 1) await Bun.sleep(50)
+        await page.evaluate(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.click()`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.custom-select__footer') !== null`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<string>(`document.querySelector('.custom-select__footer')?.textContent?.trim() ?? ''`)).toBe("2 offline or revoked machines are managed in Settings → Devices.")
+        expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll('[role="option"] .custom-select__option-body')].map(option => option.textContent.trim())`)).toEqual(["Studio Mac"])
+      } finally { await page.close() }
+    }
+  }, 30_000)
+
+  test("shows connection in the header and switches machines from Settings at each breakpoint", async () => {
+    if (!browser) throw new Error("Chrome was not initialized")
+    for (const [width, height] of [[1440, 900], [820, 1180], [390, 844]] as const) {
+      const page = await browser.openPage()
+      try {
+        await page.setViewport(width, height)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=conversation-workspace-${width === 1440 ? 1440 : 390}`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.remote-connection') !== null`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<boolean>(`document.querySelector('.app-header [aria-label="Machine"]') === null && document.querySelector('.app-header .remote-connection') !== null`)).toBe(true)
+        await page.evaluate(`document.querySelector('a[href="/remote/settings"]')?.click()`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('#device-settings') !== null`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<string>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.textContent?.trim() ?? ''`)).toBe("Studio Mac")
+        await page.evaluate(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.click()`)
+        await page.evaluate(`document.querySelectorAll('[role="option"]')[1]?.click()`)
+        if (width < 768) await page.evaluate(`document.querySelector('.custom-select__confirm')?.click()`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.textContent?.includes('Dev Linux') ?? false`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<string>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.textContent?.trim() ?? ''`)).toBe("Dev Linux")
+      } finally { await page.close() }
+    }
+  }, 30_000)
+
   test("keeps confirmation pinned while phone options scroll independently", async () => {
     const page = await openPicker(390)
     try {
@@ -117,7 +177,7 @@ describe("machine picker", () => {
     }
   })
 
-  test("widens the desktop selector and dropdown to fit a typical machine hostname", async () => {
+  test("widens the Settings selector and dropdown to fit a typical machine hostname", async () => {
     for (const width of [1280, 1440]) {
       const page = await openPicker(width, "Developer-MacBook-Pro.local")
       try {
@@ -139,7 +199,7 @@ describe("machine picker", () => {
         await page.close()
       }
     }
-  })
+  }, 30_000)
 
   test("keeps mobile selection pending until confirmation and discards it on Escape", async () => {
     const page = await openPicker(390)
@@ -157,6 +217,7 @@ describe("machine picker", () => {
       await page.pressKey("Enter", "Enter", 13)
       await page.evaluate(`document.querySelectorAll('[role="option"]')[1]?.click()`)
       await page.evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Confirm Selection')?.click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-label="Machine"]')?.textContent?.includes('Dev Linux') ?? false`); attempt += 1) await Bun.sleep(50)
       expect(await page.evaluate<string>(`document.querySelector('[aria-label="Machine"]')?.textContent?.trim() ?? ''`)).toBe("Dev Linux")
       expect(await page.evaluate<boolean>(`document.querySelector('[role="listbox"]') === null`)).toBe(true)
     } finally {

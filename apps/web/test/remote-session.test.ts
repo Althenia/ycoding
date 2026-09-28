@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { canReplyToRequest } from "../src/remote/projection"
+import { canReplyToRequest, sessionStatusLabel } from "../src/remote/projection"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore, readSessionInfo, type RemoteStore } from "../src/remote/store"
 import { createRemoteTransport, type RemoteTransport, type RemoteTransportStatus } from "../src/remote/transport"
@@ -22,6 +22,7 @@ async function harness(options: {
   permissions?: readonly unknown[]
   guardrailRequests?: readonly unknown[]
   forms?: readonly unknown[]
+  now?: () => number
 } = {}): Promise<Harness> {
   const relay = await startRelayDouble({
     handler: options.handler,
@@ -56,7 +57,7 @@ async function harness(options: {
       createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, schedule }),
     schedule,
     batchMs: 20,
-    now: () => 1_000,
+    now: options.now ?? (() => 1_000),
     createMessageID: () => "msg_local_1",
   })
   const runUntil = async (predicate: () => boolean, attempts = 100) => {
@@ -233,6 +234,318 @@ describe("remote store integration", () => {
     }
   })
 
+  test("an authoritative status read stops an already selected Session's stale elapsed clock", async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const test = await harness({ handler: async (request) => {
+      if (request.operation === "session.status") { await gate; return { ok: true, value: { running: [], attention: [] } } }
+      return "default" as const
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.status"))
+      await test.store.selectSession("ses_a")
+      test.relay.pushEvent("ses_a", { type: "session.execution.started", data: { sessionID: "ses_a" } })
+      await test.flush()
+      expect(test.store.state().view).toMatchObject({ status: "running", executionStarted: 1_000 })
+      release()
+      await waitFor(() => test.store.state().sessionStatus !== undefined)
+      expect(test.store.state().view?.status).toBe("idle")
+      expect(test.store.state().view?.executionStarted).toBeUndefined()
+      expect(sessionStatusLabel(test.store.state().view!, 2_000)).toBe("ready")
+    } finally { release(); await test.stop() }
+  })
+
+  test("live status frames end an idle Session's timer without fabricating a new execution", async () => {
+    const test = await harness()
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessionStatus !== undefined)
+      await test.store.selectSession("ses_a")
+      test.relay.pushEvent("ses_a", { type: "session.execution.started", data: { sessionID: "ses_a" } })
+      await test.flush()
+      expect(test.store.state().view?.status).toBe("running")
+      test.relay.pushStatus([], [])
+      await waitFor(() => test.store.state().view?.status === "idle")
+      expect(test.store.state().view?.executionStarted).toBeUndefined()
+      test.relay.pushStatus(["ses_a"], [])
+      await waitFor(() => test.store.state().sessionStatus?.running.has("ses_a") === true)
+      expect(test.store.state().view?.status).toBe("idle")
+      expect(test.store.state().view?.executionStarted).toBeUndefined()
+      test.relay.pushEvent("ses_a", { type: "session.execution.failed", data: { sessionID: "ses_a", error: { code: "provider_error", message: "Provider failed" } } })
+      await test.flush()
+      test.relay.pushStatus([], [])
+      await waitFor(() => test.store.state().sessionStatus?.running.size === 0)
+      expect(test.store.state().view?.status).toBe("failed")
+      expect(test.store.state().view?.executionStarted).toBeUndefined()
+    } finally { await test.stop() }
+  })
+
+  test("snapshot publication cannot revive a stale running timer against an idle owner status", async () => {
+    const test = await harness()
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessionStatus !== undefined)
+      await test.store.selectSession("ses_a")
+      test.relay.pushEvent("ses_a", { type: "session.execution.started", data: { sessionID: "ses_a" } })
+      await test.flush()
+      expect(test.store.state().view).toMatchObject({ status: "running", executionStarted: 1_000 })
+      await test.store.reloadMessages()
+      expect(test.store.state().view?.status).toBe("idle")
+      expect(test.store.state().view?.executionStarted).toBeUndefined()
+    } finally { await test.stop() }
+  })
+
+  test("reconciles a missed terminal event after reconnect and starts a fresh clock on the next execution", async () => {
+    let running: readonly string[] = ["ses_a"]
+    let watermark = 1
+    let now = 1_000
+    const test = await harness({ now: () => now, handler: (request) => {
+      if (request.operation === "session.status") return { ok: true, value: { running, attention: [] } }
+      if (request.operation === "session.snapshot") return { ok: true, value: {
+        sourceEpoch: "epoch_1", session: { id: request.sessionID }, messages: [], watermark: { type: "log.synced", aggregateID: request.sessionID, seq: watermark },
+      } }
+      return "default"
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessionStatus !== undefined)
+      await test.store.selectSession("ses_a")
+      test.relay.pushEvent("ses_a", { type: "session.execution.started", durable: { aggregateID: "ses_a", seq: 2, version: 1 }, data: { sessionID: "ses_a" } })
+      await test.flush()
+      expect(test.store.state().view).toMatchObject({ status: "running", executionStarted: 1_000 })
+      running = []
+      watermark = 3
+      now = 11_000
+      test.relay.dropConnections(1006, "")
+      await test.runUntil(() => test.store.state().transport.kind === "open" && test.store.state().view?.watermark === 3 &&
+        test.store.state().sessionStatus?.running.size === 0)
+      expect(test.store.state().view?.status).toBe("idle")
+      expect(test.store.state().view?.executionStarted).toBeUndefined()
+      expect(sessionStatusLabel(test.store.state().view!, now)).toBe("ready")
+      test.relay.pushEvent("ses_a", { type: "session.execution.started", durable: { aggregateID: "ses_a", seq: 4, version: 1 }, data: { sessionID: "ses_a" } })
+      await test.flush()
+      expect(test.store.state().view?.executionStarted).toBe(11_000)
+      expect(sessionStatusLabel(test.store.state().view!, 12_000)).toBe("cooking · 1.0s")
+    } finally { await test.stop() }
+  })
+
+  test("keeps a child execution running while its recorded root family is in the status set", async () => {
+    const child = { id: "ses_child", parentID: "ses_a", title: "Child task", projectID: "prj_default", location: { directory: "/work" }, time: { created: 1, updated: 2 } }
+    const test = await harness({ handler: (request) => {
+      if (request.operation === "session.status") return { ok: true, value: { running: ["ses_a"], attention: [] } }
+      if (request.operation === "session.get" && request.sessionID === "ses_child") return { ok: true, value: { data: child } }
+      if (request.operation === "session.snapshot" && request.sessionID === "ses_child") return { ok: true, value: {
+        sourceEpoch: "epoch_1", session: child, messages: [], watermark: { type: "log.synced", aggregateID: "ses_child", seq: 0 },
+      } }
+      return "default"
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessionStatus !== undefined)
+      await test.store.selectSession("ses_child")
+      test.relay.pushEvent("ses_child", { type: "session.execution.started", data: { sessionID: "ses_child" } })
+      await test.flush()
+      test.relay.pushStatus(["ses_a"], [])
+      await test.flush()
+      expect(test.store.state().selectedSessionInfo?.parentID).toBe("ses_a")
+      expect(test.store.state().view).toMatchObject({ id: "ses_child", status: "running", executionStarted: 1_000 })
+      await test.store.reloadMessages()
+      expect(test.store.state().view).toMatchObject({ id: "ses_child", status: "running", executionStarted: 1_000 })
+    } finally { await test.stop() }
+  })
+
+  test("keeps a nested child's timer when its direct parent is not a known root", async () => {
+    const nested = { id: "ses_nested", parentID: "ses_middle", title: "Nested task", projectID: "prj_default", location: { directory: "/work" }, time: { created: 1, updated: 2 } }
+    const test = await harness({ handler: (request) => {
+      if (request.operation === "session.status") return { ok: true, value: { running: ["ses_a"], attention: [] } }
+      if (request.operation === "session.get" && request.sessionID === "ses_nested") return { ok: true, value: { data: nested } }
+      if (request.operation === "session.snapshot" && request.sessionID === "ses_nested") return { ok: true, value: {
+        sourceEpoch: "epoch_1", session: nested, messages: [], watermark: { type: "log.synced", aggregateID: "ses_nested", seq: 0 },
+      } }
+      return "default"
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessionStatus !== undefined && test.store.state().sessions.some((row) => row.id === "ses_a"))
+      await test.store.selectSession("ses_nested")
+      expect(test.store.state().selectedSessionInfo?.parentID).toBe("ses_middle")
+      expect(test.store.state().sessions.some((row) => row.id === "ses_middle")).toBe(false)
+      test.relay.pushEvent("ses_nested", { type: "session.execution.started", data: { sessionID: "ses_nested" } })
+      await test.flush()
+      test.relay.pushStatus(["ses_a"], [])
+      await test.flush()
+      expect(test.store.state().view).toMatchObject({ id: "ses_nested", status: "running", executionStarted: 1_000 })
+      await test.store.reloadMessages()
+      expect(test.store.state().view).toMatchObject({ id: "ses_nested", status: "running", executionStarted: 1_000 })
+    } finally { await test.stop() }
+  })
+
+  test("reconciles a direct child of a loaded root when that family is idle", async () => {
+    const child = { id: "ses_child", parentID: "ses_a", title: "Child task", projectID: "prj_default", location: { directory: "/work" }, time: { created: 1, updated: 2 } }
+    const test = await harness({ handler: (request) => {
+      if (request.operation === "session.get" && request.sessionID === "ses_child") return { ok: true, value: { data: child } }
+      if (request.operation === "session.snapshot" && request.sessionID === "ses_child") return { ok: true, value: {
+        sourceEpoch: "epoch_1", session: child, messages: [], watermark: { type: "log.synced", aggregateID: "ses_child", seq: 0 },
+      } }
+      return "default"
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessionStatus !== undefined && test.store.state().sessions.some((row) => row.id === "ses_a"))
+      await test.store.selectSession("ses_child")
+      test.relay.pushEvent("ses_child", { type: "session.execution.started", data: { sessionID: "ses_child" } })
+      await test.flush()
+      test.relay.pushStatus([], [])
+      await test.flush()
+      expect(test.store.state().view).toMatchObject({ id: "ses_child", status: "idle", executionStarted: undefined })
+      test.relay.pushEvent("ses_child", { type: "session.execution.started", data: { sessionID: "ses_child" } })
+      await test.flush()
+      await test.store.reloadMessages()
+      expect(test.store.state().view).toMatchObject({ id: "ses_child", status: "idle", executionStarted: undefined })
+    } finally { await test.stop() }
+  })
+
+  test("reconciles a child whose root is known only to the running-and-recent carousel", async () => {
+    const root = { id: "ses_carousel", title: "Carousel root", projectID: "prj_default", location: { directory: "/work" }, time: { created: 1, updated: 2 } }
+    const child = { id: "ses_child", parentID: root.id, title: "Child task", projectID: "prj_default", location: { directory: "/work" }, time: { created: 1, updated: 2 } }
+    const test = await harness({ handler: (request) => {
+      if (request.operation === "session.list") return { ok: true, value: { data: request.input?.workspace === undefined && request.input?.status === "idle" ? [root] : [] } }
+      if (request.operation === "session.get" && request.sessionID === child.id) return { ok: true, value: { data: child } }
+      if (request.operation === "session.snapshot" && request.sessionID === child.id) return { ok: true, value: {
+        sourceEpoch: "epoch_1", session: child, messages: [], watermark: { type: "log.synced", aggregateID: child.id, seq: 0 },
+      } }
+      return "default"
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().carouselSessions?.some((row) => row.id === root.id) === true)
+      expect(test.store.state().sessions.some((row) => row.id === root.id)).toBe(false)
+      await test.store.selectSession(child.id)
+      test.relay.pushEvent(child.id, { type: "session.execution.started", data: { sessionID: child.id } })
+      await test.flush()
+      test.relay.pushStatus([], [])
+      await test.flush()
+      expect(test.store.state().view).toMatchObject({ id: child.id, status: "idle", executionStarted: undefined })
+    } finally { await test.stop() }
+  })
+
+  test("a family-running status frame never fabricates execution or overwrites failure", async () => {
+    const test = await harness()
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessionStatus !== undefined)
+      await test.store.selectSession("ses_a")
+      test.relay.pushStatus(["ses_a"], [])
+      await waitFor(() => test.store.state().sessionStatus?.running.has("ses_a") === true)
+      expect(test.store.state().view?.status).toBe("idle")
+      expect(test.store.state().view?.executionStarted).toBeUndefined()
+      test.relay.pushEvent("ses_a", { type: "session.execution.failed", data: { sessionID: "ses_a", error: { code: "provider_error", message: "Provider failed" } } })
+      await test.flush()
+      test.relay.pushStatus(["ses_a"], [])
+      await test.flush()
+      expect(test.store.state().view?.status).toBe("failed")
+      expect(test.store.state().view?.lastError).toMatchObject({ code: "provider_error", message: "Provider failed" })
+      test.relay.pushEvent("ses_a", { type: "session.execution.interrupted", data: { sessionID: "ses_a" } })
+      await test.flush()
+      test.relay.pushStatus([], [])
+      await test.flush()
+      expect(test.store.state().view?.status).toBe("interrupted")
+    } finally { await test.stop() }
+  })
+
+  test("restores an unlisted Session only after the connected machine verifies its ownership", async () => {
+    const oldSession = { id: "ses_old", title: "Older Session", projectID: "prj_default", location: { directory: "/work" }, time: { created: 1, updated: 2 } }
+    const test = await harness({ handler: (request) => {
+      if (request.operation === "session.list") return { ok: true, value: { data: [] } }
+      if (request.operation === "session.get" && request.sessionID === "ses_old") return { ok: true, value: { data: oldSession } }
+      if (request.operation === "session.snapshot" && request.sessionID === "ses_old") return { ok: true, value: {
+        sourceEpoch: "epoch_1", session: oldSession, messages: [], watermark: { type: "log.synced", aggregateID: "ses_old", seq: 0 },
+      } }
+      return "default"
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().connection.kind === "connected")
+      expect(await test.store.restoreSession("ses_old")).toBe("selected")
+      expect(test.store.state().activeSessionID).toBe("ses_old")
+      expect(test.store.state().selectedSessionInfo?.title).toBe("Older Session")
+      const calls = test.relay.requests.filter((request) => request.sessionID === "ses_old")
+      expect(calls.findIndex((request) => request.operation === "session.get")).toBeLessThan(calls.findIndex((request) => request.operation === "session.subscribe"))
+      expect(calls.filter((request) => request.operation === "session.get")).toHaveLength(1)
+    } finally { await test.stop() }
+  })
+
+  test("rejects a disappeared Session without publishing an optimistic selection", async () => {
+    const test = await harness({ handler: (request) => request.operation === "session.get" && request.sessionID === "ses_missing"
+      ? { ok: false, code: "session_not_allowed", message: "Session not found" } : "default" })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().connection.kind === "connected")
+      expect(await test.store.restoreSession("ses_missing")).toBe("missing")
+      expect(test.store.state().activeSessionID).toBeUndefined()
+      expect(test.relay.requests.some((request) => request.operation === "session.subscribe" && request.sessionID === "ses_missing")).toBe(false)
+    } finally { await test.stop() }
+  })
+
+  test("treats a temporary owner read failure as unavailable rather than missing", async () => {
+    const test = await harness({ handler: (request) => request.operation === "session.get" && request.sessionID === "ses_old"
+      ? { ok: false, code: "internal_error", message: "Owner read failed" } : "default" })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().connection.kind === "connected")
+      expect(await test.store.restoreSession("ses_old")).toBe("unavailable")
+      expect(test.store.state().activeSessionID).toBeUndefined()
+      expect(test.relay.requests.some((request) => request.operation === "session.subscribe" && request.sessionID === "ses_old")).toBe(false)
+    } finally { await test.stop() }
+  })
+
+  test("cannot restore a stale Session over a user selection on the same connection", async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const test = await harness({ handler: async (request) => {
+      if (request.operation === "session.get" && request.sessionID === "ses_old") {
+        await gate
+        return { ok: true, value: { data: { id: "ses_old", projectID: "prj_default", location: { directory: "/work" }, time: { created: 1, updated: 2 } } } }
+      }
+      return "default" as const
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      const restoring = test.store.restoreSession("ses_old")
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.get" && request.sessionID === "ses_old"))
+      await test.store.selectSession("ses_a")
+      release()
+      expect(await restoring).toBe("unavailable")
+      expect(test.store.state().activeSessionID).toBe("ses_a")
+      expect(test.relay.requests.some((request) => request.operation === "session.subscribe" && request.sessionID === "ses_old")).toBe(false)
+    } finally { release(); await test.stop() }
+  })
+
+  test("cannot restore a Session after its device connection is replaced", async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const test = await harness({ handler: async (request) => {
+      if (request.operation === "session.get" && request.sessionID === "ses_old") {
+        await gate
+        return { ok: true, value: { data: { id: "ses_old", projectID: "prj_default", location: { directory: "/work" }, time: { created: 1, updated: 2 } } } }
+      }
+      return "default" as const
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().connection.kind === "connected")
+      const restoring = test.store.restoreSession("ses_old")
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.get" && request.sessionID === "ses_old"))
+      test.store.connect("dev_2")
+      release()
+      expect(await restoring).toBe("unavailable")
+      expect(test.store.state().activeDeviceID).toBe("dev_2")
+      expect(test.store.state().activeSessionID).toBeUndefined()
+    } finally { release(); await test.stop() }
+  })
+
   test("publishes a bounded first workspace page and loads older Sessions only on demand", async () => {
     const count = 1_205
     const relay = await startRelayDouble({
@@ -268,8 +581,8 @@ describe("remote store integration", () => {
       await waitFor(() => store.state().sessions.length === 25)
       expect(store.state().sessions[0]?.id).toBe("ses_48")
       expect(store.state().sessions.at(-1)?.id).toBe("ses_0")
-      expect(relay.requests.filter((request) => request.operation === "session.list")).toHaveLength(1)
-      expect(relay.requests.find((request) => request.operation === "session.list")?.input).toMatchObject({ order: "active", parentID: null, limit: 25 })
+      expect(relay.requests.filter((request) => request.operation === "session.list" && request.input?.workspace !== undefined)).toHaveLength(1)
+      expect(relay.requests.find((request) => request.operation === "session.list" && request.input?.workspace !== undefined)?.input).toMatchObject({ order: "active", parentID: null, limit: 25 })
       await store.nextSessionsPage()
       expect(store.state().sessions[0]?.id).toBe("ses_98")
       expect(store.state().sessions).toHaveLength(50)
@@ -304,7 +617,7 @@ describe("remote store integration", () => {
     const row = (id: string) => ({ id, title: id, time: { created: 1, updated: 1 } })
     const relay = await startRelayDouble({
       handler: async (request) => {
-        if (request.operation !== "session.list") return "default"
+        if (request.operation !== "session.list" || request.input?.workspace === undefined) return "default"
         if (phase === "initial") {
           await oldPage.promise
           return { ok: true, value: { data: [row("ses_deleted")] } }
@@ -318,7 +631,7 @@ describe("remote store integration", () => {
         const transport = createRemoteTransport({ url: relay.wsURL(deviceID), handlers })
         return { ...transport, request: async (operation, input) => {
           const outcome = await transport.request(operation, input)
-          if (operation === "session.list") settledPages++
+          if (operation === "session.list" && input?.input?.workspace !== undefined) settledPages++
           return outcome
         } }
       },
@@ -327,7 +640,7 @@ describe("remote store integration", () => {
     const unsubscribe = store.subscribe(() => published.push(store.state().sessions.map((session) => session.id)))
     try {
       await store.load()
-      await waitFor(() => relay.requests.filter((request) => request.operation === "session.list").length === 1)
+      await waitFor(() => relay.requests.filter((request) => request.operation === "session.list" && request.input?.workspace !== undefined).length === 1)
       phase = "created"
       relay.pushSessions([])
       phase = "deleted"
@@ -335,7 +648,7 @@ describe("remote store integration", () => {
       oldPage.resolve()
       await waitFor(() => settledPages >= 2 && store.state().sessions.length === 2)
       await Bun.sleep(20)
-      expect(relay.requests.filter((request) => request.operation === "session.list")).toHaveLength(2)
+      expect(relay.requests.filter((request) => request.operation === "session.list" && request.input?.workspace !== undefined)).toHaveLength(2)
       expect(store.state().sessions.map((session) => session.id)).toEqual(["ses_created", "ses_stable"])
       expect(published.filter((ids) => ids.length > 0).every((ids) => ids.join(",") === "ses_created,ses_stable")).toBe(true)
     } finally {
@@ -371,7 +684,7 @@ describe("remote store integration", () => {
     let lists = 0
     const test = await harness({
       handler: (request) => {
-        if (request.operation !== "session.list") return "default"
+        if (request.operation !== "session.list" || request.input?.workspace === undefined) return "default"
         lists += 1
         return lists === 1
           ? { ok: false, code: "agent_unavailable", message: "No local agent is connected" }
@@ -442,7 +755,7 @@ describe("remote store integration", () => {
     let lists = 0
     const test = await harness({
       handler: (request) => {
-        if (request.operation !== "session.list") return "default"
+        if (request.operation !== "session.list" || request.input?.workspace === undefined) return "default"
         lists += 1
         return lists === 1 ? "default" : { ok: false, code: "agent_unavailable", message: "No local agent is connected" }
       },
@@ -487,7 +800,7 @@ describe("remote store integration", () => {
     let lists = 0
     const test = await harness({
       handler: (request) => {
-        if (request.operation !== "session.list") return "default"
+        if (request.operation !== "session.list" || request.input?.workspace === undefined) return "default"
         lists += 1
         return lists === 1 ? { ok: false, code: "internal_error", message: "the agent rejected this read" } : "default"
       },
@@ -527,7 +840,7 @@ describe("remote store integration", () => {
     let lists = 0
     const test = await harness({
       handler: async (request) => {
-        if (request.operation === "session.list") {
+        if (request.operation === "session.list" && request.input?.workspace !== undefined) {
           lists += 1
           return lists === 1
             ? { ok: false, code: "agent_unavailable", message: "No local agent is connected" }
@@ -1106,6 +1419,8 @@ describe("remote store integration", () => {
       expect(test.store.state().devices.map((device) => device.id)).toEqual(["dev_1"])
       expect(test.store.state().activeDeviceID).toBe("dev_1")
       expect(alertCategories()).toEqual(["agent-completed"])
+      expect(test.store.state().view?.status).toBe("idle")
+      expect(test.store.state().view?.executionStarted).toBeUndefined()
     } finally {
       await test.stop()
     }
@@ -1262,7 +1577,7 @@ describe("remote store integration", () => {
     let lists = 0
     const test = await harness({
       handler: async (request) => {
-        if (request.operation === "session.list") {
+        if (request.operation === "session.list" && request.input?.workspace !== undefined) {
           lists += 1
           if (lists === 1) {
             return { ok: true, value: { data: [{ id: "ses_a", title: "Old device session", time: { created: 1, updated: 1 } }] } }
@@ -1297,7 +1612,7 @@ describe("remote store integration", () => {
     })
     const test = await harness({
       handler: async (request) => {
-        if (request.operation === "session.list") {
+        if (request.operation === "session.list" && request.input?.workspace !== undefined) {
           lists += 1
           if (lists === 1) {
             await olderRead
@@ -1366,7 +1681,7 @@ describe("remote store integration", () => {
     const heldLists = new Promise<void>(() => {})
     const test = await harness({
       handler: async (request) => {
-        if (request.operation === "session.list" && holdLists) {
+        if (request.operation === "session.list" && request.input?.workspace !== undefined && holdLists) {
           held += 1
           await heldLists
         }

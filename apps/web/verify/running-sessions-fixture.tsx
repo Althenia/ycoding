@@ -8,9 +8,10 @@ import "../src/styles/base.css"
 const params = new URLSearchParams(location.search)
 document.documentElement.dataset.theme = params.get("theme") === "dark" ? "dark" : "light"
 const requestedCount = params.get("count")
+const mixed = params.has("mixed")
 const entries: readonly (SessionInfoView & { readonly workspaceName: string })[] = [
   { id: "ses_alpha", title: "Review test coverage", projectID: "prj_a", directory: "/work/alpha", workspaceName: "Alpha", updatedAt: 2, archived: false, running: true },
-  { id: "ses_beta", title: "Debug remote response", projectID: "prj_b", directory: "/work/beta", workspaceName: "Beta", updatedAt: 1, archived: false, running: true },
+  { id: "ses_beta", title: "Debug remote response", projectID: "prj_b", directory: "/work/beta", workspaceName: "Beta", updatedAt: mixed ? Date.now() - 3_600_000 : 1, archived: false, running: !mixed },
   ...Array.from({ length: 5 }, (_, index) => ({ id: `ses_more_${index}`, title: index === 4 ? `Investigate ${"long-running deployment incident ".repeat(12)}` : `Session ${index + 3}`, projectID: "prj_c", directory: "/work/other", workspaceName: "Other", updatedAt: index, archived: false, running: true })),
 ].slice(0, requestedCount !== null && [0, 1, 2, 7].includes(Number(requestedCount)) ? Number(requestedCount) : 2)
 const selected: string[] = []

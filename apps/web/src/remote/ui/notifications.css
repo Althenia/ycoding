@@ -111,22 +111,32 @@
 .yc-notification {
   --yc-notification-tone: var(--yc-text-muted);
   --yc-notification-wash: var(--yc-surface);
+  position: relative;
   display: grid;
-  grid-template-columns: 7px 34px minmax(0, 1fr) auto 28px;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--yc-space-2);
   min-block-size: 76px;
-  padding: var(--yc-space-2) var(--yc-space-3);
-  margin-inline: var(--yc-space-2);
+  padding: var(--yc-space-2) var(--yc-space-4);
   border-block-end: var(--yc-border-width) solid var(--yc-border);
   animation: yc-notification-row-in var(--yc-dur-slow) var(--yc-ease-entrance) both;
 }
+
+.yc-notification-group:last-child li:last-child { border-block-end: 0; }
 
 .yc-notification--agent-completed { --yc-notification-tone: var(--yc-green-strong); --yc-notification-wash: var(--yc-green-soft); }
 .yc-notification--approval-requested { --yc-notification-tone: var(--yc-yellow-strong); --yc-notification-wash: var(--yc-yellow-soft); }
 .yc-notification--guardrail-blocked,
 .yc-notification--error { --yc-notification-tone: var(--yc-danger); --yc-notification-wash: var(--yc-danger-soft); }
-.yc-notification__unread { inline-size: 7px; block-size: 7px; border-radius: var(--yc-radius-pill); background: var(--yc-notification-tone); }
+.yc-notification__unread {
+  position: absolute;
+  inset-inline-start: calc(var(--yc-space-4) / 2 - 3.5px);
+  inset-block-start: calc(50% - 3.5px);
+  inline-size: 7px;
+  block-size: 7px;
+  border-radius: var(--yc-radius-pill);
+  background: var(--yc-notification-tone);
+}
 .yc-notification--read .yc-notification__unread { visibility: hidden; }
 .yc-notification__icon,
 .yc-toast__icon {
@@ -163,6 +173,9 @@
   white-space: nowrap;
 }
 .yc-notification time { align-self: center; color: var(--yc-text-muted); font: var(--yc-weight-regular) var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono); }
+.yc-notification time,
+.yc-notification__dismiss { grid-column: 3; grid-row: 1; justify-self: end; }
+.yc-notification:is(:hover, :focus-within) time { visibility: hidden; }
 
 .yc-notification__dismiss,
 .yc-toast__close {
@@ -280,14 +293,16 @@
 @media (max-width: 479px) {
   .yc-notification-panel__head { flex-wrap: wrap; min-block-size: 84px; }
   .yc-notification-panel__spacer { min-inline-size: var(--yc-space-4); }
-  .yc-notification { grid-template-columns: 7px 34px minmax(0, 1fr) auto 28px; gap: var(--yc-space-1); padding-inline: var(--yc-space-2); }
+  .yc-notification { gap: var(--yc-space-1); }
   .yc-toasts { inset-block-start: calc(var(--yc-header-h) + var(--yc-space-2)); }
 }
 
 @media (pointer: coarse) {
   .yc-notification__dismiss,
   .yc-toast__close { inline-size: var(--yc-hit-min); block-size: var(--yc-hit-min); opacity: 1; pointer-events: auto; }
-  .yc-notification { grid-template-columns: 7px 34px minmax(0, 1fr) auto var(--yc-hit-min); }
+  .yc-notification { grid-template-columns: 34px minmax(0, 1fr) auto var(--yc-hit-min); }
+  .yc-notification__dismiss { grid-column: 4; }
+  .yc-notification:is(:hover, :focus-within) time { visibility: visible; }
   .yc-toast { grid-template-columns: 34px minmax(0, 1fr) auto var(--yc-hit-min); }
   .yc-notification-panel__action { min-block-size: var(--yc-hit-min); }
   .yc-toast__open { min-block-size: var(--yc-hit-min); }

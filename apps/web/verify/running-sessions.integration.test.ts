@@ -35,7 +35,7 @@ describe("running Sessions across workspaces", () => {
           labels: [...document.querySelectorAll('.running-sessions__item')].map((button) => button.getAttribute('aria-label')),
           overflow: document.documentElement.scrollWidth > innerWidth,
           targets: [...document.querySelectorAll('.running-sessions__item')].every((button) => button.getBoundingClientRect().height >= 44) })`))
-          .toEqual({ heading: "Running across workspaces", labels: ["Open Review test coverage in Alpha", "Open Debug remote response in Beta"], overflow: false, targets: true })
+          .toEqual({ heading: "Running and recent", labels: ["Open Review test coverage in Alpha", "Open Debug remote response in Beta"], overflow: false, targets: true })
         await page.evaluate(`document.querySelector('.running-sessions__item').focus()`)
         expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.running-sessions__item') && getComputedStyle(document.activeElement).outlineStyle !== 'none'`)).toBe(true)
         await page.pressKey(" ", "Space", 32)
@@ -51,6 +51,22 @@ describe("running Sessions across workspaces", () => {
     } finally { await empty.close() }
   }, 20_000)
 
+  test("labels running roots and recent activity separately without changing card selection", async () => {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(390, 844)
+      await page.navigate(`http://127.0.0.1:${port}/verify/running-sessions-fixture.html?mixed=1`)
+      for (let attempt = 0; attempt < 40 && await page.evaluate<number>(`document.querySelectorAll('.running-sessions__item').length`) !== 2; attempt += 1) await Bun.sleep(50)
+      const cards = await page.evaluate<readonly { readonly status: string; readonly dot: boolean; readonly time: string | null }[]>(`[...document.querySelectorAll('.running-sessions__item')].map(card => ({ status: card.querySelector('.running-sessions__status')?.textContent?.trim() ?? '', dot: card.querySelector('.running-sessions__dot') !== null, time: card.querySelector('time')?.getAttribute('datetime') ?? null }))`)
+      expect(cards[0]).toMatchObject({ status: "Running", dot: true, time: null })
+      expect(cards[1]?.status.startsWith("Last active ")).toBe(true)
+      expect(cards[1]?.dot).toBe(false)
+      expect(cards[1]?.time).toMatch(/^20\d\d-/)
+      await page.evaluate(`document.querySelectorAll('.running-sessions__item')[1]?.click()`)
+      expect(await page.evaluate<string[]>(`window.runningSelected()`)).toEqual(["ses_beta"])
+    } finally { await page.close() }
+  })
+
   test("snaps fixed cards with visible pagination only when the row overflows", async () => {
     const page = await browser!.openPage()
     try {
@@ -65,7 +81,7 @@ describe("running Sessions across workspaces", () => {
         expect(result.snap).toContain("mandatory")
         expect(result.labels).toEqual(Array.from({ length: count }, (_, index) => `${index + 1} of ${count}`))
         expect(result.dots).toBe(result.overflow ? count : 0)
-        if (result.overflow) expect(await page.evaluate<readonly { readonly name: string; readonly current: string | null }[]>(`[...document.querySelectorAll('.running-sessions__pagination button')].map(button => ({ name: button.getAttribute('aria-label'), current: button.getAttribute('aria-current') }))`)).toEqual(Array.from({ length: count }, (_, index) => ({ name: `Show running Session ${index + 1} of ${count}`, current: index === 0 ? "true" : null })))
+        if (result.overflow) expect(await page.evaluate<readonly { readonly name: string; readonly current: string | null }[]>(`[...document.querySelectorAll('.running-sessions__pagination button')].map(button => ({ name: button.getAttribute('aria-label'), current: button.getAttribute('aria-current') }))`)).toEqual(Array.from({ length: count }, (_, index) => ({ name: `Show Session ${index + 1} of ${count}`, current: index === 0 ? "true" : null })))
         if (width < 768) { expect(result.cardWidth).toBeGreaterThan(width * 0.7); if (count > 1) expect(result.peek).toBe(true) }
         else expect(result.cardWidth).toBeGreaterThanOrEqual(280)
         if (count !== 7) continue

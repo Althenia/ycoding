@@ -1,17 +1,19 @@
 import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
+import { CustomSelect } from "../../ui/custom-select"
+import { Modal } from "../../ui/modal"
 import { useTheme } from "../../theme/theme-store"
 import type { ThemePreference } from "../../theme/theme"
-import type { SessionView } from "../projection"
 import { useRemote } from "../context"
-import { createPushHttp } from "../http"
-import { browserPushPlatform, disablePush, enablePush, pushStatusView, readPushState, type PushPlatform, type PushStatus } from "../push"
+import { createPushHttp, createRemoteHttp } from "../http"
+import { browserPushPlatform, disablePush, enablePush, pushStatusView, syncPushState, type PushPlatform, type PushStatus } from "../push"
 import type { OfficeSettingsStore, WorkspacePresentation } from "../office/storage"
 import type { OfficePreferences } from "../office/types"
 import {
   accountReadState,
   accountSectionView,
   deviceAvailabilityView,
+  devicePickerNote,
   enrollmentInstructions,
   type EnrollmentInstructions,
 } from "../view-model"
@@ -33,12 +35,22 @@ const themeOptions: readonly { readonly id: ThemePreference; readonly label: str
   { id: "dark", label: "Dark" },
 ]
 
-const autonomyOptions = [
-  { level: 0 as const, label: "Standard", detail: "Manual questions and approval requests." },
-  { level: 1 as const, label: "YOLO 1", detail: "Automatically answers questions." },
-  { level: 2 as const, label: "YOLO 2", detail: "Answers questions and approves tool permissions." },
-  { level: 3 as const, label: "YOLO 3", detail: "Also approves ordinary guardrail reviews." },
-]
+export function MachineSettings(): JSX.Element {
+  const remote = useRemote()
+  const state = () => remote.state()
+  const availability = () => deviceAvailabilityView(accountReadState({ connection: state().connection, owner: state().owner }), state().devices.length, {
+    devices: state().devices, activeDeviceID: state().activeDeviceID, sessionCount: state().sessions.length,
+    unreachable: state().connection.kind === "offline",
+  })
+  return <Section id="machine-settings" category="Machine" title="Machine" hint="Choose an online machine to access its Sessions.">
+    <CustomSelect class="remote-device__select" surfaceClass="remote-device__surface" label="Machine"
+      sheetTitle="Select Active Machine" sheetSubtitle="Online machines you can connect to"
+      value={state().activeDeviceID} placeholder={availability().placeholder} disabled={!availability().selectable}
+      options={state().devices.filter((device) => device.status === "active" && device.online).map((device) => ({ value: device.id, label: device.name, badge: "Online" }))}
+      onChange={(deviceID) => remote.store.connect(deviceID)}
+      footer={devicePickerNote(state().devices)} />
+  </Section>
+}
 
 export function moveRadio(event: KeyboardEvent, index: number, count: number, select: (next: number) => void) {
   const next = event.key === "ArrowRight" || event.key === "ArrowDown" ? (index + 1) % count
@@ -50,11 +62,6 @@ export function moveRadio(event: KeyboardEvent, index: number, count: number, se
   if (event.currentTarget instanceof HTMLButtonElement) {
     event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next]?.focus()
   }
-}
-
-function permissionDescription(): string {
-  if (typeof Notification === "undefined") return describeNotificationPermission(undefined)
-  return describeNotificationPermission(Notification.permission)
 }
 
 function Section(props: {
@@ -153,10 +160,36 @@ export function AccountSettings(): JSX.Element {
  */
 export function DeviceSettings(): JSX.Element {
   const remote = useRemote()
+  let removalTrigger: HTMLButtonElement | undefined
+  const http = createRemoteHttp()
   const [enrollment, setEnrollment] = createSignal<EnrollmentInstructions | undefined>(undefined)
   const [error, setError] = createSignal<string | undefined>(undefined)
+  const [removal, setRemoval] = createSignal<{ readonly id?: string; readonly name: string }>()
+  const [removing, setRemoving] = createSignal(false)
+  const [removalError, setRemovalError] = createSignal<string>()
   const state = () => remote.state()
   const devices = () => deviceAvailabilityView(accountReadState({ connection: state().connection, owner: state().owner }), state().devices.length)
+  const closeRemoval = () => {
+    setRemoval(undefined)
+    queueMicrotask(() => { if (removalTrigger?.isConnected) removalTrigger.focus() })
+  }
+  const remove = async () => {
+    const selected = removal()
+    if (!selected || removing()) return
+    setRemoving(true)
+    const result = await http.removeRevokedDevices(selected.id)
+    if (!result.ok) {
+      setRemovalError(result.message)
+      setRemoving(false)
+      return
+    }
+    await remote.store.load()
+    setRemoving(false)
+    setRemoval(undefined)
+    setRemovalError(undefined)
+    queueMicrotask(() => (document.querySelector<HTMLButtonElement>('button[aria-label="Remove all revoked devices"]') ??
+      document.querySelector<HTMLButtonElement>('.settings__section[aria-labelledby="device-settings"] .defs button'))?.focus())
+  }
   return (
     <Section
       id="device-settings"
@@ -206,10 +239,42 @@ export function DeviceSettings(): JSX.Element {
                     </button>
                   </span>
                 </Show>
+                <Show when={device.status === "revoked"}>
+                  <span class="device__action" role="cell">
+                    <button type="button" class="button button--secondary button--small" aria-label={`Remove ${device.name}`}
+                      disabled={removing()} onClick={(event) => { removalTrigger = event.currentTarget; setRemovalError(undefined); setRemoval({ id: device.id, name: device.name }) }}>
+                      Remove
+                    </button>
+                  </span>
+                </Show>
               </div>
             )}
           </For>
         </div>
+      </Show>
+      <Show when={state().devices.some((device) => device.status === "revoked")}>
+        <div class="device-cleanup-actions">
+          <button type="button" class="button button--secondary button--small" aria-label="Remove all revoked devices"
+            disabled={removing()} onClick={(event) => { removalTrigger = event.currentTarget; setRemovalError(undefined); setRemoval({ name: "all revoked devices" }) }}>
+            Remove all revoked devices
+          </button>
+        </div>
+      </Show>
+      <Show when={removalError() && removal() === undefined}><p class="settings__hint" role="alert">{removalError()}</p></Show>
+      <Show when={removal()}>
+        {(selected) => <Modal label={selected().id === undefined ? "Remove all revoked devices" : "Remove revoked device"}
+          onClose={closeRemoval}>
+          <p>{selected().id === undefined
+            ? "Remove all revoked machines from this account? Enrolled machines stay registered."
+            : `Remove ${selected().name} from this account? This cannot be undone.`}</p>
+          <Show when={removalError()}><p class="settings__hint" role="alert">{removalError()}</p></Show>
+          <div class="device-cleanup-actions">
+            <button type="button" class="button button--secondary" onClick={closeRemoval}>Cancel</button>
+            <button type="button" class="button button--danger" data-confirm-remove disabled={removing()} onClick={() => void remove()}>
+              {removing() ? "Removing…" : selected().id === undefined ? "Remove revoked devices" : "Remove device"}
+            </button>
+          </div>
+        </Modal>}
       </Show>
       <div class="defs">
         <div class="defs__row">
@@ -332,6 +397,7 @@ export function AppearanceSettings(): JSX.Element {
                     if (selected) theme.setPreference(selected.id)
                   })}
                 >
+                  <Icon name={option.id === "system" ? "monitor" : option.id === "light" ? "sun" : "moon"} size={16} />
                   {option.label}
                 </button>
               )}
@@ -448,77 +514,6 @@ function ChoiceRow<Value extends string | boolean>(props: {
 }
 
 /**
- * The autonomy of the selected session. A workspace with no selected session shows the
- * shipped placeholder: no level is invented and no goal is reported for a session this
- * browser is not watching.
- */
-export function AutonomySettings(): JSX.Element {
-  const remote = useRemote()
-  const [goal, setGoal] = createSignal("")
-  const view = () => remote.state().view
-  const autonomy = () => view()?.autonomy
-  return (
-    <Section id="autonomy-settings" category="Autonomy" title="Autonomy" hint={autonomyHint(view())}>
-      <Show when={view() !== undefined}>
-        <p class="settings__hint settings__guardrail-note">Hard guardrail reviews always require a human decision, even at level 3.</p>
-        <div class="defs">
-          <div class="autonomy-choices" role="radiogroup" aria-label="Autonomy level">
-            <For each={autonomyOptions}>
-              {(option, index) => (
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={(autonomy()?.yolo ?? 0) === option.level}
-                  tabIndex={(autonomy()?.yolo ?? 0) === option.level ? 0 : -1}
-                  class={`autonomy-choice${(autonomy()?.yolo ?? 0) === option.level ? " autonomy-choice--active" : ""}`}
-                  onClick={() => void remote.store.setYolo(option.level)}
-                  onKeyDown={(event) => moveRadio(event, index(), autonomyOptions.length, (next) => {
-                    const selected = autonomyOptions[next]
-                    if (selected) void remote.store.setYolo(selected.level)
-                  })}
-                >
-                  <strong>{option.label}</strong>
-                  <span>{option.detail}</span>
-                </button>
-              )}
-            </For>
-          </div>
-          <div class="defs__row">
-            <span class="defs__key">Goal</span>
-            <span class="defs__value">
-              <input
-                class="input"
-                type="text"
-                placeholder="Describe the objective"
-                aria-label="Goal"
-                value={goal()}
-                onInput={(event) => setGoal(event.currentTarget.value)}
-              />
-              <button
-                type="button"
-                class="button button--primary button--small"
-                disabled={goal().trim().length === 0}
-                onClick={() => {
-                  void remote.store.setGoal(goal().trim())
-                  setGoal("")
-                }}
-              >
-                Set goal
-              </button>
-              <Show when={autonomy()?.mode === "goal"}>
-                <button type="button" class="button button--danger button--small" onClick={() => void remote.store.stopGoal()}>
-                  Stop goal
-                </button>
-              </Show>
-            </span>
-          </div>
-        </div>
-      </Show>
-    </Section>
-  )
-}
-
-/**
  * Notification preferences keep the shipped per-category, per-channel matrix: every
  * category carries one switch per channel, so a category can be muted in the workspace
  * while it still raises a desktop alert. Notification permission is requested only from
@@ -526,7 +521,7 @@ export function AutonomySettings(): JSX.Element {
  */
 export function NotificationSettings(): JSX.Element {
   const [preferences, setPreferences] = createSignal(readNotificationPreferences())
-  const [permission, setPermission] = createSignal(permissionDescription())
+  const [permission, setPermission] = createSignal(typeof Notification === "undefined" ? undefined : Notification.permission)
   const [pushStatus, setPushStatus] = createSignal<PushStatus>("unsupported")
   const [pushBusy, setPushBusy] = createSignal(true)
   const [pushError, setPushError] = createSignal("")
@@ -538,7 +533,7 @@ export function NotificationSettings(): JSX.Element {
 
   onMount(() => {
     pushPlatform = browserPushPlatform()
-    void readPushState(pushPlatform, pushHttp).then((status) => {
+    void syncPushState(pushPlatform, pushHttp).then((status) => {
       if (!active) return
       setPushStatus(status)
       setPushBusy(false)
@@ -618,18 +613,14 @@ export function NotificationSettings(): JSX.Element {
         <div class="defs__row">
           <span class="defs__key">Desktop alerts</span>
           <span class="defs__value">
-            <button
-              type="button"
-              class="button button--secondary button--small"
-              onClick={() => {
-                if (typeof Notification === "undefined") return
-                void Notification.requestPermission().then(() => setPermission(permissionDescription()))
-              }}
-            >
-              <Icon name="bell" size={16} />
-              Request browser permission
-            </button>
-            <span class="field__hint">{permission()}</span>
+            <Show when={permission() === "default"}>
+              <button type="button" class="button button--secondary button--small"
+                onClick={() => void Notification.requestPermission().then(setPermission)}>
+                <Icon name="bell" size={16} />
+                Request browser permission
+              </button>
+            </Show>
+            <span class="field__hint" role="status" aria-live="polite">{describeNotificationPermission(permission())}</span>
           </span>
         </div>
       </div>
@@ -640,13 +631,4 @@ export function NotificationSettings(): JSX.Element {
       </p>
     </Section>
   )
-}
-
-function autonomyHint(view: SessionView | undefined): string {
-  if (view === undefined) return "Select a session to read or change its autonomy state."
-  const autonomy = view.autonomy
-  if (autonomy === undefined) return "This connection has not reported autonomy state yet."
-  if (autonomy.mode === "goal") return `Goal active: ${autonomy.goal?.text ?? ""}`
-  if (autonomy.yolo === 0) return "Standard mode: every review and question waits for you."
-  return `YOLO ${autonomy.yolo}: levels 1-3 answer questions, permissions, then ordinary guardrail reviews.`
 }

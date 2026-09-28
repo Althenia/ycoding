@@ -698,7 +698,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
       return { ...view, model: selected ?? view.model, updatedAt: now }
     }
     case "session.execution.started":
-      return { ...view, status: "running", executionStarted: view.executionStarted ?? now, retry: undefined, updatedAt: now }
+      return { ...view, status: "running", executionStarted: now, retry: undefined, updatedAt: now }
     case "session.execution.succeeded":
       return { ...view, status: "idle", executionStarted: undefined, retry: undefined, updatedAt: now }
     case "session.execution.failed":
@@ -1083,7 +1083,7 @@ export function readError(
 function applyStatus(view: SessionView, data: Record<string, unknown>, now: number): SessionView {
   const status = isRecord(data.status) ? data.status : {}
   if (status.type === "busy") return { ...view, status: "running", updatedAt: now }
-  if (status.type === "idle") return { ...view, status: "idle", retry: undefined, updatedAt: now }
+  if (status.type === "idle") return { ...view, status: "idle", executionStarted: undefined, retry: undefined, updatedAt: now }
   if (status.type === "retry") {
     return {
       ...view,

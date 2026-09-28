@@ -89,7 +89,8 @@ describe("built web output", () => {
 
   test("ships the PWA files and canonical brand assets", async () => {
     const manifest = await (await fetch(`${serverOrigin}/manifest.webmanifest`)).json()
-    expect(manifest.start_url).toBe("/")
+    expect(manifest.start_url).toBe("/remote")
+    expect(manifest.scope).toBe("/")
     for (const path of [...manifest.icons.map((icon: { src: string }) => icon.src), "/offline.html", "/robots.txt", "/brand/ycoding-mark.svg"]) {
       const response = await fetch(`${serverOrigin}${path}`)
       expect({ path, status: response.status }).toEqual({ path, status: 200 })

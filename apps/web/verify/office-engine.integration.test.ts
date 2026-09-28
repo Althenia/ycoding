@@ -84,6 +84,22 @@ test("renders original assets in one lazily mounted canvas and captures the requ
   await page.close()
 }, 90_000)
 
+test("characters speak through text bubbles without emote icons", async () => {
+  const page = await requireBrowser().openPage()
+  for (const [state, bubble] of [["thinking", "Thinking"], ["attention", "Needs your decision"]] as const) {
+    await page.navigate(url(state, "&inspectEngine=1"))
+    await waitFor(page, "!!window.__officeGame && !document.querySelector('.office-notice[role=status]')")
+    await advanceScene(page, 4)
+    const scene = await page.evaluate<{ readonly textures: readonly string[]; readonly texts: readonly string[] }>(`(() => {
+      const list=window.__officeGame.scene.getScene('office').children.list.filter(object=>object.visible);
+      return {textures:[...new Set(list.filter(object=>object.type==='Sprite').map(object=>object.texture.key))],texts:list.filter(object=>object.type==='Text').map(object=>object.text)};
+    })()`)
+    expect(scene.textures, state).toEqual(["characters"])
+    expect(scene.texts, state).toContain(bubble)
+  }
+  await page.close()
+}, 60_000)
+
 test("DPR 2 renders every authored room at CSS zoom one, a full fit, and a phone", async () => {
   const page = await requireBrowser().openPage()
   await page.injectOnNewDocument("Object.defineProperty(window,'devicePixelRatio',{configurable:true,get:()=>2})")
@@ -230,7 +246,7 @@ test("phone camera toolbar sits above the canvas without covering actor bubbles"
   await page.close()
 }, 30_000)
 
-test("attention emotes and markers do not obscure the selected bubble", async () => {
+test("attention markers do not obscure the selected bubble", async () => {
   const page = await requireBrowser().openPage()
   await page.setViewport(390, 844)
   await page.navigate(url("attention", "&inspectEngine=1"))
@@ -240,7 +256,7 @@ test("attention emotes and markers do not obscure the selected bubble", async ()
     const box=object=>({left:object.x-object.displayWidth*object.originX,right:object.x+object.displayWidth*(1-object.originX),
       top:object.y-object.displayHeight*object.originY,bottom:object.y+object.displayHeight*(1-object.originY)});
     const bubble=objects.find(object=>object.type==='Text'&&object.text==='Needs your decision'&&object.visible);
-    const decorations=objects.filter(object=>object.visible&&((object.type==='Text'&&object.text==='!')||(object.type==='Sprite'&&object.texture.key==='emotes')));
+    const decorations=objects.filter(object=>object.visible&&object.type==='Text'&&object.text==='!');
     return {bubble:box(bubble),decorations:decorations.map(box)};
   })()`)
   expect(layout.decorations.length).toBeGreaterThan(0)
@@ -414,7 +430,7 @@ test("a new delegate cue brings supervisor and child into the meeting room and b
       const actors=scene.children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters'&&ids.has(object.name));
       if(actors.length===2&&actors.every(actor=>actor.x>=${meeting.left * tileSize}&&actor.x<${(meeting.right + 1) * tileSize}
         &&actor.y>=${meeting.top * tileSize}&&actor.y<${(meeting.bottom + 1) * tileSize})
-        &&scene.children.list.some(object=>object.type==='Sprite'&&object.texture.key==='emotes'&&object.visible))return true;
+        &&scene.latestFrames.some(frame=>frame.actor.sessionID==='session-b'&&frame.speech==='chat'))return true;
     }
     return false;
   })()`)
@@ -524,7 +540,7 @@ test("repeated ready team snapshots preserve roster row nodes and character spri
   await page.close()
 }, 30_000)
 
-test("a report cue sends the child beside its supervisor, shows a report emote, and returns", async () => {
+test("a report cue sends the child beside its supervisor to report and returns", async () => {
   const page = await requireBrowser().openPage()
   await page.navigate(url("tool", "&team=1&inspectEngine=1&cue=0&cueKind=report"))
   await waitFor(page, "window.__officeGame?.scene.getScene('office').children.list.filter(object=>object.type==='Sprite'&&object.texture.key==='characters').length === 2")
@@ -538,7 +554,7 @@ test("a report cue sends the child beside its supervisor, shows a report emote, 
       const child=actors.find(actor=>actor.name==='["fixture-device","session-b"]');
       if(root&&child&&Math.abs(Math.floor(root.x/${tileSize})-Math.floor(child.x/${tileSize}))
         +Math.abs(Math.floor(root.y/${tileSize})-Math.floor(child.y/${tileSize}))<=1
-        &&scene.children.list.some(object=>object.type==='Sprite'&&object.texture.key==='emotes'&&object.visible&&String(object.frame.name)==='6'))return true;
+        &&scene.latestFrames.some(frame=>frame.actor.sessionID==='session-b'&&frame.speech==='report'))return true;
     }
     return false;
   })()`)

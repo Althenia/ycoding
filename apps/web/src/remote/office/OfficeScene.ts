@@ -4,7 +4,7 @@ import type { OfficeMailbox } from "./bridge"
 import { columns, floorFrameAt, officeLayout, props, rooms, rows, tileSize, wallAt, wallFrameAt, worldHeight, worldWidth } from "./map"
 import { shortText } from "./model"
 import { hasReducedMotion } from "./preferences"
-import { characterAppearances, characterColumns, characterDirections, characterFrame, emotes } from "./sprites"
+import { characterAppearances, characterColumns, characterDirections, characterFrame } from "./sprites"
 import type { ActorFrame, OfficeCue, OfficeSnapshot } from "./types"
 
 const importedAssets = import.meta.glob<string>("./assets/*.png", { eager: true, query: "?url&no-inline", import: "default" })
@@ -19,7 +19,6 @@ type ActorObjects = {
   bubble: Phaser.GameObjects.Text
   bubblePlate: Phaser.GameObjects.Graphics
   marker: Phaser.GameObjects.Text
-  emote: Phaser.GameObjects.Sprite
 }
 type RoomTitle = { readonly room: (typeof rooms)[number]; readonly text: Phaser.GameObjects.Text; readonly plate: Phaser.GameObjects.Graphics }
 
@@ -51,7 +50,7 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   preload(): void {
-    for (const key of ["tiles", "walls", "characters", "emotes", ...new Set(props.map((prop) => prop.kind))]) {
+    for (const key of ["tiles", "walls", "characters", ...new Set(props.map((prop) => prop.kind))]) {
       if (textureURLs[key]) continue
       this.failed = true
       this.fail("An office asset failed to load. The normal workspace remains available.")
@@ -60,7 +59,6 @@ export class OfficeScene extends Phaser.Scene {
     this.load.spritesheet("tiles", textureURLs.tiles, { frameWidth: 32, frameHeight: 32 })
     this.load.spritesheet("walls", textureURLs.walls, { frameWidth: 32, frameHeight: 32 })
     this.load.spritesheet("characters", textureURLs.characters, { frameWidth: 32, frameHeight: 48 })
-    this.load.spritesheet("emotes", textureURLs.emotes, { frameWidth: 24, frameHeight: 24 })
     for (const kind of new Set(props.map((prop) => prop.kind))) this.load.image(kind, textureURLs[kind])
     this.load.once("loaderror", () => {
       this.failed = true
@@ -70,7 +68,7 @@ export class OfficeScene extends Phaser.Scene {
 
   create(): void {
     if (this.failed) return
-    if (!["tiles", "walls", "characters", "emotes", ...new Set(props.map((prop) => prop.kind))].every((key) => this.textures.exists(key))) {
+    if (!["tiles", "walls", "characters", ...new Set(props.map((prop) => prop.kind))].every((key) => this.textures.exists(key))) {
       this.failed = true
       this.fail("An office asset failed to load. The normal workspace remains available.")
       return
@@ -246,7 +244,7 @@ export class OfficeScene extends Phaser.Scene {
     for (const [id, objects] of this.objects) {
       if (present.has(id)) continue
       objects.sprite.destroy(); objects.shadow.destroy(); objects.ring.destroy(); objects.label.destroy(); objects.labelPlate.destroy()
-      objects.bubble.destroy(); objects.bubblePlate.destroy(); objects.marker.destroy(); objects.emote.destroy()
+      objects.bubble.destroy(); objects.bubblePlate.destroy(); objects.marker.destroy()
       this.objects.delete(id)
     }
     for (const frame of this.latestFrames) this.paintActor(frame, input.snapshot, scale)
@@ -262,9 +260,6 @@ export class OfficeScene extends Phaser.Scene {
       const covered = [...this.objects.values()].some((objects) => objects.bubble.visible && overlaps(
         objects.bubble.x - objects.bubble.displayWidth / 2 - 9 * scale, objects.bubble.x + objects.bubble.displayWidth / 2 + 9 * scale,
         objects.bubble.y - objects.bubble.displayHeight - 5 * scale, objects.bubble.y + 5 * scale,
-      ) || objects.emote.visible && overlaps(
-        objects.emote.x - objects.emote.displayWidth / 2, objects.emote.x + objects.emote.displayWidth / 2,
-        objects.emote.y - objects.emote.displayHeight, objects.emote.y,
       ))
       title.text.setAlpha(covered ? 0.25 : 1)
       title.plate.setAlpha(covered ? 0.15 : 1)
@@ -350,7 +345,6 @@ export class OfficeScene extends Phaser.Scene {
         bubble: this.add.text(0, 0, "", { fontFamily: "sans-serif", fontSize: "13px", color: "#253443", wordWrap: { width: 180 }, resolution: this.resolution }).setOrigin(0.5, 1).setDepth(10003),
         bubblePlate: this.add.graphics().setDepth(10002),
         marker: this.add.text(0, 0, "!", { fontFamily: "sans-serif", fontSize: "18px", color: "#243340", backgroundColor: "#f3be65", padding: { x: 5, y: 1 }, resolution: this.resolution }).setOrigin(0.5, 1).setDepth(10005),
-        emote: this.add.sprite(0, 0, "emotes", 0).setOrigin(0.5, 1).setDepth(10004),
       }
       this.objects.set(frame.actor.id, objects)
     }
@@ -387,12 +381,6 @@ export class OfficeScene extends Phaser.Scene {
       const height = objects.bubble.displayHeight + 10 * scale
       objects.bubblePlate.fillStyle(0xfaf7ef, 0.97).fillRoundedRect(bubbleX - bubbleWidth / 2, y - 67 - height + 5 * scale, bubbleWidth, height, 6 * scale)
     }
-    const speech = frame.speech ?? (frame.actor.status === "attention" ? "attention" : frame.actor.status === "failed" ? "failed"
-      : frame.actor.taskState === "completed" ? "done" : frame.actor.status === "thinking" ? "thinking" : undefined)
-    const emoteIndex = speech ? emotes.indexOf(speech) : -1
-    objects.emote.setFrame(Math.max(0, emoteIndex)).setScale(scale).setDepth(10004).setAlpha(alpha).setVisible(emoteIndex >= 0 && !frame.leaving)
-    const emoteX = showBubble ? Math.max(view.left + objects.emote.displayWidth / 2, bubbleX - bubbleWidth / 2 - objects.emote.displayWidth / 2 - 5 * scale) : x - 20
-    objects.emote.setPosition(emoteX, showBubble ? y - 67 : y - 55)
     objects.marker.setText(frame.actor.status === "failed" ? "×" : "!").setScale(scale)
     const markerX = showBubble ? Math.min(view.right - objects.marker.displayWidth / 2, bubbleX + bubbleWidth / 2 + objects.marker.displayWidth / 2 + 5 * scale) : x + 20
     objects.marker.setPosition(markerX, showBubble ? y - 67 : y - 48)

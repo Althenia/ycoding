@@ -1,6 +1,7 @@
 import { Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { Icon } from "../../ui/icon"
 import { useRemote } from "../context"
+import { LoadingPlaceholder } from "./loading"
 import "./image.css"
 
 export function ImagePreview(props: { readonly src: string; readonly name: string }) {
@@ -65,7 +66,7 @@ export function UserImage(props: { readonly deviceID: string; readonly sessionID
   })
   return <div class="transcript-attachment" ref={container}><Show when={source()} fallback={failed()
     ? <div class="transcript-image__unavailable" role="status">Image unavailable <button type="button" onClick={() => setRetry(retry() + 1)}>Retry {props.name}</button></div>
-    : <span class="transcript-image__loading" role="status">Loading image {props.name}</span>}>
+    : <LoadingPlaceholder kind="image" label={`Loading image ${props.name}`} />}>
     {(src) => <ImagePreview src={src()} name={props.name} />}
   </Show></div>
 }

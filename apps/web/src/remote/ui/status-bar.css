@@ -1,18 +1,29 @@
 .session-status { display:flex; align-items:center; gap:var(--yc-space-1); min-inline-size:0; max-inline-size:100%; font:var(--yc-weight-medium) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); }
 .session-status__slot { display:flex; align-items:center; gap:var(--yc-space-1); min-inline-size:0; min-block-size:var(--yc-control-h-dense); max-inline-size:260px; overflow:hidden; padding-inline:var(--yc-space-2); border-radius:var(--yc-radius-pill); background:var(--yc-green-soft); color:var(--yc-green-strong); transition:background var(--yc-dur-base) var(--yc-ease-standard), color var(--yc-dur-base) var(--yc-ease-standard); }
+.composer .composer__controls .session-status__slot { flex-shrink:1; }
 .session-status__slot--empty { visibility:hidden; }
 .session-status__slot--attention { background:var(--yc-yellow-soft); color:var(--yc-yellow-strong); }
 .session-status__label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .session-status__mobile { display:none; min-inline-size:0; max-inline-size:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.session-status__yolo { display:flex; align-items:center; min-block-size:var(--yc-control-h-dense); padding-inline:var(--yc-space-2); border-radius:var(--yc-radius-pill); background:var(--yc-green-soft); color:var(--yc-green-strong); white-space:nowrap; }
-.session-status__goal { position:relative; }
-.session-status__goal-trigger { min-block-size:var(--yc-control-h-dense); padding-inline:var(--yc-space-2); border:0; border-radius:var(--yc-radius-pill); background:var(--yc-green-soft); color:var(--yc-green-strong); font:inherit; cursor:pointer; white-space:nowrap; }
+.session-status__yolo-trigger,.session-status__goal-trigger { flex:none; min-block-size:var(--yc-control-h-dense); padding-inline:var(--yc-space-2); border:0; border-radius:var(--yc-radius-pill); background:var(--yc-green-soft); color:var(--yc-green-strong); font:inherit; cursor:pointer; white-space:nowrap; }
+.session-status__yolo-compact { display:none; }
+.session-status__yolo-trigger:hover,.session-status__goal-trigger:hover { background:var(--yc-surface-sunken); }
 .session-status__goal-count { opacity:.7; }
-.session-status__goal-popover { position:absolute; z-index:var(--yc-z-overlay); inset-block-end:calc(100% + var(--yc-space-2)); inset-inline-start:0; inline-size:min(310px, 80vw); padding:var(--yc-space-3); border:1px solid var(--yc-border); border-radius:var(--yc-radius-xl); background:var(--yc-surface-raised); box-shadow:var(--yc-shadow-lg); color:var(--yc-text); animation:mini-float var(--yc-dur-quick) var(--yc-ease-entrance); }
+.session-status__popover { position:fixed; z-index:calc(var(--yc-z-overlay) + 2); max-block-size:min(420px,75dvh); overflow:auto; padding:var(--yc-space-3); border:1px solid var(--yc-border); border-radius:var(--yc-radius-xl); background:var(--yc-surface-raised); box-shadow:var(--yc-shadow-lg); color:var(--yc-text); }
+.session-status__yolo-popover [role="radiogroup"] { display:grid; gap:var(--yc-space-1); }
+.session-status__yolo-popover [role="radio"] { display:grid; gap:var(--yc-space-1); inline-size:100%; min-block-size:44px; padding:var(--yc-space-2); border:1px solid var(--yc-border); border-radius:var(--yc-radius-md); background:var(--yc-surface-raised); color:var(--yc-text); text-align:start; cursor:pointer; }
+.session-status__yolo-popover [role="radio"][aria-checked="true"] { border-color:var(--yc-green-strong); background:var(--yc-green-soft); }
+.session-status__yolo-popover [role="radio"] span { color:var(--yc-text-muted); font-size:var(--yc-size-2xs); }
+.session-status__guardrail-note { margin:var(--yc-space-2) 0 0; color:var(--yc-text-muted); font-size:var(--yc-size-2xs); }
 .session-status__goal-popover p { margin:0 0 var(--yc-space-2); overflow-wrap:anywhere; }
 .session-status__goal-popover span { display:block; color:var(--yc-text-muted); font-size:var(--yc-size-2xs); }
-.session-status__goal-popover button { min-block-size:var(--yc-control-h-dense); margin-block-start:var(--yc-space-2); padding-inline:var(--yc-space-3); border:1px solid var(--yc-border); border-radius:var(--yc-radius-pill); background:var(--yc-danger-soft); color:var(--yc-danger); cursor:pointer; }
-@media (max-width:767px), (pointer:coarse) { .session-status__slot, .session-status__yolo, .session-status__goal-trigger, .session-status__goal-popover button { min-block-size:44px; } }
+.session-status__goal-popover form { display:grid; gap:var(--yc-space-2); }
+.session-status__goal-popover input { inline-size:100%; min-block-size:44px; padding-inline:var(--yc-space-2); border:1px solid var(--yc-border-strong); border-radius:var(--yc-radius-md); background:var(--yc-bg); color:var(--yc-text); font:inherit; }
+.session-status__goal-popover button { min-block-size:44px; margin-block-start:var(--yc-space-2); padding-inline:var(--yc-space-3); border:1px solid var(--yc-border); border-radius:var(--yc-radius-pill); background:var(--yc-green-soft); color:var(--yc-green-strong); cursor:pointer; }
+.session-status__goal-popover button:disabled { opacity:.5; cursor:not-allowed; }
+.session-status__goal-popover button:not([type="submit"]) { background:var(--yc-danger-soft); color:var(--yc-danger); }
+.session-status :is(button,input):focus-visible { outline:2px solid var(--yc-focus); outline-offset:2px; }
+@media (max-width:767px), (pointer:coarse) { .session-status__slot, .session-status__yolo-trigger, .session-status__goal-trigger { min-block-size:44px; } .session-status__yolo-trigger,.session-status__goal-trigger { min-inline-size:44px; } }
 @media (max-width:479px) { .session-status__slot { max-inline-size:98px; } .session-status__label { max-inline-size:70px; } }
-@media (max-width:479px) { .session-status__label { position:absolute; inline-size:1px; block-size:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; } .session-status__mobile { display:block; } }
-@media (prefers-reduced-motion:reduce) { .session-status__slot { transition:none; } .session-status__goal-popover { animation:none; } }
+@media (max-width:479px) { .session-status__slot { max-inline-size:64px; } .session-status__yolo-full { display:none; } .session-status__yolo-compact { display:inline; } .session-status__label { position:absolute; inline-size:1px; block-size:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; } .session-status__mobile { display:block; } }
+@media (prefers-reduced-motion:reduce) { .session-status__slot { transition:none; } }

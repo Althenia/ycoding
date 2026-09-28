@@ -1,5 +1,6 @@
 import { Show, createEffect, createSignal, onCleanup, onMount } from "solid-js"
 import { Icon } from "../../ui/icon"
+import { LoadingPlaceholder } from "../ui/loading"
 import type { OfficePreferences, OfficeRoomID, OfficeSnapshot } from "./types"
 import type { OfficeHandle } from "./create-game"
 import "./office.css"
@@ -55,7 +56,7 @@ export function OfficeCanvas(props: {
       <button type="button" onClick={() => handle?.follow()} aria-label="Follow selected" data-tooltip="Follow selected"><Icon name="crosshair" size={22} /></button>
       <button type="button" onClick={props.onNormalView} aria-label="Back to conversation" data-tooltip="Back to conversation"><Icon name="chat" size={22} /></button>
     </div>
-    <Show when={loading()}><p class="office-notice" role="status">Loading the office renderer…</p></Show>
+    <Show when={loading()}><LoadingPlaceholder kind="office" label="Loading the office renderer…" announce={false} /><p class="office-notice" role="status">Loading the office renderer…</p></Show>
     <Show when={error()}>{(message) => <p class="office-notice" role="alert">{message()} <button type="button" onClick={props.onNormalView}>Use normal view</button></p>}</Show>
     <div ref={host} class="office-canvas-host" aria-hidden="true" />
   </section>

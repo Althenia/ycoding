@@ -94,12 +94,15 @@ async function openPublic(scenarioName: (typeof publicFamilies)[number], viewpor
 }
 
 describe("remote and public product interactions", () => {
-  test("updates navigation, reviews, enrollment, autonomy, search, and release filters through user input", async () => {
+  test("updates navigation, reviews, enrollment, settings, search, and release filters through user input", async () => {
     const remote = async (scenarioName: RemoteScenario["name"], width: RemoteScenario["viewport"]) =>
       openRemote(REMOTE_SCENARIOS.find((scene) => scene.name === scenarioName && scene.viewport === width)!)
 
     const workspace = await remote("conversation-workspace", 390)
     try {
+      await workspace.evaluate(`document.querySelector('a[href="/remote/settings"]')?.click()`)
+      for (let attempt = 0; attempt < 40 && !await workspace.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]') !== null`); attempt += 1) await Bun.sleep(50)
+      await workspace.evaluate(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.click()`)
       expect(await workspace.evaluate<number>(`document.querySelectorAll('[role="listbox"]').length`)).toBe(1)
       expect(await workspace.evaluate<boolean>(`document.querySelector('dialog[aria-label="Select Active Machine"]')?.contains(document.activeElement) === true`)).toBe(true)
       await workspace.pressEscape()
@@ -186,11 +189,8 @@ describe("remote and public product interactions", () => {
 
     const settings = await remote("autonomy-goal-notification-settings", 768)
     try {
-      expect(await settings.evaluate<string>(`document.querySelector('#autonomy-settings + .settings__hint')?.textContent?.trim() ?? ''`)).toContain("Goal active: Refactor telemetry UI")
-      await settings.evaluate(`[...document.querySelectorAll('.autonomy-choices button')].find(button => button.textContent?.includes('YOLO 3'))?.focus()`)
-      await settings.pressKey(" ", "Space", 32)
-      expect(await settings.evaluate<boolean>(`[...document.querySelectorAll('.autonomy-choices button')].some(button => button.textContent?.includes('YOLO 3') && button.getAttribute('aria-checked') === 'true')`)).toBe(true)
-      expect(await settings.evaluate<string>(`document.querySelector('#autonomy-settings + .settings__hint')?.textContent?.trim() ?? ''`)).toContain("YOLO 3: levels 1-3 answer questions")
+      expect(await settings.evaluate<boolean>(`document.querySelector('#autonomy-settings, .autonomy-choices, input[aria-label="Goal"]') === null`)).toBe(true)
+      expect(await settings.evaluate<boolean>(`document.querySelector('#notification-settings') !== null`)).toBe(true)
     } finally { await settings.close() }
 
     const mobile = viewports[2]

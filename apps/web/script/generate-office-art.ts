@@ -1,6 +1,6 @@
 import { mkdir, readdir, rm } from "node:fs/promises"
 import { join } from "node:path"
-import { characterSheet, emoteSheet } from "./office-art/characters"
+import { characterSheet } from "./office-art/characters"
 import { environmentFurniture, environmentTiles, wallTiles } from "./office-art/environment"
 import { encodePNG } from "./office-art/png"
 
@@ -10,7 +10,6 @@ const images = {
   walls: wallTiles(),
   ...environmentFurniture(),
   characters: characterSheet(),
-  emotes: emoteSheet(),
 }
 const encoded = Object.entries(images).map(([name, art]) => ({ name, art, bytes: encodePNG(art) }))
 const total = encoded.reduce((sum, asset) => sum + asset.bytes.length, 0)

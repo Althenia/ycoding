@@ -27,6 +27,102 @@ afterAll(async () => {
 })
 
 describe("remote responsive state behavior", () => {
+  test("keeps YOLO and goal controls out of Settings at desktop and phone widths", async () => {
+    for (const width of [1440, 390] as const) {
+      const page = await fixture(`scenario=autonomy-goal-notification-settings-${width}`, width, "Appearance")
+      try {
+        expect(await page.evaluate<boolean>(`document.querySelector('#autonomy-settings, .autonomy-choices, input[aria-label="Goal"]') === null`)).toBe(true)
+        expect(await page.evaluate<boolean>(`document.querySelector('.page-head__support')?.textContent?.includes('autonomy') === false`)).toBe(true)
+      } finally { await page.close() }
+    }
+  }, 30_000)
+
+  test("offers Desktop alert permission only while undecided and shows the settled browser state", async () => {
+    for (const permission of ["default", "granted", "denied"] as const) {
+      const page = await browser!.openPage()
+      try {
+        await page.injectOnNewDocument(`Object.defineProperty(window, 'Notification', { configurable: true, value: class {
+          static permission = ${JSON.stringify(permission)};
+          static async requestPermission() { this.permission = 'granted'; return this.permission; }
+        } })`)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=autonomy-goal-notification-settings-390`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('#notification-settings') !== null`); attempt += 1) await Bun.sleep(50)
+        const row = `(() => { const row = [...(document.querySelector('#notification-settings')?.closest('section')?.querySelectorAll('.defs__row') ?? [])].find(item => item.querySelector('.defs__key')?.textContent === 'Desktop alerts');
+          return { button: row?.querySelector('button') !== null, status: row?.querySelector('.field__hint')?.textContent?.trim() ?? '' }; })()`
+        expect(await page.evaluate<{ readonly button: boolean; readonly status: string }>(row)).toEqual({
+          button: permission === "default",
+          status: permission === "granted" ? "Desktop alerts are allowed in this browser." : permission === "denied"
+            ? "Desktop alerts are blocked in this browser's site settings." : "Desktop alerts are not requested yet.",
+        })
+        if (permission === "default") {
+          await page.evaluate(`[...(document.querySelector('#notification-settings')?.closest('section')?.querySelectorAll('.defs__row') ?? [])].find(item => item.querySelector('.defs__key')?.textContent === 'Desktop alerts')?.querySelector('button')?.click()`)
+          for (let attempt = 0; attempt < 40 && (await page.evaluate<{ readonly button: boolean; readonly status: string }>(row)).button; attempt += 1) await Bun.sleep(50)
+          expect(await page.evaluate<{ readonly button: boolean; readonly status: string }>(row)).toEqual({ button: false, status: "Desktop alerts are allowed in this browser." })
+        }
+      } finally { await page.close() }
+    }
+  }, 30_000)
+
+  test("renders System, Light, and Dark Appearance icons in both themes at every viewport", async () => {
+    for (const [width, height] of [[1440, 900], [820, 1180], [390, 844]] as const) for (const theme of ["light", "dark"] as const) {
+      const page = await fixture(`scenario=autonomy-goal-notification-settings-${width === 820 ? 768 : width}`, width, "Appearance", theme, height)
+      try {
+        const icons = await page.evaluate<readonly { readonly name: string; readonly paths: number; readonly width: number; readonly height: number }[]>(`[...document.querySelectorAll('.appearance-segments [role="radio"]')].map(button => ({ name: button.textContent.trim(), paths: button.querySelectorAll('svg path[d]').length, width: button.querySelector('svg')?.getBoundingClientRect().width ?? 0, height: button.querySelector('svg')?.getBoundingClientRect().height ?? 0 }))`)
+        expect(icons.map((icon) => icon.name)).toEqual(["System", "Light", "Dark"])
+        expect(icons.every((icon) => icon.paths > 0 && icon.width >= 16 && icon.height >= 16), JSON.stringify({ width, theme, icons })).toBe(true)
+        await page.evaluate(`document.querySelector('.appearance-segments')?.scrollIntoView({ block: 'center' })`)
+        await Bun.write(new URL(`../../../.cache/tmp/shell-settings-appearance-${width}x${height}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      } finally { await page.close() }
+    }
+  }, 30_000)
+
+  test("confirms one or all revoked-device removals without affecting enrolled machines", async () => {
+    for (const [width, height] of [[1440, 900], [820, 1180], [390, 844]] as const) {
+      const page = await fixture(`scenario=devices-enrollment-${width === 820 ? 768 : width}&deviceCleanup=two`, width, "Legacy-MacBook", undefined, height)
+      try {
+        const removeOne = 'button[aria-label="Remove Legacy-MacBook"]'
+        expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(removeOne)}) !== null && document.querySelector('button[aria-label="Remove all revoked devices"]') !== null`)).toBe(true)
+        await page.evaluate(`document.querySelector(${JSON.stringify(removeOne)})?.click()`)
+        expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Remove revoked device"]')?.open === true`)).toBe(true)
+        expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Remove revoked device"]')?.contains(document.activeElement) === true`)).toBe(true)
+        expect(await page.evaluate<number>(`window.remoteCleanupReport().length`)).toBe(0)
+        await page.pressEscape()
+        expect(await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label') ?? ''`)).toBe("Remove Legacy-MacBook")
+        expect(await page.evaluate<boolean>(`document.querySelector('.device-table .device__name')?.textContent?.includes('Studio Mac') ?? false`)).toBe(true)
+        await page.evaluate(`document.querySelector(${JSON.stringify(removeOne)})?.click()`)
+        await page.evaluate(`document.querySelector('dialog[aria-label="Remove revoked device"] button[data-confirm-remove]')?.click()`)
+        for (let attempt = 0; attempt < 40 && await page.evaluate<boolean>(`document.body.innerText.includes('Legacy-MacBook')`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll('.device-table .device__name')].map(row => row.textContent.trim())`)).toEqual(["Studio Mac", "Workstation-Box", "Backup Mac"])
+        for (let attempt = 0; attempt < 120 && await page.evaluate<boolean>(`document.querySelector('button[aria-label="Remove all revoked devices"]')?.disabled !== false`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<boolean>(`document.querySelector('button[aria-label="Remove all revoked devices"]')?.disabled === false`)).toBe(true)
+        await page.evaluate(`document.querySelector('button[aria-label="Remove all revoked devices"]')?.click()`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Remove all revoked devices"]')?.open === true`); attempt += 1) await Bun.sleep(25)
+        expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Remove all revoked devices"]')?.open === true`)).toBe(true)
+        await page.evaluate(`document.querySelector('dialog[aria-label="Remove all revoked devices"] button[data-confirm-remove]')?.click()`)
+        for (let attempt = 0; attempt < 120 && await page.evaluate<boolean>(`document.body.innerText.includes('Backup Mac')`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll('.device-table .device__name')].map(row => row.textContent.trim())`)).toEqual(["Studio Mac", "Workstation-Box"])
+        expect(await page.evaluate<readonly string[]>(`window.remoteCleanupReport()`)).toEqual(["dev_legacy", "all"])
+        expect(await page.evaluate<boolean>(`document.activeElement?.textContent?.includes('Create enrollment code') ?? false`)).toBe(true)
+      } finally { await page.close() }
+    }
+  }, 30_000)
+
+  test("keeps a failed revoked-device removal visible until the user retries it", async () => {
+    const page = await fixture("scenario=devices-enrollment-390&deviceCleanupFailure=once", 390, "Legacy-MacBook")
+    try {
+      await page.evaluate(`document.querySelector('button[aria-label="Remove Legacy-MacBook"]')?.click()`)
+      await page.evaluate(`document.querySelector('dialog[aria-label="Remove revoked device"] button[data-confirm-remove]')?.click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[role="alert"]')?.textContent?.includes('Device cleanup is unavailable') ?? false`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Remove revoked device"] [role="alert"]')?.textContent?.includes('Device cleanup is unavailable') ?? false`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.body.innerText.includes('Legacy-MacBook')`)).toBe(true)
+      expect(await page.evaluate<readonly string[]>(`window.remoteCleanupReport()`)).toEqual(["dev_legacy"])
+      await page.evaluate(`document.querySelector('dialog[aria-label="Remove revoked device"] button[data-confirm-remove]')?.click()`)
+      for (let attempt = 0; attempt < 40 && await page.evaluate<boolean>(`document.body.innerText.includes('Legacy-MacBook')`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<boolean>(`document.body.innerText.includes('Legacy-MacBook')`)).toBe(false)
+      expect(await page.evaluate<readonly string[]>(`window.remoteCleanupReport()`)).toEqual(["dev_legacy", "dev_legacy"])
+    } finally { await page.close() }
+  }, 30_000)
+
   test("exposes one remote main landmark and the active narrow navigation destination", async () => {
     const page = await scenario("conversation-workspace", 390, "Token expiry refactor")
     try {
@@ -46,8 +142,8 @@ describe("remote responsive state behavior", () => {
     }
   }, 30_000)
 
-  test("moves through theme and autonomy radios with one Tab stop per group", async () => {
-    const page = await scenario("autonomy-goal-notification-settings", 390, "Mobile refactor")
+  test("moves through theme radios with one Tab stop", async () => {
+    const page = await scenario("autonomy-goal-notification-settings", 390, "Appearance")
     try {
       await page.evaluate(`document.querySelector('.appearance-segments [role="radio"]')?.click()`)
       const group = (selector: string) => `(() => {
@@ -63,9 +159,6 @@ describe("remote responsive state behavior", () => {
       await page.pressKey("End", "End", 35)
       expect(await radioState('.appearance-segments [role="radio"]')).toEqual({ checked: 2, tabs: [-1, -1, 0], focus: 2 })
 
-      await page.evaluate(`document.querySelector('.autonomy-choices [role="radio"]')?.focus()`)
-      await page.pressKey("ArrowRight", "ArrowRight", 39)
-      expect(await radioState('.autonomy-choices [role="radio"]')).toEqual({ checked: 1, tabs: [-1, 0, -1, -1], focus: 1 })
     } finally {
       await page.close()
     }
@@ -110,7 +203,7 @@ describe("remote responsive state behavior", () => {
   test("does not apply the centered conversation-empty composition to Sessions, Activity, or Settings", async () => {
     for (const [view, expected] of [
       ["sessions", "No sessions"],
-      ["activity", "No session selected"],
+      ["activity", "Choose a Session to view its reported events."],
       ["settings", "Account"],
     ] as const) {
       const page = await fixture(`view=${view}&sessions=empty`, 768, expected)
@@ -263,14 +356,15 @@ describe("remote responsive state behavior", () => {
     }
   }, 30_000)
 
-  test("shows the selected Session's real state in the mobile conversation context", async () => {
+  test("shows the selected idle Session's real state in the mobile conversation context", async () => {
     for (const theme of ["light", "dark"] as const) {
       const page = await scenario("conversation-workspace", 390, "Token expiry refactor", theme)
       const status = await page.evaluate<{ readonly label: string; readonly visible: boolean }>(`(() => {
         const chip = document.querySelector('.conversation-breadcrumb .chip');
         return { label: chip?.textContent?.trim() ?? '', visible: chip instanceof HTMLElement && chip.getBoundingClientRect().height > 0 && getComputedStyle(chip.parentElement).display !== 'none' };
       })()`)
-      expect(status).toEqual({ label: "Running", visible: true })
+      expect(status).toEqual({ label: "Standard", visible: true })
+      expect(await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb__status')?.textContent?.includes('Running') === false`)).toBe(true)
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
       await page.close()
     }
@@ -469,10 +563,10 @@ describe("remote responsive state behavior", () => {
       expect(rows.every((row) => row.lastSeen.length > 0 && row.aligned && row.contained)).toBe(true)
       expect(rows[0]!.height).toBeLessThanOrEqual(140)
       expect(rows[1]!.height).toBeLessThanOrEqual(140)
-      expect(rows[2]!.height).toBeLessThanOrEqual(90)
+      expect(rows[2]!.height).toBeLessThanOrEqual(140)
       expect(rows[0]!.actionHeight).toBeGreaterThanOrEqual(44)
       expect(rows[1]!.actionHeight).toBeGreaterThanOrEqual(44)
-      expect(rows[2]!.actionHeight).toBe(0)
+      expect(rows[2]!.actionHeight).toBeGreaterThanOrEqual(44)
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth > innerWidth`)).toBe(false)
     }
     await page.close()
@@ -509,7 +603,7 @@ describe("remote responsive state behavior", () => {
     })()`)
     expect(deviceState.account).toContain("account_fixture")
     expect(deviceState.account).not.toContain("[account name]")
-    expect(deviceState.revokedActions).toBe(0)
+    expect(deviceState.revokedActions).toBe(1)
     expect(deviceState.selected).toBe(true)
     await devices.close()
   }, 30_000)
@@ -531,15 +625,19 @@ describe("remote responsive state behavior", () => {
         }).observe(document, { subtree: true, childList: true, characterData: true });
       })()`)
       await page.navigate(url("/verify/remote.html?view=settings&accountDelay=900"))
-      const read = () => page.evaluate<{ readonly status: string; readonly account: string; readonly signIn: boolean; readonly overflow: boolean }>(`({
+      for (let attempt = 0; attempt < 30 && !await page.evaluate<boolean>(`document.querySelector('.status-strip__body')?.textContent?.includes('Checking account') === true`); attempt += 1) await Bun.sleep(20)
+      const read = () => page.evaluate<{ readonly status: string; readonly account: string; readonly signIn: boolean; readonly overflow: boolean; readonly screen: number }>(`({
         status: document.querySelector('.status-strip__body')?.textContent?.trim() ?? '',
         account: document.querySelector('#account-settings')?.closest('section')?.textContent?.trim() ?? '',
         signIn: document.querySelector('main.sign-in') !== null,
         overflow: document.documentElement.scrollWidth > innerWidth,
+        screen: document.querySelectorAll('.workspace__main .loading-placeholder--screen[role="status"]').length,
       })`)
       const pending = await read()
       expect(pending.status).toContain("Checking account")
       expect(pending.account).toContain("Checking account")
+      expect(pending.screen).toBe(1)
+      expect(await page.evaluate<boolean>(`document.querySelector('button') !== null && [...document.querySelectorAll('button')].every(button => !button.textContent?.includes('Create enrollment code'))`)).toBe(true)
       expect(pending.signIn).toBe(false)
       await Bun.sleep(300)
       expect((await read()).status).toContain("Checking account")
@@ -547,6 +645,7 @@ describe("remote responsive state behavior", () => {
       const settled = await read()
       expect(settled.status).toContain("Connected")
       expect(settled.account).toContain("user_fixture")
+      expect(settled.screen).toBe(0)
       expect(settled.signIn).toBe(false)
       expect(settled.overflow).toBe(false)
       const samples = await page.evaluate<readonly { readonly status: string; readonly account: string; readonly signIn: boolean }[]>(`window.accountSamples`)
@@ -656,13 +755,18 @@ describe("remote responsive state behavior", () => {
     }
   }, 30_000)
 
-  test("supports keyboard and coarse-pointer operation for device, delivery, autonomy, and overlays", async () => {
+  test("supports keyboard and coarse-pointer operation for device, delivery, appearance, and overlays", async () => {
     const workspace = await scenario("conversation-workspace", 768, "Run test suite against auth services.")
+    await workspace.evaluate(`document.querySelector('a[href="/remote/settings"]')?.click()`)
+    for (let attempt = 0; attempt < 40 && !await workspace.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]') !== null`); attempt += 1) await Bun.sleep(50)
     await workspace.evaluate(`document.querySelector('[aria-label="Machine"]')?.focus()`)
     await workspace.pressKey("Enter", "Enter", 13)
     expect(await workspace.evaluate<boolean>(`document.querySelector('[aria-label="Machine"]')?.getAttribute('aria-expanded') === 'true' && document.querySelector('[role="listbox"]') !== null`)).toBe(true)
     await workspace.pressEscape()
     expect(await workspace.evaluate<boolean>(`document.querySelector('[aria-label="Machine"]')?.getAttribute('aria-expanded') === 'false' && document.activeElement?.getAttribute('aria-label') === 'Machine'`)).toBe(true)
+
+    await workspace.evaluate(`document.querySelector('a[href="/remote"]')?.click()`)
+    for (let attempt = 0; attempt < 40 && !await workspace.evaluate<boolean>(`document.querySelector('.composer__delivery-toggle') !== null`); attempt += 1) await Bun.sleep(50)
 
     await workspace.evaluate(`document.querySelector('.composer__delivery-toggle')?.focus()`)
     expect(await workspace.evaluate<string | null>(`document.activeElement?.getAttribute('aria-label') ?? null`)).toBe("Steer mode; switch to Queue")
@@ -675,33 +779,27 @@ describe("remote responsive state behavior", () => {
     await workspace.pressEscape()
     await workspace.close()
 
-    const settings = await scenario("autonomy-goal-notification-settings", 390, "Mobile refactor")
+    const settings = await scenario("autonomy-goal-notification-settings", 390, "Appearance")
     await settings.setCoarsePointer(true)
-    const coarse = await settings.evaluate<{ readonly minimum: number; readonly themes: number; readonly autonomy: number }>(`(() => {
+    const coarse = await settings.evaluate<{ readonly minimum: number; readonly themes: number }>(`(() => {
       const appearance=document.querySelector('#appearance-settings')?.closest('section');
-      const autonomy=document.querySelector('#autonomy-settings')?.closest('section');
-      const controls=[...appearance.querySelectorAll('button'),...autonomy.querySelectorAll('button')].filter(button=>button.getBoundingClientRect().width>0);
+      const controls=[...appearance.querySelectorAll('button')].filter(button=>button.getBoundingClientRect().width>0);
       return {
         minimum:Math.min(...controls.map(control=>control.getBoundingClientRect().height)),
         themes:appearance.querySelectorAll('[role="radio"]').length,
-        autonomy:autonomy.querySelectorAll('[role="radio"]').length,
       };
     })()`)
     expect(coarse.minimum).toBeGreaterThanOrEqual(44)
     expect(coarse.themes).toBe(3)
-    expect(coarse.autonomy).toBe(4)
-    await settings.evaluate(`[...document.querySelector('#autonomy-settings').closest('section').querySelectorAll('[role="radio"]')].find(button=>button.textContent.includes('YOLO 3'))?.focus()`)
-    await settings.pressKey(" ", "Space", 32)
-    expect(await settings.evaluate<boolean>(`[...document.querySelector('#autonomy-settings').closest('section').querySelectorAll('[role="radio"]')].find(button=>button.textContent.includes('YOLO 3'))?.getAttribute('aria-checked') === 'true'`)).toBe(true)
     await settings.close()
   }, 30_000)
 
   test("keeps Settings controls in product order and density", async () => {
     const mobile = await scenario("autonomy-goal-notification-settings", 390, "Device disconnected")
     const state = await mobile.evaluate<{ readonly categoriesHidden: boolean; readonly themes: readonly string[]; readonly headingSizes: readonly number[] }>(`(() => ({
-      categoriesHidden:[...document.querySelectorAll('#appearance-settings,#autonomy-settings,#notification-settings')].every(heading=>{const section=heading.closest('section');const category=section?.querySelector('.settings__category');return category instanceof HTMLElement&&getComputedStyle(category).display==='none'}),
+      categoriesHidden:[...document.querySelectorAll('#appearance-settings,#notification-settings')].every(heading=>{const section=heading.closest('section');const category=section?.querySelector('.settings__category');return category instanceof HTMLElement&&getComputedStyle(category).display==='none'}),
       themes:[...document.querySelectorAll('.appearance-segments [role="radio"]')].map(button=>button.textContent.trim()).slice(0,3),
-      headingSizes:[...document.querySelectorAll('#appearance-settings,#autonomy-settings,#notification-settings')].map(heading=>parseFloat(getComputedStyle(heading).fontSize))
+      headingSizes:[...document.querySelectorAll('#appearance-settings,#notification-settings')].map(heading=>parseFloat(getComputedStyle(heading).fontSize))
     }))()`)
     expect(state.categoriesHidden).toBe(true)
     expect(state.themes).toEqual(["System", "Light", "Dark"])
@@ -750,9 +848,9 @@ async function selectSessionWorkspace(page: Awaited<ReturnType<NonNullable<typeo
   throw new Error(`Session workspace ${directory} did not settle`)
 }
 
-async function fixture(query: string, width: number, expected: string, theme?: "dark" | "light") {
+async function fixture(query: string, width: number, expected: string, theme?: "dark" | "light", height = 1600) {
   const page = await requireBrowser().openPage()
-  await page.setViewport(width, 1600)
+  await page.setViewport(width, height)
   await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?${query}`)
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (await page.evaluate<boolean>(`document.body.innerText.includes(${JSON.stringify(expected)})`)) {

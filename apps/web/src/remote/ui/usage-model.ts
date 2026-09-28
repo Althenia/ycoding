@@ -8,11 +8,25 @@ export type UsageReport = RemoteUsageReportValue["data"]
 export type UsageReportRow = UsageReport["rows"][number]
 export type UsageReportInput = RemoteUsageReportInput
 
-export const reportKey = (input: UsageReportInput) => JSON.stringify({ group: input.group, from: input.from, to: input.to, offset: input.offset, limit: input.limit, sort: input.sort, order: input.order })
+export const reportKey = (input: UsageReportInput) => JSON.stringify({ group: input.group, timeZone: input.timeZone, from: input.from, to: input.to, offset: input.offset, limit: input.limit, sort: input.sort, order: input.order })
 
 const number = (value: number) => new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(value)
 export const money = (value: number) => new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: value > 0 && value < 0.01 ? 4 : 2 }).format(value)
 export const tokenCount = (value: UsageTokens) => value.input + value.output + value.reasoning + value.cache.read + value.cache.write
+
+export function tooltipPosition(
+  card: { readonly left: number; readonly top: number; readonly width: number; readonly height: number },
+  viewport: { readonly width: number; readonly height: number },
+  anchor: { readonly x: number; readonly y: number },
+  tooltip: { readonly width: number; readonly height: number },
+) {
+  const left = Math.max(card.left + 8, 8)
+  const top = Math.max(card.top + 8, 8)
+  return {
+    left: Math.min(Math.max(anchor.x + 12, left), Math.max(left, Math.min(card.left + card.width, viewport.width) - tooltip.width - 8)) - card.left,
+    top: Math.min(Math.max(anchor.y + 12, top), Math.max(top, Math.min(card.top + card.height, viewport.height) - tooltip.height - 8)) - card.top,
+  }
+}
 
 export function providerHeading(provider: Pick<UsageProvider, "label" | "profile">) {
   if (provider.profile) return { name: provider.label, plan: provider.profile }
@@ -95,8 +109,49 @@ export function quotaWindow(window: UsageWindow, now: number) {
 export type Spend = { readonly cost: number; readonly tokens: number; readonly requests: number; readonly provenance?: "estimate" }
 export type SpendDay = Spend & { readonly key: string; readonly label: string }
 
-export function dailySpend(report: UsageReport | undefined, now: number): SpendDay[] {
-  const today = Math.floor(now / 86_400_000) * 86_400_000
+function localDate(time: number, formatter: Intl.DateTimeFormat) {
+  const parts = formatter.formatToParts(time)
+  const part = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((entry) => entry.type === type)?.value)
+  return { year: part("year"), month: part("month"), day: part("day") }
+}
+
+function localMidnight(year: number, month: number, day: number, formatter: Intl.DateTimeFormat) {
+  const target = Date.UTC(year, month - 1, day)
+  const start = target - 48 * 3_600_000
+  const ordinal = (time: number) => {
+    const date = localDate(time, formatter)
+    return Date.UTC(date.year, date.month - 1, date.day)
+  }
+  for (let end = start + 3_600_000; end <= target + 48 * 3_600_000; end += 3_600_000) {
+    if (ordinal(end - 3_600_000) >= target || ordinal(end) < target) continue
+    let low = end - 3_600_000
+    let high = end
+    while (high - low > 1) {
+      const middle = Math.floor((low + high) / 2)
+      if (ordinal(middle) >= target) high = middle
+      else low = middle
+    }
+    return high
+  }
+  throw new RangeError("Local calendar boundary is unavailable")
+}
+
+export function usageBounds(now: number, timeZone?: string) {
+  const formatter = timeZone === undefined ? undefined : new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" })
+  const date = formatter ? localDate(now, formatter) : { year: new Date(now).getUTCFullYear(), month: new Date(now).getUTCMonth() + 1, day: new Date(now).getUTCDate() }
+  const today = Date.UTC(date.year, date.month - 1, date.day)
+  const start = new Date(today - 29 * 86_400_000)
+  const tomorrow = new Date(today + 86_400_000)
+  return {
+    from: formatter ? localMidnight(start.getUTCFullYear(), start.getUTCMonth() + 1, start.getUTCDate(), formatter) : start.getTime(),
+    to: formatter ? localMidnight(tomorrow.getUTCFullYear(), tomorrow.getUTCMonth() + 1, tomorrow.getUTCDate(), formatter) : tomorrow.getTime(),
+    monthFrom: formatter ? localMidnight(date.year, date.month, 1, formatter) : Date.UTC(date.year, date.month - 1, 1),
+  }
+}
+
+export function dailySpend(report: UsageReport | undefined, now: number, timeZone?: string): SpendDay[] {
+  const date = timeZone === undefined ? undefined : localDate(now, new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }))
+  const today = date === undefined ? Math.floor(now / 86_400_000) * 86_400_000 : Date.UTC(date.year, date.month - 1, date.day)
   const rows = new Map(report?.rows.map((row) => [row.key, row]) ?? [])
   return Array.from({ length: 30 }, (_, index) => {
     const key = new Date(today - (29 - index) * 86_400_000).toISOString().slice(0, 10)

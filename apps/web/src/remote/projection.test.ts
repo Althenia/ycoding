@@ -118,6 +118,25 @@ test("tracks live execution and part timings for the transcript and status bar",
   expect(view.executionStarted).toBeUndefined()
 })
 
+test("ends the elapsed clock on an idle status before the next execution starts", () => {
+  const started = apply(createSessionView("ses_a"), "session.execution.started", {}, 1_000)
+  const retry = apply(started, "session.retry.scheduled", { attempt: 2, at: 6_000, code: "rate_limit" }, 2_000)
+  const idle = apply(retry, "session.status", { status: { type: "idle" } }, 4_000)
+  expect(idle).toMatchObject({ status: "idle" })
+  expect(idle.executionStarted).toBeUndefined()
+  expect(idle.retry).toBeUndefined()
+  const next = apply(idle, "session.execution.started", {}, 10_000)
+  expect(next.executionStarted).toBe(10_000)
+  expect(sessionStatusLabel(next, 11_000)).toBe("cooking · 1.0s")
+})
+
+test("starts a fresh elapsed clock when the previous terminal event was missed", () => {
+  const started = apply(createSessionView("ses_a"), "session.execution.started", {}, 1_000)
+  const next = apply(started, "session.execution.started", {}, 10_000)
+  expect(next.executionStarted).toBe(10_000)
+  expect(sessionStatusLabel(next, 11_000)).toBe("cooking · 1.0s")
+})
+
 test("keeps short row durations precise without changing live one-decimal elapsed", () => {
   expect(formatPartDuration(137)).toBe("137ms")
   expect(formatPartDuration(2_000)).toBe("2s")

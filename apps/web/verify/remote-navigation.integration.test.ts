@@ -101,6 +101,7 @@ describe("remote navigation", () => {
           const report = await page.evaluate<{
             readonly tab: string | null
             readonly tabDot: boolean
+            readonly bar: boolean
             readonly navDot: boolean
             readonly bottomDot: boolean
             readonly rowDot: boolean
@@ -111,6 +112,7 @@ describe("remote navigation", () => {
             return {
               tab: document.querySelector(".presentation-switch .filters__option--attention")?.getAttribute("aria-label") ?? null,
               tabDot: visible(document.querySelector(".presentation-switch .filters__option--attention .attention-dot")),
+              bar: (() => { const bar = document.querySelector('.workspace__topbar'); return bar?.parentElement === document.querySelector('.workspace__main') && Boolean(bar?.querySelector('[aria-label="Open Team"]')) && (innerWidth < 768 ? bar.querySelector('.presentation-switch') === null : bar.querySelector('.presentation-switch') !== null) })(),
               navDot: visible(document.querySelector('.remote-nav a[href="/remote"] .attention-dot')),
               bottomDot: visible(document.querySelector('.bottom-nav a[href="/remote"] .attention-dot')),
               rowDot: document.querySelector(".session-row--active .session-row__attention") !== null,
@@ -120,6 +122,7 @@ describe("remote navigation", () => {
           })()`)
           expect(report.tab).toBe(width < 768 ? null : "Conversation, waiting for your decision")
           expect(report.tabDot).toBe(width >= 768)
+          expect(report.bar).toBe(true)
           expect(report.navDot || report.bottomDot).toBe(true)
           expect(report.rowDot).toBe(true)
           expect(report.rows).not.toContain("Child: fix flaky suite")

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { dailySpend, donutGeometry, modelIdentity, providerDistribution, providerHeading, quotaWindow, relativeFreshness, reportKey, spendMetrics, visibleProviders, type UsageProvider } from "./usage-model"
+import { dailySpend, donutGeometry, modelIdentity, providerDistribution, providerHeading, quotaWindow, relativeFreshness, reportKey, spendMetrics, tooltipPosition, usageBounds, visibleProviders, type UsageProvider } from "./usage-model"
 
 const tokens = { input: 900, output: 100, reasoning: 20, cache: { read: 300, write: 40 } }
 const row = (label: string, cost?: number, costProvenance?: "recorded" | "current_catalog") => ({
@@ -105,4 +105,26 @@ test("model breakdown uses the encoded provider and model rather than guessing f
   expect(modelIdentity("open%2Frouter/deepseek%2Fv4/high", providers)).toEqual({ providerID: "open/router", provider: "OpenRouter", model: "deepseek/v4 · high" })
   expect(modelIdentity("openai/gpt-6-sol", [])).toEqual({ providerID: "openai", provider: "openai", model: "gpt-6-sol" })
   expect(modelIdentity("model_without_separator", providers)).toBeUndefined()
+})
+
+test("chart detail stays beside its anchor but inside both card and viewport", () => {
+  const card = { left: 16, top: 100, width: 358, height: 360 }
+  expect(tooltipPosition(card, { width: 390, height: 844 }, { x: 50, y: 250 }, { width: 220, height: 80 })).toEqual({ left: 46, top: 162 })
+  expect(tooltipPosition(card, { width: 390, height: 844 }, { x: 360, y: 430 }, { width: 220, height: 80 })).toEqual({ left: 130, top: 272 })
+  expect(tooltipPosition({ ...card, top: 700 }, { width: 390, height: 844 }, { x: 50, y: 810 }, { width: 220, height: 80 })).toEqual({ left: 46, top: 56 })
+})
+
+test("local report bounds use exact DST and non-hour-offset midnights", () => {
+  expect(usageBounds(Date.UTC(2026, 2, 8, 18), "America/New_York")).toMatchObject({
+    to: Date.UTC(2026, 2, 9, 4),
+    monthFrom: Date.UTC(2026, 2, 1, 5),
+  })
+  expect(usageBounds(Date.UTC(2026, 4, 1, 1), "Asia/Kathmandu")).toMatchObject({
+    to: Date.UTC(2026, 4, 1, 18, 15),
+    monthFrom: Date.UTC(2026, 3, 30, 18, 15),
+  })
+  const now = Date.UTC(2026, 2, 8, 18)
+  const report = { group: "day" as const, rows: [row("2026-03-07", 1, "recorded"), row("2026-03-08", 2, "recorded")], total: row("total"), rowCount: 2 }
+  expect(dailySpend(report, now, "America/New_York").slice(-2).map((day) => [day.key, day.cost])).toEqual([["2026-03-07", 1], ["2026-03-08", 2]])
+  expect(reportKey({ group: "day", timeZone: "America/New_York" })).not.toBe(reportKey({ group: "day" }))
 })

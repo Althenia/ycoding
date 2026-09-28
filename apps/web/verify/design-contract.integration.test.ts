@@ -78,6 +78,7 @@ describe("web design contract inventory", () => {
     for (const scenario of REMOTE_SCENARIOS) {
       await page.setViewport(scenario.viewport, 900)
       await page.navigate(`${url("/verify/remote.html")}?scenario=${scenario.name}-${scenario.viewport}`)
+      for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.documentElement.dataset.theme === ${JSON.stringify(scenario.theme)} && (document.querySelector('.app') !== null || document.querySelector('main.sign-in') !== null)`); attempt += 1) await Bun.sleep(50)
       const state = await page.evaluate<{ readonly theme: string; readonly background: string; readonly ink: string; readonly overflow: boolean; readonly path: string; readonly signIn: boolean }>(`(() => ({
         theme: document.documentElement.dataset.theme ?? "",
         background: getComputedStyle(document.documentElement).getPropertyValue("--yc-bg").trim(),
@@ -189,6 +190,10 @@ describe("web design contract inventory", () => {
     expect(ownership.edges.every((edge) => Math.abs(edge.left - ownership.edges[0]!.left) <= 1 && Math.abs(edge.right - ownership.edges[0]!.right) <= 1)).toBe(true)
 
     await page.navigate(`${url("/verify/remote.html")}?scenario=conversation-workspace-390`)
+    for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('a[href="/remote/settings"]') !== null`); attempt += 1) await Bun.sleep(50)
+    await page.evaluate(`document.querySelector('a[href="/remote/settings"]')?.click()`)
+    for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]') !== null`); attempt += 1) await Bun.sleep(50)
+    await page.evaluate(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.click()`)
     const dropdown = await page.evaluate<{ readonly expanded: boolean; readonly withinViewport: boolean }>(`(() => {
       const trigger = document.querySelector('[aria-label="Machine"]')
       const list = document.querySelector('[role="listbox"]')
@@ -225,6 +230,7 @@ describe("web design contract inventory", () => {
         await page.setViewport(width, height)
         for (const path of ["/", "/docs/quickstart", "/changelog", "/verify/remote.html?view=chat", "/verify/remote.html?view=activity", "/verify/remote.html?view=settings"]) {
           await page.navigate(url(path))
+          if (path.includes("view=chat")) for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('.composer') !== null`); attempt += 1) await Bun.sleep(50)
           const layout = await page.evaluate<{ readonly overflow: boolean; readonly escaped: readonly string[]; readonly undersizedTabs: readonly string[]; readonly composer: boolean }>(`(() => {
             document.documentElement.dataset.theme = ${JSON.stringify(theme)}
             const visible = (element) => element instanceof HTMLElement && getComputedStyle(element).visibility !== 'hidden' && getComputedStyle(element).display !== 'none' && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0

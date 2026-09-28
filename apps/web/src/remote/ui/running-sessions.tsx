@@ -42,22 +42,28 @@ export function RunningSessions(props: {
   })
   return <Show when={props.sessions.length > 0}>
     <section class="running-sessions" aria-labelledby="running-sessions-title">
-      <h2 id="running-sessions-title">Running across workspaces</h2>
+      <h2 id="running-sessions-title">Running and recent</h2>
       <ul class="running-sessions__list" ref={track} onScroll={measure} onWheel={() => { target = undefined }} onTouchStart={() => { target = undefined }}>
         <For each={props.sessions}>
-          {(session, index) => <li role="group" aria-label={`${index() + 1} of ${props.sessions.length}`}>
+          {(session, index) => {
+            const lastActive = session.updatedAt > 0 ? new Date(session.updatedAt) : undefined
+            return <li role="group" aria-label={`${index() + 1} of ${props.sessions.length}`}>
             <button type="button" class="running-sessions__item"
               aria-label={`Open ${session.title} in ${session.workspaceName}`}
               onClick={() => props.onSelectSession(session.id)}>
               <span class="running-sessions__title">{session.title}</span>
               <span class="running-sessions__workspace">{session.workspaceName}</span>
-              <span class="running-sessions__status"><span aria-hidden="true" class="running-sessions__dot" />Running</span>
+              <span class="running-sessions__status">
+                <Show when={session.running} fallback={lastActive === undefined ? "Last active not reported" : <time dateTime={lastActive.toISOString()}>Last active {lastActive.toLocaleString()}</time>}>
+                  <span aria-hidden="true" class="running-sessions__dot" />Running
+                </Show>
+              </span>
             </button>
-          </li>}
+          </li>}}
         </For>
       </ul>
-      <Show when={overflow()}><div class="running-sessions__pagination" role="group" aria-label="Running Session pages">
-        <For each={props.sessions}>{(_, index) => <button type="button" aria-label={`Show running Session ${index() + 1} of ${props.sessions.length}`} aria-current={active() === index() ? "true" : undefined} onClick={() => showCard(index())} />}</For>
+      <Show when={overflow()}><div class="running-sessions__pagination" role="group" aria-label="Session carousel pages">
+        <For each={props.sessions}>{(_, index) => <button type="button" aria-label={`Show Session ${index() + 1} of ${props.sessions.length}`} aria-current={active() === index() ? "true" : undefined} onClick={() => showCard(index())} />}</For>
       </div></Show>
     </section>
   </Show>

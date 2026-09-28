@@ -117,4 +117,81 @@ describe("notification center and live toasts", () => {
       expect(result).toEqual({ size: 44, visible: true, overflow: false })
     } finally { await page.close() }
   })
+
+  test("re-registers this device's push subscription with the relay when the workspace loads", async () => {
+    if (!browser) throw new Error("Browser not started")
+    const page = await browser.openPage()
+    try {
+      await page.injectOnNewDocument(`(() => {
+        window.__pushCalls = [];
+        Object.defineProperty(Notification, 'permission', { configurable: true, get: () => 'granted' });
+        const key = new Uint8Array(65); key[0] = 4;
+        const subscription = { endpoint: 'https://fcm.googleapis.com/send/existing', options: { applicationServerKey: key.buffer },
+          getKey: (name) => new Uint8Array(name === 'p256dh' ? 65 : 16).buffer, unsubscribe: async () => true };
+        const registration = { pushManager: { getSubscription: async () => subscription, subscribe: async () => subscription } };
+        Object.defineProperty(ServiceWorkerContainer.prototype, 'ready', { configurable: true, get: () => Promise.resolve(registration) });
+        const network = window.fetch.bind(window);
+        window.fetch = async (input, init) => {
+          const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+          if (url.pathname === '/api/push/key') return Response.json({ publicKey: 'BA' + 'A'.repeat(85) });
+          if (url.pathname === '/api/push/subscriptions') {
+            window.__pushCalls.push({ method: init && init.method, body: init && init.body ? JSON.parse(init.body) : undefined });
+            return Response.json({ subscribed: true });
+          }
+          return network(input, init);
+        };
+      })()`)
+      await page.setViewport(1440, 844)
+      await page.navigate(`http://127.0.0.1:${port}/verify/notifications-fixture.html?theme=dark`)
+      for (let attempt = 0; attempt < 60 && await page.evaluate<number>(`window.__pushCalls.length`) === 0; attempt += 1) await Bun.sleep(50)
+      const calls = await page.evaluate<readonly { method: string; body: { endpoint: string } }[]>(`window.__pushCalls`)
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({ method: "POST", body: { endpoint: "https://fcm.googleapis.com/send/existing" } })
+    } finally { await page.close() }
+  })
+
+  test("aligns notification rows with the panel heading and its trailing actions", async () => {
+    for (const width of [390, 1440]) {
+      const page = await open(width, "dark")
+      try {
+        await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
+        await page.evaluate(`Promise.all([...document.querySelectorAll('.yc-notification-panel, .yc-notification')].flatMap(node => node.getAnimations()).map(animation => animation.finished))`)
+        const measure = `(() => {
+          const panel = document.querySelector('.yc-notification-panel');
+          const head = panel.querySelector('.yc-notification-panel__head');
+          const headStyle = getComputedStyle(head);
+          const contentLeft = head.getBoundingClientRect().left + parseFloat(headStyle.paddingLeft);
+          const contentRight = head.getBoundingClientRect().right - parseFloat(headStyle.paddingRight);
+          const label = panel.querySelector('.yc-notification-group h3');
+          const labelLeft = label.getBoundingClientRect().left + parseFloat(getComputedStyle(label).paddingLeft);
+          const scroll = panel.querySelector('.yc-notification-panel__scroll').getBoundingClientRect();
+          const rows = [...panel.querySelectorAll('.yc-notification')].map(row => ({
+            rowLeft: row.getBoundingClientRect().left, rowRight: row.getBoundingClientRect().right,
+            icon: row.querySelector('.yc-notification__icon').getBoundingClientRect().left,
+            time: row.querySelector('time').getBoundingClientRect().right,
+          }));
+          const dismiss = panel.querySelector('.yc-notification__dismiss');
+          return { contentLeft, contentRight, labelLeft, scrollLeft: scroll.left, scrollRight: scroll.right, rows,
+            dismissRight: dismiss.getBoundingClientRect().right, dismissVisible: getComputedStyle(dismiss).opacity === '1',
+            timeVisible: getComputedStyle(panel.querySelector('.yc-notification time')).visibility === 'visible' };
+        })()`
+        const resting = await page.evaluate<{ contentLeft: number; contentRight: number; labelLeft: number; scrollLeft: number; scrollRight: number;
+          rows: readonly { rowLeft: number; rowRight: number; icon: number; time: number }[]; timeVisible: boolean }>(measure)
+        expect(resting.rows.length, `${width}`).toBe(2)
+        expect(Math.abs(resting.labelLeft - resting.contentLeft), `${width} label`).toBeLessThanOrEqual(1)
+        for (const row of resting.rows) {
+          expect(Math.abs(row.icon - resting.contentLeft), `${width} icon`).toBeLessThanOrEqual(1)
+          expect(Math.abs(row.time - resting.contentRight), `${width} time`).toBeLessThanOrEqual(1)
+          expect(Math.abs(row.rowLeft - resting.scrollLeft), `${width} divider start`).toBeLessThanOrEqual(1)
+          expect(Math.abs(row.rowRight - resting.scrollRight), `${width} divider end`).toBeLessThanOrEqual(1)
+        }
+        expect(resting.timeVisible).toBe(true)
+        await page.evaluate(`document.querySelector('.yc-notification__dismiss').focus()`)
+        const focused = await page.evaluate<{ contentRight: number; dismissRight: number; dismissVisible: boolean; timeVisible: boolean }>(measure)
+        expect(focused.dismissVisible, `${width} dismiss`).toBe(true)
+        expect(focused.timeVisible, `${width} time hidden behind dismiss`).toBe(false)
+        expect(Math.abs(focused.dismissRight - focused.contentRight), `${width} dismiss edge`).toBeLessThanOrEqual(1)
+      } finally { await page.close() }
+    }
+  }, 30_000)
 })

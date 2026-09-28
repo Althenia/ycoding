@@ -1,12 +1,12 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, untrack } from "solid-js"
 import { useRemote } from "../context"
-import { dailySpend, donutGeometry, modelIdentity, money, providerDistribution, providerHeading, quotaWindow, relativeFreshness, reportKey, spendMetrics, tokenCount, visibleProviders, type SpendDay, type UsageProvider, type UsageReport, type UsageReportInput, type UsageReportRow, type UsageWindow } from "./usage-model"
+import { LoadingPlaceholder } from "./loading"
+import { dailySpend, donutGeometry, modelIdentity, money, providerDistribution, providerHeading, quotaWindow, relativeFreshness, reportKey, spendMetrics, tokenCount, tooltipPosition, usageBounds, visibleProviders, type SpendDay, type UsageProvider, type UsageReport, type UsageReportInput, type UsageReportRow, type UsageWindow } from "./usage-model"
 import "./usage.css"
 
 const groups = ["model", "session", "project", "agent"] as const
 type BreakdownInput = UsageReportInput & { readonly group: (typeof groups)[number] }
 const names = { model: "Model", session: "Session", project: "Project", agent: "Agent" }
-const day = 86_400_000
 const columns = [
   { key: "steps", label: "Steps" }, { key: "tokens", label: "Tokens" }, { key: "input", label: "Input" },
   { key: "output", label: "Output" }, { key: "reasoning", label: "Reasoning" }, { key: "cacheRead", label: "Cache read" }, { key: "cost", label: "Cost" },
@@ -19,7 +19,10 @@ const providerKey = (provider: UsageProvider) => `${provider.providerID}\u0000${
 
 export function UsagePage() {
   const remote = useRemote()
+  const openedAt = Date.now()
+  const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone
   const [now, setNow] = createSignal(Date.now())
+  const [zoneMode, setZoneMode] = createSignal<"utc" | "local">(localStorage.getItem("ycoding.remote.usage.timeZone") === "local" ? "local" : "utc")
   const [group, setGroup] = createSignal<(typeof groups)[number]>("model")
   const [sort, setSort] = createSignal<UsageReportInput["sort"]>("cost")
   const [order, setOrder] = createSignal<UsageReportInput["order"]>("desc")
@@ -32,24 +35,33 @@ export function UsagePage() {
   const [minimumRowsHeight, setMinimumRowsHeight] = createSignal(0)
   const [activeDay, setActiveDay] = createSignal<SpendDay>()
   const [activeProvider, setActiveProvider] = createSignal<string>()
-  const [retained, setRetained] = createSignal<{ readonly deviceID?: string; readonly providers?: readonly UsageProvider[]; readonly daily?: UsageReport; readonly monthly?: UsageReport }>({})
+  const [dayPosition, setDayPosition] = createSignal({ left: 0, top: 0 })
+  const [providerPosition, setProviderPosition] = createSignal({ left: 0, top: 0 })
+  const [retained, setRetained] = createSignal<{ readonly deviceID?: string; readonly providers?: readonly UsageProvider[]; readonly daily?: UsageReport; readonly dailyKey?: string; readonly monthly?: UsageReport; readonly monthlyKey?: string }>({})
   let mobileRows: HTMLDivElement | undefined
+  let dayCard: HTMLDivElement | undefined
+  let dayTooltip: HTMLDivElement | undefined
+  let providerCard: HTMLDivElement | undefined
+  let providerTooltip: HTMLDivElement | undefined
   let deviceID = remote.state().activeDeviceID
   const connected = createMemo(() => remote.state().transport.kind === "open")
-  const today = Math.floor(Date.now() / day) * day
-  const range = { from: today - 29 * day, to: today + day }
-  const dailyInput: UsageReportInput = { group: "day", ...range, limit: 30, sort: "key", order: "asc" }
-  const month = new Date()
-  const monthlyInput: UsageReportInput = { group: "model", from: Date.UTC(month.getUTCFullYear(), month.getUTCMonth(), 1), to: Date.now(), limit: 200, sort: "cost", order: "desc" }
-  const breakdownInput = createMemo<BreakdownInput>(() => ({ group: group(), ...range, offset: offset(), limit: 25, sort: sort(), order: order() }))
-  const daily = () => remote.state().usage.reports[reportKey(dailyInput)]
-  const monthly = () => remote.state().usage.reports[reportKey(monthlyInput)]
+  const providerStatus = createMemo(() => remote.state().usage.providers.status)
+  const selectedZone = () => zoneMode() === "local" ? localZone : undefined
+  const zoneLabel = () => zoneMode() === "local" ? `Local · ${localZone}` : "UTC"
+  const zoneInput = () => selectedZone() === undefined ? {} : { timeZone: selectedZone() }
+  const bounds = createMemo(() => usageBounds(openedAt, selectedZone()))
+  const range = () => ({ from: bounds().from, to: bounds().to, ...zoneInput() })
+  const dailyInput = createMemo<UsageReportInput>(() => ({ group: "day", ...range(), limit: 30, sort: "key", order: "asc" }))
+  const monthlyInput = createMemo<UsageReportInput>(() => ({ group: "model", from: bounds().monthFrom, to: openedAt, ...zoneInput(), limit: 200, sort: "cost", order: "desc" }))
+  const breakdownInput = createMemo<BreakdownInput>(() => ({ group: group(), ...range(), offset: offset(), limit: 25, sort: sort(), order: order() }))
+  const daily = () => remote.state().usage.reports[reportKey(dailyInput())]
+  const monthly = () => remote.state().usage.reports[reportKey(monthlyInput())]
   const breakdown = () => remote.state().usage.reports[reportKey(breakdownInput())]
   const retainedForDevice = () => retained().deviceID === remote.state().activeDeviceID ? retained() : undefined
   const providerData = () => remote.state().usage.providers.data ?? retainedForDevice()?.providers
-  const dailyData = () => daily()?.data ?? retainedForDevice()?.daily
-  const monthlyData = () => monthly()?.data ?? retainedForDevice()?.monthly
-  const displayed = () => shownBreakdown()?.deviceID === remote.state().activeDeviceID ? shownBreakdown()?.report : undefined
+  const dailyData = () => daily()?.status === "unsupported" ? undefined : daily()?.data ?? (retainedForDevice()?.dailyKey === reportKey(dailyInput()) ? retainedForDevice()?.daily : undefined)
+  const monthlyData = () => monthly()?.status === "unsupported" ? undefined : monthly()?.data ?? (retainedForDevice()?.monthlyKey === reportKey(monthlyInput()) ? retainedForDevice()?.monthly : undefined)
+  const displayed = () => breakdown()?.status !== "unsupported" && shownBreakdown()?.deviceID === remote.state().activeDeviceID && shownBreakdown()?.input.timeZone === selectedZone() ? shownBreakdown()?.report : undefined
   const updating = () => shownBreakdown() !== undefined && (breakdown() === undefined || breakdown()?.status === "loading")
   const holdRows = () => setMinimumRowsHeight(Math.max(minimumRowsHeight(), mobileRows?.offsetHeight ?? 0))
   const providers = createMemo(() => visibleProviders(providerData() ?? []))
@@ -64,7 +76,15 @@ export function UsagePage() {
   const segmentIDs = createMemo(() => distribution().segments.map((segment) => segment.providerID))
   const providerCosts = createMemo(() => new Map(providerDistribution(monthlyData(), providerData() ?? [], "spend").segments.map((segment) => [segment.providerID, segment.value])))
   const activeSegment = () => arcs().find((segment) => segment.providerID === activeProvider())
-  const days = createMemo(() => dailySpend(dailyData(), now()))
+  const placeDay = (x: number, y: number) => {
+    if (!dayCard || !dayTooltip) return
+    setDayPosition(tooltipPosition(dayCard.getBoundingClientRect(), { width: window.innerWidth, height: window.innerHeight }, { x, y }, dayTooltip.getBoundingClientRect()))
+  }
+  const placeProvider = (x: number, y: number) => {
+    if (!providerCard || !providerTooltip) return
+    setProviderPosition(tooltipPosition(providerCard.getBoundingClientRect(), { width: window.innerWidth, height: window.innerHeight }, { x, y }, providerTooltip.getBoundingClientRect()))
+  }
+  const days = createMemo(() => dailySpend(dailyData(), now(), selectedZone()))
   const dayKeys = createMemo(() => days().map((entry) => entry.key))
   const tileValue = (id: (typeof tileIDs)[number]) => spendMetrics(id === "today" ? days().slice(-1) : id === "yesterday" ? days().slice(-2, -1) : days())
   const sparkline = createMemo(() => {
@@ -78,7 +98,7 @@ export function UsagePage() {
     setOffset(0)
     setSort("cost")
     setOrder("desc")
-    void remote.store.loadUsageReport({ group: next, ...range, offset: 0, limit: 25, sort: "cost", order: "desc" })
+    void remote.store.loadUsageReport({ group: next, ...range(), offset: 0, limit: 25, sort: "cost", order: "desc" })
   }
   const setSorting = (next: NonNullable<UsageReportInput["sort"]>) => {
     holdRows()
@@ -86,7 +106,7 @@ export function UsagePage() {
     setSort(next)
     setOrder(direction)
     setOffset(0)
-    void remote.store.loadUsageReport({ group: group(), ...range, offset: 0, limit: 25, sort: next, order: direction })
+    void remote.store.loadUsageReport({ group: group(), ...range(), offset: 0, limit: 25, sort: next, order: direction })
   }
   const nextPage = () => {
     const next = displayed()?.nextOffset
@@ -103,9 +123,14 @@ export function UsagePage() {
     void remote.store.loadUsageReport({ ...breakdownInput(), offset: next })
   }
   createEffect(() => {
-    if (!connected() || remote.state().usage.providers.status !== "idle") return
-    untrack(() => { void Promise.all([remote.store.loadUsage(), remote.store.loadUsageReport(dailyInput), remote.store.loadUsageReport(breakdownInput()), remote.store.loadUsageReport(monthlyInput)]) })
+    if (connected() && providerStatus() === "idle") untrack(() => { void remote.store.loadUsage() })
   })
+  createEffect(() => {
+    if (!connected()) return
+    const reports = [dailyInput(), breakdownInput(), monthlyInput()]
+    untrack(() => { void Promise.all(reports.map((input) => remote.store.loadUsageReport(input))) })
+  })
+  createEffect(() => localStorage.setItem("ycoding.remote.usage.timeZone", zoneMode()))
   createEffect(() => {
     const current = remote.state().activeDeviceID
     if (current !== deviceID || current === undefined || remote.state().connection.kind === "signed-out") {
@@ -120,7 +145,9 @@ export function UsagePage() {
     const monthReport = monthly()?.data
     if (providers || dayReport || monthReport) setRetained((previous) => {
       if (previous.deviceID === current && (providers ?? previous.providers) === previous.providers && (dayReport ?? previous.daily) === previous.daily && (monthReport ?? previous.monthly) === previous.monthly) return previous
-      return { deviceID: current, providers: providers ?? previous.providers, daily: dayReport ?? previous.daily, monthly: monthReport ?? previous.monthly }
+      return { deviceID: current, providers: providers ?? previous.providers,
+        daily: dayReport ?? previous.daily, dailyKey: dayReport ? reportKey(dailyInput()) : previous.dailyKey,
+        monthly: monthReport ?? previous.monthly, monthlyKey: monthReport ? reportKey(monthlyInput()) : previous.monthlyKey }
     })
     const result = breakdown()
     if (result?.status === "ready" && result.data && (shownBreakdown()?.report !== result.data || shownBreakdown()?.input !== breakdownInput()))
@@ -134,6 +161,10 @@ export function UsagePage() {
   return <div class="usage-page">
     <header class="usage-head"><div class="usage-head__title"><h1>Usage</h1><p>Quotas and spend from {machine() ?? "your machine"}</p></div>
       <div class="usage-head__actions"><Show when={latest() !== undefined}><span class="usage-head__freshness">Updated {relativeFreshness(latest()!, now())}</span></Show>
+        <div class={`usage-zone usage-toggle${zoneMode() === "local" ? " usage-zone--local" : ""}`} role="group" aria-label="Usage time zone">
+          <button type="button" aria-pressed={zoneMode() === "utc"} onClick={() => setZoneMode("utc")}>UTC</button>
+          <button type="button" aria-pressed={zoneMode() === "local"} onClick={() => setZoneMode("local")}>Local</button>
+        </div>
         <button class="usage-refresh" type="button" disabled={remote.state().usage.providers.status === "loading" || remote.state().transport.kind !== "open"} onClick={() => void remote.store.loadUsage({ refresh: true })}>Refresh quotas</button>
       </div>
     </header>
@@ -142,8 +173,9 @@ export function UsagePage() {
       <h2 class="visually-hidden" id="usage-allowances">Provider quotas</h2>
       <Show when={!providerData() && remote.state().usage.providers.status === "unsupported"}><p class="usage-message" role="status">Update YCoding on this machine to see usage.</p></Show>
       <Show when={!providerData() && remote.state().usage.providers.status === "error"}><p class="usage-message" role="alert">{remote.state().usage.providers.message ?? "Usage could not be loaded."}</p></Show>
+      <Show when={providerData() && remote.state().usage.providers.status === "error"}><p class="usage-message" role="alert">{remote.state().usage.providers.message ?? "Usage could not be loaded."}</p></Show>
       <Show when={!providerData() && remote.state().transport.kind !== "open" && remote.state().usage.providers.status === "idle"}><p class="usage-message" role="status">Connect to a machine to see usage.</p></Show>
-      <Show when={!providerData() && remote.state().usage.providers.status === "loading"}><p class="usage-message" role="status">Loading provider quotas…</p></Show>
+      <Show when={!providerData() && remote.state().usage.providers.status === "loading"}><LoadingPlaceholder kind="usage" label="Loading provider quotas…" /></Show>
       <Show when={providerData() && remote.state().usage.providers.status === "ready" && providers().length === 0}><p class="usage-message">No connected provider reports quotas.</p></Show>
       <div class="usage-providers"><For each={providerKeys()}>{(key, index) => {
         const initial = providers().find((provider) => providerKey(provider) === key)!
@@ -161,9 +193,12 @@ export function UsagePage() {
         </article>}</For></div>
       </Show>
       <div class="usage-visuals">
-        <div class="usage-chart">
-          <div class="usage-chart__head"><div><h3>Daily spend (last 30 UTC days)</h3><p>UTC day boundary · Today highlighted</p></div><button type="button" aria-expanded={tableOpen()} aria-controls="usage-daily-table" onClick={() => setTableOpen(!tableOpen())}>{tableOpen() ? "Hide table" : "View table"}</button></div>
-          <Show when={dailyData()} fallback={<p class="usage-message" role="status">{daily()?.status === "unsupported" ? "Update YCoding on this machine to see usage." : daily()?.status === "error" ? daily()?.message : "Loading daily spend…"}</p>}>
+        <div class="usage-chart" ref={dayCard}>
+          <div class="usage-chart__head"><div><h3>Daily spend (last 30 {zoneLabel()} days)</h3><p>{zoneLabel()} day boundary · Today highlighted</p></div><button type="button" aria-expanded={tableOpen()} aria-controls="usage-daily-table" onClick={() => setTableOpen(!tableOpen())}>{tableOpen() ? "Hide table" : "View table"}</button></div>
+          <Show when={dailyData() && daily()?.status === "error"}><p class="usage-message" role="alert">{daily()?.message ?? "Daily usage could not be loaded."} <button type="button" onClick={() => void remote.store.loadUsageReport(dailyInput(), { refresh: true })}>Retry</button></p></Show>
+          <Show when={dailyData()} fallback={<Show when={daily()?.status === "unsupported" || daily()?.status === "error"} fallback={<Show when={connected()}><LoadingPlaceholder kind="chart" label="Loading daily spend…" /></Show>}>
+            <p class="usage-message" role={daily()?.status === "error" ? "alert" : "status"}>{daily()?.status === "unsupported" ? zoneMode() === "local" ? "Update YCoding on this machine to see Local usage. Switch to UTC to continue." : "Update YCoding on this machine to see usage." : daily()?.message}<Show when={daily()?.status === "error"}> <button type="button" onClick={() => void remote.store.loadUsageReport(dailyInput(), { refresh: true })}>Retry</button></Show></p>
+          </Show>}>
             <p class="usage-chart__today">Today: {money(days().at(-1)?.cost ?? 0)} · {count(days().at(-1)?.requests ?? 0)} requests</p>
             <svg viewBox="0 0 900 180" role="img" aria-label="Daily cost over the last 30 days, with exact values in the table" preserveAspectRatio="none">
               <line x1="0" y1="156" x2="900" y2="156" class="usage-chart__axis" />
@@ -172,28 +207,31 @@ export function UsagePage() {
                 const height = () => entry().cost === 0 ? 2 : Math.max(4, entry().cost / Math.max(1, ...days().map((item) => item.cost)) * 138)
                 return <rect x={index() * 30 + 7} y={156 - height()} width="16" height={height()} rx="2" class={index() === 29 ? "usage-chart__bar usage-chart__bar--today" : "usage-chart__bar"}
                   tabindex="0" role="img" aria-label={`${key}: estimated cost ${money(entry().cost)}, ${count(entry().requests)} requests, ${count(entry().tokens)} tokens`}
-                  onPointerEnter={(event) => { if (event.pointerType !== "touch") setActiveDay(entry()) }} onPointerLeave={(event) => { if (event.pointerType !== "touch") setActiveDay(undefined) }}
-                  onFocus={() => setActiveDay(entry())} onBlur={() => setActiveDay(undefined)} onClick={() => setActiveDay(entry())} />
+                  onPointerEnter={(event) => { if (event.pointerType !== "touch") { setActiveDay(entry()); queueMicrotask(() => placeDay(event.clientX, event.clientY)) } }}
+                  onPointerMove={(event) => { if (event.pointerType !== "touch") placeDay(event.clientX, event.clientY) }} onPointerLeave={(event) => { if (event.pointerType !== "touch") setActiveDay(undefined) }}
+                  onFocus={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setActiveDay(entry()); queueMicrotask(() => placeDay(rect.left + rect.width / 2, rect.top + rect.height / 2)) }}
+                  onBlur={() => setActiveDay(undefined)} onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setActiveDay(entry()); queueMicrotask(() => placeDay(event.clientX || rect.left + rect.width / 2, event.clientY || rect.top + rect.height / 2)) }} />
               }}</For>
             </svg>
-            <Show when={activeDay()}>{(entry) => <div class="usage-chart__tooltip" role="status"><strong>{entry().key}</strong><span>Estimated cost {money(entry().cost)}</span><span>{count(entry().requests)} requests · {count(entry().tokens)} tokens</span></div>}</Show>
+            <Show when={activeDay()}>{(entry) => <div class="usage-chart__tooltip" ref={dayTooltip} style={{ left: `${dayPosition().left}px`, top: `${dayPosition().top}px` }} role="status"><strong>{entry().key}</strong><span>Estimated cost {money(entry().cost)}</span><span>{count(entry().requests)} requests · {count(entry().tokens)} tokens</span></div>}</Show>
             <div class="usage-chart__labels"><span>{days()[0]?.label}</span><span>{days()[14]?.label}</span><span>Today</span></div>
-            <Show when={tableOpen()}><div id="usage-daily-table" class="usage-table-wrap"><table><caption>Daily usage, last 30 UTC days</caption><thead><tr><th scope="col">Day</th><th scope="col">Cost</th><th scope="col">Tokens</th><th scope="col">Requests</th></tr></thead><tbody><For each={[...days()].reverse()}>{(entry) => <tr><th scope="row">{entry.key}</th><td>{money(entry.cost)}</td><td>{count(entry.tokens)}</td><td>{count(entry.requests)}</td></tr>}</For></tbody></table></div></Show>
+            <Show when={tableOpen()}><div id="usage-daily-table" class="usage-table-wrap"><table><caption>Daily usage, last 30 {zoneLabel()} days</caption><thead><tr><th scope="col">Day</th><th scope="col">Cost</th><th scope="col">Tokens</th><th scope="col">Requests</th></tr></thead><tbody><For each={[...days()].reverse()}>{(entry) => <tr><th scope="row">{entry.key}</th><td>{money(entry.cost)}</td><td>{count(entry.tokens)}</td><td>{count(entry.requests)}</td></tr>}</For></tbody></table></div></Show>
           </Show>
         </div>
-        <div class="usage-distribution" aria-labelledby="usage-distribution-title">
-          <div class="usage-distribution__head"><div><h3 id="usage-distribution-title">Provider distribution (current UTC month)</h3><p>Current UTC month</p></div>
+        <div class="usage-distribution" ref={providerCard} aria-labelledby="usage-distribution-title">
+          <div class="usage-distribution__head"><div><h3 id="usage-distribution-title">Provider distribution (current {zoneLabel()} month)</h3><p>Current {zoneLabel()} month</p></div>
             <div class="usage-distribution__controls"><div class={`usage-toggle${distributionMetric() === "tokens" ? " usage-toggle--tokens" : ""}`} role="group" aria-label="Distribution metric">
               <button type="button" aria-pressed={distributionMetric() === "spend"} onClick={() => setDistributionMetric("spend")}>Spend</button>
               <button type="button" aria-pressed={distributionMetric() === "tokens"} onClick={() => setDistributionMetric("tokens")}>Tokens</button>
             </div><button class="usage-distribution__table-toggle" type="button" aria-expanded={distributionTableOpen()} aria-controls="usage-distribution-table" onClick={() => setDistributionTableOpen(!distributionTableOpen())}>{distributionTableOpen() ? "Hide table" : "View table"}</button></div>
           </div>
-          <Show when={!monthlyData() && (monthly()?.status === "loading" || monthly() === undefined)}><p class="usage-distribution__empty" role="status">Loading monthly usage…</p></Show>
-          <Show when={!monthlyData() && monthly()?.status === "unsupported"}><p class="usage-distribution__empty">Update YCoding on this machine to see monthly usage.</p></Show>
-          <Show when={!monthlyData() && monthly()?.status === "error"}><p class="usage-distribution__empty" role="alert">{monthly()?.message}</p></Show>
+          <Show when={monthlyData() && monthly()?.status === "error"}><p class="usage-message" role="alert">{monthly()?.message ?? "Monthly usage could not be loaded."} <button type="button" onClick={() => void remote.store.loadUsageReport(monthlyInput(), { refresh: true })}>Retry</button></p></Show>
+          <Show when={!monthlyData() && connected() && (monthly()?.status === "loading" || monthly() === undefined)}><LoadingPlaceholder kind="chart" label="Loading monthly usage…" /></Show>
+          <Show when={!monthlyData() && monthly()?.status === "unsupported"}><p class="usage-distribution__empty">{zoneMode() === "local" ? "Update YCoding on this machine to see Local usage. Switch to UTC to continue." : "Update YCoding on this machine to see monthly usage."}</p></Show>
+          <Show when={!monthlyData() && monthly()?.status === "error"}><p class="usage-distribution__empty" role="alert">{monthly()?.message} <button type="button" onClick={() => void remote.store.loadUsageReport(monthlyInput(), { refresh: true })}>Retry</button></p></Show>
           <Show when={monthlyData()}><Show when={distribution().total > 0} fallback={<p class="usage-distribution__empty">No {distributionMetric() === "spend" ? "priced" : "token"} usage this month.</p>}>
             <div class="usage-distribution__body">
-              <svg class="usage-donut" viewBox="0 0 200 200" role="img" aria-label={`${distributionMetric() === "spend" ? "Estimated spend" : "Tokens"} by provider this UTC month; exact values are available in the table`}>
+              <svg class="usage-donut" viewBox="0 0 200 200" role="img" aria-label={`${distributionMetric() === "spend" ? "Estimated spend" : "Tokens"} by provider this ${zoneLabel()} month; exact values are available in the table`}>
                 <circle class="usage-donut__track" cx="100" cy="100" r="72" fill="none" stroke-width="26" />
                 <For each={segmentIDs()}>{(id, index) => {
                   const initial = arcs().find((segment) => segment.providerID === id)!
@@ -201,13 +239,15 @@ export function UsagePage() {
                   return <circle class="usage-donut__arc" cx="100" cy="100" r="72" fill="none" stroke-width="26"
                     style={{ stroke: distributionColors[index() % distributionColors.length], "--usage-dash": `${segment().length} ${segment().circumference - segment().length}`, "--usage-circumference": segment().circumference, "stroke-dashoffset": segment().offset }}
                     tabindex="0" role="img" aria-label={`${segment().label}: estimated cost ${money(providerCosts().get(id) ?? 0)}, ${Math.round(segment().share * 100)}% share${distributionMetric() === "tokens" ? `, ${count(segment().value)} tokens` : ""}`}
-                    onPointerEnter={(event) => { if (event.pointerType !== "touch") setActiveProvider(id) }} onPointerLeave={(event) => { if (event.pointerType !== "touch") setActiveProvider(undefined) }}
-                    onFocus={() => setActiveProvider(id)} onBlur={() => setActiveProvider(undefined)} onClick={() => setActiveProvider(id)} />
+                    onPointerEnter={(event) => { if (event.pointerType !== "touch") { setActiveProvider(id); queueMicrotask(() => placeProvider(event.clientX, event.clientY)) } }}
+                    onPointerMove={(event) => { if (event.pointerType !== "touch") placeProvider(event.clientX, event.clientY) }} onPointerLeave={(event) => { if (event.pointerType !== "touch") setActiveProvider(undefined) }}
+                    onFocus={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setActiveProvider(id); queueMicrotask(() => placeProvider(rect.left + rect.width / 2, rect.top + rect.height / 2)) }}
+                    onBlur={() => setActiveProvider(undefined)} onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setActiveProvider(id); queueMicrotask(() => placeProvider(event.clientX || rect.left + rect.width / 2, event.clientY || rect.top + rect.height / 2)) }} />
                 }}</For>
                 <text x="100" y="96" class="usage-donut__total">{distributionMetric() === "spend" ? money(distribution().total) : count(distribution().total)}</text>
                 <text x="100" y="120" class="usage-donut__caption">{distributionMetric() === "spend" ? "estimated USD" : "tokens"}</text>
               </svg>
-              <Show when={activeSegment()}>{(segment) => <div class="usage-distribution__tooltip" role="status"><strong>{segment().label}</strong><span>Estimated cost {money(providerCosts().get(segment().providerID) ?? 0)} · {Math.round(segment().share * 100)}% share</span><Show when={distributionMetric() === "tokens"}><span>{count(segment().value)} tokens</span></Show></div>}</Show>
+              <Show when={activeSegment()}>{(segment) => <div class="usage-distribution__tooltip" ref={providerTooltip} style={{ left: `${providerPosition().left}px`, top: `${providerPosition().top}px` }} role="status"><strong>{segment().label}</strong><span>Estimated cost {money(providerCosts().get(segment().providerID) ?? 0)} · {Math.round(segment().share * 100)}% share</span><Show when={distributionMetric() === "tokens"}><span>{count(segment().value)} tokens</span></Show></div>}</Show>
               <ul class="usage-distribution__legend"><For each={segmentIDs()}>{(id, index) => {
                 const initial = distribution().segments.find((segment) => segment.providerID === id)!
                 const segment = () => distribution().segments.find((item) => item.providerID === id) ?? initial
@@ -233,8 +273,8 @@ export function UsagePage() {
         event.currentTarget.querySelectorAll<HTMLButtonElement>("button")[index]?.focus()
       }}><For each={groups}>{(item) => <button id={`usage-tab-${item}`} role="tab" type="button" aria-selected={group() === item} aria-controls="usage-breakdown-panel" tabindex={group() === item ? 0 : -1} onClick={() => selectGroup(item)}>{names[item]}</button>}</For></div></div>
       <div id="usage-breakdown-panel" role="tabpanel" aria-labelledby={`usage-tab-${group()}`} class="usage-breakdown" aria-busy={updating() ? "true" : "false"}>
-        <Show when={!displayed() && remote.state().transport.kind === "open" && (breakdown()?.status === "loading" || breakdown() === undefined)}><p class="usage-message" role="status">Loading breakdown…</p></Show>
-        <Show when={!displayed() && breakdown()?.status === "unsupported"}><p class="usage-message" role="status">Update YCoding on this machine to see usage.</p></Show>
+        <Show when={!displayed() && remote.state().transport.kind === "open" && (breakdown()?.status === "loading" || breakdown() === undefined)}><LoadingPlaceholder kind="usage" label="Loading breakdown…" /></Show>
+        <Show when={!displayed() && breakdown()?.status === "unsupported"}><p class="usage-message" role="status">{zoneMode() === "local" ? "Update YCoding on this machine to see Local usage. Switch to UTC to continue." : "Update YCoding on this machine to see usage."}</p></Show>
         <Show when={!displayed() && breakdown()?.status === "error"}><p class="usage-message" role="alert">{breakdown()?.message}</p></Show>
         <Show when={displayed()}><Show when={(displayed()?.rows.length ?? 0) > 0} fallback={<p class="usage-message">No requests in this period.</p>}>
           <div class="usage-breakdown__mobile" ref={mobileRows} style={{ "min-height": `${minimumRowsHeight()}px` }}><For each={displayed()?.rows}>{(row: UsageReportRow) => {
@@ -248,7 +288,7 @@ export function UsagePage() {
             const identity = () => shownBreakdown()?.input.group === "model" ? modelIdentity(row.key, remote.state().usage.providers.data ?? []) : undefined
             return <tr><th scope="row"><span>{identity()?.model ?? row.label}</span><Show when={identity()}><span class="usage-provider-chip">{identity()?.provider}</span></Show></th><td>{count(row.logical)}</td><td>{count(tokenCount(row.tokens))}</td><td>{count(row.tokens.input)}</td><td>{count(row.tokens.output)}</td><td>{count(row.tokens.reasoning)}</td><td>{count(row.tokens.cache.read)}</td><td class="usage-table__cost">{money(row.cost ?? 0)}<Show when={row.costProvenance === "current_catalog"}><small>estimate</small></Show></td></tr>
           }}</For></tbody></table></div>
-          <div class="usage-breakdown__feedback" aria-live="polite"><Show when={updating()}><span role="status">Loading {names[group()].toLowerCase()} report…</span></Show><Show when={breakdown()?.status === "error"}><span role="alert">{breakdown()?.message} <button type="button" onClick={() => void remote.store.loadUsageReport(breakdownInput())}>Retry</button></span></Show></div>
+          <div class="usage-breakdown__feedback" aria-live="polite"><Show when={updating()}><span role="status">Loading {names[group()].toLowerCase()} report…</span></Show><Show when={breakdown()?.status === "error"}><span role="alert">{breakdown()?.message} <button type="button" onClick={() => void remote.store.loadUsageReport(breakdownInput(), { refresh: true })}>Retry</button></span></Show></div>
           <div class="usage-pagination"><span>Showing {(shownBreakdown()?.input.offset ?? 0) + 1}–{(shownBreakdown()?.input.offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)}</span><div><button type="button" disabled={updating() || (shownBreakdown()?.input.offset ?? 0) === 0} onClick={previousPage}>Previous</button><button type="button" disabled={updating() || displayed()?.nextOffset === undefined} onClick={nextPage}>Next</button></div></div>
         </Show></Show>
       </div>

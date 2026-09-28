@@ -16,7 +16,8 @@ export function pushStatusView(status: PushStatus) {
   throw new Error("Unknown push state")
 }
 
-type Subscription = { readonly endpoint: string; getKey: (name: "p256dh" | "auth") => ArrayBuffer | null; unsubscribe: () => Promise<boolean> }
+type Subscription = { readonly endpoint: string; getKey: (name: "p256dh" | "auth") => ArrayBuffer | null; unsubscribe: () => Promise<boolean>;
+  readonly options?: { readonly applicationServerKey: ArrayBuffer | null } }
 type Registration = { readonly pushManager: { getSubscription: () => Promise<Subscription | null>;
   subscribe: (options: { readonly userVisibleOnly: true; readonly applicationServerKey: Uint8Array<ArrayBuffer> }) => Promise<Subscription> } }
 
@@ -46,17 +47,41 @@ export function pushSupport(platform: PushPlatform): PushStatus {
   return "off"
 }
 
-export async function readPushState(platform: PushPlatform, http: ReturnType<typeof createPushHttp>): Promise<PushStatus> {
+export async function syncPushState(platform: PushPlatform, http: ReturnType<typeof createPushHttp>): Promise<PushStatus> {
   const support = pushSupport(platform)
   if (support !== "off") return support
   const key = await http.key()
   if (!key.ok) return key.status === 503 ? "unavailable" : "error"
+  const applicationServerKey = decodeKey(key.value.publicKey)
+  if (applicationServerKey === undefined) return "unavailable"
   try {
-    if (await (await platform.registration()).pushManager.getSubscription()) return "on"
-    return platform.permission() === "granted" ? "needs-setup" : "off"
+    const manager = (await platform.registration()).pushManager
+    const existing = await manager.getSubscription()
+    if (!existing) return platform.permission() === "granted" ? "needs-setup" : "off"
+    const madeFor = existing.options?.applicationServerKey
+    const stale = madeFor !== undefined && madeFor !== null && !sameBytes(new Uint8Array(madeFor), applicationServerKey)
+    if (stale) await existing.unsubscribe()
+    const current = stale ? await manager.subscribe({ userVisibleOnly: true, applicationServerKey }) : existing
+    const input = subscriptionInput(current)
+    if (!input) return "error"
+    const registered = await http.subscribe(input)
+    if (!registered.ok) return "error"
+    if (stale) await http.remove(existing.endpoint)
+    return "on"
   } catch {
-    return "unavailable"
+    return "error"
   }
+}
+
+function subscriptionInput(subscription: Subscription): PushSubscriptionInput | undefined {
+  const p256dh = subscription.getKey("p256dh")
+  const auth = subscription.getKey("auth")
+  if (!p256dh || !auth) return undefined
+  return { endpoint: subscription.endpoint, keys: { p256dh: encodeKey(new Uint8Array(p256dh)), auth: encodeKey(new Uint8Array(auth)) } }
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
 export async function enablePush(platform: PushPlatform, http: ReturnType<typeof createPushHttp>): Promise<{ status: PushStatus; message?: string }> {
@@ -72,14 +97,11 @@ export async function enablePush(platform: PushPlatform, http: ReturnType<typeof
     const manager = (await platform.registration()).pushManager
     const existing = await manager.getSubscription()
     const subscription = existing ?? await manager.subscribe({ userVisibleOnly: true, applicationServerKey })
-    const p256dh = subscription.getKey("p256dh")
-    const auth = subscription.getKey("auth")
-    if (!p256dh || !auth) {
+    const input = subscriptionInput(subscription)
+    if (!input) {
       if (!existing) await subscription.unsubscribe()
       return { status: "error", message: "The browser did not provide push keys." }
     }
-    const input: PushSubscriptionInput = { endpoint: subscription.endpoint,
-      keys: { p256dh: encodeKey(new Uint8Array(p256dh)), auth: encodeKey(new Uint8Array(auth)) } }
     const registered = await http.subscribe(input)
     if (!registered.ok) {
       if (!existing) await subscription.unsubscribe()

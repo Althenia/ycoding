@@ -1,5 +1,6 @@
 import { For, Show, createMemo, createSignal, type JSX } from "solid-js"
 import { OfficeCanvas } from "./OfficeCanvas"
+import { LoadingPlaceholder } from "../ui/loading"
 import { officeLocationLabel } from "./model"
 import { appearanceFor, characterFrame } from "./sprites"
 import type { OfficeActor, OfficePreferences, OfficeRoomID, OfficeSnapshot } from "./types"
@@ -67,7 +68,7 @@ function OfficeRoster(props: {
         <button type="button" class="office-roster__toggle" aria-label={collapsed() ? "Show agent list" : "Hide agent list"} aria-expanded={!collapsed()} aria-controls="office-roster-list" onClick={() => setCollapsed(!collapsed())}>{collapsed() ? "Show agents" : "Hide agents"}</button>
       </div>
       <Show when={props.snapshot.activityStatus === "unsupported"}><p class="office-roster__note" role="status">Update YCoding on this machine to show agent activity.</p></Show>
-      <Show when={actors().length > 0} fallback={<p class="office-roster__empty">No agents in this Session yet.</p>}>
+      <Show when={actors().length > 0} fallback={<Show when={props.snapshot.team.status !== "loading"}><p class="office-roster__empty">No agents in this Session yet.</p></Show>}>
         <ul id="office-roster-list" class="office-roster__list">
           <For each={actorIDs()}>
             {(id) => {
@@ -77,6 +78,7 @@ function OfficeRoster(props: {
           </For>
         </ul>
       </Show>
+      <Show when={props.snapshot.team.status === "loading"}><LoadingPlaceholder kind="team" label="Loading subagents…" /></Show>
       <Show when={teamNote(props.snapshot.team, actors().filter((actor) => actor.kind === "task").length)}>{(note) => <p class="office-roster__note">{note()}</p>}</Show>
       <Show when={props.snapshot.team.more}>
         <button type="button" class="button button--secondary button--small office-roster__more" onClick={props.onLoadMoreTeam}>
@@ -117,7 +119,6 @@ function OfficeRosterRow(props: {
 }
 
 function teamNote(team: OfficeSnapshot["team"], shown: number): string | undefined {
-  if (team.status === "loading") return "Loading subagents…"
   if (team.status === "unsupported") return "The connected machine does not report subagents."
   if (team.status === "error") return "Subagents could not be loaded."
   if (team.status !== "ready") return undefined

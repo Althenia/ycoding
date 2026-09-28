@@ -8,14 +8,16 @@ import "../src/styles/tokens.css"
 import "../src/styles/base.css"
 
 const today = Math.floor(Date.now() / 86_400_000) * 86_400_000
-const monthStart = Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)
 const old = new URLSearchParams(location.search).has("old")
+let oldZone = new URLSearchParams(location.search).has("old-zone")
 const offline = new URLSearchParams(location.search).has("offline")
 const none = new URLSearchParams(location.search).has("none")
 const paged = new URLSearchParams(location.search).has("paged")
 const pageError = new URLSearchParams(location.search).has("page-error")
 const refreshCycle = new URLSearchParams(location.search).has("refresh-cycle")
+const initialLoading = new URLSearchParams(location.search).has("initial-loading")
 const largeValues = new URLSearchParams(location.search).has("large-values")
+const unknownUsage = new URLSearchParams(location.search).has("unknown-usage")
 const providers: UsageProvider[] = [
   { providerID: "openai", label: "Codex", profile: "Personal", status: "available", source: "provider_api", stability: "stable", updatedAt: Date.now(), windows: [
     { id: "session", label: "Session allowance", unit: "percent", used: 38, resetAt: Date.now() + 2 * 3600_000, periodSeconds: 5 * 3600 },
@@ -62,7 +64,12 @@ const monthlyRows: UsageReportRow[] = [
   { ...rows[0]!, key: "github-copilot/gpt-4o", label: "github-copilot/gpt-4o", cost: undefined, costProvenance: undefined },
 ]
 const sample = ["GPT-6 Sol", "Claude Opus", "Gemini Pro", "DeepSeek V3", "Llama 4", "Qwen 3"]
-const entries = (input: UsageReportInput): UsageReportRow[] => input.group === "day" ? rows : Array.from({ length: 41 }, (_, index) => ({
+const entries = (input: UsageReportInput): UsageReportRow[] => input.group === "day" ? input.timeZone === undefined ? rows : rows.map((row, index) => {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: input.timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(Date.now())
+  const value = (type: string) => Number(parts.find((part) => part.type === type)?.value)
+  const key = new Date(Date.UTC(value("year"), value("month") - 1, value("day")) - (29 - index) * 86_400_000).toISOString().slice(0, 10)
+  return { ...row, key, label: key }
+}) : Array.from({ length: 41 }, (_, index) => ({
   ...rows[index % 30]!, key: input.group === "model" ? `${["openai", "anthropic", "openrouter", "github-copilot"][index % 4]}/${encodeURIComponent(sample[index % sample.length]!.toLowerCase().replaceAll(" ", "-"))}-${index + 1}` : `${input.group}-${index}`,
   label: input.group === "model" ? `${sample[index % sample.length]} ${index + 1}` : `${input.group === "session" ? "Session" : input.group === "project" ? "Project" : "Agent"} ${index + 1}`,
   physical: 41 - index, cost: (41 - index) * 0.45, costProvenance: index % 3 === 0 ? "current_catalog" : "recorded",
@@ -71,7 +78,10 @@ const requests: { operation: string; input?: UsageReportInput | { refresh: boole
 let releasePage: (() => void) | undefined
 let releaseReload: (() => void) | undefined
 let pendingReload: Promise<void> | undefined
+let releaseInitial: (() => void) | undefined
+const pendingInitial = initialLoading ? new Promise<void>((resolve) => { releaseInitial = resolve }) : undefined
 let revision = 0
+let retryFailure = false
 const [state, setState] = createSignal({
   connection: offline ? { kind: "connecting" } : { kind: "connected", deviceName: "Studio Mac" }, transport: offline ? { kind: "connecting" } : { kind: "open" }, activeDeviceID: "dev_fixture",
   usage: { providers: { status: "idle" }, summary: { status: "idle" }, reports: {} },
@@ -89,6 +99,14 @@ const store = {
     if (refreshCycle && options?.refresh && !pendingReload) beginReload()
     requests.push({ operation: "usage.providers", ...(options?.refresh ? { input: { refresh: true } } : {}) })
     requests.push({ operation: "usage.summary" })
+    if (releaseInitial && pendingInitial) {
+      update({ ...state().usage, providers: { status: "loading" }, summary: { status: "loading" } })
+      await pendingInitial
+    }
+    if (unknownUsage && retryFailure) {
+      update({ ...state().usage, providers: { status: "error", message: "Quota retry failed." }, summary: { status: "error", message: "Summary retry failed." } })
+      return
+    }
     if (refreshCycle && pendingReload) {
       update({ ...state().usage, providers: { ...state().usage.providers, status: "loading" }, summary: { ...state().usage.summary, status: "loading" } })
       await pendingReload
@@ -99,11 +117,23 @@ const store = {
   },
   loadUsageReport: async (input: UsageReportInput) => {
     requests.push({ operation: "usage.report", input })
+    if (releaseInitial && pendingInitial) {
+      update({ ...state().usage, reports: { ...state().usage.reports, [reportKey(input)]: { status: "loading" } } })
+      await pendingInitial
+    }
+    if (unknownUsage && retryFailure) {
+      update({ ...state().usage, reports: { ...state().usage.reports, [reportKey(input)]: { status: "error", message: "Report retry failed." } } })
+      return
+    }
+    if (oldZone && input.timeZone !== undefined) {
+      update({ ...state().usage, reports: { ...state().usage.reports, [reportKey(input)]: { status: "unsupported" } } })
+      return
+    }
     if (refreshCycle && pendingReload) {
       update({ ...state().usage, reports: { ...state().usage.reports, [reportKey(input)]: { status: "loading" } } })
       await pendingReload
     }
-    if (paged && input.group !== "day" && input.from !== monthStart && ((input.offset ?? 0) > 0 || input.group !== "model" || input.order === "asc")) {
+    if (paged && input.group !== "day" && input.limit !== 200 && ((input.offset ?? 0) > 0 || input.group !== "model" || input.order === "asc")) {
       update({ ...state().usage, reports: { ...state().usage.reports, [reportKey(input)]: { status: "loading" } } })
       await new Promise<void>((resolve) => { releasePage = resolve })
       releasePage = undefined
@@ -112,7 +142,7 @@ const store = {
         return
       }
     }
-    if (input.group === "model" && input.from === monthStart) {
+    if (input.group === "model" && input.limit === 200) {
       update({ ...state().usage, reports: { ...state().usage.reports, [reportKey(input)]: old ? { status: "unsupported" } : { status: "ready", data: {
         group: "model", rows: refreshCycle ? monthlyRows.map((row) => ({ ...row, cost: row.cost === undefined ? undefined : row.cost + revision })) : monthlyRows,
         total: { logical: 4, physical: 4, helpers: 0, continued: 0, fallback: 0,
@@ -136,17 +166,33 @@ const store = {
     update({ ...state().usage, reports: { ...state().usage.reports, [reportKey(input)]: old ? { status: "unsupported" } : { status: "ready", data: result } } })
   },
 } as unknown as RemoteStore
-Object.assign(window, { usageRequests: () => requests, usageReleasePage: () => releasePage?.(), usageReleaseReload: () => {
+Object.assign(window, { usageRequests: () => requests, usageReleaseInitial: () => { releaseInitial?.(); releaseInitial = undefined }, usageReleasePage: () => releasePage?.(), usageReleaseReload: () => {
   const release = releaseReload
   pendingReload = undefined
   releaseReload = undefined
   release?.()
+}, usageOutage: () => {
+  update({ ...state().usage, providers: { status: "loading" }, summary: { status: "loading" },
+    reports: Object.fromEntries(Object.keys(state().usage.reports).map((key) => [key, { status: "loading" }])) })
+}, usageAgentBack: (fail: boolean) => {
+  retryFailure = fail
+  const reports = requests.flatMap((item) => item.operation === "usage.report" && item.input && "group" in item.input ? [item.input] : [])
+  void store.loadUsage({ refresh: true })
+  reports.slice(-3).forEach((input) => { void store.loadUsageReport(input) })
 }, usageReconnect: () => {
   beginReload()
   setState({ ...state(), connection: { kind: "connecting" }, transport: { kind: "reconnecting", attempt: 1, delayMs: 0 }, usage: { providers: { status: "idle" }, summary: { status: "idle" }, reports: {} } })
   listeners.forEach((listener) => listener())
   queueMicrotask(() => {
     setState({ ...state(), connection: { kind: "connected", deviceName: "Studio Mac" }, transport: { kind: "open" } })
+    listeners.forEach((listener) => listener())
+  })
+}, usageDowngrade: () => {
+  oldZone = true
+  setState({ ...state(), transport: { kind: "reconnecting", attempt: 1, delayMs: 0 }, usage: { providers: { status: "idle" }, summary: { status: "idle" }, reports: {} } })
+  listeners.forEach((listener) => listener())
+  queueMicrotask(() => {
+    setState({ ...state(), transport: { kind: "open" } })
     listeners.forEach((listener) => listener())
   })
 }, usageSwitchDevice: () => {

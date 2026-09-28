@@ -73,7 +73,11 @@ describe("remote inventory feed", () => {
         await Bun.sleep(100)
       }
       expect(await page.evaluate(`window.remoteInventoryReport()`)).toMatchObject({ workspaceRequests: 1, rows: 25, groups: 2, next: true })
-      expect(await page.evaluate<boolean>(`window.remoteInventoryReport().inputs.some(input => input.status === 'running' && input.workspace === undefined)`)).toBe(true)
+      for (let attempt = 0; attempt < 40 && await page.evaluate<number>(`document.querySelectorAll('.running-sessions__item').length`) !== 10; attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.running-sessions__item').length`)).toBe(10)
+      expect(await page.evaluate<readonly { readonly status: string; readonly limit: number }[]>(`window.remoteInventoryReport().inputs.filter(input => input.workspace === undefined).map(input => ({ status: input.status, limit: input.limit }))`)).toEqual([
+        { status: "running", limit: 10 }, { status: "idle", limit: 10 },
+      ])
       expect(await page.evaluate<number>(`document.querySelectorAll('.sessions-table__row').length`)).toBe(25)
       await page.evaluate(`(() => { const root = document.querySelector('.workspace__scroll'); root.tabIndex = 0; root.focus(); })()`)
       await page.pressKey("End", "End", 35)
