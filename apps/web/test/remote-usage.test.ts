@@ -28,6 +28,34 @@ test("usage reads are cached per input, refreshed explicitly, and clear on devic
   } finally { store.dispose(); await relay.stop() }
 })
 
+test("a connection the browser replaces or disconnects stops reporting open", async () => {
+  const relay = await startRelayDouble()
+  const opens: (() => void)[] = []
+  const store = createRemoteStore({
+    http: createRemoteHttp({ baseURL: relay.httpURL }),
+    createTransport: (_deviceID, handlers) => {
+      let open = false
+      return {
+        connect: () => { opens.push(() => { open = true; handlers.onStatus?.({ kind: "open" }) }) },
+        close: () => { open = false },
+        status: () => open ? { kind: "open" } as const : { kind: "idle" } as const,
+        request: async () => ({ status: "unavailable", reason: "not-connected" }) as const,
+      }
+    },
+  })
+  try {
+    store.connect("dev_studio")
+    opens.shift()?.()
+    expect(store.state().transport.kind).toBe("open")
+    store.connect("dev_studio")
+    expect(store.state().transport.kind).toBe("idle")
+    opens.shift()?.()
+    expect(store.state().transport.kind).toBe("open")
+    store.disconnect()
+    expect(store.state().transport.kind).toBe("idle")
+  } finally { store.dispose(); await relay.stop() }
+})
+
 test("old connectors expose unsupported usage rather than empty metrics", async () => {
   const relay = await startRelayDouble({ handler: (request) => request.operation.startsWith("usage.")
     ? { ok: false, code: "unknown_operation", message: "Unknown operation" } : "default" })

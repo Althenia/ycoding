@@ -1833,6 +1833,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     reconnectingSameDevice = false
     const active = transport
     transport = undefined
+    lastStatusKind = "idle"
     active?.close(1000, "disconnected")
     cancelSearch?.()
     sessionPages = []
@@ -1843,6 +1844,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     workspacesToken += 1
     setState({
       activeDeviceID: undefined,
+      transport: { kind: "idle" },
       advertised: [],
       sessions: [],
       carouselSessions: [],
@@ -2000,6 +2002,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const creation = state.sessionCreation?.deviceID === deviceID ? state.sessionCreation : undefined
       const previous = transport
       transport = undefined
+      lastStatusKind = "idle"
       previous?.close(1000, "switching device")
       cancelSearch?.()
       sessionPages = []
@@ -2023,7 +2026,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       queued = []
       sessionsToken += 1
       workspacesToken += 1
-      setState({ activeDeviceID: deviceID, sessions: [], carouselSessions: [], sessionStatus: undefined, advertised: [], activeSessionID: undefined, view: undefined, notice: undefined, drafts,
+      setState({ activeDeviceID: deviceID, transport: { kind: "idle" }, sessions: [], carouselSessions: [], sessionStatus: undefined, advertised: [], activeSessionID: undefined, view: undefined, notice: undefined, drafts,
         lastRelayDrop: state.activeDeviceID === deviceID ? state.lastRelayDrop : undefined,
         team: undefined, familyActivity: undefined, teamCues: [], todos: undefined,
         sessionGroups: [], selectedWorkspaceID: undefined, selectedSessionInfo: undefined, sessionQuery: "", sessionFilter: "all",
