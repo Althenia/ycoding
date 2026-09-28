@@ -1228,6 +1228,56 @@ it.effect("repairs overlapping AI SDK cache-write usage", () =>
   }),
 )
 
+it.effect("marks inclusive AI SDK output only for effective unreported thinking", () =>
+  Effect.gen(function* () {
+    const aisdk = yield* AISDK.Service
+    const outputTokens = { total: 12, text: undefined, reasoning: undefined as number | undefined }
+    yield* aisdk.hook.sdk((event) => {
+      event.sdk = { languageModel: () => streamModel([{
+        type: "finish",
+        finishReason: { unified: "stop", raw: "stop" },
+        usage: {
+          inputTokens: { total: 5, noCache: 5, cacheRead: 0, cacheWrite: 0 },
+          outputTokens,
+          raw: {},
+        },
+      }]) }
+    })
+    const anthropic = yield* aisdk.model(model("@ai-sdk/anthropic"))
+    const enabled = LLM.request({ model: anthropic, prompt: "Hello", providerOptions: {
+      anthropic: { thinking: { type: "enabled", budgetTokens: 1_024 } },
+    } })
+    expect((yield* LLMClient.prepare<LanguageModelV3CallOptions>(enabled)).body.providerOptions).toEqual({
+      anthropic: { thinking: { type: "enabled", budgetTokens: 1_024 } },
+    })
+    expect((yield* LLMClient.generate(enabled).pipe(Effect.provide(client))).usage?.outputMayIncludeUnreportedReasoning).toBe(true)
+    outputTokens.reasoning = 4
+    expect((yield* LLMClient.generate(enabled).pipe(Effect.provide(client))).usage?.outputMayIncludeUnreportedReasoning).toBeUndefined()
+    outputTokens.reasoning = undefined
+    const disabled = LLM.updateRequest(enabled, { providerOptions: { anthropic: { thinking: { type: "disabled" } } } })
+    expect((yield* LLMClient.generate(disabled).pipe(Effect.provide(client))).usage?.outputMayIncludeUnreportedReasoning).toBeUndefined()
+
+    const defaultThinking = yield* aisdk.model(ModelV2.Info.make({
+      ...model("@ai-sdk/anthropic"), modelID: ModelV2.ID.make("claude-opus-5"),
+    }))
+    expect((yield* LLMClient.prepare<LanguageModelV3CallOptions>(LLM.request({ model: defaultThinking, prompt: "Hello" }))).body.providerOptions)
+      .toBeUndefined()
+    expect((yield* LLMClient.generate(LLM.request({ model: defaultThinking, prompt: "Hello" })).pipe(Effect.provide(client))).usage?.outputMayIncludeUnreportedReasoning)
+      .toBe(true)
+
+    const bedrock = yield* aisdk.model(ModelV2.Info.make({
+      ...model("@ai-sdk/gateway"), modelID: ModelV2.ID.make("amazon/nova-2-lite"),
+    }))
+    const bedrockEnabled = LLM.request({ model: bedrock, prompt: "Hello", providerOptions: {
+      bedrock: { reasoningConfig: { type: "enabled" } },
+    } })
+    expect((yield* LLMClient.prepare<LanguageModelV3CallOptions>(bedrockEnabled)).body.providerOptions).toEqual({
+      bedrock: { reasoningConfig: { type: "enabled" } },
+    })
+    expect((yield* LLMClient.generate(bedrockEnabled).pipe(Effect.provide(client))).usage?.outputMayIncludeUnreportedReasoning).toBe(true)
+  }),
+)
+
 it.effect("retains validated Anthropic cache-write TTL buckets from AI SDK finish metadata", () =>
   Effect.gen(function* () {
     const aisdk = yield* AISDK.Service

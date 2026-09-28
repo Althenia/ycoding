@@ -3,7 +3,7 @@ export * as SessionCacheDiagnostics from "./session-cache-diagnostics.js"
 import { Schema } from "effect"
 import { Model } from "./model.js"
 import { Money } from "./money.js"
-import { NonNegativeInt, optional } from "./schema.js"
+import { NonNegativeInt, PositiveInt, optional } from "./schema.js"
 import { ProviderRequest } from "./provider-request.js"
 
 export const Mechanism = Schema.Literals([
@@ -34,6 +34,20 @@ export const ContextBreakdown = Schema.Struct({
   other: NonNegativeInt,
 }).annotate({ identifier: "Session.ContextBreakdown" })
 export interface ContextBreakdown extends Schema.Schema.Type<typeof ContextBreakdown> {}
+
+export const GenerationSpeed = Schema.Struct({
+  model: Model.Ref,
+  tokens: PositiveInt,
+  durationNs: PositiveInt,
+  tokensPerSecond: Schema.Finite.check(Schema.isGreaterThan(0)),
+}).annotate({ identifier: "Session.GenerationSpeed" })
+export interface GenerationSpeed extends Schema.Schema.Type<typeof GenerationSpeed> {}
+
+export const GenerationSpeedHistory = Schema.Struct({
+  latest: GenerationSpeed.pipe(optional),
+  recent: Schema.Array(GenerationSpeed).check(Schema.isMaxLength(8)),
+}).annotate({ identifier: "Session.GenerationSpeedHistory" })
+export interface GenerationSpeedHistory extends Schema.Schema.Type<typeof GenerationSpeedHistory> {}
 
 export const Info = Schema.Struct({
   model: Model.Ref,
@@ -68,5 +82,6 @@ export const Info = Schema.Struct({
   }),
   estimatedCost: Money.USD.pipe(optional),
   requests: ProviderRequest.Summary.pipe(optional),
+  generationSpeed: GenerationSpeedHistory.pipe(optional),
 }).annotate({ identifier: "Session.CacheDiagnostics" })
 export interface Info extends Schema.Schema.Type<typeof Info> {}

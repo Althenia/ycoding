@@ -63,6 +63,7 @@ export interface Interface {
   readonly list: (
     sessionID: ProviderRequest.Record["sessionID"],
   ) => Effect.Effect<ReadonlyArray<ProviderRequest.Record>>
+  readonly recentSteps: (sessionID: ProviderRequest.Record["sessionID"]) => Effect.Effect<ReadonlyArray<ProviderRequest.Record>>
   readonly listAll: (range?: { readonly from?: number; readonly to?: number }) => Effect.Effect<ReadonlyArray<ProviderRequest.Record>>
   readonly summary: (sessionID: ProviderRequest.Record["sessionID"]) => Effect.Effect<ProviderRequest.Summary>
 }
@@ -288,6 +289,16 @@ const layer = Layer.effect(
           Effect.map((rows) => rows.map(rowRecord)),
         )
 
+    const recentSteps: Interface["recentSteps"] = (sessionID) =>
+      db
+        .select()
+        .from(SessionProviderRequestTable)
+        .where(and(eq(SessionProviderRequestTable.session_id, sessionID), eq(SessionProviderRequestTable.source, "step")))
+        .orderBy(desc(SessionProviderRequestTable.request))
+        .limit(8)
+        .all()
+        .pipe(Effect.orDie, Effect.map((rows) => rows.toReversed().map(rowRecord)))
+
     const listAll: Interface["listAll"] = (range) =>
       db
         .select()
@@ -494,7 +505,7 @@ const layer = Layer.effect(
         )
         .pipe(Effect.catchTag("SqlError", Effect.die))) as unknown as Interface["next"]
 
-    return Service.of({ next, observeAttempt, list, listAll, summary })
+    return Service.of({ next, observeAttempt, list, recentSteps, listAll, summary })
   }),
 )
 

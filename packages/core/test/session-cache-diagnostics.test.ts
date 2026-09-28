@@ -74,6 +74,25 @@ test("keeps cache effectiveness separate from context occupancy", () => {
   expect(result.estimatedCost).toBe(Money.USD.make(0.0123))
 })
 
+test("derives speed from the latest Step and at most eight recent requests", () => {
+  const records = Array.from({ length: 10 }, (_, index) => ({
+    model: model("openai"),
+    timing: index === 9 ? { generatedTokens: 10, generationDurationNs: 0, observedGenerationDurationNs: 2_000_000 }
+      : { generatedTokens: 10 + index, generationDurationNs: 2_000_000, observedGenerationDurationNs: 8_000_000 },
+  }))
+  const withZero = SessionCacheDiagnostics.generationSpeed(records)
+  expect(withZero?.latest).toBeUndefined()
+  expect(withZero?.recent.map((sample) => sample.tokens)).toEqual([12, 13, 14, 15, 16, 17, 18])
+  expect(withZero?.recent.at(-1)?.tokensPerSecond).toBe(9_000)
+  const current = { model: model("anthropic"),
+    timing: { generatedTokens: 12, generationDurationNs: 2_000_000 } }
+  expect(SessionCacheDiagnostics.generationSpeed(records, current)?.latest).toMatchObject({
+    model: current.model, tokensPerSecond: 6_000,
+  })
+  expect(SessionCacheDiagnostics.generationSpeed([], current)?.recent).toHaveLength(1)
+  expect(SessionCacheDiagnostics.generationSpeed([])).toBeUndefined()
+})
+
 test("reconstructs the last request breakdown from projected assistant diagnostics", () => {
   const contextBreakdown = { system: 2, tools: 0, user: 4, assistant: 0, reasoning: 0, toolCalls: 0, other: 0 }
   const messages = [SessionMessage.Assistant.make({

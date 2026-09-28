@@ -25,6 +25,7 @@ export function SidebarCacheContent(props: {
   pressure?: () => { estimatedInputTokens: number; safeInputTokens: number } | undefined
   fallback?: () => { tokens: { input: number; output: number }; cost: number } | undefined
   currentModel?: () => { identity: string; limit: number } | undefined
+  selectedModel?: () => SessionCacheDiagnostics["model"] | undefined
   cost?: () => number | undefined
 }) {
   const { themeV2 } = useTheme()
@@ -90,6 +91,22 @@ export function SidebarCacheContent(props: {
     const percent = cacheHitPercent(diagnostics()?.cache.hitRatio)
     return percent === undefined ? "unreported" : `${percent}%`
   })
+  const speed = createMemo(() => {
+    const value = diagnostics()?.generationSpeed
+    const latest = value?.latest
+    if (!latest) return undefined
+    const selected = props.selectedModel?.()
+    if (selected && (selected.providerID !== latest.model.providerID || selected.id !== latest.model.id ||
+      (selected.variant ?? "default") !== (latest.model.variant ?? "default"))) return undefined
+    const rate = latest.tokensPerSecond >= 1
+      ? Math.round(latest.tokensPerSecond).toLocaleString("en-US") : latest.tokensPerSecond.toPrecision(2)
+    const label = Locale.truncateWidth(`${rate} tok/s`, Math.max(1, rowWidth() - "Speed".length - 1))
+    if (!value || value.recent.length < 2) return label
+    const peak = Math.max(...value.recent.map((sample) => sample.tokensPerSecond))
+    const levels = "▁▂▃▄▅▆▇█"
+    const trend = value.recent.map((sample) => levels[Math.floor(sample.tokensPerSecond / peak * 7)]).join("")
+    return rowWidth() >= "Speed".length + 1 + label.length + 1 + trend.length ? `${label} ${trend}` : label
+  })
   const modelSpend = createMemo(() =>
     (usage()?.models ?? []).map((entry) => {
       const value = money.format(entry.cost ?? 0)
@@ -122,6 +139,7 @@ export function SidebarCacheContent(props: {
       <Show when={diagnostics()}>
         <RailRow label="Cache" value={cache()} valueColor={themeV2.text.feedback.success.default} />
       </Show>
+      <Show when={speed()}>{(value) => <RailRow label="Speed" value={value()} />}</Show>
       <Show when={hasSpend()}>
         <>
           <Show when={diagnostics()}>
@@ -191,6 +209,7 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
       pressure={pressure}
       fallback={fallback}
       cost={cost}
+      selectedModel={() => session()?.model}
     />
   )
 }

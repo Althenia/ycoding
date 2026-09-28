@@ -257,6 +257,7 @@ interface ParserState {
   readonly tools: ToolStream.State<number>
   readonly usage?: Usage
   readonly lifecycle: Lifecycle.State
+  readonly outputMayIncludeUnreportedReasoning: boolean
 }
 
 const invalid = ProviderShared.invalidRequest
@@ -668,7 +669,7 @@ const mapFinishReason = (reason: string | null | undefined): FinishReason => {
 // thinking tokens are *not* broken out by Anthropic — they're billed as
 // part of `output_tokens`, so `reasoningTokens` stays `undefined` and
 // `outputTokens` carries the combined total.
-const mapUsage = (usage: AnthropicUsage | undefined): Usage | undefined => {
+const mapUsage = (usage: AnthropicUsage | undefined, outputMayIncludeUnreportedReasoning: boolean): Usage | undefined => {
   if (!usage) return undefined
   const normalized = ProviderShared.normalizeInputUsage({
     semantics: "exclusive-input",
@@ -679,6 +680,7 @@ const mapUsage = (usage: AnthropicUsage | undefined): Usage | undefined => {
   return new Usage({
     ...normalized,
     outputTokens: usage.output_tokens,
+    ...(outputMayIncludeUnreportedReasoning ? { outputMayIncludeUnreportedReasoning: true } : {}),
     totalTokens: ProviderShared.totalTokens(normalized.inputTokens, usage.output_tokens, undefined),
     providerMetadata: { anthropic: usage },
   })
@@ -710,6 +712,8 @@ const mergeUsage = (left: Usage | undefined, right: Usage | undefined) => {
   return new Usage({
     ...normalized,
     outputTokens,
+    ...((left.outputMayIncludeUnreportedReasoning || right.outputMayIncludeUnreportedReasoning)
+      ? { outputMayIncludeUnreportedReasoning: true } : {}),
     totalTokens: ProviderShared.totalTokens(normalized.inputTokens, outputTokens, undefined),
     providerMetadata: {
       anthropic: {
@@ -755,7 +759,7 @@ type StepResult = readonly [ParserState, ReadonlyArray<LLMEvent>]
 const NO_EVENTS: StepResult["1"] = []
 
 const onMessageStart = (state: ParserState, event: AnthropicEvent): StepResult => {
-  const usage = mapUsage(event.message?.usage)
+  const usage = mapUsage(event.message?.usage, state.outputMayIncludeUnreportedReasoning)
   return [usage ? { ...state, usage: mergeUsage(state.usage, usage) } : state, NO_EVENTS]
 }
 
@@ -908,7 +912,7 @@ const onContentBlockStop = Effect.fn("AnthropicMessages.onContentBlockStop")(fun
 })
 
 const onMessageDelta = (state: ParserState, event: AnthropicEvent): StepResult => {
-  const usage = mergeUsage(state.usage, mapUsage(event.usage))
+  const usage = mergeUsage(state.usage, mapUsage(event.usage, state.outputMayIncludeUnreportedReasoning))
   const events: LLMEvent[] = []
   const lifecycle = Lifecycle.finish(state.lifecycle, events, {
     reason: mapFinishReason(event.delta?.stop_reason),
@@ -962,7 +966,17 @@ export const protocol = Protocol.make({
   },
   stream: {
     event: Protocol.jsonEvent(AnthropicEvent),
-    initial: () => ({ tools: ToolStream.empty<number>(), lifecycle: Lifecycle.initial() }),
+    initial: (request) => {
+      const thinking = anthropicOptions(request)?.thinking
+      const mode = AnthropicModel.capabilities(String(request.model.id)).adaptiveThinking
+      return {
+        tools: ToolStream.empty<number>(),
+        lifecycle: Lifecycle.initial(),
+        outputMayIncludeUnreportedReasoning: ProviderShared.isRecord(thinking)
+          ? thinking.type === "adaptive" || thinking.type === "enabled"
+          : mode === "default" || mode === "required",
+      }
+    },
     step,
   },
 })

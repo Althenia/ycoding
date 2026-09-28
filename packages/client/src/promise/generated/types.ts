@@ -142,6 +142,8 @@ export type PromptBase64 = string
 export type ProviderRequestTiming = {
   promptEvalDurationNs?: number
   generationDurationNs?: number
+  observedGenerationDurationNs?: number
+  generatedTokens?: number
   loadDurationNs?: number
 }
 
@@ -509,6 +511,8 @@ export type SessionMessageModelSelected = {
   model: ModelRef
   previous?: ModelRef
 }
+
+export type SessionGenerationSpeed = { model: ModelRef; tokens: number; durationNs: number; tokensPerSecond: number }
 
 export type CommandInfo = {
   name: string
@@ -2171,6 +2175,8 @@ export type BrowserElement = {
   destination?: BrowserPage
 }
 
+export type SessionGenerationSpeedHistory = { latest?: SessionGenerationSpeed; recent: Array<SessionGenerationSpeed> }
+
 export type PermissionV2Ruleset = Array<PermissionV2Rule>
 
 export type SessionRevertStaged = {
@@ -2305,24 +2311,6 @@ export type SessionMessageCompaction =
   | SessionMessageCompactionCompleted
   | SessionMessageCompactionFailedV1
   | SessionMessageCompactionFailed
-
-export type SessionCacheDiagnostics = {
-  model: ModelRef
-  contextBreakdown?: SessionContextBreakdown
-  context: { total: number; limit?: number; remaining?: number; percent?: number }
-  tokens: { uncachedInput: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number }
-  cache: {
-    eligible: number
-    hitRatio?: number
-    mechanism: SessionCacheMechanism
-    readReported: boolean
-    writeReported: boolean
-    minimumTokens?: number
-    belowMinimum?: boolean
-  }
-  estimatedCost?: MoneyUSD
-  requests?: ProviderRequestSummary
-}
 
 export type SessionAutonomyState = {
   mode: SessionAutonomyMode
@@ -2549,6 +2537,25 @@ export type IsolatedBrowserObservation = {
   instanceID: string
 }
 
+export type SessionCacheDiagnostics = {
+  model: ModelRef
+  contextBreakdown?: SessionContextBreakdown
+  context: { total: number; limit?: number; remaining?: number; percent?: number }
+  tokens: { uncachedInput: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number }
+  cache: {
+    eligible: number
+    hitRatio?: number
+    mechanism: SessionCacheMechanism
+    readReported: boolean
+    writeReported: boolean
+    minimumTokens?: number
+    belowMinimum?: boolean
+  }
+  estimatedCost?: MoneyUSD
+  requests?: ProviderRequestSummary
+  generationSpeed?: SessionGenerationSpeedHistory
+}
+
 export type AgentInfo = {
   id: string
   name: string
@@ -2652,16 +2659,6 @@ export type SessionMessageAssistantTool = {
   time: { created: number; ran?: number; completed?: number }
 }
 
-export type SessionDiagnosticsUpdated = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "session.diagnostics.updated"
-  location?: LocationRef
-  data: { sessionID: string; diagnostics: SessionCacheDiagnostics }
-}
-
 export type GuardrailStatus = GuardrailStatus1
 
 export type IntegrationMethod =
@@ -2683,6 +2680,16 @@ export type ProjectArtifactPromotionPreview = {
   collision?: ProjectArtifactCollisionDiagnostic
   token: ProjectArtifactConfirmationToken
   expiresAt: ProjectArtifactTimestampMillis
+}
+
+export type SessionDiagnosticsUpdated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.diagnostics.updated"
+  location?: LocationRef
+  data: { sessionID: string; diagnostics: SessionCacheDiagnostics }
 }
 
 export type SessionsResponse = { data: Array<SessionInfo>; cursor: { previous?: string | null; next?: string | null } }
@@ -3442,6 +3449,7 @@ export type SessionProjection = {
   session: SessionInfo
   messages: Array<SessionMessageInfo>
   watermark: EventLogSynced
+  generationSpeed?: SessionGenerationSpeedHistory | null
   before?: string | null
 }
 

@@ -42,6 +42,9 @@ test("decodes content-free provider request records", () => {
   expect(decode({ ...record, timing: { promptEvalDurationNs: 0, generationDurationNs: 5 } }).timing)
     .toEqual({ promptEvalDurationNs: 0, generationDurationNs: 5 })
   expect(() => decode({ ...record, timing: { promptEvalDurationNs: -1 } })).toThrow()
+  expect(decode({ ...record, timing: { generatedTokens: 12, observedGenerationDurationNs: 2_000_000 } }).timing)
+    .toEqual({ generatedTokens: 12, observedGenerationDurationNs: 2_000_000 })
+  expect(() => decode({ ...record, timing: { generatedTokens: -1 } })).toThrow()
 })
 
 test("rejects unknown sources and non-positive counters", () => {

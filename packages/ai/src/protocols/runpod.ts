@@ -41,7 +41,8 @@ const VLLMBody = Schema.Struct({ input: Schema.Struct({
 
 const ToolCall = Schema.Struct({ function: Schema.Struct({ name: Schema.String, arguments: Schema.Record(Schema.String, Schema.Unknown) }) })
 const OllamaResponse = Schema.Struct({
-  message: Schema.Struct({ role: Schema.Literal("assistant"), content: Schema.String, tool_calls: Schema.optional(Schema.Array(ToolCall)) }),
+  message: Schema.Struct({ role: Schema.Literal("assistant"), content: Schema.String,
+    thinking: Schema.optional(Schema.String), tool_calls: Schema.optional(Schema.Array(ToolCall)) }),
   done: Schema.Literal(true),
   done_reason: Schema.optional(Schema.String),
   prompt_eval_count: Schema.optional(Schema.Number),
@@ -56,6 +57,7 @@ const VLLMResponse = Schema.Struct({
     message: Schema.Struct({
       role: Schema.Literal("assistant"),
       content: Schema.NullOr(Schema.String),
+      reasoning_content: Schema.optional(Schema.NullOr(Schema.String)),
       tool_calls: Schema.optional(Schema.Array(Schema.Struct({
         id: Schema.String,
         type: Schema.Literal("function"),
@@ -217,6 +219,7 @@ const stepOllama = (state: { readonly lifecycle: Lifecycle.State; readonly reque
       semantics: "inclusive-total", total: response.prompt_eval_count, cacheRead: response.prompt_eval_cached_count,
     }),
     outputTokens: response.eval_count,
+    ...(response.message.thinking ? { outputMayIncludeUnreportedReasoning: true } : {}),
     ...(response.prompt_eval_duration !== undefined && Number.isSafeInteger(response.prompt_eval_duration) && response.prompt_eval_duration >= 0
       ? { promptEvalDurationNs: response.prompt_eval_duration } : {}),
     ...(response.eval_duration !== undefined && Number.isSafeInteger(response.eval_duration) && response.eval_duration >= 0
@@ -266,6 +269,7 @@ const stepVLLM = (state: Lifecycle.State, envelope: Schema.Schema.Type<typeof En
     ...ProviderShared.normalizeInputUsage({ semantics: "inclusive-total", total: response.usage?.prompt_tokens,
       cacheRead: response.usage?.prompt_tokens_details?.cached_tokens }),
     outputTokens: response.usage?.completion_tokens,
+    ...(choice.message.reasoning_content ? { outputMayIncludeUnreportedReasoning: true } : {}),
     totalTokens: response.usage?.total_tokens,
   }) }), events] as const
 })

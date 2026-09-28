@@ -409,6 +409,21 @@ describe("Bedrock Converse route", () => {
     }),
   )
 
+  it.effect("marks inclusive Bedrock usage when a reasoning block is redacted", () =>
+    Effect.gen(function* () {
+      const body = eventStreamBody(
+        ["messageStart", { role: "assistant" }],
+        ["contentBlockDelta", { contentBlockIndex: 0, delta: { reasoningContent: { signature: "redacted" } } }],
+        ["contentBlockStop", { contentBlockIndex: 0 }],
+        ["messageStop", { stopReason: "end_turn" }],
+        ["metadata", { usage: { inputTokens: 5, outputTokens: 12 } }],
+      )
+      const response = yield* LLMClient.generate(baseRequest).pipe(Effect.provide(fixedBytes(body)))
+      expect(response.usage?.outputMayIncludeUnreportedReasoning).toBe(true)
+      expect(response.events.some((event) => event.type === "reasoning-delta")).toBe(false)
+    }),
+  )
+
   it.effect("preserves streamed reasoning signatures for continuation lowering", () =>
     Effect.gen(function* () {
       const body = eventStreamBody(

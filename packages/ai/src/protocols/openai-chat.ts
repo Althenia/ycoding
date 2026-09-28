@@ -892,7 +892,10 @@ const finishEvents = (state: ParserState): ReadonlyArray<LLMEvent> => {
   let finalLifecycle = state.toolCallEvents.length ? Lifecycle.stepStart(ended, events) : ended
   if (pendingText) finalLifecycle = Lifecycle.textDelta(finalLifecycle, events, "text-0", pendingText)
   events.push(...state.toolCallEvents)
-  if (reason) Lifecycle.finish(finalLifecycle, events, { reason, usage: state.usage })
+  const usage = state.usage && state.reasoningEmitted && state.usage.reasoningTokens === undefined
+    ? new Usage(Object.assign({}, state.usage, { outputMayIncludeUnreportedReasoning: true }))
+    : state.usage
+  if (reason) Lifecycle.finish(finalLifecycle, events, { reason, usage })
   return events
 }
 

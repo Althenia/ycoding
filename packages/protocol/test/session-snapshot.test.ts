@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { Schema } from "effect"
 import { HttpApi, HttpApiMiddleware, OpenApi } from "effect/unstable/httpapi"
 import { makeSessionGroup, SessionProjection, SessionSnapshotQuery } from "../src/groups/session.js"
+import { SessionCacheDiagnostics } from "@ycoding-ai/schema/session-cache-diagnostics"
 
 class SessionLocationMiddleware extends HttpApiMiddleware.Service<SessionLocationMiddleware>()(
   "test/SessionSnapshotLocationMiddleware",
@@ -25,6 +26,16 @@ test("windowed snapshot query bounds and optional cursor are published on the Se
     session: { id: "ses_test", projectID: "project", cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 1 }, title: "Test", location: { directory: "/project" } },
     messages: [], watermark: { type: "log.synced", aggregateID: "ses_test", seq: 0 }, before: "opaque_1",
   }).before).toBe("opaque_1")
+  const sample = Schema.decodeUnknownSync(SessionCacheDiagnostics.GenerationSpeed)({
+    model: { providerID: "openai", id: "gpt" }, tokens: 12,
+    durationNs: 2_000_000, tokensPerSecond: 6_000,
+  })
+  expect(Schema.decodeUnknownSync(SessionProjection)({
+    sourceEpoch: "epoch_test",
+    session: { id: "ses_test", projectID: "project", cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 1 }, title: "Test", location: { directory: "/project" } },
+    messages: [], watermark: { type: "log.synced", aggregateID: "ses_test", seq: 0 },
+    generationSpeed: { latest: sample, recent: [sample] },
+  }).generationSpeed).toEqual({ latest: sample, recent: [sample] })
 })
 
 test("Session-scoped managed attachment reads publish a bounded base64 result", () => {

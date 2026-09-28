@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
+import { createSignal } from "solid-js"
 import type { ProviderRequestSummary, SessionCacheDiagnostics } from "@ycoding-ai/client"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
@@ -19,6 +20,20 @@ const diagnostics: SessionCacheDiagnostics = {
     writeReported: true,
   },
   estimatedCost: 0.0123,
+}
+
+const speedDiagnostics: SessionCacheDiagnostics = {
+  ...diagnostics,
+  generationSpeed: {
+    latest: { model: diagnostics.model, tokens: 12,
+      durationNs: 2_000_000, tokensPerSecond: 6_000 },
+    recent: [
+      { model: diagnostics.model, tokens: 3,
+        durationNs: 1_000_000, tokensPerSecond: 3_000 },
+      { model: diagnostics.model, tokens: 12,
+        durationNs: 2_000_000, tokensPerSecond: 6_000 },
+    ],
+  },
 }
 
 const longModelID = "claude-sonnet-4-5-20250929-extended-preview"
@@ -121,6 +136,7 @@ test("renders provider prompt cache without application artifact diagnostics", a
     expect(frame).toContain("Context")
     expect(frame).toContain("54,015 / 1,050,000")
     expect(frame).toContain("Cache")
+    expect(frame).not.toContain("Speed")
     expect(frame).toContain("89%")
     expect(frame).not.toContain("gpt-5.6-sol")
     expect(frame).not.toContain("400K")
@@ -142,6 +158,62 @@ test("renders provider prompt cache without application artifact diagnostics", a
     expect(frame.indexOf("Reads")).toBeLessThan(frame.indexOf("Writes"))
     expect(frame).not.toContain("Application artifact cache")
     expect(frame).not.toContain("App reuse")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("renders latest generation speed and bounded trend, then hides it on model switch", async () => {
+  const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
+    import("../../../src/config"), import("../../../src/context/theme"),
+  ])
+  const [selected, select] = createSignal(diagnostics.model)
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ConfigProvider config={createTuiResolvedConfig()}>
+        <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+          <module.SidebarCacheContent diagnostics={() => speedDiagnostics} selectedModel={selected} />
+        </ThemeProvider>
+      </ConfigProvider>
+    </TestTuiContexts>
+  ), { width: 48, height: 40 })
+  app.renderer.start()
+  await app.waitForFrame((frame) => frame.includes("6,000 tok/s"))
+  try {
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("Speed")
+    expect(frame).toContain("6,000 tok/s")
+    expect(frame).toContain("▄█")
+    expect(frame.indexOf("Cache")).toBeLessThan(frame.indexOf("Speed"))
+    select({ providerID: "anthropic", id: "claude-opus-5" })
+    await app.waitForFrame((next) => !next.includes("Speed"))
+    expect(app.captureCharFrame()).not.toContain("tok/s")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("keeps the latest speed on one narrow row without a wrapping trend", async () => {
+  const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
+    import("../../../src/config"), import("../../../src/context/theme"),
+  ])
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ConfigProvider config={createTuiResolvedConfig()}>
+        <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+          <module.SidebarCacheContent diagnostics={() => speedDiagnostics} />
+        </ThemeProvider>
+      </ConfigProvider>
+    </TestTuiContexts>
+  ), { width: 18, height: 40 })
+  app.renderer.start()
+  await app.waitForFrame((frame) => frame.includes("tok/s"))
+  try {
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("Speed")
+    expect(frame).toContain("6,000 tok/s")
+    expect(frame).not.toContain("▄█")
+    expect(frame.split("\n").find((line) => line.includes("Speed"))?.length).toBeLessThanOrEqual(18)
   } finally {
     app.renderer.destroy()
   }

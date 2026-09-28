@@ -94,6 +94,30 @@ it.effect("rejects step ownership when the prepared context revision is stale", 
   }),
 )
 
+it.effect("reads only the latest eight Step requests for the exact Session in ascending order", () =>
+  Effect.gen(function* () {
+    const sessionID = SessionV2.ID.make("ses_provider_request_speed")
+    const otherID = SessionV2.ID.make("ses_provider_request_speed_other")
+    yield* insertSession(sessionID)
+    yield* insertSession(otherID)
+    const service = yield* SessionProviderRequest.Service
+    const model = ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") })
+    for (const [index, target, source] of Array.from({ length: 12 }, (_, index) => [
+      index, index === 10 ? otherID : sessionID, index === 9 ? "title" : "step",
+    ] as const)) {
+      const tracker = yield* service.next({ sessionID: target, source, agent: AgentV2.ID.make("build"), model,
+        routeID: "openai-responses", promptCacheKey: "cache-key", systemDigest: "system-digest", toolDigest: "tool-digest" })
+      yield* tracker.complete({ continuation: "full", tokens: { input: 0, output: index, reasoning: 0,
+        cache: { read: 0, write: 0 } }, timing: { generatedTokens: index + 1, observedGenerationDurationNs: 2_000_000 } })
+    }
+    expect((yield* service.recentSteps(sessionID)).map((record) => record.tokens.output))
+      .toEqual([2, 3, 4, 5, 6, 7, 8, 11])
+    expect((yield* service.recentSteps(sessionID)).at(-1)?.timing).toEqual({
+      generatedTokens: 12, observedGenerationDurationNs: 2_000_000,
+    })
+  }),
+)
+
 itWithFailingLedger.effect("contains provider-request persistence defects", () =>
   Effect.gen(function* () {
     const sessionID = SessionV2.ID.make("ses_provider_request_failure")

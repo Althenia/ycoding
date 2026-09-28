@@ -47,6 +47,26 @@ test("keeps provider timings separate from token accounting", () => {
   expect(SessionUsage.timing(new Usage({ promptEvalDurationNs: -1, loadDurationNs: Number.NaN }))).toBeUndefined()
 })
 
+test("counts only observed output categories and keeps provider timing independent", () => {
+  const times = { text: 2_000_000n, reasoning: 1_000_000n, ended: 3_000_000n }
+  expect(SessionUsage.generationTiming(new Usage({ outputTokens: 12, outputMayIncludeUnreportedReasoning: true }), {
+    ...times, reasoning: undefined,
+  })).toBeUndefined()
+  expect(SessionUsage.generationTiming(new Usage({ outputTokens: 12, outputMayIncludeUnreportedReasoning: true }), times))
+    .toEqual({ generatedTokens: 12, observedGenerationDurationNs: 2_000_000 })
+  expect(SessionUsage.generationTiming(new Usage({ outputTokens: 12, reasoningTokens: 4 }), {
+    ...times, reasoning: undefined,
+  })).toEqual({ generatedTokens: 8, observedGenerationDurationNs: 1_000_000 })
+  expect(SessionUsage.generationTiming(new Usage({ outputTokens: 12, reasoningTokens: 4 }), times))
+    .toEqual({ generatedTokens: 12, observedGenerationDurationNs: 2_000_000 })
+  expect(SessionUsage.generationTiming(new Usage({ outputTokens: 12 }), { ...times, text: undefined, reasoning: undefined }))
+    .toBeUndefined()
+  expect(SessionUsage.generationTiming(new Usage({ outputTokens: 12 }), { ...times, ended: 2_000_000n }))
+    .toEqual({ generatedTokens: 12 })
+  expect(SessionUsage.generationTiming(new Usage({ outputTokens: 12 }), { ...times, ended: BigInt(Number.MAX_SAFE_INTEGER) + times.text + 3n }))
+    .toEqual({ generatedTokens: 12 })
+})
+
 test("falls back to the OpenRouter master price only when provider pricing is unavailable", () => {
   const usage = { input: 1_000, output: 100, reasoning: 50, cache: { read: 0, write: 0 } }
 

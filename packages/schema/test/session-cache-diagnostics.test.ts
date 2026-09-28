@@ -53,6 +53,20 @@ test("preserves missing provider write telemetry instead of fabricating a zero r
   expect(result.cache.writeReported).toBe(false)
 })
 
+test("bounds optional generation speed history without inventing missing latest speed", () => {
+  const sample = Schema.decodeUnknownSync(SessionCacheDiagnostics.GenerationSpeed)({
+    model: diagnostics.model, tokens: 12, durationNs: 2_000_000,
+    tokensPerSecond: 6_000,
+  })
+  expect(decode(diagnostics).generationSpeed).toBeUndefined()
+  expect(decode({ ...diagnostics, generationSpeed: { latest: sample, recent: [sample] } }).generationSpeed)
+    .toEqual({ latest: sample, recent: [sample] })
+  expect(decode({ ...diagnostics, generationSpeed: { recent: [sample] } }).generationSpeed)
+    .toEqual({ recent: [sample] })
+  expect(() => decode({ ...diagnostics, generationSpeed: { recent: Array(9).fill(sample) } })).toThrow()
+  expect(() => decode({ ...diagnostics, generationSpeed: { latest: { ...sample, durationNs: 0 }, recent: [] } })).toThrow()
+})
+
 test("rejects unknown provider cache mechanisms", () => {
   expect(() =>
     decode({

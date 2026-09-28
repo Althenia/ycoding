@@ -11,7 +11,7 @@ import {
 import { Money } from "@ycoding-ai/schema/money"
 import { classifyProviderFailure } from "@ycoding-ai/ai/provider-error"
 import { SessionError } from "@ycoding-ai/schema/session-error"
-import { Cause, Effect, Exit, Fiber, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
+import { Cause, Clock, Effect, Exit, Fiber, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
 import { EventV2 } from "../../event"
@@ -420,6 +420,9 @@ const layer = Layer.effect(
       })
       let overflowFailure: ProviderErrorEvent | undefined
       let continuationFailure: ProviderErrorEvent | undefined
+      let firstTextNs: bigint | undefined
+      let firstReasoningNs: bigint | undefined
+      let generationTiming: ReturnType<typeof SessionUsage.generationTiming>
       const [consumedInputID, ...remainingConsumedInputIDs] = consumedInputIDs
       let inputConsumptionPending = consumedInputID !== undefined
       requestTrackerState.attempts += 1
@@ -458,12 +461,20 @@ const layer = Layer.effect(
               })
               if (SessionRunnerRetry.isRetryable(failure)) yield* failure
             }
+            if (event.type === "text-delta" && event.text.trim() && firstTextNs === undefined)
+              firstTextNs = yield* Clock.currentTimeNanos
+            if (event.type === "reasoning-delta" && event.text.trim() && firstReasoningNs === undefined)
+              firstReasoningNs = yield* Clock.currentTimeNanos
             yield* publish(event)
             if (LLMEvent.is.stepFinish(event)) {
               const settlement =
                 publisher.stepSettlement() ??
                 (yield* Effect.die(new Error("Step finish did not produce provider settlement")))
               const usage = stepUsage(settlement)
+              generationTiming = SessionUsage.generationTiming(event.usage, {
+                text: firstTextNs, reasoning: firstReasoningNs, ended: yield* Clock.currentTimeNanos,
+              })
+              const speedTiming = { ...settlement.timing, ...generationTiming }
               yield* serialized(
                 events.publish(SessionEvent.DiagnosticsUpdated, {
                   sessionID: session.id,
@@ -474,6 +485,10 @@ const layer = Layer.effect(
                     contextLimit: effectiveModel.route.defaults.limits?.context,
                     contextBreakdown,
                     providerCache: providerCache(settlement),
+                    generationSpeed: SessionCacheDiagnostics.generationSpeed(
+                      yield* providerRequests.recentSteps(session.id),
+                      { model: effective.ref, timing: speedTiming },
+                    ),
                   }),
                 }),
               )
@@ -566,7 +581,8 @@ const layer = Layer.effect(
                 : "full",
           ...(invalidation === undefined ? {} : { invalidation }),
           ...(cache === undefined ? {} : { cacheReadReported: cache.readReported }),
-          ...(settlement?.timing === undefined ? {} : { timing: settlement.timing }),
+          ...((settlement?.timing === undefined && generationTiming === undefined)
+            ? {} : { timing: { ...settlement?.timing, ...generationTiming } }),
         })
       }
 

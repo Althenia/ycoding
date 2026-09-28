@@ -54,6 +54,31 @@ export const timing = (usage: Usage | undefined): ProviderRequest.Timing | undef
   return Object.keys(values).length === 0 ? undefined : values
 }
 
+export const generationTiming = (
+  usage: Usage | undefined,
+  times: { readonly text?: bigint; readonly reasoning?: bigint; readonly ended: bigint },
+) => {
+  const normalized = tokens(usage)
+  const inclusiveReasoning = usage?.outputMayIncludeUnreportedReasoning === true && usage.reasoningTokens === undefined
+  if (inclusiveReasoning && times.reasoning === undefined) return undefined
+  const output = times.text !== undefined || inclusiveReasoning ? normalized.output : 0
+  const reasoning = times.reasoning === undefined ? 0 : normalized.reasoning
+  const generatedTokens = output + reasoning
+  if (!Number.isSafeInteger(generatedTokens) || generatedTokens <= 0) return undefined
+  const start = [
+    ...(output > 0 && times.text !== undefined ? [times.text] : []),
+    ...(times.reasoning !== undefined && (inclusiveReasoning || reasoning > 0) ? [times.reasoning] : []),
+  ].reduce((earliest, value) => earliest === undefined || value < earliest ? value : earliest, undefined as bigint | undefined)
+  if (start === undefined) return undefined
+  const observed = times.ended - start
+  const observedGenerationDurationNs = observed > 0n && observed <= BigInt(Number.MAX_SAFE_INTEGER)
+    ? Number(observed) : undefined
+  return {
+    generatedTokens,
+    ...(observedGenerationDurationNs === undefined ? {} : { observedGenerationDurationNs }),
+  }
+}
+
 // TODO(#35765): Use Copilot's reported billed amount once billing has a dedicated typed runtime contract.
 export function estimatedCost(
   costs: ModelV2.Info["cost"],

@@ -4,6 +4,7 @@ import { SessionPending } from "@ycoding-ai/schema/session-pending"
 import { PromptInput } from "@ycoding-ai/schema/prompt-input"
 import { AttachmentDigest, Base64 } from "@ycoding-ai/schema/prompt"
 import { Session } from "@ycoding-ai/schema/session"
+import { SessionCacheDiagnostics } from "@ycoding-ai/schema/session-cache-diagnostics"
 import { InstructionEntry } from "@ycoding-ai/schema/instruction-entry"
 import { Project } from "@ycoding-ai/schema/project"
 import { AbsolutePath, NonNegativeInt, PositiveInt, RelativePath, statics } from "@ycoding-ai/schema/schema"
@@ -261,6 +262,7 @@ export const SessionProjection = Schema.Struct({
   session: Session.Info,
   messages: Schema.Array(SessionMessage.Info),
   watermark: EventLog.Synced,
+  generationSpeed: SessionCacheDiagnostics.GenerationSpeedHistory.pipe(Schema.optional),
   before: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)).pipe(Schema.optional),
 }).annotate({ identifier: "SessionProjection" })
 export type SessionProjection = typeof SessionProjection.Type

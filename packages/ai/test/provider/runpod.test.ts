@@ -58,6 +58,8 @@ describe("Runpod Ollama /runsync", () => {
       expect(Array.from(events).find((event) => event.type === "finish")).toMatchObject({ usage: {
         inputTokens: 5, outputTokens: 2, totalTokens: 7,
       } })
+      expect(Array.from(events).find((event) => event.type === "finish")?.usage?.outputMayIncludeUnreportedReasoning)
+        .toBeUndefined()
     }).pipe(Effect.provide(dynamicResponse(({ request, text, respond }) => {
       expect(request.url).toBe("https://api.runpod.ai/v2/endpoint/runsync")
       expect(request.headers.authorization).toBe("Bearer fixture-key")
@@ -77,6 +79,16 @@ describe("Runpod Ollama /runsync", () => {
       message: { role: "assistant", content: "Hi" }, done: true,
       prompt_eval_count: 20, prompt_eval_cached_count: 8, eval_count: 3,
       prompt_eval_duration: 4_000_000, eval_duration: 5_000_000, load_duration: 6_000_000,
+    }] })))),
+  )
+
+  it.effect("marks inclusive Ollama output only when its response reveals thinking", () =>
+    Effect.gen(function* () {
+      const events = Array.from(yield* LLMClient.stream(request).pipe(Stream.runCollect))
+      expect(events.find((event) => event.type === "finish")?.usage?.outputMayIncludeUnreportedReasoning).toBe(true)
+    }).pipe(Effect.provide(fixedResponse(JSON.stringify({ status: "COMPLETED", output: [{
+      message: { role: "assistant", content: "Answer", thinking: "Think" }, done: true, eval_count: 12,
+      eval_duration: 2_000_000_000,
     }] })))),
   )
 
@@ -272,6 +284,7 @@ describe("Runpod vLLM /runsync", () => {
       expect(events.find((event) => event.type === "text-delta")).toMatchObject({ text: "Hello back" })
       expect(events.find((event) => event.type === "finish")).toMatchObject({ reason: "length", usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 } })
       expect(events.find((event) => event.type === "finish")?.usage?.cacheReadInputTokens).toBeUndefined()
+      expect(events.find((event) => event.type === "finish")?.usage?.outputMayIncludeUnreportedReasoning).toBeUndefined()
     }).pipe(Effect.provide(dynamicResponse(({ request, text, respond }) => {
       expect(request.url).toBe("https://api.runpod.ai/v2/endpoint/runsync")
       expect(request.headers.authorization).toBe("Bearer fixture-key")
@@ -289,6 +302,16 @@ describe("Runpod vLLM /runsync", () => {
     }).pipe(Effect.provide(fixedResponse(JSON.stringify({ status: "COMPLETED", output: [{
       choices: [{ message: { role: "assistant", content: "Hi" }, finish_reason: "stop" }],
       usage: { prompt_tokens: 9, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 4 } },
+    }] })))),
+  )
+
+  it.effect("marks inclusive vLLM output only when its response reveals reasoning", () =>
+    Effect.gen(function* () {
+      const events = Array.from(yield* LLMClient.stream(request).pipe(Stream.runCollect))
+      expect(events.find((event) => event.type === "finish")?.usage?.outputMayIncludeUnreportedReasoning).toBe(true)
+    }).pipe(Effect.provide(fixedResponse(JSON.stringify({ status: "COMPLETED", output: [{
+      choices: [{ message: { role: "assistant", content: "Answer", reasoning_content: "Think" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 5, completion_tokens: 12 },
     }] })))),
   )
 

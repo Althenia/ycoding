@@ -1866,6 +1866,24 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("marks inclusive Responses output when reasoning streams without a token breakdown", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        { type: "response.reasoning_summary_text.delta", item_id: "rs_1", delta: "Think" },
+        { type: "response.output_text.delta", item_id: "msg_1", delta: "Answer" },
+        { type: "response.completed", response: { id: "resp_1", usage: { input_tokens: 5, output_tokens: 12 } } },
+      )
+      const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
+      expect(response.usage?.outputMayIncludeUnreportedReasoning).toBe(true)
+      expect(response.usage?.outputTokens).toBe(12)
+      const textOnly = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(sseEvents(
+        { type: "response.output_text.delta", item_id: "msg_1", delta: "Answer" },
+        { type: "response.completed", response: { id: "resp_2", usage: { input_tokens: 5, output_tokens: 12 } } },
+      ))))
+      expect(textOnly.usage?.outputMayIncludeUnreportedReasoning).toBeUndefined()
+    }),
+  )
+
   it.effect("preserves encrypted reasoning metadata for continuation", () =>
     Effect.gen(function* () {
       const response = yield* LLMClient.generate(request).pipe(

@@ -215,6 +215,7 @@ interface ParserState {
   readonly hasToolCalls: boolean
   readonly lifecycle: Lifecycle.State
   readonly reasoningSignatures: Readonly<Record<number, string>>
+  readonly outputMayIncludeUnreportedReasoning: boolean
 }
 
 // =============================================================================
@@ -467,7 +468,7 @@ const mapFinishReason = (reason: string): FinishReason => {
 // from cache reads and writes. Its `totalTokens` excludes those cache counts,
 // so normalize the total from inclusive input plus output. Bedrock does not
 // break reasoning out of `outputTokens` for any current model.
-const mapUsage = (usage: BedrockUsageSchema | undefined): Usage | undefined => {
+const mapUsage = (usage: BedrockUsageSchema | undefined, outputMayIncludeUnreportedReasoning: boolean): Usage | undefined => {
   if (!usage) return undefined
   const normalized = ProviderShared.normalizeInputUsage({
     semantics: "exclusive-input",
@@ -478,6 +479,7 @@ const mapUsage = (usage: BedrockUsageSchema | undefined): Usage | undefined => {
   return new Usage({
     ...normalized,
     outputTokens: usage.outputTokens,
+    ...(outputMayIncludeUnreportedReasoning ? { outputMayIncludeUnreportedReasoning: true } : {}),
     totalTokens: ProviderShared.sumTokens(normalized.inputTokens, usage.outputTokens),
     providerMetadata: { bedrock: usage },
   })
@@ -528,6 +530,7 @@ const onReasoningDelta = (state: ParserState, event: BedrockEvent) => {
       reasoningSignatures: reasoning.signature
         ? { ...state.reasoningSignatures, [index]: reasoning.signature }
         : state.reasoningSignatures,
+      outputMayIncludeUnreportedReasoning: true,
     },
     events,
   ] as const)
@@ -595,7 +598,7 @@ const onMessageStop = (state: ParserState, event: BedrockEvent) => {
 
 const onMetadata = (state: ParserState, event: BedrockEvent) => {
   if (!event.metadata) return Effect.succeed([state, []] as const)
-  const usage = mapUsage(event.metadata.usage)
+  const usage = mapUsage(event.metadata.usage, state.outputMayIncludeUnreportedReasoning)
   return Effect.succeed([{ ...state, pendingFinish: { reason: state.pendingFinish?.reason ?? "stop", usage } }, []] as const)
 }
 
@@ -642,7 +645,9 @@ const onHalt = (state: ParserState): ReadonlyArray<LLMEvent> =>
         Lifecycle.finish(state.lifecycle, events, {
           reason:
             state.pendingFinish.reason === "stop" && state.hasToolCalls ? "tool-calls" : state.pendingFinish.reason,
-          usage: state.pendingFinish.usage,
+          usage: state.pendingFinish.usage && state.outputMayIncludeUnreportedReasoning
+            ? new Usage(Object.assign({}, state.pendingFinish.usage, { outputMayIncludeUnreportedReasoning: true }))
+            : state.pendingFinish.usage,
         })
         return events
       })()
@@ -669,6 +674,7 @@ export const protocol = Protocol.make({
       hasToolCalls: false,
       lifecycle: Lifecycle.initial(),
       reasoningSignatures: {},
+      outputMayIncludeUnreportedReasoning: false,
     }),
     step,
     onHalt,

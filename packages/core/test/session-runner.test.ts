@@ -2484,6 +2484,10 @@ describe("SessionRunnerLLM", () => {
         },
       })
       const diagnostics = yield* session.diagnostics(sessionID)
+      expect(diagnostics?.generationSpeed?.latest).toMatchObject({
+        tokens: 20, durationNs: 5_000_000, tokensPerSecond: 4_000,
+      })
+      expect((yield* session.snapshot(sessionID)).generationSpeed).toEqual(diagnostics?.generationSpeed)
       expect(diagnostics).toMatchObject({
         contextBreakdown: assistant.diagnostics?.contextBreakdown,
         context: { total: 1_030, limit: 20_000, remaining: 18_970, percent: 5 },
@@ -2513,6 +2517,82 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("times observed generation from the first counted reasoning delta and hides unreported hidden reasoning", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = Model.make({ id: "speed-model", provider: "openai", route: OpenAIChat.route })
+      responseStream = Stream.concat(
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "speed-reasoning" }),
+          LLMEvent.reasoningDelta({ id: "speed-reasoning", text: "Think" }),
+          LLMEvent.reasoningEnd({ id: "speed-reasoning" }),
+        ]),
+        Stream.fromEffect(TestClock.adjust("2 seconds")).pipe(Stream.flatMap(() => Stream.fromIterable([
+          LLMEvent.textStart({ id: "speed-text" }),
+          LLMEvent.textDelta({ id: "speed-text", text: "Done" }),
+          LLMEvent.textEnd({ id: "speed-text" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop", usage: {
+            outputTokens: 12, outputMayIncludeUnreportedReasoning: true,
+          } }),
+          LLMEvent.finish({ reason: "stop" }),
+        ]))),
+      )
+      responses = [reply.text("Title", "speed-title")]
+      yield* admit(session, "Measure generation")
+      yield* session.resume(sessionID)
+      const measured = yield* session.diagnostics(sessionID)
+      expect(measured?.generationSpeed?.latest).toMatchObject({
+        tokens: 12, durationNs: 2_000_000_000, tokensPerSecond: 6,
+      })
+      expect((yield* session.snapshot(sessionID)).generationSpeed).toEqual(measured?.generationSpeed)
+      const requests = yield* SessionProviderRequest.Service
+      expect((yield* requests.recentSteps(sessionID)).at(-1)?.timing).toMatchObject({
+        generatedTokens: 12, observedGenerationDurationNs: 2_000_000_000,
+      })
+
+      responses = [[
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.textStart({ id: "speed-hidden-text" }),
+        LLMEvent.textDelta({ id: "speed-hidden-text", text: "Answer" }),
+        LLMEvent.textEnd({ id: "speed-hidden-text" }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop", usage: {
+          outputTokens: 15, outputMayIncludeUnreportedReasoning: true,
+        } }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]]
+      yield* admit(session, "Hidden thinking")
+      yield* session.resume(sessionID)
+      const hidden = yield* session.diagnostics(sessionID)
+      expect(hidden?.generationSpeed?.latest).toBeUndefined()
+      expect(hidden?.generationSpeed?.recent).toHaveLength(1)
+      expect((yield* session.snapshot(sessionID)).generationSpeed).toEqual(hidden?.generationSpeed)
+      responses = [[
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.textStart({ id: "speed-openai-text" }),
+        LLMEvent.textDelta({ id: "speed-openai-text", text: "Visible" }),
+        LLMEvent.textEnd({ id: "speed-openai-text" }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop", usage: {
+          outputTokens: 12, reasoningTokens: 4, generationDurationNs: 2_000_000_000,
+        } }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]]
+      yield* admit(session, "Unstreamed separate reasoning")
+      yield* session.resume(sessionID)
+      const separate = yield* session.diagnostics(sessionID)
+      expect(separate?.generationSpeed?.latest).toMatchObject({ tokens: 8, durationNs: 2_000_000_000,
+        tokensPerSecond: 4 })
+      expect(separate?.generationSpeed?.recent).toHaveLength(2)
+      const events = yield* EventV2.Service
+      yield* events.publish(SessionEvent.Compaction.StartedV1, { sessionID, reason: "manual", recent: "" })
+      yield* events.publish(SessionEvent.Compaction.EndedV1, {
+        sessionID, reason: "manual", text: "summary", recent: "",
+      })
+      expect(yield* session.diagnostics(sessionID)).toBeUndefined()
+      expect((yield* session.snapshot(sessionID)).generationSpeed).toBeUndefined()
+    }),
+  )
+
   it.effect("publishes live cache diagnostics before settled local tools finish", () =>
     Effect.gen(function* () {
       const session = yield* setup
@@ -2528,6 +2608,9 @@ describe("SessionRunnerLLM", () => {
       responses = [
         [
           LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "live-speed-text" }),
+          LLMEvent.textDelta({ id: "live-speed-text", text: "Working" }),
+          LLMEvent.textEnd({ id: "live-speed-text" }),
           LLMEvent.toolCall({ id: "call-diagnostics", name: "echo", input: { text: "blocked" } }),
           LLMEvent.stepFinish({
             index: 0,
@@ -2538,6 +2621,7 @@ describe("SessionRunnerLLM", () => {
               cacheReadInputTokens: 900,
               outputTokens: 30,
               reasoningTokens: 10,
+              generationDurationNs: 5_000_000,
             },
           }),
           LLMEvent.finish({ reason: "tool-calls" }),
@@ -2564,6 +2648,7 @@ describe("SessionRunnerLLM", () => {
               context: { total: 1_030, limit: 20_000, remaining: 18_970, percent: 5 },
               tokens: { uncachedInput: 100, output: 20, reasoning: 10, cacheRead: 900, cacheWrite: 0 },
               cache: { eligible: 1_000, hitRatio: 0.9, readReported: true, writeReported: false },
+              generationSpeed: { latest: { tokens: 20, durationNs: 5_000_000, tokensPerSecond: 4_000 } },
             },
           },
         },

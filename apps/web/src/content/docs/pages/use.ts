@@ -72,7 +72,7 @@ export const usePages: readonly DocPage[] = [
             head: ["Area", "Use it to"],
             rows: [
               ["Transcript", "Read user and assistant messages, tool calls, compaction records, and execution results in order."],
-              ["Sidebar", "Inspect Session context, status, subagents, and runtime state."],
+              ["Sidebar", "Inspect Session context, generation speed, status, subagents, and runtime state."],
               ["Composer", "Write multi-line prompts, choose delivery behavior, and attach supported files or images."],
               ["Command palette", "Find Session, model, agent, service, theme, and context-sensitive actions."],
             ],

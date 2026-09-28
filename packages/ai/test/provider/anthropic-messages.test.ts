@@ -534,10 +534,13 @@ describe("Anthropic Messages route", () => {
         },
         { type: "message_stop" },
       )
-      const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
+      const response = yield* LLMClient.generate(LLM.updateRequest(request, {
+        providerOptions: { anthropic: { thinking: { type: "enabled", budgetTokens: 1_024 } } },
+      })).pipe(Effect.provide(fixedResponse(body)))
 
       expect(response.text).toBe("Hello!")
       expect(response.reasoning).toBe("thinking")
+      expect(response.usage?.outputMayIncludeUnreportedReasoning).toBe(true)
       expect(response.usage).toMatchObject({
         inputTokens: 6,
         outputTokens: 2,
@@ -599,6 +602,26 @@ describe("Anthropic Messages route", () => {
           ],
         },
       ])
+    }),
+  )
+
+  it.effect("marks inclusive hidden thinking only when effective Anthropic thinking is enabled", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        { type: "message_start", message: { usage: { input_tokens: 5 } } },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Answer" } },
+        { type: "content_block_stop", index: 0 },
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 12 } },
+      )
+      const enabled = LLM.updateRequest(request, { providerOptions: { anthropic: { thinking: { type: "enabled", budgetTokens: 1_024 } } } })
+      const disabled = LLM.updateRequest(request, { providerOptions: { anthropic: { thinking: { type: "disabled" } } } })
+      expect((yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(enabled)).body.thinking).toEqual({ type: "enabled", budget_tokens: 1_024 })
+      expect((yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(disabled)).body.thinking).toEqual({ type: "disabled" })
+      expect((yield* LLMClient.generate(enabled).pipe(Effect.provide(fixedResponse(body)))).usage?.outputMayIncludeUnreportedReasoning).toBe(true)
+      expect((yield* LLMClient.generate(disabled).pipe(Effect.provide(fixedResponse(body)))).usage?.outputMayIncludeUnreportedReasoning).toBeUndefined()
+      expect((yield* LLMClient.generate(LLM.request({ model: opus5, prompt: "Answer" })).pipe(Effect.provide(fixedResponse(body))))
+        .usage?.outputMayIncludeUnreportedReasoning).toBe(true)
     }),
   )
 

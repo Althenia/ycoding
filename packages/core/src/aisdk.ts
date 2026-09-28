@@ -344,6 +344,11 @@ function modelFromLanguage(info: ModelV2.Info, language: LanguageModelV3) {
     if (packageName === "@ai-sdk/azure") return { openai: projected.settings, azure: projected.settings }
     return { [optionKey]: projected.settings }
   })()
+  const modelID = String(info.modelID ?? info.id)
+  const mode = AnthropicModel.capabilities(modelID).adaptiveThinking
+  const defaultAnthropicThinking = (["@ai-sdk/anthropic", "@ai-sdk/google-vertex/anthropic"].includes(packageName) ||
+    (packageName === "@ai-sdk/gateway" && modelID.startsWith("anthropic/"))) &&
+    (mode === "default" || mode === "required")
   const route: AnyRoute = {
     id: `ai-sdk:${packageName}`,
     provider: ProviderID.make(info.providerID),
@@ -375,7 +380,8 @@ function modelFromLanguage(info: ModelV2.Info, language: LanguageModelV3) {
     with: () => route,
     model: (input) => Model.make({ ...input, provider: "provider" in input ? input.provider : info.providerID, route }),
     prepareTransport: (body) => Effect.succeed(body),
-    streamPrepared: (prepared) => streamLanguage(language, prepared as LanguageModelV3CallOptions),
+    streamPrepared: (prepared) => streamLanguage(language, prepared as LanguageModelV3CallOptions,
+      defaultAnthropicThinking),
   }
   return Model.make({ id: info.modelID ?? info.id, provider: info.providerID, route })
 }
@@ -697,8 +703,18 @@ function providerOptions(input: LLMRequest["providerOptions"]): SharedV3Provider
   return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, jsonObject(value)]))
 }
 
-function streamLanguage(language: LanguageModelV3, options: LanguageModelV3CallOptions) {
-  const state = { step: 0, toolNames: {} as Record<string, string> }
+function streamLanguage(language: LanguageModelV3, options: LanguageModelV3CallOptions, defaultAnthropicThinking: boolean) {
+  const thinking = options.providerOptions?.anthropic?.thinking
+  const reasoningConfig = options.providerOptions?.bedrock?.reasoningConfig
+  const state = {
+    step: 0,
+    toolNames: {} as Record<string, string>,
+    outputMayIncludeUnreportedReasoning:
+      (ProviderShared.isRecord(thinking)
+        ? thinking.type === "enabled" || thinking.type === "adaptive"
+        : defaultAnthropicThinking) ||
+      (ProviderShared.isRecord(reasoningConfig) && reasoningConfig.type === "enabled"),
+  }
   return Stream.concat(
     Stream.make(LLMEvent.stepStart({ index: state.step })),
     Stream.unwrap(
@@ -721,7 +737,7 @@ function streamLanguage(language: LanguageModelV3, options: LanguageModelV3CallO
 }
 
 function streamPartEvents(
-  state: { step: number; toolNames: Record<string, string> },
+  state: { step: number; toolNames: Record<string, string>; outputMayIncludeUnreportedReasoning: boolean },
   event: LanguageModelV3StreamPart,
 ): Effect.Effect<ReadonlyArray<LLMEvent>, LLMError> {
   switch (event.type) {
@@ -826,12 +842,12 @@ function streamPartEvents(
         LLMEvent.stepFinish({
           index: state.step++,
           reason: finishReason(event.finishReason),
-          usage: usage(event.usage, event.providerMetadata),
+          usage: usage(event.usage, event.providerMetadata, state.outputMayIncludeUnreportedReasoning),
           providerMetadata: providerMetadata(event.providerMetadata),
         }),
         LLMEvent.finish({
           reason: finishReason(event.finishReason),
-          usage: usage(event.usage, event.providerMetadata),
+          usage: usage(event.usage, event.providerMetadata, state.outputMayIncludeUnreportedReasoning),
           providerMetadata: providerMetadata(event.providerMetadata),
         }),
       ])
@@ -843,6 +859,7 @@ function streamPartEvents(
 function usage(
   input: Extract<LanguageModelV3StreamPart, { type: "finish" }>["usage"],
   metadata?: unknown,
+  outputMayIncludeUnreportedReasoning = false,
 ): UsageInput | undefined {
   const normalized = ProviderShared.normalizeInputUsage({
     semantics: "ai-sdk",
@@ -855,6 +872,8 @@ function usage(
     ...normalized,
     outputTokens: input.outputTokens.total,
     reasoningTokens: input.outputTokens.reasoning,
+    ...(outputMayIncludeUnreportedReasoning && input.outputTokens.reasoning === undefined
+      ? { outputMayIncludeUnreportedReasoning: true } : {}),
     totalTokens:
       normalized.inputTokens === undefined || input.outputTokens.total === undefined
         ? undefined

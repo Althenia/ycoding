@@ -2,6 +2,16 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-09-28: Add Session Generation Speed
+
+- Add `Session.GenerationSpeed` (`model`, positive `tokens`, positive `durationNs`, positive finite `tokensPerSecond`) and `Session.GenerationSpeedHistory` (optional `latest`, `recent` with at most eight samples).
+- Add optional `generationSpeed` to `SessionCacheDiagnostics.Info` and the Session snapshot projection.
+- Add optional `generatedTokens` and `observedGenerationDurationNs` to `session.provider.request.recorded` timing.
+
+Compatibility:
+
+- The fields are additive and optional; stored events without them remain decodable and keep their durable event version. Promise and Effect client surfaces are regenerated from the assembled `HttpApi`.
+
 ## 2026-09-28: Add Server-Owned Remote Connection
 
 - Add `Remote.Status` (`state`: `off`, `connecting`, `on`, or `error`; optional `message`).

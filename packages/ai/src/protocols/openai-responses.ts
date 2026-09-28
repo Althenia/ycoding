@@ -368,6 +368,7 @@ interface ParserState {
   readonly textContent: Readonly<Record<string, string>>
   readonly messagePhases: Readonly<Record<string, OpenAIResponsesMessagePhase>>
   readonly reasoningItems: Readonly<Record<string, ReasoningStreamItem>>
+  readonly reasoningObserved: boolean
   readonly store: boolean | undefined
 }
 
@@ -878,7 +879,7 @@ const fromRequest = Effect.fn("OpenAIResponses.fromRequest")(function* (request:
 // `cached_tokens` and `cache_write_tokens` subsets, and `output_tokens`
 // (inclusive total) with a `reasoning_tokens` subset. Pass the totals through
 // and derive the non-cached breakdown.
-const mapUsage = (usage: OpenAIResponsesUsage | null | undefined) => {
+const mapUsage = (usage: OpenAIResponsesUsage | null | undefined, reasoningObserved: boolean) => {
   if (!usage) return undefined
   const normalized = ProviderShared.normalizeInputUsage({
     semantics: "inclusive-total",
@@ -891,6 +892,7 @@ const mapUsage = (usage: OpenAIResponsesUsage | null | undefined) => {
     ...normalized,
     outputTokens: usage.output_tokens,
     reasoningTokens: reasoning,
+    ...(reasoningObserved && reasoning === undefined ? { outputMayIncludeUnreportedReasoning: true } : {}),
     totalTokens: ProviderShared.totalTokens(usage.input_tokens, usage.output_tokens, usage.total_tokens),
     providerMetadata: { openai: usage },
   })
@@ -1097,6 +1099,7 @@ const onReasoningDelta = (state: ParserState, event: OpenAIResponsesEvent): Step
     {
       ...state,
       lifecycle: Lifecycle.reasoningDelta(state.lifecycle, events, id, event.delta),
+      reasoningObserved: true,
     },
     events,
   ]
@@ -1389,7 +1392,7 @@ const onResponseFinish = Effect.fn("OpenAIResponses.onResponseFinish")(function*
   }
   const lifecycle = Lifecycle.finish(current.lifecycle, events, {
     reason: mapFinishReason(event, state.hasFunctionCall),
-    usage: mapUsage(event.response?.usage),
+    usage: mapUsage(event.response?.usage, current.reasoningObserved),
     providerMetadata:
       state.remoteCompaction || event.response?.id || event.response?.service_tier
         ? openaiMetadata({
@@ -1485,6 +1488,7 @@ export const protocol = Protocol.make({
       textContent: {},
       messagePhases: {},
       reasoningItems: {},
+      reasoningObserved: false,
       store: OpenAIOptions.store(request),
     }),
     step,

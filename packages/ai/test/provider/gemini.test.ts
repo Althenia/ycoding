@@ -326,6 +326,8 @@ describe("Gemini route", () => {
         reasoningTokens: 1,
         totalTokens: 7,
       })
+      expect(response.usage?.visibleOutputTokens).toBe(2)
+      expect(response.usage?.outputMayIncludeUnreportedReasoning).toBeUndefined()
       expect(response.usage?.cacheWriteInputTokens).toBeUndefined()
       expect(
         (response.usage?.nonCachedInputTokens ?? 0) +

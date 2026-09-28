@@ -261,6 +261,7 @@ export interface Interface {
       readonly messages: SessionMessage.Info[]
       readonly watermark: EventLog.Synced
       readonly before?: string
+      readonly generationSpeed?: NonNullable<Session.CacheDiagnostics["generationSpeed"]>
     },
     NotFoundError | MessageDecodeError | InvalidCursorError
   >
@@ -922,10 +923,14 @@ const layer = Layer.effect(
                 aggregateID: sessionID,
                 ...(sequence < 0 ? {} : { seq: EventV2.Seq.make(sequence) }),
               }
+              const generationSpeed = SessionCacheDiagnostics.latestAssistant(history.messages, session.revert?.messageID)
+                ? SessionCacheDiagnostics.generationSpeed(yield* providerRequests.recentSteps(sessionID))
+                : undefined
               return {
                 session,
                 ...history,
                 watermark,
+                ...(generationSpeed === undefined ? {} : { generationSpeed }),
               }
             }),
           )
@@ -971,7 +976,10 @@ const layer = Layer.effect(
           session.revert?.messageID,
         )
         if (!diagnostics) return diagnostics
-        return { ...diagnostics, requests: yield* providerRequests.summary(sessionID) }
+        const generationSpeed = SessionCacheDiagnostics.generationSpeed(yield* providerRequests.recentSteps(sessionID))
+        return { ...diagnostics, requests: yield* providerRequests.summary(sessionID),
+          ...(generationSpeed === undefined ? {} : { generationSpeed }),
+        }
       }),
       usage: Effect.fn("V2Session.usage")(function* (sessionID) {
         const session = yield* result.get(sessionID)

@@ -4,6 +4,8 @@ import { cacheProfile } from "@ycoding-ai/ai/cache-profile"
 import { Session } from "@ycoding-ai/schema/session"
 import type { ContextBreakdown } from "@ycoding-ai/schema/session-cache-diagnostics"
 import { Money } from "@ycoding-ai/schema/money"
+import type { ProviderRequest } from "@ycoding-ai/schema/provider-request"
+import type { SessionCacheDiagnostics as DiagnosticsSchema } from "@ycoding-ai/schema/session-cache-diagnostics"
 import type { TokenUsage } from "@ycoding-ai/schema/token-usage"
 import type { ModelV2 } from "../model"
 import { OpenAICodex } from "../plugin/provider/openai-codex"
@@ -17,6 +19,7 @@ export interface CalculateInput {
   readonly contextBreakdown?: ContextBreakdown
   readonly routeID?: string
   readonly providerCache?: Session.ProviderCacheDiagnostics
+  readonly generationSpeed?: DiagnosticsSchema.GenerationSpeedHistory
 }
 
 const safe = (value: number) => Math.max(0, Number.isFinite(value) ? value : 0)
@@ -130,7 +133,28 @@ export function calculate(input: CalculateInput): Session.CacheDiagnostics {
       ...(minimumTokens === undefined ? {} : { minimumTokens, belowMinimum: eligible < minimumTokens }),
     },
     estimatedCost: input.estimatedCost,
+    ...(input.generationSpeed === undefined ? {} : { generationSpeed: input.generationSpeed }),
   }
+}
+
+export function generationSpeed(
+  records: readonly Pick<ProviderRequest.Record, "model" | "timing">[],
+  current?: Pick<ProviderRequest.Record, "model" | "timing">,
+): DiagnosticsSchema.GenerationSpeedHistory | undefined {
+  const recentRecords = [...records, ...(current === undefined ? [] : [current])].slice(-8)
+  const samples = recentRecords.map((record) => {
+    const tokens = record.timing?.generatedTokens
+    const durationNs = record.timing?.generationDurationNs ?? record.timing?.observedGenerationDurationNs
+    if (!Number.isSafeInteger(tokens) || !tokens || tokens <= 0 ||
+      !Number.isSafeInteger(durationNs) || !durationNs || durationNs <= 0) return undefined
+    const tokensPerSecond = tokens * 1_000_000_000 / durationNs
+    if (!Number.isFinite(tokensPerSecond) || tokensPerSecond <= 0) return undefined
+    return { model: record.model, tokens, durationNs, tokensPerSecond }
+  })
+  const recent = samples.filter((sample): sample is NonNullable<typeof sample> => sample !== undefined)
+  if (recent.length === 0) return undefined
+  const latest = samples.at(-1)
+  return { ...(latest === undefined ? {} : { latest }), recent }
 }
 
 export function latestAssistant(

@@ -834,6 +834,31 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
+  it.effect("marks inclusive Chat output when streamed reasoning lacks a token breakdown", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        deltaChunk({ reasoning_content: "Think" }),
+        deltaChunk({ content: "Answer" }),
+        deltaChunk({}, "stop"),
+        usageChunk({ prompt_tokens: 5, completion_tokens: 12 }),
+      )
+      const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
+      expect(response.usage?.outputMayIncludeUnreportedReasoning).toBe(true)
+      expect(response.usage?.outputTokens).toBe(12)
+      const separate = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(sseEvents(
+        deltaChunk({ reasoning_content: "Think" }), deltaChunk({ content: "Answer" }), deltaChunk({}, "stop"),
+        usageChunk({ prompt_tokens: 5, completion_tokens: 12, completion_tokens_details: { reasoning_tokens: 4 } }),
+      ))))
+      expect(separate.usage?.outputMayIncludeUnreportedReasoning).toBeUndefined()
+      expect(separate.usage?.visibleOutputTokens).toBe(8)
+      const textOnly = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(sseEvents(
+        deltaChunk({ content: "Answer" }), deltaChunk({}, "stop"),
+        usageChunk({ prompt_tokens: 5, completion_tokens: 12 }),
+      ))))
+      expect(textOnly.usage?.outputMayIncludeUnreportedReasoning).toBeUndefined()
+    }),
+  )
+
   it.effect("preserves and replays reasoning details alongside scalar reasoning", () =>
     Effect.gen(function* () {
       const details = [

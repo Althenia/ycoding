@@ -52,6 +52,8 @@ export type ReportOrder = typeof ReportOrder.Type
 export const Timing = Schema.Struct({
   promptEvalDurationNs: NonNegativeInt.pipe(optional),
   generationDurationNs: NonNegativeInt.pipe(optional),
+  observedGenerationDurationNs: PositiveInt.pipe(optional),
+  generatedTokens: PositiveInt.pipe(optional),
   loadDurationNs: NonNegativeInt.pipe(optional),
 }).annotate({ identifier: "ProviderRequest.Timing" })
 export interface Timing extends Schema.Schema.Type<typeof Timing> {}
