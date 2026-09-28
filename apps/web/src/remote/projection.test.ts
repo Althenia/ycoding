@@ -13,6 +13,8 @@ import {
   visibleTranscriptMessages,
   appendShellOutputPage,
   applySessionEvent,
+  contextWindowDisplay,
+  generationSpeedDisplay,
   boundedText,
   createSessionView,
   mergeFileChanges,
@@ -122,6 +124,40 @@ test("tracks live execution and part timings for the transcript and status bar",
   ] })
   view = apply(view, "session.execution.succeeded", {}, 4_000)
   expect(view.executionStarted).toBeUndefined()
+})
+
+test("live diagnostics replace selected-Session speed and context, then clear on compaction or unreported values", () => {
+  const selected = { id: "gpt-6", providerID: "openai", variant: "high" }
+  const first = { model: selected, tokens: 12, durationNs: 2_000_000, tokensPerSecond: 6_000 }
+  const second = { model: selected, tokens: 15, durationNs: 3_000_000, tokensPerSecond: 5_000 }
+  const diagnostics = (speed?: unknown, limit?: number) => ({
+    model: selected, context: { total: 74_000, ...(limit === undefined ? {} : { limit }), remaining: 184_000, percent: 29 },
+    tokens: { uncachedInput: 60_000, output: 10_000, reasoning: 2_000, cacheRead: 2_000, cacheWrite: 0 },
+    cache: { eligible: 62_000, mechanism: "openai-prefix-cache", readReported: true, writeReported: false },
+    ...(speed === undefined ? {} : { generationSpeed: speed }),
+  })
+  const initial = apply(createSessionView("ses_a"), "session.diagnostics.updated", {
+    sessionID: "ses_a", diagnostics: diagnostics({ latest: first, recent: [first] }, 258_000),
+  })
+  expect(generationSpeedDisplay(initial, selected)?.label).toBe("6,000 tok/s")
+  expect(contextWindowDisplay(initial, selected)?.usedPercent).toBe(29)
+  const updated = apply(initial, "session.diagnostics.updated", {
+    sessionID: "ses_a", diagnostics: diagnostics({ latest: second, recent: [first, second] }, 258_000),
+  }, 2)
+  expect(generationSpeedDisplay(updated, selected)).toMatchObject({ label: "5,000 tok/s", trend: expect.any(String) })
+  expect(updated.generationSpeed?.recent).toHaveLength(2)
+  const switched = apply(updated, "session.model.selected", { sessionID: "ses_a", model: { ...selected, variant: "low" } })
+  expect(generationSpeedDisplay(switched, switched.model)).toBeUndefined()
+  expect(contextWindowDisplay(switched, switched.model)).toBeUndefined()
+  const unreported = apply(updated, "session.diagnostics.updated", {
+    sessionID: "ses_a", diagnostics: diagnostics(undefined, undefined),
+  }, 3)
+  expect(generationSpeedDisplay(unreported, selected)).toBeUndefined()
+  expect(contextWindowDisplay(unreported, selected)).toBeUndefined()
+  const compacted = apply(updated, "session.compaction.ended", { sessionID: "ses_a", jobID: "cmp_1",
+    boundary: { messageID: "msg_before", seq: 1 }, metrics: { excludedMessages: 1, excludedParts: 0, inputTokens: 100, retainedTokens: 40 } }, 4)
+  expect(generationSpeedDisplay(compacted, selected)).toBeUndefined()
+  expect(contextWindowDisplay(compacted, selected)).toBeUndefined()
 })
 
 test("ends the elapsed clock on an idle status before the next execution starts", () => {
@@ -474,6 +510,36 @@ describe("unknown and ignored events", () => {
 })
 
 describe("snapshot readers", () => {
+  test("reads bounded speed and the latest post-compaction assistant context from the declared fields", () => {
+    const selected = { id: "gpt-6", providerID: "openai", variant: "high" }
+    const sample = { model: selected, tokens: 12, durationNs: 2_000_000, tokensPerSecond: 6_000 }
+    const assistant = { id: "msg_current", type: "assistant", agent: "build", model: selected,
+      content: [], tokens: { input: 60_000, output: 10_000, reasoning: 2_000, cache: { read: 2_000, write: 0 } },
+      diagnostics: { contextLimit: 258_000 }, time: { created: 3, completed: 4 } }
+    const snapshot = readSnapshot({ session: { model: selected }, messages: [assistant],
+      generationSpeed: { latest: sample, recent: [sample] } })
+    expect(snapshot?.generationSpeed).toEqual({ latest: sample, recent: [sample] })
+    expect(snapshot?.contextWindow).toEqual({ model: selected, used: 74_000, limit: 258_000 })
+    expect(generationSpeedDisplay({ ...createSessionView("ses_a"), generationSpeed: snapshot?.generationSpeed }, selected))
+      .toMatchObject({ label: "6,000 tok/s" })
+    expect(contextWindowDisplay({ ...createSessionView("ses_a"), contextWindow: snapshot?.contextWindow }, selected))
+      .toMatchObject({ usedPercent: 29, leftPercent: 71, tokens: "74K / 258K tokens", fraction: 74_000 / 258_000 })
+    expect(generationSpeedDisplay({ ...createSessionView("ses_a"), generationSpeed: snapshot?.generationSpeed },
+      { ...selected, variant: "low" })).toBeUndefined()
+    expect(contextWindowDisplay({ ...createSessionView("ses_a"), contextWindow: snapshot?.contextWindow },
+      { ...selected, variant: "low" })).toBeUndefined()
+    expect(contextWindowDisplay({ ...createSessionView("ses_a"), contextWindow: { model: selected, used: 0, limit: 258_000 } }, selected)).toBeUndefined()
+    expect(generationSpeedDisplay(createSessionView("ses_a"), selected)).toBeUndefined()
+    expect(readSnapshot({ session: { model: selected }, messages: [assistant],
+      generationSpeed: { latest: { ...sample, tokensPerSecond: 0 }, recent: [sample] } })?.generationSpeed).toBeUndefined()
+
+    const compacted = readSnapshot({ session: { model: selected }, messages: [assistant,
+      completedCompaction("msg_compaction", "cmp_1", "msg_current", 4, 5)],
+      generationSpeed: { latest: sample, recent: [sample] } })
+    expect(compacted?.contextWindow).toBeUndefined()
+    expect(compacted?.generationSpeed).toBeUndefined()
+  })
+
   test("keeps only the latest compaction lifecycle without discarding uncompleted history", () => {
     const messages = [
       { id: "msg_before", type: "user", text: "keep", time: { created: 1 } },

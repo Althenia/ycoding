@@ -81,6 +81,14 @@ Object.assign(window, { composerSwitchSession: () => update({ ...state(), active
 Object.assign(window, { composerClearAutonomy: () => update({ ...state(), view: { ...state().view!, autonomy: undefined } }) })
 Object.assign(window, { composerSetWorkspaceLoading: (loading: boolean) => update({ ...state(), workspaceStatus: loading ? "loading" : "ready" }) })
 Object.assign(window, { composerSetGoalStatus: (status: "active" | "completed" | "stopped" | "exhausted" | null) => update({ ...state(), view: { ...state().view!, autonomy: { mode: status === "active" ? "goal" : "normal", yolo: 3, ...(status ? { goal: { text: "Finish task", status, iteration: 2, noProgress: 0, maxNoProgress: 3 } } : {}) } } }) })
+Object.assign(window, { composerSetDiagnostics: (status: "known" | "unknown" | "mismatch") => {
+  const selected = state().selectedSessionInfo?.model
+  const model = status === "mismatch" ? { providerID: "anthropic", id: "claude-opus-5-5" } : selected
+  const first = model && { model, tokens: 3, durationNs: 1_000_000, tokensPerSecond: 3_000 }
+  const latest = model && { model, tokens: 12, durationNs: 2_000_000, tokensPerSecond: 6_000 }
+  update({ ...state(), view: { ...state().view!, generationSpeed: status === "unknown" || !first || !latest ? undefined : { latest, recent: [first, latest] },
+    contextWindow: status === "unknown" || !model ? undefined : { model, used: 74_000, limit: 258_000 } } })
+} })
 
 function Fixture() {
   const [created, setCreated] = createSignal("")

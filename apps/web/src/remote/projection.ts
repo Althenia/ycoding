@@ -32,6 +32,90 @@ export function modelLabel(model: ModelRefView | undefined): string | undefined 
   return `${model.providerID}/${model.id}${model.variant === undefined ? "" : `#${model.variant}`}`
 }
 
+export type GenerationSpeedSampleView = {
+  readonly model: ModelRefView
+  readonly tokens: number
+  readonly durationNs: number
+  readonly tokensPerSecond: number
+}
+
+export type GenerationSpeedHistoryView = {
+  readonly latest?: GenerationSpeedSampleView
+  readonly recent: readonly GenerationSpeedSampleView[]
+}
+
+export type ContextWindowView = { readonly model: ModelRefView; readonly used: number; readonly limit: number }
+
+const positiveInteger = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined
+
+function readGenerationSpeedSample(value: unknown): GenerationSpeedSampleView | undefined {
+  if (!isRecord(value)) return undefined
+  const model = readModelRef(value.model)
+  const tokens = positiveInteger(value.tokens)
+  const durationNs = positiveInteger(value.durationNs)
+  const tokensPerSecond = numberField(value.tokensPerSecond)
+  if (!model || tokens === undefined || durationNs === undefined || tokensPerSecond === undefined || tokensPerSecond <= 0) return undefined
+  return { model, tokens, durationNs, tokensPerSecond }
+}
+
+function readGenerationSpeed(value: unknown): GenerationSpeedHistoryView | undefined {
+  if (!isRecord(value) || !Array.isArray(value.recent) || value.recent.length > 8) return undefined
+  const recent = value.recent.map(readGenerationSpeedSample)
+  if (!recent.every((sample): sample is GenerationSpeedSampleView => sample !== undefined)) return undefined
+  const latest = value.latest === undefined ? undefined : readGenerationSpeedSample(value.latest)
+  if (value.latest !== undefined && latest === undefined) return undefined
+  return { recent, ...(latest === undefined ? {} : { latest }) }
+}
+
+function readContextWindow(model: unknown, used: unknown, limit: unknown): ContextWindowView | undefined {
+  const selected = readModelRef(model)
+  const total = positiveInteger(used)
+  const cap = positiveInteger(limit)
+  if (!selected || total === undefined || cap === undefined) return undefined
+  return { model: selected, used: total, limit: cap }
+}
+
+function readAssistantContext(value: unknown): ContextWindowView | undefined {
+  if (!isRecord(value) || !isRecord(value.tokens) || !isRecord(value.tokens.cache)) return undefined
+  const counts = [value.tokens.input, value.tokens.output, value.tokens.reasoning,
+    value.tokens.cache.read, value.tokens.cache.write]
+  if (!counts.every((count): count is number => typeof count === "number" && Number.isSafeInteger(count) && count >= 0)) return undefined
+  return readContextWindow(value.model, counts.reduce((sum, count) => sum + count, 0),
+    isRecord(value.diagnostics) ? value.diagnostics.contextLimit : undefined)
+}
+
+const sameModel = (left: ModelRefView | undefined, right: ModelRefView | undefined) =>
+  left !== undefined && right !== undefined && left.providerID === right.providerID && left.id === right.id &&
+  (left.variant ?? "default") === (right.variant ?? "default")
+
+export function generationSpeedDisplay(view: SessionView | undefined, selected: ModelRefView | undefined) {
+  const history = view?.generationSpeed
+  const latest = history?.latest
+  if (!latest || !sameModel(latest.model, selected)) return undefined
+  const rate = latest.tokensPerSecond
+  const label = `${rate >= 1 ? Math.round(rate).toLocaleString("en-US") : rate.toPrecision(2)} tok/s`
+  const peak = Math.max(...history.recent.map((sample) => sample.tokensPerSecond))
+  const levels = "▁▂▃▄▅▆▇█"
+  const trend = history.recent.length < 2 ? undefined
+    : history.recent.map((sample) => levels[Math.floor(sample.tokensPerSecond / peak * 7)]).join("")
+  return { label, ...(trend === undefined ? {} : { trend }) }
+}
+
+const compactTokens = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 })
+
+export function contextWindowDisplay(view: SessionView | undefined, selected: ModelRefView | undefined) {
+  const context = view?.contextWindow
+  if (!context || !sameModel(context.model, selected) || context.used <= 0 || context.limit <= 0) return undefined
+  const usedPercent = Math.round(context.used / context.limit * 100)
+  if (usedPercent <= 0) return undefined
+  return {
+    usedPercent,
+    leftPercent: Math.max(0, 100 - usedPercent),
+    fraction: context.used / context.limit,
+    tokens: `${compactTokens.format(context.used)} / ${compactTokens.format(context.limit)} tokens`,
+  }
+}
+
 export type ToolContentBlock =
   | { readonly kind: "text"; readonly text: string; readonly sourceTruncated?: boolean }
   | { readonly kind: "image"; readonly uri: string; readonly mime: string; readonly name?: string }
@@ -241,6 +325,8 @@ export type SessionView = {
   readonly title?: string
   readonly agent?: string
   readonly model?: ModelRefView
+  readonly generationSpeed?: GenerationSpeedHistoryView
+  readonly contextWindow?: ContextWindowView
   readonly status: "idle" | "running" | "interrupted" | "failed"
   readonly archived?: boolean
   readonly lastError?: { readonly code: string; readonly message: string }
@@ -308,7 +394,6 @@ const ignoredEventTypes: readonly string[] = [
   "session.deleted",
   "session.usage.recorded",
   "session.usage.updated",
-  "session.diagnostics.updated",
   "session.provider.request.recorded",
   "session.skill.deactivated",
   "session.compaction.delta",
@@ -701,6 +786,12 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
       const selected = readModelRef(data.model)
       return { ...view, model: selected ?? view.model, updatedAt: now }
     }
+    case "session.diagnostics.updated": {
+      if (stringField(data.sessionID) !== view.id || !isRecord(data.diagnostics)) return view
+      const context = isRecord(data.diagnostics.context) ? data.diagnostics.context : undefined
+      return { ...view, generationSpeed: readGenerationSpeed(data.diagnostics.generationSpeed),
+        contextWindow: readContextWindow(data.diagnostics.model, context?.total, context?.limit), updatedAt: now }
+    }
     case "session.execution.started":
       return { ...view, status: "running", executionStarted: now, retry: undefined, updatedAt: now }
     case "session.execution.succeeded":
@@ -862,7 +953,10 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
     case "session.compaction.started":
       return withCompaction(view, data, "running", event.created ?? now)
     case "session.compaction.ended":
-      return withCompaction(view, data, "completed", event.created ?? now)
+      return stringField(data.jobID) === undefined ? view : {
+        ...withCompaction(view, data, "completed", event.created ?? now),
+        generationSpeed: undefined, contextWindow: undefined,
+      }
     case "session.compaction.failed":
       return withCompaction(view, data, "failed", event.created ?? now, readError(data.error)?.message)
     case "session.synthetic":
@@ -888,7 +982,8 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
     case "session.revert.cleared":
       return pushNotice(view, "revert", "Revert cleared", now)
     case "session.revert.committed":
-      return pushNotice(view, "revert", `Revert committed to ${stringField(data.to) ?? "boundary"}`, now)
+      return { ...pushNotice(view, "revert", `Revert committed to ${stringField(data.to) ?? "boundary"}`, now),
+        generationSpeed: undefined, contextWindow: undefined }
     case "permission.v2.asked":
       return pushRequest(view, {
         kind: "permission",
@@ -1609,6 +1704,8 @@ function stringList(value: unknown): readonly string[] {
 
 export type SessionSnapshot = {
   readonly messages: readonly RemoteMessageView[]
+  readonly generationSpeed?: GenerationSpeedHistoryView
+  readonly contextWindow?: ContextWindowView
   readonly before?: string
   readonly coveredAssistantIDs: readonly string[]
   readonly title?: string
@@ -1639,6 +1736,11 @@ export function readSnapshot(payload: unknown): SessionSnapshot | undefined {
     return message ? [message] : []
   })
   const messages = visibleTranscript(allMessages)
+  const compactionIndex = payload.messages.findLastIndex((item) => isRecord(item) && item.type === "compaction" && item.status === "completed")
+  const assistant = payload.messages.findLast((item, index) => index > compactionIndex && isRecord(item) &&
+    item.type === "assistant" && isRecord(item.tokens))
+  const contextWindow = readAssistantContext(assistant)
+  const generationSpeed = assistant === undefined ? undefined : readGenerationSpeed(payload.generationSpeed)
   const visibleIDs = new Set(messages.map((message) => message.id))
   return {
     messages,
@@ -1648,6 +1750,8 @@ export function readSnapshot(payload: unknown): SessionSnapshot | undefined {
     ...(stringField(session.parentID) === undefined ? {} : { parentID: stringField(session.parentID) }),
     ...(stringField(session.agent) === undefined ? {} : { agent: stringField(session.agent) }),
     ...(model === undefined ? {} : { model }),
+    ...(contextWindow === undefined ? {} : { contextWindow }),
+    ...(generationSpeed === undefined ? {} : { generationSpeed }),
     ...(archived ? { archived: true } : {}),
     ...(watermark === undefined ? {} : { watermark }),
     ...(sourceEpoch === undefined ? {} : { sourceEpoch }),

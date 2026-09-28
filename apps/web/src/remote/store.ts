@@ -1038,6 +1038,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       ...(base ?? createSessionView(sessionID)),
       id: sessionID,
       messages: visibleTranscript(combined),
+      generationSpeed: snapshot.generationSpeed,
+      contextWindow: snapshot.contextWindow,
       ...(snapshot.title === undefined ? {} : { title: snapshot.title }),
       ...(snapshot.agent === undefined ? {} : { agent: snapshot.agent }),
       ...(snapshot.model === undefined ? {} : { model: snapshot.model }),

@@ -4,6 +4,7 @@ import { Icon } from "../../ui/icon"
 import { catalogKey, type CatalogTarget, type CatalogView, type FileOption } from "../catalog"
 import { useRemote } from "../context"
 import { defaultComposerModel, readPreferredModel, writePreferredModel } from "../preferences"
+import { contextWindowDisplay, generationSpeedDisplay } from "../projection"
 import type { ModelRefView } from "../projection"
 import { applyMention, optionsForTrigger, pairedFastModel, reconcileMentions, submission, triggerAt, type MentionPart } from "./composer-logic"
 import { ComposerPicker } from "./composer-picker"
@@ -42,10 +43,15 @@ export function MiniComposer(props: {
   const [active, setActive] = createSignal(0)
   const [closed, setClosed] = createSignal(false)
   const [mobileOpen, setMobileOpen] = createSignal(false)
+  const [contextOpen, setContextOpen] = createSignal(false)
+  const [contextPinned, setContextPinned] = createSignal(false)
+  const [contextLeaving, setContextLeaving] = createSignal(false)
   let input: HTMLTextAreaElement | undefined
   let fileInput: HTMLInputElement | undefined
   let mobileTrigger: HTMLButtonElement | undefined
   let mobileSheet: HTMLElement | undefined
+  let contextTrigger: HTMLButtonElement | undefined
+  let contextCloseTimer: ReturnType<typeof setTimeout> | undefined
   let request = 0
   let attachmentGeneration = 0
   const closeMobile = () => { setMobileOpen(false); queueMicrotask(() => mobileTrigger?.focus()) }
@@ -55,10 +61,43 @@ export function MiniComposer(props: {
   const current = () => "sessionID" in (props.target ?? {}) ? remote.state().selectedSessionInfo : undefined
   const selectedAgent = () => agent() ?? current()?.agent
   const selectedModel = () => model() ?? current()?.model ?? defaultComposerModel(catalog(), readPreferredModel())
+  const activeView = () => {
+    const sessionID = props.target && "sessionID" in props.target ? props.target.sessionID : undefined
+    const view = remote.state().view
+    return sessionID && remote.state().activeSessionID === sessionID && view?.id === sessionID ? view : undefined
+  }
+  const speed = () => generationSpeedDisplay(activeView(), selectedModel())
+  const contextWindow = () => contextWindowDisplay(activeView(), selectedModel())
   const primaryAgents = () => (catalog()?.agents ?? []).filter((item) => item.mode !== "subagent" && !item.hidden)
   const agentPending = () => !!current() && selectedAgent() !== current()?.agent
   const modelPending = () => !!current() && !!selectedModel() && (selectedModel()?.providerID !== current()?.model?.providerID || selectedModel()?.id !== current()?.model?.id || selectedModel()?.variant !== current()?.model?.variant)
   const mobileLabel = () => `${primaryAgents().find((item) => item.id === selectedAgent())?.name ?? selectedAgent() ?? "Default agent"} · ${pairedFastModel(catalog()?.models ?? [], selectedModel())?.base.name ?? catalog()?.models.find((item) => item.providerID === selectedModel()?.providerID && item.id === selectedModel()?.id)?.name ?? selectedModel()?.id ?? "Model"}${selectedModel()?.variant ? ` · ${selectedModel()?.variant}` : ""}`
+  const contextLabel = () => {
+    const value = contextWindow()
+    return value ? `${value.usedPercent}% used · ${value.leftPercent}% left` : ""
+  }
+  const contextAccessible = () => {
+    const value = contextWindow()
+    return value ? `Context window: ${contextLabel()}, ${value.tokens}` : ""
+  }
+  const ring = () => <svg class="composer__context-ring" viewBox="0 0 24 24" aria-hidden="true"><circle class="composer__context-ring-track" cx="12" cy="12" r="9" pathLength="100" fill="none" stroke-width="3" /><circle class="composer__context-ring-progress" cx="12" cy="12" r="9" pathLength="100" fill="none" stroke-width="3" stroke-dasharray={`${Math.min(100, (contextWindow()?.fraction ?? 0) * 100)} 100`} /></svg>
+  const cancelContextClose = () => { if (contextCloseTimer !== undefined) clearTimeout(contextCloseTimer); contextCloseTimer = undefined }
+  const closeContext = () => {
+    cancelContextClose()
+    setContextPinned(false)
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) { setContextLeaving(false); setContextOpen(false) }
+    else if (contextOpen()) setContextLeaving(true)
+  }
+  const showContext = () => { cancelContextClose(); setContextLeaving(false); setContextOpen(true) }
+  const finishContext = (event: AnimationEvent) => {
+    if (event.target !== event.currentTarget || event.animationName !== "composer-context-out" || !contextLeaving()) return
+    setContextOpen(false)
+    setContextLeaving(false)
+  }
+  const queueContextClose = () => {
+    cancelContextClose()
+    contextCloseTimer = setTimeout(() => { if (!contextPinned()) closeContext() }, 100)
+  }
   const trigger = createMemo(() => closed() ? undefined : triggerAt(props.text, cursor()))
   const options = () => trigger() ? optionsForTrigger(trigger()!.trigger, trigger()!.query, catalog(), fileResult()) : []
   createEffect(() => {
@@ -72,6 +111,7 @@ export function MiniComposer(props: {
     setAttachments([])
     setAttachmentError(undefined)
     setMobileOpen(false)
+    untrack(() => closeContext())
     onCleanup(() => { attachmentGeneration++ })
   })
   onMount(() => {
@@ -81,6 +121,14 @@ export function MiniComposer(props: {
     media.addEventListener("change", close)
     onCleanup(() => media.removeEventListener("change", close))
   })
+  onMount(() => {
+    const outside = (event: PointerEvent) => {
+      if (contextOpen() && event.target instanceof Node && !contextTrigger?.parentElement?.contains(event.target)) closeContext()
+    }
+    document.addEventListener("pointerdown", outside)
+    onCleanup(() => { document.removeEventListener("pointerdown", outside); cancelContextClose() })
+  })
+  createEffect(() => { if (!contextWindow() && contextOpen()) closeContext() })
   createEffect(() => {
     if (mobileOpen()) queueMicrotask(() => mobileSheet?.querySelector<HTMLButtonElement>('.mini-picker__trigger')?.focus())
   })
@@ -189,7 +237,7 @@ export function MiniComposer(props: {
   }
   return <>
     <Show when={props.mobileMount}><Portal mount={props.mobileMount}>
-      <button ref={mobileTrigger} type="button" class="composer__mobile-trigger" classList={{ "composer__mobile-trigger--pending": agentPending() || modelPending() }} aria-label={`Agent and model: ${mobileLabel()}`} aria-description={agentPending() || modelPending() ? "applies with your next send" : undefined} aria-haspopup="dialog" aria-expanded={mobileOpen()} disabled={props.disabled || catalog()?.status !== "ready"} onClick={() => setMobileOpen(true)}><span title={mobileLabel()}>{mobileLabel()}</span><Icon name="chevron-down" /></button>
+      <button ref={mobileTrigger} type="button" class="composer__mobile-trigger" classList={{ "composer__mobile-trigger--pending": agentPending() || modelPending() }} aria-label={`Agent and model: ${mobileLabel()}${contextWindow() ? `; ${contextAccessible()}` : ""}${speed() ? `; generation speed ${speed()!.label}` : ""}`} aria-description={agentPending() || modelPending() ? "applies with your next send" : undefined} aria-haspopup="dialog" aria-expanded={mobileOpen()} disabled={props.disabled || catalog()?.status !== "ready"} onClick={() => setMobileOpen(true)}><Show when={contextWindow()}><span class="composer__mobile-context-ring" aria-hidden="true">{ring()}</span></Show><span class="composer__mobile-label" title={mobileLabel()}>{mobileLabel()}</span><Show when={speed()}>{(value) => <span class="composer__mobile-speed">{value().label}</span>}</Show><Icon name="chevron-down" /></button>
       <Show when={mobileOpen()}><Portal>
         <div class="mini-picker__scrim composer__selection-scrim" onClick={closeMobile} />
         <section ref={mobileSheet} class="composer__selection-sheet" role="dialog" aria-modal="true" aria-label="Choose agent and model" tabindex="-1" onKeyDown={(event) => {
@@ -200,6 +248,7 @@ export function MiniComposer(props: {
           if (!event.shiftKey && document.activeElement === buttons.at(-1)) { event.preventDefault(); buttons[0]?.focus() }
         }}>
           <div class="mini-picker__heading"><strong>Agent and model</strong><button type="button" aria-label="Close agent and model picker" onClick={closeMobile}><Icon name="close" /></button></div>
+          <Show when={contextWindow()}>{(value) => <div class="composer__context-summary"><strong>Context window</strong><div class="composer__context-bar" aria-hidden="true"><span class="composer__context-bar-fill" style={{ width: `${Math.min(100, value().fraction * 100)}%` }} /></div><span>{contextLabel()}</span><span>{value().tokens}</span></div>}</Show>
           <div class="composer__selection-options"><ComposerPicker label="Agent" icon="user" placeholder="Default agent" value={selectedAgent()} pending={agentPending()} options={primaryAgents().map((item) => ({ value: item.id, label: item.name, detail: item.description }))} disabled={props.disabled || catalog()?.status !== "ready"} onChange={setAgent} /><ModelControl models={catalog()?.models ?? []} selected={selectedModel()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready"} onChange={(chosen) => { setModel(chosen); writePreferredModel(undefined, chosen) }} /></div>
         </section>
       </Portal></Show>
@@ -226,8 +275,10 @@ export function MiniComposer(props: {
       <Show when={!attachmentError() && attachments().length && remote.state().uploadError}><p class="composer__attachment-error" role="alert">{remote.state().uploadError}</p></Show>
       <div class="composer__controls">
         <ComposerPicker label="Agent" icon="user" placeholder="Default agent" value={selectedAgent()} pending={agentPending()} options={primaryAgents().map((item) => ({ value: item.id, label: item.name, detail: item.description }))} disabled={props.disabled || catalog()?.status !== "ready"} onChange={setAgent} />
+        <Show when={contextWindow()}><div class="composer__context"><button ref={contextTrigger} type="button" class="composer__context-trigger" aria-label={contextAccessible()} aria-expanded={contextOpen() && !contextLeaving()} onMouseEnter={() => { if (window.matchMedia("(hover: hover)").matches) showContext() }} onMouseLeave={queueContextClose} onFocus={showContext} onBlur={() => { if (!contextPinned()) queueContextClose() }} onClick={() => { if (contextPinned()) closeContext(); else { setContextPinned(true); showContext() } }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeContext() } }}>{ring()}</button><Show when={contextOpen()}><div class="composer__context-popover" classList={{ "composer__context-popover--leaving": contextLeaving() }} role="tooltip" aria-hidden={contextLeaving()} inert={contextLeaving()} onMouseEnter={cancelContextClose} onMouseLeave={queueContextClose} onAnimationEnd={finishContext} onAnimationCancel={finishContext}><strong>Context window</strong><span>{contextLabel()}</span><span>{contextWindow()?.tokens}</span></div></Show></div></Show>
         <ModelControl models={catalog()?.models ?? []} selected={selectedModel()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready"} onChange={(chosen) => { setModel(chosen); writePreferredModel(undefined, chosen) }} />
         <Show when={props.showStatus}><ComposerStatus /></Show>
+        <Show when={speed()}>{(value) => <span class="composer__speed" title="Latest generation speed">{value().label}<Show when={value().trend}><span class="composer__speed-trend" aria-hidden="true"> {value().trend}</span></Show></span>}</Show>
         <span class="composer__spacer" />
         <div class="composer__actions"><input ref={fileInput} class="composer__file-input" type="file" multiple aria-label="Choose files" onChange={(event) => { void addFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = "" }} /><button type="button" class="composer__attach" aria-label="Attach files" title="Attach files" disabled={props.disabled || sending() || reading() > 0} onClick={() => fileInput?.click()}><Icon name="plus" /></button><Show when={!props.allowEmpty}><button type="button" class="composer__delivery-toggle" aria-label={delivery() === "steer" ? "Steer mode; switch to Queue" : "Queue mode; switch to Steer"} title={delivery() === "steer" ? "Steer: switch to Queue" : "Queue: switch to Steer"} aria-pressed={delivery() === "queue"} onClick={() => setDelivery(delivery() === "steer" ? "queue" : "steer")}><Icon name={delivery()} /></button></Show>
           <Show when={props.running && props.onInterrupt}><button type="button" class="mini-composer__interrupt" aria-label="Interrupt the running step" onClick={props.onInterrupt}><Icon name="stop" /></button></Show>

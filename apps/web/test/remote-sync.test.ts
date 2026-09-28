@@ -377,6 +377,37 @@ describe("model references", () => {
 })
 
 describe("snapshot synchronization", () => {
+  test("selected Session speed and context hydrate from the snapshot and are replaced by live diagnostics without another read", async () => {
+    const speed = { model: { id: "gpt-5", providerID: "openai" }, tokens: 12, durationNs: 2_000_000, tokensPerSecond: 6_000 }
+    const test = await harness({ snapshot: (sessionID) => ({
+      sourceEpoch: "epoch_1", session: { id: sessionID, model: speed.model },
+      messages: [{ id: "msg_answer", type: "assistant", agent: "build", model: speed.model, content: [],
+        tokens: { input: 60_000, output: 10_000, reasoning: 2_000, cache: { read: 2_000, write: 0 } },
+        diagnostics: { contextLimit: 258_000 }, time: { created: 1, completed: 2 } }],
+      generationSpeed: { latest: speed, recent: [speed] },
+      watermark: { type: "log.synced", aggregateID: sessionID, seq: 1 },
+    }) })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      expect(test.store.state().view?.generationSpeed?.latest?.tokensPerSecond).toBe(6_000)
+      expect(test.store.state().view?.contextWindow).toMatchObject({ used: 74_000, limit: 258_000 })
+      const requestCount = test.relay.requests.length
+      const updated = { ...speed, tokens: 15, durationNs: 3_000_000, tokensPerSecond: 5_000 }
+      test.relay.pushEvent("ses_a", { type: "session.diagnostics.updated", data: { sessionID: "ses_a", diagnostics: {
+        model: speed.model, context: { total: 80_000, limit: 258_000, remaining: 178_000, percent: 31 },
+        tokens: { uncachedInput: 60_000, output: 15_000, reasoning: 3_000, cacheRead: 2_000, cacheWrite: 0 },
+        cache: { eligible: 62_000, mechanism: "openai-prefix-cache", readReported: true, writeReported: false },
+        generationSpeed: { latest: updated, recent: [speed, updated] },
+      } } })
+      await test.runUntil(() => test.store.state().view?.generationSpeed?.latest?.tokensPerSecond === 5_000)
+      expect(test.store.state().view?.contextWindow?.used).toBe(80_000)
+      expect(test.relay.requests.filter((request) => request.operation === "session.snapshot")).toHaveLength(1)
+      expect(test.relay.requests).toHaveLength(requestCount)
+    } finally { await test.stop() }
+  })
+
   test("live completed compaction prunes covered rows but a failed job preserves them", async () => {
     const messages = [
       { id: "msg_old", type: "assistant", agent: "god", content: [{ type: "text", text: "old" }], time: { created: 1 } },

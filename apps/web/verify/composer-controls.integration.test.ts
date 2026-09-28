@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
+import { join } from "node:path"
 import { launchBrowser } from "./cdp"
 
 const port = 4387
@@ -16,6 +17,87 @@ beforeAll(async () => {
   await mkdir(new URL("../../../.cache/tmp/", import.meta.url), { recursive: true })
 })
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
+
+test("selected Session speed and context share one stable composer row and accessible details", async () => {
+  const captures = join(process.env.TMPDIR ?? new URL("../../../.cache/tmp", import.meta.url).pathname, "web-status-captures")
+  await mkdir(captures, { recursive: true })
+  for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width!, height!)
+      if (width === 390) await page.setCoarsePointer(true)
+      await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+      await wait(page, `document.querySelector('.mini-composer__mount .composer__row') !== null`)
+      await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
+      const baseline = await page.evaluate<{ row: number; controls: number; mobile: number }>(`(() => { const mount=document.querySelector('.mini-composer__mount'); return { row:mount.querySelector('.composer__row').getBoundingClientRect().height, controls:mount.querySelector('.composer__controls').getBoundingClientRect().height, mobile:mount.querySelector('.composer__mobile-identity').getBoundingClientRect().height }; })()`)
+      await page.evaluate(`window.composerSetDiagnostics('known')`)
+      await wait(page, `document.querySelector('.mini-composer__mount .composer__speed')?.textContent?.includes('6,000 tok/s') === true`)
+      const layout = await page.evaluate<{ row: number; controls: number; mobile: number; speed: string; ring: boolean; ringBeforeModel: boolean; inFooter: boolean; mobileRing: boolean; tapHeight: number; overflow: boolean }>(`(() => { const mount=document.querySelector('.mini-composer__mount'), ring=mount.querySelector('.composer__context-trigger'), mobile=mount.querySelector('.composer__mobile-trigger'), model=mount.querySelector('.model-control__trigger'), speed=mount.querySelector('.composer__speed'), controls=mount.querySelector('.composer__controls'); return { row:mount.querySelector('.composer__row').getBoundingClientRect().height, controls:controls.getBoundingClientRect().height, mobile:mount.querySelector('.composer__mobile-identity').getBoundingClientRect().height, speed:speed?.textContent ?? '', ring:!!ring, ringBeforeModel:!!ring && !!model && ring.getBoundingClientRect().right<=model.getBoundingClientRect().left+1, inFooter:!!speed && controls.contains(speed) && speed.getBoundingClientRect().right<=controls.getBoundingClientRect().right+1, mobileRing:!!mobile?.querySelector('.composer__mobile-context-ring'), tapHeight:mobile?.getBoundingClientRect().height ?? 0, overflow:document.documentElement.scrollWidth>innerWidth }; })()`)
+      expect(layout.speed).toContain("6,000 tok/s")
+      expect(layout.row).toBe(baseline.row)
+      expect(layout.controls).toBe(baseline.controls)
+      expect(layout.overflow).toBe(false)
+      const arc = await page.evaluate<number>(`Number(document.querySelector('.mini-composer__mount .composer__context-ring-progress')?.getAttribute('stroke-dasharray')?.split(' ')[0])`)
+      expect(arc).toBeGreaterThan(28)
+      expect(arc).toBeLessThan(30)
+      if (width === 390) {
+        expect(layout.mobile).toBe(baseline.mobile)
+        expect(layout.mobileRing).toBe(true)
+        expect(layout.tapHeight).toBeGreaterThanOrEqual(44)
+        await page.evaluate(`document.querySelector('.composer__mobile-trigger')?.click()`)
+        await wait(page, `document.querySelector('.composer__selection-sheet .composer__context-summary') !== null`)
+        const sheet = await page.evaluate<{ text: string; fraction: number; nestedButton: boolean }>(`(() => { const summary=document.querySelector('.composer__selection-sheet .composer__context-summary'), bar=summary?.querySelector('.composer__context-bar'), fill=summary?.querySelector('.composer__context-bar-fill'); return { text:summary?.textContent ?? '', fraction:bar && fill ? fill.getBoundingClientRect().width/bar.getBoundingClientRect().width : 0, nestedButton:!!document.querySelector('.composer__mobile-trigger button') }; })()`)
+        expect(sheet.text).toContain("Context window")
+        expect(sheet.text).toContain("29% used · 71% left")
+        expect(sheet.text).toContain("74K / 258K tokens")
+        expect(sheet.fraction).toBeGreaterThan(0.28)
+        expect(sheet.fraction).toBeLessThan(0.30)
+        expect(sheet.nestedButton).toBe(false)
+      } else {
+        expect(layout.ring).toBe(true)
+        expect(layout.ringBeforeModel).toBe(true)
+        expect(layout.inFooter).toBe(true)
+        expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .composer__speed-trend')?.textContent ?? ''`)).toContain("▄█")
+        await page.evaluate(`document.querySelector('.composer__context-trigger')?.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))`)
+        await wait(page, `document.querySelector('.composer__context-popover')?.textContent?.includes('29% used') === true`)
+        const hover = await page.evaluate<{ text: string; name: string; row: number }>(`(() => ({ text:document.querySelector('.composer__context-popover')?.textContent ?? '', name:document.querySelector('.composer__context-trigger')?.getAttribute('aria-label') ?? '', row:document.querySelector('.composer__row').getBoundingClientRect().height }))()`)
+        expect(hover.text).toContain("Context window")
+        expect(hover.text).toContain("29% used · 71% left")
+        expect(hover.text).toContain("74K / 258K tokens")
+        expect(hover.name).toContain("29% used")
+        expect(hover.row).toBe(baseline.row)
+        await page.evaluate(`document.querySelector('.composer__context-trigger')?.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }))`)
+        await wait(page, `document.querySelector('.composer__context-popover') === null`)
+        await page.evaluate(`document.querySelector('.composer__context-trigger')?.focus()`)
+        await wait(page, `document.querySelector('.composer__context-popover') !== null`)
+        await page.pressEscape()
+        await wait(page, `document.querySelector('.composer__context-popover') === null`)
+        await page.evaluate(`document.querySelector('.composer__context-trigger')?.click()`)
+        await wait(page, `document.querySelector('.composer__context-popover') !== null`)
+        expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.composer__context-popover')).animationDuration`)).toBe("0.14s")
+        await page.evaluate(`document.querySelector('.composer__context-trigger')?.click()`)
+        await wait(page, `document.querySelector('.composer__context-popover') === null`)
+        await page.setReducedMotion(true)
+        await page.evaluate(`document.querySelector('.composer__context-trigger')?.click()`)
+        await wait(page, `document.querySelector('.composer__context-popover') !== null`)
+        expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.composer__context-popover')).animationDuration`)).toBe("0s")
+        await page.evaluate(`document.querySelector('.composer__context-trigger')?.click()`)
+        expect(await page.evaluate<boolean>(`document.querySelector('.composer__context-popover') === null`)).toBe(true)
+        await page.setReducedMotion(false)
+        await page.evaluate(`document.querySelector('.composer__context-trigger')?.click()`)
+        await wait(page, `document.querySelector('.composer__context-popover') !== null`)
+        await page.evaluate(`Promise.all([...document.querySelector('.composer__context-popover').getAnimations()].map(animation => animation.finished.catch(() => {})))`)
+      }
+      await Bun.write(join(captures, `composer-status-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
+      if (width === 390) await page.pressEscape()
+      await page.evaluate(`window.composerSetDiagnostics('mismatch')`)
+      await wait(page, `document.querySelector('.mini-composer__mount .composer__speed') === null`)
+      expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount .composer__context-trigger,.mini-composer__mount .composer__mobile-context-ring') !== null`)).toBe(false)
+      await page.evaluate(`window.composerSetDiagnostics('unknown')`)
+      expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount .composer__speed') !== null`)).toBe(false)
+    } finally { await page.close() }
+  }
+}, 60_000)
 
 test("in-flight prompts do not mount a transient composer row; unresolved outcomes remain actionable", async () => {
   const page = await browser!.openPage()
