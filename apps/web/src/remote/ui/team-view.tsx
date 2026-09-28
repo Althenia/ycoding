@@ -75,7 +75,7 @@ export function TeamView(props: {
     event.preventDefault()
     selectTab(tabs[next]!)
   }
-  const runAction = (item: { readonly kind: "cancel" | "kill"; readonly id: string }, action: () => Promise<TeamActionOutcome>) => {
+  const runAction = (item: { readonly kind: "cancel" | "kill"; readonly id: string }, action: () => Promise<TeamActionOutcome>, dismiss: () => void) => {
     if (working() !== undefined) return
     const rootID = props.data().rootID
     setWorking(item.id)
@@ -84,7 +84,7 @@ export function TeamView(props: {
       (cause: unknown) => { if (rootID === props.data().rootID) setError(cause instanceof Error ? cause.message : "The action could not be completed.") }).finally(() => {
       if (rootID !== props.data().rootID) return
       setWorking(undefined)
-      if (confirm()?.id === item.id && confirm()?.kind === item.kind) setConfirm(undefined)
+      if (confirm()?.id === item.id && confirm()?.kind === item.kind) dismiss()
     })
   }
   const readOutput = (ownerID: string, shellID: string, cursor?: number) => {
@@ -179,13 +179,17 @@ export function TeamView(props: {
   </section>
   return <>
     <Show when={props.sheet} fallback={panel}><Modal class="overlay--sheet team-view__sheet" label="Team" onClose={props.onClose}>{panel}</Modal></Show>
-    <Show when={confirm()} keyed>{(item) => <Modal class="overlay--dialog" label={item.kind === "cancel" ? "Cancel subagent" : "Kill shell"} onClose={() => { if (confirm()?.id === item.id && confirm()?.kind === item.kind) setConfirm(undefined) }}>
+    <Show when={confirm()} keyed>{(item) => {
+      let close: (() => void) | undefined
+      return <Modal class="overlay--dialog" label={item.kind === "cancel" ? "Cancel subagent" : "Kill shell"} onClose={() => { if (confirm()?.id === item.id && confirm()?.kind === item.kind) setConfirm(undefined) }}
+        requestClose={(handoff) => { close = handoff }}>
       <div class="team-view__confirmation"><p>{item.kind === "cancel" ? `Cancel ${item.label}?` : `Kill ${item.label}?`}</p>
-        <div><button type="button" data-action="keep" onClick={() => setConfirm(undefined)}>Keep running</button>
-          <button type="button" data-action="confirm" disabled={working() !== undefined || !canConfirm()} onClick={() => { if (canConfirm()) runAction(item, () => item.kind === "cancel" ? props.onCancel(item.id) : props.onKillShell(item.id)) }}>
+        <div><button type="button" data-action="keep" onClick={() => close?.()}>Keep running</button>
+          <button type="button" data-action="confirm" disabled={working() !== undefined || !canConfirm()} onClick={() => { if (canConfirm()) runAction(item, () => item.kind === "cancel" ? props.onCancel(item.id) : props.onKillShell(item.id), () => close?.()) }}>
             {item.kind === "cancel" ? "Cancel subagent" : "Kill shell"}
           </button></div>
       </div>
-    </Modal>}</Show>
+    </Modal>
+    }}</Show>
   </>
 }
