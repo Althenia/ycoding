@@ -472,7 +472,7 @@ export const usePages: readonly DocPage[] = [
               ["Approval requested", "A top-level Session starts waiting for your decision on a permission request, Form, or guardrail review."],
               ["Guardrail block", "A guardrail decision blocked an action."],
               ["Error or failure", "Execution reports an error or failed step."],
-              ["Device disconnected", "The connector for a device goes offline."],
+              ["Device disconnected", "The selected machine goes offline. A dropped connection between this browser and the relay does not raise it."],
             ],
           },
           {
@@ -483,6 +483,7 @@ export const usePages: readonly DocPage[] = [
               "Settings provides independent workspace and desktop switches for each category.",
               "The browser requests desktop-notification permission only when you press its permission button. Desktop alerts use generic text rather than Session details.",
               "Notices cover live events while the page is open. After reconnecting to the same machine, a decision that became pending or a Session that stopped while disconnected raises one notice each; loading the page does not replay earlier alerts. Turn on Settings → Push to this device to also get a push alert when a Session needs your decision or stops running while the browser or installed app is closed; alerts use generic text, and opening one goes to its Session. Availability depends on the browser and platform. Opening the workspace renews this device's push registration automatically; if the device has no active push subscription, Settings shows push as off with a Re-enable action, and push can be unavailable when the service is not configured. The installed app opens directly to the remote workspace.",
+              "The connection strip shows this browser's own connection to the relay. After that connection drops, the strip keeps its latest close code and reason for the selected machine through reconnects; choosing another machine or disconnecting clears them.",
               "If the device is offline, restore its connection and use Reconnect. If no Session is selected, select one before sending a prompt or answering a request.",
             ],
           },

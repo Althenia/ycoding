@@ -89,6 +89,29 @@ describe("reserved connection strip", () => {
     expect(strip.showReconnect).toBe(true)
   })
 
+  test("keeps the latest browser relay close code and reason in the existing connection strip", () => {
+    const drop = { code: 1012, reason: "Relay restarted" }
+    const reconnecting = connectionStripView({
+      connection: { kind: "connecting" }, transportKind: "reconnecting", activeDeviceID: "dev_studio", advertised: 2, lastRelayDrop: drop,
+    })
+    expect(reconnecting.body).toBe("Connecting — Opening the relay connection. · Last browser relay drop (1012): Relay restarted")
+    expect(reconnecting.body).not.toContain("Machine disconnected")
+    const restored = connectionStripView({
+      connection: { kind: "connected", deviceName: "Studio Mac" }, transportKind: "open", activeDeviceID: "dev_studio", advertised: 2, lastRelayDrop: drop,
+    })
+    expect(restored.body).toBe("Connected — Relay session active for Studio Mac. · Last browser relay drop (1012): Relay restarted")
+    const failedRead = connectionStripView({
+      connection: { kind: "error", message: "Session list: the backend rejected this read" },
+      transportKind: "open", activeDeviceID: "dev_studio", advertised: 2, lastRelayDrop: drop,
+    })
+    expect(failedRead.body).toBe("Connection error — Session list: the backend rejected this read · Last browser relay drop (1012): Relay restarted")
+    const closed = connectionStripView({
+      connection: { kind: "error", message: "Relay restarted" },
+      transportKind: "closed", activeDeviceID: "dev_studio", advertised: 2, lastRelayDrop: drop,
+    })
+    expect(closed.body).toBe("Connection error — Relay restarted · Last browser relay drop (1012)")
+  })
+
   test("offers nothing to retry before any device has reported", () => {
     const strip = connectionStripView({
       connection: { kind: "connecting" },

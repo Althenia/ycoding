@@ -47,7 +47,7 @@ export type DesktopAlert = { readonly title: string; readonly body: string; read
 
 export type DesktopNotifier = {
   readonly show: (alert: DesktopAlert) => void
-  readonly dispose: () => void
+  readonly dispose: (retainMachineOffline?: boolean) => void
 }
 
 export type DesktopRegistration = {
@@ -72,9 +72,9 @@ export function createDesktopNotifier(registration: () => Promise<DesktopRegistr
         ...(alert.sessionID === undefined ? {} : { data: { sessionID: alert.sessionID } }),
       })).catch(() => undefined)
     },
-    dispose: () => {
-      const tags = new Set(raised)
-      raised.clear()
+    dispose: (retainMachineOffline = false) => {
+      const tags = new Set([...raised].filter((tag) => !retainMachineOffline || tag !== "ycoding-remote-device-disconnected"))
+      for (const tag of tags) raised.delete(tag)
       if (tags.size === 0) return
       void registration().then((worker) => worker?.getNotifications()).then((open) => {
         for (const notification of open ?? []) if (tags.has(notification.tag)) notification.close()
@@ -100,7 +100,7 @@ export type NotificationDelivery = {
   readonly dismiss: (id: string) => void
   readonly markRead: () => void
   readonly clear: () => void
-  readonly dispose: () => void
+  readonly dispose: (retainMachineOffline?: boolean) => void
 }
 
 export function createNotificationDelivery(options: NotificationDeliveryOptions = {}): NotificationDelivery {
@@ -132,9 +132,9 @@ export function createNotificationDelivery(options: NotificationDeliveryOptions 
     },
     markRead: () => { entries = entries.map((entry) => entry.read ? entry : { ...entry, read: true }) },
     clear: () => { entries = [] },
-    dispose: () => {
-      desktop.dispose()
-      entries = []
+    dispose: (retainMachineOffline = false) => {
+      desktop.dispose(retainMachineOffline)
+      entries = retainMachineOffline ? entries.filter((entry) => entry.category === "device-disconnected") : []
     },
   }
 }

@@ -294,8 +294,8 @@ describe("remote notification delivery", () => {
       await test.runUntil(
         () => test.store.state().transport.kind === "open" && test.store.state().notice?.includes("read-only") === true,
       )
-      expect(test.store.state().notifications.map((entry) => entry.category)).toEqual(["device-disconnected"])
-      expect(test.alerts.map((alert) => alert.title)).toEqual(["YCoding — device disconnected"])
+      expect(test.store.state().notifications).toEqual([])
+      expect(test.alerts).toEqual([])
     } finally {
       await test.stop()
     }

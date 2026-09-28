@@ -449,12 +449,17 @@ export function connectionStripView(input: {
   readonly transportKind: RemoteTransportStatus["kind"]
   readonly activeDeviceID?: string
   readonly advertised: number
+  readonly lastRelayDrop?: { readonly code: number; readonly reason: string }
 }): ConnectionStripView {
   const summary = summarizeConnection(input.connection)
   const banner = connectionBanner(input.connection)
+  const body = banner === undefined ? `${summary.label} — ${summary.detail}` : `${banner.title} — ${banner.body}`
+  const drop = input.activeDeviceID !== undefined && input.lastRelayDrop !== undefined &&
+    (input.connection.kind === "connected" || input.connection.kind === "connecting" || input.connection.kind === "error")
+    ? `Last browser relay drop (${input.lastRelayDrop.code})${input.connection.kind === "error" && summary.detail === input.lastRelayDrop.reason ? "" : `: ${input.lastRelayDrop.reason}`}` : undefined
   return {
     tone: summary.tone,
-    body: banner === undefined ? `${summary.label} — ${summary.detail}` : `${banner.title} — ${banner.body}`,
+    body: drop === undefined ? body : `${body} · ${drop}`,
     showReconnect:
       input.activeDeviceID !== undefined &&
       input.transportKind !== "open" &&
@@ -776,6 +781,7 @@ function ConnectionStrip(): JSX.Element {
       transportKind: state().transport.kind,
       activeDeviceID: state().activeDeviceID,
       advertised: state().advertised.length,
+      lastRelayDrop: state().lastRelayDrop,
     })
   const detail = () => {
     const sessions = state().sessions.length

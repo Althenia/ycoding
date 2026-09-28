@@ -680,6 +680,79 @@ describe("remote store integration", () => {
     }
   })
 
+  test("does not call a browser relay drop a machine disconnect and retains its latest close reason", async () => {
+    const test = await harness()
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length === 2)
+      test.relay.dropConnections(1012, "Relay restarted")
+      await test.runUntil(() => test.store.state().transport.kind === "open" && test.relay.connections >= 2)
+      expect(test.store.state().notifications.filter((entry) => entry.category === "device-disconnected")).toEqual([])
+      expect(test.store.state().lastRelayDrop).toEqual({ code: 1012, reason: "Relay restarted" })
+      expect(test.store.state().connection.kind).toBe("connected")
+      test.relay.dropConnections(1001, "Phone relay link slept")
+      await test.runUntil(() => test.store.state().transport.kind === "open" && test.relay.connections >= 3)
+      expect(test.store.state().notifications.filter((entry) => entry.category === "device-disconnected")).toEqual([])
+      expect(test.store.state().lastRelayDrop).toEqual({ code: 1001, reason: "Phone relay link slept" })
+      test.store.connect("dev_1")
+      await test.runUntil(() => test.store.state().transport.kind === "open" && test.relay.connections >= 4)
+      expect(test.store.state().lastRelayDrop).toEqual({ code: 1001, reason: "Phone relay link slept" })
+      test.store.disconnect()
+      expect(test.store.state().lastRelayDrop).toBeUndefined()
+    } finally { await test.stop() }
+  })
+
+  test("notifies once per selected machine offline transition reported by the open relay", async () => {
+    let agent = "present"
+    const test = await harness({ handler: () =>
+      agent === "gone" ? { ok: false, code: "agent_unavailable", message: "No local agent is connected" } : "default" })
+    const notices = () => test.store.state().notifications.filter((entry) => entry.category === "device-disconnected")
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length === 2)
+      agent = "gone"
+      test.relay.pushSessions([])
+      await test.runUntil(() => test.store.state().connection.kind === "offline")
+      expect(notices()).toHaveLength(1)
+      const firstID = notices()[0]!.id
+      test.relay.pushSessions([])
+      await test.runUntil(() => test.store.state().sessionListStatus === "error")
+      expect(notices().map((entry) => entry.id)).toEqual([firstID])
+      test.relay.dropConnections(1012, "Relay restarted")
+      await test.runUntil(() => test.relay.connections >= 2 && test.store.state().connection.kind === "offline")
+      expect(notices().map((entry) => entry.id)).toEqual([firstID])
+      agent = "present"
+      test.relay.pushSessions([])
+      await test.runUntil(() => test.store.state().connection.kind === "connected")
+      agent = "gone"
+      test.relay.pushSessions([])
+      await test.runUntil(() => test.store.state().connection.kind === "offline" && notices().length === 2)
+      expect(notices()).toHaveLength(2)
+    } finally { await test.stop() }
+  })
+
+  test("keeps one machine-offline notice when a later account refresh confirms the same outage", async () => {
+    let agent = "present"
+    const test = await harness({ handler: () =>
+      agent === "gone" ? { ok: false, code: "agent_unavailable", message: "No local agent is connected" } : "default" })
+    const notices = () => test.store.state().notifications.filter((entry) => entry.category === "device-disconnected")
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length === 2)
+      agent = "gone"
+      test.relay.pushSessions([])
+      await test.runUntil(() => test.store.state().connection.kind === "offline")
+      expect(notices()).toHaveLength(1)
+      const id = notices()[0]!.id
+      test.relay.setMe({ user: { id: "user_1" }, session: { expiresAt: 4_102_444_800_000 },
+        devices: [{ id: "dev_1", name: "Studio Mac", createdAt: 1, status: "active", online: false }] })
+      await test.store.load()
+      expect(notices().map((entry) => entry.id)).toEqual([id])
+      test.store.markNotificationsRead()
+      expect(notices()[0]?.read).toBe(true)
+    } finally { await test.stop() }
+  })
+
   test("restores an offline device after a later advertised session list succeeds", async () => {
     let lists = 0
     const test = await harness({
@@ -789,6 +862,11 @@ describe("remote store integration", () => {
       expect(test.store.state().connection).toEqual({ kind: "offline", deviceName: "Studio Mac" })
       expect(test.store.state().activeDeviceID).toBe("dev_1")
       expect(test.store.state().sessions.map((session) => session.id)).toEqual(["ses_a", "ses_b"])
+      const offlineNotices = test.store.state().notifications.filter((entry) => entry.category === "device-disconnected")
+      expect(offlineNotices).toHaveLength(1)
+      await test.store.load()
+      expect(test.store.state().notifications.filter((entry) => entry.category === "device-disconnected").map((entry) => entry.id))
+        .toEqual(offlineNotices.map((entry) => entry.id))
       test.store.searchSessions("no match")
       expect(test.store.state().sessions.map((session) => session.id)).toEqual(["ses_a", "ses_b"])
     } finally {

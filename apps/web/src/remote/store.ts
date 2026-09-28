@@ -203,6 +203,7 @@ export type RemoteStoreState = {
   readonly familyActivity?: { readonly rootID: string; readonly status: "loading" | "ready" | "unsupported" | "error"; readonly members: readonly RemoteFamilyActivity[] }
   readonly teamCues: readonly TeamCue[]
   readonly transport: RemoteTransportStatus
+  readonly lastRelayDrop?: { readonly code: number; readonly reason: string }
   readonly mutations: readonly PendingMutation[]
   readonly notice?: string
   readonly upload?: { readonly sessionID: string; readonly name: string; readonly percent: number }
@@ -437,8 +438,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   const requestReads = new Set<{ readonly sessionID: string; readonly live: { readonly event: unknown; readonly at: number }[] }>()
   let cancelBatch: (() => void) | undefined
   let queued: { readonly sessionID: string; readonly event: unknown }[] = []
-  /** Last published transport status, so only a live connection can report a drop. */
   let lastStatusKind: RemoteTransportStatus["kind"] = "idle"
+  let offlineDeviceID: string | undefined
   const listeners = new Set<() => void>()
 
   const notify = () => {
@@ -477,15 +478,17 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
   }
 
-  /**
-   * Ends the alerts a connection raised. In-app notices and desktop alerts belong
-   * to the live events of one connection, so sign-out, a rejected credential, a
-   * device switch, and a disconnect all close them. The delivery stays usable, so
-   * the next connection raises its own.
-   */
-  const endAlerts = () => {
-    delivery.dispose()
-    setState({ notifications: [] })
+  const endAlerts = (retainMachineOffline = false) => {
+    delivery.dispose(retainMachineOffline)
+    setState({ notifications: delivery.entries() })
+  }
+
+  const reportMachineOffline = () => {
+    if (state.activeDeviceID === undefined || offlineDeviceID === state.activeDeviceID ||
+      !state.devices.some((device) => device.id === state.activeDeviceID && device.status === "active")) return
+    offlineDeviceID = state.activeDeviceID
+    delivery.deliver("device-disconnected")
+    setState({ notifications: delivery.entries() })
   }
 
   /**
@@ -881,11 +884,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       }
     }
     const rejected = status.kind === "closed" && (status.code === 4401 || status.code === 4403)
-    // Only a connection that was live can drop: a deliberate close, an initial
-    // failure, and a credential rejection are not a device that stopped reporting.
-    if (status.kind === "closed" && status.retryable && lastStatusKind === "open") {
-      delivery.deliver("device-disconnected")
-    }
     lastStatusKind = status.kind
     if (status.kind === "closed") subscribedSessionID = undefined
     if (status.kind === "closed") {
@@ -936,7 +934,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       void api.load()
       return
     }
-    setState({ transport: status, connection: connectionFor(status, state.activeDeviceID), notifications: delivery.entries() })
+    setState({ transport: status, connection: connectionFor(status, state.activeDeviceID), notifications: delivery.entries(),
+      ...(status.kind === "closed" ? { lastRelayDrop: { code: status.code, reason: status.reason } } : {}) })
     if (status.kind === "open" && state.activeSessionID !== undefined) void readSessionStatus(owner)
     if (status.kind === "open" && recoveredUsage.length > 0) retryUsage(owner)
   }
@@ -1269,15 +1268,20 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
   }
 
-  const listFailure = (outcome: Exclude<RemoteRequestOutcome, { status: "ok" }>, label: string): Pick<RemoteStoreState, "connection"> =>
-    outcome.status === "failed" && outcome.error.code === "agent_unavailable"
-      ? { connection: { kind: "offline", deviceName: deviceName(state.activeDeviceID ?? "device") } }
-      : { connection: { kind: "error", message: describeOutcome(outcome, label) } }
+  const listFailure = (outcome: Exclude<RemoteRequestOutcome, { status: "ok" }>, label: string): Pick<RemoteStoreState, "connection"> => {
+    if (outcome.status === "failed" && outcome.error.code === "agent_unavailable") {
+      reportMachineOffline()
+      return { connection: { kind: "offline", deviceName: deviceName(state.activeDeviceID ?? "device") } }
+    }
+    return { connection: { kind: "error", message: describeOutcome(outcome, label) } }
+  }
 
-  const recoveredConnection = (owner: RemoteTransport): Partial<Pick<RemoteStoreState, "connection">> =>
-    state.connection.kind === "offline" || state.connection.kind === "error"
+  const recoveredConnection = (owner: RemoteTransport): Partial<Pick<RemoteStoreState, "connection">> => {
+    if (owner.status().kind === "open") offlineDeviceID = undefined
+    return state.connection.kind === "offline" || state.connection.kind === "error"
       ? { connection: connectionFor(owner.status(), state.activeDeviceID) }
       : {}
+  }
 
   const sortSessions = (rows: readonly SessionInfoView[]) => [...new Map(rows.map((row) => [row.id, row])).values()].sort((left, right) => {
     if (left.running !== right.running) return left.running ? -1 : 1
@@ -1811,6 +1815,59 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (usagePending.has(key) && usageRecoveryRevision !== recoveryRevision) retryUsage(owner)
   }
 
+  const disconnectDevice = (retainMachineOffline = false) => {
+    if (!retainMachineOffline) offlineDeviceID = undefined
+    clearImageSources()
+    cancelFamilyRefresh?.()
+    cancelFamilyRefresh = undefined
+    cancelUpload("Attachment upload was cancelled by disconnection. Files were not sent.")
+    accountToken += 1
+    clearCatalogs()
+    clearUsage()
+    cancelStatusReload?.()
+    cancelStatusReload = undefined
+    statusReloadLocal = false
+    carouselRefreshPending = false
+    carouselRevision += 1
+    reconnectStatus = undefined
+    reconnectingSameDevice = false
+    const active = transport
+    transport = undefined
+    active?.close(1000, "disconnected")
+    cancelSearch?.()
+    sessionPages = []
+    openRootInfo = undefined
+    subscribedSessionID = undefined
+    queued = []
+    sessionsToken += 1
+    workspacesToken += 1
+    setState({
+      activeDeviceID: undefined,
+      advertised: [],
+      sessions: [],
+      carouselSessions: [],
+      sessionGroups: [],
+      selectedWorkspaceID: undefined,
+      selectedSessionInfo: undefined,
+      sessionListStatus: "idle",
+      sessionPageLoading: false,
+      sessionHasNext: false,
+      sessionHasPrevious: false,
+      drafts: {},
+      workspaces: [],
+      workspaceStatus: "idle",
+      workspaceError: undefined,
+      sessionCreation: undefined,
+      activeSessionID: undefined,
+      view: undefined,
+      team: undefined, familyActivity: undefined, todos: undefined,
+      teamCues: [],
+      lastRelayDrop: undefined,
+      connection: state.owner === undefined ? { kind: "signed-out" } : deviceConnection(state.devices.length),
+    })
+    endAlerts(retainMachineOffline)
+  }
+
   const api: RemoteStore = {
     state: () => state,
     subscribe: (listener) => {
@@ -1868,6 +1925,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const devices = me.value.devices
       const selected = devices.find((device) => device.id === state.activeDeviceID)
       if (selected?.status === "active" && !selected.online) {
+        const alreadyOffline = offlineDeviceID === selected.id || state.connection.kind === "offline"
+        const wentOffline = !alreadyOffline && state.devices.some((device) => device.id === selected.id && device.status === "active" && device.online)
         // The disconnect clears the list, so the selected device's last list is restored read-only.
         const sessions = state.sessions
         const sessionGroups = state.sessionGroups
@@ -1875,7 +1934,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         const drafts = state.drafts
         const creation = state.sessionCreation
         setState({ owner: { id: me.value.user.id, expiresAt: me.value.session.expiresAt }, devices })
-        api.disconnect()
+        disconnectDevice(alreadyOffline)
+        offlineDeviceID = selected.id
+        if (wentOffline) delivery.deliver("device-disconnected")
         setState({
           activeDeviceID: selected.id,
           sessions,
@@ -1891,6 +1952,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
             : creation,
           connection: { kind: "offline", deviceName: selected.name },
           transport: { kind: "idle" },
+          notifications: delivery.entries(),
         })
         return
       }
@@ -1930,12 +1992,15 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return result
     },
     connect: (deviceID) => {
+      if (state.activeDeviceID !== deviceID) offlineDeviceID = undefined
       clearImageSources()
       cancelFamilyRefresh?.()
       cancelFamilyRefresh = undefined
       const drafts = state.activeDeviceID === deviceID ? state.drafts : {}
       const creation = state.sessionCreation?.deviceID === deviceID ? state.sessionCreation : undefined
-      transport?.close(1000, "switching device")
+      const previous = transport
+      transport = undefined
+      previous?.close(1000, "switching device")
       cancelSearch?.()
       sessionPages = []
       openRootInfo = undefined
@@ -1959,6 +2024,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       sessionsToken += 1
       workspacesToken += 1
       setState({ activeDeviceID: deviceID, sessions: [], carouselSessions: [], sessionStatus: undefined, advertised: [], activeSessionID: undefined, view: undefined, notice: undefined, drafts,
+        lastRelayDrop: state.activeDeviceID === deviceID ? state.lastRelayDrop : undefined,
         team: undefined, familyActivity: undefined, teamCues: [], todos: undefined,
         sessionGroups: [], selectedWorkspaceID: undefined, selectedSessionInfo: undefined, sessionQuery: "", sessionFilter: "all",
         sessionListStatus: "idle", sessionPageLoading: false, sessionHasNext: false, sessionHasPrevious: false,
@@ -1994,57 +2060,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       transport = created
       created.connect()
     },
-    disconnect: () => {
-      clearImageSources()
-      cancelFamilyRefresh?.()
-      cancelFamilyRefresh = undefined
-      cancelUpload("Attachment upload was cancelled by disconnection. Files were not sent.")
-      // The device choice the account reads describe ends here, so a read that is
-      // still in flight cannot reconnect a device the user has dropped.
-      accountToken += 1
-      clearCatalogs()
-      clearUsage()
-      cancelStatusReload?.()
-      cancelStatusReload = undefined
-      statusReloadLocal = false
-      carouselRefreshPending = false
-      carouselRevision += 1
-      reconnectStatus = undefined
-      reconnectingSameDevice = false
-      transport?.close(1000, "disconnected")
-      cancelSearch?.()
-      sessionPages = []
-      openRootInfo = undefined
-      transport = undefined
-      subscribedSessionID = undefined
-      queued = []
-      sessionsToken += 1
-      workspacesToken += 1
-      setState({
-        activeDeviceID: undefined,
-        advertised: [],
-        sessions: [],
-        carouselSessions: [],
-        sessionGroups: [],
-        selectedWorkspaceID: undefined,
-        selectedSessionInfo: undefined,
-        sessionListStatus: "idle",
-        sessionPageLoading: false,
-        sessionHasNext: false,
-        sessionHasPrevious: false,
-        drafts: {},
-        workspaces: [],
-        workspaceStatus: "idle",
-        workspaceError: undefined,
-        sessionCreation: undefined,
-        activeSessionID: undefined,
-        view: undefined,
-        team: undefined, familyActivity: undefined, todos: undefined,
-        teamCues: [],
-        connection: state.owner === undefined ? { kind: "signed-out" } : deviceConnection(state.devices.length),
-      })
-      endAlerts()
-    },
+    disconnect: () => disconnectDevice(),
     selectSession,
     restoreSession: async (sessionID) => {
       const owner = transport

@@ -247,6 +247,19 @@ describe("createNotificationDelivery", () => {
     expect(test.delivery.entries()).toHaveLength(0)
   })
 
+  test("keeps a machine-offline notice while disposing unrelated connection notices", () => {
+    const test = deliveryWith({})
+    test.delivery.deliver("error")
+    test.delivery.deliver("device-disconnected")
+    const id = test.delivery.entries()[0]!.id
+    test.delivery.dispose(true)
+    expect(test.delivery.entries().map((entry) => entry.id)).toEqual([id])
+    test.delivery.markRead()
+    expect(test.delivery.entries()[0]?.read).toBe(true)
+    test.delivery.dismiss(id)
+    expect(test.delivery.entries()).toEqual([])
+  })
+
   test("keeps delivering after dispose so the next connection can raise its own alerts", () => {
     const test = deliveryWith({})
     test.delivery.deliver("error")
@@ -310,6 +323,22 @@ describe("createDesktopNotifier", () => {
       notifier.dispose()
       await Bun.sleep(0)
       expect([...worker.open.keys()]).toEqual(["ycoding-ses_z-agent-completed"])
+    })
+  })
+
+  test("retains one machine-offline desktop alert through account confirmation, then clears it on explicit disconnect", async () => {
+    await withFakeNotificationAsync("granted", async () => {
+      const worker = fakeWorkerRegistration()
+      const notifier = createDesktopNotifier(async () => worker.registration)
+      notifier.show({ title: "machine", body: "offline", tag: "ycoding-remote-device-disconnected" })
+      notifier.show({ title: "step", body: "failed", tag: "ycoding-ses_a-error", sessionID: "ses_a" })
+      await Bun.sleep(0)
+      notifier.dispose(true)
+      await Bun.sleep(0)
+      expect([...worker.open.keys()]).toEqual(["ycoding-remote-device-disconnected"])
+      notifier.dispose()
+      await Bun.sleep(0)
+      expect([...worker.open.keys()]).toEqual([])
     })
   })
 

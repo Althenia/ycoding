@@ -36,6 +36,21 @@ async function open(width: number, theme: "light" | "dark", initial = "seeded") 
 }
 
 describe("notification center and live toasts", () => {
+  test("attributes a browser relay reconnect in the connection strip without a machine-disconnected notice", async () => {
+    if (!browser) throw new Error("Browser not started")
+    const page = await browser.openPage()
+    try {
+      await page.setViewport(390, 844)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.status-strip__body')?.textContent?.includes('Connected') === true`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`[...document.querySelectorAll('.fixture__controls button')].find(button => button.textContent?.includes('Simulate disconnect and reconnect'))?.click()`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.status-strip__body')?.textContent?.startsWith('Connected —') === true && document.querySelector('.status-strip__body')?.textContent?.includes('Last browser relay drop (1006): synthetic disconnect') === true`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<string>(`document.querySelector('.status-strip__body')?.textContent?.trim() ?? ''`)).toBe("Connected — Relay session active for Studio Mac. · Last browser relay drop (1006): synthetic disconnect")
+      await page.evaluate(`document.querySelector('.yc-notification-center__trigger')?.click()`)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification--device-disconnected').length`)).toBe(0)
+    } finally { await page.close() }
+  }, 15_000)
+
   test("renders a bounded panel in light and dark desktop and phone layouts with keyboard and item actions", async () => {
     for (const width of [390, 1440]) for (const theme of ["light", "dark"] as const) {
       const page = await open(width, theme)
