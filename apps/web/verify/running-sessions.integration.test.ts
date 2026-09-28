@@ -105,6 +105,24 @@ describe("running Sessions across workspaces", () => {
     } finally { await page.close() }
   }, 60_000)
 
+  test("keeps overflowing page dots 24 px apart while each stays a 24 px target", async () => {
+    const page = await browser!.openPage()
+    try {
+      for (const width of [390, 1440]) {
+        await page.setViewport(width, 844)
+        await page.navigate(`http://127.0.0.1:${port}/verify/running-sessions-fixture.html?theme=dark&count=7`)
+        for (let attempt = 0; attempt < 40 && await page.evaluate<number>(`document.querySelectorAll('.running-sessions__pagination button').length`) !== 7; attempt += 1) await Bun.sleep(50)
+        const dots = await page.evaluate<readonly { readonly center: number; readonly width: number; readonly height: number }[]>(`[...document.querySelectorAll('.running-sessions__pagination button')].map(button => { const box = button.getBoundingClientRect(); return { center: box.left + box.width / 2, width: box.width, height: box.height } })`)
+        expect(dots).toHaveLength(7)
+        for (const dot of dots) {
+          expect(dot.width).toBeGreaterThanOrEqual(24)
+          expect(dot.height).toBeGreaterThanOrEqual(24)
+        }
+        expect(dots.slice(1).map((dot, index) => dot.center - dots[index]!.center)).toEqual(Array.from({ length: 6 }, () => 24))
+      }
+    } finally { await page.close() }
+  })
+
   test("rehydrates a later running list and recalculates overflow when the viewport grows", async () => {
     const page = await browser!.openPage()
     try {
