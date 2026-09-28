@@ -337,8 +337,14 @@ describe("paged shell output", () => {
 
       const reading = test.store.loadShellOutputPage("sh_page")
       await test.runUntil(() => shellRequests(test).length === 1)
-      await test.store.selectSession("ses_b")
-      await test.store.selectSession("ses_a")
+      let returned = false
+      const returning = test.store.selectSession("ses_b")
+        .then(() => test.store.selectSession("ses_a"))
+        .finally(() => {
+          returned = true
+        })
+      await test.runUntil(() => returned, 1_000)
+      await returning
       gate.release()
       await reading
       await test.flush()
