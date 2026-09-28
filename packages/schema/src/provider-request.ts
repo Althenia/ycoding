@@ -57,9 +57,11 @@ export const Timing = Schema.Struct({
 export interface Timing extends Schema.Schema.Type<typeof Timing> {}
 
 const ReportLimit = PositiveInt.check(Schema.isLessThanOrEqualTo(200))
+const ReportTimeZone = Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(128))
 
 export const ReportInput = Schema.Struct({
   group: ReportGroup,
+  timeZone: ReportTimeZone.pipe(optional),
   /** Inclusive UTC epoch-millisecond lower bound. */
   from: NonNegativeInt.pipe(optional),
   /** Exclusive UTC epoch-millisecond upper bound. */
@@ -72,8 +74,8 @@ export const ReportInput = Schema.Struct({
   .check(
     Schema.makeFilter((value) => value.from === undefined || value.to === undefined || value.from < value.to, {
       expected: "from before to",
-      meta: { _tag: "isMaxProperties", maxProperties: 7 },
-      arbitrary: { constraint: { maxLength: 7 } },
+      meta: { _tag: "isMaxProperties", maxProperties: 8 },
+      arbitrary: { constraint: { maxLength: 8 } },
     }),
   )
   .annotate({ identifier: "ProviderRequest.ReportInput" })

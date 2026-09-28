@@ -19,5 +19,5 @@ test("declares local-runtime global usage summary and report operations", () => 
     document.paths["/api/usage/report"]?.get?.parameters?.map((parameter) =>
       "$ref" in parameter ? parameter.$ref : parameter.name,
     ),
-  ).toEqual(["group", "from", "to", "offset", "limit", "sort", "order"])
+  ).toEqual(["group", "timeZone", "from", "to", "offset", "limit", "sort", "order"])
 })

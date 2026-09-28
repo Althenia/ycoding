@@ -432,6 +432,7 @@ function usageReportGroup(
   group: ProviderRequest.ReportGroup,
   item: { readonly record: SessionProviderRequest.CostedRecord; readonly session: SessionSchema.Info },
   projects: ReadonlyArray<ProjectV2.Info>,
+  formatter?: Intl.DateTimeFormat,
 ) {
   if (group === "model") {
     const variant = item.record.model.variant
@@ -455,6 +456,15 @@ function usageReportGroup(
   }
   if (group === "agent") return { key: item.record.agent, label: item.record.agent }
   const iso = new Date(DateTime.toEpochMillis(item.record.time)).toISOString()
+  if (formatter) {
+    const parts = formatter.formatToParts(DateTime.toEpochMillis(item.record.time))
+    const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((entry) => entry.type === type)?.value ?? ""
+    const date = `${part("year")}-${part("month")}-${part("day")}`
+    if (group === "day") return { key: date, label: date }
+    if (group === "month") return { key: date.slice(0, 7), label: date.slice(0, 7) }
+    const offset = part("timeZoneName").replace("GMT", "") || "+00:00"
+    return { key: `${date}T${part("hour")}:00:00${offset}`, label: `${date}T${part("hour")}:00 ${offset}` }
+  }
   if (group === "hour") return { key: `${iso.slice(0, 13)}:00:00.000Z`, label: `${iso.slice(0, 13)}:00 UTC` }
   if (group === "day") return { key: iso.slice(0, 10), label: iso.slice(0, 10) }
   return { key: iso.slice(0, 7), label: iso.slice(0, 7) }
@@ -464,9 +474,9 @@ function usageReportTokenTotal(row: ProviderRequest.ReportRow) {
   return row.tokens.input + row.tokens.output + row.tokens.reasoning + row.tokens.cache.read + row.tokens.cache.write
 }
 
-function usageReportComparator(sort: ProviderRequest.ReportSort, order: ProviderRequest.ReportOrder) {
+function usageReportComparator(sort: ProviderRequest.ReportSort, order: ProviderRequest.ReportOrder, localHour: boolean) {
   return (left: ProviderRequest.ReportRow, right: ProviderRequest.ReportRow) => {
-    const key = left.key < right.key ? -1 : left.key > right.key ? 1 : 0
+    const key = localHour ? Date.parse(left.key) - Date.parse(right.key) : left.key < right.key ? -1 : left.key > right.key ? 1 : 0
     if (sort === "key") return order === "asc" ? key : -key
     const metric = (row: ProviderRequest.ReportRow) => {
       if (sort === "cost") return row.cost ?? 0
@@ -501,8 +511,11 @@ function buildUsageReport(
     string,
     { readonly label: string; readonly records: SessionProviderRequest.CostedRecord[] }
   >()
+  const formatter = input.timeZone && (input.group === "hour" || input.group === "day" || input.group === "month")
+    ? new Intl.DateTimeFormat("en-US", { timeZone: input.timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23", timeZoneName: "longOffset" })
+    : undefined
   for (const item of records) {
-    const group = usageReportGroup(input.group, item, projects)
+    const group = usageReportGroup(input.group, item, projects, formatter)
     const current = grouped.get(group.key)
     if (current) {
       current.records.push(item.record)
@@ -514,7 +527,7 @@ function buildUsageReport(
     key,
     label: value.label,
     ...SessionProviderRequest.reportMetrics(value.records),
-  })).toSorted(usageReportComparator(input.sort ?? "key", input.order ?? "asc"))
+  })).toSorted(usageReportComparator(input.sort ?? "key", input.order ?? "asc", input.group === "hour" && input.timeZone !== undefined))
   const offset = input.offset ?? 0
   const limit = input.limit ?? 100
   const page = rows.slice(offset, offset + limit)
@@ -753,6 +766,21 @@ const layer = Layer.effect(
     })
     const costedRecords = (session: SessionSchema.Info) =>
       providerRequests.list(session.id).pipe(Effect.flatMap((records) => estimated(session, records)))
+    const globalCostedRecords = Effect.fnUntraced(function* (range?: { readonly from?: number; readonly to?: number }) {
+      const sessions = (yield* result.list({ order: "asc" })).data
+      const recordsBySession = new Map<SessionSchema.ID, ProviderRequest.Record[]>()
+      for (const record of yield* providerRequests.listAll(range)) {
+        const records = recordsBySession.get(record.sessionID)
+        if (records) records.push(record)
+        else recordsBySession.set(record.sessionID, [record])
+      }
+      return yield* Effect.forEach(sessions.flatMap((session) => {
+        const records = recordsBySession.get(session.id)
+        return records === undefined ? [] : [{ session, records }]
+      }), (item) => estimated(item.session, item.records).pipe(Effect.map((records) => records.map((record) => ({ record, session: item.session }))))).pipe(
+        Effect.map((items) => items.flat()),
+      )
+    })
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
       decodeMessage({ ...row.data, id: row.id, type: row.type }).pipe(
         Effect.mapError(
@@ -958,22 +986,17 @@ const layer = Layer.effect(
         )
       }),
       usageAll: Effect.fn("V2Session.usageAll")(function* () {
-        const sessions = (yield* result.list({ order: "asc" })).data
-        const records = yield* Effect.forEach(sessions, costedRecords)
         return SessionProviderRequest.summarize(
-          records
-            .flat()
+          (yield* globalCostedRecords())
+            .map((item) => item.record)
             .toSorted((left, right) => DateTime.toEpochMillis(left.time) - DateTime.toEpochMillis(right.time)),
         )
       }),
       usageReportAll: Effect.fn("V2Session.usageReportAll")(function* (input) {
-        const sessions = (yield* result.list({ order: "asc" })).data
         const projectInfos = input.group === "project" ? yield* projects.list() : []
         return buildUsageReport(
           input,
-          yield* Effect.forEach(sessions, (session) =>
-            costedRecords(session).pipe(Effect.map((records) => records.map((record) => ({ record, session })))),
-          ).pipe(Effect.map((items) => items.flat())),
+          yield* globalCostedRecords(input),
           projectInfos,
         )
       }),

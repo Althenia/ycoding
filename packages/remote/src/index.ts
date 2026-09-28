@@ -432,10 +432,11 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
     Object.keys(input).every((key) => key === "refresh") && (input.refresh === undefined || typeof input.refresh === "boolean"))
   if (operation === "usage.report") {
     if (!isRecord(input) || typeof input.group !== "string" || !["model", "hour", "day", "month", "session", "project", "agent"].includes(input.group) ||
-      Object.keys(input).some((key) => !["group", "from", "to", "offset", "limit", "sort", "order"].includes(key))) return false
+      Object.keys(input).some((key) => !["group", "timeZone", "from", "to", "offset", "limit", "sort", "order"].includes(key))) return false
     const integer = (value: unknown, minimum: number, maximum: number) => value === undefined ||
       (typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum)
     return integer(input.from, 0, Number.MAX_SAFE_INTEGER) && integer(input.to, 0, Number.MAX_SAFE_INTEGER) &&
+      (input.timeZone === undefined || typeof input.timeZone === "string" && input.timeZone.length > 0 && input.timeZone.length <= 128) &&
       integer(input.offset, 0, Number.MAX_SAFE_INTEGER) && integer(input.limit, 1, 200) &&
       (input.from === undefined || input.to === undefined || (typeof input.from === "number" && typeof input.to === "number" && input.from < input.to)) &&
       (input.sort === undefined || (typeof input.sort === "string" && ["key", "tokens", "cost", "steps", "input", "output", "reasoning", "cacheRead", "cacheWrite"].includes(input.sort))) &&
@@ -751,7 +752,7 @@ export type RemoteUsageSummaryValue = { readonly data: RemoteUsageMetrics & {
   readonly latestInvalidation?: string; readonly latestNamespace?: string;
   readonly latestTiming?: { readonly promptEvalDurationNs?: number; readonly generationDurationNs?: number; readonly loadDurationNs?: number } } }
 export type RemoteUsageGroup = "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
-export type RemoteUsageReportInput = { readonly group: RemoteUsageGroup; readonly from?: number; readonly to?: number;
+export type RemoteUsageReportInput = { readonly group: RemoteUsageGroup; readonly timeZone?: string; readonly from?: number; readonly to?: number;
   readonly offset?: number; readonly limit?: number;
   readonly sort?: "key" | "tokens" | "cost" | "steps" | "input" | "output" | "reasoning" | "cacheRead" | "cacheWrite";
   readonly order?: "asc" | "desc" }

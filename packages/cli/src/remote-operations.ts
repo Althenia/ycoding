@@ -874,6 +874,7 @@ function validate(request: RemoteRequest): Validated {
     const to = optionalInteger(fields.to, "to", 0, Number.MAX_SAFE_INTEGER)
     if (from !== undefined && to !== undefined && from >= to) throw new OperationError("invalid_message", "Usage report from must precede to")
     return { kind: "usage.report", input: { group,
+      ...(fields.timeZone === undefined ? {} : { timeZone: requireString(fields.timeZone, "timeZone", 128) }),
       ...(from === undefined ? {} : { from }), ...(to === undefined ? {} : { to }),
       ...(fields.offset === undefined ? {} : { offset: optionalInteger(fields.offset, "offset", 0, Number.MAX_SAFE_INTEGER)! }),
       ...(fields.limit === undefined ? {} : { limit: optionalInteger(fields.limit, "limit", 1, 200)! }),
@@ -1334,7 +1335,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.active": [],
   "usage.providers": ["refresh"],
   "usage.summary": [],
-  "usage.report": ["group", "from", "to", "offset", "limit", "sort", "order"],
+  "usage.report": ["group", "timeZone", "from", "to", "offset", "limit", "sort", "order"],
   "session.status": [],
   "session.catalog": [],
   "workspace.catalog": ["workspace"],

@@ -28,6 +28,7 @@ test("decodes and validates usage report query bounds", () => {
     sort: "cost",
     order: "desc",
   })
+  expect(decode({ group: "day", timeZone: "America/New_York" })).toEqual({ group: "day", timeZone: "America/New_York" })
   for (const sort of ["steps", "input", "output", "reasoning", "cacheRead", "cacheWrite"] as const)
     expect(decode({ group: "hour", sort }).sort).toBe(sort)
   for (const query of [
@@ -53,6 +54,7 @@ test("publishes the additive location-owned usage report OpenAPI operation", () 
   expect(operation?.parameters?.map((parameter) => "$ref" in parameter ? parameter.$ref : parameter.name)).toEqual([
     "sessionID",
     "group",
+    "timeZone",
     "from",
     "to",
     "offset",

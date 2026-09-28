@@ -96,6 +96,8 @@ test("preserves optional cache-read reporting certainty on summaries and model s
 
 test("validates bounded usage report inputs", () => {
   expect(decodeReportInput({ group: "day" })).toEqual({ group: "day" })
+  expect(decodeReportInput({ group: "day", timeZone: "America/New_York" })).toEqual({ group: "day", timeZone: "America/New_York" })
+  expect(decodeReportInput({ group: "month", timeZone: "Asia/Kathmandu" })).toEqual({ group: "month", timeZone: "Asia/Kathmandu" })
   expect(
     decodeReportInput({ group: "model", from: 0, to: 1, offset: 0, limit: 200, sort: "tokens", order: "desc" }),
   ).toEqual({
@@ -118,6 +120,8 @@ test("validates bounded usage report inputs", () => {
     { group: "day", limit: 201 },
     { group: "day", sort: "requests" },
     { group: "day", order: "newest" },
+    { group: "day", timeZone: "" },
+    { group: "day", timeZone: "x".repeat(129) },
   ])
     expect(() => decodeReportInput(input)).toThrow()
 })

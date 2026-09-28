@@ -228,6 +228,7 @@ export const SessionSubagentListQuery = Schema.Struct({
 
 export const SessionUsageReportQuery = Schema.Struct({
   group: ProviderRequest.ReportGroup,
+  timeZone: Schema.String.pipe(Schema.optional),
   from: Schema.NumberFromString.pipe(Schema.decodeTo(NonNegativeInt), Schema.optional),
   to: Schema.NumberFromString.pipe(Schema.decodeTo(NonNegativeInt), Schema.optional),
   offset: Schema.NumberFromString.pipe(Schema.decodeTo(NonNegativeInt), Schema.optional),

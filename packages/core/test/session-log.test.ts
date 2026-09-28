@@ -14,6 +14,7 @@ import { SessionV2 } from "@ycoding-ai/core/session"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
+import { SessionProviderRequest } from "@ycoding-ai/core/session/provider-request"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { ModelV2 } from "@ycoding-ai/core/model"
@@ -90,7 +91,7 @@ const catalog = Layer.mock(Catalog.Service, {
 })
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionStore.node, Catalog.node, SessionV2.node]),
+    LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionStore.node, SessionProviderRequest.node, Catalog.node, SessionV2.node]),
     [
       [ProjectV2.node, projects],
       [SessionExecution.node, SessionExecution.noopLayer],
@@ -523,6 +524,9 @@ describe("SessionV2.log", () => {
       )
       yield* session.archive(child.id)
 
+      const requests = yield* SessionProviderRequest.Service
+      expect((yield* requests.listAll({ from: times[1], to: times[2] })).map((record) => record.id)).toEqual([ProviderRequest.ID.make("prq_global_child")])
+
       expect(yield* session.usageAll()).toMatchObject({ logical: 3, physical: 3 })
       expect(yield* session.usageReportAll({ group: "project" })).toMatchObject({
         rowCount: 2,
@@ -549,6 +553,51 @@ describe("SessionV2.log", () => {
         rows: [{ key: "2026-03-03" }],
         total: { logical: 2, tokens: { input: 50 } },
       })
+    }),
+  )
+
+  it.effect("groups local usage through a DST transition and a non-hour-offset day and month boundary", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const created = yield* session.create({ location })
+      const times = [
+        Date.UTC(2026, 2, 8, 4, 30), Date.UTC(2026, 2, 8, 5, 30),
+        Date.UTC(2026, 2, 9, 3, 30), Date.UTC(2026, 2, 9, 4, 30),
+        Date.UTC(2027, 2, 8, 18, 14), Date.UTC(2027, 2, 8, 18, 15),
+        Date.UTC(2027, 3, 30, 18, 14), Date.UTC(2027, 3, 30, 18, 15),
+        Date.UTC(2026, 9, 25, 0, 30), Date.UTC(2026, 9, 25, 1, 30),
+      ]
+      yield* Effect.forEach(times, (time, index) => events.publish(SessionEvent.ProviderRequestRecorded, {
+        id: ProviderRequest.ID.make(`prq_zoned_${index}`),
+        sessionID: created.id,
+        source: "step",
+        agent: AgentV2.ID.make("build"),
+        model: ModelV2.Ref.make({ providerID: ProviderV2.ID.make("openai"), id: ModelV2.ID.make("provider-priced") }),
+        routeID: "test-route",
+        promptCacheKey: "test-cache",
+        systemDigest: "test-system",
+        toolDigest: "test-tools",
+        request: index + 1,
+        attempts: 1,
+        invalidation: "first-request",
+        continuation: "full",
+        tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        time: DateTime.makeUnsafe(time),
+      }))
+
+      const spring = { group: "day" as const, from: Date.UTC(2026, 2, 8, 5), to: Date.UTC(2026, 2, 9, 4) }
+      expect(yield* session.usageAll()).toEqual(yield* session.usage(created.id))
+      expect(yield* session.usageReportAll(spring)).toEqual(yield* session.usageReport({ sessionID: created.id, ...spring }))
+      const berlin = { group: "hour" as const, timeZone: "Europe/Berlin", from: times[8], to: times[9]! + 1 }
+      expect(yield* session.usageReportAll(berlin)).toEqual(yield* session.usageReport({ sessionID: created.id, ...berlin }))
+      expect((yield* session.usageReportAll({ ...spring, timeZone: "America/New_York" })).rows.map((row) => [row.key, row.logical])).toEqual([["2026-03-08", 2]])
+      expect((yield* session.usageReportAll(spring)).rows.map((row) => row.key)).toEqual(["2026-03-08", "2026-03-09"])
+      expect((yield* session.usageReportAll({ group: "day", timeZone: "Asia/Kathmandu", from: times[4], to: times[5]! + 1 })).rows.map((row) => row.key)).toEqual(["2027-03-08", "2027-03-09"])
+      expect((yield* session.usageReportAll({ group: "month", timeZone: "Asia/Kathmandu", from: times[6], to: times[7]! + 1 })).rows.map((row) => row.key)).toEqual(["2027-04", "2027-05"])
+      expect((yield* session.usageReportAll(berlin)).rows.map((row) => row.key)).toEqual([
+        "2026-10-25T02:00:00+02:00", "2026-10-25T02:00:00+01:00",
+      ])
     }),
   )
 

@@ -117,11 +117,13 @@ test("usage operations are global and validate refresh and bounded ReportInput",
     ["usage.providers", { refresh: true }], ["usage.providers", {}], ["usage.providers", undefined],
     ["usage.summary", undefined],
     ["usage.report", { group: "model", from: 0, to: 100, offset: 0, limit: 200, sort: "cost", order: "desc" }],
+    ["usage.report", { group: "day", timeZone: "America/New_York" }],
   ] as const) expect(parseClientMessage(JSON.stringify({ type: "request", id: "r", operation, ...(input === undefined ? {} : { input }) }))).toMatchObject({ ok: true })
   for (const [operation, input] of [
     ["usage.providers", { refresh: "true" }], ["usage.providers", { refresh: true, raw: true }],
     ["usage.summary", {}], ["usage.report", {}], ["usage.report", { group: "model", limit: 201 }],
     ["usage.report", { group: "hour", from: 10, to: 10 }], ["usage.report", { group: "model", sort: "secret" }],
+    ["usage.report", { group: "day", timeZone: "" }], ["usage.report", { group: "day", timeZone: 42 }],
   ] as const) expect(parseClientMessage(JSON.stringify({ type: "request", id: "r", operation, input }))).toMatchObject({ ok: false, error: { code: "invalid_message" } })
   for (const operation of ["usage.providers", "usage.summary", "usage.report"])
     expect(parseClientMessage(JSON.stringify({ type: "request", id: "r", operation, sessionID: "ses_1", input: operation === "usage.report" ? { group: "model" } : undefined })).ok).toBe(false)

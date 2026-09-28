@@ -63,12 +63,12 @@ test("serves backend-wide summary and forwards the complete report query without
   expect(summary.status).toBe(200)
   expect(await summary.json()).toEqual({ data: metrics })
   const report = await f.request(
-    "/api/usage/report?group=project&from=1&to=3&offset=2&limit=25&sort=cost&order=desc",
+    "/api/usage/report?group=project&from=1&to=3&offset=2&limit=25&sort=cost&order=desc&timeZone=Asia%2FKathmandu",
   )
   expect(report.status).toBe(200)
   expect(await report.json()).toEqual({ data: { group: "project", rows: [], total: metrics, rowCount: 0 } })
   expect(received).toEqual([
-    { group: "project", from: 1, to: 3, offset: 2, limit: 25, sort: "cost", order: "desc" },
+    { group: "project", from: 1, to: 3, offset: 2, limit: 25, sort: "cost", order: "desc", timeZone: "Asia/Kathmandu" },
   ])
 })
 
@@ -83,5 +83,6 @@ test("rejects an invalid global report query before the Core read", async () => 
   })
 
   expect((await f.request("/api/usage/report?group=project&sort=requests")).status).toBe(400)
+  expect((await f.request("/api/usage/report?group=day&timeZone=Mars%2FOlympus_Mons")).status).toBe(400)
   expect(calls.value).toBe(0)
 })

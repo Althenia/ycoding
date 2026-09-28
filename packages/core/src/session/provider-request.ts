@@ -6,7 +6,7 @@ import { Money } from "@ycoding-ai/schema/money"
 import { Model } from "@ycoding-ai/schema/model"
 import type { TokenUsage } from "@ycoding-ai/schema/token-usage"
 import type { TransportAttempt } from "@ycoding-ai/ai/route"
-import { and, asc, desc, eq, gt } from "drizzle-orm"
+import { and, asc, desc, eq, gt, gte, lt } from "drizzle-orm"
 import { Cause, Context, Data, DateTime, Effect, Layer, Option, Schema, Semaphore } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
@@ -63,6 +63,7 @@ export interface Interface {
   readonly list: (
     sessionID: ProviderRequest.Record["sessionID"],
   ) => Effect.Effect<ReadonlyArray<ProviderRequest.Record>>
+  readonly listAll: (range?: { readonly from?: number; readonly to?: number }) => Effect.Effect<ReadonlyArray<ProviderRequest.Record>>
   readonly summary: (sessionID: ProviderRequest.Record["sessionID"]) => Effect.Effect<ProviderRequest.Summary>
 }
 
@@ -287,6 +288,18 @@ const layer = Layer.effect(
           Effect.map((rows) => rows.map(rowRecord)),
         )
 
+    const listAll: Interface["listAll"] = (range) =>
+      db
+        .select()
+        .from(SessionProviderRequestTable)
+        .where(and(
+          range?.from === undefined ? undefined : gte(SessionProviderRequestTable.time_created, range.from),
+          range?.to === undefined ? undefined : lt(SessionProviderRequestTable.time_created, range.to),
+        ))
+        .orderBy(asc(SessionProviderRequestTable.session_id), asc(SessionProviderRequestTable.request))
+        .all()
+        .pipe(Effect.orDie, Effect.map((rows) => rows.map(rowRecord)))
+
     const summary: Interface["summary"] = (sessionID) =>
       Effect.gen(function* () {
         const [rows, last] = yield* Effect.all([
@@ -481,7 +494,7 @@ const layer = Layer.effect(
         )
         .pipe(Effect.catchTag("SqlError", Effect.die))) as unknown as Interface["next"]
 
-    return Service.of({ next, observeAttempt, list, summary })
+    return Service.of({ next, observeAttempt, list, listAll, summary })
   }),
 )
 

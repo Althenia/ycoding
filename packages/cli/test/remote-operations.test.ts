@@ -536,12 +536,15 @@ describe("operation mapping", () => {
     expect(valueOf(await runUsage("usage.providers", { refresh: true }))).toEqual({ data: providers.data })
     expect(valueOf(await runUsage("usage.summary"))).toEqual({ data: summary })
     expect(valueOf(await runUsage("usage.report", { group: "model", from: 0, to: 10, limit: 2, sort: "cost", order: "desc" }))).toEqual({ data: report })
+    expect(valueOf(await runUsage("usage.report", { group: "day", timeZone: "Asia/Kathmandu" }))).toEqual({ data: report })
     expect(test.calls.filter((call) => ["providerUsageList", "usageSummary", "usageReport"].includes(call.method))).toEqual([
       { method: "providerUsageList", args: [true] }, { method: "usageSummary", args: [] },
       { method: "usageReport", args: [{ group: "model", from: 0, to: 10, limit: 2, sort: "cost", order: "desc" }] },
+      { method: "usageReport", args: [{ group: "day", timeZone: "Asia/Kathmandu" }] },
     ])
     test.calls.length = 0
     expect(errorOf(await runUsage("usage.report", { group: "model", limit: 201 })).code).toBe("invalid_message")
+    expect(errorOf(await runUsage("usage.report", { group: "day", timeZone: "" })).code).toBe("invalid_message")
     expect(test.calls.some((call) => call.method === "usageReport")).toBe(false)
   })
 
