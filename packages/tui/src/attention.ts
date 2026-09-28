@@ -119,7 +119,7 @@ function normalizePack(pack: TuiAttentionSoundPack): RegisteredSoundPack | undef
 
 function focusSkip(when: TuiAttentionWhen, focus: FocusState) {
   if (when === "always") return
-  if (focus === "unknown") return "focus_unknown"
+  if (focus === "unknown") return when === "focused" ? "focus_unknown" : undefined
   if (when === "blurred" && focus === "focused") return "focused"
   if (when === "focused" && focus === "blurred") return "blurred"
 }

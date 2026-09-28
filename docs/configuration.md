@@ -1110,7 +1110,7 @@ All other `cli.json` fields are optional and remain `unset` until configured. Th
 | `hints.onboarding`, `debug.devtools`, `debug.timing`, `animations` | boolean                                           | unset                 | Guidance, diagnostics, and animation switches.                                                      |
 | `mouse`                                                            | boolean                                           | `true`                | Terminal mouse capture.                                                                             |
 
-Attention sound names are `default`, `question`, `permission`, `error`, `done`, and `subagent_done`.
+Attention sound names are `default`, `question`, `permission`, `error`, `done`, and `subagent_done`. System notifications for attention events are requested while the terminal is blurred or before it has reported its focus, and are suppressed while it is known to be focused; delivery also depends on the terminal's notification support and the operating system's notification settings for that terminal.
 
 `terminal.copy_on_select` controls copy-on-select. When enabled (the default except on Windows), releasing a mouse selection copies it; when disabled, use `Ctrl+C` on every supported platform or `Cmd+C` on macOS, and press `Esc` to clear the selection. Selection copy consumes `Ctrl+C` and cannot exit the application. Without a selection, `Ctrl+C` keeps its prompt behavior and requires two presses to exit from an empty prompt; `Esc` never exits YCoding.
 

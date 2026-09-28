@@ -1,6 +1,68 @@
 import { expect, test } from "bun:test"
-import type { AudioSound, AudioVoice } from "@opentui/core"
+import { createCliRenderer, type AudioSound, type AudioVoice } from "@opentui/core"
+import { Readable, Writable } from "node:stream"
 import { createTuiAttention } from "../src/attention"
+
+test("delivers a blurred notification before focus is reported through Ghostty's renderer", async () => {
+  const chunks: Buffer[] = []
+  const stdin = Object.assign(new Readable({ read() {} }), { isTTY: true, setRawMode() {} })
+  const stdout = Object.assign(
+    new Writable({
+      write(chunk: Buffer, _encoding, callback) {
+        chunks.push(Buffer.from(chunk))
+        callback()
+      },
+    }),
+    { isTTY: true, columns: 80, rows: 24 },
+  )
+  const renderer = await createCliRenderer({
+    stdin: stdin as unknown as NodeJS.ReadStream,
+    stdout: stdout as unknown as NodeJS.WriteStream,
+    useThread: false,
+    useMouse: false,
+    consoleMode: "disabled",
+  })
+  const attention = createTuiAttention({
+    renderer,
+    config: {
+      attention: {
+        enabled: true,
+        notifications: true,
+        sound: false,
+        volume: 0.4,
+        sound_pack: "ycoding.default",
+        sounds: {},
+      },
+    },
+  })
+  try {
+    stdin.emit("data", Buffer.from("\u001bP>|ghostty 1.1.3\u001b\\"))
+    expect(renderer.capabilities?.notifications).toBe(true)
+    expect(await attention.notify({ message: "Session done", notification: { when: "blurred" }, sound: false })).toEqual({
+      ok: true,
+      notification: true,
+      sound: false,
+    })
+    expect(Buffer.concat(chunks).toString()).toContain("\u001b]777;notify;YCoding;Session done\u001b\\")
+
+    stdin.emit("data", Buffer.from("\u001b[?1004;1$y"))
+    expect(Buffer.concat(chunks).toString()).toContain("\u001b[?1004h")
+    stdin.emit("data", Buffer.from("\u001b[I"))
+    expect(await attention.notify({ message: "Session done", notification: { when: "blurred" }, sound: false })).toEqual({
+      ok: false,
+      notification: false,
+      sound: false,
+      skipped: "focused",
+    })
+    stdin.emit("data", Buffer.from("\u001b[O"))
+    expect(
+      (await attention.notify({ message: "Session done", notification: { when: "blurred" }, sound: false })).notification,
+    ).toBe(true)
+  } finally {
+    attention.dispose()
+    renderer.destroy()
+  }
+})
 
 test("plays the built-in done sound through the TUI audio host", async () => {
   const loaded: string[] = []
