@@ -63,7 +63,7 @@ describe("responsive contract", () => {
             continue
           }
           for (const feature of condition.replace(/^@media\s+/, "").split(" and ")) {
-            if (feature.startsWith("(pointer:") || feature.startsWith("(prefers-")) continue
+            if (feature.startsWith("(pointer:") || feature.startsWith("(prefers-") || feature.startsWith("(forced-colors:")) continue
             const width = feature.match(/^\((min|max)-width: (\d+)px\)$/)
             expect({ name, condition, unrecognized: width === null ? feature : undefined }).toEqual({
               name,

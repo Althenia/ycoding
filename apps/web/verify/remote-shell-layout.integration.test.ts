@@ -138,18 +138,18 @@ describe("remote shell layout", () => {
       const page = await fixture("view=settings&noSelection=1", width, "Desktop alerts", undefined, height)
       try {
         await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`)
-        const layout = await page.evaluate<{ scrollable: boolean; left: number; right: number; viewport: number; edgeScrolls: boolean; column: number; columnCenter: number }>(`(() => {
+        const layout = await page.evaluate<{ scrollable: boolean; left: number; right: number; viewport: number; edgeScrolls: boolean; column: number; columnCenter: number; contentCenter: number }>(`(() => {
           const scroller = document.querySelector('.app--settings .workspace__scroll')
           const box = scroller.getBoundingClientRect()
           const pane = document.querySelector('.app--settings .pane').getBoundingClientRect()
           const edge = document.elementFromPoint(innerWidth - 24, box.top + box.height / 2)
-          return { scrollable: scroller.scrollHeight > scroller.clientHeight, left: box.left, right: box.right, viewport: innerWidth, edgeScrolls: scroller.contains(edge), column: pane.width, columnCenter: pane.left + pane.width / 2 }
+          return { scrollable: scroller.scrollHeight > scroller.clientHeight, left: box.left, right: box.right, viewport: innerWidth, edgeScrolls: scroller.contains(edge), column: pane.width, columnCenter: pane.left + pane.width / 2, contentCenter: box.left + scroller.clientLeft + scroller.clientWidth / 2 }
         })()`)
         expect(layout.scrollable).toBe(true)
         expect(Math.abs(layout.right - layout.viewport)).toBeLessThanOrEqual(1)
         expect(layout.edgeScrolls).toBe(true)
         expect(layout.column).toBeLessThanOrEqual(960)
-        expect(Math.abs(layout.columnCenter - (layout.left + layout.right) / 2)).toBeLessThanOrEqual(1)
+        expect(Math.abs(layout.columnCenter - layout.contentCenter)).toBeLessThanOrEqual(1)
       } finally { await page.close() }
     }
   }, 30_000)

@@ -103,6 +103,64 @@ kbd {
   color: var(--yc-text);
 }
 
+/* Owned scrollbar for a fine pointer: a transparent gutter with no arrow buttons and a
+   pill thumb that widens under the pointer. Touch keeps the platform's transient
+   indicators and forced colors keep system scrollbars. Firefox, which lacks the
+   pseudo-elements, gets the standard properties instead; a non-auto scrollbar-color
+   would switch the pseudo-elements off in Chromium and WebKit. */
+@media (pointer: fine) and (forced-colors: none) {
+  ::-webkit-scrollbar {
+    width: var(--yc-scrollbar-size);
+    height: var(--yc-scrollbar-size);
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-button {
+    display: none;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border: var(--yc-space-1) solid transparent;
+    border-radius: var(--yc-radius-pill);
+    background-color: var(--yc-border-strong);
+    background-clip: padding-box;
+  }
+
+  ::-webkit-scrollbar-thumb:vertical {
+    min-height: var(--yc-space-8);
+  }
+
+  ::-webkit-scrollbar-thumb:horizontal {
+    min-width: var(--yc-space-8);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    border-width: calc(var(--yc-space-1) / 2);
+    background-color: var(--yc-text-muted);
+  }
+
+  ::-webkit-scrollbar-thumb:active {
+    border-width: calc(var(--yc-space-1) / 2);
+    background-color: var(--yc-green-strong);
+  }
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  @media (pointer: fine) and (forced-colors: none) {
+    :root {
+      scrollbar-color: var(--yc-border-strong) transparent;
+    }
+
+    * {
+      scrollbar-width: thin;
+    }
+  }
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;

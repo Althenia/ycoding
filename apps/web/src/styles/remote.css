@@ -2420,3 +2420,32 @@ body:has(.app) {
     animation: yc-pulse 1.6s var(--yc-ease-standard) infinite;
   }
 }
+
+/* The owned fine-pointer scrollbar takes layout space, so primary scroll regions keep
+   its gutter reserved and never shift when overflow appears. The conversation's
+   column rows outside the scroller stop at the same edge, keeping one column with the
+   composer, while full-width bands still reach the window edge. */
+@supports (scrollbar-gutter: stable) and selector(::-webkit-scrollbar) {
+  @media (min-width: 768px) and (pointer: fine) and (forced-colors: none) {
+    .workspace__scroll {
+      scrollbar-gutter: stable;
+    }
+
+    .app--activity .workspace__scroll,
+    .app--empty .workspace__scroll {
+      scrollbar-gutter: auto;
+    }
+
+    .app--conversation.app--selected .workspace__main {
+      grid-template-columns: minmax(0, 1fr) var(--yc-scrollbar-size);
+    }
+
+    .app--conversation.app--selected .workspace__main > * {
+      grid-column: 1;
+    }
+
+    .app--conversation.app--selected .workspace__main > :is(.workspace__scroll, .workspace__topbar, .subagent-resident) {
+      grid-column: 1 / -1;
+    }
+  }
+}

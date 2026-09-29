@@ -253,6 +253,7 @@ describe("remote responsive state behavior", () => {
       const state = await page.evaluate<{
         readonly width: number
         readonly center: number
+        readonly contentCenter: number
         readonly viewport: number
         readonly rows: number
         readonly columns: number
@@ -269,6 +270,7 @@ describe("remote responsive state behavior", () => {
         return {
           width: layout.width,
           center: layout.left + layout.width / 2,
+          contentCenter: (() => { const scroller = document.querySelector('.workspace__scroll'); return scroller.getBoundingClientRect().left + scroller.clientLeft + scroller.clientWidth / 2 })(),
           tableWidth: table.getBoundingClientRect().width,
           contentWidth: document.querySelector('.sessions-page__content').getBoundingClientRect().width,
           viewport: innerWidth,
@@ -279,7 +281,7 @@ describe("remote responsive state behavior", () => {
         }
       })()`)
       expect(state.width).toBeGreaterThanOrEqual(width - 128)
-      expect(Math.abs(state.center - state.viewport / 2)).toBeLessThanOrEqual(2)
+      expect(Math.abs(state.center - state.contentCenter)).toBeLessThanOrEqual(2)
       expect(state.tableWidth).toBeGreaterThanOrEqual(state.contentWidth - 2)
       expect(state.rows).toBe(1)
       expect(state.columns).toBe(3)

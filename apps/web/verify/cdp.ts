@@ -5,9 +5,9 @@ import { join } from "node:path"
 
 type Pending = { readonly method: string; readonly resolve: (value: unknown) => void; readonly reject: (error: Error) => void }
 
-export async function launchBrowser(executable: string, width: number, height: number) {
+export async function launchBrowser(executable: string, width: number, height: number, options: { readonly scrollbars?: boolean } = {}) {
   const profile = mkdtempSync(join(tmpdir(), "ycoding-web-verify-"))
-  const child = spawn(executable, ["--headless", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--disable-gpu", "--enable-unsafe-swiftshader", "--hide-scrollbars", "about:blank"], { stdio: ["ignore", "pipe", "pipe"] })
+  const child = spawn(executable, ["--headless", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--disable-gpu", "--enable-unsafe-swiftshader", ...(options.scrollbars ? [] : ["--hide-scrollbars"]), "about:blank"], { stdio: ["ignore", "pipe", "pipe"] })
   const endpoint = await devtoolsEndpoint(child)
   const socket = new WebSocket(endpoint)
   await new Promise<void>((resolve, reject) => {
@@ -89,8 +89,19 @@ export async function launchBrowser(executable: string, width: number, height: n
         setReducedMotion: (reduce: boolean) => call("Emulation.setEmulatedMedia", {
           features: [{ name: "prefers-reduced-motion", value: reduce ? "reduce" : "no-preference" }],
         }),
+        setForcedColors: (active: boolean) => call("Emulation.setEmulatedMedia", {
+          features: [{ name: "forced-colors", value: active ? "active" : "none" }],
+        }),
+        mouse: (type: "mouseMoved" | "mousePressed" | "mouseReleased", x: number, y: number) => call("Input.dispatchMouseEvent", {
+          type,
+          x,
+          y,
+          button: type === "mouseMoved" ? "none" : "left",
+          buttons: type === "mousePressed" ? 1 : 0,
+          clickCount: type === "mouseMoved" ? 0 : 1,
+        }),
         async setCoarsePointer(enabled: boolean) {
-          await call("Emulation.setTouchEmulationEnabled", { enabled, maxTouchPoints: enabled ? 1 : 0 })
+          await call("Emulation.setTouchEmulationEnabled", { enabled, ...(enabled ? { maxTouchPoints: 1 } : {}) })
           await call("Emulation.setEmulatedMedia", {
             features: [{ name: "pointer", value: enabled ? "coarse" : "fine" }],
           })

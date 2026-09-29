@@ -109,6 +109,33 @@ describe("foreground accent contrast", () => {
   }
 })
 
+describe("scrollbar thumb contrast", () => {
+  const SURFACES = ["--yc-bg", "--yc-surface", "--yc-surface-raised", "--yc-surface-sunken", "--yc-terminal-bg"] as const
+  const STATES = [
+    { name: "rest", selector: "::-webkit-scrollbar-thumb" },
+    { name: "hover", selector: "::-webkit-scrollbar-thumb:hover" },
+    { name: "drag", selector: "::-webkit-scrollbar-thumb:active" },
+  ] as const
+
+  for (const theme of ["light", "dark"] as const) {
+    for (const state of STATES) {
+      test(`${theme} theme ${state.name} thumb reaches 3:1 on every surface a scroll region paints`, async () => {
+        const { base, themes } = await stylesheets()
+        const thumb = resolveColor(value(declarations(base, state.selector), "background-color"), themes[theme])
+        for (const surface of SURFACES) {
+          expect(contrastRatio(thumb, required(themes[theme], surface)), `${theme} ${surface}`).toBeGreaterThanOrEqual(3)
+        }
+      })
+    }
+  }
+
+  test("declares every thumb color token in the dark theme block", async () => {
+    const { base, overrides } = await stylesheets()
+    const referenced = STATES.map((state) => value(declarations(base, state.selector), "background-color").match(/^var\((--[a-z0-9-]+)\)$/)?.[1])
+    expect(referenced.every((token) => token !== undefined && overrides[token] !== undefined)).toBe(true)
+  })
+})
+
 describe("focus indicator token contrast", () => {
   for (const theme of ["light", "dark"] as const) {
     test(`${theme} focus color contrasts with page surfaces`, async () => {

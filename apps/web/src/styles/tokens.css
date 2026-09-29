@@ -122,6 +122,7 @@
   --yc-control-pad-x: 16px;
   --yc-focus-ring: 0 0 0 2px var(--yc-bg), 0 0 0 4px var(--yc-focus);
   --yc-border-width: 1px;
+  --yc-scrollbar-size: 12px;
 
   /* layout metrics — a header is one or two declared rows, never a row that
      compresses the controls inside it */
