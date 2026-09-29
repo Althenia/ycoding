@@ -169,6 +169,11 @@
 .new-session-composer__brand .brand__name { font-size:72px; line-height:1.1; }
 .new-session-composer__repository .mini-picker__trigger { min-block-size:36px; }
 .new-session-composer__refresh { display:grid; place-items:center; inline-size:36px; block-size:36px; border:0; border-radius:var(--yc-radius-pill); background:var(--yc-surface-sunken); color:var(--yc-text); cursor:pointer; }
+:root[data-theme="light"] .composer .composer__row,
+:root[data-theme="light"] .mini-picker__trigger,
+:root[data-theme="light"] .model-control__trigger { border-color:var(--yc-border-strong); }
+:root[data-theme="light"] .new-session-composer__refresh,
+:root[data-theme="light"] .composer__attach { border:1px solid var(--yc-border-strong); }
 @keyframes mini-float { from { opacity:0; transform:translateY(6px) scale(.96); } to { opacity:1; transform:translateY(0) scale(1); } }
 @keyframes mini-sheet-enter { from { opacity:0; transform:translateY(20px) scale(.98); } to { opacity:1; transform:translateY(0) scale(1); } }
 @keyframes mini-float-out { to { opacity:0; transform:translateY(6px) scale(.96); } }

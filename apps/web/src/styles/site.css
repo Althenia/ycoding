@@ -114,7 +114,7 @@
 .hero__content { position: relative; }
 
 @media (prefers-reduced-motion: no-preference) {
-  :root[data-motion="on"] .hero::before {
+  :root[data-theme="dark"][data-motion="on"] .hero::before {
     content: "";
     position: absolute;
     z-index: -1;
@@ -604,6 +604,17 @@
    the capabilities follow it as one group. */
 .hero--compact {
   padding-block: var(--yc-space-16) var(--yc-space-12);
+}
+
+.marketing > main:has(> .hero--compact) {
+  display: flex;
+  flex-direction: column;
+}
+
+.marketing > main > .hero--compact {
+  flex: 1;
+  display: grid;
+  align-content: center;
 }
 
 .hero--compact + .features {

@@ -193,10 +193,14 @@ Inherited R1–R8 apply. These web-specific rules are approved binding statement
 | W6 | approved | User transcript bubbles MUST be right-aligned; assistant content MUST remain left-aligned, and history paging MUST preserve the visible row. | `verify/transcript.integration.test.ts` |
 | W7 | approved | Fine-pointer scrollbars MUST use the owned treatment: a 12px gutter with a transparent track and corner, no arrow buttons, and a pill thumb 4px wide at rest in `--yc-border-strong` that widens to 8px under the pointer (`--yc-text-muted`) and while dragged (`--yc-green-strong`); coarse pointers and forced colors MUST keep platform scrollbars. From 768px with a fine pointer, primary scroll regions MUST reserve the gutter so overflow never shifts content, and Conversation rows outside the scroller MUST stop at the scroller's content edge while full-width bands reach the window edge. | `verify/scrollbar.integration.test.ts`, `src/styles/contrast.test.ts` |
 | W8 | approved | Popovers MUST appear beside their triggers without losing focus return, including portalled ones; sheets/dialogs MUST keep keyboard focus contained. | `verify/status-panel-motion.integration.test.ts`, `verify/composer-controls.integration.test.ts` |
+| W9 | approved | In the light theme, the public hero MUST remain neutral without the ambient green glow; the glow belongs to the dark hero only. Composer cards, picker outlines, and neutral circular icon actions MUST have boundaries of at least 3:1 against the white work surface without changing their size or dark-theme treatment. | `verify/light-office.integration.test.ts` |
+| W10 | approved | On a tall viewport, the landing hero MUST absorb spare vertical space while keeping its content centered; the capabilities section MUST meet the footer without a blank band in either theme. On short viewports, content MUST keep its natural height and remain scrollable. | `verify/light-office.integration.test.ts` |
 
 ## Colors
 
 Green is the single web accent. `--yc-green-strong` is foreground on page, raised, and soft-green surfaces; primary buttons instead use their dedicated pair because white on the bright dark green is only 1.65:1. `--yc-text-subtle` holds AA on sunken surfaces; `--yc-border-strong` holds 3:1 for active boundaries. Terminal plate inks stay constant across themes; semantic page surfaces and shadows change. Sources: `src/styles/tokens.css`, `src/styles/contrast.test.ts`.
+
+In light mode, the new-session and conversation composer use `--yc-border-strong` for their outline and neutral icon/picker boundaries against white. Dark mode retains its existing raised-surface treatment. The install command remains a dark code block in both themes: its constant terminal ink and surface distinguish executable code from page prose. The public hero's ambient green gradient is dark-theme only (`src/styles/site.css`, `src/styles/base.css`, `src/remote/ui/composer.css`, W9).
 
 ## Typography
 
@@ -205,6 +209,8 @@ Use `--yc-font-sans` for public titles and prose, `--yc-font-mono` for code and 
 ## Layout
 
 Use the 4px spacing scale, 1200px content maximum, stepped `--yc-gutter`, declared header/status rows, and rail widths. Center Conversation's transcript and composer as one column; reserve todo and composer space in document flow (`src/styles/remote.css`, `verify/transcript.integration.test.ts`). The owned scrollbar occupies layout space, so from 768px with a fine pointer `.workspace__scroll` reserves its gutter (Activity, whose panes run edge to edge, does not), and Conversation's main grid adds a `--yc-scrollbar-size` end column that only the scroller, the top bar, and the subagent bar span; the todo panel, jump controls, and composer end where the transcript column's content box ends (`src/styles/remote.css`, `verify/scrollbar.integration.test.ts`).
+
+The landing route alone uses a flexible hero before its fixed-height capabilities section. The hero centers its existing content as it grows so a tall viewport adds room around the opening statement rather than a blank strip after the cards; shorter screens retain ordinary page scrolling (`src/styles/site.css`, W10).
 
 ## Responsive
 
