@@ -23,6 +23,7 @@ async function harness(options: {
   guardrailRequests?: readonly unknown[]
   forms?: readonly unknown[]
   now?: () => number
+  paceLongTimers?: boolean
 } = {}): Promise<Harness> {
   const relay = await startRelayDouble({
     handler: options.handler,
@@ -35,10 +36,14 @@ async function harness(options: {
     advertisedSessions: ["ses_a", "ses_b"],
   })
   const timers: (() => void)[] = []
-  // Long-delay timers (request timeouts, keepalives) are left to the real clock so a
-  // manual flush only advances batching and reconnect backoff.
+  const longTimers = new Set<ReturnType<typeof setTimeout>>()
   const schedule = (callback: () => void, ms = 0) => {
-    if (ms >= 1_000) return () => {}
+    if (ms >= 1_000) {
+      if (!options.paceLongTimers || ms > 10_000) return () => {}
+      const timer = setTimeout(() => { longTimers.delete(timer); callback() }, ms)
+      longTimers.add(timer)
+      return () => { clearTimeout(timer); longTimers.delete(timer) }
+    }
     timers.push(callback)
     return () => {
       const index = timers.indexOf(callback)
@@ -74,6 +79,7 @@ async function harness(options: {
     runUntil,
     stop: async () => {
       store.dispose()
+      longTimers.forEach(clearTimeout)
       await relay.stop()
     },
   }
@@ -408,7 +414,7 @@ describe("remote store integration", () => {
   })
 
   test("filters the sidebar to matching rows and resets search and status when a Session opens", async () => {
-    const test = await harness({ handler: (request) => {
+    const test = await harness({ paceLongTimers: true, handler: (request) => {
       if (request.operation === "workspace.list") return { ok: true, value: { data: [
         { id: "wsp_work", projectID: "prj_work", directory: "/work" },
         { id: "wsp_other", projectID: "prj_other", directory: "/other" },
@@ -442,12 +448,12 @@ describe("remote store integration", () => {
       test.store.searchSessions("no match", "idle")
       await test.runUntil(() => test.store.state().sessionListStatus === "ready" && test.store.state().sessionQuery === "no match")
       void test.store.selectSession("ses_b")
-      await test.runUntil(() => test.store.state().selectedWorkspaceID === "wsp_other" && test.store.state().sessionListStatus === "ready")
+      await test.runUntil(() => test.store.state().selectedWorkspaceID === "wsp_other" && test.store.state().sessionListStatus === "ready", 500)
       expect(test.store.state().sessionQuery).toBe("")
       expect(test.store.state().sessionFilter).toBe("all")
       expect(test.store.state().sessions.map((session) => session.id)).toEqual(["ses_b"])
     } finally { await test.stop() }
-  })
+  }, 15_000)
   test("loads the owner, connects the only device, and lists advertised sessions", async () => {
     const test = await harness()
     try {
@@ -2136,6 +2142,9 @@ describe("remote store integration", () => {
       expect(prompt?.sessionID).toBe("ses_a")
       expect(test.store.state().mutations).toHaveLength(0)
       expect(test.store.state().view?.messages.at(-1)).toMatchObject({ kind: "user", id: "msg_local_1", text: "Run the tests", delivery: "queue" })
+      expect(test.store.state().mutationToasts?.at(-1)).toMatchObject({ id: "msg_local_1", state: "sent" })
+      test.store.dismissMutationToast("msg_local_1")
+      expect(test.store.state().mutationToasts).toEqual([])
     } finally {
       await test.stop()
     }
@@ -2160,6 +2169,7 @@ describe("remote store integration", () => {
       const mutation = test.store.state().mutations[0]
       expect(mutation?.state).toBe("unknown")
       expect(mutation?.detail).toContain("Outcome unknown")
+      expect(test.store.state().mutationToasts?.at(-1)).toMatchObject({ id: mutation?.id, state: "unknown" })
       if (!mutation) throw new Error("expected an unsettled mutation")
 
       await test.runUntil(() => test.store.state().transport.kind === "open")
@@ -2172,6 +2182,26 @@ describe("remote store integration", () => {
     } finally {
       await test.stop()
     }
+  })
+
+  test("an admitted pending read resolves an uncertain prompt without replaying it", async () => {
+    const test = await harness({ handler: (request) => {
+      if (request.operation === "session.prompt") return "close"
+      if (request.operation === "session.pending.list") return { ok: true, value: { data: [{ id: "msg_local_1", sessionID: "ses_a", admittedSeq: 2, timeCreated: 2,
+        type: "user", data: { text: "Continue safely" }, delivery: "steer" }] } }
+      return "default"
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      await test.store.sendPrompt({ text: "Continue safely", delivery: "steer" })
+      await test.runUntil(() => test.store.state().transport.kind === "open")
+      await test.runUntil(() => test.store.state().mutations.every((mutation) => mutation.id !== "msg_local_1"))
+      expect(test.store.state().view?.messages.filter((message) => message.id === "msg_local_1")).toHaveLength(1)
+      expect(test.store.state().mutationToasts?.find((toast) => toast.id === "msg_local_1")?.state).toBe("sent")
+      expect(test.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(1)
+    } finally { await test.stop() }
   })
 
   test("replies to permission, guardrail, and native form requests with protocol payloads", async () => {
@@ -2383,6 +2413,7 @@ describe("remote store integration", () => {
       await test.store.replyPermission("per_1", "once")
       expect(test.store.state().view?.requests.map((request) => request.id)).toEqual(["per_1"])
       expect(test.store.state().mutations.some((mutation) => mutation.state === "failed")).toBe(true)
+      expect(test.store.state().mutationToasts?.at(-1)).toMatchObject({ state: "failed" })
     } finally {
       await test.stop()
     }
@@ -2412,6 +2443,40 @@ describe("remote store integration", () => {
     } finally {
       await test.stop()
     }
+  })
+
+  test("reconciles an unknown goal outcome from authoritative autonomy without resending", async () => {
+    let goal = false
+    const test = await harness({ handler: (request) => {
+      if (request.operation === "session.goal.set") { goal = true; return { ok: false, code: "outcome_unknown", message: "Request timed out" } }
+      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: { mode: "normal", yolo: 0,
+        ...(goal ? { goal: { text: "Ship the workspace", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } } : {}) } } }
+      return "default"
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      await test.store.setGoal("Ship the workspace")
+      expect(test.relay.requests.filter((request) => request.operation === "session.goal.set")).toHaveLength(1)
+      expect(test.relay.requests.filter((request) => request.operation === "session.autonomy.get").length).toBeGreaterThanOrEqual(2)
+      expect(test.store.state().view?.autonomy?.goal?.status).toBe("active")
+      expect(test.store.state().mutations.some((mutation) => mutation.kind === "goal" && mutation.state === "unknown")).toBe(false)
+    } finally { await test.stop() }
+  })
+
+  test("keeps an unconfirmed goal outcome retryable after an autonomy read", async () => {
+    const test = await harness({ handler: (request) => request.operation === "session.goal.set"
+      ? { ok: false, code: "outcome_unknown", message: "Request timed out" } : "default" })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      expect(await test.store.setGoal("Inspect the migration")).toBe(false)
+      expect(test.store.state().view?.autonomy?.goal).toBeUndefined()
+      expect(test.store.state().mutations.find((mutation) => mutation.kind === "goal")).toMatchObject({ state: "unknown" })
+      expect(test.relay.requests.filter((request) => request.operation === "session.goal.set")).toHaveLength(1)
+    } finally { await test.stop() }
   })
 
   test("interrupts the active session", async () => {

@@ -26,6 +26,7 @@ import {
   readFileChangeEvent,
   readFileChangeList,
   readModelRef,
+  readPendingInputs,
   readShellOutputPage,
   sealedPartKeys,
   readGuardrailRequests,
@@ -37,6 +38,7 @@ import {
   readTeamCue,
   replaceFileChanges,
   replaceRequests,
+  reconcilePendingInputs,
   shellOutputFetchFor,
   shellOutputFor,
   withShellOutputFetch,
@@ -161,7 +163,10 @@ export type PendingMutation = {
   readonly sessionID: string
   readonly operation: RemoteOperation
   readonly input: Readonly<Record<string, unknown>>
+  readonly created?: number
 }
+
+export type MutationToast = { readonly id: string; readonly label: string; readonly state: "sent" | "failed" | "unknown"; readonly detail?: string; readonly sessionID: string }
 
 export type SessionCreation = {
   readonly id: string
@@ -212,6 +217,7 @@ export type RemoteStoreState = {
   readonly transport: RemoteTransportStatus
   readonly lastRelayDrop?: { readonly code: number; readonly reason: string }
   readonly mutations: readonly PendingMutation[]
+  readonly mutationToasts?: readonly MutationToast[]
   readonly notice?: string
   readonly upload?: { readonly sessionID: string; readonly name: string; readonly percent: number }
   readonly uploadError?: string
@@ -284,6 +290,7 @@ export type RemoteStore = {
   readonly switchAgent: (agent: string) => Promise<boolean>
   readonly retryMutation: (id: string) => Promise<void>
   readonly dismissMutation: (id: string) => void
+  readonly dismissMutationToast: (id: string) => void
   readonly dismissNotification: (id: string) => void
   readonly markNotificationsRead: () => void
   readonly clearNotifications: () => void
@@ -364,6 +371,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     workspaces: [],
     workspaceStatus: "idle",
     mutations: [],
+    mutationToasts: [],
     teamCues: [],
     notifications: [],
     transport: { kind: "idle" },
@@ -441,6 +449,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   let subscribedSessionID: string | undefined
   let sealed: { readonly sessionID: string; readonly parts: Set<string>; readonly covered: Set<string> } | undefined
   let hydration: HydrationWindow | undefined
+  let pendingRead: { readonly sessionID: string; readonly token: number; readonly promoted: Set<string> } | undefined
+  let resyncRead: Promise<void> | undefined
+  let resyncTarget: { readonly owner: RemoteTransport; readonly sessionID: string; readonly token: number } | undefined
+  let resyncAgain = false
   /**
    * Live file changes that arrive while a ledger read is pending. The read describes
    * the device's ledger at one instant; a record this client applied after the read was
@@ -602,6 +614,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (type === "session.input.promoted") {
         const data = typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "data") : undefined
         const inputID = data && typeof data === "object" ? Reflect.get(data, "inputID") : undefined
+        if (typeof inputID === "string" && pendingRead?.sessionID === item.sessionID) pendingRead.promoted.add(inputID)
         if (typeof inputID === "string" && view.messages.some((message) => message.kind === "oversized" && message.id === inputID)) {
           view = { ...view, messages: view.messages.map((message) => message.kind === "oversized" && message.id === inputID ? { ...message, projected: true, state: "loading" } : message) }
           oversizedIDs.add(inputID)
@@ -676,7 +689,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     })) scheduleCapturedRefresh()
     if (batch.some((item) => typeof item.event === "object" && item.event !== null && Reflect.get(item.event, "type") === "session.compaction.started") &&
       state.activeSessionID !== undefined) void loadCompactionHistory(state.activeSessionID, selectionToken)
-    if (gap) void reloadSnapshot(state.activeSessionID, selectionToken)
+    if (gap) void resyncSelected()
     oversizedIDs.forEach((id) => {
       oversizedReads.get(id)?.abort()
       oversizedReads.delete(id)
@@ -1010,7 +1023,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     setState({ mutations: [...state.mutations.filter((entry) => entry.id !== mutation.id), mutation] })
     const outcome = await active.request(mutation.operation, { sessionID: options.sessionID, input: mutation.input })
     if (outcome.status === "ok") {
-      setState({ mutations: state.mutations.filter((entry) => entry.id !== mutation.id) })
+      setState({ mutations: state.mutations.filter((entry) => entry.id !== mutation.id),
+        mutationToasts: [...(state.mutationToasts ?? []).filter((entry) => entry.id !== mutation.id), { id: mutation.id, label: mutation.label, state: "sent" as const, sessionID: mutation.sessionID }].slice(-3) })
       return outcome
     }
     if (outcome.status === "unknown") {
@@ -1030,8 +1044,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
 
   const finishMutation = (id: string, mutationState: PendingMutation["state"], detail: string) => {
+    const mutation = state.mutations.find((entry) => entry.id === id)
     setState({
       mutations: state.mutations.map((entry) => (entry.id === id ? { ...entry, state: mutationState, detail } : entry)),
+      ...(mutation === undefined ? {} : { mutationToasts: [...(state.mutationToasts ?? []).filter((entry) => entry.id !== id), { id, label: mutation.label, state: mutationState === "unknown" ? "unknown" as const : "failed" as const, detail, sessionID: mutation.sessionID }].slice(-3) }),
     })
   }
 
@@ -1055,7 +1071,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return "stale"
     }
     const combined = base === undefined ? snapshot.messages : [
-      ...base.messages.filter((message) => (olderMessageIDs.has(message.id) || message.kind === "oversized" && message.state === "pending") && !snapshot.messages.some((fresh) => fresh.id === message.id)),
+      ...base.messages.filter((message) => (olderMessageIDs.has(message.id) || message.kind === "oversized" && message.state === "pending" || message.kind === "user" && message.state === "pending" || message.kind === "synthetic" && message.pending === true) && !snapshot.messages.some((fresh) => fresh.id === message.id)),
       ...snapshot.messages,
     ]
     const projected: SessionView = {
@@ -1071,7 +1087,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       watermark: snapshot.watermark,
       ...(snapshot.sourceEpoch === undefined ? {} : { sourceEpoch: snapshot.sourceEpoch }),
     }
-    const view = state.sessionStatus === undefined ? projected : reconcileSessionStatus(projected, state.sessionStatus,
+    const unsynced = state.mutations.flatMap((mutation): RemoteMessageView[] => {
+      if (mutation.kind !== "prompt" || mutation.sessionID !== sessionID || projected.messages.some((message) => message.id === mutation.id) || typeof mutation.input.text !== "string") return []
+      return [{ kind: "user", id: mutation.id, text: mutation.input.text,
+        delivery: mutation.input.delivery === "queue" ? "queue" : "steer", state: "pending", created: mutation.created ?? now() }]
+    })
+    const resident = unsynced.length === 0 ? projected : { ...projected, messages: visibleTranscript([...projected.messages, ...unsynced]) }
+    const view = state.sessionStatus === undefined ? resident : reconcileSessionStatus(resident, state.sessionStatus,
       snapshot.parentID ?? (state.selectedSessionInfo?.id === sessionID ? state.selectedSessionInfo.parentID : undefined))
     return { view, before: snapshot.before, coveredAssistantIDs: [...new Set([
       ...snapshot.coveredAssistantIDs,
@@ -1103,6 +1125,30 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const loaded = outcome?.status === "ok" ? readTodos(typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined) : undefined
       setState({ todos: read.live ?? loaded })
     } finally { if (todoRead === read) todoRead = undefined }
+  }
+
+  const loadPendingInputs = async (owner: RemoteTransport, sessionID: string, token: number) => {
+    const read = { sessionID, token, promoted: new Set<string>() }
+    pendingRead = read
+    try {
+      const outcome = await owner.request("session.pending.list", { sessionID })
+      if (token !== selectionToken || !isCurrentConnection(owner) || state.activeSessionID !== sessionID || pendingRead !== read || !state.view) return
+      if (outcome.status === "failed") {
+        setState({ notice: outcome.error.code === "unknown_operation"
+          ? "Update the connected device to restore pending prompts."
+          : describeOutcome(outcome, "Pending prompts") })
+        return
+      }
+      const pending = outcome.status === "ok" ? readPendingInputs(outcome.value, sessionID) : undefined
+      if (pending === undefined) return
+      const retained = new Set(state.mutations.filter((mutation) => mutation.sessionID === sessionID && mutation.kind === "prompt").map((mutation) => mutation.id))
+      const confirmed = new Set([...pending.map((entry) => entry.id),
+        ...state.view.messages.flatMap((message) => message.kind === "user" && message.state !== "pending" ? [message.id] : [])])
+      const resolved = state.mutations.filter((mutation) => mutation.kind === "prompt" && mutation.sessionID === sessionID && confirmed.has(mutation.id))
+      setState({ view: reconcilePendingInputs(state.view, pending.filter((entry) => !read.promoted.has(entry.id)), retained),
+        mutations: state.mutations.filter((mutation) => !resolved.includes(mutation)),
+        mutationToasts: state.mutationToasts?.map((toast) => resolved.some((mutation) => mutation.id === toast.id) ? { ...toast, state: "sent" as const, detail: undefined } : toast) })
+    } finally { if (pendingRead === read) pendingRead = undefined }
   }
 
   const loadSessionReads = async (sessionID: string, token: number, notice?: string) => {
@@ -1756,7 +1802,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (teamWatching && !sameFamily) void loadTeam(active, token, rootID)
       if (sameFamily && activityWatching) void loadFamilyActivity(active, rootID)
       void loadCapturedChanges(active, sessionID, token)
-      await loadSessionReads(sessionID, token)
+      await Promise.all([loadSessionReads(sessionID, token), loadPendingInputs(active, sessionID, token)])
     }
     try {
       const outcome = await readSnapshotPayload(sessionID)
@@ -1793,13 +1839,37 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     } finally {
       if (hydration === owned) hydration = undefined
     }
-    await loadSessionReads(sessionID, token)
+    await Promise.all([loadSessionReads(sessionID, token), loadPendingInputs(active, sessionID, token)])
+  }
+
+  const resyncSelected = (): Promise<void> => {
+    const owner = transport
+    const sessionID = state.activeSessionID
+    const token = selectionToken
+    if (!owner || !sessionID || subscribedSessionID !== sessionID || selectionReadyToken !== token) return Promise.resolve()
+    if (resyncRead) {
+      if (resyncTarget?.owner === owner && resyncTarget.sessionID === sessionID && resyncTarget.token === token) {
+        resyncAgain = true
+        return resyncRead
+      }
+      return resyncRead.then(() => resyncSelected())
+    }
+    const run = (async () => {
+      do {
+        resyncAgain = false
+        await reloadSnapshot(sessionID, token)
+        if (token !== selectionToken || !isCurrentConnection(owner) || state.activeSessionID !== sessionID) return
+        await Promise.all([loadSessionReads(sessionID, token), loadPendingInputs(owner, sessionID, token)])
+      } while (resyncAgain && token === selectionToken && isCurrentConnection(owner))
+    })()
+    resyncRead = run
+    resyncTarget = { owner, sessionID, token }
+    void run.then(() => { if (resyncRead === run) { resyncRead = undefined; resyncTarget = undefined } }, () => { if (resyncRead === run) { resyncRead = undefined; resyncTarget = undefined } })
+    return run
   }
 
   const reloadMessages = async () => {
-    const sessionID = state.activeSessionID
-    if (sessionID === undefined) return
-    await reloadSnapshot(sessionID, selectionToken)
+    await resyncSelected()
   }
 
   const loadWorkspaces = async () => {
@@ -2010,6 +2080,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       sessionHasNext: false,
       sessionHasPrevious: false,
       drafts: {},
+      mutationToasts: [],
       workspaces: [],
       workspaceStatus: "idle",
       workspaceError: undefined,
@@ -2186,6 +2257,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       sessionsToken += 1
       workspacesToken += 1
       setState({ activeDeviceID: deviceID, transport: { kind: "idle" }, sessions: [], carouselSessions: [], carouselStatus: "loading", sessionStatus: undefined, advertised: [], activeSessionID: undefined, view: undefined, notice: undefined, drafts,
+        mutationToasts: [],
         lastRelayDrop: state.activeDeviceID === deviceID ? state.lastRelayDrop : undefined,
         team: undefined, familyActivity: undefined, teamCues: [], todos: undefined,
         sessionGroups: [], selectedWorkspaceID: undefined, selectedSessionInfo: undefined, sessionQuery: "", sessionFilter: "all",
@@ -2210,6 +2282,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           sessionsToken += 1
           setState({ sessionListStatus: "loading" })
           void refreshSessionGroups(created)
+          if (selectionReadyToken === selectionToken && subscribedSessionID === state.activeSessionID) void resyncSelected()
         },
         onEvent: (sessionID, event) => {
           if (!isCurrentConnection(created)) return
@@ -2608,6 +2681,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
             kind: "prompt",
             label: input.delivery === "queue" ? "Queued prompt" : "Prompt",
             state: "sending",
+            created: optimistic.created,
             sessionID,
             operation: "session.prompt",
             input: { id: messageID, text, delivery: input.delivery,
@@ -2660,6 +2734,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     },
     dismissMutation: (id) => {
       setState({ mutations: state.mutations.filter((entry) => entry.id !== id) })
+    },
+    dismissMutationToast: (id) => {
+      setState({ mutationToasts: (state.mutationToasts ?? []).filter((entry) => entry.id !== id) })
     },
     dismissNotification: (id) => {
       delivery.dismiss(id)
@@ -2776,9 +2853,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const sessionID = state.activeSessionID
       const token = selectionToken
       if (sessionID === undefined) return false
+      const previousGoal = state.view?.autonomy?.goal
+      const id = `goal_${now()}`
       const outcome = await request(
         {
-          id: `goal_${now()}`,
+          id,
           kind: "goal",
           label: "Set goal",
           state: "sending",
@@ -2789,6 +2868,21 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         { sessionID },
       )
       applyAutonomyResponse(outcome, sessionID)
+      if (outcome.status === "unknown" || outcome.status === "failed" && outcome.error.code === "outcome_unknown") {
+        const owner = transport
+        const resolved = await owner?.request("session.autonomy.get", { sessionID })
+        if (token !== selectionToken || state.activeSessionID !== sessionID || owner === undefined || !isCurrentConnection(owner)) return false
+        if (resolved?.status === "ok") {
+          applyAutonomyResponse(resolved, sessionID)
+          const goal = readAutonomy(resolved.value)?.goal
+          if (goal?.status === "active" && (previousGoal?.status !== "active" || previousGoal.text !== goal.text)) {
+            setState({ mutations: state.mutations.filter((mutation) => mutation.id !== id),
+              mutationToasts: state.mutationToasts?.map((toast) => toast.id === id ? { ...toast, state: "sent" as const, detail: undefined } : toast) })
+            return true
+          }
+        }
+        finishMutation(id, "unknown", "The goal was not confirmed by the current Session state. Check again before retrying.")
+      }
       return outcome.status === "ok" && token === selectionToken && state.activeSessionID === sessionID
     },
     stopGoal: async () => {
@@ -2901,7 +2995,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     compactionAttemptedToken = undefined
     const reloaded = await reloadSnapshot(sessionID, token)
     if (!isCurrentConnection(owner)) return
-    await loadSessionReads(sessionID, token)
+    await Promise.all([loadSessionReads(sessionID, token), loadPendingInputs(owner, sessionID, token)])
     if (isCurrentConnection(owner)) void loadCapturedChanges(owner, sessionID, token)
     if (!isCurrentConnection(owner)) return
     if (reloaded === "applied") {

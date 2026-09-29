@@ -18,6 +18,27 @@ import {
   successFrames,
 } from "../src/remote-operations"
 
+test("reads admitted pending prompts at their verified Session Location", async () => {
+  const pending = [{ id: "msg_pending", sessionID: "ses_1", admittedSeq: 3, timeCreated: 100,
+    type: "user", data: { text: "Continue work" }, delivery: "queue" }]
+  const fixture = await harness({ sessions: [sessionInfo("ses_1", { updated: 1 })], results: { pendingList: pending } })
+  const value = valueOf(await executeRemoteOperation({ request: { ...request("session.pending.list"), sessionID: "ses_1" },
+    local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions }))
+  expect(value).toEqual({ data: pending })
+  expect(fixture.calls.filter((call) => call.method === "pendingList")).toEqual([{ method: "pendingList", args: ["ses_1", { directory: "/work" }] }])
+  expect(errorOf(await executeRemoteOperation({ request: { ...request("session.pending.list"), sessionID: "ses_other" },
+    local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions })).code).toBe("session_not_allowed")
+  expect(fixture.calls.filter((call) => call.method === "pendingList")).toHaveLength(1)
+})
+
+test("refuses an oversized pending inventory rather than silently dropping prompts", async () => {
+  const pending = Array.from({ length: 201 }, (_, index) => ({ id: `msg_${index}`, sessionID: "ses_1", admittedSeq: index,
+    timeCreated: index, type: "user", data: { text: `Prompt ${index}` }, delivery: "queue" }))
+  const fixture = await harness({ sessions: [sessionInfo("ses_1", { updated: 1 })], results: { pendingList: pending } })
+  expect(errorOf(await executeRemoteOperation({ request: { ...request("session.pending.list"), sessionID: "ses_1" },
+    local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions })).code).toBe("message_too_large")
+})
+
 test("uploaded chunks resolve only for their Session and reach the local prompt as a canonical data URL", async () => {
   const test = await harness({ sessions: [sessionInfo("ses_1", { updated: 1 }), sessionInfo("ses_2", { updated: 1 })], results: { prompt: { id: "msg_1" }, command: { id: "msg_2" } } })
   const uploads = createAttachmentUploads()
@@ -342,6 +363,7 @@ const readOperations = [
   "session.messages",
   "session.compaction.list",
   "session.snapshot",
+  "session.pending.list",
   "session.todo.list",
   "session.active",
   "session.log",
@@ -1302,6 +1324,7 @@ function readMethod(operation: (typeof readOperations)[number]) {
     "session.messages": "messages",
     "session.compaction.list": "messages",
     "session.snapshot": "snapshot",
+    "session.pending.list": "pendingList",
     "session.todo.list": "todoList",
     "session.active": "activeSessions",
     "session.log": "log",

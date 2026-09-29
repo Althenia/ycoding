@@ -92,6 +92,7 @@ export type LocalServer = {
   readonly resourceCatalog: (location: LocalLocation) => Promise<McpResourceCatalog>
   readonly fileFind: (location: LocalLocation, query: string, limit: number) => Promise<readonly FileSystemEntry[]>
   readonly snapshot: (sessionID: string, location: LocalLocation, options?: { readonly limit?: number; readonly before?: string }) => Promise<unknown>
+  readonly pendingList: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly attachmentRead: (sessionID: string, location: LocalLocation, digest: string) => Promise<{ readonly mime: string; readonly bytes: number; readonly data: string }>
   readonly messageRead: (sessionID: string, location: LocalLocation, messageID: string, signal?: AbortSignal) => Promise<SessionMessageInfo>
   readonly todoList: (sessionID: string, location: LocalLocation) => Promise<unknown>
@@ -220,6 +221,8 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     fileFind: (location, query, limit) => call(async () => (await client.file.find({ query, limit }, request(location, timeoutMs))).data),
     snapshot: (sessionID, location, options) =>
       call(() => client.session.snapshot({ sessionID, ...options }, request(location, timeoutMs))),
+    pendingList: (sessionID, location) =>
+      call(() => client.session.pending.list({ sessionID }, request(location, timeoutMs))),
     attachmentRead: (sessionID, location, digest) =>
       call(() => client.session.attachment.read({ sessionID, digest }, request(location, timeoutMs))),
     messageRead: (sessionID, location, messageID, signal) =>

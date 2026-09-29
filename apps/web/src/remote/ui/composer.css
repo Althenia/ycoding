@@ -1,4 +1,15 @@
 .mini-composer__mount { min-inline-size: 0; }
+.mutation-toasts { position:fixed; z-index:var(--yc-z-toast); inset-block-start:calc(var(--yc-header-h) + var(--yc-space-2)); inset-inline-end:var(--yc-gutter); display:grid; gap:var(--yc-space-2); inline-size:min(360px,calc(100vw - 2 * var(--yc-gutter))); pointer-events:none; }
+.mutation-toast { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:var(--yc-space-1) var(--yc-space-2); align-items:center; padding:var(--yc-space-3); border:1px solid var(--yc-border-strong); border-inline-start:3px solid var(--yc-green-strong); border-radius:var(--yc-radius-xl); background:var(--yc-surface-raised); box-shadow:var(--yc-shadow-lg); color:var(--yc-text); font:var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); pointer-events:auto; animation:mutation-toast-in var(--yc-dur-base) var(--yc-ease-entrance) both; }
+.mutation-toast--unknown { border-inline-start-color:var(--yc-yellow-strong); }
+.mutation-toast--failed { border-inline-start-color:var(--yc-danger); }
+.mutation-toast strong,.mutation-toast span { min-inline-size:0; overflow-wrap:anywhere; }
+.mutation-toast span { grid-column:1; color:var(--yc-text-muted); }
+.mutation-toast button { grid-column:2; grid-row:1 / span 2; inline-size:36px; block-size:36px; border:0; border-radius:var(--yc-radius-pill); background:transparent; color:var(--yc-text); cursor:pointer; }
+.mutation-toast button:focus-visible { outline:2px solid var(--yc-focus); outline-offset:2px; }
+@keyframes mutation-toast-in { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:none; } }
+@media (pointer:coarse) { .mutation-toast button { inline-size:var(--yc-hit-min); block-size:var(--yc-hit-min); } }
+@media (prefers-reduced-motion:reduce) { .mutation-toast { animation:none; } }
 .composer__mobile-identity { display:none; }
 .composer__mobile-trigger { display:flex; align-items:center; justify-content:space-between; gap:var(--yc-space-2); inline-size:100%; min-block-size:44px; padding-inline:var(--yc-space-3); border:1px solid var(--yc-border); border-radius:var(--yc-radius-lg); background:var(--yc-surface-raised); color:var(--yc-text); font:var(--yc-weight-medium) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); cursor:pointer; }
 .composer__mobile-trigger span { min-inline-size:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

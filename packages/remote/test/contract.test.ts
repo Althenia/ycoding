@@ -451,6 +451,7 @@ describe("remote operations", () => {
       "session.capturedChanges.list",
       "session.compaction.list",
       "session.snapshot",
+      "session.pending.list",
       "session.attachment.read",
       "session.message.stream",
       "session.todo.list",
@@ -542,6 +543,7 @@ describe("remote operations", () => {
 
     const reads: readonly RemoteOperation[] = [
       "session.snapshot",
+      "session.pending.list",
       "session.compaction.list",
       "session.permission.list",
       "session.guardrail.status",

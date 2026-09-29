@@ -274,6 +274,10 @@ The tokens/states below describe current selectors and owners, not a new compone
 
 Use concise action labels and explicit pending, error, and unknown states. On remote screens, distinguish account, machine, Session, and child status; unknown provider quotas are unreported, not zero. The carousel orders active roots before recent idle roots; file-change counts match every expanded diff, and compaction recovery shows each path's latest recorded patch with its own counts (`docs/runtime.md`, `verify/running-sessions.integration.test.ts`, `verify/file-change-card.integration.test.ts`).
 
+## Mutation feedback
+
+Composer mutations report sent, failed, and unknown outcomes in dismissible, accessible toasts above the workspace using the toast layer and semantic success, warning, or danger roles. Failed and unknown prompts retain an actionable status on their transcript message; a retry reuses its message identity. Reduced motion removes toast travel without hiding the outcome. An admitted steer displays Processing until promotion; a queued input displays Queued until promotion. The composer status row names an active goal without relying on color or an opened popover (`verify/composer-controls.integration.test.ts`, `verify/remote-shell-layout.integration.test.ts`).
+
 ## Touchpoints
 
 Public routes, documentation, changelog, remote workspace, offline shell, installed app icons, and browser theme-color use the same semantics but their route compositions remain owned by `site.css`, `docs.css`, `remote.css`, and the app shell. Use the canonical mark variants in `../../assets/brand` rather than a screenshot-derived approximation (`verify/pwa-shell.integration.test.ts`, `../../assets/brand/README.md`).

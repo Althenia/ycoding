@@ -1846,40 +1846,6 @@ body:has(.app) {
   }
 }
 
-.mutation {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--yc-space-2);
-  padding: var(--yc-space-2) var(--yc-space-3);
-  margin-block-end: var(--yc-space-2);
-  border-radius: var(--yc-radius-sm);
-  border: var(--yc-border-width) solid var(--yc-border);
-  background: var(--yc-surface);
-  font-size: var(--yc-size-2xs);
-  color: var(--yc-text-muted);
-}
-
-.mutation--unknown {
-  border-color: color-mix(in srgb, var(--yc-yellow) 45%, var(--yc-border));
-  background: var(--yc-yellow-soft);
-  color: var(--yc-yellow-strong);
-}
-
-.mutation--failed {
-  border-color: color-mix(in srgb, var(--yc-danger) 45%, var(--yc-border));
-  background: var(--yc-danger-soft);
-  color: var(--yc-danger);
-}
-
-.mutation__label {
-  font-weight: var(--yc-weight-semibold);
-}
-
-.mutation__detail {
-  color: inherit;
-}
-
 /* --- compact navigation ------------------------------------------------- */
 
 .bottom-nav {

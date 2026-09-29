@@ -27,6 +27,7 @@ type Relay = {
   readonly deliver: (frame: unknown) => void
   readonly createConnection: (input: ConnectionInput) => RelayConnection
   readonly onSent: (listener: (frame: SentValue) => void) => void
+  readonly dropEvents: (drop: boolean) => void
 }
 
 function createRelay(): Relay {
@@ -34,6 +35,7 @@ function createRelay(): Relay {
   let handler: ((frame: unknown) => void) | undefined
   let connection: ConnectionInput | undefined
   let listener: ((frame: SentValue) => void) | undefined
+  let droppingEvents = false
   return {
     input: () => {
       if (connection === undefined) throw new Error("the bridge has not connected")
@@ -41,6 +43,7 @@ function createRelay(): Relay {
     },
     sent: () => values,
     onSent: (next) => { listener = next },
+    dropEvents: (drop) => { droppingEvents = drop },
     responses: () => values.filter((value) => value.type === "response") as unknown as readonly RemoteResponse[],
     events: () =>
       values.filter((value) => value.type === "event") as unknown as readonly {
@@ -55,6 +58,7 @@ function createRelay(): Relay {
         send: async (value: string) => {
           const parsed = parseAgentMessage(value)
           if (!parsed.ok) throw new Error(`bridge sent an invalid frame: ${parsed.error.code}`)
+          if (droppingEvents && parsed.value.type === "event") return
           values.push(parsed.value as unknown as SentValue)
           listener?.(parsed.value as unknown as SentValue)
         },
@@ -67,10 +71,10 @@ function createRelay(): Relay {
   }
 }
 
-async function waitFor<Value>(check: () => Value | undefined, timeout = 15_000) {
+async function waitFor<Value>(check: () => Value | undefined | Promise<Value | undefined>, timeout = 15_000) {
   const deadline = Date.now() + timeout
   for (;;) {
-    const value = check()
+    const value = await check()
     if (value !== undefined) return value
     if (Date.now() >= deadline) throw new Error("condition timed out")
     await Bun.sleep(10)
@@ -288,6 +292,85 @@ const goalRequest = "keep the remote bridge honest"
 // The synthesized goal text comes from the loopback stand-in, not from the request,
 // so a projected goal text is proof that the model boundary ran.
 const synthesizedGoal = "Keep the remote bridge honest across reconnects and restarts."
+
+test("a disconnected connector reconciles a promoted prompt from the real server into one web row", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ycoding-prompt-resync-"))
+  const server = await startServer(directory, { provider: { text: "Work completed.", holdAfter: 0 } })
+  const relay = createRelay()
+  const bridge = new RemoteAgent({
+    relayURL: "https://relay.example",
+    local: createLocalServer({ url: server.base, auth: { type: "basic", username: "ycoding", password } }),
+    credentials: async () => ({ accessToken: "integration-token", accessExpiresAt: Date.now() + 600_000 }),
+    createConnection: relay.createConnection,
+    refreshIntervalMs: 3_600_000,
+  })
+  const device = { id: "dev_test", name: "Test", createdAt: 1, status: "active" as const, online: true }
+  const http: RemoteHttp = {
+    me: async () => ({ ok: true, value: { user: { id: "usr_test" }, session: { expiresAt: Date.now() + 600_000 }, devices: [device] } }),
+    devices: async () => ({ ok: true, value: [device] }),
+    createEnrollment: async () => ({ ok: false, status: 403, kind: "http", message: "Unavailable" }),
+    revokeDevice: async () => ({ ok: false, status: 403, kind: "http", message: "Unavailable" }),
+    removeRevokedDevices: async () => ({ ok: false, status: 403, kind: "http", message: "Unavailable" }),
+    logout: async () => ({ ok: true, value: undefined }),
+  }
+  let nextID = 0
+  let handlers: RemoteTransportHandlers | undefined
+  const store = createRemoteStore({ http, createTransport: (_deviceID, next): RemoteTransport => {
+    handlers = next
+    return {
+      connect: () => queueMicrotask(() => { next.onStatus?.({ kind: "open" }); next.onSessions?.() }),
+      close: () => next.onStatus?.({ kind: "idle" }),
+      status: () => ({ kind: "open" }),
+      request: async (operation, options) => {
+        const id = `req_pending_${++nextID}`
+        relay.deliver(request(id, operation, options?.sessionID, options?.input ? { ...options.input } : undefined))
+        const response = await answer(relay, id)
+        if (response.ok && operation === "session.subscribe" && options?.sessionID)
+          relay.deliver({ type: "subscriptions", clientID: "client-pending", sessionIDs: [options.sessionID] })
+        return response.ok ? { status: "ok", value: response.value } : { status: "failed", error: response.error }
+      },
+    }
+  } })
+  relay.onSent((frame) => {
+    if (frame.type === "event" && typeof frame.sessionID === "string") handlers?.onEvent?.(frame.sessionID, frame.event)
+    if (frame.type === "sessions") handlers?.onSessions?.()
+    if (frame.type === "status" && Array.isArray(frame.running) && Array.isArray(frame.attention))
+      handlers?.onSessionStatus?.({ running: frame.running.filter((id: unknown): id is string => typeof id === "string"), attention: frame.attention.filter((id: unknown): id is string => typeof id === "string") })
+  })
+  try {
+    if (!server.provider) throw new Error("Missing isolated provider")
+    const sessionID = "ses_pending_resync"
+    const messageID = "msg_pending_resync"
+    await createSession(server, sessionID, directory, { providerID: server.provider.providerID, id: server.provider.modelID })
+    await bridge.connect()
+    await store.load()
+    await waitFor(() => store.state().carouselSessions?.find((row) => row.id === sessionID))
+    await store.selectSession(sessionID)
+    const prompt = (resume: boolean) => server.request(`/api/session/${sessionID}/prompt`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: messageID, text: "Resume after reconnect", delivery: "steer", resume }) })
+    const admitted = await prompt(false)
+    expect(admitted.status, await admitted.clone().text()).toBe(200)
+    await waitFor(() => store.state().view?.messages.some((message) => message.id === messageID && message.kind === "user" && message.state === "pending") ? true : undefined)
+    relay.dropEvents(true)
+    relay.input().onClose(1012, "Disconnected")
+    const resumed = await prompt(true)
+    expect(resumed.status, await resumed.clone().text()).toBe(200)
+    await waitFor(async () => {
+      const snapshot = await server.request(`/api/session/${sessionID}/snapshot`)
+      if (!snapshot.ok) return undefined
+      const value: unknown = await snapshot.json()
+      const messages = value && typeof value === "object" ? Reflect.get(value, "messages") : undefined
+      return Array.isArray(messages) && messages.some((message) => message?.id === messageID && message.type === "user") ? true : undefined
+    }, 30_000)
+    expect(store.state().view?.messages.filter((message) => message.id === messageID)).toMatchObject([{ kind: "user", state: "pending" }])
+    relay.dropEvents(false)
+    relay.input().onOpen()
+    relay.deliver({ type: "subscriptions", clientID: "client-pending", sessionIDs: [sessionID] })
+    await waitFor(() => store.state().view?.messages.some((message) => message.id === messageID && message.kind === "user" && message.state !== "pending") ? true : undefined)
+    expect(store.state().view?.messages.filter((message) => message.id === messageID)).toHaveLength(1)
+    expect(store.state().view?.messages.some((message) => message.id === messageID && message.kind === "user" && message.state === "pending")).toBe(false)
+    expect(relay.events().filter((entry) => entry.sessionID === sessionID && typeof entry.event === "object" && entry.event !== null && Reflect.get(entry.event, "type") === "session.input.promoted")).toHaveLength(0)
+  } finally { server.provider?.releaseAll(); store.dispose(); await bridge.close(); await server.close(); await rm(directory, { recursive: true, force: true }) }
+}, 60_000)
 
 test("a real finished run reaches the web activity store without changing Session list order", async () => {
   const directory = await mkdtemp(join(tmpdir(), "ycoding-active-flow-"))

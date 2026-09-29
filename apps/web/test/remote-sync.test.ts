@@ -107,6 +107,123 @@ describe("windowed history", () => {
     } finally { await test.stop() }
   })
 
+  test("hydrates a durable queued prompt and replaces it once after promotion", async () => {
+    const pending = { id: "msg_queued", sessionID: "ses_a", admittedSeq: 2, timeCreated: 2,
+      type: "user", data: { text: "Continue after this", files: [] }, delivery: "queue" }
+    let admitted = true
+    let promoted = false
+    const test = await harness({ handler: (request) => {
+      if (request.operation === "session.snapshot") return { ok: true, value: page("ses_a", promoted ? [message("msg_queued")] : [], undefined, promoted ? 3 : 2) }
+      if (request.operation === "session.pending.list") return { ok: true, value: { data: admitted ? [pending] : [] } }
+      return "default"
+    } })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      expect(test.store.state().view?.messages).toMatchObject([{ kind: "user", id: pending.id, text: pending.data.text, state: "pending", delivery: "queue" }])
+      admitted = false
+      promoted = true
+      test.relay.pushEvent("ses_a", { type: "session.input.promoted", data: { sessionID: "ses_a", inputID: pending.id }, durable: { aggregateID: "ses_a", seq: 3, version: 1 } })
+      await test.runUntil(() => { const message = test.store.state().view?.messages[0]; return message?.kind === "user" && message.state === "promoted" })
+      await test.store.reloadMessages()
+      expect(test.store.state().view?.messages.filter((entry) => entry.id === pending.id)).toHaveLength(1)
+      expect(test.store.state().view?.messages[0]).toMatchObject({ kind: "user", state: "promoted" })
+    } finally { await test.stop() }
+  })
+
+  test("a pending read started before promotion cannot resurrect its consumed row", async () => {
+    const gate = Promise.withResolvers<void>()
+    const pending = { id: "msg_wait", sessionID: "ses_a", admittedSeq: 2, timeCreated: 2,
+      type: "user", data: { text: "Wait here" }, delivery: "steer" }
+    const test = await harness({ handler: async (request) => {
+      if (request.operation === "session.snapshot") return { ok: true, value: page("ses_a", [], undefined, 2) }
+      if (request.operation === "session.pending.list") { await gate.promise; return { ok: true, value: { data: [pending] } } }
+      return "default" as const
+    } })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length > 0)
+      const selecting = test.store.selectSession("ses_a")
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.pending.list"))
+      test.relay.pushEvent("ses_a", { type: "session.input.promoted", data: { sessionID: "ses_a", inputID: pending.id }, durable: { aggregateID: "ses_a", seq: 3, version: 1 } })
+      await test.flush()
+      gate.resolve()
+      await selecting
+      expect(test.store.state().view?.messages.some((entry) => entry.id === pending.id && entry.kind === "user" && entry.state === "pending")).toBe(false)
+    } finally { gate.resolve(); await test.stop() }
+  })
+
+  test("refuses a pending row attributed to another Session", async () => {
+    const test = await harness({ handler: (request) => request.operation === "session.pending.list"
+      ? { ok: true, value: { data: [{ id: "msg_foreign", sessionID: "ses_b", admittedSeq: 1, timeCreated: 2,
+        type: "user", data: { text: "Private work" }, delivery: "steer" }] } }
+      : "default" })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      expect(test.store.state().view?.messages.some((entry) => entry.id === "msg_foreign")).toBe(false)
+    } finally { await test.stop() }
+  })
+
+  test("asks for a connector update when durable pending reads are unsupported", async () => {
+    const test = await harness({ handler: (request) => request.operation === "session.pending.list"
+      ? { ok: false, code: "unknown_operation", message: "Unknown operation" } : "default" })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      expect(test.store.state().notice).toContain("Update the connected device")
+    } finally { await test.stop() }
+  })
+
+  test("a machine inventory invalidation rehydrates missed promoted history and pending inputs", async () => {
+    let promoted = false
+    const test = await harness({ handler: (request) => {
+      if (request.operation === "session.snapshot") return { ok: true, value: page("ses_a", promoted ? [message("msg_9")] : [], undefined, promoted ? 4 : 1) }
+      if (request.operation === "session.pending.list") return { ok: true, value: { data: promoted ? [] : [{ id: "msg_8", sessionID: "ses_a", admittedSeq: 2, timeCreated: 2, type: "user", data: { text: "Queued" }, delivery: "queue" }] } }
+      return "default"
+    } })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      promoted = true
+      test.relay.pushSessions(["ses_a"])
+      await test.runUntil(() => test.store.state().view?.messages.some((entry) => entry.id === "msg_9") === true)
+      expect(test.store.state().view?.messages.some((entry) => entry.id === "msg_8")).toBe(false)
+      expect(test.relay.requests.filter((request) => request.operation === "session.pending.list").length).toBeGreaterThanOrEqual(2)
+      expect(test.relay.requests.filter((request) => request.operation === "session.todo.list").length).toBeGreaterThanOrEqual(2)
+    } finally { await test.stop() }
+  })
+
+  test("a gap during a machine resync schedules a second authoritative window", async () => {
+    const gate = Promise.withResolvers<void>()
+    let snapshots = 0
+    const test = await harness({ handler: async (request) => {
+      if (request.operation === "session.snapshot") {
+        snapshots += 1
+        if (snapshots === 2) await gate.promise
+        return { ok: true, value: page("ses_a", snapshots >= 3 ? [message("msg_9")] : [], undefined, snapshots >= 3 ? 4 : 1) }
+      }
+      if (request.operation === "session.pending.list") return { ok: true, value: { data: [] } }
+      return "default" as const
+    } })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      test.relay.pushSessions(["ses_a"])
+      await waitFor(() => snapshots === 2)
+      test.relay.pushEvent("ses_a", { type: "session.execution.started", data: { sessionID: "ses_a" }, durable: { aggregateID: "ses_a", seq: 4, version: 1 } })
+      await test.flush()
+      gate.resolve()
+      await test.runUntil(() => test.store.state().view?.messages.some((entry) => entry.id === "msg_9") === true)
+      expect(snapshots).toBeGreaterThanOrEqual(3)
+    } finally { gate.resolve(); await test.stop() }
+  })
+
   test("refuses a first window without a durable watermark", async () => {
     const test = await harness({ handler: (request) => request.operation === "session.snapshot"
       ? { ok: true, value: { sourceEpoch: "epoch_1", session: { id: "ses_a" }, messages: [message("msg_1")] } }

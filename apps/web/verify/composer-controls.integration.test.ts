@@ -99,24 +99,36 @@ test("selected Session speed and context share one stable composer row and acces
   }
 }, 60_000)
 
-test("in-flight prompts do not mount a transient composer row; unresolved outcomes remain actionable", async () => {
-  const page = await browser!.openPage()
-  try {
-    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
-    await wait(page, `document.querySelector('.mini-composer__mount .composer__row') !== null`)
-    await page.evaluate(`window.composerSetMutation('sending')`)
-    expect(await page.evaluate<number>(`document.querySelectorAll('.mini-composer__mount .mutation').length`)).toBe(0)
-    for (const status of ["failed", "unknown"]) {
-      await page.evaluate(`window.composerSetMutation(${JSON.stringify(status)})`)
-      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .mutation')?.className`)).toContain(`mutation--${status}`)
-      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .mutation__detail')?.textContent`)).toBe(status === "failed" ? "Failed" : "Outcome unknown")
-      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.mini-composer__mount .mutation button')].map(button => button.textContent.trim())`)).toEqual(["Send again", "Dismiss"])
-      await page.evaluate(`document.querySelector('.mini-composer__mount .mutation button')?.click()`)
-      expect(await page.evaluate<string>(`window.composerRequests().at(-1)?.operation`)).toBe("retry")
-    }
-    await page.evaluate(`document.querySelector('.mini-composer__mount .mutation button:last-child')?.click()`)
-    expect(await page.evaluate<number>(`document.querySelectorAll('.mini-composer__mount .mutation').length`)).toBe(0)
-  } finally { await page.close() }
+test("pending prompts, mutation toasts, and the active goal remain accessible on phone and desktop", async () => {
+  for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width!, height!)
+      if (width === 390) await page.setCoarsePointer(true)
+      await page.setReducedMotion(true)
+      await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+      await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; window.composerSetPending('steer'); window.composerSetGoalStatus('active')`)
+      await wait(page, `document.querySelector('.transcript-message__receipt')?.textContent?.includes('Processing') === true`)
+      expect(await page.evaluate<string>(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label')`)).toBe("Processing prompt")
+      expect(await page.evaluate<string>(`document.querySelector('.session-status__active-goal')?.textContent?.trim()`)).toBe("Goal active · Finish task")
+      await page.evaluate(`window.composerSetPending('queue'); window.composerSetMutation('sending')`)
+      expect(await page.evaluate<string>(`document.querySelector('.transcript-message__receipt')?.textContent?.trim()`)).toContain("Queued")
+      expect(await page.evaluate<number>(`document.querySelectorAll('.mutation-toast').length`)).toBe(0)
+      for (const status of ["sent", "failed", "unknown"] as const) {
+        await page.evaluate(`window.composerSetMutation(${JSON.stringify(status)})`)
+        await wait(page, `document.querySelector('.mutation-toast')?.classList.contains('mutation-toast--${status}') === true`)
+        expect(await page.evaluate<string>(`document.querySelector('.mutation-toast')?.getAttribute('role')`)).toBe(status === "sent" ? "status" : "alert")
+        expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.mutation-toast')).animationDuration`)).toBe("0s")
+        expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+        if (status !== "sent") {
+          await page.evaluate(`document.querySelector('.transcript-message__send-error button')?.click()`)
+          expect(await page.evaluate<string>(`window.composerRequests().at(-1)?.operation`)).toBe("retry")
+        }
+        await page.evaluate(`document.querySelector('.mutation-toast button')?.click()`)
+        expect(await page.evaluate<number>(`document.querySelectorAll('.mutation-toast').length`)).toBe(0)
+      }
+    } finally { await page.close() }
+  }
 }, 30_000)
 
 test("phone tool-running status text stays inside its pill and footer", async () => {
@@ -285,6 +297,7 @@ test("Goal is visibly off after completion and other terminal states while its c
       const measure = () => page.evaluate<{ name: string | null; color: string; background: string; yoloBackground: string; count: boolean; asymmetry: number; height: number; left: number }>(`(() => { const button=document.querySelector('.mini-composer__mount .session-status__goal-trigger'), yolo=document.querySelector('.mini-composer__mount .session-status__yolo-trigger'), style=getComputedStyle(button), rect=button.getBoundingClientRect(), walker=document.createTreeWalker(button, NodeFilter.SHOW_TEXT), glyphs=[]; for (let node=walker.nextNode(); node; node=walker.nextNode()) { if (!node.textContent.trim() || getComputedStyle(node.parentElement).visibility === 'hidden') continue; const range=document.createRange(); range.selectNodeContents(node); glyphs.push(range.getBoundingClientRect()) } const left=Math.min(...glyphs.map(box => box.left)), right=Math.max(...glyphs.map(box => box.right)); return { name:button.getAttribute('aria-label'), color:style.color, background:style.backgroundColor, yoloBackground:getComputedStyle(yolo).backgroundColor, count:button.querySelector('.session-status__goal-count') !== null, asymmetry:Math.abs((left - rect.left) - (rect.right - right)), height:rect.height, left:rect.left } })()`)
       const active = await measure()
       expect(active.name).toBe("Goal active")
+      expect(await page.evaluate<string>(`document.querySelector('.session-status__active-goal')?.textContent?.trim()`)).toBe("Goal active · Finish task")
       expect(active.count).toBe(true)
       expect(active.asymmetry).toBeLessThanOrEqual(1)
       expect(active.background).toBe(active.yoloBackground)
@@ -293,6 +306,7 @@ test("Goal is visibly off after completion and other terminal states while its c
         await page.evaluate(`window.composerSetGoalStatus(${JSON.stringify(status)})`)
         const off = await measure()
         expect(off.name).toBe("Goal off")
+        expect(await page.evaluate<boolean>(`document.querySelector('.session-status__active-goal') === null`)).toBe(true)
         expect(off.background).not.toBe(off.yoloBackground)
         expect(off.color).not.toBe(active.color)
         expect(off.count).toBe(false)

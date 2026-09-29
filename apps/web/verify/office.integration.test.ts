@@ -244,18 +244,18 @@ describe("remote Office presentation", () => {
         input.dispatchEvent(new InputEvent('input', { bubbles: true }))
         document.querySelector('button[aria-label="Send prompt"]').click()
       })()`)
-      expect(await until(page, `document.querySelector('.mutation--unknown') !== null`)).toBe(true)
+      expect(await until(page, `document.querySelector('.mutation-toast--unknown') !== null`)).toBe(true)
       await choosePresentation(page, "Office")
       expect(await until(page, `document.querySelector('.office-roster__row[aria-current="true"]')?.textContent.includes('Outcome unknown') ?? false`)).toBe(true)
 
       for (let index = 0; index < 6; index += 1) {
         await choosePresentation(page, index % 2 === 0 ? "Conversation" : "Office")
-        expect(await until(page, index % 2 === 0 ? `document.querySelector('.mutation--unknown') !== null` : `document.querySelector('.office-roster__row[aria-current="true"]')?.textContent.includes('Outcome unknown') ?? false`)).toBe(true)
+        expect(await until(page, index % 2 === 0 ? `document.querySelector('.mutation-toast--unknown') !== null` : `document.querySelector('.office-roster__row[aria-current="true"]')?.textContent.includes('Outcome unknown') ?? false`)).toBe(true)
       }
       await choosePresentation(page, "Conversation")
-      expect(await until(page, `document.querySelector('.mutation--unknown') !== null`)).toBe(true)
+      expect(await until(page, `document.querySelector('.mutation-toast--unknown') !== null`)).toBe(true)
       expect(await page.evaluate<number>(`remoteOperationReport().operations['session.prompt'] ?? 0`)).toBe(1)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.mutation--unknown .button').length`)).toBe(2)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.mutation-toast--unknown button,.transcript-message__send-error button').length`)).toBe(2)
     } finally {
       await page.close()
     }

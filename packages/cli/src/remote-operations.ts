@@ -54,6 +54,7 @@ export const unscopedOperations: ReadonlySet<RemoteOperation> = new Set([
 const maxLogReadItems = 2_000
 const maxCapturedPageChars = 512_000
 const maxCapturedFilesPerPage = 100
+const maxPendingInputs = 200
 
 // One shell-output request returns one page at most: the local default page, so a
 // remote reader pages explicitly instead of asking the device for unbounded output.
@@ -611,6 +612,13 @@ async function run(input: OperationInput) {
   switch (validated.kind) {
     case "get":
       return { data: verified }
+    case "pending.list": {
+      const pending = await input.local.pendingList(sessionID, location)
+      if (!Array.isArray(pending) || pending.length > maxPendingInputs ||
+        successFrames(request.id, { data: pending })[0]?.ok === false)
+        throw new OperationError("message_too_large", "Pending Session inputs exceed the remote response bound")
+      return { data: pending }
+    }
     case "snapshot": {
       if (validated.limit === undefined) return await input.local.snapshot(sessionID, location)
       for (let limit = validated.limit;; limit = Math.max(1, Math.floor(limit / 2))) {
@@ -862,6 +870,7 @@ type Validated =
   | { readonly kind: "shell.output"; readonly shellID: string; readonly cursor?: number; readonly limit: number }
   | { readonly kind: "log"; readonly after?: number }
   | { readonly kind: "subscribe" }
+  | { readonly kind: "pending.list" }
   | { readonly kind: "unsubscribe" }
   | { readonly kind: "prompt"; readonly input: LocalPrompt }
   | { readonly kind: "interrupt" }
@@ -875,6 +884,7 @@ type Validated =
 
 const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
   "session.get": "get",
+  "session.pending.list": "pending.list",
   "session.catalog": "catalog",
   "session.messages": "messages",
   "session.capturedChanges.list": "capturedChanges.list",
@@ -1477,6 +1487,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.skill": ["id", "skill", "resume"],
   "session.get": [],
   "session.snapshot": ["limit", "before"],
+  "session.pending.list": [],
   "session.attachment.read": ["digest"],
   "session.message.stream": ["messageID"],
   "session.subagent.list": ["cursor"],

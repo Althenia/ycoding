@@ -492,6 +492,45 @@ export function visibleTranscriptMessages(messages: readonly RemoteMessageView[]
   return [...visible.filter((message) => !pendingInput(message)), ...visible.filter(pendingInput)]
 }
 
+export function readPendingInputs(payload: unknown, sessionID: string): readonly RemoteMessageView[] | undefined {
+  if (!isRecord(payload) || !Array.isArray(payload.data)) return undefined
+  const rows = payload.data.flatMap((item): readonly RemoteMessageView[] => {
+    if (!isRecord(item) || !isRecord(item.data) || item.sessionID !== sessionID) return []
+    const id = stringField(item.id)
+    const created = numberField(item.timeCreated)
+    const delivery = deliveryField(item.delivery)
+    if (id === undefined || created === undefined || delivery === undefined) return []
+    if (item.type === "user") {
+      const text = stringField(item.data.text)
+      if (text === undefined) return []
+      const attachments = readAttachments(item.data.files)
+      return [{ kind: "user", id, text, delivery, state: "pending", created,
+        ...(attachments.length === 0 ? {} : { attachments }) }]
+    }
+    if (item.type !== "synthetic") return []
+    const text = stringField(item.data.text)
+    if (text === undefined) return []
+    const metadata = recordField(item.data.metadata)
+    return [{ kind: "synthetic", id, text, pending: true, created,
+      ...(stringField(item.data.description) === undefined ? {} : { description: stringField(item.data.description) }),
+      ...(metadata === undefined ? {} : { metadata }),
+      ...(metadata && stringField(metadata.contextSource) ? { source: stringField(metadata.contextSource) } : {}) }]
+  })
+  return rows.length === payload.data.length ? rows : undefined
+}
+
+export function reconcilePendingInputs(view: SessionView, pending: readonly RemoteMessageView[], retainIDs: ReadonlySet<string> = new Set()): SessionView {
+  const known = new Map(view.messages.map((message) => [message.id, message]))
+  const retained = view.messages.filter((message) =>
+    !(message.kind === "user" && message.state === "pending" || message.kind === "synthetic" && message.pending) || retainIDs.has(message.id))
+  const admitted = pending.flatMap((message) => {
+    const existing = known.get(message.id)
+    if (existing && !(existing.kind === "user" && existing.state === "pending" || existing.kind === "synthetic" && existing.pending)) return []
+    return [{ ...message, ...(existing?.kind === "user" && message.kind === "user" && existing.attachments && !message.attachments ? { attachments: existing.attachments } : {}) }]
+  })
+  return { ...view, messages: visibleTranscript([...retained.filter((message) => !admitted.some((item) => item.id === message.id)), ...admitted]) }
+}
+
 export function classifySyntheticNotice(message: RemoteMessageView):
   | { readonly kind: "subagent"; readonly label: string; readonly status: "completed" | "failed" | "waiting" | "updated"; readonly excerpt?: string }
   | { readonly kind: "completion"; readonly label: string; readonly status: string; readonly description: string }

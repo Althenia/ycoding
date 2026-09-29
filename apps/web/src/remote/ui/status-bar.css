@@ -11,6 +11,7 @@
 .session-status__yolo-compact { display:none; }
 .session-status__yolo-trigger:hover,.session-status__goal-trigger:hover { background:var(--yc-surface-sunken); }
 .session-status__goal-count { font-variant-numeric:tabular-nums; opacity:.7; }
+.session-status__active-goal { min-inline-size:0; max-inline-size:24ch; overflow:hidden; color:var(--yc-green-strong); text-overflow:ellipsis; white-space:nowrap; }
 .session-status__popover { position:fixed; z-index:calc(var(--yc-z-overlay) + 2); max-block-size:min(420px,75dvh); overflow:auto; padding:var(--yc-space-3); border:1px solid var(--yc-border); border-radius:var(--yc-radius-xl); background:var(--yc-surface-raised); box-shadow:var(--yc-shadow-lg); color:var(--yc-text); font:var(--yc-weight-medium) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); }
 .session-status__popover { animation:session-status-in var(--yc-dur-base) var(--yc-ease-entrance) both; }
 .session-status__goal-popover { animation-name:session-status-goal-in; }
@@ -34,3 +35,4 @@
 @media (max-width:767px), (pointer:coarse) { .session-status__slot, .session-status__yolo-trigger, .session-status__goal-trigger { min-block-size:44px; } .session-status__yolo-trigger,.session-status__goal-trigger { min-inline-size:44px; } }
 @media (max-width:479px) { .session-status__slot { max-inline-size:98px; } .session-status__label { max-inline-size:70px; } }
 @media (max-width:479px) { .session-status__slot { max-inline-size:64px; } .session-status__yolo-full { display:none; } .session-status__yolo-compact { display:inline; } .session-status__label { position:absolute; inline-size:1px; block-size:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; } .session-status__mobile { display:block; } }
+@media (max-width:479px) { .session-status__active-goal { max-inline-size:10ch; } }

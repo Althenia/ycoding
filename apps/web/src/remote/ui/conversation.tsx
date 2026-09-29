@@ -350,6 +350,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
   }
   const syntheticNotice = () => classifySyntheticNotice(props.message())
   const attachments = () => { const message = props.message(); return message.kind === "user" ? message.attachments ?? [] : [] }
+  const promptMutation = () => remote.state().mutations.find((mutation) => mutation.kind === "prompt" && mutation.id === props.message().id && mutation.sessionID === remote.state().activeSessionID && mutation.state !== "sending")
   const attachmentKeys = () => attachments().map(attachmentKey)
   const oversized = () => { const message = props.message(); return message.kind === "oversized" ? message : undefined }
   const fallbackText = () => {
@@ -372,11 +373,14 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
               ? <UserImage name={attachment().name} mime={attachment().mime} digest={attachment().digest} deviceID={remote.state().activeDeviceID ?? ""} sessionID={remote.state().activeSessionID ?? ""} />
               : <span class="transcript-file">{attachment().name} · {size()}</span>
           }}</For>
-          <span class="transcript-message__receipt" aria-label={userState(props.message()) === "consumed" ? "Read by YCoding" : userState(props.message()) === "pending" ? "Pending delivery" : "Sent, not yet read"}>
+          <span class="transcript-message__receipt" aria-label={userState(props.message()) === "consumed" ? "Read by YCoding" : userState(props.message()) === "pending" ? userDelivery(props.message()) === "queue" ? "Queued for processing" : "Processing prompt" : "Sent, not yet read"}>
             <Show when={userState(props.message()) === "consumed"} fallback={<Show when={userState(props.message()) === "pending"} fallback={<Icon name="check" size={14} />}><span aria-hidden="true">◷</span></Show>}><span aria-hidden="true">✓✓</span></Show>
-            {userState(props.message()) === "consumed" ? "Read" : userState(props.message()) === "pending" ? "Pending" : "Sent"}
-            <Show when={userDelivery(props.message()) === "queue"}><span>· queued</span></Show>
+            {userState(props.message()) === "consumed" ? "Read" : userState(props.message()) === "pending" ? userDelivery(props.message()) === "queue" ? "Queued" : "Processing · steer" : "Sent"}
           </span>
+          <Show when={promptMutation()}>{(mutation) => <div class="transcript-message__send-error" role={mutation().state === "failed" ? "alert" : "status"}>
+            <span>{mutation().state === "unknown" ? "Outcome unknown" : "Send failed"}: {mutation().detail}</span>
+            <button type="button" class="button button--secondary button--small" onClick={() => void remote.store.retryMutation(mutation().id)}>Retry send</button>
+          </div>}</Show>
         </Show>
 
         <Show when={kind() === "assistant"}>

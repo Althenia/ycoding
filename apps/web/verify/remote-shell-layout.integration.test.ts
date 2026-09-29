@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { startRelayDouble } from "../test/relay-double"
 import { launchBrowser } from "./cdp"
 
-const port = 4196
+const port = 4197
 const browserPath = process.env.YCODING_WEB_CHROME
 if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable.")
 
@@ -919,17 +919,17 @@ describe("remote shell layout", () => {
       document.querySelector('button[aria-label="Send prompt"]')?.click();
     })()`)
     for (let attempt = 0; attempt < 30; attempt += 1) {
-      if (await page.evaluate<boolean>(`document.querySelector('.mutation--unknown') !== null`)) break
+      if (await page.evaluate<boolean>(`document.querySelector('.mutation-toast--unknown') !== null`)) break
       await Bun.sleep(50)
     }
-    expect(await page.evaluate<number>(`document.querySelectorAll('.mutation--unknown .button').length`)).toBe(2)
+    expect(await page.evaluate<number>(`document.querySelectorAll('.mutation-toast--unknown button,.transcript-message__send-error button').length`)).toBe(2)
     await page.evaluate(`document.querySelectorAll('.session-row')[1]?.click()`)
     expect(await page.evaluate<string>(`document.querySelector('.conversation-breadcrumb strong')?.textContent ?? ''`)).toContain("Archived: release notes")
-    expect(await page.evaluate<number>(`document.querySelectorAll('.mutation--unknown').length`)).toBe(0)
+    expect(await page.evaluate<number>(`document.querySelectorAll('.mutation-toast--unknown').length`)).toBe(0)
     expect(await page.evaluate<string>(`document.querySelector('.notice-strip--warning')?.textContent ?? ''`)).toBe("")
     await page.evaluate(`document.querySelectorAll('.session-row')[0]?.click()`)
-    expect(await page.evaluate<number>(`document.querySelectorAll('.mutation--unknown').length`)).toBe(1)
-    expect(await page.evaluate<number>(`document.querySelectorAll('.mutation--unknown .button').length`)).toBe(2)
+    expect(await page.evaluate<number>(`document.querySelectorAll('.mutation-toast--unknown').length`)).toBe(1)
+    expect(await page.evaluate<number>(`document.querySelectorAll('.mutation-toast--unknown button,.transcript-message__send-error button').length`)).toBe(2)
     expect(await page.evaluate<string>(`document.querySelector('.notice-strip--warning')?.textContent ?? ''`)).toContain("Nothing was resent automatically")
     expect(await page.evaluate<number>(`window.remoteMutationReport().filter(request=>request.operation==='session.prompt').length`)).toBe(1)
     await page.close()
