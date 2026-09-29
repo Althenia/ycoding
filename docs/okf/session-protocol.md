@@ -42,7 +42,7 @@ Tool construction, registration, execution, and settlement follow explicit tool 
 
 Public events use one encoded feed with independent consumer queues; durable events record facts while projections derive display state and local execution ownership stays separate.[^spec-stream]
 
-Graceful managed-service restart uses private Session suspension with atomic resume consumption; hard-crash recovery and exactly-once provider or tool execution remain out of scope.[^spec-restart]
+Graceful managed-service shutdown marks executing Sessions with private Session suspension, and startup never resumes them automatically; hard-crash recovery and exactly-once provider or tool execution remain out of scope.[^spec-restart]
 
 ## Related Concepts
 

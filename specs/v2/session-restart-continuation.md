@@ -1,17 +1,17 @@
-# Decision: Continue Sessions After Managed-Service Restart
+# Decision: Suspend Sessions on Managed-Service Shutdown
 
-| Field          | Value                                                        |
-| -------------- | ------------------------------------------------------------ |
-| Status         | Accepted and implemented                                     |
-| Author         | Kit Langton                                                  |
-| Date           | 2026-07-08                                                   |
-| Historical source | Upstream issue #35646                                   |
+| Field             | Value                    |
+| ----------------- | ------------------------ |
+| Status            | Accepted and implemented |
+| Author            | Kit Langton              |
+| Date              | 2026-07-08               |
+| Historical source | Upstream issue #35646    |
 
 ## Summary
 
-When the managed YCoding server shuts down gracefully, active Sessions continue automatically the next time the managed server starts.
+When the managed YCoding server shuts down gracefully, it records each Session it was executing in one private nullable timestamp on the existing Session row: `time_suspended`. Startup never resumes a suspended Session; the user resumes it manually.
 
-The implementation uses one private nullable timestamp on the existing Session row: `time_suspended`. The managed server suspends its active Sessions on graceful shutdown and resumes suspended Sessions on startup. Both are explicit actions the managed server invokes.
+Suspension is an explicit action the managed server invokes during teardown. Automatic continuation would retry provider and tool work whose outcome is ambiguous, so no server schedules it; that requires an explicit durable crash-recovery design with admission rules.
 
 The field is not Session status. Live activity remains process-local. Hard-crash recovery and exactly-once provider or tool execution remain out of scope.
 
@@ -30,7 +30,9 @@ WHERE time_suspended IS NOT NULL;
 
 A non-null `time_suspended` means:
 
-> A managed server suspended this Session during graceful shutdown, at this time. The next managed server may make one attempt to resume it.
+> A managed server suspended this Session during graceful shutdown, at this time.
+
+A retained marker never admits or executes work by itself.
 
 The name records the fact rather than one consumer's policy, and it follows the Session table's existing nullable-timestamp idiom. The timestamp also gives operators suspension age for free, which later policy may use without a schema change.
 
@@ -46,17 +48,18 @@ The field does not appear in public `Session.Info` and does not drive UI activit
 
 A persisted status such as `idle / running / resumable` answers three different questions. `running` becomes stale after a crash, while `resumable` is pending work rather than current status.
 
-## The Managed Server Owns Restart Continuity
+## The Managed Server Owns Suspension
 
-Restart continuity is not layer configuration. `SessionRestart` is an inert core service exposing two actions, and only the managed server (`ycoding serve --service`) calls them:
+Suspension is not layer configuration. `SessionRestart` is an inert core service exposing two actions. Only the managed server (`ycoding serve --service`) invokes one of them, `suspendActiveSessions`:
 
 ```typescript
 // ServerProcess, service mode only
-yield * Effect.forkScoped(restart.resumeSuspendedSessions)
 yield * Effect.addFinalizer(() => restart.suspendActiveSessions)
 ```
 
-Default, embedded, and stdio servers build the same execution layer but never invoke the actions, so they never suspend or auto-resume.
+No product path invokes `resumeSuspendedSessions`, so startup never resumes a suspended Session. Default, embedded, and stdio servers build the same execution layer but never invoke either action, so they never suspend.
+
+`ycoding update` restarts the managed server only after `GET /api/session/outstanding` reports no outstanding Session work, so an update restart suspends nothing.
 
 ### Graceful shutdown suspends
 
@@ -83,9 +86,9 @@ Interruption must preserve suspension because managed teardown interrupts drains
 
 Because the clears are `commit` hooks rather than projections, event replay preserves lifecycle history without recreating or destroying suspension.
 
-## Startup Consumes Each Suspension Atomically
+## Explicit Resume Consumes Each Suspension Atomically
 
-`resumeSuspendedSessions` reads pending Session IDs through the partial index. Immediately before resuming each Session, it performs a conditional clear:
+When invoked, `resumeSuspendedSessions` reads pending Session IDs through the partial index. Immediately before resuming each Session, it performs a conditional clear:
 
 ```sql
 UPDATE session
@@ -100,30 +103,28 @@ The resume goes through the existing process-local coordinator, which joins dupl
 
 ## Failure Semantics
 
-The design provides at-most-once automatic scheduling, not guaranteed continuation.
+The design schedules no automatic continuation; the user decides whether to resume interrupted work.
 
-| Failure                                                | Result                                                                        |
-| ------------------------------------------------------ | ----------------------------------------------------------------------------- |
-| Old server is killed before graceful closeout          | Nothing is suspended; user resumes manually                                   |
-| Old server dies between suspension and teardown        | Session stays suspended; next server resumes it                               |
-| New server crashes before conditional clear            | Session stays suspended                                                       |
-| New server crashes after clear but before drain starts | Automatic continuation is lost                                                |
-| New server crashes after drain starts                  | No automatic hard-crash retry                                                 |
-| Interrupted tool has uncertain side effects            | Orphan reconciliation records interruption rather than replaying the old call |
+| Event                                               | Result                                                                        |
+| --------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Graceful managed shutdown during execution          | Session is suspended and interrupted; the next server does not resume it      |
+| Managed server is killed before graceful closeout   | Nothing is suspended; user resumes manually                                   |
+| Managed server dies between suspension and teardown | Session stays suspended; the next server does not resume it                   |
+| Interrupted tool has uncertain side effects         | Orphan reconciliation records interruption rather than replaying the old call |
 
-Losing one automatic continuation is safer than repeatedly restarting ambiguous provider or tool work.
+Leaving continuation to the user is safer than restarting ambiguous provider or tool work.
 
 ## Migration Does Not Infer Historical Intent
 
 The migration adds the nullable column with no backfill. It does not scan historical shutdown events.
 
-An old shutdown event records what happened; it does not prove that a future process is authorized to start new work. The first upgrade may therefore require manual continuation for Sessions interrupted by the old binary.
+An old shutdown event records what happened; it does not prove that a future process is authorized to start new work.
 
 ## Ranked Alternatives
 
 | Rank | Option                                  | Verdict   | Reason                                                                          |
 | ---: | --------------------------------------- | --------- | ------------------------------------------------------------------------------- |
-|    1 | Daemon-invoked suspend/resume actions   | Preferred | The restart authority acts explicitly; execution layer stays generic            |
+|    1 | Daemon-invoked restart actions          | Preferred | The restart authority acts explicitly; execution layer stays generic            |
 |    2 | Execution-layer configuration flag      | Rejected  | Threads a mode bit through server, routes, and layer construction               |
 |    3 | Dedicated continuation table            | Reserve   | Useful if continuation later needs metadata, leases, retries, or multiple rows  |
 |    4 | Leased continuation queue               | Defer     | Solves claimant failure but adds acknowledgement, expiry, and fencing semantics |
@@ -135,13 +136,14 @@ An old shutdown event records what happened; it does not prove that a future pro
 Regression coverage verifies:
 
 - A suspension can be consumed only once per Session.
+- The explicit resume action resumes each suspended Session at most once.
 - Generic lifecycle publication and replay do not infer suspension.
-- Historical shutdown events remain unsuspended after migration.
-- Concurrent managed-service candidates elect one process and produce one continued execution.
+- Concurrent managed-service processes elect one server, and startup resumes no suspended Session.
 - Teardown interruption preserves suspension; a drain finishing on its own clears it.
 
 ## Non-Goals
 
+- Resuming suspended Sessions automatically at server startup.
 - Recovering unmatched execution after a hard process or machine crash.
 - Persisting authoritative live Session status.
 - Coordinating Session execution across independent processes or a cluster.
