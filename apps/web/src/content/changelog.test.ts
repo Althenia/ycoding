@@ -6,6 +6,19 @@ const TAGS = ["Added", "Changed", "Fixed"] as const
 describe("release entries", () => {
   test("includes the latest TUI release at the top of the public changelog", () => {
     expect(RELEASES[0]).toEqual({
+      version: "0.7.15",
+      date: "2026-09-29",
+      title: "Outcome toasts below the header and exact agent edits",
+      tags: ["Fixed"],
+      changes: [
+        { tag: "Fixed", text: "Show outcome and notification toasts below the header and Team row, and close outcome toasts after about six seconds unless hovered or focused, as notification toasts do." },
+        { tag: "Fixed", text: "Insert agent edit replacement text exactly as written, so dollar-sign replacement patterns no longer corrupt the edited file." },
+      ],
+    })
+  })
+
+  test("retains the 0.7.14 release content", () => {
+    expect(RELEASES.find((item) => item.version === "0.7.14")).toEqual({
       version: "0.7.14",
       date: "2026-09-29",
       title: "Installable app, restored pending prompts, and Work finished alerts for the whole Session family",
@@ -304,7 +317,7 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 10)).toEqual(["0.7.14", "0.7.13", "0.7.12", "0.7.11", "0.7.10", "0.7.9", "0.7.8", "0.7.7", "0.7.6", "0.7.5"])
+    expect(versions.slice(0, 10)).toEqual(["0.7.15", "0.7.14", "0.7.13", "0.7.12", "0.7.11", "0.7.10", "0.7.9", "0.7.8", "0.7.7", "0.7.6"])
     expect(new Set(versions).size).toBe(versions.length)
     const sorted = [...versions].sort((a, b) => compare(b, a))
     expect(versions).toEqual(sorted)

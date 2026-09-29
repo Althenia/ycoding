@@ -22,6 +22,16 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.7.15",
+    date: "2026-09-29",
+    title: "Outcome toasts below the header and exact agent edits",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Show outcome and notification toasts below the header and Team row, and close outcome toasts after about six seconds unless hovered or focused, as notification toasts do." },
+      { tag: "Fixed", text: "Insert agent edit replacement text exactly as written, so dollar-sign replacement patterns no longer corrupt the edited file." },
+    ],
+  },
+  {
     version: "0.7.14",
     date: "2026-09-29",
     title: "Installable app, restored pending prompts, and Work finished alerts for the whole Session family",
