@@ -324,7 +324,8 @@ test("a disconnected connector reconciles a promoted prompt from the real server
       request: async (operation, options) => {
         const id = `req_pending_${++nextID}`
         relay.deliver(request(id, operation, options?.sessionID, options?.input ? { ...options.input } : undefined))
-        const response = await answer(relay, id)
+        const response = await answer(relay, id).catch(() => undefined)
+        if (response === undefined) return { status: "unknown", error: { code: "outcome_unknown", message: "The request did not settle before the timeout" } }
         if (response.ok && operation === "session.subscribe" && options?.sessionID)
           relay.deliver({ type: "subscriptions", clientID: "client-pending", sessionIDs: [options.sessionID] })
         return response.ok ? { status: "ok", value: response.value } : { status: "failed", error: response.error }
@@ -402,7 +403,8 @@ test("a real finished run reaches the web activity store without changing Sessio
       request: async (operation, options) => {
         const id = `req_active_${++nextID}`
         relay.deliver(request(id, operation, options?.sessionID, options?.input ? { ...options.input } : undefined))
-        const response = await answer(relay, id)
+        const response = await answer(relay, id).catch(() => undefined)
+        if (response === undefined) return { status: "unknown", error: { code: "outcome_unknown", message: "The request did not settle before the timeout" } }
         if (response.ok && operation === "session.subscribe" && options?.sessionID)
           relay.deliver({ type: "subscriptions", clientID: "client-active", sessionIDs: [options.sessionID] })
         return response.ok ? { status: "ok", value: response.value } : { status: "failed", error: response.error }
