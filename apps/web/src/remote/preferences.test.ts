@@ -28,9 +28,9 @@ function storage(initial: Record<string, string> = {}) {
 describe("notification categories", () => {
   test("Settings offers exactly three device-neutral categories and channels", () => {
     expect(NOTIFICATION_CATEGORIES).toEqual([
-      { id: "agent-completed", label: "Work finished", detail: "All work in a Session family has finished." },
-      { id: "approval-requested", label: "Needs your attention", detail: "A Session family needs a decision, a guardrail blocked an action, or a run ended with an error." },
-      { id: "machine-offline", label: "Machine offline", detail: "A paired machine stopped reporting." },
+      { id: "agent-completed", label: "Work finished", detail: "Get notified when a Session and everything it started, including subagents, shells and goals, has finished. Useful for long-running work." },
+      { id: "approval-requested", label: "Needs your attention", detail: "Get notified when a Session needs your decision, a guardrail blocks an action, or a run fails." },
+      { id: "machine-offline", label: "Machine offline", detail: "Get notified when the selected paired machine stops reporting while YCoding is open." },
     ])
     expect(NOTIFICATION_CHANNELS).toEqual([{ id: "in-app", label: "In app" }, { id: "desktop", label: "System" }])
   })

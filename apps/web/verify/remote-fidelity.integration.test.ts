@@ -52,14 +52,19 @@ describe("remote responsive state behavior", () => {
       const page = await fixture(`scenario=autonomy-goal-notification-settings-${width}`, width, "Notifications")
       try {
         await page.evaluate(`document.querySelector('.notification-table')?.scrollIntoView({ block: 'center' })`)
-        const layout = await page.evaluate<{ readonly names: readonly string[]; readonly categories: readonly string[]; readonly lines: readonly number[]; readonly offsets: readonly number[]; readonly overflow: boolean }>(`(() => {
+        const layout = await page.evaluate<{ readonly names: readonly string[]; readonly categories: readonly string[]; readonly details: readonly string[]; readonly lines: readonly number[]; readonly offsets: readonly number[]; readonly overflow: boolean }>(`(() => {
           const table = document.querySelector('.notification-table'), heads = [...table.querySelectorAll('thead th')], row = table.querySelector('tbody tr');
-          return { names: heads.map(head => head.textContent.trim()), categories: [...table.querySelectorAll('tbody th > span:first-child')].map(cell => cell.textContent.trim()),
+          return { names: heads.map(head => head.textContent.trim()), categories: [...table.querySelectorAll('tbody th > span:first-child')].map(cell => cell.textContent.trim()), details: [...table.querySelectorAll('tbody th .field__hint')].map(cell => cell.textContent.trim()),
             lines: heads.map(head => { const range = document.createRange(); range.selectNodeContents(head); return range.getClientRects().length }),
             offsets: [...row.querySelectorAll('td')].map((cell, index) => Math.abs((cell.querySelector('.switch').getBoundingClientRect().left + cell.querySelector('.switch').getBoundingClientRect().right) / 2 - (heads[index + 1].getBoundingClientRect().left + heads[index + 1].getBoundingClientRect().right) / 2)),
             overflow: document.documentElement.scrollWidth > innerWidth }; })()`)
         expect(layout.names).toEqual(["Event", "In app", "System"])
         expect(layout.categories).toEqual(["Work finished", "Needs your attention", "Machine offline"])
+        expect(layout.details).toEqual([
+          "Get notified when a Session and everything it started, including subagents, shells and goals, has finished. Useful for long-running work.",
+          "Get notified when a Session needs your decision, a guardrail blocks an action, or a run fails.",
+          "Get notified when the selected paired machine stops reporting while YCoding is open.",
+        ])
         expect(layout.lines, JSON.stringify(layout)).toEqual([1, 1, 1])
         expect(layout.offsets.every((offset) => offset <= 1), JSON.stringify(layout)).toBe(true)
         expect(layout.overflow).toBe(false)

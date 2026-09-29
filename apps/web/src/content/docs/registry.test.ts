@@ -103,8 +103,11 @@ describe("page structure", () => {
     const section = findDocPage("usage/remote")?.sections.find((entry) => entry.heading === "Notifications and availability")
     const text = JSON.stringify(section?.blocks)
     expect(section?.blocks.flatMap((block) => block.kind === "table" ? block.rows.map((row) => row[0]) : [])).toEqual(["Work finished", "Needs your attention", "Machine offline"])
-    expect(text).toContain("A root Session family has no executing work")
-    expect(text).toContain("a run ends with an error")
+    expect(section?.blocks.flatMap((block) => block.kind === "table" ? block.rows.map((row) => row[1]) : [])).toEqual([
+      "Get notified when a Session and everything it started, including subagents, shells and goals, has finished. Useful for long-running work.",
+      "Get notified when a Session needs your decision, a guardrail blocks an action, or a run fails. A later run clears failure attention.",
+      "Get notified when the selected paired machine stops reporting while YCoding is open. A browser-only relay disconnect does not establish that the machine is offline.",
+    ])
     expect(text).toContain("Machine offline does not send Web Push")
     expect(text).not.toContain("stops running")
   })
