@@ -437,10 +437,13 @@ export function createRelay(deps: RelayDeps) {
         previousStatus = message
         if (before !== undefined && deps.notifyPush !== undefined) {
           const oldAttention = new Set(before.attention)
-          const running = new Set(message.running)
+          const busy = new Set([...message.running, ...(message.outstanding ?? [])])
+          const attention = new Set(message.attention)
           const events: PushEvent[] = [
             ...message.attention.filter((sessionID) => !oldAttention.has(sessionID)).map((sessionID) => ({ category: "approval-requested" as const, sessionID, deviceID: current.deviceID })),
-            ...before.running.filter((sessionID) => !running.has(sessionID)).map((sessionID) => ({ category: "agent-completed" as const, sessionID, deviceID: current.deviceID })),
+            ...[...new Set([...before.running, ...(before.outstanding ?? [])])]
+              .filter((sessionID) => !busy.has(sessionID) && !attention.has(sessionID))
+              .map((sessionID) => ({ category: "agent-completed" as const, sessionID, deviceID: current.deviceID })),
           ]
           if (deps.now() - pushWindowStart >= 60_000) { pushWindowStart = deps.now(); pushWindowCount = 0 }
           for (const event of events) {

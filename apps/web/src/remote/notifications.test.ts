@@ -117,6 +117,10 @@ function deliveryWith(options: {
 }
 
 describe("notificationCategory", () => {
+  test("finished and attention use fixed privacy-safe copy", () => {
+    expect(NOTIFICATION_TEXT["agent-completed"]).toEqual({ title: "YCoding — work finished", body: "A session finished all its work." })
+    expect(NOTIFICATION_TEXT["approval-requested"]).toEqual({ title: "YCoding — needs your attention", body: "A session is waiting for you." })
+  })
   test("maps each live event the workspace receives to one category", () => {
     expect(notificationCategory({ type: "session.execution.succeeded", data: {} })).toBeUndefined()
     expect(notificationCategory({ type: "session.execution.failed", data: { error: { code: "x", message: "y" } } })).toBe("error")
@@ -346,10 +350,10 @@ describe("createDesktopNotifier", () => {
       } })
       try {
         const notifier = createDesktopNotifier()
-        notifier.show({ title: "YCoding — work stopped", body: "A session stopped running.", tag: "ycoding-ses_a-agent-completed", sessionID: "ses_a" })
+        notifier.show({ title: "YCoding — work finished", body: "A session finished all its work.", tag: "ycoding-ses_a-agent-completed", sessionID: "ses_a" })
         await Bun.sleep(0)
         expect(registered).toEqual(["/sw.js:module"])
-        expect(worker.shown).toMatchObject([{ title: "YCoding — work stopped", options: { tag: "ycoding-ses_a-agent-completed", data: { sessionID: "ses_a" } } }])
+        expect(worker.shown).toMatchObject([{ title: "YCoding — work finished", options: { tag: "ycoding-ses_a-agent-completed", data: { sessionID: "ses_a" } } }])
         notifier.dispose()
       } finally {
         Reflect.set(globalThis, "navigator", original)
@@ -369,12 +373,12 @@ describe("createDesktopNotifier", () => {
         ready,
       } })
       try {
-        createDesktopNotifier().show({ title: "YCoding — work stopped", body: "A session stopped running.", tag: "ycoding-ses_a-agent-completed" })
+        createDesktopNotifier().show({ title: "YCoding — work finished", body: "A session finished all its work.", tag: "ycoding-ses_a-agent-completed" })
         await Bun.sleep(0)
         expect(shownEarly).toEqual([])
         activate(worker.registration)
         await Bun.sleep(0)
-        expect(worker.shown).toMatchObject([{ title: "YCoding — work stopped" }])
+        expect(worker.shown).toMatchObject([{ title: "YCoding — work finished" }])
       } finally {
         Reflect.set(globalThis, "navigator", original)
       }

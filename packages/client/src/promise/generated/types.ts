@@ -4012,6 +4012,10 @@ export type SessionCreateOutput = { data: SessionInfo }["data"]
 
 export type SessionActiveOutput = { data: { [x: string]: SessionActive } }["data"]
 
+export type SessionOutstandingInput = { readonly failures?: { readonly failures?: boolean | undefined }["failures"] }
+
+export type SessionOutstandingOutput = { data: Array<string>; failed: Array<string> }
+
 export type SessionGetInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
 export type SessionGetOutput = { data: SessionInfo }["data"]

@@ -26,6 +26,7 @@ import { SessionV2 } from "@ycoding-ai/core/session"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
+import { SessionPendingTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { PermissionV2 } from "@ycoding-ai/core/permission"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
@@ -1023,6 +1024,47 @@ describe("ShellTool", () => {
                 state: "completed",
               },
             })
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
+  it.live("keeps real background shell work outstanding until its completion input is durable", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const sessions = yield* SessionV2.Service
+            const jobs = yield* Job.Service
+            const events = yield* EventV2.Service
+            const release = path.join(tmp.path, "release")
+            const command = isWindows
+              ? `while (!(Test-Path -LiteralPath '${release}')) { Start-Sleep -Milliseconds 50 }; [Console]::Out.Write('done')`
+              : `while [ ! -e '${release}' ]; do sleep 0.05; done; printf done`
+            const admitted = yield* events.subscribe(SessionEvent.InputAdmitted).pipe(
+              Stream.filter((event) => event.data.sessionID === sessionID && event.data.input.type === "synthetic"),
+              Stream.runHead,
+              Effect.forkScoped({ startImmediately: true }),
+            )
+            const settled = yield* settleTool(registry, call({ command, timeout: 10_000, background: true }))
+            expect(settled.output?.structured).toMatchObject({ truncated: false })
+            expect((yield* sessions.outstanding()).sessions.has(sessionID)).toBe(true)
+            expect((yield* jobs.outstandingSessions()).has(sessionID)).toBe(true)
+            yield* Effect.promise(() => fs.writeFile(release, ""))
+            yield* jobs.wait({ id: "call-shell" })
+            expect((yield* Fiber.join(admitted)).valueOrUndefined?.data.input.data).toMatchObject({
+              metadata: { source: "shell", state: "completed" },
+            })
+            yield* Effect.gen(function* () {
+              while ((yield* jobs.outstandingSessions()).has(sessionID)) yield* Effect.sleep(10)
+            }).pipe(Effect.timeout(5_000))
+            const pending = yield* (yield* Database.Service).db.select().from(SessionPendingTable).all()
+            expect(pending).toHaveLength(1)
+            expect((yield* sessions.outstanding()).sessions.has(sessionID)).toBe(true)
           }),
         )
       },

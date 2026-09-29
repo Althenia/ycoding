@@ -14,6 +14,8 @@ import type {
   SessionCreateInput,
   SessionCreateOutput,
   SessionActiveOutput,
+  SessionOutstandingInput,
+  SessionOutstandingOutput,
   SessionGetInput,
   SessionGetOutput,
   SessionSnapshotInput,
@@ -612,6 +614,18 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+      outstanding: (input?: SessionOutstandingInput, requestOptions?: RequestOptions) =>
+        request<SessionOutstandingOutput>(
+          {
+            method: "GET",
+            path: `/api/session/outstanding`,
+            query: { failures: input?.["failures"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
       get: (input: SessionGetInput, requestOptions?: RequestOptions) =>
         request<{ readonly data: SessionGetOutput }>(
           {

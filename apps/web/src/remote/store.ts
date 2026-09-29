@@ -184,7 +184,7 @@ export type RemoteStoreState = {
   readonly sessions: readonly SessionInfoView[]
   readonly carouselSessions?: readonly (SessionInfoView & { readonly workspaceName: string })[]
   readonly carouselStatus?: "idle" | "loading" | "ready" | "error"
-  readonly sessionStatus?: { readonly running: ReadonlySet<string>; readonly attention: ReadonlySet<string> }
+  readonly sessionStatus?: { readonly running: ReadonlySet<string>; readonly attention: ReadonlySet<string>; readonly outstanding: ReadonlySet<string> }
   readonly catalogs: Readonly<Record<string, CatalogView>>
   readonly usage: UsageState
   readonly sessionGroups: readonly RemoteWorkspaceInfo[]
@@ -1466,20 +1466,23 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     void reloadStatusFirstPage(owner)
   }
 
-  const applyStatusFrame = (owner: RemoteTransport, frame: { readonly running: readonly string[]; readonly attention: readonly string[] }) => {
+  const applyStatusFrame = (owner: RemoteTransport, frame: { readonly running: readonly string[]; readonly attention: readonly string[]; readonly outstanding?: readonly string[] }) => {
     if (!isCurrentConnection(owner)) return
     retryUsage(owner)
     statusFrameRevision += 1
-    const status = { running: new Set(frame.running), attention: new Set(frame.attention) }
+    const status = { running: new Set(frame.running), attention: new Set(frame.attention), outstanding: new Set(frame.outstanding ?? []) }
     const previous = state.sessionStatus
     const comparison = reconnectStatus?.owner === owner ? reconnectStatus.status : previous
     const runningChanged = previous === undefined || previous.running.size !== status.running.size ||
       [...status.running].some((id) => !previous.running.has(id))
     const changed = previous === undefined || previous.running.size !== status.running.size || previous.attention.size !== status.attention.size ||
+      previous.outstanding.size !== status.outstanding.size || [...status.outstanding].some((id) => !previous.outstanding.has(id)) ||
       [...status.running].some((id) => !previous.running.has(id)) || [...status.attention].some((id) => !previous.attention.has(id))
     if ((statusBaseline || reconnectStatus?.owner === owner) && comparison !== undefined) {
       for (const id of status.attention) if (!comparison.attention.has(id)) notifySession("approval-requested", id)
-      for (const id of comparison.running) if (!status.running.has(id)) notifySession("agent-completed", id)
+      const busy = new Set([...status.running, ...status.outstanding])
+      for (const id of new Set([...comparison.running, ...comparison.outstanding]))
+        if (!busy.has(id) && !status.attention.has(id)) notifySession("agent-completed", id)
     }
     reconnectStatus = undefined
     statusBaseline = true
@@ -1489,7 +1492,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       carouselRevision += 1
       carouselRefreshPending = true
     }
-    if (changed && [...status.running, ...status.attention].some((id) => !state.sessions.some((row) => row.id === id))) statusReloadLocal = true
+    if (changed && [...status.running, ...status.attention, ...status.outstanding].some((id) => !state.sessions.some((row) => row.id === id))) statusReloadLocal = true
     if (statusReloadLocal || carouselRefreshPending) void reloadStatusFirstPage(owner)
   }
 
@@ -3075,9 +3078,11 @@ export function parseSessionStatus(payload: unknown): RemoteStoreState["sessionS
   if (typeof body !== "object" || body === null) return undefined
   const running = Reflect.get(body, "running")
   const attention = Reflect.get(body, "attention")
+  const outstanding = Reflect.get(body, "outstanding")
   if (!Array.isArray(running) || !running.every((id) => typeof id === "string" && id.startsWith("ses_")) ||
-    !Array.isArray(attention) || !attention.every((id) => typeof id === "string" && id.startsWith("ses_"))) return undefined
-  return { running: new Set(running), attention: new Set(attention) }
+    !Array.isArray(attention) || !attention.every((id) => typeof id === "string" && id.startsWith("ses_")) ||
+    (outstanding !== undefined && (!Array.isArray(outstanding) || !outstanding.every((id) => typeof id === "string" && id.startsWith("ses_"))))) return undefined
+  return { running: new Set(running), attention: new Set(attention), outstanding: new Set(outstanding ?? []) }
 }
 
 export function readAutonomyFromResponse(value: unknown): SessionAutonomyView | undefined {

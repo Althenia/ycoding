@@ -146,7 +146,7 @@ export const Plugin = {
             text: `<shell id="${callID}" state="${state}" command="${command}">\n${text}\n</shell>`,
             description: command,
             metadata: { source: "shell", state },
-          })
+          }).pipe(Effect.andThen(runtime.job.noticeAdmitted(callID)))
         }),
         Effect.forkIn(scope, { startImmediately: true }),
       )

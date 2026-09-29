@@ -78,6 +78,7 @@ export type LocalServer = {
   readonly getSession: (sessionID: string, location: LocalLocation) => Promise<SessionInfo>
   /** Process-wide running status; the caller filters it to the current inventory. */
   readonly activeSessions: () => Promise<unknown>
+  readonly outstandingSessions: (failures?: boolean) => Promise<{ readonly data: readonly string[]; readonly failed: readonly string[] }>
   readonly providerUsageList: (refresh?: boolean) => Promise<ProviderUsageListOutput>
   readonly usageSummary: () => Promise<UsageGetOutput>
   readonly usageReport: (input: RemoteUsageReportInput) => Promise<UsageReportOutput>
@@ -203,6 +204,8 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     messages: (sessionID, location) =>
       call(() => client.message.list({ sessionID }, request(location, timeoutMs))),
     activeSessions: () => call(() => client.session.active({ signal: AbortSignal.timeout(timeoutMs) })),
+    outstandingSessions: (failures) => call(() => client.session.outstanding(failures ? { failures: true } : undefined,
+      { signal: AbortSignal.timeout(timeoutMs) })),
     providerUsageList: (refresh) => call(() => client.providerUsage.list({ ...(refresh === undefined ? {} : { refresh }) }, { signal: AbortSignal.timeout(timeoutMs) })),
     usageSummary: () => call(() => client.usage.get({ signal: AbortSignal.timeout(timeoutMs) })),
     usageReport: (input) => call(() => client.usage.report(input, { signal: AbortSignal.timeout(timeoutMs) })),

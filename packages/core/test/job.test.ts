@@ -9,6 +9,21 @@ import { testEffect } from "./lib/effect"
 const it = testEffect(AppNodeBuilder.build(Job.node))
 
 describe("Job", () => {
+  it.live("keeps a background shell outstanding across process settlement until its notice is admitted", () =>
+    Effect.gen(function* () {
+      const jobs = yield* Job.Service
+      const sessionID = SessionSchema.ID.make("ses_shell_notice")
+      const release = yield* Deferred.make<void>()
+      const job = yield* jobs.start({ type: "shell", metadata: { sessionID }, run: Deferred.await(release).pipe(Effect.as("done")) })
+      expect([...(yield* jobs.outstandingSessions())]).toEqual([sessionID])
+      yield* jobs.background(job.id)
+      yield* Deferred.succeed(release, undefined)
+      yield* jobs.wait({ id: job.id })
+      expect([...(yield* jobs.outstandingSessions())]).toEqual([sessionID])
+      yield* jobs.noticeAdmitted(job.id)
+      expect([...(yield* jobs.outstandingSessions())]).toEqual([])
+    }),
+  )
   it.live("tracks process-local work through explicit observation", () =>
     Effect.gen(function* () {
       const jobs = yield* Job.Service

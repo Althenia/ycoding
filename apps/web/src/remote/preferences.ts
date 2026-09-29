@@ -26,8 +26,8 @@ export function defaultComposerModel(catalog: CatalogView | undefined, preferred
 export const NOTIFICATION_STORAGE_KEY = "ycoding.notifications"
 
 export const NOTIFICATION_CATEGORIES = [
-  { id: "agent-completed", label: "Agent completed", detail: "Work finished in a session you are watching." },
-  { id: "approval-requested", label: "Approval requested", detail: "A tool or command waits for your decision." },
+  { id: "agent-completed", label: "Work finished", detail: "All work in a Session family has finished." },
+  { id: "approval-requested", label: "Needs your attention", detail: "A Session family is waiting for you or ended with an error." },
   { id: "guardrail-blocked", label: "Guardrail block", detail: "A guardrail review or denial stopped an action." },
   { id: "error", label: "Error or failure", detail: "A session step or model request failed." },
   { id: "device-disconnected", label: "Device disconnected", detail: "A paired machine stopped reporting." },

@@ -4,7 +4,7 @@ import type { RemoteNotificationView } from "../notifications"
 
 const today = new Date(2026, 8, 27, 12).getTime()
 const notice = (id: string, at: number, read = false): RemoteNotificationView => ({
-  id, at, read, category: "approval-requested", title: "YCoding — approval needed", body: "A session is waiting for your decision.",
+  id, at, read, category: "approval-requested", title: "YCoding — needs your attention", body: "A session is waiting for you.",
   sessionID: "ses_a", sessionTitle: "Alpha",
 })
 

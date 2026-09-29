@@ -152,6 +152,8 @@ const BooleanFromString = Schema.Literals(["true", "false"]).pipe(
   }),
 )
 
+export const SessionOutstandingQuery = Schema.Struct({ failures: BooleanFromString.pipe(Schema.optional) })
+
 export const SessionAutonomyMode = Schema.Literals(["normal"]).annotate({
   identifier: "SessionAutonomyMode",
 })
@@ -327,6 +329,18 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           summary: "List active sessions",
           description:
             "Retrieve foreground Session drains currently owned by this YCoding process. Sessions absent from the result are inactive.",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.outstanding", "/api/session/outstanding", {
+        query: SessionOutstandingQuery,
+        success: Schema.Struct({ data: Schema.Array(Session.ID), failed: Schema.Array(Session.ID) }),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.outstanding",
+          summary: "List outstanding Session work",
+          description: "List Sessions with executing drains, admitted inputs, background shell notices, active subagent tasks or notices, or active goals in this process. Optionally include roots whose latest execution failed until their family next starts.",
         }),
       ),
     )

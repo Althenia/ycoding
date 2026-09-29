@@ -3,9 +3,10 @@ export * from "./session/schema"
 
 import { Cause, DateTime, Effect, Layer, Option, Schema, Context, Stream, Scope } from "effect"
 import { ListAnchor } from "@ycoding-ai/schema/session"
+import { Event } from "@ycoding-ai/schema/event"
 import type { Model } from "@ycoding-ai/schema/model"
 import { ID, type Admission, type Result } from "@ycoding-ai/schema/session-compaction"
-import { and, asc, desc, eq, gt, isNull, like, lt, or, sql, type SQL } from "drizzle-orm"
+import { and, asc, desc, eq, gt, inArray, isNull, like, lt, or, sql, type SQL } from "drizzle-orm"
 import { ProjectV2 } from "./project"
 import { WorkspaceV2 } from "./workspace"
 import { ModelV2 } from "./model"
@@ -29,12 +30,13 @@ import { SessionGuardrail } from "./session/guardrail"
 import { Base64, FileAttachment, ManagedAttachmentContent, Prompt } from "@ycoding-ai/schema/prompt"
 import { PromptInput } from "@ycoding-ai/schema/prompt-input"
 import { EventV2 } from "./event"
+import { EventTable } from "./event/sql"
 import { Database } from "./database/database"
 import { SessionProjector } from "./session/projector"
 import { SessionContextExclusionCleanup } from "./session/context-exclusion-cleanup"
 import { SessionFileChangeCleanup } from "./session/file-change-cleanup"
 import { SessionUsageCleanup } from "./session/usage-cleanup"
-import { SessionFileChangeTable, SessionMessageTable, SessionTable, SessionTaskTable } from "./session/sql"
+import { SessionFileChangeTable, SessionMessageTable, SessionPendingTable, SessionTable, SessionTaskNotificationTable, SessionTaskTable } from "./session/sql"
 import { SessionSchema } from "./session/schema"
 import { AbsolutePath, PositiveInt, RelativePath } from "./schema"
 import { AgentV2 } from "./agent"
@@ -404,6 +406,10 @@ export interface Interface {
   readonly compact: Compact
   readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
+  readonly outstanding: (includeFailures?: boolean) => Effect.Effect<{
+    readonly sessions: ReadonlySet<SessionSchema.ID>
+    readonly failed: ReadonlySet<SessionSchema.ID>
+  }>
   readonly background: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
@@ -1847,6 +1853,46 @@ const layer = Layer.effect(
         yield* execution.awaitIdle(sessionID)
       }),
       active: execution.active,
+      outstanding: Effect.fn("V2Session.outstanding")(function* (includeFailures = false) {
+        const tasks = yield* db.select({ sessionID: SessionTaskTable.parent_id }).from(SessionTaskTable)
+          .where(inArray(SessionTaskTable.state, ["starting", "running", "waiting", "cancelling"]))
+          .all().pipe(Effect.orDie)
+        const notices = yield* db.select({ sessionID: SessionTaskNotificationTable.parent_id }).from(SessionTaskNotificationTable)
+          .where(eq(SessionTaskNotificationTable.delivered, false)).all().pipe(Effect.orDie)
+        const goals = yield* db.select({ sessionID: SessionTable.id }).from(SessionTable)
+          .where(sql`json_extract(${SessionTable.autonomy}, '$.goal.status') = 'active'`).all().pipe(Effect.orDie)
+        const shellJobs = yield* jobs.outstandingSessions()
+        const pending = yield* db.select({ sessionID: SessionPendingTable.session_id }).from(SessionPendingTable)
+          .groupBy(SessionPendingTable.session_id).all().pipe(Effect.orDie)
+        const active = yield* execution.active
+        const sessions = new Set([...tasks, ...notices, ...goals, ...pending].map((row) => row.sessionID).concat([...shellJobs, ...active]))
+        if (!includeFailures) return { sessions, failed: new Set<SessionSchema.ID>() }
+        const startedType = Event.versionedType(SessionEvent.Execution.Started.type, SessionEvent.Execution.Started.durable.version)
+        const failedType = Event.versionedType(SessionEvent.Execution.Failed.type, SessionEvent.Execution.Failed.durable.version)
+        const latest = db.select({ aggregateID: EventTable.aggregate_id, seq: sql<number>`max(${EventTable.seq})`.as("seq") })
+          .from(EventTable).where(inArray(EventTable.type, [startedType, failedType]))
+          .groupBy(EventTable.aggregate_id).as("latest_execution")
+        const history = yield* db.select({ aggregateID: EventTable.aggregate_id, type: EventTable.type,
+          created: EventTable.created, id: EventTable.id }).from(EventTable)
+          .innerJoin(latest, and(eq(EventTable.aggregate_id, latest.aggregateID), eq(EventTable.seq, latest.seq)))
+          .orderBy(asc(EventTable.created), asc(EventTable.id)).all().pipe(Effect.orDie)
+        const rows = yield* db.select({ id: SessionTable.id, parentID: SessionTable.parent_id })
+          .from(SessionTable).all().pipe(Effect.orDie)
+        const parents = new Map(rows.map((row) => [row.id, row.parentID]))
+        const failed = new Set<SessionSchema.ID>()
+        for (const event of history) {
+          const seen = new Set<SessionSchema.ID>()
+          let root = SessionSchema.ID.make(event.aggregateID)
+          while (parents.get(root) && !seen.has(root)) {
+            seen.add(root)
+            root = parents.get(root)!
+          }
+          if (!parents.has(root) || seen.has(root)) continue
+          if (event.type === failedType) failed.add(root)
+          else failed.delete(root)
+        }
+        return { sessions, failed }
+      }),
       background: Effect.fn("V2Session.background")(function* (sessionID) {
         yield* result.get(sessionID)
         const backgrounded = yield* jobs.backgroundAll({ sessionID })

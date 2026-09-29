@@ -18,6 +18,26 @@ async function setup(handler?: (request: { operation: string; input?: Readonly<R
 }
 
 describe("remote data", () => {
+  test("the bell waits for all family work and gives attention precedence over finished", async () => {
+    const test = await setup()
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessionStatus !== undefined)
+      test.relay.pushStatus(["ses_a"], [])
+      await waitFor(() => test.store.state().sessionStatus?.running.has("ses_a") === true)
+      test.relay.pushStatus([], [], ["ses_a"])
+      await waitFor(() => test.store.state().sessionStatus?.running.size === 0)
+      expect(test.store.state().notifications).toEqual([])
+      test.relay.pushStatus([], ["ses_a"])
+      await waitFor(() => test.store.state().sessionStatus?.attention.has("ses_a") === true)
+      expect(test.store.state().notifications.map((notice) => notice.category)).toEqual(["approval-requested"])
+      test.relay.pushStatus(["ses_a"], [])
+      await waitFor(() => test.store.state().sessionStatus?.running.has("ses_a") === true)
+      test.relay.pushStatus([], [])
+      await waitFor(() => test.store.state().notifications.length === 2)
+      expect(test.store.state().notifications.map((notice) => notice.category)).toEqual(["agent-completed", "approval-requested"])
+    } finally { await test.stop() }
+  })
   test("the first status after a same-device reconnect reports decisions gained and work stopped while away", async () => {
     const test = await setup()
     const transitions = () => test.store.state().notifications.filter((entry) => entry.category === "approval-requested" || entry.category === "agent-completed")
@@ -488,9 +508,9 @@ describe("remote data", () => {
         ["ses_a", true, false], ["ses_b", false, true],
       ])
       expect(test.store.state().notifications.map((notice) => [notice.category, notice.sessionID, notice.read])).toEqual([
-        ["agent-completed", "ses_b", false], ["approval-requested", "ses_b", false], ["approval-requested", "ses_a", false],
+        ["approval-requested", "ses_b", false], ["approval-requested", "ses_a", false],
       ])
-      expect(test.store.state().notifications[0]?.body).toContain("stopped running")
+      expect(test.store.state().notifications[0]?.body).toBe("A session is waiting for you.")
       test.store.markNotificationsRead()
       expect(test.store.state().notifications.every((notice) => notice.read)).toBe(true)
       test.store.clearNotifications()

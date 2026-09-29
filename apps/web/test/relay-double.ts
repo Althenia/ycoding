@@ -58,7 +58,7 @@ export type RelayDouble = {
   setMe: (value: unknown, status?: number) => void
   pushEvent: (sessionID: string, event: unknown) => void
   pushSessions: (sessionIDs: readonly string[]) => void
-  pushStatus: (running: readonly string[], attention: readonly string[]) => void
+  pushStatus: (running: readonly string[], attention: readonly string[], outstanding?: readonly string[]) => void
   dropConnections: (code: number, reason: string) => void
   stop: () => Promise<void>
 }
@@ -346,8 +346,9 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
     pushSessions: (_sessionIDs) => {
       for (const socket of sockets) socket.send(serializeSessions({ type: "sessions" }))
     },
-    pushStatus: (running, attention) => {
-      for (const socket of sockets) socket.send(serializeStatus({ type: "status", running, attention }))
+    pushStatus: (running, attention, outstanding) => {
+      for (const socket of sockets) socket.send(serializeStatus({ type: "status", running, attention,
+        ...(outstanding === undefined ? {} : { outstanding }) }))
     },
     dropConnections: (code, reason) => {
       for (const socket of sockets) socket.close(code, reason)

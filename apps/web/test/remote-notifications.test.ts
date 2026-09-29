@@ -186,7 +186,7 @@ describe("remote notification delivery", () => {
       await stopRoot(test, "ses_far")
       expect(test.store.state().notifications[0]).toMatchObject({ sessionID: "ses_far", sessionTitle: "Cross-workspace work" })
       expect(test.relay.requests.filter((request) => request.operation === "session.get" && request.sessionID === "ses_far")).toHaveLength(0)
-      expect(test.alerts[0]?.body).toBe("A session stopped running.")
+      expect(test.alerts[0]?.body).toBe("A session finished all its work.")
     } finally { await test.stop() }
   })
 
@@ -218,7 +218,7 @@ describe("remote notification delivery", () => {
       await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.get" && request.sessionID === "ses_far"))
       await needDecision(test, "ses_far")
       expect(test.store.state().notifications.filter((entry) => entry.sessionID === "ses_far").map((entry) => [entry.sessionTitle, entry.body])).toEqual([
-        [undefined, "A session is waiting for your decision."], [undefined, "A session stopped running."],
+        [undefined, "A session is waiting for you."], [undefined, "A session finished all its work."],
       ])
       expect(test.relay.requests.filter((request) => request.operation === "session.get" && request.sessionID === "ses_far")).toHaveLength(1)
     } finally { await test.stop() }
@@ -245,7 +245,7 @@ describe("remote notification delivery", () => {
       await test.openSession()
       await stopRoot(test)
       expect(test.store.state().notifications.map((entry) => entry.category)).toEqual(["agent-completed"])
-      expect(test.store.state().notifications[0]?.body).toBe("A session stopped running.")
+      expect(test.store.state().notifications[0]?.body).toBe("A session finished all its work.")
       expect(test.alerts).toHaveLength(1)
 
       test.relay.pushEvent("ses_a", durable("session.execution.succeeded", 6))
@@ -277,7 +277,7 @@ describe("remote notification delivery", () => {
         "approval-requested",
       ])
       expect(test.alerts.map((alert) => alert.title)).toEqual([
-        "YCoding — approval needed",
+        "YCoding — needs your attention",
         "YCoding — guardrail blocked",
         "YCoding — session failure",
       ])

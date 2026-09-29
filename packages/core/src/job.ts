@@ -27,6 +27,7 @@ type Active = {
   token: object
   blockingSessions: Map<SessionSchema.ID, number>
   isBackgrounded: boolean
+  noticePending: boolean
   backgroundReason?: BackgroundReason
 }
 
@@ -102,6 +103,8 @@ export type BackgroundAllInput = {
 
 export interface Interface {
   readonly list: () => Effect.Effect<Info[]>
+  readonly outstandingSessions: () => Effect.Effect<ReadonlySet<SessionSchema.ID>>
+  readonly noticeAdmitted: (id: string) => Effect.Effect<void>
   readonly get: (id: string) => Effect.Effect<Info | undefined>
   readonly start: (input: StartInput) => Effect.Effect<Info>
   readonly wait: (input: WaitInput) => Effect.Effect<WaitResult>
@@ -205,6 +208,22 @@ export const make = Effect.gen(function* () {
       .toSorted((a, b) => a.started_at - b.started_at)
   })
 
+  const outstandingSessions: Interface["outstandingSessions"] = Effect.fn("Job.outstandingSessions")(function* () {
+    return new Set(Array.from((yield* SynchronizedRef.get(state.jobs)).values()).flatMap((job) => {
+      const sessionID = job.info.metadata?.sessionID
+      return job.info.type === "shell" && typeof sessionID === "string" && sessionID.startsWith("ses_") &&
+        (job.info.status === "running" || job.noticePending)
+        ? [SessionSchema.ID.make(sessionID)] : []
+    }))
+  })
+
+  const noticeAdmitted: Interface["noticeAdmitted"] = Effect.fn("Job.noticeAdmitted")(function* (id) {
+    yield* SynchronizedRef.update(state.jobs, (jobs) => {
+      const job = jobs.get(id)
+      return job?.noticePending ? new Map(jobs).set(id, { ...job, noticePending: false }) : jobs
+    })
+  })
+
   const get: Interface["get"] = Effect.fn("Job.get")(function* (id) {
     const job = (yield* SynchronizedRef.get(state.jobs)).get(id)
     if (!job) return undefined
@@ -242,6 +261,7 @@ export const make = Effect.gen(function* () {
               token,
               blockingSessions: new Map<SessionSchema.ID, number>(),
               isBackgrounded: false,
+              noticePending: false,
             }
             return [{ info: snapshot(job), scope, token }, new Map(jobs).set(id, job)] as readonly [
               StartResult,
@@ -282,11 +302,16 @@ export const make = Effect.gen(function* () {
       state.jobs,
       (jobs): readonly [BackgroundResult, Map<string, Active>] => {
         const job = jobs.get(id)
-        if (!job || job.info.status !== "running") return [{}, jobs]
+        if (!job) return [{}, jobs]
+        if (job.info.status !== "running") {
+          if (job.info.type !== "shell") return [{}, jobs]
+          return [{ info: snapshot(job) }, new Map(jobs).set(id, { ...job, noticePending: true })]
+        }
         if (job.isBackgrounded) return [{ info: snapshot(job) }, jobs]
         const next = {
           ...job,
           isBackgrounded: true,
+          noticePending: job.info.type === "shell",
           backgroundReason: reason,
           blockingSessions: new Map<SessionSchema.ID, number>(),
         }
@@ -361,6 +386,7 @@ export const make = Effect.gen(function* () {
           const updated = {
             ...job,
             isBackgrounded: true,
+            noticePending: job.info.type === "shell",
             backgroundReason: "request" as const,
             blockingSessions: new Map<SessionSchema.ID, number>(),
           }
@@ -401,7 +427,7 @@ export const make = Effect.gen(function* () {
     return result.info
   })
 
-  return Service.of({ list, get, start, wait, block, background, backgroundAll, cancel })
+  return Service.of({ list, outstandingSessions, noticeAdmitted, get, start, wait, block, background, backgroundAll, cancel })
 })
 
 const layer = Layer.effect(Service, make)

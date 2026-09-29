@@ -178,6 +178,7 @@ describe("SkillTool", () => {
                 wait: unavailable,
                 block: unavailable,
                 background: unavailable,
+                noticeAdmitted: unavailable,
                 cancel: unavailable,
               },
               orchestration: {

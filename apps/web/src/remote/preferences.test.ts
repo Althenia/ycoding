@@ -26,6 +26,12 @@ function storage(initial: Record<string, string> = {}) {
 }
 
 describe("notification categories", () => {
+  test("Settings labels describe finished work and attention across the root family", () => {
+    expect(NOTIFICATION_CATEGORIES.slice(0, 2)).toEqual([
+      { id: "agent-completed", label: "Work finished", detail: "All work in a Session family has finished." },
+      { id: "approval-requested", label: "Needs your attention", detail: "A Session family is waiting for you or ended with an error." },
+    ])
+  })
   test("cover the configured user-facing categories", () => {
     expect(NOTIFICATION_CATEGORIES.map((category) => category.id)).toEqual([
       "agent-completed",

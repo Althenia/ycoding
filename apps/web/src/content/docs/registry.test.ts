@@ -99,6 +99,13 @@ describe("remote workspace documentation", () => {
 })
 
 describe("page structure", () => {
+  test("the remote guide describes family-finished and attention categories", () => {
+    const section = findDocPage("usage/remote")?.sections.find((entry) => entry.heading === "Notifications and availability")
+    const text = JSON.stringify(section?.blocks)
+    expect(text).toContain("A root Session family has no executing work")
+    expect(text).toContain("a run ends with an error")
+    expect(text).not.toContain("stops running")
+  })
   test("configuration pages describe local attention without a removed remote notification tool", () => {
     expect(JSON.stringify(DOC_PAGES.filter((page) => page.group === "Configuration"))).not.toMatch(/ntfy/i)
     expect(findDocPage("configuration/notifications")?.sections.some((section) => section.heading === "Terminal attention")).toBe(true)

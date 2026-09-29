@@ -162,6 +162,26 @@ describe("relay core: role separation", () => {
     expect(h.pushed).toHaveLength(21)
   })
 
+  test("a family finishes only after all outstanding work clears, and attention wins at idle", async () => {
+    const h = harness()
+    await attachBoth(h)
+    const status = (running: string[], attention: string[], outstanding: string[] = []) =>
+      h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running, attention, outstanding }))
+    await status(["ses_a"], [])
+    await status([], [], ["ses_a"])
+    expect(h.pushed).toEqual([])
+    await status(["ses_a"], [], ["ses_a"])
+    await status([], [], ["ses_a"])
+    expect(h.pushed).toEqual([])
+    await status([], ["ses_a"], [])
+    expect(h.pushed.map((event) => event.category)).toEqual(["approval-requested"])
+    await status(["ses_a"], [], [])
+    await status([], [], [])
+    expect(h.pushed.map((event) => event.category)).toEqual(["approval-requested", "agent-completed"])
+    await status([], [], [])
+    expect(h.pushed).toHaveLength(2)
+  })
+
   test("a reattached agent diffs against the stored status, while unchanged and first-ever frames stay silent", async () => {
     const h = harness()
     await h.relay.attach(agent("agent-1"))

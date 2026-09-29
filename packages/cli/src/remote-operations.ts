@@ -206,6 +206,7 @@ export function createSubscriptions(options: { readonly onChange?: () => void } 
 export type SessionRegistry = {
   readonly ids: () => readonly string[]
   readonly snapshot: () => readonly SessionInfo[]
+  readonly root: (sessionID: string) => string | undefined
   readonly get: (sessionID: string) => Promise<SessionInfo | undefined>
   /** Resolve the Session from the complete backend inventory, then verify its current Location. */
   readonly verify: (sessionID: string) => Promise<SessionInfo | undefined>
@@ -269,6 +270,10 @@ export function createSessionRegistry(input: {
   return {
     ids: () => [...verified.keys()],
     snapshot: () => [...verified.values()],
+    root: (sessionID) => {
+      const session = verified.get(sessionID)
+      return session === undefined ? undefined : rootSessionID(session, verified)
+    },
     get: verify,
     verify,
     refresh: async () => {
@@ -577,7 +582,11 @@ async function run(input: OperationInput) {
     const active = await input.local.activeSessions()
     return { data: filterActiveSessions(active, allowed) }
   }
-  if (validated.kind === "status") return sessionStatus(input.local, input.sessions.snapshot())
+  if (validated.kind === "status") {
+    const status = await sessionStatus(input.local, input.sessions.snapshot())
+    return { running: status.running, attention: status.attention,
+      ...(status.outstanding === undefined ? {} : { outstanding: status.outstanding }) }
+  }
   if (validated.kind === "usage.providers") return { data: (await input.local.providerUsageList(validated.refresh)).data }
   if (validated.kind === "usage.summary") return { data: await input.local.usageSummary() }
   if (validated.kind === "usage.report") return { data: await input.local.usageReport(validated.input) }
@@ -1249,7 +1258,7 @@ function boundedActivity(value: string, limit = 80): string {
   return points.length <= limit ? clean : `${points.slice(0, limit - 1).join("")}…`
 }
 
-export async function sessionStatus(local: LocalServer, sessions: readonly SessionInfo[], knownAttention?: readonly string[]) {
+export async function sessionStatus(local: LocalServer, sessions: readonly SessionInfo[], knownAttention?: readonly string[], knownFailures?: ReadonlySet<string>) {
   const byID = new Map(sessions.map((session) => [session.id, session]))
   const rootOf = (sessionID: unknown) => {
     const session = typeof sessionID === "string" ? byID.get(sessionID) : undefined
@@ -1257,11 +1266,17 @@ export async function sessionStatus(local: LocalServer, sessions: readonly Sessi
   }
   const executing = [...activeIDs(await local.activeSessions())].flatMap((id) => byID.get(id) ?? [])
   const running = new Set(executing.flatMap((session) => rootSessionID(session, byID) ?? []))
+  const work = await local.outstandingSessions(knownFailures === undefined)
+  const outstanding = new Set(work.data.flatMap((id) => rootOf(id) ?? []).filter((id) => !running.has(id)))
+  const failed = knownFailures ?? new Set(work.failed.flatMap((id) => rootOf(id) ?? []))
   if (running.size > RemoteLimits.maxStatusSessions || (knownAttention !== undefined && knownAttention.length > RemoteLimits.maxStatusSessions))
     throw new OperationError("message_too_large", "Session status exceeds the bounded root count")
-  if (knownAttention !== undefined) return { running: [...running].sort(), attention: knownAttention }
-  const executingLocations = [...new Map(executing.map((session) => [JSON.stringify([session.location.directory, session.location.workspaceID ?? null]), locationInfo(session)])).values()]
+  if (outstanding.size > RemoteLimits.maxStatusSessions) throw new OperationError("message_too_large", "Session status exceeds the bounded root count")
   const attention = new Set<string>()
+  if (knownAttention !== undefined) for (const id of knownAttention) attention.add(id)
+  const executingLocations = knownAttention === undefined
+    ? [...new Map(executing.map((session) => [JSON.stringify([session.location.directory, session.location.workspaceID ?? null]), locationInfo(session)])).values()]
+    : []
   for (let offset = 0; offset < executingLocations.length; offset += 8) {
     await Promise.all(executingLocations.slice(offset, offset + 8).map(async (location) => {
       const [permissions, forms] = await Promise.all([local.permissionRequests(location), local.formRequests(location)])
@@ -1273,7 +1288,7 @@ export async function sessionStatus(local: LocalServer, sessions: readonly Sessi
       }
     }))
   }
-  const families = [...running].flatMap((id) => byID.get(id) ?? [])
+  const families = knownAttention === undefined ? [...running].flatMap((id) => byID.get(id) ?? []) : []
   for (let offset = 0; offset < families.length; offset += 8) {
     await Promise.all(families.slice(offset, offset + 8).map(async (root) => {
       const reviews = await local.guardrailRequestList(root.id, locationInfo(root))
@@ -1284,7 +1299,11 @@ export async function sessionStatus(local: LocalServer, sessions: readonly Sessi
   }
   if (attention.size > RemoteLimits.maxStatusSessions)
     throw new OperationError("message_too_large", "Session status exceeds the bounded root count")
-  return { running: [...running].sort(), attention: [...attention].sort() }
+  const requestAttention = [...attention].sort()
+  const combined = [...new Set([...attention, ...failed])].sort()
+  if (combined.length > RemoteLimits.maxStatusSessions) throw new OperationError("message_too_large", "Session status exceeds the bounded root count")
+  return { running: [...running].sort(), attention: combined, requestAttention, failed: [...failed],
+    ...(outstanding.size === 0 ? {} : { outstanding: [...outstanding].sort() }) }
 }
 
 function rootSessionID(session: SessionInfo, byID: ReadonlyMap<string, SessionInfo>): string | undefined {

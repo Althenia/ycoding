@@ -53,11 +53,14 @@ test("service worker shows one notification per push including malformed and foc
     const payload = { category: "approval-requested", sessionID: "ses_1", deviceID: "dev_1" }
     await emit("push", { data: { json: () => payload } })
     expect(shown).toHaveLength(3)
-    expect(shown[2]).toMatchObject({ title: "YCoding — approval needed", options: { tag: "ycoding-ses_1-approval-requested", data: { sessionID: "ses_1" } } })
+    expect(shown[2]).toMatchObject({ title: "YCoding — needs your attention", options: { tag: "ycoding-ses_1-approval-requested", data: { sessionID: "ses_1" } } })
     windowClients.length = 0
     await emit("push", { data: { json: () => payload } })
     expect(shown).toHaveLength(4)
-    expect(shown[3]).toMatchObject({ title: "YCoding — approval needed", options: { tag: "ycoding-ses_1-approval-requested", data: { sessionID: "ses_1" } } })
+    expect(shown[3]).toMatchObject({ title: "YCoding — needs your attention", options: { tag: "ycoding-ses_1-approval-requested", data: { sessionID: "ses_1" } } })
+    await emit("push", { data: { json: () => ({ category: "agent-completed", sessionID: "ses_1", deviceID: "dev_1" }) } })
+    expect(shown[4]).toMatchObject({ title: "YCoding — work finished", options: { body: "A session finished all its work.", tag: "ycoding-ses_1-agent-completed" } })
+    expect(shown[3]).toMatchObject({ title: "YCoding — needs your attention", options: { body: "A session is waiting for you." } })
     await emit("notificationclick", { notification: { data: { sessionID: "ses_1" }, close: () => undefined } })
     expect(opened).toBe("/remote#session=ses_1")
     windowClients.push(windowClient)

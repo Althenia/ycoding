@@ -14,7 +14,7 @@ export interface Interface {
     SessionV2.Interface,
     "get" | "create" | "messages" | "prompt" | "generate" | "command" | "resume" | "interrupt" | "synthetic" | "compact"
   >
-  readonly job: Pick<Job.Interface, "start" | "wait" | "block" | "background" | "cancel">
+  readonly job: Pick<Job.Interface, "start" | "wait" | "block" | "background" | "cancel" | "noticeAdmitted">
   readonly orchestration: SessionOrchestration.Interface
   readonly location: {
     readonly agent: {
@@ -67,6 +67,7 @@ export const layerWithCell = (cell: Cell) =>
         wait: (input) => require(cell, (runtime) => runtime.job.wait(input)),
         block: (input) => require(cell, (runtime) => runtime.job.block(input)),
         background: (id) => require(cell, (runtime) => runtime.job.background(id)),
+        noticeAdmitted: (id) => require(cell, (runtime) => runtime.job.noticeAdmitted(id)),
         cancel: (id) => require(cell, (runtime) => runtime.job.cancel(id)),
       },
       orchestration: {

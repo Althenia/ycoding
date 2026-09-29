@@ -209,6 +209,7 @@ describe("MCP skill model-facing integration", () => {
                 wait: unavailable,
                 block: unavailable,
                 background: unavailable,
+                noticeAdmitted: unavailable,
                 cancel: unavailable,
               },
               orchestration: {

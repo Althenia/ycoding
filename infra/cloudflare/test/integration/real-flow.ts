@@ -1178,6 +1178,50 @@ try {
     if (!process.argv.includes("--page-alert")) await chrome.leavePage()
   }
   providerMode = "hold"
+  providerTurn = { text: providerText, prompt: "finish after the review" }
+  const finishing = await probeRequest("session.prompt", {
+    sessionID: guardSessionID,
+    input: { id: "msg_real_flow_finish", text: "finish after the review" },
+  })
+  expect(finishing.status === "ok", `completion prompt failed: ${JSON.stringify(finishing)}`)
+  await waitFor(() => store.state().sessionStatus?.running.has(guardSessionID) ? true : undefined, 30_000,
+    "the finishing Session did not publish its running status")
+  const pushesBeforeFinish = pushRequests.length
+  releaseStream?.()
+  await waitFor(() => pushRequests.length > pushesBeforeFinish &&
+    store.state().sessionStatus?.running.has(guardSessionID) === false &&
+    store.state().sessionStatus?.outstanding.has(guardSessionID) === false ? true : undefined, 30_000,
+  "the completed Session did not publish its finished status and push")
+  const pushPayloads = await Promise.all(pushRequests.slice(pushesBeforeFinish).map(async (request) => {
+    const sender = request.body.slice(21, 86)
+    const publicSender = await crypto.subtle.importKey("raw", sender, { name: "ECDH", namedCurve: "P-256" }, false, [])
+    const shared = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: publicSender }, receiver.privateKey, 256))
+    const { cek, nonce } = await deriveWebPushKeys(shared, pushAuth, pushReceiver, sender, request.body.slice(0, 16))
+    const key = await crypto.subtle.importKey("raw", cek, "AES-GCM", false, ["decrypt"])
+    const clear = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce }, key, request.body.slice(86)))
+    return { method: request.method, ttl: request.ttl, payload: JSON.parse(new TextDecoder().decode(clear.slice(0, -1))) }
+  }))
+  expect(pushPayloads.some((item) => item.method === "POST" && item.ttl === "600" &&
+    item.payload.category === "agent-completed" && item.payload.sessionID === guardSessionID),
+  "the hibernatable Durable Object did not complete the finished Session's encrypted push POST")
+  if (chrome) {
+    if (process.argv.includes("--page-alert")) {
+      await waitFor(async () => {
+        const tags = await chrome.pageAlerts()
+        return Array.isArray(tags) && tags.includes(`ycoding-${guardSessionID}-agent-completed`) ? true : undefined
+      }, 30_000, "the open workspace did not invoke the page-level service worker notification on completion")
+      checks.push("an open Chrome workspace invoked the page-level desktop notifier on a real family completion")
+    } else {
+      const notifications = await waitFor(async () => {
+        const shown = await chrome.notifications()
+        return Array.isArray(shown) && shown.some((item) => isRecord(item) && item.title === "YCoding — work finished" && item.tag === `ycoding-${guardSessionID}-agent-completed`) ? shown : undefined
+      }, 90_000, "headed Chrome did not show a decrypted Web Push notification from FCM")
+      expect(notifications.length > 0, "headed Chrome received no notification")
+      checks.push("headed Chrome received the FCM push through the built service worker and showed the finished-work notification")
+    }
+  }
+  checks.push("finished status reached the hibernatable Durable Object and completed a push POST to the local endpoint stub")
+  providerMode = "hold"
   providerTurn = { text: providerText, prompt: "hold the stream open" }
   const executing = await probeRequest("session.prompt", {
     sessionID,
@@ -1191,7 +1235,6 @@ try {
   )
   await waitFor(() => store.state().sessionStatus?.running.has(sessionID) ? true : undefined, 30_000,
     "the held step did not publish a running status baseline")
-  const pushesBeforeStop = pushRequests.length
   const interrupted = await probeRequest("session.interrupt", { sessionID })
   expect(interrupted.status === "ok", `interrupt failed: ${JSON.stringify(interrupted)}`)
   releaseStream?.()
@@ -1205,39 +1248,11 @@ try {
     30_000,
     "the interrupted session stayed active",
   )
-  await waitFor(() => pushRequests.length > pushesBeforeStop ? true : undefined, 30_000,
-    "the Durable Object did not finish its outbound stopped-work push POST")
-  const pushPayloads = await Promise.all(pushRequests.slice(pushesBeforeStop).map(async (request) => {
-    const sender = request.body.slice(21, 86)
-    const publicSender = await crypto.subtle.importKey("raw", sender, { name: "ECDH", namedCurve: "P-256" }, false, [])
-    const shared = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: publicSender }, receiver.privateKey, 256))
-    const { cek, nonce } = await deriveWebPushKeys(shared, pushAuth, pushReceiver, sender, request.body.slice(0, 16))
-    const key = await crypto.subtle.importKey("raw", cek, "AES-GCM", false, ["decrypt"])
-    const clear = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce }, key, request.body.slice(86)))
-    return { method: request.method, ttl: request.ttl, payload: JSON.parse(new TextDecoder().decode(clear.slice(0, -1))) }
-  }))
-  expect(pushPayloads.some((item) => item.method === "POST" && item.ttl === "600" &&
-    item.payload.category === "agent-completed" && item.payload.sessionID === sessionID),
-  "the hibernatable Durable Object did not complete the stopped Session's encrypted push POST")
-  if (chrome) {
-    if (process.argv.includes("--page-alert")) {
-      await waitFor(async () => {
-        const tags = await chrome.pageAlerts()
-        return Array.isArray(tags) && tags.includes(`ycoding-${sessionID}-agent-completed`) ? true : undefined
-      }, 30_000, "the open workspace did not invoke the page-level service worker notification on the status transition")
-      checks.push("an open Chrome workspace invoked the page-level desktop notifier on a real running-to-idle status frame")
-    } else {
-      const notifications = await waitFor(async () => {
-        const shown = await chrome.notifications()
-        return Array.isArray(shown) && shown.some((item) => isRecord(item) && item.title === "YCoding — work stopped" && item.tag === `ycoding-${sessionID}-agent-completed`) ? shown : undefined
-      }, 90_000, "headed Chrome did not show a decrypted Web Push notification from FCM")
-      expect(notifications.length > 0, "headed Chrome received no notification")
-      checks.push("headed Chrome received the FCM push through the built service worker and showed the stopped-work notification")
-    }
-  }
+  await waitFor(() => store.state().sessionStatus?.running.has(sessionID) === false &&
+    store.state().sessionStatus?.outstanding.has(sessionID) === true ? true : undefined,
+  30_000, "the interrupted Session lost its admitted outstanding work")
   expect((await pushHttp.remove(endpoint)).ok, "the authenticated push subscription was not removed")
-  checks.push("running-to-idle status reached the hibernatable Durable Object and completed a push POST to the local endpoint stub")
-  checks.push("interrupt stopped the running step through the real local service")
+  checks.push("interrupt stopped the running step while the real local service retained admitted outstanding work")
 
   await Bun.sleep(RemoteLimits.clientRateWindowMs + 1)
   providerMode = "normal"

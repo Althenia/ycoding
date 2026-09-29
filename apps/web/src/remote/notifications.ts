@@ -16,8 +16,8 @@ export type RemoteNotificationView = {
  * never carries a session title, tool name, path, command, or error message.
  */
 export const NOTIFICATION_TEXT: Record<NotificationCategory, { readonly title: string; readonly body: string }> = {
-  "agent-completed": { title: "YCoding — work stopped", body: "A session stopped running." },
-  "approval-requested": { title: "YCoding — approval needed", body: "A session is waiting for your decision." },
+  "agent-completed": { title: "YCoding — work finished", body: "A session finished all its work." },
+  "approval-requested": { title: "YCoding — needs your attention", body: "A session is waiting for you." },
   "guardrail-blocked": { title: "YCoding — guardrail blocked", body: "A guardrail decision blocked an action." },
   error: { title: "YCoding — session failure", body: "A session step failed." },
   "device-disconnected": { title: "YCoding — device disconnected", body: "The connected machine stopped reporting." },

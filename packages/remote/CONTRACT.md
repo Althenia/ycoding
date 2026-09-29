@@ -265,7 +265,7 @@ One JSON object per WebSocket frame, discriminated by `type`.
 | `response` | agent → relay → client | `{ type:"response", id, ok:true, value, chunk? }` or `{ type:"response", id, ok:false, error:{ code, message } }` |
 | `event` | agent → relay → clients | `{ type:"event", sessionID, event }` |
 | `sessions` | agent → relay → clients | `{ type:"sessions" }` |
-| `status` | agent → relay → clients | `{ type:"status", running:[rootSessionID,...], attention:[rootSessionID,...] }` |
+| `status` | agent → relay → clients | `{ type:"status", running:[rootSessionID,...], attention:[rootSessionID,...], outstanding?:[rootSessionID,...] }` |
 | `subscriptions` | relay → agent | `{ type:"subscriptions", clientID, sessionIDs:[...] }` |
 | `ping` | either direction | `{ type:"ping" }` |
 | `pong` | either direction | `{ type:"pong" }` |
@@ -289,14 +289,21 @@ Relay rules:
   rereading the Session groups and the selected group's first `session.list` page.
   The agent sends it for membership and list-metadata changes, not for activity
   that only advances a Session's updated time.
-- `status` is the complete current set of running root families and root families
-  with unresolved human requests. Each list contains unique Session IDs and at
+- `status` reports running root families, roots needing human attention, and
+  optional `outstanding` roots with non-executing work. An absent `outstanding`
+  means none. It includes admitted inputs, background shell notices, active
+  subagent tasks or undelivered parent notices, and active goals, excluding roots
+  already in `running`. Attention includes pending human requests and the latest
+  failed execution in a family until any member starts another execution.
+  Each list contains unique Session IDs and at
   most 500 entries. The agent sends it on connection and coalesces changed
-  execution/request state to at most one later frame per 250 ms. The relay
+  execution/request/work state to at most one later frame per 250 ms. The relay
   validates and broadcasts it unchanged to each device client; a new client
   receives the latest frame from the live agent. Execution-only changes read
-  process activity without rescanning pending requests; request transitions and
-  inventory changes refresh the pending-request set before publishing.
+  process activity and one aggregate outstanding-work read without rescanning
+  pending requests; request transitions and inventory changes refresh the
+  pending-request set before publishing. The connector reads persisted failed
+  state on connect and updates it from execution start/failure events afterward.
 
 - The client's registered subscription is updated when a `session.subscribe` or
   `session.unsubscribe` response succeeds.
@@ -338,7 +345,9 @@ that reaches five other failed deliveries.
 
 The first `status` frame after agent connect or Durable Object restore is a
 silent push baseline. Later newly attentive roots emit `approval-requested`;
-roots leaving the running set emit `agent-completed`. The push plaintext has
+roots leaving the union of `running` and `outstanding` emit `agent-completed`
+only if they are not attentive. Attention wins over completion. The web bell
+applies the same transition rule. The push plaintext has
 only `{ category, sessionID, deviceID }`, encrypted using RFC 8291
 `aes128gcm` and authenticated using RFC 8292 ES256 VAPID. The JWT audience is
 the endpoint origin and expires within twelve hours. Approval uses TTL 3600
@@ -400,7 +409,7 @@ grouping and Session-list filters are derived from backend metadata.
 | `usage.providers` | no | `v2.providerUsage.list` | `GET /api/provider/usage` | `refresh?` boolean |
 | `usage.summary` | no | `v2.usage.get` | `GET /api/usage` | — |
 | `usage.report` | no | `v2.usage.report` | `GET /api/usage/report` | `group`, `timeZone?`, `from?`, `to?`, `offset?`, `limit?`, `sort?`, `order?` |
-| `session.status` | no | `v2.session.active`, pending Session permission/form/guardrail reads | Local active and pending-request GET routes | — |
+| `session.status` | no | `v2.session.active`, `v2.session.outstanding`, pending Session permission/form/guardrail reads | Local active, outstanding-work, and pending-request GET routes | — |
 | `session.get` | yes | `v2.session.get` | `GET /api/session/:sessionID` | — |
 | `session.messages` | yes | `v2.message.list` | `GET /api/session/:sessionID/message` | — |
 | `session.capturedChanges.list` | yes | `v2.message.list`, `v2.session.subagent.list`, `v2.session.file-change.list` | Verified root and completed direct-child reads at their backend Locations | `cursor?` (opaque, at most 256 chars) |

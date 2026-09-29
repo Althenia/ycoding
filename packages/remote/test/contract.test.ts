@@ -517,11 +517,16 @@ describe("remote operations", () => {
     const status = { type: "status" as const, running: ["ses_a"], attention: ["ses_b"] }
     expect(parseAgentMessage(JSON.stringify(status))).toEqual({ ok: true, value: status })
     expect(parseClientMessage(JSON.stringify(status)).ok).toBe(false)
+    expect(parseAgentMessage(JSON.stringify({ ...status, outstanding: ["ses_c"] }))).toEqual({
+      ok: true, value: { ...status, outstanding: ["ses_c"] },
+    })
     for (const frame of [
       { type: "status", running: ["ses_a", "ses_a"], attention: [] },
       { type: "status", running: ["ses_a"], attention: ["not-session"] },
       { type: "status", running: [], attention: [], secret: "x" },
       { type: "status", running: Array.from({ length: 501 }, (_, index) => `ses_${index}`), attention: [] },
+      { type: "status", running: [], attention: [], outstanding: ["ses_a", "ses_a"] },
+      { type: "status", running: [], attention: [], outstanding: Array.from({ length: 501 }, (_, index) => `ses_${index}`) },
     ]) expect(parseAgentMessage(JSON.stringify(frame)).ok).toBe(false)
   })
 

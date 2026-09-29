@@ -109,6 +109,9 @@ export class RemoteAgent {
   private lastStatus?: string
   private attentionStatus?: readonly string[]
   private attentionGeneration = 0
+  private failedRoots = new Set<string>()
+  private failureChanges = new Map<string, boolean>()
+  private failuresHydrated = false
   private eventStop?: () => Promise<void>
   private eventStarting = false
   private eventStreamGeneration = 0
@@ -128,7 +131,7 @@ export class RemoteAgent {
     this.authRetryWindowMs = options.authRetryWindowMs ?? defaults.authRetryWindowMs
     this.registry = createSessionRegistry({
       local: options.local,
-      onChange: () => { void this.advertise(); this.attentionStatus = undefined; this.attentionGeneration++; this.scheduleStatus() },
+      onChange: () => { void this.advertise(); this.attentionStatus = undefined; this.attentionGeneration++; this.failuresHydrated = false; this.scheduleStatus() },
     })
     this.subscriptions = createSubscriptions()
   }
@@ -188,6 +191,9 @@ export class RemoteAgent {
         this.lastStatus = undefined
         this.attentionStatus = undefined
         this.attentionGeneration++
+        this.failedRoots.clear()
+        this.failureChanges.clear()
+        this.failuresHydrated = false
         if (this.statusTimer !== undefined) clearTimeout(this.statusTimer)
         this.statusTimer = undefined
         this.statusReading = undefined
@@ -248,6 +254,9 @@ export class RemoteAgent {
         if (controller.signal.aborted) return
         await this.send(serializeResponse(frame), owner)
       }
+      if (frames.some((frame) => frame.ok) &&
+        (request.operation === "session.goal.stop" || request.operation === "session.goal.set" || request.operation === "session.autonomy.set"))
+        this.scheduleStatus()
     } finally {
       if (this.inFlight.get(request.id) === controller) this.inFlight.delete(request.id)
     }
@@ -308,10 +317,23 @@ export class RemoteAgent {
     this.statusReading = connection
     const generation = this.attentionGeneration
     try {
-      const status = await sessionStatus(this.options.local, this.registry.snapshot(), this.attentionStatus)
+      const status = await sessionStatus(this.options.local, this.registry.snapshot(), this.attentionStatus,
+        this.failuresHydrated ? this.failedRoots : undefined)
       if (this.connection !== connection || this.state !== "live") return
-      if (generation === this.attentionGeneration) this.attentionStatus = status.attention
-      const frame = serializeStatus({ type: "status", ...status })
+      if (!this.failuresHydrated && generation === this.attentionGeneration) {
+        this.failedRoots = new Set(status.failed)
+        for (const [root, failed] of this.failureChanges) {
+          if (failed) this.failedRoots.add(root)
+          else this.failedRoots.delete(root)
+        }
+        this.failureChanges.clear()
+        this.failuresHydrated = true
+      }
+      if (generation === this.attentionGeneration) this.attentionStatus = status.requestAttention
+      const attention = [...new Set([...status.requestAttention, ...this.failedRoots])].sort()
+      if (attention.length > RemoteLimits.maxStatusSessions) throw new Error("Session status exceeds the bounded root count")
+      const frame = serializeStatus({ type: "status", running: status.running, attention,
+        ...(status.outstanding === undefined ? {} : { outstanding: status.outstanding }) })
       if (frame !== this.lastStatus) {
         if (await this.send(frame, connection)) this.lastStatus = frame
       }
@@ -391,7 +413,19 @@ export class RemoteAgent {
     if (typeof event === "object" && event !== null) {
       const type = Reflect.get(event, "type")
       if (typeof type === "string" && (type.startsWith("session.step.") || type.startsWith("session.execution.") ||
-        type.startsWith("permission.v2.") || type.startsWith("form.") || type.startsWith("guardrail."))) {
+        type.startsWith("session.task.") || type.startsWith("session.shell.") || type.startsWith("shell.") ||
+        type.startsWith("session.input.") || type.startsWith("permission.v2.") || type.startsWith("form.") || type.startsWith("guardrail."))) {
+        if (type.startsWith("session.execution.failed") || type.startsWith("session.execution.started")) {
+          const data = Reflect.get(event, "data")
+          const sessionID = typeof data === "object" && data !== null ? Reflect.get(data, "sessionID") : undefined
+          const root = typeof sessionID === "string" ? this.registry.root(sessionID) : undefined
+          if (root !== undefined) {
+            const failed = type.startsWith("session.execution.failed")
+            if (failed) this.failedRoots.add(root)
+            else this.failedRoots.delete(root)
+            if (!this.failuresHydrated) this.failureChanges.set(root, failed)
+          }
+        }
         if (type.startsWith("permission.v2.") || type.startsWith("form.") || type.startsWith("guardrail.")) {
           this.attentionStatus = undefined
           this.attentionGeneration++
@@ -470,7 +504,7 @@ export class RemoteAgent {
       this.refreshTimer = undefined
       if (this.state !== "live") return
       const rotate = this.accessExpiresAt - this.now() < defaults.rotateBeforeExpiryMs
-      void (rotate ? this.rotateConnection() : this.republish()).then(() => this.scheduleRefresh())
+      void (rotate ? this.rotateConnection() : this.republish()).then(() => { this.scheduleStatus(); this.scheduleRefresh() })
     }, this.refreshIntervalMs)
   }
 

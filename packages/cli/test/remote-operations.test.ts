@@ -290,6 +290,7 @@ function formInfo(id: string, sessionID: string) {
 type Call = { readonly method: string; readonly args: readonly unknown[] }
 
 function fakeLocal(results: Partial<Record<keyof LocalServer, unknown>> = {}) {
+  results.outstandingSessions ??= { data: [], failed: [] }
   const calls: Call[] = []
   const local = new Proxy({} as LocalServer, {
     get(_target, property: PropertyKey) {
@@ -717,11 +718,21 @@ describe("operation mapping", () => {
       formRequests: async (location: LocalLocation) => location.directory === directory ? [formInfo("frm_1", "ses_idle")] : Promise.reject(idleRead),
       guardrailRequestList: async () => [],
     })
-    expect(await sessionStatus(local, sessions)).toEqual({ running: ["ses_root"], attention: ["ses_idle", "ses_root"] })
+    expect(await sessionStatus(local, sessions)).toEqual({ running: ["ses_root"], attention: ["ses_idle", "ses_root"],
+      requestAttention: ["ses_idle", "ses_root"], failed: [] })
     expect(calls.filter((call) => call.method === "permissionRequests").map((call) => call.args[0])).toEqual([{ directory }])
     expect(calls.filter((call) => call.method === "formRequests").map((call) => call.args[0])).toEqual([{ directory }])
     expect(calls.filter((call) => call.method === "guardrailRequestList").map((call) => call.args[0])).toEqual(["ses_root"])
     expect(calls.some((call) => call.method === "permissionList" || call.method === "formList")).toBe(false)
+  })
+
+  test("maps the one process-wide outstanding read to non-executing family roots without per-root work reads", async () => {
+    const sessions = [sessionInfo("ses_parent", { updated: 1 }),
+      sessionInfo("ses_child", { updated: 2, parentID: "ses_parent" }), sessionInfo("ses_other", { updated: 3 })]
+    const { local, calls } = fakeLocal({ activeSessions: { ses_other: { type: "running" } },
+      outstandingSessions: { data: ["ses_child", "ses_other"], failed: [] } })
+    expect(await sessionStatus(local, sessions, [])).toMatchObject({ running: ["ses_other"], outstanding: ["ses_parent"] })
+    expect(calls.map((call) => call.method)).toEqual(["activeSessions", "outstandingSessions"])
   })
 
   test("status folds active descendants and unresolved requests to unique root IDs", async () => {

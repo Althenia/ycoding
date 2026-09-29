@@ -58,8 +58,8 @@ scope.addEventListener("push", (event: { data?: { json: () => unknown }; waitUnt
   event.waitUntil((async () => {
     const payload = await Promise.resolve().then(() => event.data?.json()).catch(() => undefined)
     const valid = isPushPayload(payload)
-    await scope.registration.showNotification(!valid ? "YCoding — update" : payload.category === "approval-requested" ? "YCoding — approval needed" : "YCoding — work stopped", {
-      body: !valid ? "Open YCoding to check your work." : payload.category === "approval-requested" ? "A session is waiting for your decision." : "A session stopped running.",
+    await scope.registration.showNotification(!valid ? "YCoding — update" : payload.category === "approval-requested" ? "YCoding — needs your attention" : "YCoding — work finished", {
+      body: !valid ? "Open YCoding to check your work." : payload.category === "approval-requested" ? "A session is waiting for you." : "A session finished all its work.",
       tag: valid ? `ycoding-${payload.sessionID}-${payload.category}` : "ycoding-update",
       ...(valid ? { data: { sessionID: payload.sessionID } } : {}),
       icon: "/icons/icon-256.png", badge: "/icons/icon-256.png",
