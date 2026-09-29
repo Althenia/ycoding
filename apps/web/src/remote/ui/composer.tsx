@@ -307,12 +307,6 @@ export function Composer(props: { readonly sessionID?: string; readonly running:
   const text = () => props.sessionID ? remote.state().drafts[props.sessionID] ?? "" : ""
   return <div class="mini-composer__mount">
     <div ref={setMobileMount} class="composer__mobile-identity" />
-    <Portal><div class="mutation-toasts" aria-label="Mutation outcomes"><For each={remote.state().mutationToasts?.filter((toast) => toast.sessionID === props.sessionID) ?? []}>{(toast) =>
-      <div class={`mutation-toast mutation-toast--${toast.state}`} role={toast.state === "sent" ? "status" : "alert"}>
-        <strong>{toast.label} · {toast.state === "sent" ? "Sent" : toast.state === "unknown" ? "Outcome unknown" : "Failed"}</strong>
-        <Show when={toast.detail}><span>{toast.detail}</span></Show>
-        <button type="button" aria-label={`Dismiss ${toast.label} outcome`} onClick={() => remote.store.dismissMutationToast(toast.id)}><Icon name="close" size={14} /></button>
-      </div>}</For></div></Portal>
     <MiniComposer mobileMount={mobileMount()} target={props.sessionID ? { sessionID: props.sessionID } : undefined} text={text()} onText={(value) => { if (props.sessionID) remote.store.setDraft(props.sessionID, value) }} disabled={!props.canSend || !props.sessionID} running={props.running} showStatus onInterrupt={() => void remote.store.interrupt()} onSubmit={async (value) => {
       if (!props.sessionID) return false
       const result = value.kind === "command" ? await remote.store.runCommand(value.input)

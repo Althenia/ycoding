@@ -4,7 +4,9 @@ import { useRemote } from "../context"
 import { createPushHttp } from "../http"
 import { browserPushPlatform, syncPushState } from "../push"
 import type { RemoteNotificationView } from "../notifications"
+import type { MutationToast } from "../store"
 import type { NotificationCategory } from "../preferences"
+import { Toast, maxToasts } from "./toast"
 import "./notifications.css"
 
 const kinds: Record<NotificationCategory, { readonly icon: IconName; readonly label: string }> = {
@@ -41,7 +43,7 @@ export function newlyAddedNotifications(seen: ReadonlySet<string>, entries: read
 
 export function enqueueToasts(current: readonly RemoteNotificationView[], added: readonly RemoteNotificationView[]) {
   const IDs = new Set(added.map((entry) => entry.id))
-  return [...added, ...current.filter((entry) => !IDs.has(entry.id))].slice(0, 3)
+  return [...added, ...current.filter((entry) => !IDs.has(entry.id))].slice(0, maxToasts)
 }
 
 export function NotificationCenter(props: { readonly onOpenSession: (sessionID: string) => void }): JSX.Element {
@@ -159,46 +161,29 @@ export function NotificationCenter(props: { readonly onOpenSession: (sessionID: 
   )
 }
 
-function Toast(props: { readonly notification: () => RemoteNotificationView; readonly onOpenSession: (id: string) => void; readonly onDismiss: (id: string) => void }): JSX.Element {
-  const [paused, setPaused] = createSignal(false)
-  const [leaving, setLeaving] = createSignal(false)
-  let root: HTMLDivElement | undefined
-  let remaining = 6_000
-  let started = performance.now()
-  let timer: ReturnType<typeof setTimeout> | undefined
-  let exitTimer: ReturnType<typeof setTimeout> | undefined
-  const dismiss = () => {
-    if (leaving()) return
-    clearTimeout(timer)
-    setLeaving(true)
-    exitTimer = setTimeout(() => props.onDismiss(props.notification().id), 220)
-  }
-  const resume = () => {
-    if (!paused() || leaving()) return
-    setPaused(false)
-    started = performance.now()
-    timer = setTimeout(dismiss, Math.max(0, remaining))
-  }
-  const pause = () => {
-    if (paused() || leaving()) return
-    remaining -= performance.now() - started
-    clearTimeout(timer)
-    setPaused(true)
-  }
-  timer = setTimeout(dismiss, remaining)
-  onCleanup(() => { clearTimeout(timer); clearTimeout(exitTimer) })
+function NoticeToast(props: { readonly notification: () => RemoteNotificationView; readonly onOpenSession: (id: string) => void; readonly onDismiss: (id: string) => void }): JSX.Element {
   return (
-    <div ref={root} class={`yc-toast yc-toast--${props.notification().category}${paused() ? " yc-toast--paused" : ""}${leaving() ? " yc-toast--leaving" : ""}`} onMouseEnter={pause} onMouseLeave={() => { if (!root?.contains(document.activeElement)) resume() }} onFocusIn={pause} onFocusOut={(event) => { if (!(event.relatedTarget instanceof Node) || !root?.contains(event.relatedTarget)) resume() }}>
+    <Toast class={`yc-toast--${props.notification().category}`} onDismiss={() => props.onDismiss(props.notification().id)}>{(dismiss) => <>
       <span class="yc-toast__icon" aria-hidden="true"><Icon name={kinds[props.notification().category].icon} size={18} /></span>
       <div class="yc-toast__body"><strong>{kinds[props.notification().category].label}</strong><span>{props.notification().sessionTitle ?? props.notification().body}</span></div>
       <Show when={props.notification().sessionID}><button type="button" class="yc-toast__open" onClick={() => { const sessionID = props.notification().sessionID; if (sessionID) props.onOpenSession(sessionID); dismiss() }}>Open</button></Show>
       <button type="button" class="yc-toast__close" aria-label={`Dismiss ${kinds[props.notification().category].label} toast`} onClick={dismiss}><Icon name="close" size={14} /></button>
-      <span class="yc-toast__progress" aria-hidden="true" />
-    </div>
+    </>}</Toast>
   )
 }
 
-export function NotificationToasts(props: { readonly onOpenSession: (sessionID: string) => void }): JSX.Element {
+function OutcomeToast(props: { readonly toast: MutationToast }): JSX.Element {
+  const remote = useRemote()
+  return (
+    <Toast class={`mutation-toast mutation-toast--${props.toast.state}`} role={props.toast.state === "sent" ? "status" : "alert"} onDismiss={() => remote.store.dismissMutationToast(props.toast.id)}>{(dismiss) => <>
+      <span class="yc-toast__icon" aria-hidden="true"><Icon name={props.toast.state === "sent" ? "check" : "alert"} size={18} /></span>
+      <div class="yc-toast__body"><strong>{props.toast.label} · {props.toast.state === "sent" ? "Sent" : props.toast.state === "unknown" ? "Outcome unknown" : "Failed"}</strong><Show when={props.toast.detail}><span>{props.toast.detail}</span></Show></div>
+      <button type="button" class="yc-toast__close" aria-label={`Dismiss ${props.toast.label} outcome`} onClick={dismiss}><Icon name="close" size={14} /></button>
+    </>}</Toast>
+  )
+}
+
+export function ToastLayer(props: { readonly sessionID: string | undefined; readonly onOpenSession: (sessionID: string) => void }): JSX.Element {
   const remote = useRemote()
   const [queue, setQueue] = createSignal<readonly RemoteNotificationView[]>([])
   let seen = new Set(remote.state().notifications.map((entry) => entry.id))
@@ -212,10 +197,23 @@ export function NotificationToasts(props: { readonly onOpenSession: (sessionID: 
       return updated.every((entry, index) => entry === next[index]) ? next : updated
     })
   })
+  const outcomes = createMemo(() => (remote.state().mutationToasts ?? []).filter((toast) => toast.sessionID === props.sessionID).reverse().slice(0, maxToasts))
+  let layer: HTMLElement | undefined
+  const clearHeader = () => {
+    const bottoms = Array.from(document.querySelectorAll("[data-toast-clearance]"), (element) => element.getBoundingClientRect().bottom)
+    if (bottoms.length > 0) layer?.style.setProperty("--yc-toast-offset", `${Math.max(...bottoms)}px`)
+  }
+  createEffect(() => {
+    outcomes().length + queue().length
+    clearHeader()
+  })
+  window.addEventListener("resize", clearHeader)
+  onCleanup(() => window.removeEventListener("resize", clearHeader))
   return (
-    <Show when={queue().length > 0}>
-      <aside class="yc-toasts" role="status" aria-live="polite" aria-label="New notifications">
-        <For each={queue().map((entry) => entry.id)}>{(id) => <Toast notification={() => remote.state().notifications.find((entry) => entry.id === id) ?? queue().find((entry) => entry.id === id)!} onOpenSession={props.onOpenSession} onDismiss={(dismissed) => setQueue((current) => current.filter((entry) => entry.id !== dismissed))} />}</For>
+    <Show when={outcomes().length + queue().length > 0}>
+      <aside ref={layer} class="yc-toasts" role="status" aria-live="polite" aria-label="Toasts">
+        <For each={outcomes()}>{(toast) => <OutcomeToast toast={toast} />}</For>
+        <For each={queue().slice(0, maxToasts - outcomes().length).map((entry) => entry.id)}>{(id) => <NoticeToast notification={() => remote.state().notifications.find((entry) => entry.id === id) ?? queue().find((entry) => entry.id === id)!} onOpenSession={props.onOpenSession} onDismiss={(dismissed) => setQueue((current) => current.filter((entry) => entry.id !== dismissed))} />}</For>
       </aside>
     </Show>
   )

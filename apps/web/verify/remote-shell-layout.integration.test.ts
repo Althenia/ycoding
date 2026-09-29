@@ -935,6 +935,48 @@ describe("remote shell layout", () => {
     await page.close()
   }, 30_000)
 
+  for (const width of [390, 1440] as const) test(`shows the Sent outcome toast below the header at ${width}px, then pauses and expires it like a notification toast`, async () => {
+    const page = await fixture("view=chat", width, "Stream remote output safely")
+    try {
+      await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`)
+      await page.evaluate(`(() => {
+        const input=document.querySelector('.composer__input');
+        input.value='Work on A';
+        input.dispatchEvent(new InputEvent('input',{bubbles:true}));
+        document.querySelector('button[aria-label="Send prompt"]')?.click();
+      })()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.mutation-toast--sent') !== null`); attempt += 1) await Bun.sleep(50)
+      const placement = await page.evaluate<{ role: string | null; layer: boolean; belowHeader: boolean; covered: readonly string[] }>(`(() => {
+        const toast = document.querySelector('.mutation-toast--sent'), box = toast.getBoundingClientRect();
+        const controls = [...document.querySelectorAll('.app-header :is(a,button,input,select), .workspace__topbar :is(a,button,input,select)')];
+        return {
+          role: toast.getAttribute('role'),
+          layer: toast.parentElement?.classList.contains('yc-toasts') === true,
+          belowHeader: box.top >= document.querySelector('.app-header').getBoundingClientRect().bottom,
+          covered: controls.filter((control) => { const other = control.getBoundingClientRect(); return other.width > 0 && box.left < other.right && box.right > other.left && box.top < other.bottom && box.bottom > other.top }).map((control) => control.getAttribute('aria-label') ?? control.textContent?.trim() ?? control.className),
+        };
+      })()`)
+      expect(placement).toEqual({ role: "status", layer: true, belowHeader: true, covered: [] })
+      await page.evaluate(`document.querySelector('.mutation-toast--sent').dispatchEvent(new MouseEvent('mouseenter'))`)
+      expect(await page.evaluate<boolean>(`document.querySelector('.mutation-toast--sent').classList.contains('yc-toast--paused')`)).toBe(true)
+      await Bun.sleep(6_500)
+      expect(await page.evaluate<boolean>(`document.querySelector('.mutation-toast--sent') !== null`)).toBe(true)
+      await page.evaluate(`document.querySelector('.mutation-toast--sent').dispatchEvent(new MouseEvent('mouseleave'))`)
+      await Bun.sleep(6_600)
+      expect(await page.evaluate<boolean>(`document.querySelector('.mutation-toast--sent') === null`)).toBe(true)
+      await page.evaluate(`(() => {
+        const input=document.querySelector('.composer__input');
+        input.value='Work on B';
+        input.dispatchEvent(new InputEvent('input',{bubbles:true}));
+        document.querySelector('button[aria-label="Send prompt"]')?.click();
+      })()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.mutation-toast--sent') !== null`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<boolean>(`document.querySelector('.mutation-toast--sent') !== null`)).toBe(true)
+      await Bun.sleep(6_600)
+      expect(await page.evaluate<boolean>(`document.querySelector('.mutation-toast--sent') === null`)).toBe(true)
+    } finally { await page.close() }
+  }, 40_000)
+
   test("uses the SVG chevron primitive without polluting the Device control name at compact and desktop widths", async () => {
     for (const width of [390, 1440] as const) {
       const page = await fixture("scenario=conversation-workspace-768", width, "Studio Mac")

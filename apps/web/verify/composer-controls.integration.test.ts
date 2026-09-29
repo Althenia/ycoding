@@ -129,7 +129,7 @@ test("pending prompts, mutation toasts, and the active goal remain accessible on
           expect(await page.evaluate<string>(`window.composerRequests().at(-1)?.operation`)).toBe("retry")
         }
         await page.evaluate(`document.querySelector('.mutation-toast button')?.click()`)
-        expect(await page.evaluate<number>(`document.querySelectorAll('.mutation-toast').length`)).toBe(0)
+        await wait(page, `document.querySelector('.mutation-toast') === null`)
       }
     } finally { await page.close() }
   }

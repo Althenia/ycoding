@@ -4,6 +4,7 @@ import { RemoteProvider } from "../src/remote/context"
 import { Composer } from "../src/remote/ui/composer"
 import { MessageRow } from "../src/remote/ui/conversation"
 import { NewSessionComposer } from "../src/remote/ui/new-session"
+import { ToastLayer } from "../src/remote/ui/notifications"
 import { catalogKey, type CatalogView } from "../src/remote/catalog"
 import type { RemoteStore, RemoteStoreState } from "../src/remote/store"
 import { applySessionEvent, createSessionView } from "../src/remote/projection"
@@ -115,6 +116,7 @@ function Fixture() {
     <main class="composer-fixture" style={{ "max-width": "900px", margin: "auto", padding: "16px" }}>
       <button type="button" onClick={() => setRunning(!running())}>Toggle running</button>
       <Composer sessionID="ses_fixture" running={running()} canSend />
+      <ToastLayer sessionID="ses_fixture" onOpenSession={() => {}} />
       <div class="transcript" aria-label="Fixture transcript"><For each={state().view?.messages ?? []}>{(message) => <MessageRow message={() => message} />}</For></div>
       <NewSessionComposer onCreated={setCreated} />
       <Show when={created()}><output>Created {created()}</output></Show>

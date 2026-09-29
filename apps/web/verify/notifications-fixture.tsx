@@ -3,7 +3,7 @@ import { createRemoteHttp } from "../src/remote/http"
 import { RemoteProvider } from "../src/remote/context"
 import { createRemoteStore, type RemoteStore, type RemoteStoreState } from "../src/remote/store"
 import type { RemoteNotificationView } from "../src/remote/notifications"
-import { NotificationCenter, NotificationToasts } from "../src/remote/ui/notifications"
+import { NotificationCenter, ToastLayer } from "../src/remote/ui/notifications"
 import "../src/styles/tokens.css"
 import "../src/styles/base.css"
 
@@ -48,11 +48,11 @@ const root = document.getElementById("app")
 if (!root) throw new Error("Missing notifications fixture root")
 render(() => <RemoteProvider createStore={() => store}>
   <main style={{ "min-height": "100dvh", background: "var(--yc-bg)", color: "var(--yc-text)" }}>
-    <header style={{ display: "flex", "align-items": "center", "justify-content": "space-between", height: "var(--yc-header-h)", padding: "0 var(--yc-gutter)", "border-bottom": "1px solid var(--yc-border)", background: "var(--yc-surface-raised)" }}>
+    <header data-toast-clearance style={{ display: "flex", "align-items": "center", "justify-content": "space-between", height: "var(--yc-header-h)", padding: "0 var(--yc-gutter)", "border-bottom": "1px solid var(--yc-border)", background: "var(--yc-surface-raised)" }}>
       <strong>YCoding</strong>
       <NotificationCenter onOpenSession={(id) => opened.push(id)} />
     </header>
     <p style={{ padding: "var(--yc-space-6) var(--yc-gutter)" }}>Conversation workspace</p>
-    <NotificationToasts onOpenSession={(id) => opened.push(id)} />
+    <ToastLayer sessionID={undefined} onOpenSession={(id) => opened.push(id)} />
   </main>
 </RemoteProvider>, root)

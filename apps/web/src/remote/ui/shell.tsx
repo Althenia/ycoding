@@ -56,7 +56,7 @@ import {
 } from "./settings"
 import { ActivityRow, RequestCard } from "./conversation"
 import { TranscriptNavigation } from "./transcript-nav"
-import { NotificationCenter, NotificationToasts } from "./notifications"
+import { NotificationCenter, ToastLayer } from "./notifications"
 import { TodoPanel } from "./todo-panel"
 import { RunningSessions } from "./running-sessions"
 import { LoadingPlaceholder } from "./loading"
@@ -214,6 +214,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     state().connection.kind === "connected" && state().transport.kind === "open"
   const managedChild = () => isManagedSubagent(activeSession())
   const childParentID = () => activeSession()?.parentID
+  const composerSessionID = () => managedChild() ? childParentID() : state().activeSessionID
   const siblingTasks = () => state().team?.rootID === childParentID() ? state().team?.tasks ?? [] : []
   const currentTask = () => siblingTasks().find((task) => task.sessionID === activeSession()?.id)
   const siblingNavigation = () => siblingTargets(siblingTasks(), activeSession()?.id ?? "")
@@ -364,7 +365,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
 
           <main id="remote-main" tabindex="-1" class="workspace__main">
             <Show when={view() === "/remote" && selected() && !newSessionOpen()}>
-              <div class="workspace__topbar" aria-hidden={selectedLoading() ? "true" : undefined} inert={selectedLoading()}>
+              <div class="workspace__topbar" data-toast-clearance aria-hidden={selectedLoading() ? "true" : undefined} inert={selectedLoading()}>
                 <Show when={!phoneLayout()}>
                   <PresentationSwitch
                     value={office.presentation()}
@@ -416,7 +417,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
             </Show>
             <Show when={selected()}>
                 <RoutePanel active={!managedChild()} preserve class="composer-resident"><Composer
-                  sessionID={managedChild() ? childParentID() : state().activeSessionID}
+                  sessionID={composerSessionID()}
                   running={state().view?.status === "running"}
                   canSend={
                     !managedChild() && state().transport.kind === "open" &&
@@ -458,7 +459,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
 
         <BottomNav view={view()} />
 
-        <NotificationToasts onOpenSession={openSession} />
+        <ToastLayer sessionID={composerSessionID()} onOpenSession={openSession} />
 
         <Show when={navOpen() ? navGeneration() : undefined} keyed>
           {(generation) => <Modal class="overlay--slideover overlay--sessions-sheet" label="Sessions" returnFocus={navTrigger!} requestClose={(close) => { closeSessionsSheet = close }} onDismiss={() => setNavClosing(true)} onClose={() => {
@@ -819,7 +820,7 @@ function RemoteHeader(props: {
   const connection = () => summarizeConnection(state().connection)
   const attention = useNavigationAttention()
   return (
-    <header class="app-header">
+    <header class="app-header" data-toast-clearance>
       <div class="app-header__inner">
         <button
           type="button"
