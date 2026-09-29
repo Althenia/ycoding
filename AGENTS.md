@@ -3,7 +3,7 @@
 ## Repository identity and direction
 
 - This repository is the YCoding product and source of truth.
-- YCoding is licensed under AGPL-3.0-only (`LICENSE`); keep every workspace `package.json` `license` field set to `AGPL-3.0-only`. YCoding is derived from OpenCode, so keep the OpenCode MIT notice in `NOTICE` intact.
+- YCoding is licensed under AGPL-3.0-only (`LICENSE`); keep every workspace `package.json` `license` field set to `AGPL-3.0-only`, and keep the upstream MIT notice in `NOTICE` intact.
 - The default branch is `main`.
 - Maintain one current runtime. Do not restore removed session, configuration, plugin, SDK, package, event, or TUI compatibility paths unless the user explicitly requests a migration design.
 - The TUI is the primary product, release, and behavior surface.
