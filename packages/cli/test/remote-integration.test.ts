@@ -91,7 +91,7 @@ function request(id: string, operation: string, sessionID?: string, input?: Reco
   }
 }
 
-async function answer(relay: Relay, id: string) {
+async function answer(relay: Relay, id: string, timeout = 15_000) {
   return waitFor(() => {
     const frames = relay.responses().filter((frame) => frame.id === id)
     if (frames.length === 0) return undefined
@@ -106,7 +106,7 @@ async function answer(relay: Relay, id: string) {
     const reassembled = parseChunkedValue(parts)
     if (!reassembled.ok) throw new Error("failed to reassemble a chunked response")
     return { ...frames[0], value: reassembled.value } as RemoteResponse
-  })
+  }, timeout)
 }
 
 function valueOf(frame: RemoteResponse | undefined) {
@@ -460,6 +460,41 @@ test("a real finished run reaches the web activity store without changing Sessio
     expect(afterPage.find((row) => row?.id === olderID)?.activeAt).toBe(active)
   } finally { store.dispose(); await bridge.close(); await server.close(); await rm(directory, { recursive: true, force: true }) }
 }, 60_000)
+
+test("two delayed goal model calls cross the ordinary 30-second connector deadline", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ycoding-remote-slow-goal-"))
+  const server = await startServer(directory, { provider: { text: synthesizedGoal, holdAfter: 2, settleDelayMs: 15_500 } })
+  const provider = server.provider
+  if (!provider) throw new Error("the isolated server must expose its provider stand-in")
+  const relay = createRelay()
+  const bridge = new RemoteAgent({
+    relayURL: "https://relay.example",
+    local: createLocalServer({ url: server.base, auth: { type: "basic", username: "ycoding", password } }),
+    credentials: async () => ({ accessToken: "integration-token", accessExpiresAt: Date.now() + 600_000 }),
+    createConnection: relay.createConnection,
+    refreshIntervalMs: 3_600_000,
+  })
+  try {
+    await createSession(server, "ses_slow_goal", directory, { providerID: provider.providerID, id: provider.modelID })
+    await createSession(server, "ses_slow_goal_hidden", directory)
+    await bridge.connect()
+    await waitFor(() => relay.sent().find((value) => value.type === "sessions"))
+    relay.deliver(request("warm_list", "session.list"))
+    valueOf(await answer(relay, "warm_list"))
+    relay.deliver(request("warm_snapshot", "session.snapshot", "ses_slow_goal"))
+    valueOf(await answer(relay, "warm_snapshot"))
+    relay.deliver(request("warm_autonomy", "session.autonomy.get", "ses_slow_goal"))
+    valueOf(await answer(relay, "warm_autonomy"))
+    const started = Date.now()
+    relay.deliver(request("slow_goal", "session.goal.set", "ses_slow_goal", { goal: goalRequest }))
+    const settled = await answer(relay, "slow_goal", 45_000)
+    if (!settled?.ok) throw new Error(`goal operation failed: ${settled?.error.code}`)
+    const result = settled.value
+    expect(Date.now() - started).toBeGreaterThan(30_000)
+    expect(result).toMatchObject({ data: { goal: { text: synthesizedGoal, status: "active" } } })
+    expect(provider.requests()).toHaveLength(2)
+  } finally { provider.releaseAll(); await bridge.close(); await server.close(); await rm(directory, { recursive: true, force: true }) }
+}, 65_000)
 
 test("bridges authorized session operations against an isolated server", async () => {
   const directory = await mkdtemp(join(tmpdir(), "ycoding-remote-bridge-"))

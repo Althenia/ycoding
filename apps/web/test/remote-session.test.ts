@@ -24,6 +24,7 @@ async function harness(options: {
   forms?: readonly unknown[]
   now?: () => number
   paceLongTimers?: boolean
+  requestTimeoutMs?: number
 } = {}): Promise<Harness> {
   const relay = await startRelayDouble({
     handler: options.handler,
@@ -59,7 +60,8 @@ async function harness(options: {
     http: createRemoteHttp({ baseURL: relay.httpURL }),
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
     createTransport: (deviceID, handlers) =>
-      createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, schedule }),
+      createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, schedule,
+        ...(options.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: options.requestTimeoutMs }) }),
     schedule,
     batchMs: 20,
     now: options.now ?? (() => 1_000),
@@ -2462,6 +2464,26 @@ describe("remote store integration", () => {
       expect(test.relay.requests.filter((request) => request.operation === "session.autonomy.get").length).toBeGreaterThanOrEqual(2)
       expect(test.store.state().view?.autonomy?.goal?.status).toBe("active")
       expect(test.store.state().mutations.some((mutation) => mutation.kind === "goal" && mutation.state === "unknown")).toBe(false)
+    } finally { await test.stop() }
+  })
+
+  test("a goal synthesis exceeding the ordinary request deadline still activates the goal", async () => {
+    const test = await harness({ requestTimeoutMs: 30, handler: async (request) => {
+      if (request.operation !== "session.goal.set") return "default"
+      await Bun.sleep(65)
+      return { ok: true, value: { data: { mode: "goal", yolo: 0,
+        goal: { text: "Ship the workspace", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } } } }
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      const goal = test.store.setGoal("Ship the workspace")
+      await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.goal.set"))
+      await test.flush()
+      expect(await goal).toBe(true)
+      expect(test.store.state().view?.autonomy?.goal?.status).toBe("active")
+      expect(test.relay.requests.filter((request) => request.operation === "session.goal.set")).toHaveLength(1)
     } finally { await test.stop() }
   })
 

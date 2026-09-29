@@ -26,6 +26,7 @@ export type ProviderFixture = {
    * its initial steer to settle before inspecting the admitted autonomous work.
    */
   readonly holdAfter?: number
+  readonly settleDelayMs?: number
 }
 
 export type ProviderStandIn = {
@@ -133,6 +134,10 @@ async function startProviderStandIn(fixture: ProviderFixture) {
       const stream = new ReadableStream({
         async start(controller) {
           for (const frame of frames) controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`))
+          for (let remaining = fixture.settleDelayMs ?? 0; remaining > 0; remaining -= 4_000) {
+            await Bun.sleep(Math.min(remaining, 4_000))
+            controller.enqueue(encoder.encode(": keep-alive\n\n"))
+          }
           if (heldRequest)
             await new Promise<void>((resolve) => {
               held.push(resolve)

@@ -1021,7 +1021,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return { status: "unavailable", reason: "not-connected" }
     }
     setState({ mutations: [...state.mutations.filter((entry) => entry.id !== mutation.id), mutation] })
-    const outcome = await active.request(mutation.operation, { sessionID: options.sessionID, input: mutation.input })
+    const outcome = await active.request(mutation.operation, { sessionID: options.sessionID, input: mutation.input,
+      ...((mutation.operation === "session.goal.set" || mutation.operation === "session.autonomy.set" && typeof mutation.input.goal === "string")
+        ? { timeoutMs: RemoteLimits.goalSetTimeoutMs } : {}) })
     if (outcome.status === "ok") {
       setState({ mutations: state.mutations.filter((entry) => entry.id !== mutation.id),
         mutationToasts: [...(state.mutationToasts ?? []).filter((entry) => entry.id !== mutation.id), { id: mutation.id, label: mutation.label, state: "sent" as const, sessionID: mutation.sessionID }].slice(-3) })

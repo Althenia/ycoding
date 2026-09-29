@@ -166,11 +166,11 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
   const timeoutMs = options.timeoutMs ?? defaultTimeoutMs
   const maxLogItems = options.maxLogItems ?? defaultMaxLogItems
 
-  const call = async <A>(operation: () => Promise<A>): Promise<A> => {
+  const call = async <A>(operation: () => Promise<A>, deadline = timeoutMs): Promise<A> => {
     try {
       return await operation()
     } catch (cause) {
-      throw classify(cause, timeoutMs)
+      throw classify(cause, deadline)
     }
   }
 
@@ -348,13 +348,15 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       call(async () => {
         await client.form.cancel({ sessionID, formID }, request(location, timeoutMs))
       }),
-    autonomySet: (sessionID, location, payload) =>
-      call(() =>
+    autonomySet: (sessionID, location, payload) => {
+      const deadline = "goal" in payload && typeof payload.goal === "string" ? RemoteLimits.goalSetTimeoutMs : timeoutMs
+      return call(() =>
         client.session.autonomy.set(
           { sessionID, payload } as Parameters<YCodingClient["session"]["autonomy"]["set"]>[0],
-          request(location, timeoutMs),
+          request(location, deadline),
         ),
-      ),
+      deadline)
+    },
     events: async (stream) => {
       const controller = new AbortController()
       let stopped = false

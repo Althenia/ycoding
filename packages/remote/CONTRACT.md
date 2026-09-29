@@ -483,6 +483,7 @@ not idle. Omitted status
 includes all states. `order` accepts `"asc"`, `"desc"` (default), `"pinned"`, or `"active"`.
 Session list/get data carries the optional `time.active` of the latest terminal Step or execution event. The connector forwards the event's `created` millisecond time to the browser for live activity display; list ordering and cursors continue to use `time.updated`.
 `session.pending.list` returns admitted but unpromoted user and synthetic inputs in admission order at the verified backend Session Location. The connector refuses more than 200 pending inputs or a response beyond the relay's bounded chunk limit rather than truncating the list. The browser reads it beside the projected Session window to restore processing and queued rows after reload or dropped events.
+Goal text sent through `session.goal.set` or `session.autonomy.set` has a five-minute browser and connector-local deadline for synchronous synthesis and starting steer. The generic request deadline is 30 seconds, with narrower per-operation read and control overrides; goal stop and non-text autonomy updates do not use the extended deadline. The relay imposes no per-request lifetime.
 Pinned order lists pins by ascending pin time, then unpinned Sessions by descending
 update time and ID. Its opaque cursors include the pin sort key and support both
 directions. Active order places running root families first, then pins by

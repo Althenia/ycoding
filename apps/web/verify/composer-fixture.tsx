@@ -83,6 +83,9 @@ Object.assign(window, { composerSwitchSession: () => update({ ...state(), active
 Object.assign(window, { composerClearAutonomy: () => update({ ...state(), view: { ...state().view!, autonomy: undefined } }) })
 Object.assign(window, { composerSetWorkspaceLoading: (loading: boolean) => update({ ...state(), workspaceStatus: loading ? "loading" : "ready" }) })
 Object.assign(window, { composerSetGoalStatus: (status: "active" | "completed" | "stopped" | "exhausted" | null) => update({ ...state(), view: { ...state().view!, autonomy: { mode: status === "active" ? "goal" : "normal", yolo: 3, ...(status ? { goal: { text: "Finish task", status, iteration: 2, noProgress: 0, maxNoProgress: 3 } } : {}) } } }) })
+Object.assign(window, { composerSetGoalPending: (pending: boolean) => update({ ...state(), mutations: pending
+  ? [{ id: "goal_fixture", kind: "goal", label: "Set goal", state: "sending", sessionID: "ses_fixture", operation: "session.goal.set", input: { goal: "Finish task" } }]
+  : [] }) })
 Object.assign(window, { composerSetDiagnostics: (status: "known" | "unknown" | "mismatch") => {
   const selected = state().selectedSessionInfo?.model
   const model = status === "mismatch" ? { providerID: "anthropic", id: "claude-opus-5-5" } : selected

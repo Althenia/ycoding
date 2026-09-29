@@ -189,6 +189,7 @@ export type RemoteWorkspaceInfo = {
 
 /** Shared bounds. Both sides enforce the same numbers so neither can drift. */
 export const RemoteLimits = {
+  goalSetTimeoutMs: 5 * 60_000,
   maxClientMessageChars: 32_768,
   maxAttachmentChunkChars: 28_000,
   maxAttachmentChunks: 1_024,

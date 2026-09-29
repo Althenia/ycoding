@@ -12,6 +12,7 @@
 .session-status__yolo-trigger:hover,.session-status__goal-trigger:hover { background:var(--yc-surface-sunken); }
 .session-status__goal-count { font-variant-numeric:tabular-nums; opacity:.7; }
 .session-status__active-goal { min-inline-size:0; max-inline-size:24ch; overflow:hidden; color:var(--yc-green-strong); text-overflow:ellipsis; white-space:nowrap; }
+.session-status__goal-setting { min-inline-size:0; max-inline-size:12ch; overflow:hidden; color:var(--yc-text-muted); text-overflow:ellipsis; white-space:nowrap; }
 .session-status__popover { position:fixed; z-index:calc(var(--yc-z-overlay) + 2); max-block-size:min(420px,75dvh); overflow:auto; padding:var(--yc-space-3); border:1px solid var(--yc-border); border-radius:var(--yc-radius-xl); background:var(--yc-surface-raised); box-shadow:var(--yc-shadow-lg); color:var(--yc-text); font:var(--yc-weight-medium) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); }
 .session-status__popover { animation:session-status-in var(--yc-dur-base) var(--yc-ease-entrance) both; }
 .session-status__goal-popover { animation-name:session-status-goal-in; }

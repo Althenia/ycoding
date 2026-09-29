@@ -42,6 +42,7 @@ export function ComposerStatus() {
   const visible = () => current()?.status === "running" || current()?.status === "failed"
   const goal = () => view()?.autonomy?.goal
   const goalActive = () => goal()?.status === "active"
+  const goalSetting = () => remote.state().mutations.some((mutation) => mutation.sessionID === view()?.id && mutation.operation === "session.goal.set" && mutation.state === "sending")
   const yolo = () => view()?.autonomy?.yolo ?? 0
   const close = (focus = false) => {
     if (!open() || leaving()) return
@@ -106,6 +107,7 @@ export function ComposerStatus() {
     <button ref={yoloTrigger} type="button" class="session-status__yolo-trigger" aria-label="Autonomy level" aria-haspopup="dialog" aria-expanded={open() === "yolo" && !leaving()} onClick={() => toggle("yolo")}><span class="session-status__yolo-full">{yolo() ? `YOLO ${yolo()}` : "Standard"}</span><span class="session-status__yolo-compact" aria-hidden="true">Y{yolo()}</span></button>
     <button ref={goalTrigger} type="button" class="session-status__goal-trigger" classList={{ "session-status__goal-trigger--active": goalActive() }} aria-label={goalActive() ? "Goal active" : "Goal off"} aria-haspopup="dialog" aria-expanded={open() === "goal" && !leaving()} onClick={() => toggle("goal")}>Goal<Show when={goalActive()}>{" "}<span class="session-status__goal-count" aria-hidden="true">{goal()?.iteration}</span></Show></button>
     <Show when={goalActive()}><span class="session-status__active-goal" role="status" title={goal()?.text}>Goal active · {goal()?.text}</span></Show>
+    <Show when={goalSetting()}><span class="session-status__goal-setting" role="status">Setting goal…</span></Show>
     <Show when={open()}><Portal><div ref={popover} class="session-status__popover" classList={{ "session-status__yolo-popover": open() === "yolo", "session-status__goal-popover": open() === "goal", "session-status__popover--leaving": leaving() }} role="dialog" aria-label={open() === "yolo" ? "Autonomy level" : "Goal details"} aria-hidden={leaving() ? "true" : undefined} inert={leaving()} style={{ left: `${position().left}px`, top: `${position().top}px`, width: `${position().width}px` }} onAnimationEnd={finish} onAnimationCancel={finish} onKeyDown={(event) => { if (event.key === "Escape" && !leaving()) { event.preventDefault(); close(true) } }}>
       <Show when={open() === "yolo"}><div role="radiogroup" aria-label="Autonomy level"><For each={levels}>{(option, index) => <button type="button" role="radio" aria-checked={yolo() === option.level} tabIndex={yolo() === option.level ? 0 : -1} onClick={() => void remote.store.setYolo(option.level)} onKeyDown={(event) => {
         const next = event.key === "ArrowRight" || event.key === "ArrowDown" ? (index() + 1) % levels.length : event.key === "ArrowLeft" || event.key === "ArrowUp" ? (index() - 1 + levels.length) % levels.length : event.key === "Home" ? 0 : event.key === "End" ? levels.length - 1 : undefined

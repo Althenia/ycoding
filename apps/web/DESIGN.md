@@ -276,7 +276,7 @@ Use concise action labels and explicit pending, error, and unknown states. On re
 
 ## Mutation feedback
 
-Composer mutations report sent, failed, and unknown outcomes in dismissible, accessible toasts above the workspace using the toast layer and semantic success, warning, or danger roles. Failed and unknown prompts retain an actionable status on their transcript message; a retry reuses its message identity. Reduced motion removes toast travel without hiding the outcome. An admitted steer displays Processing until promotion; a queued input displays Queued until promotion. The composer status row names an active goal without relying on color or an opened popover (`verify/composer-controls.integration.test.ts`, `verify/remote-shell-layout.integration.test.ts`).
+Composer mutations report sent, failed, and unknown outcomes in dismissible, accessible toasts above the workspace using the toast layer and semantic success, warning, or danger roles. Failed and unknown prompts retain an actionable status on their transcript message; a retry reuses its message identity. Reduced motion removes toast travel without hiding the outcome. An admitted steer displays Processing until promotion; a queued input displays Queued until promotion. The composer status row names an active goal without relying on color or an opened popover, and announces Setting goal while the selected Session's goal request is in flight (`verify/composer-controls.integration.test.ts`, `verify/remote-shell-layout.integration.test.ts`).
 
 ## Touchpoints
 
