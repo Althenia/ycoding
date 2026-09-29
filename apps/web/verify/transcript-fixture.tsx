@@ -36,6 +36,20 @@ const imagesMode = new URLSearchParams(location.search).has("images")
 const oversizedMode = new URLSearchParams(location.search).has("oversized")
 const pendingOversized = new URLSearchParams(location.search).get("oversized") === "pending"
 const compactionMode = new URLSearchParams(location.search).get("compaction")
+const fileChangesMode = new URLSearchParams(location.search).get("file-changes")
+const fileChanges = [
+  { path: "apps/web/src/remote/ui/conversation.tsx", patch: fileChangesMode === "unavailable" ? "Binary files a/a.png and b/a.png differ" : "@@ -1,2 +1,3 @@\n-old value\n+new value\n+extra line\n tail", additions: 30, deletions: 5 },
+  { path: "apps/web/src/remote/ui/long.ts", patch: `@@ -0,0 +1 @@\n+${"long line ".repeat(100)}`, additions: 1, deletions: 0 },
+  { path: "packages/core/src/session.ts", patch: "@@ -1 +1 @@\n-return false\n+return true", additions: 1, deletions: 1 },
+  { path: "README.md", patch: "@@ -1 +1 @@\n-before\n+after", additions: 1, deletions: 1 },
+]
+const fileChangeMessages: readonly RemoteMessageView[] = fileChangesMode === "checkpoint"
+  ? [{ kind: "compaction", id: "msg_file_checkpoint", status: "completed", jobID: "cmp_file", created: 2 }]
+  : [
+      { kind: "user", id: "msg_file_request", state: "consumed", text: "Edit the files", created: 1 },
+      { kind: "assistant", id: "msg_earlier", parts: [{ kind: "text", ordinal: 0, text: "Starting the edits." }], created: 2, completed: 3 },
+      { kind: "assistant", id: "msg_latest", parts: [{ kind: "text", ordinal: 0, text: "The files are updated." }], created: 4, completed: 5 },
+    ]
 const raw = "first line\n" + "x".repeat(20_000) + "\n... output truncated; full content saved to /private/fixture/tool-output.txt ..."
 const outputMessages: readonly RemoteMessageView[] = [{ kind: "assistant", id: "msg_tool", created: 1, parts: [
   { kind: "tool", callID: "call_store", name: "read", status: "completed", content: [{ kind: "text", text: raw.replace(/\.\.\. output truncated; full content saved to [^\r\n]*/g, "[full output retained on the device]"), sourceTruncated: true }], structured: { truncated: true } },
@@ -117,7 +131,7 @@ const imageSnapshot = () => readSnapshot({ sourceEpoch: "epoch_1", session: { id
     ...(streamedImageText ? [{ type: "text", text: streamedImageText }] : []),
   ] },
 ] })?.messages ?? imageMessages
-const [messages, setMessages] = createSignal(synthetic ? syntheticMessages(synthetic === "compacted") : toolOutput ? outputMessages : historyMode ? navigationMessages.slice(12) : imagesMode ? imageMessages : oversizedMode ? [{ kind: "oversized", id: "msg_big", projected: !pendingOversized, state: pendingOversized ? "pending" : "loading" }] as const : navigation ? navigationMessages : runningStep ? runningMessages : visibility ? visibilityMessages : notification ? notificationMessages : compactionMode ? compactionMessages : initial)
+const [messages, setMessages] = createSignal(synthetic ? syntheticMessages(synthetic === "compacted") : fileChangesMode ? fileChangeMessages : toolOutput ? outputMessages : historyMode ? navigationMessages.slice(12) : imagesMode ? imageMessages : oversizedMode ? [{ kind: "oversized", id: "msg_big", projected: !pendingOversized, state: pendingOversized ? "pending" : "loading" }] as const : navigation ? navigationMessages : runningStep ? runningMessages : visibility ? visibilityMessages : notification ? notificationMessages : compactionMode ? compactionMessages : initial)
 const [compactionHistory, setCompactionHistory] = createSignal(compactionMode && compactionMode !== "old" ? {
   data: [{ jobID: "cmp_old", trigger: "auto", status: "completed" as const, metrics: { ...compressionMetrics, inputTokens: 500, retainedTokens: 200 }, created: 2 }, { jobID: "cmp_live", trigger: "manual", status: "running" as const, created: 3 }],
   truncated: compactionMode === "truncated", completedBefore: compactionMode === "truncated" ? 2 : 0, completedCount: compactionMode === "truncated" ? 3 : 1, totalSavedTokens: compactionMode === "truncated" ? 900 : 300,
@@ -135,7 +149,7 @@ if (!root) throw new Error("Missing transcript root")
 const store = createRemoteStore({ http: createRemoteHttp({ fetch: Object.assign(async () => new Response(null, { status: 401 }), { preconnect: () => {} }) }), createTransport: () => { throw new Error("Fixture transport must not connect") } })
 const fixtureState = { ...store.state(), activeSessionID: "ses_a", activeDeviceID: "dev_1" }
 const listeners = new Set<() => void>()
-Object.defineProperty(store, "state", { value: () => ({ ...fixtureState, history: history(), view: compactionMode ? { ...createSessionView("ses_a"), compactionHistory: compactionHistory() } : fixtureState.view }) })
+Object.defineProperty(store, "state", { value: () => ({ ...fixtureState, history: history(), view: fileChangesMode ? { ...createSessionView("ses_a"), messages: messages(), fileChanges } : compactionMode ? { ...createSessionView("ses_a"), compactionHistory: compactionHistory() } : fixtureState.view }) })
 Object.defineProperty(store, "subscribe", { value: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener) } })
 Object.defineProperty(store, "loadOlderMessages", { value: async () => {
   if (!history().before) return

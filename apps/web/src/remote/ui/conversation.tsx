@@ -2,6 +2,7 @@ import { For, Show, createMemo, createSignal, onCleanup, type JSX } from "solid-
 import { Icon } from "../../ui/icon"
 import { catalogKey, modelDisplayLabel } from "../catalog"
 import { useRemote } from "../context"
+import { capturedChangesPlacement } from "../file-change-diff"
 import {
   formatPartDuration,
   classifySyntheticNotice,
@@ -26,6 +27,7 @@ import { shellOutputPaging } from "../view-model"
 import { FormRequest } from "./form-request"
 import { Markdown } from "./markdown"
 import { DotTrail } from "./dot-trail"
+import { FileChangeCard } from "./file-change-card"
 import { ImagePreview, UserImage } from "./image"
 import { LoadingPlaceholder } from "./loading"
 import "./transcript.css"
@@ -331,6 +333,8 @@ function ReasoningPart(props: { readonly text: () => string; readonly parts: () 
 export function MessageRow(props: { readonly message: () => RemoteMessageView }): JSX.Element {
   const kind = () => props.message().kind
   const remote = useRemote()
+  const fileChanges = () => remote.state().view?.fileChanges ?? []
+  const showFileChanges = () => capturedChangesPlacement(remote.state().view?.messages ?? [], fileChanges()) === props.message().id
   const catalog = () => remote.state().catalogs[catalogKey({ sessionID: remote.state().activeSessionID ?? "" })]
   const models = () => catalog()?.models ?? []
   const agent = () => {
@@ -403,6 +407,9 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
 
         <Show when={kind() === "compaction"}>
           <CompactionDivider message={props.message} />
+        </Show>
+        <Show when={(kind() === "assistant" || kind() === "compaction") && showFileChanges()}>
+          <FileChangeCard files={fileChanges} />
         </Show>
       </article>
     </Show>
