@@ -2,7 +2,7 @@
   "name": "@ycoding-ai/ui",
   "version": "1.18.4",
   "type": "module",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "publishConfig": {
     "access": "public"
   },

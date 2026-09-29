@@ -17,6 +17,10 @@ describe("YCoding brand residual scanner", () => {
         path: "packages/core/src/plugin/provider/opencode.ts",
         content: 'const integrationID = "opencode" // external OpenCode Console integration',
       },
+      {
+        path: "NOTICE",
+        content: "YCoding is derived from OpenCode.\n\nMIT License\n\nCopyright (c) 2025 opencode",
+      },
     ])
 
     expect(findings).toEqual([

@@ -32,6 +32,10 @@ describe("YCoding rebrand policy", () => {
       ),
     ).toBe("Upstream source: https://github.com/anomalyco/opencode and https://opencode.ai/docs")
 
+    expect(rewriteBrandText("NOTICE", "MIT License\n\nCopyright (c) 2025 opencode")).toBe(
+      "MIT License\n\nCopyright (c) 2025 opencode",
+    )
+
     expect(
       rewriteBrandText(
         "packages/core/src/plugin/provider/opencode.ts",

@@ -95,7 +95,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
 
   meta = {
     description = "YCoding terminal coding agent";
-    license = lib.licenses.mit;
+    license = lib.licenses.agpl3Only;
     mainProgram = "ycoding";
     inherit (node_modules.meta) platforms;
   };

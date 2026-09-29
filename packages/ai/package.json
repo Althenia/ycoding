@@ -3,7 +3,7 @@
   "version": "1.17.20",
   "name": "@ycoding-ai/ai",
   "type": "module",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "scripts": {
     "setup:recording-env": "bun run script/setup-recording-env.ts",
     "test": "bun test --timeout 30000 --only-failures",

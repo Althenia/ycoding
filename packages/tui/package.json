@@ -4,7 +4,7 @@
   "version": "1.18.4",
   "private": true,
   "type": "module",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "scripts": {
     "test": "bun test --timeout 30000 --only-failures --path-ignore-patterns=test-integration",
     "test:unit:browser": "bun test --timeout 30000 test/isolated-browser-dialog.test.tsx",

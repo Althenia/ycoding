@@ -100,4 +100,4 @@ The release workflow (`release.yml`) triggers on `push` to `v<version>` tags. It
 
 ## License
 
-MIT. See [LICENSE](./LICENSE).
+YCoding is licensed under the GNU Affero General Public License, version 3 only (AGPL-3.0-only). See [LICENSE](./LICENSE) for the full text and [NOTICE](./NOTICE) for the upstream MIT notice it retains.

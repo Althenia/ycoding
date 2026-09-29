@@ -3,6 +3,7 @@
 import { rm } from "fs/promises"
 import path from "path"
 import { Script } from "@ycoding-ai/script"
+import pkg from "../package.json"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 import { modelsData } from "./generate"
 import { BUN_BINARY } from "../src/binary"
@@ -123,7 +124,7 @@ for (const item of targets) {
       {
         name: `@ycoding-ai/${name}`,
         version: Script.version,
-        license: "MIT",
+        license: pkg.license,
         os: [item.os],
         cpu: [item.arch],
       },

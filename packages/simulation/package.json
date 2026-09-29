@@ -4,7 +4,7 @@
   "version": "1.17.13",
   "private": true,
   "type": "module",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "exports": {
     "./backend": "./src/backend/index.ts",
     "./backend/*": "./src/backend/*.ts",

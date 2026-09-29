@@ -4,7 +4,7 @@
   "version": "0.1.1",
   "private": true,
   "type": "module",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "sideEffects": [
     "**/*.css"
   ],

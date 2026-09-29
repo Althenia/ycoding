@@ -187,7 +187,7 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
               <Link href="/" class="brand">
                 <BrandMark compact />
               </Link>
-              <p>MIT licensed.</p>
+              <p>AGPL-3.0 licensed.</p>
             </div>
             <nav class="footer__columns" aria-label="Footer">
               <For each={SITE.footerColumns}>

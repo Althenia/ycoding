@@ -253,4 +253,4 @@ Cassettes are readable JSON files intended to be committed with your tests. HTTP
 
 ## License
 
-MIT
+AGPL-3.0-only

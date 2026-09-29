@@ -4,7 +4,7 @@
   "name": "@ycoding-ai/http-recorder",
   "description": "Record and replay Effect HTTP and WebSocket traffic with deterministic cassettes",
   "type": "module",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "keywords": [
     "effect",
     "http",
