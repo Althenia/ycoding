@@ -39,7 +39,10 @@ test("shows cumulative file counts after the last assistant and expands latest p
           more: card?.querySelector('.file-change-card__more')?.textContent?.trim() ?? '',
           expanded: card?.querySelector('.file-change-card__file-toggle')?.getAttribute('aria-expanded') ?? '' }
       })()`)
-      expect(collapsed).toEqual({ cards: 1, attached: true, title: "Edited 4 files", counts: "+33 −7", rows: 3, more: "Show 1 more file", expanded: "false" })
+      expect(collapsed).toEqual({ cards: 1, attached: true, title: "Edited 4 files", counts: "+5 −3", rows: 3, more: "Show 1 more file", expanded: "false" })
+      const geometry = await page.evaluate<{ left: number; right: number; columnLeft: number; columnRight: number }>(`(() => { const card = document.querySelector('.file-change-card').getBoundingClientRect(); const column = document.querySelector('.transcript-navigation .transcript').getBoundingClientRect(); return { left: card.left, right: card.right, columnLeft: column.left, columnRight: column.right } })()`)
+      expect(Math.abs(geometry.left - geometry.columnLeft)).toBeLessThanOrEqual(1)
+      expect(Math.abs(geometry.right - geometry.columnRight)).toBeLessThanOrEqual(1)
       expect(await page.evaluate<boolean>(`(() => { const button = document.querySelector('.file-change-card__more'); return document.getElementById(button.getAttribute('aria-controls')) === document.querySelector('.file-change-card__files') })()`)).toBe(true)
 
       await page.evaluate(`document.querySelector('.file-change-card__more').click()`)
@@ -85,6 +88,10 @@ test("uses the completed compaction row when no assistant has completed", async 
     for (let attempt = 0; attempt < 40 && !await page.evaluate(`document.querySelector('.file-change-card')`); attempt++) await Bun.sleep(50)
     expect(await page.evaluate<number>(`document.querySelectorAll('[data-message-id="cmp_file"] .file-change-card').length`)).toBe(1)
     expect(await page.evaluate<number>(`document.querySelectorAll('.file-change-card').length`)).toBe(1)
+    expect(await page.evaluate<string>(`document.querySelector('.file-change-card__totals')?.textContent ?? ''`)).toBe("+5 −3")
+    expect(await page.evaluate<string>(`document.querySelector('.file-change-card__file-counts')?.textContent ?? ''`)).toBe("+2−1")
+    await page.evaluate(`document.querySelector('.file-change-card__file-toggle').click()`)
+    expect(await page.evaluate<number>(`document.querySelectorAll('.file-change-card__diff .file-change-card__unified .file-change-card__line--added').length`)).toBe(2)
   } finally { await page.close() }
 }, 20_000)
 
@@ -94,7 +101,29 @@ test("retains the cumulative summary and explains when a recorded patch cannot b
     await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?file-changes=unavailable`)
     for (let attempt = 0; attempt < 40 && !await page.evaluate(`document.querySelector('.file-change-card')`); attempt++) await Bun.sleep(50)
     await page.evaluate(`document.querySelector('.file-change-card__file-toggle').click()`)
-    expect(await page.evaluate<string>(`document.querySelector('.file-change-card__totals')?.textContent?.trim() ?? ''`)).toBe("+33 −7")
+    expect(await page.evaluate<string>(`document.querySelector('.file-change-card__totals')?.textContent?.trim() ?? ''`)).toBe("+3 −2")
     expect(await page.evaluate<string>(`document.querySelector('.file-change-card__diff')?.textContent?.trim() ?? ''`)).toBe("Latest changeDiff unavailable for this file.")
+  } finally { await page.close() }
+}, 20_000)
+
+test("does not attribute pre-compaction ledger edits to a later reply and shows child-only captures", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?file-changes=no-edits`)
+    expect(await page.evaluate<number>(`document.querySelectorAll('.file-change-card').length`)).toBe(0)
+    await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?file-changes=child-only`)
+    expect(await page.evaluate<string>(`document.querySelector('.file-change-card__title')?.textContent ?? ''`)).toBe("Edited 1 file")
+    expect(await page.evaluate<string>(`document.querySelector('.file-change-card__totals')?.textContent ?? ''`)).toBe("+2 −1")
+  } finally { await page.close() }
+}, 20_000)
+
+test("expands every grouped patch behind one path and sums only those displayed changes", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?file-changes=repeated`)
+    expect(await page.evaluate<string>(`document.querySelector('.file-change-card__totals')?.textContent ?? ''`)).toBe("+3 −2")
+    await page.evaluate(`document.querySelector('.file-change-card__file-toggle').click()`)
+    expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.file-change-card__diff-label')].map(item => item.textContent)`)).toEqual(["Change 1", "Change 2"])
+    expect(await page.evaluate<string>(`document.querySelector('.file-change-card__diff')?.textContent ?? ''`)).toContain("after second")
   } finally { await page.close() }
 }, 20_000)

@@ -247,6 +247,17 @@ describe("relay core: role separation", () => {
 })
 
 describe("relay core: request admission", () => {
+  test("forwards only Session-scoped bounded captured-change pages to the local agent", async () => {
+    const h = harness()
+    await attachBoth(h)
+    h.reset()
+    await h.relay.handleClientMessage("client-1", request("1", "session.capturedChanges.list", "ses_a", { cursor: "opaque" }))
+    expect(h.requestsTo("agent-1")).toMatchObject([{ operation: "session.capturedChanges.list", sessionID: "ses_a", input: { cursor: "opaque" } }])
+    await h.relay.handleClientMessage("client-1", request("2", "session.capturedChanges.list"))
+    await h.relay.handleClientMessage("client-1", request("3", "session.capturedChanges.list", "ses_a", { directory: "/private" }))
+    expect(h.requestsTo("agent-1")).toHaveLength(1)
+    expect(h.messagesTo("client-1").filter((item) => item.type === "response")).toHaveLength(2)
+  })
   test("reports an unavailable agent, then forwards any scoped Session for local authorization", async () => {
     const h = harness()
     await h.relay.attach(client("client-1"))

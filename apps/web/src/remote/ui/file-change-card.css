@@ -1,4 +1,4 @@
-.file-change-card { inline-size:min(100%,960px); min-inline-size:0; max-inline-size:100%; overflow:hidden; border:1px solid var(--yc-border); border-radius:var(--yc-radius-lg); background:var(--yc-surface-raised); color:var(--yc-text); font:var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); }
+.file-change-card { inline-size:100%; min-inline-size:0; max-inline-size:100%; overflow:hidden; border:1px solid var(--yc-border); border-radius:var(--yc-radius-lg); background:var(--yc-surface-raised); color:var(--yc-text); font:var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); }
 .file-change-card__header { display:flex; align-items:center; gap:var(--yc-space-2); min-inline-size:0; min-block-size:52px; padding:var(--yc-space-2) var(--yc-space-3); border-block-end:1px solid var(--yc-border); }
 .file-change-card__icon { flex:none; display:grid; place-items:center; inline-size:28px; block-size:28px; border-radius:var(--yc-radius-sm); background:var(--yc-green-soft); color:var(--yc-green-strong); }
 .file-change-card__title { min-inline-size:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:var(--yc-weight-semibold); }

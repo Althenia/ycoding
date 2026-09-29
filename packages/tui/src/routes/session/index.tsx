@@ -33,7 +33,6 @@ import { BoxRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, 
 import { Prompt, type PromptRef } from "../../component/prompt"
 import type {
   ModelInfo,
-  SessionEventFileChangeInfo,
   SessionMessageInfo,
   SessionMessageAssistant,
   SessionMessageAssistantReasoning,
@@ -43,6 +42,7 @@ import type {
   SessionInfo,
   SessionAutonomyState,
 } from "@ycoding-ai/client"
+import { capturedPatch, groupCapturedPatches, summarizeCapturedChanges } from "@ycoding-ai/client/file-change-summary"
 import { useLocal } from "../../context/local"
 import { Locale } from "../../util/locale"
 import { contextCompositionBar } from "../../util/provider-usage"
@@ -135,7 +135,7 @@ import { promptSkillsFromMetadata, segmentPromptSkills } from "../../prompt/skil
 import { sessionSkillContent } from "../../util/session-skills"
 import { Header, headerModelRef, pendingVariantSelection, sessionRetryHeaderState, type SessionHeaderOperationalState, type SessionHeaderState } from "./header"
 import { railPlacement, railWidth } from "./rail"
-import { InlineDiff, inlineDiffGroups, parseInlineDiff, type InlineDiffFile, type InlineDiffGroup } from "./inline-diff"
+import { InlineDiff, parseInlineDiff, type InlineDiffFile, type InlineDiffGroup } from "./inline-diff"
 import { diffViewForWidth } from "../../util/diff-view"
 import { parseInlineCommandResult, type InlineCommandResult } from "./inline-command"
 import {
@@ -223,18 +223,9 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const messages = () => data.session.message.list(route.sessionID)
   const [capturedChildIDs, setCapturedChildIDs] = createSignal<string[]>([])
   let capturedChangesGeneration = 0
-  const capturedChanges = createMemo(() =>
-    capturedChangeFiles([
-      ...messages(),
-      ...capturedChildIDs().flatMap((sessionID) => data.session.message.list(sessionID)),
-    ]),
-  )
-  const durableCapturedChanges = createMemo(() => {
-    const compacted = messages().some((message) => message.type === "compaction" && message.status === "completed")
-    const completedAssistant = messages().some((message) => message.type === "assistant" && message.time.completed)
-    if (!compacted || completedAssistant) return []
-    return durableCapturedChangeFiles(data.session.fileChange.list(route.sessionID))
-  })
+  const capturedSummary = createMemo(() => summarizeCapturedChanges(messages(), capturedChildIDs().map((sessionID) => data.session.message.list(sessionID)), data.session.fileChange.list(route.sessionID)))
+  const capturedChanges = createMemo(() => capturedSummary().mode === "transcript" ? capturedSummary().files.flatMap((file) => file.files) : [])
+  const durableCapturedChanges = createMemo(() => capturedSummary().mode === "recovery" ? capturedSummary().files.flatMap((file) => file.files) : [])
   const location = createMemo(() => session()?.location)
   const currentLocation = useLocation()
 
@@ -3252,7 +3243,10 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean }
 function FileChangeBlock(props: { files: InlineDiffFile[]; label?: string; collapsed?: boolean }) {
   const { themeV2 } = useTheme()
   const renderer = useRenderer()
-  const files = createMemo(() => inlineDiffGroups(props.files))
+  const files = createMemo(() => groupCapturedPatches(props.files.flatMap((file) => {
+    const parsed = capturedPatch(file.diff, file.path, file.status)
+    return parsed ? [parsed] : []
+  })))
   const summary = createMemo(
     () => `${props.label ?? "Edited"} ${files().length} ${files().length === 1 ? "file" : "files"}`,
   )
@@ -3446,31 +3440,6 @@ export function transcriptToolPresentation(input: {
   const result = input.output ? parseInlineCommandResult(input.output) : undefined
   if (!command || !result) return undefined
   return { type: "command", command, result }
-}
-
-function capturedChangeFiles(messages: SessionMessageInfo[]): InlineDiffFile[] {
-  return messages.flatMap((message) => {
-    if (message.type !== "assistant") return []
-    return message.content.flatMap((part) => {
-      if (part.type !== "tool" || part.state.status !== "completed") return []
-      if (!["edit", "patch"].includes(toolDisplay(part.name))) return []
-      const presentation = transcriptToolPresentation({
-        tool: part.name,
-        input: part.state.input,
-        structured: part.state.structured,
-      })
-      if (presentation?.type === "diff") return [presentation]
-      if (presentation?.type === "diffs") return presentation.files
-      return []
-    })
-  })
-}
-
-function durableCapturedChangeFiles(files: SessionEventFileChangeInfo[]): InlineDiffFile[] {
-  return files.flatMap((file) => {
-    if (!parseInlineDiff(file.patch)) return []
-    return [{ diff: file.patch, path: file.path, additions: file.additions, deletions: file.deletions }]
-  })
 }
 
 function commandStatus(result: InlineCommandResult) {

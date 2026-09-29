@@ -1,10 +1,12 @@
 import { For, Show, createMemo, createSignal, createUniqueId, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
 import { filePathParts, parseUnifiedPatch, summarizeFileChanges, type DiffCell, type DiffLine } from "../file-change-diff"
-import type { FileChangeView } from "../projection"
+import type { RemoteCapturedChangesPage } from "@ycoding-ai/remote"
 import "./file-change-card.css"
 
-export function FileChangeCard(props: { readonly files: () => readonly FileChangeView[] }): JSX.Element {
+type CapturedFile = RemoteCapturedChangesPage["data"][number]
+
+export function FileChangeCard(props: { readonly files: () => readonly CapturedFile[] }): JSX.Element {
   const [showAll, setShowAll] = createSignal(false)
   const filesID = createUniqueId()
   const totals = createMemo(() => summarizeFileChanges(props.files()))
@@ -15,7 +17,7 @@ export function FileChangeCard(props: { readonly files: () => readonly FileChang
       <header class="file-change-card__header">
         <span class="file-change-card__icon" aria-hidden="true"><Icon name="file" size={16} /></span>
         <strong class="file-change-card__title">Edited {totals().files} {totals().files === 1 ? "file" : "files"}</strong>
-        <span class="file-change-card__totals" aria-label={`Cumulative changes: ${totals().additions} additions, ${totals().deletions} deletions`}>
+        <span class="file-change-card__totals" aria-label={`${totals().additions} additions, ${totals().deletions} deletions`}>
           <span class="file-change-card__added">+{totals().additions}</span>{" "}<span class="file-change-card__removed">−{totals().deletions}</span>
         </span>
       </header>
@@ -30,11 +32,10 @@ export function FileChangeCard(props: { readonly files: () => readonly FileChang
   )
 }
 
-function FileChangeRow(props: { readonly file: FileChangeView }): JSX.Element {
+function FileChangeRow(props: { readonly file: CapturedFile }): JSX.Element {
   const [expanded, setExpanded] = createSignal(false)
   const id = createUniqueId()
   const path = filePathParts(props.file.path)
-  const parsed = createMemo(() => expanded() ? parseUnifiedPatch(props.file.patch) : undefined)
   return (
     <li class="file-change-card__file">
       <button type="button" class="file-change-card__file-toggle" aria-expanded={expanded()} aria-controls={id} onClick={() => setExpanded(!expanded())}>
@@ -42,11 +43,12 @@ function FileChangeRow(props: { readonly file: FileChangeView }): JSX.Element {
         <span class="file-change-card__file-counts"><span class="file-change-card__added">+{props.file.additions}</span><span class="file-change-card__removed">−{props.file.deletions}</span></span>
         <span class="file-change-card__chevron" aria-hidden="true"><Icon name="chevron-down" size={14} /></span>
       </button>
-      <div class="file-change-card__diff" id={id} role="region" aria-label={`Latest change in ${props.file.path}`} hidden={!expanded()} tabindex="0">
+      <div class="file-change-card__diff" id={id} role="region" aria-label={`${props.file.files.length === 1 ? "Latest change" : "Recorded changes"} in ${props.file.path}`} hidden={!expanded()} tabindex="0">
         <Show when={expanded()}>
-          <div class="file-change-card__diff-label">Latest change</div>
-          <Show when={parsed()} fallback={<p class="file-change-card__unavailable">Diff unavailable for this file.</p>}>
-            {(diff) => <>
+          <For each={props.file.files}>{(patch, index) => <div class="file-change-card__patch">
+            <div class="file-change-card__diff-label">{props.file.files.length === 1 ? "Latest change" : `Change ${index() + 1}`}</div>
+            <Show when={!patch.unavailable && parseUnifiedPatch(patch.diff)} fallback={<p class="file-change-card__unavailable">Diff unavailable for this file.</p>}>
+              {(diff) => <>
               <div class="file-change-card__split" aria-label="Side-by-side diff">
                 <div class="file-change-card__pane-heading">Old</div><div class="file-change-card__pane-heading">New</div>
                 <For each={diff().split}>{(row) => row.kind === "hunk"
@@ -61,8 +63,9 @@ function FileChangeRow(props: { readonly file: FileChangeView }): JSX.Element {
                   ? <div class="file-change-card__hunk">{line.text}</div>
                   : <UnifiedLine line={line} />}</For>
               </div>
-            </>}
-          </Show>
+              </>}
+            </Show>
+          </div>}</For>
         </Show>
       </div>
     </li>

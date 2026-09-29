@@ -1,5 +1,3 @@
-import type { FileChangeView, RemoteMessageView } from "./projection"
-
 export type DiffLine =
   | { readonly kind: "hunk"; readonly text: string }
   | { readonly kind: "context" | "added" | "removed"; readonly text: string; readonly oldNumber?: number; readonly newNumber?: number }
@@ -91,7 +89,7 @@ export function parseUnifiedPatch(patch: string): ParsedDiff | undefined {
   return { unified, split }
 }
 
-export function summarizeFileChanges(files: readonly FileChangeView[]) {
+export function summarizeFileChanges(files: readonly { readonly additions: number; readonly deletions: number }[]) {
   return {
     files: files.length,
     additions: files.reduce((total, file) => total + (Number.isSafeInteger(file.additions) && file.additions > 0 ? file.additions : 0), 0),
@@ -102,11 +100,4 @@ export function summarizeFileChanges(files: readonly FileChangeView[]) {
 export function filePathParts(path: string) {
   const boundary = path.lastIndexOf("/") + 1
   return { directory: path.slice(0, boundary), basename: path.slice(boundary) }
-}
-
-export function capturedChangesPlacement(messages: readonly RemoteMessageView[], files: readonly FileChangeView[]): string | undefined {
-  if (files.length === 0) return undefined
-  const assistant = messages.findLast((message) => message.kind === "assistant" && message.completed !== undefined)
-  if (assistant) return assistant.id
-  return messages.findLast((message) => message.kind === "compaction" && message.status === "completed")?.id
 }

@@ -89,30 +89,6 @@ export function inlineDiffSummary(file: InlineDiffFile) {
   }
 }
 
-export function inlineDiffGroups(files: InlineDiffFile[]): InlineDiffGroup[] {
-  const groups = new Map<string, InlineDiffGroup>()
-  return files.flatMap((file) => {
-    const summary = inlineDiffSummary(file)
-    const group = groups.get(summary.path)
-    if (group) {
-      group.additions += summary.additions
-      group.deletions += summary.deletions
-      group.files.push(file)
-      if (group.status !== summary.status) group.status = "modified"
-      return []
-    }
-    const next: InlineDiffGroup = {
-      path: summary.path,
-      additions: summary.additions,
-      deletions: summary.deletions,
-      status: summary.status,
-      files: [file],
-    }
-    groups.set(next.path, next)
-    return [next]
-  })
-}
-
 export function InlineDiff(props: InlineDiffGroup & { wrapMode?: "word" | "none"; heading?: boolean; view?: "split" | "unified" }) {
   const { themeV2, syntax } = useTheme()
   const patches = createMemo(() => props.files.filter((file) => parseInlineDiff(file.diff)?.patch))

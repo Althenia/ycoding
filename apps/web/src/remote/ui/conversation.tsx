@@ -2,7 +2,6 @@ import { For, Show, createMemo, createSignal, onCleanup, type JSX } from "solid-
 import { Icon } from "../../ui/icon"
 import { catalogKey, modelDisplayLabel } from "../catalog"
 import { useRemote } from "../context"
-import { capturedChangesPlacement } from "../file-change-diff"
 import {
   formatPartDuration,
   classifySyntheticNotice,
@@ -333,8 +332,9 @@ function ReasoningPart(props: { readonly text: () => string; readonly parts: () 
 export function MessageRow(props: { readonly message: () => RemoteMessageView }): JSX.Element {
   const kind = () => props.message().kind
   const remote = useRemote()
-  const fileChanges = () => remote.state().view?.fileChanges ?? []
-  const showFileChanges = () => capturedChangesPlacement(remote.state().view?.messages ?? [], fileChanges()) === props.message().id
+  const fileChanges = () => remote.state().view?.capturedChanges?.data ?? []
+  const showFileChanges = () => remote.state().view?.capturedChanges?.placementMessageID === props.message().id && fileChanges().length > 0 &&
+    (remote.state().view?.capturedChanges?.mode === "transcript" && kind() === "assistant" || remote.state().view?.capturedChanges?.mode === "recovery" && kind() === "compaction")
   const catalog = () => remote.state().catalogs[catalogKey({ sessionID: remote.state().activeSessionID ?? "" })]
   const models = () => catalog()?.models ?? []
   const agent = () => {

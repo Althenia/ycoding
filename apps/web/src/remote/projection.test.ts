@@ -22,6 +22,7 @@ import {
   previewText,
   readAutonomy,
   readCompactionHistory,
+  readCapturedChangesPage,
   readFileChangeEvent,
   readFileChangeList,
   readMessageList,
@@ -55,6 +56,16 @@ test("projects managed user files without exposing their storage path", () => {
       { name: "notes.pdf", mime: "application/pdf", bytes: 42, digest: "b".repeat(64) },
     ],
   }])
+})
+
+test("accepts only a complete captured summary whose grouped counts match its patch entries", () => {
+  const patch = { path: "src/a.ts", diff: "@@ -1 +1 @@\n-old\n+new", additions: 1, deletions: 1, status: "modified" } as const
+  const page = { mode: "transcript", placementMessageID: "msg_reply", data: [{ path: "src/a.ts", additions: 2, deletions: 2, status: "modified", files: [patch, patch] }], cursor: { next: "page_2" } } as const
+  expect(readCapturedChangesPage(page)).toEqual(page)
+  expect(readCapturedChangesPage({ ...page, data: [{ ...page.data[0], additions: 65 }] })).toBeUndefined()
+  expect(readCapturedChangesPage({ ...page, data: [{ ...page.data[0], additions: 3, files: [{ ...patch, additions: 2 }, patch] }] })).toBeUndefined()
+  expect(readCapturedChangesPage({ ...page, data: [{ ...page.data[0], files: [{ ...patch, path: "src/foreign.ts" }] }] })).toBeUndefined()
+  expect(readCapturedChangesPage({ mode: "recovery", placementMessageID: "msg_compact", data: [{ path: "src/large.ts", additions: 0, deletions: 0, status: "modified", files: [{ path: "src/large.ts", diff: "", additions: 0, deletions: 0, status: "modified", unavailable: true }] }] })).toBeDefined()
 })
 
 test("keeps attached images on an admitted live prompt until its snapshot arrives", () => {

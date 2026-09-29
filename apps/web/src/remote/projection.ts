@@ -7,7 +7,8 @@
  */
 
 import type { Form } from "../../../../packages/schema/src/form"
-import { RemoteLimits, isWellFormedBase64, type RemoteCompactionHistory } from "@ycoding-ai/remote"
+import { RemoteLimits, isWellFormedBase64, type RemoteCapturedChangesPage, type RemoteCompactionHistory } from "@ycoding-ai/remote"
+import { parseUnifiedPatch } from "./file-change-diff"
 
 /** `packages/schema` `Model.Ref`: an object, never a plain string. */
 export type ModelRefView = {
@@ -338,6 +339,7 @@ export type SessionView = {
   readonly requests: readonly PendingRequestView[]
   /** Latest recorded patch per changed path, from the ledger read and live records. */
   readonly fileChanges: readonly FileChangeView[]
+  readonly capturedChanges?: RemoteCapturedChangesPage
   readonly activity: readonly ActivityItem[]
   readonly unhandledEvents: number
   readonly updatedAt?: number
@@ -1870,6 +1872,37 @@ export function readFileChangeList(payload: unknown): readonly FileChangeView[] 
     const change = readFileChange(item)
     return change === undefined ? [] : [change]
   })
+}
+
+export function readCapturedChangesPage(value: unknown): RemoteCapturedChangesPage | undefined {
+  if (!isRecord(value) || !["none", "transcript", "recovery"].includes(String(value.mode)) || !Array.isArray(value.data) ||
+    (value.mode === "none" ? value.data.length !== 0 : typeof value.placementMessageID !== "string") ||
+    (value.cursor !== undefined && (!isRecord(value.cursor) || value.cursor.next !== undefined && (typeof value.cursor.next !== "string" || value.cursor.next.length === 0 || value.cursor.next.length > 256)))) return undefined
+  const files = value.data.map((entry: unknown) => {
+    if (!isRecord(entry) || typeof entry.path !== "string" || !Number.isSafeInteger(entry.additions) || !Number.isSafeInteger(entry.deletions) ||
+      (entry.additions as number) < 0 || (entry.deletions as number) < 0 || !["created", "deleted", "modified"].includes(String(entry.status)) || !Array.isArray(entry.files)) return undefined
+    const patches = entry.files.map((patch: unknown) => {
+      if (!isRecord(patch) || typeof patch.diff !== "string" || patch.path !== entry.path || !Number.isSafeInteger(patch.additions) || !Number.isSafeInteger(patch.deletions) ||
+        (patch.additions as number) < 0 || (patch.deletions as number) < 0 || !["created", "deleted", "modified"].includes(String(patch.status)) ||
+        (patch.unavailable !== undefined && patch.unavailable !== true)) return undefined
+      const parsed = patch.unavailable === true ? undefined : parseUnifiedPatch(patch.diff)
+      if (patch.unavailable === true ? patch.diff !== "" || patch.additions !== 0 || patch.deletions !== 0
+        : !parsed || parsed.unified.filter((line) => line.kind === "added").length !== patch.additions ||
+          parsed.unified.filter((line) => line.kind === "removed").length !== patch.deletions) return undefined
+      return { path: entry.path as string, diff: patch.diff, additions: patch.additions as number, deletions: patch.deletions as number,
+        status: patch.status as "created" | "deleted" | "modified", ...(patch.unavailable === true ? { unavailable: true } : {}) }
+    })
+    if (patches.some((patch) => patch === undefined) || patches.length === 0 ||
+      patches.reduce((total, patch) => total + (patch?.additions ?? 0), 0) !== entry.additions ||
+      patches.reduce((total, patch) => total + (patch?.deletions ?? 0), 0) !== entry.deletions) return undefined
+    return { path: entry.path, additions: entry.additions as number, deletions: entry.deletions as number,
+      status: entry.status as "created" | "deleted" | "modified", files: patches.filter((patch): patch is NonNullable<typeof patch> => patch !== undefined) }
+  })
+  if (files.some((file) => file === undefined)) return undefined
+  return { mode: value.mode as RemoteCapturedChangesPage["mode"],
+    ...(typeof value.placementMessageID === "string" ? { placementMessageID: value.placementMessageID } : {}),
+    data: files.filter((file): file is NonNullable<typeof file> => file !== undefined),
+    ...(isRecord(value.cursor) && typeof value.cursor.next === "string" ? { cursor: { next: value.cursor.next } } : {}) }
 }
 
 /** `session.file-change.recorded` change, when the payload is that event. */

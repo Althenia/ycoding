@@ -68,6 +68,15 @@ test("compaction history is a read-only Session-scoped operation with no caller 
     expect(parseClientMessage(JSON.stringify({ ...request, input })).ok).toBe(false)
 })
 
+test("captured changes is a read-only Session-scoped paged operation without caller placement", () => {
+  const frame = { type: "request", id: "req_changes", operation: "session.capturedChanges.list", sessionID: "ses_root" }
+  expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
+  expect(parseRelayToAgentMessage(JSON.stringify({ ...frame, input: { cursor: "opaque_cursor" } }))).toMatchObject({ ok: true })
+  expect(parseClientMessage(JSON.stringify({ ...frame, sessionID: undefined }))).toMatchObject({ ok: false, error: { code: "session_required" } })
+  for (const input of [{ directory: "/private" }, { workspaceID: "wsp_other" }, { cursor: "" }, { cursor: "x".repeat(257) }, { limit: 1 }, {}])
+    expect(parseClientMessage(JSON.stringify({ ...frame, input })).ok).toBe(false)
+})
+
 test("Team operations stay root-scoped with bounded child, shell, side-chat, and economics inputs", () => {
   const request = (operation: string, input?: unknown) => ({ type: "request", id: "team_1", sessionID: "ses_root", operation,
     ...(input === undefined ? {} : { input }) })
@@ -439,6 +448,7 @@ describe("remote operations", () => {
       "session.active",
       "session.get",
       "session.messages",
+      "session.capturedChanges.list",
       "session.compaction.list",
       "session.snapshot",
       "session.attachment.read",

@@ -358,6 +358,7 @@ grouping and Session-list filters are derived from backend metadata.
 | `session.status` | no | `v2.session.active`, pending Session permission/form/guardrail reads | Local active and pending-request GET routes | — |
 | `session.get` | yes | `v2.session.get` | `GET /api/session/:sessionID` | — |
 | `session.messages` | yes | `v2.message.list` | `GET /api/session/:sessionID/message` | — |
+| `session.capturedChanges.list` | yes | `v2.message.list`, `v2.session.subagent.list`, `v2.session.file-change.list` | Verified root and completed direct-child reads at their backend Locations | `cursor?` (opaque, at most 256 chars) |
 | `session.compaction.list` | yes | `v2.message.list` | `GET /api/session/:sessionID/message` at the verified Session Location | — |
 | `session.snapshot` | yes | `v2.session.snapshot` | `GET /api/session/:sessionID/snapshot` | `limit?` (1–200), `before?` (requires limit; at most 256 chars) |
 | `session.attachment.read` | yes | `v2.session.attachment.read` | `GET /api/session/:sessionID/attachment/:digest` | `digest` (64 lowercase hex) |
@@ -441,6 +442,8 @@ larger limit, mutation, or child subscription is accepted. The response keeps
 the Protocol `{ data, summary, cursor }` shape and is chunked if needed. An
 agent without this operation replies `unknown_operation`, which is an
 unsupported team read rather than an empty team.
+
+`session.capturedChanges.list` is a read-only Session-scoped captured-diff summary. The connector reads the addressed Session's resident post-compaction transcript and, for a root, all completed direct-child transcripts after verifying each child's current backend Location and direct ownership. It returns `mode: "transcript"` with the last completed assistant message ID and first-seen per-path groups of completed `edit`/`patch` diffs; if no assistant has completed after compaction, `mode: "recovery"` uses the durable ledger's latest parseable patches and the completed compaction message ID. Otherwise `mode: "none"` returns no files. Counts describe the displayed patches, including every grouped diff. Each response carries at most 100 file groups with at most 512,000 serialized characters of group data before transport framing; an opaque Session-bound digest cursor continues the same summary, and a changed summary rejects that cursor. A file group too large for one page is labeled `unavailable`, with no patch or counted lines, rather than cut silently. The caller cannot supply a child ID, directory, workspace, or arbitrary limit. An older connector answers `unknown_operation`; the browser omits the card without an error.
 
 Team operations address a verified root Session; the connector verifies each
 child at its recorded Location immediately before a child operation. Cancel and

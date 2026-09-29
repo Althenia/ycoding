@@ -7,6 +7,7 @@ import { basename, relative, resolve, sep } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { Project } from "@ycoding-ai/schema/project"
 import type { FormAnswer, SessionInfo } from "@ycoding-ai/client/promise"
+import { residentCapturedMessages, summarizeCapturedChanges } from "@ycoding-ai/client/file-change-summary"
 import {
   RemoteLimits,
   isSessionID,
@@ -20,6 +21,7 @@ import {
   type RemoteWorkspaceInfo,
   type RemoteFamilyActivity,
   type RemoteUsageReportInput,
+  type RemoteCapturedChangesPage,
 } from "@ycoding-ai/remote"
 import {
   LocalFailure,
@@ -50,6 +52,8 @@ export const unscopedOperations: ReadonlySet<RemoteOperation> = new Set([
 // URL, HTTP method, or Location header.
 
 const maxLogReadItems = 2_000
+const maxCapturedPageChars = 512_000
+const maxCapturedFilesPerPage = 100
 
 // One shell-output request returns one page at most: the local default page, so a
 // remote reader pages explicitly instead of asking the device for unbounded output.
@@ -608,6 +612,8 @@ async function run(input: OperationInput) {
         if (limit === 1) throw new OperationError("message_too_large", "A single projected message exceeds the response bound")
       }
     }
+    case "capturedChanges.list":
+      return await capturedChangesPage(input, verified, sessionID, location, request.id, validated.cursor)
     case "attachment.read":
       return await input.local.attachmentRead(sessionID, location, validated.digest)
     case "message.stream":
@@ -823,6 +829,7 @@ type Validated =
   | { readonly kind: "skill"; readonly input: { readonly id?: string; readonly skill: string; readonly resume?: boolean } }
   | { readonly kind: "get" }
   | { readonly kind: "snapshot"; readonly limit?: number; readonly before?: string }
+  | { readonly kind: "capturedChanges.list"; readonly cursor?: string }
   | { readonly kind: "attachment.read"; readonly digest: string }
   | { readonly kind: "message.stream"; readonly messageID: string }
   | { readonly kind: "subagent.list"; readonly cursor?: string }
@@ -861,6 +868,7 @@ const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
   "session.get": "get",
   "session.catalog": "catalog",
   "session.messages": "messages",
+  "session.capturedChanges.list": "capturedChanges.list",
   "session.compaction.list": "compaction.list",
   "session.todo.list": "todo.list",
   "session.autonomy.get": "autonomy.get",
@@ -888,6 +896,7 @@ function validate(request: RemoteRequest): Validated {
     if (before !== undefined && limit === undefined) throw new OperationError("invalid_message", "Snapshot cursor requires a limit")
     return { kind: "snapshot", ...(limit === undefined ? {} : { limit }), ...(before === undefined ? {} : { before }) }
   }
+  if (request.operation === "session.capturedChanges.list") return { kind: "capturedChanges.list", cursor: fields.cursor === undefined ? undefined : requireString(fields.cursor, "cursor", 256) }
   if (request.operation === "session.attachment.read") {
     if (typeof fields.digest !== "string" || !/^[0-9a-f]{64}$/.test(fields.digest))
       throw new OperationError("invalid_message", "Invalid managed attachment digest")
@@ -1087,6 +1096,73 @@ async function requireFamilyMember(input: OperationInput, root: SessionInfo, mem
   const member = await input.sessions.verify(memberID)
   if (member?.parentID !== root.id || managed && member.agent === "btw") throw new OperationError("forbidden", "Session is not a direct family member")
   return member
+}
+
+async function capturedChangesPage(input: OperationInput, owner: SessionInfo, sessionID: string, location: LocalLocation, requestID: string, cursor?: string): Promise<RemoteCapturedChangesPage> {
+  const parent = residentCapturedMessages(await input.local.messages(sessionID, location))
+  const children: (typeof parent)[] = []
+  if (owner.parentID === undefined) {
+    let next: string | undefined
+    do {
+      const response = await input.local.subagentPage(sessionID, location, next)
+      if (!response || typeof response !== "object" || !("data" in response) || !Array.isArray(response.data) || !("cursor" in response) || !response.cursor || typeof response.cursor !== "object")
+        throw new OperationError("internal_error", "Completed subagent list was unreadable")
+      for (const task of response.data) {
+        if (!task || typeof task !== "object" || !("state" in task) || task.state !== "completed" || !("sessionID" in task) || typeof task.sessionID !== "string") continue
+        const child = await requireFamilyMember(input, owner, task.sessionID, true)
+        children.push(residentCapturedMessages(await input.local.messages(child.id, locationInfo(child))))
+      }
+      const candidate = "next" in response.cursor ? response.cursor.next : undefined
+      if (candidate !== undefined && (typeof candidate !== "string" || candidate.length === 0 || candidate.length > 1_024 || candidate === next))
+        throw new OperationError("internal_error", "Completed subagent cursor was unreadable")
+      next = candidate
+    } while (next !== undefined)
+  }
+  const recover = !parent.some((message) => message.type === "assistant" && message.time?.completed !== undefined) &&
+    parent.some((message) => message.type === "compaction" && message.status === "completed")
+  const raw = recover ? await input.local.fileChangeList(sessionID, location) : []
+  if (!Array.isArray(raw)) throw new OperationError("internal_error", "Captured change ledger was unreadable")
+  const ledger = raw.flatMap((item: unknown) => {
+    if (!item || typeof item !== "object" || !("path" in item) || typeof item.path !== "string" || !("patch" in item) || typeof item.patch !== "string" ||
+      !("additions" in item) || typeof item.additions !== "number" || !("deletions" in item) || typeof item.deletions !== "number") return []
+    return [{ path: item.path, patch: item.patch, additions: item.additions, deletions: item.deletions }]
+  })
+  const summary = summarizeCapturedChanges(parent, children, ledger)
+  if (summary.mode === "none") {
+    if (cursor !== undefined) throw new OperationError("invalid_message", "Captured change cursor is stale")
+    return { mode: "none", data: [] }
+  }
+  const digest = createHash("sha256").update(sessionID).update(JSON.stringify(summary)).digest("hex")
+  let offset = 0
+  if (cursor !== undefined) {
+    try {
+      const parsed: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"))
+      if (!parsed || typeof parsed !== "object" || !("offset" in parsed) || !("digest" in parsed) || typeof parsed.offset !== "number" ||
+        !Number.isSafeInteger(parsed.offset) || parsed.offset < 1 || parsed.offset >= summary.files.length || parsed.digest !== digest)
+        throw new OperationError("invalid_message", "Captured change cursor is stale")
+      offset = parsed.offset
+    } catch (cause) {
+      if (cause instanceof OperationError) throw cause
+      throw new OperationError("invalid_message", "Captured change cursor is invalid")
+    }
+  }
+  const files: Array<RemoteCapturedChangesPage["data"][number]> = []
+  for (const original of summary.files.slice(offset)) {
+    const group = JSON.stringify(original).length > maxCapturedPageChars
+      ? { ...original, additions: 0, deletions: 0, files: [{ path: original.path, diff: "", additions: 0, deletions: 0, status: original.status, unavailable: true }] }
+      : original
+    if (files.length >= maxCapturedFilesPerPage || files.length > 0 && JSON.stringify([...files, group]).length > maxCapturedPageChars) break
+    files.push(group)
+  }
+  const end = offset + files.length
+  const page: RemoteCapturedChangesPage = {
+    mode: summary.mode,
+    placementMessageID: summary.placementMessageID,
+    data: files,
+    ...(end < summary.files.length ? { cursor: { next: Buffer.from(JSON.stringify({ offset: end, digest })).toString("base64url") } } : {}),
+  }
+  if (successFrames(requestID, page)[0]?.ok === false) throw new OperationError("message_too_large", "Captured change page exceeds the response bound")
+  return page
 }
 
 async function familyLocations(input: OperationInput, root: SessionInfo): Promise<readonly LocalLocation[]> {
@@ -1394,6 +1470,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.side-chat.create": ["id"],
   "session.family.activity": ["sessionIDs"],
   "session.messages": [],
+  "session.capturedChanges.list": ["cursor"],
   "session.compaction.list": [],
   "session.todo.list": [],
   "session.log": ["after"],

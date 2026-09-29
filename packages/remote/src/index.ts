@@ -40,6 +40,7 @@ export const remoteOperations = [
   "session.active",
   "session.get",
   "session.messages",
+  "session.capturedChanges.list",
   "session.compaction.list",
   "session.snapshot",
   "session.attachment.read",
@@ -93,6 +94,7 @@ export const remoteOperations = [
 export const remoteSessionOperations = [
   "session.get",
   "session.messages",
+  "session.capturedChanges.list",
   "session.compaction.list",
   "session.snapshot",
   "session.attachment.read",
@@ -136,6 +138,19 @@ export const remoteSessionOperations = [
 ] as const
 
 export type RemoteOperation = (typeof remoteOperations)[number]
+
+export type RemoteCapturedChangesPage = {
+  readonly mode: "none" | "transcript" | "recovery"
+  readonly placementMessageID?: string
+  readonly data: readonly {
+    readonly path: string
+    readonly additions: number
+    readonly deletions: number
+    readonly status: "created" | "deleted" | "modified"
+    readonly files: readonly { readonly diff: string; readonly path: string; readonly additions: number; readonly deletions: number; readonly status: "created" | "deleted" | "modified"; readonly unavailable?: boolean }[]
+  }[]
+  readonly cursor?: { readonly next?: string }
+}
 
 export type RemoteCompactionHistory = {
   readonly data: readonly {
@@ -441,6 +456,7 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
 }
 
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
+  if (operation === "session.capturedChanges.list") return input === undefined || isRecord(input) && typeof input.cursor === "string" && input.cursor.length > 0 && input.cursor.length <= 256 && Object.keys(input).length === 1
   if (operation === "session.compaction.list") return input === undefined
   if (operation === "session.snapshot") return input === undefined || (isRecord(input) &&
     typeof input.limit === "number" && Number.isSafeInteger(input.limit) && input.limit >= 1 && input.limit <= 200 &&

@@ -21,6 +21,7 @@ import {
   readAggregateID,
   readAutonomy,
   readCompactionHistory,
+  readCapturedChangesPage,
   readEventSequence,
   readFileChangeEvent,
   readFileChangeList,
@@ -443,6 +444,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
    * issued is newer, so it is re-applied over the read instead of being replaced by it.
    */
   let fileChangeRead: { readonly sessionID: string; readonly live: FileChangeView[] } | undefined
+  let capturedRead: { readonly sessionID: string; readonly owner: RemoteTransport; readonly token: number } | undefined
+  let cancelCapturedRefresh: (() => void) | undefined
+  let lastCapturedRead = -Infinity
+  let capturedUnsupported = false
   let todoRead: { readonly sessionID: string; live?: readonly TodoView[] } | undefined
   let compactionRead: { readonly token: number; readonly live: { readonly event: unknown; readonly at: number }[] } | undefined
   let compactionAttemptedToken: number | undefined
@@ -651,6 +656,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       teamCues,
     }
     notify()
+    if (batch.some((item) => {
+      if (item.sessionID !== state.activeSessionID || typeof item.event !== "object" || item.event === null) return false
+      const type = Reflect.get(item.event, "type")
+      if (type === "session.step.ended" || type === "session.compaction.ended") return true
+      const cue = readTeamCue(item.event)
+      return cue?.kind === "reported" && cue.outcome === "completed"
+    })) scheduleCapturedRefresh()
     if (batch.some((item) => typeof item.event === "object" && item.event !== null && Reflect.get(item.event, "type") === "session.compaction.started") &&
       state.activeSessionID !== undefined) void loadCompactionHistory(state.activeSessionID, selectionToken)
     if (gap) void reloadSnapshot(state.activeSessionID, selectionToken)
@@ -1136,6 +1148,49 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
   }
 
+  const loadCapturedChanges = async (owner: RemoteTransport, sessionID: string, token: number) => {
+    if (capturedUnsupported) return
+    const read = { owner, sessionID, token }
+    capturedRead = read
+    lastCapturedRead = now()
+    const pages = [] as NonNullable<SessionView["capturedChanges"]>["data"][number][]
+    const seen = new Set<string>()
+    let cursor: string | undefined
+    let mode: "none" | "transcript" | "recovery" | undefined
+    let placementMessageID: string | undefined
+    for (;;) {
+      const outcome = await owner.request("session.capturedChanges.list", { sessionID, ...(cursor === undefined ? {} : { input: { cursor } }) })
+      if (capturedRead !== read || token !== selectionToken || !isCurrentConnection(owner) || state.activeSessionID !== sessionID) return
+      if (outcome.status === "failed" && outcome.error.code === "unknown_operation") capturedUnsupported = true
+      const page = outcome.status === "ok" ? readCapturedChangesPage(outcome.value) : undefined
+      if (page === undefined || mode !== undefined && (page.mode !== mode || page.placementMessageID !== placementMessageID)) {
+        setState({ view: state.view?.id === sessionID ? { ...state.view, capturedChanges: undefined } : state.view })
+        if (capturedRead === read) capturedRead = undefined
+        return
+      }
+      mode = page.mode
+      placementMessageID = page.placementMessageID
+      pages.push(...page.data)
+      cursor = page.cursor?.next
+      if (cursor === undefined || seen.has(cursor)) break
+      seen.add(cursor)
+    }
+    if (capturedRead === read) capturedRead = undefined
+    if (cursor !== undefined || mode === undefined || state.view?.id !== sessionID) return
+    setState({ view: { ...state.view, capturedChanges: { mode, ...(placementMessageID === undefined ? {} : { placementMessageID }), data: pages } } })
+  }
+
+  const scheduleCapturedRefresh = () => {
+    if (capturedUnsupported || cancelCapturedRefresh || transport === undefined || state.activeSessionID === undefined) return
+    const owner = transport
+    const sessionID = state.activeSessionID
+    const token = selectionToken
+    cancelCapturedRefresh = schedule(() => {
+      cancelCapturedRefresh = undefined
+      if (isCurrentConnection(owner) && token === selectionToken && state.activeSessionID === sessionID) void loadCapturedChanges(owner, sessionID, token)
+    }, Math.max(0, 10_000 - (now() - lastCapturedRead)))
+  }
+
   /**
    * Reads one explicit page of a shell's captured output for the session that owns it.
    * One user request reads one page: there is no automatic paging loop, so a running
@@ -1577,6 +1632,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
 
   const selectSession = async (sessionID: string, verified?: SessionInfoView) => {
+    cancelCapturedRefresh?.()
+    cancelCapturedRefresh = undefined
+    capturedRead = undefined
+    lastCapturedRead = -Infinity
     if (state.activeSessionID !== sessionID) clearImageSources()
     oversizedReads.forEach((controller) => controller.abort())
     oversizedReads.clear()
@@ -1673,6 +1732,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       setState({ notice, ...(teamWatching && !sameFamily ? { team: emptyTeam(rootID, "loading") } : {}) })
       if (teamWatching && !sameFamily) void loadTeam(active, token, rootID)
       if (sameFamily && activityWatching) void loadFamilyActivity(active, rootID)
+      void loadCapturedChanges(active, sessionID, token)
       await loadSessionReads(sessionID, token)
     }
     try {
@@ -1704,6 +1764,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
             ...(applied.parentID === undefined ? {} : { parentID: applied.parentID }) }
         : state.selectedSessionInfo })
       void loadCompactionHistory(sessionID, token)
+      void loadCapturedChanges(active, sessionID, token)
       if (teamWatching && !retained) void loadTeam(active, token, teamRootID)
       if (retained && activityWatching) void loadFamilyActivity(active, teamRootID)
     } finally {
@@ -2064,6 +2125,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return result
     },
     connect: (deviceID) => {
+      capturedUnsupported = false
+      cancelCapturedRefresh?.()
+      cancelCapturedRefresh = undefined
+      capturedRead = undefined
+      lastCapturedRead = -Infinity
       if (state.activeDeviceID !== deviceID) offlineDeviceID = undefined
       clearImageSources()
       cancelFamilyRefresh?.()
@@ -2110,6 +2176,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         onSessionStatus: (status) => applyStatusFrame(created, status),
         onSessions: () => {
           if (!isCurrentConnection(created)) return
+          scheduleCapturedRefresh()
           retryUsage(created)
           if (state.sessionListStatus === "ready" || (state.carouselSessions?.length ?? 0) > 0) {
             carouselRevision += 1
@@ -2784,6 +2851,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     // A device switch during the reload leaves a different connection owning the
     // store, so this one must not resubscribe, reload, or report again.
     if (!isCurrentConnection(owner)) return
+    capturedUnsupported = false
     const sessionID = state.activeSessionID
     if (sessionID === undefined) {
       setState({ notice: "Reconnected." })
@@ -2804,6 +2872,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const reloaded = await reloadSnapshot(sessionID, token)
     if (!isCurrentConnection(owner)) return
     await loadSessionReads(sessionID, token)
+    if (isCurrentConnection(owner)) void loadCapturedChanges(owner, sessionID, token)
     if (!isCurrentConnection(owner)) return
     if (reloaded === "applied") {
       setState({ notice: "Reconnected. Session history reloaded read-only." })

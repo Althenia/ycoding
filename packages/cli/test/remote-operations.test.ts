@@ -121,6 +121,77 @@ test("windowed snapshots shrink under the relay chunk cap and fail a single over
   expect(errorOf(await executeRemoteOperation({ request: request("session.snapshot", { limit: 1 }), sessions: oversized.registry, subscriptions: oversized.subscriptions, local: oversized.local })).code).toBe("message_too_large")
 })
 
+test("captured changes reads completed direct-child diffs at the verified Location and returns one grouped summary", async () => {
+  const patch = "--- a/src/child.ts\n+++ b/src/child.ts\n@@ -1 +1 @@\n-old\n+new"
+  const root = sessionInfo("ses_1", { updated: 1 })
+  const child = sessionInfo("ses_child", { updated: 2, directory: "/child", parentID: "ses_1" })
+  const test = await harness({ sessions: [root, child], results: {
+    subagentPage: async () => ({ data: [{ sessionID: "ses_child", state: "completed" }], cursor: {} }),
+    messages: async (id: string) => id === "ses_1"
+      ? [{ id: "msg_reply", type: "assistant", time: { created: 3, completed: 4 }, content: [] }]
+      : [{ id: "msg_child", type: "assistant", time: { created: 2, completed: 3 }, content: [{ type: "tool", name: "edit", state: { status: "completed", structured: { files: [{ file: "src/child.ts", patch, additions: 65, deletions: 3 }] } } }] }],
+    fileChangeList: async () => [],
+  } })
+  const outcome = await executeRemoteOperation({ request: request("session.capturedChanges.list"), sessions: test.registry, subscriptions: test.subscriptions, local: test.local })
+  expect(valueOf(outcome)).toMatchObject({ mode: "transcript", placementMessageID: "msg_reply", data: [{ path: "src/child.ts", additions: 1, deletions: 1, files: [{ diff: patch }] }] })
+  expect(test.calls.filter((call) => call.method === "messages").map((call) => call.args)).toEqual([
+    ["ses_1", { directory: "/work" }], ["ses_child", { directory: "/child" }],
+  ])
+})
+
+test("captured changes does not attach pre-compaction edits to a later completed reply", async () => {
+  const patch = "--- a/src/old.ts\n+++ b/src/old.ts\n@@ -1 +1 @@\n-old\n+new"
+  const test = await harness({ results: {
+    subagentPage: async () => ({ data: [], cursor: {} }),
+    messages: async () => [
+      { id: "msg_old", type: "assistant", time: { created: 1, completed: 2 }, content: [{ type: "tool", name: "edit", state: { status: "completed", structured: { files: [{ file: "src/old.ts", patch }] } } }] },
+      { id: "msg_compact", type: "compaction", status: "completed", boundary: { messageID: "msg_old" } },
+      { id: "msg_reply", type: "assistant", time: { created: 3, completed: 4 }, content: [] },
+    ],
+    fileChangeList: async () => [{ path: "src/old.ts", patch, additions: 65, deletions: 3 }],
+  } })
+  const outcome = await executeRemoteOperation({ request: request("session.capturedChanges.list"), sessions: test.registry, subscriptions: test.subscriptions, local: test.local })
+  expect(valueOf(outcome)).toEqual({ mode: "none", data: [] })
+})
+
+test("captured changes pages complete groups and labels a patch too large for one page", async () => {
+  const patch = "@@ -1 +1 @@\n-old\n+new"
+  const files = Array.from({ length: 101 }, (_, index) => ({ file: `src/file-${index}.ts`, patch }))
+  const test = await harness({ sessions: [sessionInfo("ses_1", { updated: 1 }), sessionInfo("ses_2", { updated: 1 })], results: {
+    subagentPage: async () => ({ data: [], cursor: {} }),
+    messages: async () => [{ id: "msg_reply", type: "assistant", time: { created: 2, completed: 3 }, content: [
+      { type: "tool", name: "edit", state: { status: "completed", structured: { files } } },
+    ] }],
+  } })
+  const run = (cursor?: string) => executeRemoteOperation({ request: request("session.capturedChanges.list", cursor ? { cursor } : undefined), local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
+  const first = valueOf(await run()) as { data: { path: string }[]; cursor: { next: string } }
+  expect(first.data).toHaveLength(100)
+  const second = valueOf(await run(first.cursor.next)) as { data: { path: string }[] }
+  expect(second.data.map((file) => file.path)).toEqual(["src/file-100.ts"])
+  expect(errorOf(await executeRemoteOperation({ request: { ...request("session.capturedChanges.list", { cursor: first.cursor.next }), sessionID: "ses_2" }, local: test.local, sessions: test.registry, subscriptions: test.subscriptions })).code).toBe("invalid_message")
+  expect(errorOf(await run("bad".repeat(100))).code).toBe("invalid_message")
+
+  const largePatch = `@@ -1 +1 @@\n-old\n+${"x".repeat(600_000)}`
+  const large = await harness({ results: {
+    subagentPage: async () => ({ data: [], cursor: {} }),
+    messages: async () => [{ id: "msg_reply", type: "assistant", time: { created: 2, completed: 3 }, content: [
+      { type: "tool", name: "edit", state: { status: "completed", structured: { files: [{ file: "src/large.ts", patch: largePatch }] } } },
+    ] }],
+  } })
+  const frames = await executeRemoteOperation({ request: request("session.capturedChanges.list"), local: large.local, sessions: large.registry, subscriptions: large.subscriptions })
+  expect(frames.length).toBeLessThanOrEqual(RemoteLimits.maxChunksPerResponse)
+  expect(valueOf(frames)).toMatchObject({ mode: "transcript", data: [{ path: "src/large.ts", additions: 0, deletions: 0, files: [{ diff: "", unavailable: true }] }] })
+})
+
+test("captured changes rejects a forged completed child outside the verified family", async () => {
+  const test = await harness({ sessions: [sessionInfo("ses_1", { updated: 1 }), sessionInfo("ses_foreign", { updated: 2 })], results: {
+    subagentPage: async () => ({ data: [{ sessionID: "ses_foreign", state: "completed" }], cursor: {} }),
+    messages: async () => [],
+  } })
+  expect(errorOf(await executeRemoteOperation({ request: request("session.capturedChanges.list"), local: test.local, sessions: test.registry, subscriptions: test.subscriptions })).code).toBe("forbidden")
+  expect(test.calls.filter((call) => call.method === "messages")).toHaveLength(1)
+})
+
 test("a 10 MiB managed attachment fits the bounded relay response without wasting half of each frame", () => {
   const frames = successFrames("req_attachment", { mime: "image/png", bytes: 10 * 1024 * 1024, data: Buffer.alloc(10 * 1024 * 1024).toString("base64") })
   expect(frames.length).toBeGreaterThan(1)

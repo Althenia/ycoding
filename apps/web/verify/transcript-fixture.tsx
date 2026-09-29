@@ -43,6 +43,17 @@ const fileChanges = [
   { path: "packages/core/src/session.ts", patch: "@@ -1 +1 @@\n-return false\n+return true", additions: 1, deletions: 1 },
   { path: "README.md", patch: "@@ -1 +1 @@\n-before\n+after", additions: 1, deletions: 1 },
 ]
+const capturedFiles = fileChanges.map((file, index) => {
+  const unavailable = fileChangesMode === "unavailable" && index === 0
+  const additions = unavailable ? 0 : index === 0 ? 2 : 1
+  const deletions = unavailable ? 0 : index === 1 ? 0 : 1
+  return { path: file.path, additions, deletions, status: "modified" as const, files: [{ path: file.path, diff: unavailable ? "" : file.patch, additions, deletions, status: "modified" as const, ...(unavailable ? { unavailable: true } : {}) }] }
+})
+const capturedChanges = fileChangesMode === "no-edits" ? { mode: "none" as const, data: [] }
+  : fileChangesMode === "checkpoint" ? { mode: "recovery" as const, placementMessageID: "msg_file_checkpoint", data: capturedFiles }
+  : { mode: "transcript" as const, placementMessageID: "msg_latest", data: fileChangesMode === "child-only" ? capturedFiles.slice(0, 1)
+    : fileChangesMode === "repeated" ? [{ ...capturedFiles[0]!, additions: 3, deletions: 2,
+        files: [...capturedFiles[0]!.files, { path: capturedFiles[0]!.path, diff: "@@ -2 +2 @@\n-before second\n+after second", additions: 1, deletions: 1, status: "modified" as const }] }] : capturedFiles }
 const fileChangeMessages: readonly RemoteMessageView[] = fileChangesMode === "checkpoint"
   ? [{ kind: "compaction", id: "msg_file_checkpoint", status: "completed", jobID: "cmp_file", created: 2 }]
   : [
@@ -149,7 +160,7 @@ if (!root) throw new Error("Missing transcript root")
 const store = createRemoteStore({ http: createRemoteHttp({ fetch: Object.assign(async () => new Response(null, { status: 401 }), { preconnect: () => {} }) }), createTransport: () => { throw new Error("Fixture transport must not connect") } })
 const fixtureState = { ...store.state(), activeSessionID: "ses_a", activeDeviceID: "dev_1" }
 const listeners = new Set<() => void>()
-Object.defineProperty(store, "state", { value: () => ({ ...fixtureState, history: history(), view: fileChangesMode ? { ...createSessionView("ses_a"), messages: messages(), fileChanges } : compactionMode ? { ...createSessionView("ses_a"), compactionHistory: compactionHistory() } : fixtureState.view }) })
+Object.defineProperty(store, "state", { value: () => ({ ...fixtureState, history: history(), view: fileChangesMode ? { ...createSessionView("ses_a"), messages: messages(), fileChanges: fileChangesMode === "child-only" ? [] : fileChanges, capturedChanges } : compactionMode ? { ...createSessionView("ses_a"), compactionHistory: compactionHistory() } : fixtureState.view }) })
 Object.defineProperty(store, "subscribe", { value: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener) } })
 Object.defineProperty(store, "loadOlderMessages", { value: async () => {
   if (!history().before) return

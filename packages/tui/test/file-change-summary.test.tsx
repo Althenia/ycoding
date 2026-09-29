@@ -276,6 +276,31 @@ test("renders durable captured changes after transcript compaction", async () =>
   }
 }, 60_000)
 
+test("recovery summary counts describe the displayed patch rather than cumulative ledger edits", async () => {
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    height: 80,
+    args: { sessionID },
+    route: routeFor(compactedTranscript, { fileChanges: [{ ...sixPathFiles[0]!, additions: 65, deletions: 3 }] }),
+    settle: "Captured changes 1 file",
+  })
+  try {
+    const header = screen.lines().findIndex((line) => line.includes("Captured changes 1 file"))
+    await screen.mouse.click(12, header)
+    await waitForFrame(screen.frame, "src/parent.ts")
+    const row = screen.lines().find((line) => line.includes("src/parent.ts")) ?? ""
+    expect(row).toContain("+1")
+    expect(row).toContain("−1")
+    expect(row).not.toContain("+65")
+    expect(row).not.toContain("−3")
+    await screen.mouse.click(12, screen.lines().findIndex((line) => line.includes("src/parent.ts")))
+    await waitForFrame(screen.frame, "export const value = 'new'")
+    expect(screen.frame()).toContain("export const value = 'old'")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
 for (const { name, width, config, split } of [
   { name: "wide auto", width: 189, config: undefined, split: true },
   { name: "wide split preference", width: 189, config: { diffs: { view: "split" } }, split: true },
