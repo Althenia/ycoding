@@ -8,6 +8,8 @@ import type { ModelV2 } from "../model"
 
 const safe = (value: number | undefined) => Math.max(0, Number.isFinite(value) ? (value ?? 0) : 0)
 
+export const minimumObservedGenerationDurationNs = 1_000_000_000
+
 export const tokens = (usage: Usage | undefined): TokenUsage.Info => ({
   input: safe(usage?.nonCachedInputTokens),
   output: safe(usage?.visibleOutputTokens),
@@ -71,7 +73,8 @@ export const generationTiming = (
   ].reduce((earliest, value) => earliest === undefined || value < earliest ? value : earliest, undefined as bigint | undefined)
   if (start === undefined) return undefined
   const observed = times.ended - start
-  const observedGenerationDurationNs = observed > 0n && observed <= BigInt(Number.MAX_SAFE_INTEGER)
+  const observedGenerationDurationNs = observed >= BigInt(minimumObservedGenerationDurationNs) &&
+    observed <= BigInt(Number.MAX_SAFE_INTEGER)
     ? Number(observed) : undefined
   return {
     generatedTokens,

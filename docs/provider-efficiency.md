@@ -169,6 +169,8 @@ OpenAI server-side compaction is provider request semantics, not a prompt-cache 
 
 ## Request diagnostics
 
+Step generation speed prefers a provider-reported generation duration. Without one, it uses the observed streamed-output window only when that window lasts at least one second; shorter bursts do not yield a trustworthy rate, including when read from retained request records. This rate is separate from prompt-cache efficiency and provider quota.
+
 The Provider Usage command contains two separate sections:
 
 - external quota or credit windows reported by the active providers;

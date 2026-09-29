@@ -48,17 +48,20 @@ test("keeps provider timings separate from token accounting", () => {
 })
 
 test("counts only observed output categories and keeps provider timing independent", () => {
-  const times = { text: 2_000_000n, reasoning: 1_000_000n, ended: 3_000_000n }
+  const times = { text: 2_000_000_000n, reasoning: 1_000_000_000n, ended: 3_000_000_000n }
   expect(SessionUsage.generationTiming(new Usage({ outputTokens: 12, outputMayIncludeUnreportedReasoning: true }), {
     ...times, reasoning: undefined,
   })).toBeUndefined()
   expect(SessionUsage.generationTiming(new Usage({ outputTokens: 12, outputMayIncludeUnreportedReasoning: true }), times))
-    .toEqual({ generatedTokens: 12, observedGenerationDurationNs: 2_000_000 })
+    .toEqual({ generatedTokens: 12, observedGenerationDurationNs: 2_000_000_000 })
   expect(SessionUsage.generationTiming(new Usage({ outputTokens: 12, reasoningTokens: 4 }), {
     ...times, reasoning: undefined,
-  })).toEqual({ generatedTokens: 8, observedGenerationDurationNs: 1_000_000 })
+  })).toEqual({ generatedTokens: 8, observedGenerationDurationNs: 1_000_000_000 })
   expect(SessionUsage.generationTiming(new Usage({ outputTokens: 12, reasoningTokens: 4 }), times))
-    .toEqual({ generatedTokens: 12, observedGenerationDurationNs: 2_000_000 })
+    .toEqual({ generatedTokens: 12, observedGenerationDurationNs: 2_000_000_000 })
+  expect(SessionUsage.generationTiming(new Usage({ outputTokens: 2_355 }), {
+    text: 30_000_000_000n, ended: 30_071_223_792n,
+  })).toEqual({ generatedTokens: 2_355 })
   expect(SessionUsage.generationTiming(new Usage({ outputTokens: 12 }), { ...times, text: undefined, reasoning: undefined }))
     .toBeUndefined()
   expect(SessionUsage.generationTiming(new Usage({ outputTokens: 12 }), { ...times, ended: 2_000_000n }))

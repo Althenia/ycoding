@@ -10,6 +10,7 @@ import type { TokenUsage } from "@ycoding-ai/schema/token-usage"
 import type { ModelV2 } from "../model"
 import { OpenAICodex } from "../plugin/provider/openai-codex"
 import type { SessionMessage } from "./message"
+import { SessionUsage } from "./usage"
 
 export interface CalculateInput {
   readonly model: ModelV2.Ref
@@ -144,6 +145,8 @@ export function generationSpeed(
   const recentRecords = [...records, ...(current === undefined ? [] : [current])].slice(-8)
   const samples = recentRecords.map((record) => {
     const tokens = record.timing?.generatedTokens
+    if (record.timing?.generationDurationNs === undefined &&
+      (record.timing?.observedGenerationDurationNs ?? 0) < SessionUsage.minimumObservedGenerationDurationNs) return undefined
     const durationNs = record.timing?.generationDurationNs ?? record.timing?.observedGenerationDurationNs
     if (!Number.isSafeInteger(tokens) || !tokens || tokens <= 0 ||
       !Number.isSafeInteger(durationNs) || !durationNs || durationNs <= 0) return undefined

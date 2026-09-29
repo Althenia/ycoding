@@ -93,6 +93,23 @@ test("derives speed from the latest Step and at most eight recent requests", () 
   expect(SessionCacheDiagnostics.generationSpeed([])).toBeUndefined()
 })
 
+test("excludes historical buffered bursts without hiding provider-timed samples", () => {
+  const measured = { model: model("anthropic"), timing: {
+    generatedTokens: 12, observedGenerationDurationNs: 2_000_000_000,
+  } }
+  const burst = { model: model("anthropic"), timing: {
+    generatedTokens: 2_355, observedGenerationDurationNs: 71_223_792,
+  } }
+  const reported = { model: model("anthropic"), timing: {
+    generatedTokens: 12, generationDurationNs: 71_223_792,
+  } }
+  expect(SessionCacheDiagnostics.generationSpeed([measured, burst])?.latest).toBeUndefined()
+  expect(SessionCacheDiagnostics.generationSpeed([measured, burst])?.recent).toEqual([
+    { model: measured.model, tokens: 12, durationNs: 2_000_000_000, tokensPerSecond: 6 },
+  ])
+  expect(SessionCacheDiagnostics.generationSpeed([measured, burst], reported)?.latest?.durationNs).toBe(71_223_792)
+})
+
 test("reconstructs the last request breakdown from projected assistant diagnostics", () => {
   const contextBreakdown = { system: 2, tools: 0, user: 4, assistant: 0, reasoning: 0, toolCalls: 0, other: 0 }
   const messages = [SessionMessage.Assistant.make({

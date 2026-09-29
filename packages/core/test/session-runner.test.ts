@@ -2593,6 +2593,44 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("omits a buffered output burst instead of reporting an implausible generation rate", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = Model.make({ id: "speed-model", provider: "anthropic", route: OpenAIChat.route })
+      responseStream = Stream.concat(
+        Stream.fromIterable([LLMEvent.stepStart({ index: 0 })]),
+        Stream.fromEffect(TestClock.adjust("30 seconds")).pipe(Stream.flatMap(() => Stream.concat(
+          Stream.fromIterable([
+            LLMEvent.reasoningStart({ id: "burst-reasoning" }),
+            LLMEvent.reasoningDelta({ id: "burst-reasoning", text: "Think" }),
+            LLMEvent.reasoningEnd({ id: "burst-reasoning" }),
+          ]),
+          Stream.fromEffect(TestClock.adjust("50 millis")).pipe(Stream.flatMap(() => Stream.concat(
+            Stream.fromIterable([
+              LLMEvent.textStart({ id: "burst-text" }),
+              LLMEvent.textDelta({ id: "burst-text", text: "Done" }),
+              LLMEvent.textEnd({ id: "burst-text" }),
+            ]),
+            Stream.fromEffect(TestClock.adjust("20 millis")).pipe(Stream.flatMap(() => Stream.fromIterable([
+              LLMEvent.stepFinish({ index: 0, reason: "stop", usage: {
+                outputTokens: 2_355, outputMayIncludeUnreportedReasoning: true,
+              } }),
+              LLMEvent.finish({ reason: "stop" }),
+            ]))),
+          ))),
+        ))),
+      )
+      responses = [reply.text("Title", "speed-title")]
+      yield* admit(session, "Buffered output")
+      yield* session.resume(sessionID)
+      expect((yield* session.diagnostics(sessionID))?.generationSpeed).toBeUndefined()
+      expect((yield* session.snapshot(sessionID)).generationSpeed).toBeUndefined()
+      const requests = yield* SessionProviderRequest.Service
+      expect((yield* requests.recentSteps(sessionID)).at(-1)?.timing).toMatchObject({ generatedTokens: 2_355 })
+      expect((yield* requests.recentSteps(sessionID)).at(-1)?.timing?.observedGenerationDurationNs).toBeUndefined()
+    }),
+  )
+
   it.effect("publishes live cache diagnostics before settled local tools finish", () =>
     Effect.gen(function* () {
       const session = yield* setup
