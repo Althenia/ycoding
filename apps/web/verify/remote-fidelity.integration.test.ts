@@ -187,8 +187,8 @@ describe("remote responsive state behavior", () => {
     } finally { await page.close() }
   }, 15_000)
 
-  test("returns focus to the remote Sessions and Activity openers after unfocused clicks", async () => {
-    for (const [width, trigger, label] of [[390, ".app-header__menu", "Sessions"], [1440, "button[aria-label='Open activity']", "Activity"]] as const) {
+  test("returns focus to the remote Sessions opener after an unfocused click", async () => {
+    for (const [width, trigger, label] of [[390, ".app-header__menu", "Sessions"]] as const) {
       const page = await scenario("conversation-workspace", width, "Studio Mac")
       try {
         await page.evaluate(`document.querySelector('.skip-link')?.focus(); document.querySelector(${JSON.stringify(trigger)})?.click()`)
@@ -241,16 +241,15 @@ describe("remote responsive state behavior", () => {
     }
   }, 30_000)
 
-  test("matches conversation workspace behavior across desktop, tablet, and mobile while keeping Activity accessible", async () => {
+  test("matches conversation workspace behavior across desktop, tablet, and mobile without an Activity screen or opener", async () => {
     for (const width of [1440, 768, 390] as const) {
       for (const theme of ["dark", "light"] as const) {
         const page = await scenario("conversation-workspace", width, "Studio Mac", theme)
         const state = await page.evaluate<{
           readonly columns: number
           readonly railVisible: boolean
-          readonly persistentActivity: number
-          readonly activityControlVisible: boolean
-          readonly activityNavigationVisible: boolean
+          readonly activityControl: number
+          readonly activityNavigation: number
           readonly bottomNavigationVisible: boolean
         }>(`(() => {
           const visible = (element) => element instanceof HTMLElement && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0 && getComputedStyle(element).display !== 'none';
@@ -258,29 +257,24 @@ describe("remote responsive state behavior", () => {
           return {
             columns: workspace instanceof HTMLElement ? getComputedStyle(workspace).gridTemplateColumns.split(' ').filter(Boolean).length : 0,
             railVisible: visible(document.querySelector('.workspace__rail')),
-            persistentActivity: document.querySelectorAll('.workspace__activity').length,
-            activityControlVisible: visible(document.querySelector('button[aria-label="Open activity"]')),
-            activityNavigationVisible: [...document.querySelectorAll('a[href="/remote/activity"]')].some(visible),
+            activityControl: document.querySelectorAll('button[aria-label="Open activity"]').length,
+            activityNavigation: document.querySelectorAll('a[href="/remote/activity"]').length,
             bottomNavigationVisible: visible(document.querySelector('.bottom-nav')),
           };
         })()`)
         expect(state.columns).toBe(width >= 768 ? 2 : 1)
         expect(state.railVisible).toBe(width >= 768)
-        expect(state.persistentActivity).toBe(0)
-        expect(state.activityControlVisible || state.activityNavigationVisible).toBe(true)
+        expect(state.activityControl).toBe(0)
+        expect(state.activityNavigation).toBe(0)
         expect(state.bottomNavigationVisible).toBe(width < 768)
-
-        await page.evaluate(`document.querySelector('button[aria-label="Open activity"]')?.click()`)
-        expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Activity"]')?.hasAttribute('open') === true`)).toBe(true)
         await page.close()
       }
     }
   }, 30_000)
 
-  test("does not apply the centered conversation-empty composition to Sessions, Activity, or Settings", async () => {
+  test("does not apply the centered conversation-empty composition to Sessions or Settings", async () => {
     for (const [view, expected] of [
       ["sessions", "No sessions"],
-      ["activity", "Choose a Session to view its reported events."],
       ["settings", "Account"],
     ] as const) {
       const page = await fixture(`view=${view}&sessions=empty`, 768, expected)
@@ -449,45 +443,6 @@ describe("remote responsive state behavior", () => {
     }
   }, 30_000)
 
-  test("aligns Activity events and pending decisions within the desktop columns", async () => {
-    for (const theme of ["light", "dark"] as const) {
-      const page = await scenario("activity-pending-decisions", 1440, "Pending decisions", theme)
-      const state = await page.evaluate<{
-        readonly eventLeft: number
-        readonly decisionLeft: number
-        readonly decisionRightInset: number
-        readonly events: number
-        readonly decisions: number
-        readonly actions: number
-        readonly overflowing: boolean
-      }>(`(() => {
-        const event = document.querySelector('.activity-page__events .activity-row')
-        const decision = document.querySelector('.activity-page__decisions .request')
-        if (!(event instanceof HTMLElement) || !(decision instanceof HTMLElement)) throw new Error('activity pending decisions Activity cards missing')
-        return {
-          eventLeft: event.getBoundingClientRect().left,
-          decisionLeft: decision.getBoundingClientRect().left,
-          decisionRightInset: innerWidth - decision.getBoundingClientRect().right,
-          events: document.querySelectorAll('.activity-page__events .activity-row').length,
-          decisions: document.querySelectorAll('.activity-page__decisions .request').length,
-          actions: document.querySelectorAll('.activity-page__decisions .request button').length,
-          overflowing: document.documentElement.scrollWidth > innerWidth,
-        }
-      })()`)
-      expect(state.eventLeft).toBeGreaterThanOrEqual(10)
-      expect(state.eventLeft).toBeLessThanOrEqual(15)
-      expect(state.decisionLeft).toBeGreaterThanOrEqual(973)
-      expect(state.decisionLeft).toBeLessThanOrEqual(981)
-      expect(state.decisionRightInset).toBeGreaterThanOrEqual(10)
-      expect(state.decisionRightInset).toBeLessThanOrEqual(15)
-      expect(state.events).toBe(3)
-      expect(state.decisions).toBe(2)
-      expect(state.actions).toBeGreaterThanOrEqual(6)
-      expect(state.overflowing).toBe(false)
-      await page.close()
-    }
-  }, 30_000)
-
   test("aligns conversation decision cards with the transcript in one centered column", async () => {
     const page = await scenario("permission-guardrail-hard-review-form-requests", 1440, "Clarify Disambiguation Query")
     const layout = await page.evaluate<{ readonly transcript: { readonly left: number; readonly right: number }; readonly cards: readonly { readonly left: number; readonly right: number }[]; readonly requestsFollowTranscript: boolean }>(`(() => {
@@ -567,7 +522,7 @@ describe("remote responsive state behavior", () => {
   }, 30_000)
 
   test("replaces every remote route with one centered sign-in panel for a signed-out browser", async () => {
-    for (const view of ["chat", "sessions", "activity", "settings"] as const) {
+    for (const view of ["chat", "sessions", "settings"] as const) {
       const page = await fixture(`view=${view}&account=signedout`, 390, "Continue with Google")
       for (const width of [320, 390, 768, 1440] as const) {
         await page.setViewport(width, 844)
@@ -666,10 +621,6 @@ describe("remote responsive state behavior", () => {
     expect(await offline.evaluate<string>(`document.querySelector('.status-strip')?.innerText ?? ''`)).toContain("Studio Mac is not reachable")
     await offline.close()
 
-    const decisions = await scenario("activity-pending-decisions", 1440, "Authorize branch push for feat/ast-cache")
-    expect(await decisions.evaluate<number>(`document.querySelectorAll('.activity-page__decisions .request').length`)).toBe(2)
-    await decisions.close()
-
     const devices = await scenario("devices-enrollment", 1440, "Enrollment code (shown once)")
     const deviceState = await devices.evaluate<{ readonly account: string; readonly revokedActions: number; readonly selected: boolean }>(`(() => {
       const rows=[...document.querySelectorAll('.device-table .device')];
@@ -722,14 +673,15 @@ describe("remote responsive state behavior", () => {
       expect((await read()).status).toContain("Checking account")
       for (let attempt = 0; attempt < 40 && !(await read()).account.includes("user_fixture"); attempt++) await Bun.sleep(50)
       const settled = await read()
-      expect(settled.status).toContain("Connected")
+      expect(settled.status).toBe("")
+      expect(await page.evaluate<string>(`document.querySelector('.remote-connection-label')?.textContent?.trim() ?? ''`)).toBe("Connected")
       expect(settled.account).toContain("user_fixture")
       expect(settled.screen).toBe(0)
       expect(settled.signIn).toBe(false)
       expect(settled.overflow).toBe(false)
       const samples = await page.evaluate<readonly { readonly status: string; readonly account: string; readonly signIn: boolean }[]>(`window.accountSamples`)
       expect(samples.some((sample) => sample.status.includes("Checking account"))).toBe(true)
-      expect(samples.some((sample) => sample.status.includes("Connected") && sample.account.includes("user_fixture"))).toBe(true)
+      expect(samples.some((sample) => sample.status === "" && sample.account.includes("user_fixture"))).toBe(true)
       expect(samples.every((sample) => !sample.status.includes("Signed out") && !sample.account.includes("not signed in") && !sample.signIn)).toBe(true)
       expect(await page.evaluate<number>(`window.remoteMutationReport().filter(request => request.operation === 'session.prompt').length`)).toBe(0)
     } finally {
@@ -852,10 +804,6 @@ describe("remote responsive state behavior", () => {
     await workspace.pressKey(" ", "Space", 32)
     expect(await workspace.evaluate<{ readonly pressed: string | null; readonly label: string | null }>(`(() => { const toggle = document.querySelector('.composer__delivery-toggle'); return { pressed: toggle?.getAttribute('aria-pressed') ?? null, label: toggle?.getAttribute('aria-label') ?? null } })()`)).toEqual({ pressed: "true", label: "Queue mode; switch to Steer" })
 
-    await workspace.evaluate(`document.querySelector('button[aria-label="Open activity"]')?.focus()`)
-    await workspace.pressKey(" ", "Space", 32)
-    expect(await workspace.evaluate<boolean>(`document.querySelector('dialog[aria-label="Activity"]')?.hasAttribute('open') === true`)).toBe(true)
-    await workspace.pressEscape()
     await workspace.close()
 
     const settings = await scenario("autonomy-goal-notification-settings", 390, "Appearance")

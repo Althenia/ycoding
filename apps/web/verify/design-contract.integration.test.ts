@@ -100,7 +100,7 @@ describe("web design contract inventory", () => {
       if (!state.signIn) expect(state.path).toContain(`app--${scenario.view === "chat" ? "conversation" : scenario.view}`)
       if (!state.signIn && scenario.view !== "chat") {
         expect(await page.evaluate<string>(`document.querySelector('.remote-nav a[aria-current="page"]')?.textContent?.trim() ?? ""`)).toBe(
-          scenario.view === "sessions" ? "Sessions" : scenario.view === "activity" ? "Activity" : scenario.view === "usage" ? "Usage" : "Settings",
+          scenario.view === "sessions" ? "Sessions" : scenario.view === "usage" ? "Usage" : "Settings",
         )
       }
       const settled = `${JSON.stringify(scenario.expectedText)}.every((text) => document.body.innerText.includes(text))`
@@ -210,22 +210,6 @@ describe("web design contract inventory", () => {
     await page.pressEscape()
     expect(await page.evaluate<boolean>(`document.querySelector('[aria-label="Machine"]')?.getAttribute("aria-expanded") === "false" && document.activeElement?.getAttribute("aria-label") === "Machine"`)).toBe(true)
 
-    await page.setViewport(768, 900)
-    await page.navigate(`${url("/verify/remote.html")}?scenario=conversation-workspace-768`)
-    await page.evaluate(`document.querySelector('button[aria-label="Open activity"]')?.click()`)
-    await page.evaluate<void>(`Promise.all([...document.querySelector('dialog[aria-label="Activity"] .overlay__surface')?.getAnimations() ?? []].map(animation => animation.finished))`)
-    const modal = await page.evaluate<{ readonly open: boolean; readonly focused: boolean; readonly withinViewport: boolean; readonly bounds: { readonly left: number; readonly right: number; readonly top: number; readonly bottom: number } }>(`(() => {
-      const dialog = document.querySelector('dialog[aria-label="Activity"]')
-      const surface = dialog?.querySelector(".overlay__surface")
-      if (!(dialog instanceof HTMLDialogElement) || !(surface instanceof HTMLElement)) return { open: false, focused: false, withinViewport: false, bounds: { left: 0, right: 0, top: 0, bottom: 0 } }
-      const rect = surface.getBoundingClientRect()
-      return { open: dialog.open, focused: document.activeElement instanceof HTMLElement && dialog.contains(document.activeElement), withinViewport: rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight, bounds: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom } }
-    })()`)
-    expect({ open: modal.open, focused: modal.focused, withinViewport: modal.withinViewport }, JSON.stringify(modal)).toEqual({ open: true, focused: true, withinViewport: true })
-    await page.pressEscape()
-    expect(await page.evaluate<boolean>(`(() => { const dialog = document.querySelector('dialog[aria-label="Activity"]'); return dialog === null || (!dialog.open && dialog.inert) })()`)).toBe(true)
-    for (let attempt = 0; attempt < 20 && await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Activity"]') !== null`); attempt += 1) await Bun.sleep(50)
-    expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Activity"]') === null`)).toBe(true)
     await page.close()
   }, 30_000)
 
@@ -234,7 +218,7 @@ describe("web design contract inventory", () => {
     for (const [width, height] of [[320, 568], [360, 740], [430, 932], [1024, 1366], [1280, 800], [1920, 1080]] as const) {
       for (const theme of width === 1024 ? ["light", "dark"] as const : ["light"] as const) {
         await page.setViewport(width, height)
-        for (const path of ["/", "/docs/quickstart", "/changelog", "/verify/remote.html?view=chat", "/verify/remote.html?view=activity", "/verify/remote.html?view=settings"]) {
+        for (const path of ["/", "/docs/quickstart", "/changelog", "/verify/remote.html?view=chat", "/verify/remote.html?view=settings"]) {
           await page.navigate(url(path))
           if (path.includes("view=chat")) for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('.composer') !== null`); attempt += 1) await Bun.sleep(50)
           const layout = await page.evaluate<{ readonly overflow: boolean; readonly escaped: readonly string[]; readonly undersizedTabs: readonly string[]; readonly composer: boolean }>(`(() => {

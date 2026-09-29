@@ -154,13 +154,6 @@ describe("remote and public product interactions", () => {
       expect(await conversation.evaluate<string>(`document.querySelector('.transcript-tool__toggle')?.getAttribute('aria-expanded') ?? ''`)).toBe("false")
     } finally { await conversation.close() }
 
-    const activity = await remote("activity-pending-decisions", 1440)
-    try {
-      const count = await activity.evaluate<number>(`document.querySelectorAll('.activity-page__decisions .request').length`)
-      await activity.evaluate(`document.querySelector('.activity-page__decisions .request--guardrail button.button--danger')?.click()`)
-      expect(await activity.evaluate<number>(`document.querySelectorAll('.activity-page__decisions .request').length`)).toBe(count - 1)
-    } finally { await activity.close() }
-
     const reviews = await remote("permission-guardrail-hard-review-form-requests", 1440)
     try {
       expect(await reviews.evaluate<readonly string[]>(`[...document.querySelectorAll('.request--hard .request__actions button')].map(button => button.textContent.trim())`)).toEqual(["Approve once", "Reject"])

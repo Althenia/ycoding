@@ -372,7 +372,6 @@ const readOperations = [
   "session.guardrail.status",
   "session.guardrail.request.list",
   "session.form.list",
-  "session.fileChange.list",
 ] as const
 
 function valueOf(frames: readonly { ok: boolean }[]) {
@@ -1223,7 +1222,6 @@ describe("operation mapping", () => {
         guardrailStatus: async () => ({ profile: "standard" }),
         guardrailRequestList: async () => [],
         formList: async () => [formInfo("frm_1", "ses_1")],
-        fileChangeList: async () => [{ path: "a.ts" }],
       },
     })
 
@@ -1236,7 +1234,6 @@ describe("operation mapping", () => {
     expect(valueOf(await executeRemoteOperation({ request: request("session.permission.list"), sessions: registry, subscriptions, local }))).toEqual({ data: [{ id: "per_1", sessionID: "ses_1" }] })
     expect(valueOf(await executeRemoteOperation({ request: request("session.guardrail.status"), sessions: registry, subscriptions, local }))).toEqual({ data: { profile: "standard" } })
     expect(valueOf(await executeRemoteOperation({ request: request("session.form.list", {}), sessions: registry, subscriptions, local }))).toEqual([formInfo("frm_1", "ses_1")])
-    expect(valueOf(await executeRemoteOperation({ request: request("session.fileChange.list"), sessions: registry, subscriptions, local }))).toEqual({ data: [{ path: "a.ts" }] })
     expect(calls.filter((call) => call.method === "log").at(-1)).toEqual({ method: "log", args: ["ses_1", { directory: "/work" }, 4] })
 
     const before = calls.filter((call) => call.method !== "getSession").length
@@ -1348,7 +1345,6 @@ function readMethod(operation: (typeof readOperations)[number]) {
     "session.guardrail.status": "guardrailStatus",
     "session.guardrail.request.list": "guardrailRequestList",
     "session.form.list": "formList",
-    "session.fileChange.list": "fileChangeList",
   }
   return method[operation]
 }

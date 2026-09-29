@@ -1,27 +1,34 @@
 /**
  * Remote workspace: application frame, header rows, session rail, transcript, tool
- * and shell cards, request cards, activity and approvals queue, compact navigation,
+ * and shell cards, request cards, compact navigation,
  * and settings. The composer's own styles live in `remote/ui/composer.css`.
  *
  * Every class here is the interface the remote components author against. Geometry
- * that must not move with state — the status strip, bar row, and composer — keeps a
- * reserved height so a state change cannot move the working area.
+ * that must not move with state — the bar row and composer — keeps a reserved height
+ * so a state change cannot move the working area. The connection strip is present
+ * only while it has something to say.
  */
 
 /* --- app frame ----------------------------------------------------------
-   The workspace is an application shell, not a document: the header, the status
-   strip, and the composer keep their rows and only the middle region scrolls. The
-   shell column is the viewport width, so the widest item's max-content cannot widen
-   the shell past it and push a control off the inline edge. */
+   The workspace is an application shell, not a document: the header, the composer,
+   and, while it is present, the connection strip keep their rows and only the middle
+   region scrolls. The shell column is the viewport width, so the widest item's
+   max-content cannot widen the shell past it and push a control off the inline edge. */
 
 .app {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   block-size: 100dvh;
   overflow: hidden;
+  --app-strip-h: 0px;
   /* The selected conversation reads as one centered column. */
   --remote-column: 880px;
+}
+
+.app:has(> .status-strip) {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  --app-strip-h: var(--yc-status-strip-h);
 }
 
 html:has(.app),
@@ -233,11 +240,20 @@ body:has(.app) {
 }
 
 .remote-connection-label {
-  display: none;
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
-/* Below 1024 the header row has no room for the label; the status strip beneath
-   it states the same connection in full. */
+/* Below 1024 the header row has no room to show the label, so the dot carries the
+   tone and the label stays readable to assistive technology. A connection that is
+   not healthy adds the connection strip. */
 @media (min-width: 1024px) {
   .remote-connection {
     min-block-size: 32px;
@@ -248,7 +264,12 @@ body:has(.app) {
   }
 
   .remote-connection-label {
-    display: inline;
+    position: static;
+    inline-size: auto;
+    block-size: auto;
+    margin: 0;
+    overflow: visible;
+    clip-path: none;
   }
 }
 
@@ -553,7 +574,7 @@ body:has(.app) {
     display: grid;
     align-content: start;
     gap: var(--yc-space-2);
-    max-block-size: min(calc(100dvh - var(--yc-header-h) - var(--yc-status-strip-h) - var(--yc-space-8)), var(--workspace-nav-available, 100dvh));
+    max-block-size: min(calc(100dvh - var(--yc-header-h) - var(--app-strip-h) - var(--yc-space-8)), var(--workspace-nav-available, 100dvh));
     overflow-y: auto;
     padding-block: var(--yc-space-1);
     scroll-padding-block-end: var(--yc-space-8);
@@ -1072,148 +1093,12 @@ body:has(.app) {
   font: inherit;
 }
 
-/* --- activity and queue ------------------------------------------------- */
-
-.activity {
-  display: grid;
-  gap: 2px;
-}
-
-.activity-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: var(--yc-space-3);
-  align-items: start;
-  padding: var(--yc-space-2) var(--yc-space-3);
-  border: var(--yc-border-width) solid var(--yc-border);
-  border-radius: var(--yc-radius-md);
-  background: var(--yc-surface-raised);
-}
-
-.activity-row__icon {
-  color: var(--yc-text-muted);
-  margin-block-start: 2px;
-}
-
-.activity-row__body {
-  display: grid;
-  gap: 2px;
-  min-inline-size: 0;
-}
-
-.activity-row__title {
-  font-size: var(--yc-size-sm);
-  font-weight: var(--yc-weight-medium);
-  overflow-wrap: anywhere;
-}
-
-.activity-row__detail {
-  color: var(--yc-text-muted);
-  font-family: var(--yc-font-mono);
-  font-size: var(--yc-size-2xs);
-}
-
-.activity-row__view {
-  justify-self: start;
-  min-block-size: var(--yc-control-h);
-}
-
-.activity-row__patch {
-  grid-column: 1 / -1;
-  min-inline-size: 0;
-  max-inline-size: 100%;
-}
-
-.activity-row__status {
-  color: var(--yc-text-muted);
-  font-family: var(--yc-font-mono);
-  font-size: var(--yc-size-2xs);
-  text-transform: capitalize;
-}
-
-/* An approval is a decision waiting for a human, so it is separated from a report. */
-.activity-row--approval {
-  background: var(--yc-yellow-soft);
-}
-
-.activity-row--approval .activity-row__status {
-  color: var(--yc-yellow-strong);
-}
-
-.activity-row--approval .activity-row__icon {
-  color: var(--yc-yellow-strong);
-}
-
-.queue {
-  display: grid;
-  gap: var(--yc-space-3);
-}
-
-.queue__head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--yc-space-2);
-}
-
-.queue__count {
-  font-size: var(--yc-size-2xs);
-  color: var(--yc-text-muted);
-}
-
-.queue-row {
-  display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--yc-space-3);
-  min-block-size: var(--yc-hit-min);
-  padding: var(--yc-space-2) var(--yc-space-3);
-  border: var(--yc-border-width) solid color-mix(in srgb, var(--yc-yellow) 45%, var(--yc-border));
-  border-radius: var(--yc-radius-md);
-  background: color-mix(in srgb, var(--yc-yellow-soft) 50%, var(--yc-surface-raised));
-  font-size: var(--yc-size-xs);
-}
-
-.queue-row__icon {
-  color: var(--yc-yellow-strong);
-}
-
-.queue-row--hard {
-  border: 2px solid var(--yc-danger);
-  background: color-mix(in srgb, var(--yc-danger-soft) 60%, var(--yc-surface-raised));
-}
-
-.queue-row--hard .queue-row__icon,
-.queue-row--hard .queue-row__detail {
-  color: var(--yc-danger);
-}
-
-.queue-row__body {
-  display: grid;
-  gap: 2px;
-  min-inline-size: 0;
-}
-
-.queue-row__title {
-  font-weight: var(--yc-weight-semibold);
-  overflow-wrap: anywhere;
-}
-
-.queue-row__detail {
-  color: var(--yc-text-muted);
-}
-
 /* --- screen compositions ---------------------------------------------- */
 
 .app--sessions .workspace__main,
-.app--activity .workspace__main,
 .app--settings .workspace__main,
 .app--empty .workspace__main {
   grid-column: 1 / -1;
-}
-
-.app--activity .workspace__scroll {
-  padding: 0;
 }
 
 /* Notices keep the top of the column; the explanation centers in the space below. */
@@ -1457,58 +1342,6 @@ body:has(.app) {
 
 .sessions-table__updated {
   white-space: nowrap;
-}
-
-/* Decisions lead the page in one column; from 1280 they take a side column beside
-   the event feed, the first width where both keep a full action row. */
-.activity-page {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-content: start;
-  min-block-size: 100%;
-  padding: 0;
-}
-
-@media (min-width: 1280px) {
-  .activity-page {
-    grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
-    align-content: stretch;
-  }
-}
-
-.activity-page__events,
-.activity-page__decisions {
-  padding: var(--yc-space-5);
-}
-
-@media (min-width: 1024px) {
-  .activity-page__events,
-  .activity-page__decisions {
-    padding: var(--yc-space-3);
-  }
-}
-
-.activity-page__decisions {
-  order: -1;
-  border-block-end: var(--yc-border-width) solid var(--yc-border);
-  background: var(--yc-surface-sunken);
-}
-
-@media (min-width: 1280px) {
-  .activity-page__decisions {
-    order: 0;
-    border-block-end: 0;
-    border-inline-start: var(--yc-border-width) solid var(--yc-border);
-  }
-}
-
-.activity-page .page-head__title {
-  font-size: var(--yc-size-md);
-  line-height: var(--yc-leading-md);
-}
-
-.activity-page .request {
-  margin-block-start: var(--yc-space-3);
 }
 
 .account-card {
@@ -1756,15 +1589,6 @@ body:has(.app) {
   .settings {
     gap: var(--yc-space-6);
   }
-
-  .activity-page__events,
-  .activity-page__decisions {
-    padding: var(--yc-space-3);
-  }
-
-  .activity-page .requests {
-    gap: var(--yc-space-3);
-  }
 }
 
 @media (min-width: 768px) and (max-width: 1023px) {
@@ -1810,10 +1634,6 @@ body:has(.app) {
   .settings .button {
     min-block-size: var(--yc-hit-min);
   }
-
-  .activity-page .request__actions .button {
-    min-block-size: var(--yc-hit-min);
-  }
 }
 
 /* On a compact screen the answers share the footer row and wrap as a group. */
@@ -1850,7 +1670,7 @@ body:has(.app) {
 
 .bottom-nav {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   border-block-start: var(--yc-border-width) solid var(--yc-border);
   background: color-mix(in srgb, var(--yc-bg) 92%, transparent);
   backdrop-filter: blur(12px);
@@ -2343,10 +2163,10 @@ body:has(.app) {
 .team-control__panel {
   position: fixed;
   z-index: var(--yc-z-nav);
-  inset-block-start: calc(var(--yc-header-h) + var(--yc-status-strip-h) + var(--yc-space-3));
+  inset-block-start: calc(var(--yc-header-h) + var(--app-strip-h) + var(--yc-space-3));
   inset-inline-end: var(--yc-space-4);
   inline-size: min(29rem, calc(100vw - 2 * var(--yc-space-4)));
-  max-block-size: calc(100dvh - var(--yc-header-h) - var(--yc-status-strip-h) - 2 * var(--yc-space-4));
+  max-block-size: calc(100dvh - var(--yc-header-h) - var(--app-strip-h) - 2 * var(--yc-space-4));
   overflow: auto;
   padding: var(--yc-space-4);
   border: var(--yc-border-width) solid var(--yc-border);
@@ -2384,7 +2204,7 @@ body:has(.app) {
     inset-block-start: auto;
     inset-block-end: 0;
     inline-size: 100%;
-    max-block-size: min(78dvh, calc(100dvh - var(--yc-header-h) - var(--yc-status-strip-h) - var(--yc-space-4)));
+    max-block-size: min(78dvh, calc(100dvh - var(--yc-header-h) - var(--app-strip-h) - var(--yc-space-4)));
     border-radius: var(--yc-radius-xl) var(--yc-radius-xl) 0 0;
     padding-block-end: env(safe-area-inset-bottom);
   }
@@ -2412,7 +2232,6 @@ body:has(.app) {
       scrollbar-gutter: stable;
     }
 
-    .app--activity .workspace__scroll,
     .app--empty .workspace__scroll {
       scrollbar-gutter: auto;
     }

@@ -45,7 +45,6 @@ describe("createUnavailableRemoteViewModel", () => {
     expect(viewModel.devices).toHaveLength(0)
     expect(viewModel.sessions).toHaveLength(0)
     expect(viewModel.messages).toHaveLength(0)
-    expect(viewModel.activity).toHaveLength(0)
     expect(viewModel.approvals).toHaveLength(0)
     expect(viewModel.activeDeviceId).toBeUndefined()
     expect(viewModel.activeSessionId).toBeUndefined()

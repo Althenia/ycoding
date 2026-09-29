@@ -90,6 +90,41 @@ describe("remote navigation", () => {
     }
   }, 180_000)
 
+  test("offers Sessions, Conversation, Usage and Settings without Activity and shows the connection strip only when it has something to say", async () => {
+    const page = await requireBrowser().openPage()
+    const links = `(() => ({
+      header: [...document.querySelectorAll('.remote-nav a')].map((link) => link.getAttribute('href')),
+      bottom: [...document.querySelectorAll('.bottom-nav a')].map((link) => link.getAttribute('href')),
+      activityButton: document.querySelector('[aria-label="Open activity"]') !== null,
+      pill: document.querySelector('.remote-connection-label')?.textContent?.trim() ?? null,
+      strip: document.querySelector('.status-strip') !== null,
+      overflow: document.documentElement.scrollWidth > innerWidth,
+    }))()`
+    const destinations = ["/remote/sessions", "/remote", "/remote/usage", "/remote/settings"]
+    try {
+      for (const theme of themes) {
+        for (const [width, height] of [[390, 844], [1440, 900]] as const) {
+          await page.setViewport(width, height)
+          await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}`)
+          await until(page, `document.querySelector('.remote-connection-label')?.textContent.trim() === 'Connected' && document.querySelector('.composer') !== null`)
+          const healthy = await page.evaluate<{ header: readonly string[]; bottom: readonly string[]; activityButton: boolean; pill: string | null; strip: boolean; overflow: boolean }>(links)
+          expect(healthy.header).toEqual(destinations)
+          expect(healthy.bottom).toEqual(destinations)
+          expect(healthy.activityButton).toBe(false)
+          expect(healthy.pill).toBe("Connected")
+          expect(healthy.strip).toBe(false)
+          expect(healthy.overflow).toBe(false)
+        }
+      }
+      await page.setViewport(768, 1024)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=selected-machine-offline-768`)
+      await until(page, `document.querySelector('.status-strip')?.innerText.includes('Studio Mac is not reachable')`)
+      expect(await page.evaluate<string>(`document.querySelector('.status-strip__body')?.textContent ?? ''`)).toContain("Reconnect after it is back online.")
+    } finally {
+      await page.close()
+    }
+  }, 120_000)
+
   test("marks the Conversation tab, navigation, and Session row while a decision is waiting", async () => {
     const page = await requireBrowser().openPage()
     try {
@@ -299,7 +334,7 @@ describe("remote navigation", () => {
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}`)
         await until(page, `document.querySelector('.conversation-pane .transcript-message') !== null && document.querySelector('.composer') !== null`)
         await page.evaluate(`window.routeProbe = { app: document.querySelector('.app'), header: document.querySelector('.app-header'), main: document.querySelector('.workspace__main'), scroll: document.querySelector('.workspace__scroll'), message: document.querySelector('.conversation-pane .transcript-message'), composer: document.querySelector('.composer'), entrance: document.querySelector('.conversation-pane .transcript-message').getAnimations({subtree:true})[0] }`)
-        for (const route of ["/remote/activity", "/remote/usage", "/remote/settings", "/remote"]) {
+        for (const route of ["/remote/usage", "/remote/settings", "/remote"]) {
           await page.evaluate(`[...document.querySelectorAll('a[href="${route}"]')].find(link => link.getBoundingClientRect().width > 0)?.click()`)
           await until(page, `location.pathname === '${route}'`)
           expect(await page.evaluate<boolean>(`(() => { const p=window.routeProbe; return p.app===document.querySelector('.app') && p.header===document.querySelector('.app-header') && p.main===document.querySelector('.workspace__main') && p.scroll===document.querySelector('.workspace__scroll') && p.message===document.querySelector('.conversation-pane .transcript-message') && p.composer===document.querySelector('.composer') })()`)).toBe(true)
@@ -318,8 +353,8 @@ describe("remote navigation", () => {
         await page.setReducedMotion(reduced)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}`)
         await until(page, `document.querySelector('.conversation-pane .transcript-message') !== null`)
-        const transition = await page.evaluate<{ readonly exiting: boolean; readonly entering: boolean; readonly duration: string; readonly hidden: boolean; readonly oldVisibility: string; readonly frames: readonly number[] }>(`new Promise(resolve => { [...document.querySelectorAll('a[href="/remote/activity"]')].find(link => link.getBoundingClientRect().width > 0)?.click(); queueMicrotask(() => { const old=document.querySelector('.route-panel--exiting'); const next=document.querySelector('.route-panel--active, .route-panel--entering'); const report={exiting:old?.inert === true && old?.getAttribute('aria-hidden') === 'true', entering:next !== null, duration:next ? getComputedStyle(next).transitionDuration : '', hidden:old?.contains(document.activeElement) ?? false, oldVisibility:old ? getComputedStyle(old).contentVisibility : ''}; const frames=[]; const sample=() => { frames.push(Number(getComputedStyle(document.querySelector('.route-panel--active, .route-panel--entering')).opacity)); if(frames.length === 5) resolve({...report,frames}); else requestAnimationFrame(sample) }; requestAnimationFrame(sample) }) })`)
-        expect(await page.evaluate<string>(`location.pathname`)).toBe("/remote/activity")
+        const transition = await page.evaluate<{ readonly exiting: boolean; readonly entering: boolean; readonly duration: string; readonly hidden: boolean; readonly oldVisibility: string; readonly frames: readonly number[] }>(`new Promise(resolve => { [...document.querySelectorAll('a[href="/remote/usage"]')].find(link => link.getBoundingClientRect().width > 0)?.click(); queueMicrotask(() => { const old=document.querySelector('.route-panel--exiting'); const next=document.querySelector('.route-panel--active, .route-panel--entering'); const report={exiting:old?.inert === true && old?.getAttribute('aria-hidden') === 'true', entering:next !== null, duration:next ? getComputedStyle(next).transitionDuration : '', hidden:old?.contains(document.activeElement) ?? false, oldVisibility:old ? getComputedStyle(old).contentVisibility : ''}; const frames=[]; const sample=() => { frames.push(Number(getComputedStyle(document.querySelector('.route-panel--active, .route-panel--entering')).opacity)); if(frames.length === 5) resolve({...report,frames}); else requestAnimationFrame(sample) }; requestAnimationFrame(sample) }) })`)
+        expect(await page.evaluate<string>(`location.pathname`)).toBe("/remote/usage")
         expect(transition.exiting).toBe(true)
         expect(transition.entering).toBe(true)
         expect(transition.hidden).toBe(false)
@@ -429,8 +464,8 @@ describe("remote navigation", () => {
         await until(page, `document.querySelector('.conversation-pane .transcript-message') !== null`)
         const before = await page.evaluate<number>(`(() => { const scroll=document.querySelector('.workspace__scroll'); scroll.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:-300})); scroll.scrollTop=300; scroll.dispatchEvent(new Event('scroll')); window.anchorMessage=document.querySelector('.conversation-pane .transcript-message'); return scroll.scrollTop })()`)
         expect(before).toBeGreaterThanOrEqual(250)
-        await page.evaluate(`[...document.querySelectorAll('a[href="/remote/activity"]')].find(link=>link.getBoundingClientRect().width>0)?.click()`)
-        await until(page, `location.pathname === '/remote/activity' && document.querySelector('.route-panel--exiting') === null`)
+        await page.evaluate(`[...document.querySelectorAll('a[href="/remote/usage"]')].find(link=>link.getBoundingClientRect().width>0)?.click()`)
+        await until(page, `location.pathname === '/remote/usage' && document.querySelector('.route-panel--exiting') === null`)
         await page.evaluate(`[...document.querySelectorAll('a[href="/remote"]')].find(link=>link.getBoundingClientRect().width>0)?.click()`)
         await until(page, `location.pathname === '/remote' && document.querySelector('.route-panel--exiting') === null`)
         const after = await page.evaluate<{ readonly scrollTop: number; readonly sameMessage: boolean }>(`({ scrollTop:document.querySelector('.workspace__scroll').scrollTop, sameMessage:window.anchorMessage===document.querySelector('.conversation-pane .transcript-message') })`)

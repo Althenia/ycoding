@@ -478,7 +478,6 @@ describe("remote operations", () => {
       "session.form.list",
       "session.form.reply",
       "session.form.cancel",
-      "session.fileChange.list",
       "session.shell.output",
       "session.autonomy.get",
       "session.autonomy.set",
@@ -557,7 +556,6 @@ describe("remote operations", () => {
       "session.guardrail.status",
       "session.guardrail.request.list",
       "session.form.list",
-      "session.fileChange.list",
       "session.shell.output",
       "session.autonomy.get",
     ]

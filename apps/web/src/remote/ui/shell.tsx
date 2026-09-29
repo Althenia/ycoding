@@ -13,11 +13,10 @@ import { createInviteHttp } from "../http"
 import { normalizeAccessKey } from "../invite"
 import {
   modelLabel,
-  type ActivityItem,
   type PendingRequestView,
   type SessionView,
 } from "../projection"
-import type { RemoteStore, SessionInfoView } from "../store"
+import type { SessionInfoView } from "../store"
 import type { RemoteTransportStatus } from "../transport"
 import {
   accountReadState,
@@ -55,7 +54,7 @@ import {
   OfficeSettings,
   moveRadio,
 } from "./settings"
-import { ActivityRow, RequestCard } from "./conversation"
+import { RequestCard } from "./conversation"
 import { TranscriptNavigation } from "./transcript-nav"
 import { NotificationCenter, ToastLayer } from "./notifications"
 import { TodoPanel } from "./todo-panel"
@@ -65,12 +64,10 @@ import { SubagentBar } from "./subagent-bar"
 import { TeamHeading, TeamView } from "./team-view"
 import { isManagedSubagent, siblingTargets } from "./team-model"
 
-const views = ["/remote", "/remote/sessions", "/remote/activity", "/remote/usage", "/remote/settings"] as const
+const views = ["/remote", "/remote/sessions", "/remote/usage", "/remote/settings"] as const
 
 const newSessionHash = "new-session"
 const sessionHashPrefix = "session="
-const lastSessionsKey = "ycoding.remote.lastSessions"
-const restoredStores = new WeakMap<RemoteStore, { deviceID?: string; attempted?: string }>()
 const sessionRailKey = "ycoding.remote.desktopRailCollapsed"
 
 export type RemoteView = (typeof views)[number]
@@ -85,7 +82,6 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const [navGeneration, setNavGeneration] = createSignal(1)
   let closeSessionsSheet: (() => void) | undefined
   let navTrigger: HTMLButtonElement | undefined
-  let activityTrigger: HTMLButtonElement | undefined
   const closeNav = () => {
     if (!navOpen()) return
     if (closeSessionsSheet) closeSessionsSheet()
@@ -93,9 +89,6 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   }
   const storage = browserStorage()
   const [railCollapsed, setRailCollapsed] = createSignal(readStored(storage, sessionRailKey, (value) => value === "true") ?? false)
-  let lastSessions = readStored(storage, lastSessionsKey, readLastSessions) ?? {}
-  const restored = restoredStores.get(remote.store) ?? { deviceID: undefined, attempted: undefined }
-  restoredStores.set(remote.store, restored)
   const toggleRail = () => {
     setRailCollapsed((collapsed) => {
       writeStored(storage, sessionRailKey, String(!collapsed))
@@ -112,7 +105,6 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     toggleRail()
     queueMicrotask(() => rail?.querySelector<HTMLButtonElement>(".pane .session-panel__collapse")?.focus())
   }
-  const [activityOpen, setActivityOpen] = createSignal(false)
   const [teamOpen, setTeamOpen] = createSignal(false)
   const [teamVisible, setTeamVisible] = createSignal(false)
   const [teamEntering, setTeamEntering] = createSignal(false)
@@ -141,33 +133,6 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
 
   const office = createOfficeSettings()
   const state = () => remote.state()
-  createEffect(() => {
-    if (state().connection.kind !== "signed-out") return
-    restored.attempted = undefined
-    if (Object.keys(lastSessions).length === 0) return
-    lastSessions = {}
-    writeStored(storage, lastSessionsKey, "{}")
-  })
-  createEffect(() => {
-    const deviceID = state().activeDeviceID
-    if (restored.deviceID === deviceID) return
-    if (restored.deviceID !== undefined) {
-      restored.attempted = undefined
-      if (Object.keys(lastSessions).length > 0) {
-        lastSessions = {}
-        writeStored(storage, lastSessionsKey, "{}")
-      }
-    }
-    restored.deviceID = deviceID
-  })
-  createEffect(() => {
-    const info = state().selectedSessionInfo
-    const deviceID = state().activeDeviceID
-    if (!deviceID || !info?.projectID || !info.directory || state().activeSessionID !== info.id || lastSessions[deviceID] === info.id) return
-    restored.attempted = info.id
-    lastSessions = { ...lastSessions, [deviceID]: info.id }
-    writeStored(storage, lastSessionsKey, JSON.stringify(lastSessions))
-  })
   const view = (): RemoteView => views.find((entry) => entry === props.path()) ?? "/remote"
   let scrollHost: HTMLDivElement | undefined
   const anchors = new Map<string, number>()
@@ -192,21 +157,6 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     }
     queueMicrotask(restore)
     anchorTimer = setTimeout(() => { restoringAnchor = false }, 220)
-  })
-  createEffect(() => {
-    const deviceID = state().activeDeviceID
-    if (view() !== "/remote/activity" || deviceID === undefined ||
-      state().connection.kind !== "connected" || state().transport.kind !== "open" || state().activeSessionID !== undefined) return
-    const candidate = lastSessions[deviceID]
-    if (candidate === undefined || restored.attempted === candidate) return
-    restored.attempted = candidate
-    void remote.store.restoreSession(candidate).then((result) => {
-      if (state().activeDeviceID !== deviceID || result !== "missing") return
-      const saved = readStored(storage, lastSessionsKey, readLastSessions)
-      if (saved?.[deviceID] !== candidate) return
-      lastSessions = Object.fromEntries(Object.entries(saved).filter(([id]) => id !== deviceID))
-      writeStored(storage, lastSessionsKey, JSON.stringify(lastSessions))
-    })
   })
   const officeShown = () => view() === "/remote" && !phoneLayout() && office.presentation() === "office"
   const activeSession = () => state().selectedSessionInfo ?? state().sessions.find((session) => session.id === state().activeSessionID)
@@ -284,8 +234,6 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   })
   createEffect(() => remote.store.watchTeam(view() === "/remote" && state().activeSessionID !== undefined))
   onCleanup(() => remote.store.watchTeam(false))
-  createEffect(() => remote.store.watchFileChanges(view() === "/remote/activity"))
-  onCleanup(() => remote.store.watchFileChanges(false))
   createEffect(() => {
     const team = state().team
     if (!teamOpen() || team?.status !== "ready") { loadedControlsRoot = undefined; return }
@@ -345,9 +293,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
           navExpanded={navExpanded()}
           navLabel={navLabel()}
           navControls={tabletRailToggle() ? "session-rail" : undefined}
-          activityOpen={activityOpen()}
           onOpenNav={openSessionsNavigation}
-          onOpenActivity={(trigger) => { activityTrigger = trigger; setActivityOpen(true) }}
           onOpenSession={openSession}
           view={view()}
         />
@@ -400,7 +346,6 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                       onSelectSession={openSession}
                     />
                   </RoutePanel>
-                  <RoutePanel active={view() === "/remote/activity"}><ActivityPage onSelectSession={(sessionID) => void remote.store.selectSession(sessionID)} /></RoutePanel>
                   <RoutePanel active={view() === "/remote/usage"}><UsagePage /></RoutePanel>
                   <RoutePanel active={view() === "/remote/settings"}><SettingsPage office={office} phoneLayout={phoneLayout()} /></RoutePanel>
                 </>}>
@@ -478,11 +423,6 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
           </Modal>}
         </Show>
 
-        <Show when={activityOpen()}>
-          <Modal class="overlay--slideover" label="Activity" returnFocus={activityTrigger!} onClose={() => setActivityOpen(false)}>
-            <ActivityPanel onNavigate={() => setActivityOpen(false)} />
-          </Modal>
-        </Show>
       </div>
     </Show>
   )
@@ -521,12 +461,6 @@ function RoutePanel(props: { readonly active: boolean; readonly preserve?: boole
     if (entranceFrame !== undefined) cancelAnimationFrame(entranceFrame)
   })
   return <Show when={mounted()}><div ref={host} class={`route-panel route-panel--${phase()}${props.class ? ` ${props.class}` : ""}`} aria-hidden={props.active ? undefined : "true"} inert={!props.active}>{props.children}</div></Show>
-}
-
-function readLastSessions(raw: string) {
-  const value: unknown = JSON.parse(raw)
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
-  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string" && isSessionID(entry[1])))
 }
 
 /**
@@ -619,9 +553,9 @@ export type ConnectionStripView = {
 }
 
 /**
- * What the reserved connection strip states, and which controls it offers. The strip is
- * present at every width so a connection change replaces text inside one row instead of
- * inserting a banner that moves the composer.
+ * What the connection strip states, and which controls it offers. A healthy connection
+ * says nothing the header's connection label does not, so the strip appears only for a
+ * state that carries a message or a recovery action.
  */
 export function connectionStripView(input: {
   readonly connection: RemoteConnectionState
@@ -629,7 +563,8 @@ export function connectionStripView(input: {
   readonly activeDeviceID?: string
   readonly advertised: number
   readonly lastRelayDrop?: { readonly code: number; readonly reason: string }
-}): ConnectionStripView {
+}): ConnectionStripView | undefined {
+  if (input.connection.kind === "connected" && input.transportKind === "open") return undefined
   const summary = summarizeConnection(input.connection)
   const banner = connectionBanner(input.connection)
   const body = banner === undefined ? `${summary.label} — ${summary.detail}` : `${banner.title} — ${banner.body}`
@@ -716,103 +651,13 @@ export function filterSessions(
   })
 }
 
-export type QueueRowView = {
-  readonly id: string
-  readonly icon: IconName
-  readonly kind: string
-  readonly title: string
-  readonly detail: string
-  /** A hard review needs a human answer at every autonomy level and is drawn apart. */
-  readonly hard: boolean
-}
-
-/**
- * The events the selected session reported, in the order they happened. The transcript's
- * tool calls and terminal commands are the durable record the client already holds, so the
- * reported list is built from them and reconciled with the live activity stream by event ID:
- * a live row keeps the status and time the device published, and a snapshot-loaded session
- * reports its events instead of an empty panel. The ledger keeps each path's latest patch
- * without a per-path time, so a ledger row takes the session's last update.
- */
-export function reportedEvents(view: SessionView | undefined): readonly ActivityItem[] {
-  if (view === undefined) return []
-  const fromMessages: ActivityItem[] = view.messages.flatMap((message) => {
-    if (message.kind === "shell") {
-      return [
-        {
-          id: `shell-${message.shellID}`,
-          kind: "terminal" as const,
-          title: message.command,
-          detail: message.status,
-          status: message.status,
-          at: message.created,
-        },
-      ]
-    }
-    if (message.kind !== "assistant") return [] as ActivityItem[]
-    return message.parts.flatMap((part): ActivityItem[] =>
-      part.kind === "tool"
-        ? [
-            {
-              id: `tool-${part.callID}`,
-              kind: "tool" as const,
-              title: part.name,
-              status: part.status,
-              at: message.created,
-            },
-          ]
-        : [],
-    )
-  })
-  const fromLedger: ActivityItem[] = view.fileChanges.map((change) => ({
-    id: `file-${change.path}`,
-    kind: "file",
-    title: change.path,
-    detail: `+${change.additions} −${change.deletions}`,
-    at: view.updatedAt ?? 0,
-  }))
-  const live = new Set(view.activity.map((item) => item.id))
-  return [...fromMessages, ...fromLedger]
-    .filter((item) => !live.has(item.id))
-    .concat(view.activity)
-    .sort((left, right) => left.at - right.at)
-}
-
-/** One waiting request summarised as a row, instead of repeating its whole card. */
-export function queueRowView(request: PendingRequestView): QueueRowView {
-  if (request.kind === "permission") {
-    const target = request.resources.length === 0 ? request.action : `${request.action} on ${request.resources.join(", ")}`
-    return { id: request.id, icon: "shield", kind: "Permission", title: target, detail: "waits for a decision", hard: false }
-  }
-  if (request.kind === "guardrail") {
-    return {
-      id: request.id,
-      icon: "alert",
-      kind: request.hardReview ? "Guardrail review (human decision required)" : "Guardrail review",
-      title: request.action,
-      detail: request.reason,
-      hard: request.hardReview,
-    }
-  }
-  return {
-    id: request.id,
-    icon: "chat",
-    kind: request.form.metadata?.kind === "question" ? "Question" : "Form",
-    title: request.form.title,
-    detail: "waits for your answer",
-    hard: false,
-  }
-}
-
 const noSessionTitle = "No session selected"
 
 function RemoteHeader(props: {
   readonly navExpanded: boolean
   readonly navLabel: string
   readonly navControls?: string
-  readonly activityOpen: boolean
   readonly onOpenNav: (trigger: HTMLButtonElement) => void
-  readonly onOpenActivity: (trigger: HTMLButtonElement) => void
   readonly onOpenSession: (sessionID: string) => void
   readonly view: RemoteView
 }): JSX.Element {
@@ -855,7 +700,6 @@ function RemoteHeader(props: {
             Conversation
             <AttentionMark show={attention().conversation} />
           </Link>
-          <Link href="/remote/activity" class={`remote-nav__link${props.view === "/remote/activity" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/activity" ? "page" : undefined}>Activity</Link>
           <Link href="/remote/usage" class={`remote-nav__link${props.view === "/remote/usage" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/usage" ? "page" : undefined}>Usage</Link>
           <Link href="/remote/settings" class={`remote-nav__link${props.view === "/remote/settings" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/settings" ? "page" : undefined}>Settings</Link>
         </nav>
@@ -867,15 +711,6 @@ function RemoteHeader(props: {
         </div>
         <div class="app-header__end">
           <NotificationCenter onOpenSession={props.onOpenSession} />
-          <button
-            type="button"
-            class="button button--ghost button--icon"
-            aria-label="Open activity"
-            aria-expanded={props.activityOpen}
-            onClick={(event) => props.onOpenActivity(event.currentTarget)}
-          >
-            <Icon name="activity" />
-          </button>
           <span class="remote-header__theme">
             <ThemeToggle />
           </span>
@@ -960,30 +795,34 @@ function ConnectionStrip(): JSX.Element {
     return waiting === 0 ? count : `${count} · ${waiting} waiting for you`
   }
   return (
-    <div class={`status-strip${strip().tone === "online" ? "" : ` status-strip--${strip().tone}`}`} role="status">
-      <span class={`status-dot status-dot--${strip().tone}`} aria-hidden="true" />
-      <span class="status-strip__body">{strip().body}</span>
-      <span class="status-strip__spacer" />
-      <Show when={strip().showReconnect}>
-        <button
-          type="button"
-          class="button button--secondary button--small"
-          onClick={() => {
-            const deviceID = state().activeDeviceID
-            if (deviceID !== undefined) remote.store.connect(deviceID)
-          }}
-        >
-          <Icon name="refresh" size={16} />
-          Reconnect
-        </button>
-      </Show>
-      <Show when={strip().showSettings}>
-        <Link href="/remote/settings" class="button button--secondary button--small">
-          Open settings
-        </Link>
-      </Show>
-      <Show when={detail()}>{(text) => <span class="status-strip__detail">{text()}</span>}</Show>
-    </div>
+    <Show when={strip()}>
+      {(view) => (
+        <div class={`status-strip${view().tone === "online" ? "" : ` status-strip--${view().tone}`}`} role="status">
+          <span class={`status-dot status-dot--${view().tone}`} aria-hidden="true" />
+          <span class="status-strip__body">{view().body}</span>
+          <span class="status-strip__spacer" />
+          <Show when={view().showReconnect}>
+            <button
+              type="button"
+              class="button button--secondary button--small"
+              onClick={() => {
+                const deviceID = state().activeDeviceID
+                if (deviceID !== undefined) remote.store.connect(deviceID)
+              }}
+            >
+              <Icon name="refresh" size={16} />
+              Reconnect
+            </button>
+          </Show>
+          <Show when={view().showSettings}>
+            <Link href="/remote/settings" class="button button--secondary button--small">
+              Open settings
+            </Link>
+          </Show>
+          <Show when={detail()}>{(text) => <span class="status-strip__detail">{text()}</span>}</Show>
+        </div>
+      )}
+    </Show>
   )
 }
 
@@ -1708,41 +1547,6 @@ function attachSessionFeed(element: HTMLDivElement, store: ReturnType<typeof use
   }
 }
 
-function ActivityPage(props: { readonly onSelectSession: (sessionID: string) => void }): JSX.Element {
-  const remote = useRemote()
-  const requests = () => remote.state().view?.requests ?? []
-  return (
-    <div class="pane activity-page">
-      <div class="activity-page__events">
-        <div class="queue__head">
-          <h1 class="page-head__title">Reported events</h1>
-          <span class="panel__note">Chronological feed</span>
-        </div>
-        <Show when={remote.state().activeSessionID !== undefined} fallback={<>
-          <p class="panel__note">Choose a Session to view its reported events.</p>
-          <RunningSessions sessions={remote.state().carouselSessions ?? []} onSelectSession={props.onSelectSession} />
-          <Show when={(remote.state().carouselSessions?.length ?? 0) === 0 && remote.state().sessionListStatus !== "loading"}>
-            <p class="panel__note">No running or recent Sessions are available on this machine.</p>
-          </Show>
-        </>}>
-          <ActivityList />
-        </Show>
-      </div>
-      <div class="queue activity-page__decisions">
-        <div class="queue__head">
-          <h2 class="page-head__title">Pending decisions</h2>
-          <Show when={requests().length > 0}>
-            <span class="queue__count">{requestCount(requests().length)}</span>
-          </Show>
-        </div>
-        <Show when={requests().length > 0} fallback={<p class="panel__note">Nothing is waiting for you.</p>}>
-          <RequestCards requests={requests} activeSessionID={remote.state().activeSessionID} />
-        </Show>
-      </div>
-    </div>
-  )
-}
-
 function SettingsPage(props: { readonly office: OfficeSettingsStore; readonly phoneLayout: boolean }): JSX.Element {
   return (
     <>
@@ -1767,90 +1571,11 @@ function SettingsPage(props: { readonly office: OfficeSettingsStore; readonly ph
   )
 }
 
-/** The activity column: the waiting queue first, then the events the session reported. */
-function ActivityPanel(props: { readonly onNavigate?: () => void }): JSX.Element {
-  const remote = useRemote()
-  const requests = () => remote.state().view?.requests ?? []
-  return (
-    <div class="pane">
-      <Show when={requests().length > 0}>
-        <div class="queue">
-          <div class="queue__head">
-            <p class="pane__title">Waiting for you</p>
-            <span class="queue__count">{requestCount(requests().length)}</span>
-          </div>
-          <For each={requests()}>{(request) => <QueueRow request={request} onNavigate={props.onNavigate} />}</For>
-        </div>
-      </Show>
-      <ActivityList />
-    </div>
-  )
-}
-
-function QueueRow(props: { readonly request: PendingRequestView; readonly onNavigate?: () => void }): JSX.Element {
-  const row = () => queueRowView(props.request)
-  return (
-    <div class={`queue-row${row().hard ? " queue-row--hard" : ""}`}>
-      <span class="queue-row__icon" aria-hidden="true">
-        <Icon name={row().icon} size={16} />
-      </span>
-      <span class="queue-row__body">
-        <span class="queue-row__title">{row().title}</span>
-        <span class="queue-row__detail">
-          {row().kind} · {row().detail}
-        </span>
-      </span>
-      <Link href="/remote/activity" class="button button--secondary button--small" onClick={props.onNavigate}>
-        Answer
-      </Link>
-    </div>
-  )
-}
-
-function ActivityList(): JSX.Element {
-  const remote = useRemote()
-  const state = () => remote.state()
-  const activity = () => reportedEvents(state().view)
-  const ids = createMemo(() => [...activity()].reverse().map((item) => item.id))
-  const item = (id: string) => activity().find((entry) => entry.id === id)!
-  return (
-    <Show
-      when={state().view !== undefined}
-      fallback={
-        <div class="empty">
-          <p class="empty__title">{noSessionTitle}</p>
-          <p>Tool calls, terminal commands, and file changes appear here once a session is selected.</p>
-        </div>
-      }
-    >
-      <Show
-        when={activity().length > 0}
-        fallback={
-          <div class="empty">
-            <p class="empty__title">No activity yet</p>
-            <p>Tool calls, terminal commands, and file changes appear here as the session reports them.</p>
-          </div>
-        }
-      >
-        <ul class="activity">
-          <For each={ids()}>{(id) => <ActivityRow item={() => item(id)} fileChange={() => state().view?.fileChanges.find((change) => id === `file-${change.path}`)} />}</For>
-        </ul>
-        <p class="panel__note">
-          {state().unhandledEvents === 0
-            ? "Every reported event is shown."
-            : `${state().unhandledEvents} event(s) are not displayed by this client yet.`}
-        </p>
-      </Show>
-    </Show>
-  )
-}
-
 function BottomNav(props: { readonly view: RemoteView }): JSX.Element {
   const attention = useNavigationAttention()
   const items: readonly { readonly view: RemoteView; readonly label: string; readonly icon: IconName }[] = [
     { view: "/remote/sessions", label: "Sessions", icon: "sessions" },
     { view: "/remote", label: "Conversation", icon: "chat" },
-    { view: "/remote/activity", label: "Activity", icon: "activity" },
     { view: "/remote/usage", label: "Usage", icon: "usage" },
     { view: "/remote/settings", label: "Settings", icon: "settings" },
   ]
@@ -1893,8 +1618,4 @@ function sessionStatus(
 
 function advertisedCount(count: number): string {
   return `${count} ${count === 1 ? "session" : "sessions"}`
-}
-
-function requestCount(count: number): string {
-  return `${count} ${count === 1 ? "request" : "requests"}`
 }

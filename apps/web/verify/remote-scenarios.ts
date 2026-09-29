@@ -1,8 +1,8 @@
 import type { RemoteDeviceInfo } from "@ycoding-ai/remote"
 
-export type RemoteScenarioName = "conversation-workspace" | "session-list" | "conversation-tool-terminal-output" | "activity-pending-decisions" | "permission-guardrail-hard-review-form-requests" | "empty-backend" | "selected-machine-offline" | "signed-out" | "devices-enrollment" | "autonomy-goal-notification-settings" | "usage-quotas"
+export type RemoteScenarioName = "conversation-workspace" | "session-list" | "conversation-tool-terminal-output" | "permission-guardrail-hard-review-form-requests" | "empty-backend" | "selected-machine-offline" | "signed-out" | "devices-enrollment" | "autonomy-goal-notification-settings" | "usage-quotas"
 export type RemoteScenarioViewport = 1440 | 768 | 390
-export type RemoteScenarioView = "chat" | "sessions" | "activity" | "usage" | "settings"
+export type RemoteScenarioView = "chat" | "sessions" | "usage" | "settings"
 
 type WireSession = {
   readonly id: string
@@ -216,22 +216,6 @@ function conversationToolTerminalOutputMessages(viewport: RemoteScenarioViewport
   ]
 }
 
-function activityPendingDecisionsMessages(viewport: RemoteScenarioViewport): readonly WireMessage[] {
-  const first = assistant("msg_phase", [tool("call_phase", "Agent Phase Transition", {}, "Syntax graph validation started for rewrite", 35)], 35)
-  const second = assistant("msg_file", [tool("call_file", "File Updated", { path: "src/core/compiler/ast_transformer.rs" }, "Modified src/core/compiler/ast_transformer.rs", 34)], 34)
-  if (viewport !== 1440) return [first, second]
-  return [first, second, {
-    id: "msg_command",
-    type: "shell",
-    shellID: "sh_command",
-    command: "Command Executed",
-    status: "exited",
-    exit: 0,
-    output: { output: "cargo check completed (0 warnings)", cursor: 34, size: 34 },
-    time: messageTime(36),
-  }]
-}
-
 function permissionGuardrailHardReviewFormRequestsForms(viewport: RemoteScenarioViewport): readonly WireForm[] {
   if (viewport === 768) return [form("frm_endpoints", "Multi-Choice Question Prompt", [{
     key: "endpoints",
@@ -335,14 +319,6 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
         ? ["Add defensive timeout handling", "write_file_patch", "5000ms handshake deadline"]
         : ["Run sanity checks on worker threads.", "Checked worker threads."],
   }
-  if (name === "activity-pending-decisions") return {
-    ...common,
-    view: "activity",
-    messages: activityPendingDecisionsMessages(viewport),
-    permissions: [permission("per_lock", "Overwrite Cargo.lock revision?")],
-    guardrails: [guardrail("grq_push", "Authorize branch push for feat/ast-cache", "Remote push requires a decision", false)],
-    expectedText: ["Reported events", "Pending decisions", "Overwrite Cargo.lock revision?", "Authorize branch push for feat/ast-cache", "Agent Phase Transition", "File Updated", ...(viewport === 1440 ? ["Command Executed"] : [])],
-  }
   if (name === "permission-guardrail-hard-review-form-requests") return {
     ...common,
     view: "chat",
@@ -421,7 +397,7 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
   }
 }
 
-const scenarioNames: readonly RemoteScenarioName[] = ["conversation-workspace", "session-list", "conversation-tool-terminal-output", "activity-pending-decisions", "permission-guardrail-hard-review-form-requests", "devices-enrollment", "autonomy-goal-notification-settings", "usage-quotas"]
+const scenarioNames: readonly RemoteScenarioName[] = ["conversation-workspace", "session-list", "conversation-tool-terminal-output", "permission-guardrail-hard-review-form-requests", "devices-enrollment", "autonomy-goal-notification-settings", "usage-quotas"]
 const viewports: readonly RemoteScenarioViewport[] = [1440, 768, 390]
 
 export const REMOTE_SCENARIOS = [

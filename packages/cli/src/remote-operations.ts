@@ -761,8 +761,6 @@ async function run(input: OperationInput) {
     }
     case "form.list":
       return await input.local.formList(sessionID, location)
-    case "fileChange.list":
-      return { data: await input.local.fileChangeList(sessionID, location) }
     case "shell.output": {
       // Ownership is proven from the shell's own recorded Session before any output
       // byte is read, so a granted Session can never page another Session's capture.
@@ -868,7 +866,6 @@ type Validated =
   | { readonly kind: "guardrail.status" }
   | { readonly kind: "guardrail.request.list" }
   | { readonly kind: "form.list" }
-  | { readonly kind: "fileChange.list" }
   | { readonly kind: "shell.output"; readonly shellID: string; readonly cursor?: number; readonly limit: number }
   | { readonly kind: "log"; readonly after?: number }
   | { readonly kind: "subscribe" }
@@ -897,7 +894,6 @@ const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
   "session.guardrail.status": "guardrail.status",
   "session.guardrail.request.list": "guardrail.request.list",
   "session.form.list": "form.list",
-  "session.fileChange.list": "fileChange.list",
   "session.subscribe": "subscribe",
   "session.unsubscribe": "unsubscribe",
   "session.interrupt": "interrupt",
@@ -1511,7 +1507,6 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.guardrail.status": [],
   "session.guardrail.request.list": [],
   "session.form.list": [],
-  "session.fileChange.list": [],
   "session.shell.output": ["shellID", "cursor", "limit"],
   "session.subscribe": [],
   "session.unsubscribe": [],

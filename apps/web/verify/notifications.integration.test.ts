@@ -116,7 +116,7 @@ describe("notification center and live toasts", () => {
         const read = await page.evaluate<{ retained: boolean; panelSame: boolean; activeRows: number; rect: readonly number[]; badge: string; added: number; removed: number }>(sample)
         const snapshotReads = await page.evaluate<number>(`window.remoteOperationReport().operations['session.snapshot'] ?? 0`)
         await page.evaluate(`[...document.querySelectorAll('.fixture__controls button')].find(button => button.textContent?.includes('Simulate disconnect and reconnect')).click()`)
-        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.status-strip__body')?.textContent?.startsWith('Connected —') === true`); attempt += 1) await Bun.sleep(50)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.remote-connection-label')?.textContent?.trim() === 'Connected' && document.querySelector('.status-strip') === null`); attempt += 1) await Bun.sleep(50)
         const reconnect = await page.evaluate<{ retained: boolean; panelSame: boolean; activeRows: number; rect: readonly number[]; added: number; removed: number }>(sample)
         expect(initial).toEqual({ added: 4, removed: 0, ages: ["3m", "4m", "6m", "8m"], label: "4 new", unread: 0 })
         for (const update of [status, tick, newNotice, read, reconnect]) {
@@ -144,10 +144,11 @@ describe("notification center and live toasts", () => {
     try {
       await page.setViewport(390, 844)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
-      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.status-strip__body')?.textContent?.includes('Connected') === true`); attempt += 1) await Bun.sleep(50)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.remote-connection-label')?.textContent?.trim() === 'Connected'`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<boolean>(`document.querySelector('.status-strip') === null`)).toBe(true)
       await page.evaluate(`[...document.querySelectorAll('.fixture__controls button')].find(button => button.textContent?.includes('Simulate disconnect and reconnect'))?.click()`)
-      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.status-strip__body')?.textContent?.startsWith('Connected —') === true && document.querySelector('.status-strip__body')?.textContent?.includes('Last browser relay drop (1006): synthetic disconnect') === true`); attempt += 1) await Bun.sleep(50)
-      expect(await page.evaluate<string>(`document.querySelector('.status-strip__body')?.textContent?.trim() ?? ''`)).toBe("Connected — Relay session active for Studio Mac. · Last browser relay drop (1006): synthetic disconnect")
+      expect(await page.evaluate<string>(`document.querySelector('.status-strip__body')?.textContent?.trim() ?? ''`)).toBe("Connecting — Opening the relay connection. · Last browser relay drop (1006): synthetic disconnect")
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.remote-connection-label')?.textContent?.trim() === 'Connected' && document.querySelector('.status-strip') === null`); attempt += 1) await Bun.sleep(50)
       await page.evaluate(`document.querySelector('.yc-notification-center__trigger')?.click()`)
       expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification--machine-offline').length`)).toBe(0)
     } finally { await page.close() }

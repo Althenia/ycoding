@@ -18,7 +18,6 @@ export type IconName =
   | "chevron-right"
   | "chevron-down"
   | "chat"
-  | "activity"
   | "sessions"
   | "settings"
   | "send"
@@ -67,7 +66,6 @@ const paths: Record<IconName, readonly string[]> = {
   "chevron-right": ["M9 6l6 6-6 6"],
   "chevron-down": ["M6 9l6 6 6-6"],
   chat: ["M4 5h16v11H9l-5 4z"],
-  activity: ["M3 13h4l2.5-7 4 14L16 13h5"],
   sessions: ["M4 6h16", "M4 11h16", "M4 16h10"],
   settings: ["M4 7h10", "M18 7h2", "M4 12h4", "M12 12h8", "M4 17h12", "M20 17h0.5", "M16 5v4", "M10 10v4", "M18 15v4"],
   send: ["M4 12l16-8-6 16-3-7z"],

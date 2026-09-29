@@ -267,11 +267,11 @@ describe("transcript rendering", () => {
       for (const theme of ["light", "dark"] as const) for (const width of [320, 360, 390, 430]) {
         await page.setViewport(width, 844)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=${theme}`)
-        for (let i = 0; i < 80 && await page.evaluate<number>(`document.querySelectorAll('.bottom-nav__item').length`) < 5; i++) await Bun.sleep(50)
+        for (let i = 0; i < 80 && await page.evaluate<number>(`document.querySelectorAll('.bottom-nav__item').length`) < 4; i++) await Bun.sleep(50)
         const nav = await page.evaluate<{ readonly tops: readonly number[]; readonly minHeight: number; readonly names: readonly string[]; readonly labelsHidden: boolean; readonly overflow: boolean }>(`(() => { const items = [...document.querySelectorAll('.bottom-nav__item')]; return { tops: items.map(item => item.getBoundingClientRect().top), minHeight: Math.min(...items.map(item => item.getBoundingClientRect().height)), names: items.map(item => item.getAttribute('aria-label')), labelsHidden: items.every(item => { const label = item.querySelector('.bottom-nav__label'); return label instanceof HTMLElement && getComputedStyle(label).display === 'none' }), overflow: document.documentElement.scrollWidth > innerWidth } })()`)
         expect(new Set(nav.tops).size).toBe(1)
         expect(nav.minHeight).toBeGreaterThanOrEqual(44)
-        expect(nav.names.map((name) => name.replace(", waiting for your decision", ""))).toEqual(["Sessions", "Conversation", "Activity", "Usage", "Settings"])
+        expect(nav.names.map((name) => name.replace(", waiting for your decision", ""))).toEqual(["Sessions", "Conversation", "Usage", "Settings"])
         expect(nav.labelsHidden).toBe(true)
         expect(nav.overflow).toBe(false)
         await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); if (fixture) { fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden' } })()`)

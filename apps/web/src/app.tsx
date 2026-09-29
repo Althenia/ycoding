@@ -16,7 +16,7 @@ const routes = [
   { path: "/docs/*slug", render: (params: Readonly<Record<string, string>>) => <DocsPage slug={params.slug ?? ""} /> },
   { path: "/changelog", render: (_params: Readonly<Record<string, string>>) => <ChangelogPage /> },
 ] as const
-const remoteRoutes = ["/remote", "/remote/sessions", "/remote/activity", "/remote/usage", "/remote/settings"] as const
+const remoteRoutes = ["/remote", "/remote/sessions", "/remote/usage", "/remote/settings"] as const
 
 /** Renders the matched route, applies its head metadata, resets scroll on navigation, and honours documentation anchors. */
 function Outlet(): JSX.Element {

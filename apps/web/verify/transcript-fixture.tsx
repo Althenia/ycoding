@@ -165,7 +165,7 @@ if (!root) throw new Error("Missing transcript root")
 const store = createRemoteStore({ http: createRemoteHttp({ fetch: Object.assign(async () => new Response(null, { status: 401 }), { preconnect: () => {} }) }), createTransport: () => { throw new Error("Fixture transport must not connect") } })
 const fixtureState = { ...store.state(), activeSessionID: "ses_a", activeDeviceID: "dev_1" }
 const listeners = new Set<() => void>()
-Object.defineProperty(store, "state", { value: () => ({ ...fixtureState, history: history(), view: fileChangesMode ? { ...createSessionView("ses_a"), status: fileChangeStatus(), messages: messages(), fileChanges: fileChangesMode === "child-only" ? [] : fileChanges, capturedChanges } : compactionMode ? { ...createSessionView("ses_a"), compactionHistory: compactionHistory() } : fixtureState.view }) })
+Object.defineProperty(store, "state", { value: () => ({ ...fixtureState, history: history(), view: fileChangesMode ? { ...createSessionView("ses_a"), status: fileChangeStatus(), messages: messages(), capturedChanges } : compactionMode ? { ...createSessionView("ses_a"), compactionHistory: compactionHistory() } : fixtureState.view }) })
 Object.defineProperty(store, "subscribe", { value: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener) } })
 Object.defineProperty(store, "loadOlderMessages", { value: async () => {
   if (!history().before) return

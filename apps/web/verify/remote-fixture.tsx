@@ -136,7 +136,6 @@ const sessions = [...(remoteScenarioData?.sessions ?? defaultSessions), ...(acco
   id: "ses_postgres_child", title: "Inspect Postgres indexes", parentID: "ses_postgres", projectID: "project-auth",
   location: { directory: "/workspace/db-pruner" }, time: { created: ago(15), updated: ago(2) }, running: true,
 }] : [])]
-const removedSessionID = accountParams.get("removedSession")
 const inventoryCount = Math.min(15_000, Math.max(0, Number(accountParams.get("inventoryCount") ?? 0) || 0))
 const sessionListDelayMs = Number(accountParams.get("sessionListDelay") ?? 0)
 let statusRunning = new Set(inventoryCount > 0 ? ["ses_inventory_14000"] : sessions.filter((session) => session.running).map((session) =>
@@ -660,7 +659,7 @@ function createFixtureStore(): Fixture {
       return delay > 0 ? new Promise((resolve) => setTimeout(() => resolve(result), delay)) : result
     }
     if (operation === "session.get") {
-      if (targetSessionID === removedSessionID || emptyBackend && !createdSessions.has(targetSessionID))
+      if (emptyBackend && !createdSessions.has(targetSessionID))
         return { status: "failed", error: { code: "session_not_allowed", message: "Session not found" } }
       const info = createdSessions.get(targetSessionID) ?? sessions.find((item) => item.id === targetSessionID)
       return info ? { status: "ok", value: { data: info } } : { status: "failed", error: { code: "session_not_allowed", message: "Session not found" } }
@@ -689,7 +688,6 @@ function createFixtureStore(): Fixture {
           ? new Promise<RemoteRequestOutcome>((resolve) => setTimeout(() => resolve(result), sessionListDelayMs)) : result
       }
       return { status: "ok", value: { data: [...createdSessions.values(), ...(emptyBackend ? [] : sessions)]
-        .filter((session) => session.id !== removedSessionID)
         .filter((session) => input?.workspace === undefined || groupOf(session).id === input.workspace)
         .filter((session) => input?.parentID !== null || (session as { readonly parentID?: string }).parentID === undefined)
         .filter((session) => input?.status === "running" ? statusRunning.has(session.id)
@@ -768,10 +766,6 @@ function createFixtureStore(): Fixture {
       value: targetSessionID !== sessionID || accountParams.get("team") === "two" ? [] : remoteScenarioData === undefined
         ? formMode === "constraints" ? unreplied([constraintsForm]) : unreplied(formMode === "all" ? [form, allForm] : [form])
         : unreplied(remoteScenarioData.forms),
-    }
-    if (operation === "session.fileChange.list" && accountParams.get("files") === "recorded") return {
-      status: "ok",
-      value: { data: [{ path: "src/remote/store.ts", patch: `@@ -1 +1 @@\n-old\n+${"updated".repeat(80)}<img src=x onerror=alert(1)>`, additions: 1, deletions: 1 }] },
     }
     if (
       operation === "session.permission.reply" ||

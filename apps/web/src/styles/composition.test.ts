@@ -136,7 +136,7 @@ describe("responsive contract", () => {
     expect(columnSteps(remote, ".workspace")).toEqual([])
     expect(columnSteps(remote, ".app--conversation.app--selected .workspace")).toEqual([{ min: 768, tracks: 2 }])
     expect(shownFrom(remote, ".app--conversation.app--selected .workspace__rail", 768)).toBe(true)
-    for (const screen of ["sessions", "activity", "settings", "empty"]) {
+    for (const screen of ["sessions", "settings", "empty"]) {
       expect(declarationsWhere(remote, (rule) =>
         rule.header.split(",").map((selector) => selector.trim()).includes(`.app--${screen} .workspace__main`),
       )["grid-column"]).toBe("1 / -1")
@@ -146,13 +146,13 @@ describe("responsive contract", () => {
     expect(columnSteps(remote, ".defs__row")).toEqual([{ min: 1024, tracks: 2 }])
   })
 
-  test("keeps compact navigation to one row of five centered icon targets above the bottom safe area", async () => {
+  test("keeps compact navigation to one row of four centered icon targets above the bottom safe area", async () => {
     const remote = await readStylesheet("remote.css")
     const nav = base(remote, ".bottom-nav")
     const item = base(remote, ".bottom-nav__item")
     expect(nav).toMatchObject({
       display: "grid",
-      "grid-template-columns": "repeat(5, minmax(0, 1fr))",
+      "grid-template-columns": "repeat(4, minmax(0, 1fr))",
       "padding-block-end": "env(safe-area-inset-bottom)",
     })
     expect(item).toMatchObject({
@@ -160,6 +160,13 @@ describe("responsive contract", () => {
       "place-items": "center",
       "min-height": "var(--yc-bottom-nav-h)",
     })
+  })
+
+  test("keeps the header connection label readable to assistive technology when the row has no room for it", async () => {
+    const remote = await readStylesheet("remote.css")
+    const label = base(remote, ".remote-connection-label")
+    expect(label.display).not.toBe("none")
+    expect(label).toMatchObject({ position: "absolute", "clip-path": "inset(50%)" })
   })
 
   test("bounds the application shell column to the viewport", async () => {

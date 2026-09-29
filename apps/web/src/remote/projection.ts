@@ -165,14 +165,6 @@ export type ShellOutputFetch =
   /** A settled page added nothing while the device still holds bytes. */
   | { readonly state: "stalled" }
 
-/** `Session.Event.FileChange.Info`: one path's recorded patch. */
-export type FileChangeView = {
-  readonly path: string
-  readonly patch: string
-  readonly additions: number
-  readonly deletions: number
-}
-
 export type AssistantPart =
   | {
       readonly kind: "text"
@@ -300,15 +292,6 @@ export type PendingRequestView =
       readonly askedAt: number
     }
 
-export type ActivityItem = {
-  readonly id: string
-  readonly kind: "tool" | "terminal" | "file" | "approval" | "status"
-  readonly title: string
-  readonly detail?: string
-  readonly status?: string
-  readonly at: number
-}
-
 export type SessionAutonomyView = {
   readonly mode: "normal" | "yolo" | "goal"
   readonly yolo: 0 | 1 | 2 | 3
@@ -336,10 +319,7 @@ export type SessionView = {
   readonly messages: readonly RemoteMessageView[]
   readonly compactionHistory?: RemoteCompactionHistory
   readonly requests: readonly PendingRequestView[]
-  /** Latest recorded patch per changed path, from the ledger read and live records. */
-  readonly fileChanges: readonly FileChangeView[]
   readonly capturedChanges?: RemoteCapturedChangesPage
-  readonly activity: readonly ActivityItem[]
   readonly unhandledEvents: number
   readonly updatedAt?: number
   readonly activeAt?: number
@@ -387,7 +367,6 @@ export function isGoalSteerAdmission(payload: unknown): boolean {
 
 /** Caps a derived summary (compaction, non-text tool content) so it cannot dominate the page. */
 export const messageTextLimit = 4_000
-export const activityLimit = 200
 
 /**
  * Events the client receives but does not project: they carry no user-visible
@@ -395,6 +374,8 @@ export const activityLimit = 200
  * unhandled counter.
  */
 const ignoredEventTypes: readonly string[] = [
+  "session.file-change.recorded",
+  "guardrail.decided",
   "session.instructions.updated",
   "session.task.updated",
   "session.project-artifacts-ended",
@@ -412,7 +393,7 @@ const ignoredEventTypes: readonly string[] = [
 ]
 
 export function createSessionView(id: string): SessionView {
-  return { id, status: "idle", messages: [], requests: [], fileChanges: [], activity: [], unhandledEvents: 0 }
+  return { id, status: "idle", messages: [], requests: [], unhandledEvents: 0 }
 }
 
 export function formatElapsed(ms: number): string {
@@ -911,17 +892,12 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
     case "session.reasoning.ended":
       return withReasoningPart(view, data, now, (part) => ({ ...part, text: stringField(data.text) ?? part.text, completed: now }))
     case "session.tool.input.started":
-      return withToolActivity(
-        withToolPart(view, data, now, (part) => ({
-          ...part,
-          name: stringField(data.name) ?? part.name,
-          status: "streaming",
-          started: part.started ?? now,
-        })),
-        data,
-        "pending",
-        now,
-      )
+      return withToolPart(view, data, now, (part) => ({
+        ...part,
+        name: stringField(data.name) ?? part.name,
+        status: "streaming",
+        started: part.started ?? now,
+      }))
     case "session.tool.input.delta":
       return withToolPart(view, data, now, (part) => ({
         ...part,
@@ -936,17 +912,12 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         inputText: stringField(data.text) ?? part.inputText,
       }))
     case "session.tool.called":
-      return withToolActivity(
-        withToolPart(view, data, now, (part) => ({
-          ...part,
-          status: "running",
-          ran: part.ran ?? now,
-          input: recordField(data.input) ?? part.input,
-        })),
-        data,
-        "running",
-        now,
-      )
+      return withToolPart(view, data, now, (part) => ({
+        ...part,
+        status: "running",
+        ran: part.ran ?? now,
+        input: recordField(data.input) ?? part.input,
+      }))
     case "session.tool.progress":
       return withToolPart(view, data, now, (part) => ({
         ...part,
@@ -955,37 +926,25 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         structured: recordField(data.structured) ?? part.structured,
       }))
     case "session.tool.success":
-      return withToolActivity(
-        withToolPart(view, data, now, (part) => ({
-          ...part,
-          status: "completed",
-          completed: now,
-          content: readToolContent(data.content),
-          input: recordField(data.input) ?? part.input,
-          structured: recordField(data.structured) ?? part.structured,
-        })),
-        data,
-        "completed",
-        now,
-      )
+      return withToolPart(view, data, now, (part) => ({
+        ...part,
+        status: "completed",
+        completed: now,
+        content: readToolContent(data.content),
+        input: recordField(data.input) ?? part.input,
+        structured: recordField(data.structured) ?? part.structured,
+      }))
     case "session.tool.failed":
-      return withToolActivity(
-        withToolPart(view, data, now, (part) => ({
-          ...part,
-          status: "failed",
-          completed: now,
-          error: readError(data.error)?.message ?? "The tool failed",
-        })),
-        data,
-        "failed",
-        now,
-      )
+      return withToolPart(view, data, now, (part) => ({
+        ...part,
+        status: "failed",
+        completed: now,
+        error: readError(data.error)?.message ?? "The tool failed",
+      }))
     case "session.shell.started":
       return applyShell(view, data, now, false)
     case "session.shell.ended":
       return applyShell(view, data, now, true)
-    case "session.file-change.recorded":
-      return applyFileChange(view, data, now)
     case "session.context.observed":
       return pushMessage(view, {
         kind: data.source === "team-view" ? "synthetic" : "system",
@@ -1039,15 +998,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         askedAt: now,
       })
     case "permission.v2.replied":
-      return {
-        ...removeRequest(view, stringField(data.requestID)),
-        activity: pushActivity(view.activity, {
-          id: `permission-${stringField(data.requestID) ?? now}`,
-          kind: "approval",
-          title: `Permission ${stringField(data.reply) ?? "resolved"}`,
-          at: now,
-        }),
-      }
+      return removeRequest(view, stringField(data.requestID))
     case "guardrail.asked":
       return pushRequest(view, {
         kind: "guardrail",
@@ -1062,18 +1013,6 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
       })
     case "guardrail.replied":
       return removeRequest(view, stringField(data.requestID))
-    case "guardrail.decided":
-      return {
-        ...view,
-        activity: pushActivity(view.activity, {
-          id: `guardrail-${stringField(data.action) ?? now}`,
-          kind: "approval",
-          title: `Guardrail ${stringField(data.decision) ?? "decided"}`,
-          ...(stringField(data.action) === undefined ? {} : { detail: stringField(data.action) }),
-          at: now,
-        }),
-        updatedAt: now,
-      }
     case "form.created": {
       const form = readForms([data.form])[0]
       if (form === undefined || form.sessionID !== view.id) return view
@@ -1429,35 +1368,7 @@ function applyShell(view: SessionView, data: Record<string, unknown>, now: numbe
     ...(ended ? { completed: now } : {}),
   }
   const next = existing ? replaceMessage(view, message) : pushMessage(view, message)
-  return {
-    ...next,
-    activity: pushActivity(next.activity, {
-      id: `shell-${shellID}`,
-      kind: "terminal",
-      title: message.command,
-      detail: message.status,
-      status: message.status,
-      at: now,
-    }),
-    updatedAt: now,
-  }
-}
-
-function applyFileChange(view: SessionView, data: Record<string, unknown>, now: number): SessionView {
-  const change = resolveFileChange(data)
-  if (change === undefined) return bump(view)
-  return {
-    ...view,
-    fileChanges: mergeFileChanges(view.fileChanges, [change]),
-    activity: pushActivity(view.activity, {
-      id: `file-${change.path}`,
-      kind: "file",
-      title: change.path,
-      detail: `+${change.additions} −${change.deletions}`,
-      at: now,
-    }),
-    updatedAt: now,
-  }
+  return { ...next, updatedAt: now }
 }
 
 function withCompaction(
@@ -1560,32 +1471,6 @@ export function hasCompactionCheckpoint(messages: readonly RemoteMessageView[]):
   return messages.some((message) => message.kind === "compaction" && message.status === "completed" && !!message.boundaryMessageID)
 }
 
-/** Mirrors one tool call into the activity stream so the panel reflects live work. */
-function withToolActivity(
-  view: SessionView,
-  data: Record<string, unknown>,
-  status: "pending" | "running" | "completed" | "failed",
-  now: number,
-): SessionView {
-  const assistantMessageID = stringField(data.assistantMessageID)
-  const callID = stringField(data.callID)
-  if (assistantMessageID === undefined || callID === undefined) return view
-  const message = view.messages.find((entry) => entry.id === assistantMessageID)
-  const name =
-    message?.kind === "assistant"
-      ? message.parts.find(
-          (part): part is Extract<AssistantPart, { kind: "tool" }> =>
-            part.kind === "tool" && part.callID === callID,
-        )?.name
-      : undefined
-  if (name === undefined) return view
-  return {
-    ...view,
-    activity: pushActivity(view.activity, { id: `tool-${callID}`, kind: "tool", title: name, status, at: now }),
-    updatedAt: now,
-  }
-}
-
 function pushMessage(view: SessionView, message: RemoteMessageView): SessionView {
   return { ...view, messages: [...view.messages, message] }
 }
@@ -1603,10 +1488,6 @@ function pushRequest(view: SessionView, request: PendingRequestView): SessionVie
 function removeRequest(view: SessionView, requestID: string | undefined): SessionView {
   if (requestID === undefined) return bump(view)
   return { ...view, requests: view.requests.filter((request) => request.id !== requestID) }
-}
-
-function pushActivity(activity: readonly ActivityItem[], item: ActivityItem): readonly ActivityItem[] {
-  return [...activity.filter((existing) => existing.id !== item.id), item].slice(-activityLimit)
 }
 
 export function readProjectedMessage(value: unknown): RemoteMessageView | undefined {
@@ -1920,14 +1801,6 @@ export function readFormRequests(payload: unknown, now: number): readonly Extrac
   return readForms(payload).map((form) => ({ kind: "form", id: form.id, form, askedAt: now }))
 }
 
-/** Reads `GET /api/session/:sessionID/file-change`: `{ data: FileChange.Info[] }`. */
-export function readFileChangeList(payload: unknown): readonly FileChangeView[] {
-  return readDataList(payload).flatMap((item) => {
-    const change = readFileChange(item)
-    return change === undefined ? [] : [change]
-  })
-}
-
 export function readCapturedChangesPage(value: unknown): RemoteCapturedChangesPage | undefined {
   if (!isRecord(value) || !["none", "transcript", "recovery"].includes(String(value.mode)) || !Array.isArray(value.data) ||
     (value.mode === "none" ? value.data.length !== 0 : typeof value.placementMessageID !== "string") ||
@@ -1957,44 +1830,6 @@ export function readCapturedChangesPage(value: unknown): RemoteCapturedChangesPa
     ...(typeof value.placementMessageID === "string" ? { placementMessageID: value.placementMessageID } : {}),
     data: files.filter((file): file is NonNullable<typeof file> => file !== undefined),
     ...(isRecord(value.cursor) && typeof value.cursor.next === "string" ? { cursor: { next: value.cursor.next } } : {}) }
-}
-
-/** `session.file-change.recorded` change, when the payload is that event. */
-export function readFileChangeEvent(payload: unknown): FileChangeView | undefined {
-  if (!isRecord(payload) || payload.type !== "session.file-change.recorded") return undefined
-  if (!isRecord(payload.data)) return undefined
-  return resolveFileChange(payload.data)
-}
-
-/** Latest-per-path merge: an update replaces the same path and keeps first-seen order. */
-export function mergeFileChanges(
-  base: readonly FileChangeView[],
-  updates: readonly FileChangeView[],
-): readonly FileChangeView[] {
-  const byPath = new Map(base.map((change) => [change.path, change] as const))
-  for (const change of updates) byPath.set(change.path, change)
-  return [...byPath.values()]
-}
-
-/** Replaces the recorded changes with an authoritative ledger read. */
-export function replaceFileChanges(view: SessionView, fileChanges: readonly FileChangeView[]): SessionView {
-  return { ...view, fileChanges: [...fileChanges] }
-}
-
-function resolveFileChange(data: Record<string, unknown>): FileChangeView | undefined {
-  return readFileChange(isRecord(data.change) ? data.change : data)
-}
-
-function readFileChange(value: unknown): FileChangeView | undefined {
-  if (!isRecord(value)) return undefined
-  const path = stringField(value.path)
-  if (path === undefined || typeof value.patch !== "string") return undefined
-  return {
-    path,
-    patch: value.patch,
-    additions: numberField(value.additions) ?? 0,
-    deletions: numberField(value.deletions) ?? 0,
-  }
 }
 
 /** Durable sequence and epoch carried by one event payload. */

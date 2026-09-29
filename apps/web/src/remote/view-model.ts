@@ -141,14 +141,6 @@ export type RemoteMessage =
   | { readonly kind: "assistant"; readonly id: string; readonly parts: readonly RemoteMessagePart[] }
   | { readonly kind: "system"; readonly id: string; readonly text: string }
 
-export type RemoteActivityItem = {
-  readonly id: string
-  readonly kind: "tool" | "terminal" | "file" | "approval"
-  readonly title: string
-  readonly detail?: string
-  readonly status: RemoteToolStatus
-}
-
 export type RemoteApproval = {
   readonly id: string
   readonly tool: string
@@ -187,7 +179,6 @@ export type RemoteViewModel = {
   readonly activeDeviceId?: string
   readonly activeSessionId?: string
   readonly messages: readonly RemoteMessage[]
-  readonly activity: readonly RemoteActivityItem[]
   readonly approvals: readonly RemoteApproval[]
   readonly actions: RemoteActions
 }
@@ -244,7 +235,6 @@ export function createUnavailableRemoteViewModel(
     devices: [],
     sessions: [],
     messages: [],
-    activity: [],
     approvals: [],
     actions: {
       signIn: fail,

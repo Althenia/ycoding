@@ -451,7 +451,6 @@ grouping and Session-list filters are derived from backend metadata.
 | `session.form.list` | yes | `v2.session.form.list` | `GET /api/session/:sessionID/form` | — |
 | `session.form.reply` | yes | `v2.session.form.reply` | `POST /api/session/:sessionID/form/:formID/reply` | `formID`, `answer` |
 | `session.form.cancel` | yes | `v2.session.form.cancel` | `POST /api/session/:sessionID/form/:formID/cancel` | `formID` |
-| `session.fileChange.list` | yes | `v2.session.file-change.list` | `GET /api/session/:sessionID/file-change` | — |
 | `session.autonomy.get` | yes | `v2.session.autonomy.get` | `GET /api/session/:sessionID/autonomy` | — |
 | `session.autonomy.set` | yes | `v2.session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `yolo`, `maxNoProgress?` |
 | `session.goal.set` | yes | `v2.session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `goal` (non-empty string), `maxNoProgress?` |
@@ -658,15 +657,13 @@ Required reconnect reads — `session.snapshot` (the Protocol `SessionProjection
 value), `session.active` (running state for the initial view and after
 reconnect), `session.permission.list`, `session.guardrail.status`,
 `session.guardrail.request.list`, `session.form.list`,
-`session.fileChange.list`, `session.todo.list`, and `session.autonomy.get` — exist so the browser can
+`session.todo.list`, and `session.autonomy.get` — exist so the browser can
 rebuild running state, pending approvals, and autonomy state after a reconnect
 instead of relying on ephemeral events.
 
 `session.list` pages every Session in the connected backend, and `session.active`
 reports running state for that same inventory. The authenticated enrolled-device
-owner is the authorization boundary. The wire name for captured file changes is
-`session.fileChange.list`; the Protocol endpoint identifier is
-`v2.session.file-change.list` (`GET /api/session/:sessionID/file-change`).
+owner is the authorization boundary.
 
 `session.permission.reply` and `session.guardrail.reply` map a `requestID` path
 parameter. `session.form.reply` and `session.form.cancel` map a `formID` path

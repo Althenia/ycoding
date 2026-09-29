@@ -167,9 +167,6 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
       if (request.operation === "session.form.list") {
         return { ok: true, value: options.forms ?? [] }
       }
-      if (request.operation === "session.fileChange.list") {
-        return { ok: true, value: { data: [] } }
-      }
       if (request.operation === "session.prompt") {
         return {
           ok: true,

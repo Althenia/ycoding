@@ -639,9 +639,6 @@ test("bridges authorized session operations against an isolated server", async (
     const stoppedAgain = valueOf(await answer(relay, "goal_stop_again")) as { data: { goal?: { status?: string } } }
     expect(stoppedAgain.data.goal?.status).toBe("stopped")
 
-    relay.deliver(request("files_1", "session.fileChange.list", sessionID))
-    expect(valueOf(await answer(relay, "files_1"))).toEqual({ data: [] })
-
     relay.deliver(request("guardrail_1", "session.guardrail.status", sessionID))
     const status = valueOf(await answer(relay, "guardrail_1")) as { data: { rootSessionID: string } }
     expect(status.data.rootSessionID).toBe(sessionID)

@@ -9,7 +9,7 @@ describe("signInURL", () => {
   })
 
   test("targets the provider's same-origin sign-in entry point with a /remote return path", () => {
-    expect(signInURL("google", "/remote/activity")).toBe("/api/auth/google/start?redirect_after=%2Fremote%2Factivity")
+    expect(signInURL("google", "/remote/usage")).toBe("/api/auth/google/start?redirect_after=%2Fremote%2Fusage")
   })
 
   test("falls back to /remote for a return path outside the remote workspace", () => {

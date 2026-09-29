@@ -8,8 +8,6 @@ import {
   awaitsApproval,
   connectionStripView,
   filterSessions,
-  queueRowView,
-  reportedEvents,
   sessionChips,
   sessionNeedsAttention,
   remoteSurfaceComposition,
@@ -36,8 +34,6 @@ const view = (patch: Partial<SessionView> = {}): SessionView => ({
   status: "idle",
   messages: [],
   requests: [],
-  fileChanges: [],
-  activity: [],
   unhandledEvents: 0,
   ...patch,
 })
@@ -47,24 +43,24 @@ describe("screen-specific workspace composition", () => {
     expect(remoteSurfaceComposition("/remote", true)).toEqual({ showSessionRail: true, showComposer: true })
     expect(remoteSurfaceComposition("/remote", false)).toEqual({ showSessionRail: false, showComposer: false })
     expect(remoteSurfaceComposition("/remote/sessions", true)).toEqual({ showSessionRail: false, showComposer: false })
-    expect(remoteSurfaceComposition("/remote/activity", true)).toEqual({ showSessionRail: false, showComposer: false })
     expect(remoteSurfaceComposition("/remote/settings", true)).toEqual({ showSessionRail: false, showComposer: false })
   })
 })
 
-describe("reserved connection strip", () => {
-  test("states the live connection and offers no recovery control while it is open", () => {
+describe("connection strip", () => {
+  test("is hidden while the connection is healthy, whatever was loaded or dropped before", () => {
+    const healthy = { connection: { kind: "connected", deviceName: "Studio Mac" }, transportKind: "open", activeDeviceID: "dev_studio", advertised: 3 } as const
+    expect(connectionStripView(healthy)).toBeUndefined()
+    expect(connectionStripView({ ...healthy, lastRelayDrop: { code: 1012, reason: "Relay restarted" } })).toBeUndefined()
+  })
+
+  test("still states a connected device whose transport is not open", () => {
     const strip = connectionStripView({
-      connection: { kind: "connected", deviceName: "Studio Mac" },
-      transportKind: "open",
-      activeDeviceID: "dev_studio",
-      advertised: 3,
+      connection: { kind: "connected", deviceName: "Studio Mac" }, transportKind: "reconnecting", activeDeviceID: "dev_studio", advertised: 3,
     })
-    expect(strip.tone).toBe("online")
-    expect(strip.body).toContain("Connected")
-    expect(strip.body).toContain("Studio Mac")
-    expect(strip.showReconnect).toBe(false)
-    expect(strip.showSettings).toBe(false)
+    expect(strip?.tone).toBe("online")
+    expect(strip?.body).toContain("Studio Mac")
+    expect(strip?.showReconnect).toBe(true)
   })
 
   test("offers Reconnect for a device that stopped reporting", () => {
@@ -74,9 +70,9 @@ describe("reserved connection strip", () => {
       activeDeviceID: "dev_studio",
       advertised: 3,
     })
-    expect(strip.tone).toBe("offline")
-    expect(strip.body).toContain("Studio Mac is not reachable")
-    expect(strip.showReconnect).toBe(true)
+    expect(strip?.tone).toBe("offline")
+    expect(strip?.body).toContain("Studio Mac is not reachable")
+    expect(strip?.showReconnect).toBe(true)
   })
 
   test("keeps the shipped retry while a connected device is re-connecting", () => {
@@ -86,7 +82,7 @@ describe("reserved connection strip", () => {
       activeDeviceID: "dev_laptop",
       advertised: 3,
     })
-    expect(strip.showReconnect).toBe(true)
+    expect(strip?.showReconnect).toBe(true)
   })
 
   test("keeps the latest browser relay close code and reason in the existing connection strip", () => {
@@ -94,22 +90,18 @@ describe("reserved connection strip", () => {
     const reconnecting = connectionStripView({
       connection: { kind: "connecting" }, transportKind: "reconnecting", activeDeviceID: "dev_studio", advertised: 2, lastRelayDrop: drop,
     })
-    expect(reconnecting.body).toBe("Connecting — Opening the relay connection. · Last browser relay drop (1012): Relay restarted")
-    expect(reconnecting.body).not.toContain("Machine disconnected")
-    const restored = connectionStripView({
-      connection: { kind: "connected", deviceName: "Studio Mac" }, transportKind: "open", activeDeviceID: "dev_studio", advertised: 2, lastRelayDrop: drop,
-    })
-    expect(restored.body).toBe("Connected — Relay session active for Studio Mac. · Last browser relay drop (1012): Relay restarted")
+    expect(reconnecting?.body).toBe("Connecting — Opening the relay connection. · Last browser relay drop (1012): Relay restarted")
+    expect(reconnecting?.body).not.toContain("Machine disconnected")
     const failedRead = connectionStripView({
       connection: { kind: "error", message: "Session list: the backend rejected this read" },
       transportKind: "open", activeDeviceID: "dev_studio", advertised: 2, lastRelayDrop: drop,
     })
-    expect(failedRead.body).toBe("Connection error — Session list: the backend rejected this read · Last browser relay drop (1012): Relay restarted")
+    expect(failedRead?.body).toBe("Connection error — Session list: the backend rejected this read · Last browser relay drop (1012): Relay restarted")
     const closed = connectionStripView({
       connection: { kind: "error", message: "Relay restarted" },
       transportKind: "closed", activeDeviceID: "dev_studio", advertised: 2, lastRelayDrop: drop,
     })
-    expect(closed.body).toBe("Connection error — Relay restarted · Last browser relay drop (1012)")
+    expect(closed?.body).toBe("Connection error — Relay restarted · Last browser relay drop (1012)")
   })
 
   test("offers nothing to retry before any device has reported", () => {
@@ -119,7 +111,7 @@ describe("reserved connection strip", () => {
       activeDeviceID: "dev_laptop",
       advertised: 0,
     })
-    expect(strip.showReconnect).toBe(false)
+    expect(strip?.showReconnect).toBe(false)
   })
 
   test("sends a signed-in account with no enrolled machine to settings", () => {
@@ -128,8 +120,8 @@ describe("reserved connection strip", () => {
       transportKind: "idle",
       advertised: 0,
     })
-    expect(strip.showSettings).toBe(true)
-    expect(strip.showReconnect).toBe(false)
+    expect(strip?.showSettings).toBe(true)
+    expect(strip?.showReconnect).toBe(false)
   })
 
   test("never offers a reconnect without a device to reconnect", () => {
@@ -138,9 +130,9 @@ describe("reserved connection strip", () => {
       transportKind: "closed",
       advertised: 0,
     })
-    expect(strip.showReconnect).toBe(false)
-    expect(strip.showSettings).toBe(false)
-    expect(strip.tone).toBe("offline")
+    expect(strip?.showReconnect).toBe(false)
+    expect(strip?.showSettings).toBe(false)
+    expect(strip?.tone).toBe("offline")
   })
 
   test("reports a deployment without remote access as unavailable, not offline", () => {
@@ -149,9 +141,9 @@ describe("reserved connection strip", () => {
       transportKind: "idle",
       advertised: 0,
     })
-    expect(strip.tone).toBe("attention")
-    expect(strip.showSettings).toBe(true)
-    expect(strip.body).toContain("not available yet")
+    expect(strip?.tone).toBe("attention")
+    expect(strip?.showSettings).toBe(true)
+    expect(strip?.body).toContain("not available yet")
   })
 })
 
@@ -249,54 +241,6 @@ describe("session summary", () => {
   })
 })
 
-describe("waiting request row", () => {
-  test("summarises a permission request", () => {
-    const row = queueRowView({
-      kind: "permission",
-      id: "per_1",
-      action: "shell",
-      resources: ["bun test *"],
-      askedAt: 0,
-    } satisfies PendingRequestView)
-    expect(row.icon).toBe("shield")
-    expect(row.kind).toBe("Permission")
-    expect(row.hard).toBe(false)
-    expect(row.title).toBe("shell on bun test *")
-    expect(row.detail).toBe("waits for a decision")
-  })
-
-  test("names a hard guardrail review as a human decision", () => {
-    const row = queueRowView({
-      kind: "guardrail",
-      id: "grq_1",
-      sessionID: "ses_a",
-      action: "rm -rf build",
-      resources: ["build"],
-      reason: "Recursive deletion needs a human decision",
-      hardReview: true,
-      askedAt: 0,
-    } satisfies PendingRequestView)
-    expect(row.icon).toBe("alert")
-    expect(row.kind).toBe("Guardrail review (human decision required)")
-    expect(row.hard).toBe(true)
-    expect(row.title).toBe("rm -rf build")
-    expect(row.detail).toBe("Recursive deletion needs a human decision")
-  })
-
-  test("summarises a question form", () => {
-    const row = queueRowView({
-      kind: "form",
-      id: "frm_1",
-      form: { id: "frm_1", sessionID: "ses_a", title: "Scope", metadata: { kind: "question" }, fields: [{ key: "q0", type: "string", title: "Reload what?" }] },
-      askedAt: 0,
-    } satisfies PendingRequestView)
-    expect(row.icon).toBe("chat")
-    expect(row.kind).toBe("Question")
-    expect(row.title).toBe("Scope")
-    expect(row.detail).toBe("waits for your answer")
-  })
-})
-
 describe("waiting for a decision", () => {
   const permission: PendingRequestView = {
     kind: "permission",
@@ -383,64 +327,6 @@ describe("notification age", () => {
     expect(notificationAge(now - 5 * 60_000, now)).toBe("5m")
     expect(notificationAge(now - 3 * 3_600_000, now)).toBe("3h")
     expect(notificationAge(now - 3 * 86_400_000, now)).toBe(new Date(now - 3 * 86_400_000).toLocaleDateString())
-  })
-})
-
-describe("reported events", () => {
-  const assistant = {
-    kind: "assistant" as const,
-    id: "msg_a",
-    created: 20,
-    parts: [
-      { kind: "text" as const, ordinal: 0, text: "done" },
-      { kind: "tool" as const, callID: "call_read", name: "read", status: "completed" as const, content: [] },
-    ],
-  }
-  const shell = {
-    kind: "shell" as const,
-    id: "msg_shell",
-    shellID: "sh_1",
-    command: "bun test ./src",
-    status: "exited",
-    exit: 0,
-    created: 30,
-  }
-
-  test("reports the events a snapshot-loaded session holds, not an empty panel", () => {
-    const events = reportedEvents(
-      view({
-        messages: [assistant, shell],
-        fileChanges: [{ path: "src/remote/store.ts", patch: "@@", additions: 18, deletions: 4 }],
-        updatedAt: 40,
-      }),
-    )
-    expect(events.map((event) => event.id)).toEqual(["tool-call_read", "shell-sh_1", "file-src/remote/store.ts"])
-    expect(events.map((event) => event.kind)).toEqual(["tool", "terminal", "file"])
-    expect(events[2]?.title).toBe("src/remote/store.ts")
-    expect(events[2]?.detail).toBe("+18 −4")
-    expect(events[1]?.detail).toBe("exited")
-  })
-
-  test("keeps the live row where the stream already reported the same event", () => {
-    const events = reportedEvents(
-      view({
-        messages: [assistant],
-        activity: [
-          { id: "tool-call_read", kind: "tool", title: "read", status: "failed", at: 25 },
-        ],
-      }),
-    )
-    expect(events).toHaveLength(1)
-    expect(events[0]?.status).toBe("failed")
-  })
-
-  test("orders the reported events the way they happened", () => {
-    const events = reportedEvents(view({ messages: [shell, assistant], activity: [{ id: "late", kind: "status", title: "later", at: 40 }] }))
-    expect(events.map((event) => event.id)).toEqual(["tool-call_read", "shell-sh_1", "late"])
-  })
-
-  test("reports nothing for a workspace with no selected session", () => {
-    expect(reportedEvents(undefined)).toEqual([])
   })
 })
 

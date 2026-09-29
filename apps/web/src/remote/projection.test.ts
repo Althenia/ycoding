@@ -18,14 +18,11 @@ import {
   generationSpeedDisplay,
   boundedText,
   createSessionView,
-  mergeFileChanges,
   mergeShellOutputSnapshot,
   previewText,
   readAutonomy,
   readCompactionHistory,
   readCapturedChangesPage,
-  readFileChangeEvent,
-  readFileChangeList,
   readMessageList,
   readSnapshot,
   readForms,
@@ -523,7 +520,6 @@ describe("requests", () => {
     view = apply(view, "guardrail.replied", { requestID: "grq_1", reply: "reject" })
     view = apply(view, "form.replied", { id: "frm_1", sessionID: "ses_a", answer: { q0: "core" } })
     expect(view.requests).toHaveLength(0)
-    expect(view.activity.some((item) => item.kind === "approval")).toBe(true)
   })
 
   test("ignores a reply for an unknown request instead of inventing one", () => {
@@ -544,22 +540,23 @@ describe("session state", () => {
     expect(view.lastError).toEqual({ code: "provider_error", message: "boom" })
   })
 
-  test("records tool calls in the activity stream with their lifecycle status", () => {
+  test("tracks a tool call's lifecycle status on its assistant part", () => {
     let view = createSessionView("ses_a")
+    view = apply(view, "session.step.started", { assistantMessageID: "msg_1" })
     view = apply(view, "session.tool.input.started", { assistantMessageID: "msg_1", callID: "call_1", name: "shell" })
     view = apply(view, "session.tool.success", {
       assistantMessageID: "msg_1",
       callID: "call_1",
       content: [{ type: "text", text: "ok" }],
     })
-    const tool = view.activity.find((item) => item.id === "tool-call_1")
-    expect(tool).toMatchObject({ kind: "tool", title: "shell", status: "completed" })
+    const tools = () => view.messages.flatMap((message) => message.kind === "assistant" ? message.parts : []).filter((part) => part.kind === "tool")
+    expect(tools().find((part) => part.callID === "call_1")).toMatchObject({ name: "shell", status: "completed" })
 
     view = apply(view, "session.tool.failed", { assistantMessageID: "msg_1", callID: "call_2", error: { message: "no" } })
-    expect(view.activity.find((item) => item.id === "tool-call_2")).toMatchObject({ status: "failed" })
+    expect(tools().find((part) => part.callID === "call_2")).toMatchObject({ status: "failed" })
   })
 
-  test("records shell output bounded and file changes as activity", () => {
+  test("records shell output bounded", () => {
     let view = createSessionView("ses_a")
     view = apply(view, "session.shell.started", {
       shell: { id: "sh_1", status: "running", command: "bun test", cwd: "/repo" },
@@ -575,8 +572,6 @@ describe("session state", () => {
       exit: 0,
       output: { text: "ok", cursor: 2, size: 2, truncated: false },
     })
-    view = apply(view, "session.file-change.recorded", { change: { path: "src/a.ts", patch: "@@", additions: 3, deletions: 1 } })
-    expect(view.activity.find((item) => item.kind === "file")).toMatchObject({ title: "src/a.ts", detail: "+3 −1" })
   })
 })
 
@@ -1062,63 +1057,9 @@ describe("tool structured metadata", () => {
 })
 
 describe("recorded file changes", () => {
-  test("keeps a patch per path and replaces the same path on a later record", () => {
-    let view = createSessionView("ses_a")
-    view = apply(view, "session.file-change.recorded", {
-      change: { path: "src/a.ts", patch: "@@ one", additions: 3, deletions: 1 },
-    })
-    view = apply(view, "session.file-change.recorded", {
-      change: { path: "src/a.ts", patch: "@@ two", additions: 5, deletions: 2 },
-    })
-    view = apply(view, "session.file-change.recorded", {
-      change: { path: "src/b.ts", patch: "@@ b", additions: 1, deletions: 0 },
-    })
-    expect(view.fileChanges).toEqual([
-      { path: "src/a.ts", patch: "@@ two", additions: 5, deletions: 2 },
-      { path: "src/b.ts", patch: "@@ b", additions: 1, deletions: 0 },
-    ])
-    expect(view.activity.filter((item) => item.kind === "file").map((item) => item.id)).toEqual(["file-src/a.ts", "file-src/b.ts"])
-  })
-
-  test("reads the ledger envelope and drops entries without a path", () => {
-    expect(
-      readFileChangeList({
-        data: [
-          { path: "src/a.ts", patch: "@@", additions: 1, deletions: 1 },
-          { patch: "no path", additions: 0, deletions: 0 },
-        ],
-      }),
-    ).toEqual([{ path: "src/a.ts", patch: "@@", additions: 1, deletions: 1 }])
-    expect(readFileChangeList(null)).toHaveLength(0)
-  })
-
-  test("merges latest per path with the live record winning", () => {
-    expect(
-      mergeFileChanges(
-        [
-          { path: "src/a.ts", patch: "ledger", additions: 1, deletions: 0 },
-          { path: "src/b.ts", patch: "b", additions: 2, deletions: 0 },
-        ],
-        [{ path: "src/a.ts", patch: "live", additions: 3, deletions: 1 }],
-      ),
-    ).toEqual([
-      { path: "src/a.ts", patch: "live", additions: 3, deletions: 1 },
-      { path: "src/b.ts", patch: "b", additions: 2, deletions: 0 },
-    ])
-  })
-
-  test("reads a live record from its event envelope only", () => {
-    expect(
-      readFileChangeEvent({ type: "session.file-change.recorded", data: { change: { path: "src/a.ts", patch: "@@" } } }),
-    ).toEqual({ path: "src/a.ts", patch: "@@", additions: 0, deletions: 0 })
-    expect(readFileChangeEvent({ type: "session.tool.success", data: { change: { path: "src/a.ts" } } })).toBeUndefined()
-    expect(readFileChangeEvent({ type: "session.file-change.recorded", data: {} })).toBeUndefined()
-  })
-
-  test("counts a record without a path instead of inventing one", () => {
-    const view = apply(createSessionView("ses_a"), "session.file-change.recorded", { change: { patch: "@@" } })
-    expect(view.unhandledEvents).toBe(1)
-    expect(view.fileChanges).toHaveLength(0)
-    expect(view.activity).toHaveLength(0)
+  test("leave the session view untouched and uncounted because the transcript card owns file changes", () => {
+    const before = createSessionView("ses_a")
+    const view = apply(before, "session.file-change.recorded", { change: { path: "src/a.ts", patch: "@@", additions: 3, deletions: 1 } })
+    expect(view).toEqual(before)
   })
 })
