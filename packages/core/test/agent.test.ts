@@ -344,6 +344,24 @@ describe("AgentV2", () => {
     }),
   )
 
+  it.effect("shares the commit-timing rule with every maintained built-in agent", () =>
+    Effect.gen(function* () {
+      const agent = yield* AgentV2.Service
+      yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
+        Effect.provideService(Location.Service, Location.Service.of(testLocation)),
+      )
+
+      const rule =
+        "Never make atomic commits. Commit only when the task, one of its phases, or a complete piece of functionality is finished."
+      for (const id of ["zeus", "GSD", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein"]) {
+        const item = yield* agent.get(AgentV2.ID.make(id))
+        if (!item?.system) throw new Error(`expected ${id} with a system prompt`)
+        expect(item.system.split(rule)).toHaveLength(2)
+        expect(item.system.indexOf(rule)).toBeLessThan(item.system.indexOf("You are "))
+      }
+    }),
+  )
+
   it.effect("preserves representative built-in agent metadata and prompts", () =>
     Effect.gen(function* () {
       const agent = yield* AgentV2.Service

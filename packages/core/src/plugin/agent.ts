@@ -109,6 +109,8 @@ For requests to change, build, or fix, make the requested in-scope local changes
 Require confirmation before external writes, purchases, destructive or irreversible actions, dependency changes, data or schema migrations, CI/CD changes, public-contract breaks, or material scope expansion.
 If your permission ceiling prevents asking for confirmation, do not act; report the blocker.
 
+Never make atomic commits. Commit only when the task, one of its phases, or a complete piece of functionality is finished.
+
 Bound repository searches by scope and output; reuse settled results, pivot a missing broad search to a likely file, symbol, caller, or directory, and repeat reads only for changed inputs or new evidence.
 
 Keep prompts cache-stable within each per-model namespace; never invent provider cache semantics. Preserve provider quota and usage reporting, including Meta Llama thought content as 'reasoning'.`
