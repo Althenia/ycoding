@@ -60,8 +60,9 @@ export function Modal(props: {
       inert={closing()}
       data-closing={closing() ? "" : undefined}
       onClose={() => { if (!closing()) close() }}
-      onCancel={(event) => { event.preventDefault(); close() }}
+      onCancel={(event) => { event.preventDefault(); event.stopPropagation(); close() }}
       onKeyDown={(event) => {
+        if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); return }
         if (event.key !== "Tab") return
         const controls = [...event.currentTarget.querySelectorAll<HTMLElement>(
           'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',

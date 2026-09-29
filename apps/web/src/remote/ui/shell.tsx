@@ -326,7 +326,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     navigator.serviceWorker?.removeEventListener("message", workerMessage)
   })
   const teamContent = () => <TeamView
-    data={() => state().team!} currentSessionID={state().activeSessionID ?? ""} now={Date.now} sheet={false}
+    data={() => state().team!} currentSessionID={state().activeSessionID ?? ""} now={Date.now} sheet={phoneLayout()}
     onClose={closeTeam} onOpen={openFromTeam} onCancel={remote.store.cancelSubagent} onAnswer={remote.store.answerSubagent}
     onLoadOlder={remote.store.loadMoreTeam} onViewShell={remote.store.teamShellOutput} onKillShell={remote.store.killTeamShell}
     onOpenSideChat={openFromTeam} onCreateSideChat={remote.store.createSideChat} onLoadOlderSideChats={remote.store.loadMoreSideChats} />

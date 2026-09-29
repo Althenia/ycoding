@@ -128,6 +128,8 @@ describe("Settings installation in a real Chrome render", () => {
         await page.evaluate(`document.querySelector('${button}')?.focus(); document.querySelector('${button}')?.click()`)
         for (let attempt = 0; attempt < 30 && !await page.evaluate<boolean>(`document.querySelector('${label}')?.open === true`); attempt += 1) await Bun.sleep(20)
         expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll('${label} li')].map(item => item.textContent.trim())`)).toEqual(expected)
+        await page.evaluate(`Promise.all([...document.querySelector('${label}').getAnimations({ subtree: true })].map(animation => animation.finished.catch(() => {})))`)
+        expect(await page.evaluate<{ count: number; named: boolean; hit: boolean }>(`(() => { const dialog = document.querySelector('${label}'); const close = dialog?.querySelector('.overlay__close'); const minimum = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-hit-min')); return { count: dialog?.querySelectorAll('.overlay__close').length ?? 0, named: close?.getAttribute('aria-label') === 'Close Install YCoding', hit: (close?.getBoundingClientRect().width ?? 0) >= minimum && (close?.getBoundingClientRect().height ?? 0) >= minimum } })()`)).toEqual({ count: 1, named: true, hit: true })
         expect(await page.evaluate<boolean>(`document.querySelector('${label}')?.contains(document.activeElement) === true`)).toBe(true)
         await page.pressKey("Tab", "Tab", 9)
         expect(await page.evaluate<boolean>(`document.querySelector('${label}')?.contains(document.activeElement) === true`)).toBe(true)

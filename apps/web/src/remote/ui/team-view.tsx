@@ -109,7 +109,7 @@ export function TeamView(props: {
     void action().catch((cause: unknown) => { if (rootID === props.data().rootID) setError(cause instanceof Error ? cause.message : "The page could not be loaded.") })
   }
   const panel = <section class="team-view" ref={section} aria-label="Team">
-    <div class="team-view__header"><div><h2>Team</h2><span>{props.data().activeTotal ?? activeCount()} active</span></div><button type="button" aria-label="Close Team" onClick={props.onClose}>Close</button></div>
+    <div class="team-view__header"><div><h2>Team</h2><span>{props.data().activeTotal ?? activeCount()} active</span></div><Show when={!props.sheet}><button type="button" aria-label="Close Team" onClick={props.onClose}>Close</button></Show></div>
     <div class="team-view__tabs" role="tablist" aria-label="Team sections">
       <For each={tabs}>{(value, index) => <button type="button" role="tab" data-tab={value} aria-selected={tab() === value} aria-controls={`team-panel-${value}`}
         tabIndex={tab() === value ? 0 : -1} onClick={() => selectTab(value)} onKeyDown={(event) => moveTab(event, index())}>
@@ -178,7 +178,7 @@ export function TeamView(props: {
     </div>
   </section>
   return <>
-    <Show when={props.sheet} fallback={panel}><Modal class="overlay--sheet team-view__sheet" label="Team" onClose={props.onClose}>{panel}</Modal></Show>
+    {panel}
     <Show when={confirm()} keyed>{(item) => {
       let close: (() => void) | undefined
       return <Modal class="overlay--dialog" label={item.kind === "cancel" ? "Cancel subagent" : "Kill shell"} onClose={() => { if (confirm()?.id === item.id && confirm()?.kind === item.kind) setConfirm(undefined) }}

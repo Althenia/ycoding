@@ -3,6 +3,7 @@ import { render } from "solid-js/web"
 import { isManagedSubagent, siblingTargets, type TeamActionOutcome, type TeamPanelData, type TeamSubagent } from "../src/remote/ui/team-model"
 import { SubagentBar } from "../src/remote/ui/subagent-bar"
 import { TeamView } from "../src/remote/ui/team-view"
+import { Modal } from "../src/ui/modal"
 import "../src/styles/tokens.css"
 import "../src/styles/base.css"
 
@@ -44,6 +45,17 @@ Object.assign(window, {
 })
 const root = document.getElementById("app")
 if (!root) throw new Error("Missing Team fixture root")
+const teamContent = (sheet: boolean) => <TeamView data={panel} currentSessionID={selectedID()} now={() => 37_021_000} sheet={sheet} onClose={() => setOpen(false)}
+  onOpen={select} onCancel={async (id) => {
+    events.push(`cancel:${id}`)
+    if (params.get("cancelOutcome") === "deferred") return new Promise<TeamActionOutcome>((resolve) => { releaseCancel = resolve })
+    if (params.get("cancelOutcome") === "unknown") return { status: "unknown", message: "Outcome unknown; check the task before retrying." }
+    setTasks((items) => items.map((item) => item.sessionID === id ? { ...item, state: "cancelling" } : item))
+    return success
+  }} onAnswer={answer} onLoadOlder={async () => { events.push("older:subagents"); setTasks((items) => [...items, { sessionID: "ses_old", parentID: "ses_root", description: "Older task", agent: "general", state: "failed", revision: 1, updatedAt: 1_000 }]); setNext(undefined) }}
+  onViewShell={async (ownerID, id) => { events.push(`output:${ownerID}:${id}`); return { text: "Tests passed\n", cursor: 13, size: 13, truncated: false } }} onKillShell={async (id) => { events.push(`kill:${id}`); setShells((items) => items.map((item) => item.id === id ? { ...item, status: "killed", completedAt: 37_021_000 } : item)); return success }}
+  onOpenSideChat={select} onCreateSideChat={async () => { events.push("new:sidechat"); setSideChats((items) => [...items, { id: "ses_btw_new", title: "New side chat", updatedAt: 6_000 }]); return { status: "ok", sessionID: "ses_btw_new" } }}
+  onLoadOlderSideChats={async () => { events.push("older:sidechats"); setSideChats((items) => [...items, { id: "ses_btw_old", title: "Older side chat", updatedAt: 1_000 }]); setSideNext(undefined) }} />
 render(() => <main class="team-fixture">
   <button type="button" id="team-open" onClick={() => setOpen(true)}>Team</button>
   <Show when={isManagedSubagent({ parentID: selectedID() === "ses_root" ? undefined : "ses_root", agent: selectedID() === "ses_btw" ? "btw" : "omoikane" })}
@@ -56,16 +68,7 @@ render(() => <main class="team-fixture">
       question={tasks().find((item) => item.sessionID === selectedID())?.question}
       onAnswer={(questionID, text) => answer(selectedID(), questionID, text)} />
   </Show>
-  <Show when={open()}><TeamView data={panel} currentSessionID={selectedID()} now={() => 37_021_000} sheet={matchMedia("(max-width: 767px)").matches} onClose={() => setOpen(false)}
-    onOpen={select} onCancel={async (id) => {
-      events.push(`cancel:${id}`)
-      if (params.get("cancelOutcome") === "deferred") return new Promise<TeamActionOutcome>((resolve) => { releaseCancel = resolve })
-      if (params.get("cancelOutcome") === "unknown") return { status: "unknown", message: "Outcome unknown; check the task before retrying." }
-      setTasks((items) => items.map((item) => item.sessionID === id ? { ...item, state: "cancelling" } : item))
-      return success
-    }} onAnswer={answer} onLoadOlder={async () => { events.push("older:subagents"); setTasks((items) => [...items, { sessionID: "ses_old", parentID: "ses_root", description: "Older task", agent: "general", state: "failed", revision: 1, updatedAt: 1_000 }]); setNext(undefined) }}
-    onViewShell={async (ownerID, id) => { events.push(`output:${ownerID}:${id}`); return { text: "Tests passed\n", cursor: 13, size: 13, truncated: false } }} onKillShell={async (id) => { events.push(`kill:${id}`); setShells((items) => items.map((item) => item.id === id ? { ...item, status: "killed", completedAt: 37_021_000 } : item)); return success }}
-    onOpenSideChat={select} onCreateSideChat={async () => { events.push("new:sidechat"); setSideChats((items) => [...items, { id: "ses_btw_new", title: "New side chat", updatedAt: 6_000 }]); return { status: "ok", sessionID: "ses_btw_new" } }}
-    onLoadOlderSideChats={async () => { events.push("older:sidechats"); setSideChats((items) => [...items, { id: "ses_btw_old", title: "Older side chat", updatedAt: 1_000 }]); setSideNext(undefined) }} />
-  </Show>
+  <Show when={open()}>{matchMedia("(max-width: 767px)").matches
+    ? <Modal class="overlay--sheet team-view__sheet" label="Team" onClose={() => setOpen(false)}>{teamContent(true)}</Modal>
+    : teamContent(false)}</Show>
 </main>, root)

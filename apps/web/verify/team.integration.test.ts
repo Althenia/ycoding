@@ -340,7 +340,7 @@ test("Team tabs and row actions are keyboard operable, and Escape closes the pho
 
 test("phone Team sheet closes through its inert exit and returns focus for every dismissal", async () => {
   if (!browser) throw new Error("Browser not started")
-  for (const theme of ["light", "dark"]) for (const [reduced, method] of [[false, "team-button"], [false, "modal-button"], [false, "escape"], [false, "backdrop"], [false, "open-child"], [true, "team-button"]] as const) {
+  for (const theme of ["light", "dark"]) for (const [reduced, method] of [[false, "modal-button"], [false, "escape"], [false, "backdrop"], [false, "open-child"], [true, "modal-button"]] as const) {
     const page = await browser.openPage()
     try {
       await page.setViewport(390, 844)
@@ -352,7 +352,6 @@ test("phone Team sheet closes through its inert exit and returns focus for every
       await page.pressKey(" ", "Space", 32)
       for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('dialog.team-view__sheet[open]') !== null`); attempt += 1) await Bun.sleep(25)
       expect(await page.evaluate<boolean>(`document.querySelector('dialog.team-view__sheet[open]') !== null`)).toBe(true)
-      if (method === "team-button") await page.evaluate(`document.querySelector('.team-view__header [aria-label="Close Team"]').click()`)
       if (method === "modal-button") await page.evaluate(`document.querySelector('.team-view__sheet .overlay__head [aria-label="Close Team"]').click()`)
       if (method === "escape") await page.pressEscape()
       if (method === "backdrop") await page.evaluate(`document.querySelector('dialog.team-view__sheet').click()`)
