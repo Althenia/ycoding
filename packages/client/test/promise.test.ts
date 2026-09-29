@@ -59,6 +59,7 @@ test("exposes every standard HTTP API group", () => {
     "browser",
     "isolatedBrowser",
     "usage",
+    "remote",
   ])
   expect(Object.keys(client.debug)).toEqual(["location"])
   expect(Object.keys(client.debug.location)).toEqual(["list", "evict"])
