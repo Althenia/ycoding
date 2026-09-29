@@ -27,7 +27,7 @@ export type RemoteHttpOptions = {
 }
 
 /** The OAuth providers the relay accepts, in the order the sign-in screen offers them. */
-export const SIGN_IN_PROVIDERS = [{ id: "google", label: "Sign in with Google" }] as const
+export const SIGN_IN_PROVIDERS = [{ id: "google", label: "Continue with Google" }] as const
 
 export function createInviteHttp(options: RemoteHttpOptions = {}) {
   const base = options.baseURL ?? ""

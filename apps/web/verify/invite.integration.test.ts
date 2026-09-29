@@ -106,7 +106,7 @@ for (const width of [390, 1440]) for (const theme of ["light", "dark"] as const)
         readonly autocapitalize: string | null }>(`(async () => {
         for (let i = 0; i < 50 && !document.querySelector('#remote-access-key'); i++) await new Promise(resolve => setTimeout(resolve, 50));
         const input = document.querySelector('#remote-access-key');
-        return { google: [...document.querySelectorAll('button')].some(button => button.textContent?.includes('Sign in with Google')),
+        return { google: [...document.querySelectorAll('button')].some(button => button.textContent?.includes('Continue with Google')),
           autocomplete: input?.getAttribute('autocomplete') ?? null, spellcheck: input?.spellcheck ?? true,
           autocapitalize: input?.getAttribute('autocapitalize') ?? null };
       })()`)

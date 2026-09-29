@@ -5,7 +5,7 @@ import { startRelayDouble } from "./relay-double"
 describe("signInURL", () => {
   test("offers every supported OAuth provider, Google first", () => {
     expect(SIGN_IN_PROVIDERS.map((provider) => provider.id)).toEqual(["google"])
-    expect(SIGN_IN_PROVIDERS[0]?.label).toBe("Sign in with Google")
+    expect(SIGN_IN_PROVIDERS[0]?.label).toBe("Continue with Google")
   })
 
   test("targets the provider's same-origin sign-in entry point with a /remote return path", () => {

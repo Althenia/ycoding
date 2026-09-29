@@ -383,11 +383,11 @@ export const usePages: readonly DocPage[] = [
       {
         heading: "Sign in and connect",
         blocks: [
-          { kind: "paragraph", text: "The remote workspace is a browser client for Sessions on a machine running YCoding. Open /remote; when signed out, use Sign in with Google or enter an access key from a redeemed invite. After sign-in, select an online machine and one of its Sessions. Account and connection states remain distinct, so an offline device does not appear signed out." },
+          { kind: "paragraph", text: "The remote workspace is a browser client for Sessions on a machine running YCoding. Open /remote; when signed out, use Continue with Google or enter an access key from a redeemed invite. After sign-in, select an online machine and one of its Sessions. Account and connection states remain distinct, so an offline device does not appear signed out." },
           {
             kind: "steps",
             items: [
-              { title: "Sign in", text: "Choose Sign in with Google with an eligible account, or enter your access key. Success: the workspace loads the account and device state. If a key is invalid or attempts are limited, the form explains how to retry." },
+              { title: "Sign in", text: "Choose Continue with Google with an eligible account, or enter your access key. Success: the workspace loads the account and device state. If a key is invalid or attempts are limited, the form explains how to retry." },
               { title: "Accept an invite", text: "Open your invite link. Its secret fragment disappears from the address bar immediately. Select Accept invite to create your separate account, then store the access key shown once. Use that key to sign in on another device and choose Continue to open the workspace. A used, deleted, or fragment-less link cannot be accepted; use your existing access key to sign in instead." },
               { title: "Create an enrollment", text: "Open Settings, then Devices, and choose Create enrollment code. The page shows an enrollment ID, a copyable command, and a one-use code with an expiration. If hidden or expired, create a new enrollment." },
               { title: "Enroll the machine", text: "Run the displayed command on the machine that runs YCoding. Enter the code at its hidden prompt; the code is not a command argument. Success: enrollment completes without placing the code in shell history." },
@@ -401,7 +401,7 @@ export const usePages: readonly DocPage[] = [
             kind: "table",
             head: ["State", "Visible result", "What to check"],
             rows: [
-              ["Signed out", "Dedicated sign-in screen with Sign in with Google and an access-key form.", "Complete sign-in; if Google is rejected, confirm the account is eligible; an invalid key or too many attempts is reported separately."],
+              ["Signed out", "Dedicated sign-in screen with Continue with Google and an access-key form.", "Complete sign-in; if Google is rejected, confirm the account is eligible; an invalid key or too many attempts is reported separately."],
               ["Signed in, no machine", "Workspace offers device enrollment in Settings.", "Create a one-use enrollment and run the displayed CLI command."],
               ["Machine offline", "Device is not selectable; reconnect is offered for a selected device.", "Restore the machine's network. If its remote connection is off or shows an error, turn it on again with ycoding remote connect or the TUI's Remote connection toggle."],
               ["Machine online, no Sessions", "Connected machine reports an empty Session list and offers New session.", "Choose a previously opened repository. If none is listed, open it locally, then refresh repositories."],
