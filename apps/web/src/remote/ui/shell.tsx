@@ -1574,8 +1574,33 @@ function WorkspaceNav(): JSX.Element {
   const remote = useRemote()
   const labels = createMemo(() => workspaceLabels(remote.state().sessionGroups))
   const disabled = () => remote.state().transport.kind !== "open" || remote.state().connection.kind === "offline"
+  let nav: HTMLElement | undefined
+  let scrollport: HTMLElement | null = null
+  const updateCue = () => {
+    if (!nav) return
+    const available = `${Math.max(0, Math.floor(Math.min(window.innerHeight, scrollport?.getBoundingClientRect().bottom ?? window.innerHeight) - nav.getBoundingClientRect().top))}px`
+    if (nav.style.getPropertyValue("--workspace-nav-available") !== available) nav.style.setProperty("--workspace-nav-available", available)
+    nav.toggleAttribute("data-more-below", nav.scrollHeight - nav.clientHeight - nav.scrollTop > 1)
+  }
+  onMount(() => {
+    if (!nav) return
+    scrollport = nav.closest(".workspace__scroll")
+    const observer = new ResizeObserver(updateCue)
+    observer.observe(nav)
+    const list = nav.querySelector(".workspace-nav__list")
+    if (list) observer.observe(list)
+    if (nav.parentElement) observer.observe(nav.parentElement)
+    scrollport?.addEventListener("scroll", updateCue, { passive: true })
+    window.addEventListener("resize", updateCue)
+    updateCue()
+    onCleanup(() => {
+      observer.disconnect()
+      scrollport?.removeEventListener("scroll", updateCue)
+      window.removeEventListener("resize", updateCue)
+    })
+  })
   return (
-    <nav class="workspace-nav" aria-label="Workspaces">
+    <nav ref={nav} class="workspace-nav" aria-label="Workspaces" onScroll={updateCue}>
       <p class="workspace-nav__title">Workspaces</p>
       <ul class="workspace-nav__list">
         <For each={remote.state().sessionGroups}>

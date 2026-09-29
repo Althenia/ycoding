@@ -623,6 +623,10 @@ function createFixtureStore(): Fixture {
     if (operation === "session.command") return { status: "ok", value: { data: { ...input, admittedSeq: 44 } } }
     if (operation === "session.skill" || operation === "session.switchModel" || operation === "session.switchAgent") return { status: "ok", value: null }
     if (operation === "workspace.list") {
+      if (accountParams.get("workspaces") === "overflow") return { status: "ok", value: { data: [
+        ...workspaces,
+        ...Array.from({ length: 20 }, (_, index) => ({ id: `workspace_more_${index}`, projectID: `project_more_${index}`, directory: `/workspace/example-${index}`, name: `Example ${index + 1}` })),
+      ] } }
       if (accountParams.get("workspaces") === "many") return { status: "ok", value: { data: [
         { id: "workspace_fixture", projectID: "prj_remote", directory: "/workspace/ycoding", name: "ycoding" },
         { id: "workspace_agents", projectID: "12fd42415fd3fa9c65332dd8ad2128cc83499df6", directory: "/Users/me/.agents", name: ".agents" },

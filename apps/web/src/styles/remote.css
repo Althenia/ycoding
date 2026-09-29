@@ -553,10 +553,19 @@ body:has(.app) {
     display: grid;
     align-content: start;
     gap: var(--yc-space-2);
-    max-block-size: calc(100dvh - var(--yc-header-h) - var(--yc-status-strip-h) - var(--yc-space-8));
+    max-block-size: min(calc(100dvh - var(--yc-header-h) - var(--yc-status-strip-h) - var(--yc-space-8)), var(--workspace-nav-available, 100dvh));
     overflow-y: auto;
     padding-block: var(--yc-space-1);
+    scroll-padding-block-end: var(--yc-space-8);
     overscroll-behavior: contain;
+  }
+
+  .workspace-nav[data-more-below] {
+    mask-image: linear-gradient(to bottom, black calc(100% - var(--yc-space-6)), transparent);
+  }
+
+  @media (forced-colors: active) {
+    .workspace-nav[data-more-below] { mask-image: none; }
   }
 
   .sessions-page__workspace-select {
