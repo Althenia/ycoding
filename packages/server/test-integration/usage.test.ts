@@ -131,15 +131,15 @@ test("serves retained global usage through the real Server and Core graph when h
         ],
       },
     })
-    expect(summaryBody.data).not.toHaveProperty("cost")
+    expect(summaryBody.data.cost).toBeCloseTo(0.25)
     expect(summaryBody.data.models?.[1]).not.toHaveProperty("cost")
 
     const reportBody = Schema.decodeUnknownSync(reportResponse)(await report.json())
     expect(reportBody).toMatchObject({
       data: { group: "session", rowCount: 2, total: { logical: 3 } },
     })
-    expect(reportBody.data.total).not.toHaveProperty("cost")
-    expect(reportBody.data.rows.map((row) => row.cost)).toEqual(expect.arrayContaining([0.1, undefined]))
+    expect(reportBody.data.total.cost).toBeCloseTo(0.25)
+    expect(reportBody.data.rows.map((row) => row.cost)).toEqual(expect.arrayContaining([0.1, 0.15]))
   } finally {
     await handler.dispose()
     await rm(directory, { recursive: true, force: true })
