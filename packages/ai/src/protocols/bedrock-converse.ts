@@ -236,7 +236,9 @@ const lowerTools = (
 ): BedrockTool[] => {
   const result: BedrockTool[] = []
   for (const tool of tools) {
-    result.push(lowerToolSpec(tool, ToolSchemaProjection.modelCompatibility(tool.inputSchema, compatibility)))
+    result.push(
+      lowerToolSpec(tool, ToolSchemaProjection.objectRoot(ToolSchemaProjection.modelCompatibility(tool.inputSchema, compatibility))),
+    )
     const cachePoint = BedrockCache.block(breakpoints, tool.cache)
     if (cachePoint) result.push(cachePoint)
   }

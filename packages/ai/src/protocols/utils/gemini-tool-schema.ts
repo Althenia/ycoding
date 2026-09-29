@@ -94,6 +94,21 @@ const projectNode = (schema: unknown): Record<string, unknown> | undefined => {
   )
 }
 
-export const convert = (schema: unknown) => projectNode(sanitizeNode(schema))
+const inlineReferences = (schema: unknown, definitions: Record<string, unknown>, active: ReadonlyArray<string>): unknown => {
+  if (Array.isArray(schema)) return schema.map((item) => inlineReferences(item, definitions, active))
+  if (!isRecord(schema)) return schema
+  const name = typeof schema.$ref === "string" ? schema.$ref.replace("#/$defs/", "") : undefined
+  const definition = name === undefined ? undefined : definitions[name]
+  if (name !== undefined && isRecord(definition) && !active.includes(name)) {
+    const siblings = Object.fromEntries(Object.entries(schema).filter(([key]) => key !== "$ref"))
+    return inlineReferences({ ...definition, ...siblings }, definitions, [...active, name])
+  }
+  return Object.fromEntries(
+    Object.entries(schema).map(([key, value]) => [key, key === "$defs" ? value : inlineReferences(value, definitions, active)]),
+  )
+}
+
+export const convert = (schema: unknown) =>
+  projectNode(sanitizeNode(inlineReferences(schema, isRecord(schema) && isRecord(schema.$defs) ? schema.$defs : {}, [])))
 
 export * as GeminiToolSchema from "./gemini-tool-schema"

@@ -224,6 +224,11 @@ describe("AnthropicPlugin", () => {
               name: "subagent_control",
               input_schema: {
                 type: "object",
+                properties: {
+                  action: { type: "string" },
+                  text: { type: "string" },
+                },
+                required: ["action"],
                 $ref: "#/$defs/__ycoding_root",
                 $defs: { __ycoding_root: { type: "object", anyOf } },
               },

@@ -530,6 +530,17 @@ it.effect("projects Anthropic tool unions by route or Claude model identity", ()
       if (tool?.type !== "function") throw new Error("Expected function tool")
       expect(tool.inputSchema).toEqual({
         type: "object",
+        properties: {
+          action: {
+            type: "string",
+            anyOf: [
+              { type: "string", enum: ["list"] },
+              { type: "string", enum: ["send"] },
+            ],
+          },
+          text: { type: "string" },
+        },
+        required: ["action"],
         $ref: "#/$defs/__ycoding_root",
         $defs: { __ycoding_root: { type: "object", anyOf } },
       })

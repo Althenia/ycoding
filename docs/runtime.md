@@ -279,7 +279,14 @@ The provider sees one fixed `execute` tool definition. Its description explains 
 
 The live catalog remains available inside CodeMode through `search(...)` and exact runtime tool paths. Direct non-CodeMode tool definition changes still rotate the prompt-cache namespace.
 
-OpenAI Chat and Responses project top-level tool input unions into one object, preserving every distinct property alternative and requiring fields common to every branch. Branch-specific fields remain optional in the provider schema; canonical tool input validation enforces action-specific requirements before execution.
+A tool whose input schema is a top-level union (`memory`, `browser`, `computer`, `project_artifact`, `subagent_control`, `subagent_report`) reaches the OpenAI, Anthropic, Gemini, and Bedrock Converse routes as an object schema that declares each parameter's JSON type at the top level, so the model sees arrays, integers, numbers, booleans, and objects as typed parameters:
+
+- OpenAI Chat and Responses project the union into one object, preserving every distinct property alternative and requiring fields common to every branch.
+- Anthropic Messages, including the AI SDK routes for Claude models, keeps the union behind an object-root `$ref` and adds the same top-level properties and common required fields. Each property carries its own `type` when every alternative, after resolving `$ref` and `anyOf`, agrees on one type; alternatives with different types, such as an integer-or-string parameter, stay as alternatives.
+- Gemini and Bedrock Converse keep the union `anyOf` and add an object type with the same top-level properties. Gemini also inlines local `$ref` definitions.
+- Moonshot and Gemini model compatibility apply before the protocol projection.
+
+Projection output is deterministic: properties follow their first appearance across the union branches. Branch-specific fields remain optional in the top-level properties; canonical tool input validation enforces action-specific requirements before execution and accepts only the alternatives the tool's own schema declares. A parameter that accepts arbitrary JSON, such as subagent `data`, declares no type. The AI SDK routes for non-Claude models and Runpod pass the tool input schema unchanged.
 
 MCP server instruction blocks are sorted by server ID, normalized to LF line endings, stripped of trailing whitespace, and limited to 2,048 UTF-8 bytes per server with an explicit truncation marker. These instructions can still change when server guidance changes, but their ordering and size are deterministic and bounded.
 
