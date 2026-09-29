@@ -462,6 +462,15 @@ async function requireFileAttachments(local: LocalServer, location: LocalLocatio
   })
 }
 
+async function requireAgentMentions(local: LocalServer, location: LocalLocation, agents: LocalPrompt["agents"]) {
+  if (!agents?.length) return
+  const allowed = new Set((await local.agentList(location))
+    .filter((agent) => !agent.hidden && agent.mode !== "primary" && agent.id !== "btw")
+    .map((agent) => agent.id))
+  if (agents.some((agent) => typeof agent !== "object" || agent === null || !allowed.has(Reflect.get(agent, "name"))))
+    throw new OperationError("invalid_message", "Agent mention is unavailable at the Session Location")
+}
+
 function modelSelection(value: unknown): ModelSelection {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new OperationError("invalid_message", "Invalid model")
   if (Object.keys(value).some((key) => !["providerID", "id", "variant"].includes(key))) throw new OperationError("invalid_message", "Invalid model")
@@ -686,6 +695,7 @@ async function run(input: OperationInput) {
       await input.local.switchAgent(sessionID, location, validated.agent)
       return null
     case "command":
+      await requireAgentMentions(input.local, location, validated.input.agents)
       return { data: await input.local.command(sessionID, location, { ...validated.input, ...(validated.input.files === undefined ? {} : { files: await requireFileAttachments(input.local, location, validated.input.files, input.uploads, sessionID) }) }) }
     case "skill":
       await input.local.skill(sessionID, location, validated.input)
@@ -750,6 +760,7 @@ async function run(input: OperationInput) {
     case "unsubscribe":
       return null
     case "prompt":
+      await requireAgentMentions(input.local, location, validated.input.agents)
       return { data: await input.local.prompt(sessionID, location, { ...validated.input, ...(validated.input.files === undefined ? {} : { files: await requireFileAttachments(input.local, location, validated.input.files, input.uploads, sessionID) }) }) }
     case "interrupt":
       await input.local.interrupt(sessionID, location)

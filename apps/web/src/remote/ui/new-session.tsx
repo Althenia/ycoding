@@ -32,6 +32,7 @@ export function NewSessionComposer(props: { readonly onCreated: (sessionID: stri
   })
   const create = async (submission: ComposerSubmission) => {
     if (disabled()) return false
+    if (submission.kind !== "prompt" && submission.kind !== "command") return false
     const prompt = submission.kind === "command"
       ? { command: submission.input.command, ...(submission.input.arguments ? { arguments: submission.input.arguments } : {}), ...(submission.input.files ? { files: submission.input.files } : {}), ...(submission.input.agents ? { agents: submission.input.agents } : {}) }
       : submission.input.text || submission.input.files?.length ? { text: submission.input.text, ...(submission.input.files ? { files: submission.input.files } : {}), ...(submission.input.agents ? { agents: submission.input.agents } : {}), ...(submission.input.skills ? { skills: submission.input.skills } : {}) } : undefined

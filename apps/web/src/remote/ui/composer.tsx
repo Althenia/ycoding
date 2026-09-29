@@ -99,7 +99,7 @@ export function MiniComposer(props: {
     contextCloseTimer = setTimeout(() => { if (!contextPinned()) closeContext() }, 100)
   }
   const trigger = createMemo(() => closed() ? undefined : triggerAt(props.text, cursor()))
-  const options = () => trigger() ? optionsForTrigger(trigger()!.trigger, trigger()!.query, catalog(), fileResult()) : []
+  const options = () => trigger() ? optionsForTrigger(trigger()!.trigger, trigger()!.query, catalog(), fileResult(), !!props.target && "sessionID" in props.target) : []
   createEffect(() => {
     const key = targetKey()
     attachmentGeneration++
@@ -154,6 +154,7 @@ export function MiniComposer(props: {
   const edit = (text: string, position: number) => {
     setParts(reconcileMentions(props.text, text, parts()))
     props.onText(text)
+    setAttachmentError(undefined)
     setCursor(position)
     setClosed(false)
   }
@@ -195,14 +196,25 @@ export function MiniComposer(props: {
     const pendingAgent = current()?.agent === chosenAgent ? undefined : chosenAgent
     const pendingModel = current()?.model?.id === chosenModel?.id && current()?.model?.providerID === chosenModel?.providerID && current()?.model?.variant === chosenModel?.variant ? undefined : chosenModel
     const requested = submission(props.text, parts(), catalog(), delivery(), pendingAgent, pendingModel)
-    const files = [...(requested.input.files ?? []), ...attachments().map((item) => ({ uri: item.uri, name: item.name }))]
+    if (requested.kind === "invalid") { setAttachmentError(requested.message); return }
+    if (requested.kind !== "prompt" && requested.kind !== "command" && (!props.target || !("sessionID" in props.target))) {
+      setAttachmentError("Open a session to use this slash action.")
+      return
+    }
+    if (requested.kind !== "prompt" && requested.kind !== "command" && (attachments().length || parts().some((part) => part.kind === "file" || part.kind === "agent"))) {
+      setAttachmentError("Remove attachments and mentions before running this slash action.")
+      return
+    }
+    const files = [...("files" in requested.input ? requested.input.files ?? [] : []), ...attachments().map((item) => ({ uri: item.uri, name: item.name }))]
     if (files.length > 64) { setAttachmentError("A message can contain at most 64 files. Remove an attachment before sending."); return }
     const generation = attachmentGeneration
     setSending(true)
     try {
       const accepted = requested.kind === "command"
         ? await props.onSubmit({ kind: "command", input: { ...requested.input, ...(files.length ? { files } : {}) } })
-        : await props.onSubmit({ kind: "prompt", input: { ...requested.input, ...(files.length ? { files } : {}) } })
+        : requested.kind === "prompt"
+          ? await props.onSubmit({ kind: "prompt", input: { ...requested.input, ...(files.length ? { files } : {}) } })
+          : await props.onSubmit(requested)
       if (accepted === false || generation !== attachmentGeneration) return
       setParts([])
       setAttachments([])
@@ -302,7 +314,12 @@ export function Composer(props: { readonly sessionID?: string; readonly running:
     </div>}</For>
     <MiniComposer mobileMount={mobileMount()} target={props.sessionID ? { sessionID: props.sessionID } : undefined} text={text()} onText={(value) => { if (props.sessionID) remote.store.setDraft(props.sessionID, value) }} disabled={!props.canSend || !props.sessionID} running={props.running} showStatus onInterrupt={() => void remote.store.interrupt()} onSubmit={async (value) => {
       if (!props.sessionID) return false
-      const result = value.kind === "command" ? await remote.store.runCommand(value.input) : await remote.store.sendPrompt(value.input)
+      const result = value.kind === "command" ? await remote.store.runCommand(value.input)
+        : value.kind === "prompt" ? await remote.store.sendPrompt(value.input)
+          : value.kind === "goal" ? await remote.store.setGoal(value.input.goal)
+            : value.kind === "skill" ? await remote.store.activateSkill(value.input.skill)
+              : value.kind === "yolo" ? await remote.store.setYolo(value.input.level ?? ([1, 2, 3, 0] as const)[remote.state().view?.autonomy?.yolo ?? 0] ?? 1)
+                : false
       if (result !== false) remote.store.setDraft(props.sessionID, "")
       return result
     }} />

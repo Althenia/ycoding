@@ -48,7 +48,7 @@ describe("composer input semantics", () => {
   test("returns the full ranked catalog for bare skill and command triggers", () => {
     const large = { ...catalog, skills: Array.from({ length: 63 }, (_, index) => ({ id: `skill-${index}`, name: `Skill ${index}`, slash: true })), commands: Array.from({ length: 24 }, (_, index) => ({ name: `command-${index}` })) }
     expect(optionsForTrigger("$", "", large, [])).toHaveLength(63)
-    expect(optionsForTrigger("/", "", large, [])).toHaveLength(87)
+    expect(optionsForTrigger("/", "", large, [])).toHaveLength(89)
   })
   test("detects a trigger adjacent to the caret without matching prose or later text", () => {
     expect(triggerAt("/pla", 4)).toEqual({ trigger: "/", start: 0, query: "pla" })
@@ -83,8 +83,8 @@ describe("composer input semantics", () => {
     const parts = [{ kind: "agent" as const, name: "reviewer", mention: { start: 6, end: 15, text: "@reviewer" } }]
     expect(submission("/plan now", [], catalog, "queue", "gsd", { providerID: "openai", id: "gpt", variant: "high" })).toEqual({ kind: "command", input: { command: "plan", arguments: "now", delivery: "queue", agent: "gsd", model: { providerID: "openai", id: "gpt", variant: "high" } } })
     expect(submission("hello @reviewer $audit", parts, catalog, "steer", "gsd", undefined)).toEqual({ kind: "prompt", input: { text: "hello @reviewer $audit", delivery: "steer", agents: [{ name: "reviewer", mention: { start: 6, end: 15, text: "@reviewer" } }], skills: ["audit"], agent: "gsd" } })
-    expect(submission("/research context", [], catalog, "steer")).toEqual({ kind: "prompt", input: { text: "/research context", delivery: "steer", skills: ["research"] } })
-    expect(submission("/unknown", [], catalog, "steer").kind).toBe("prompt")
+    expect(submission("/research context", [], catalog, "steer")).toEqual({ kind: "skill", input: { skill: "research" } })
+    expect(submission("/unknown", [], catalog, "steer")).toEqual({ kind: "prompt", input: { text: "/unknown", delivery: "steer" } })
   })
 
 })

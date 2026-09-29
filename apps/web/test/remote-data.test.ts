@@ -403,6 +403,31 @@ describe("remote data", () => {
     } finally { await test.stop() }
   })
 
+  test("activates a slash skill without admitting a user prompt", async () => {
+    const test = await setup()
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length === 2)
+      await test.store.selectSession("ses_a")
+      expect(await test.store.activateSkill("audit")).toBe(true)
+      expect(test.relay.requests.filter((request) => request.operation === "session.skill").map((request) => request.input)).toMatchObject([{ skill: "audit" }])
+      expect(test.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(0)
+    } finally { await test.stop() }
+  })
+
+  test("failed skill activation and goal setup report failure without admitting a prompt", async () => {
+    const test = await setup((request) => request.operation === "session.skill" || request.operation === "session.goal.set"
+      ? { ok: false, code: "invalid_message", message: "Unavailable" } : "default")
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length === 2)
+      await test.store.selectSession("ses_a")
+      expect(await test.store.activateSkill("audit")).toBe(false)
+      expect(await test.store.setGoal("Finish safely")).toBe(false)
+      expect(test.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(0)
+    } finally { await test.stop() }
+  })
+
   test("stops submission after a selection failure and runs a command with its own durable ID", async () => {
     const test = await setup((request) => request.operation === "session.switchModel"
       ? { ok: false, code: "invalid_message", message: "Unavailable" } : "default")

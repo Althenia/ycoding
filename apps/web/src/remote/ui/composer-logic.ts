@@ -7,6 +7,7 @@ export type MentionPart =
   | { readonly kind: "agent"; readonly name: string; readonly mention: { readonly start: number; readonly end: number; readonly text: string } }
   | { readonly kind: "skill"; readonly id: string; readonly mention: { readonly start: number; readonly end: number; readonly text: string } }
 export type ComposerOption = { readonly label: string; readonly description?: string; readonly kind: "command" | "file" | "agent" | "skill"; readonly value: string; readonly uri?: string }
+const unsupportedSlashActions = new Set(["cd", "editor", "skills", "btw", "btw-send", "daybreak", "move"])
 
 export function orderedVariants(variants: readonly string[]): string[] {
   const intensity = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
@@ -69,7 +70,7 @@ function fuzzy(value: string, query: string): number {
   return score
 }
 
-export function optionsForTrigger(trigger: Trigger, query: string, catalog: CatalogView | undefined, files: readonly FileOption[]): ComposerOption[] {
+export function optionsForTrigger(trigger: Trigger, query: string, catalog: CatalogView | undefined, files: readonly FileOption[], sessionActions = true): ComposerOption[] {
   if (!catalog || catalog.status !== "ready") return []
   const skills: ComposerOption[] = catalog.skills.map((skill) => ({ label: `$${skill.id}`, description: skill.description ?? skill.name, kind: "skill", value: skill.id }))
   const agents: ComposerOption[] = catalog.agents.filter((agent) => !agent.hidden && agent.mode !== "primary" && agent.id !== "btw")
@@ -77,7 +78,7 @@ export function optionsForTrigger(trigger: Trigger, query: string, catalog: Cata
   const resources: ComposerOption[] = [...catalog.references, ...catalog.resources]
     .map((resource) => ({ label: `@${resource.name}`, description: resource.description, kind: "file", value: resource.name, uri: resource.uri }))
   const candidates: ComposerOption[] = trigger === "/"
-    ? [...catalog.commands.map((command) => ({ label: `/${command.name}`, description: command.description, kind: "command" as const, value: command.name })), ...skills.filter((skill) => catalog.skills.find((entry) => entry.id === skill.value)?.slash).map((skill) => ({ ...skill, label: `/${skill.value}` }))]
+    ? [...(sessionActions ? [{ label: "/goal", description: "Set an autonomous goal", kind: "command" as const, value: "goal" }, { label: "/yolo", description: "Set the autonomy level", kind: "command" as const, value: "yolo" }] : []), ...catalog.commands.filter((command) => !unsupportedSlashActions.has(command.name) && (!sessionActions || command.name !== "goal" && command.name !== "yolo")).map((command) => ({ label: `/${command.name}`, description: command.description, kind: "command" as const, value: command.name })), ...(sessionActions ? skills.filter((skill) => catalog.skills.find((entry) => entry.id === skill.value)?.slash).map((skill) => ({ ...skill, label: `/${skill.value}` })) : [])]
     : trigger === "@" ? [...catalog.references.map((resource) => resources.find((item) => item.uri === resource.uri)!), ...agents, ...catalog.resources.map((resource) => resources.find((item) => item.uri === resource.uri)!), ...files.map((file) => ({ label: `@${file.path}`, kind: "file" as const, value: file.path, uri: file.uri }))]
       : trigger === "$" ? skills : [...skills.map((skill) => ({ ...skill, label: catalog.skills.find((item) => item.id === skill.value)?.name ?? skill.label })), ...agents.map((agent) => ({ ...agent, label: catalog.agents.find((item) => item.id === agent.value)?.name ?? agent.label }))]
   return candidates.map((option) => ({ option, score: Math.max(fuzzy(option.value, query), fuzzy(option.description ?? "", query) - 20) }))
@@ -118,12 +119,23 @@ export function reconcileMentions(before: string, after: string, parts: readonly
 export function submission(text: string, parts: readonly MentionPart[], catalog: CatalogView | undefined, delivery: "steer" | "queue", agent?: string, model?: ModelRefView) {
   const trimmed = text.trim()
   const command = trimmed.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/)
+  if (command?.[1] === "goal") return command[2]?.trim()
+    ? { kind: "goal" as const, input: { goal: command[2].trim() } }
+    : { kind: "invalid" as const, message: "Enter goal text after /goal." }
+  if (command?.[1] === "yolo") {
+    const level = command[2]?.trim()
+    const parsed: 0 | 1 | 2 | 3 | undefined = level === "0" ? 0 : level === "1" ? 1 : level === "2" ? 2 : level === "3" ? 3 : undefined
+    if (level && parsed === undefined) return { kind: "invalid" as const, message: "Use /yolo with a level from 0 to 3." }
+    return { kind: "yolo" as const, input: parsed === undefined ? {} : { level: parsed } }
+  }
+  if (command && unsupportedSlashActions.has(command[1]!)) return { kind: "invalid" as const, message: "This slash action is unavailable in the web composer." }
   const files: FileAttachmentInput[] = parts.filter((part): part is Extract<MentionPart, { kind: "file" }> => part.kind === "file")
     .map((part) => ({ uri: part.uri, name: part.name, description: part.description, mention: part.mention }))
   const agents: AgentAttachmentInput[] = parts.filter((part): part is Extract<MentionPart, { kind: "agent" }> => part.kind === "agent")
     .map((part) => ({ name: part.name, mention: part.mention }))
   const base = { delivery, ...(files.length ? { files } : {}), ...(agents.length ? { agents } : {}), ...(agent ? { agent } : {}), ...(model ? { model } : {}) }
   if (command && catalog?.commands.some((item) => item.name === command[1])) return { kind: "command" as const, input: { command: command[1]!, ...(command[2] ? { arguments: command[2] } : {}), ...base } }
-  const skills = [...new Set([...parts.filter((part): part is Extract<MentionPart, { kind: "skill" }> => part.kind === "skill").map((part) => part.id), ...[...trimmed.matchAll(/(?:^|\s)\$([^\s]+)/g)].map((match) => match[1]!).filter((id) => catalog?.skills.some((skill) => skill.id === id)), ...(command && catalog?.skills.some((skill) => skill.id === command[1] && skill.slash) ? [command[1]!] : [])])]
+  if (command && catalog?.skills.some((skill) => skill.id === command[1] && skill.slash)) return { kind: "skill" as const, input: { skill: command[1]! } }
+  const skills = [...new Set([...parts.filter((part): part is Extract<MentionPart, { kind: "skill" }> => part.kind === "skill").map((part) => part.id), ...(catalog?.skills ?? []).filter((skill) => new RegExp(`(^|\\s)\\$${skill.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=[\\s.,!?;:)\\]'"\x60]|$)`).test(trimmed)).map((skill) => skill.id)])]
   return { kind: "prompt" as const, input: { text: trimmed, ...base, ...(skills.length ? { skills } : {}) } }
 }

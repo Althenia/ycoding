@@ -742,6 +742,34 @@ describe("operation mapping", () => {
     expect(calls.filter((call) => call.method === "command")).toEqual([])
   })
 
+  test("resolves prompt and command agent mentions at the verified Session Location before forwarding", async () => {
+    const test = await harness({ results: {
+      prompt: { id: "msg_1" }, command: { id: "msg_2" },
+      agentList: [
+        { id: "reviewer", name: "Reviewer", mode: "subagent", hidden: false },
+        { id: "general", name: "General", mode: "all", hidden: false },
+        { id: "private", name: "Private", mode: "subagent", hidden: true },
+        { id: "lead", name: "Lead", mode: "primary", hidden: false },
+        { id: "btw", name: "BTW", mode: "subagent", hidden: false },
+      ],
+    } })
+    const invoke = (operation: "session.prompt" | "session.command", name: string) => executeRemoteOperation({
+      request: request(operation, { ...(operation === "session.prompt" ? { text: `Ask @${name}` } : { command: "test" }), agents: [{ name }] }),
+      local: test.local, sessions: test.registry, subscriptions: test.subscriptions,
+    })
+    for (const operation of ["session.prompt", "session.command"] as const) {
+      for (const name of ["missing", "private", "lead", "btw"]) {
+        test.calls.length = 0
+        expect(errorOf(await invoke(operation, name)).code, `${operation} ${name}`).toBe("invalid_message")
+        expect(test.calls.some((call) => call.method === "prompt" || call.method === "command")).toBe(false)
+      }
+      test.calls.length = 0
+      expect(valueOf(await invoke(operation, "reviewer"))).toMatchObject({ data: { id: operation === "session.prompt" ? "msg_1" : "msg_2" } })
+      expect(test.calls.find((call) => call.method === (operation === "session.prompt" ? "prompt" : "command"))?.args[2]).toMatchObject({ agents: [{ name: "reviewer" }] })
+      expect(test.calls.find((call) => call.method === "agentList")?.args[0]).toEqual({ directory: "/work" })
+    }
+  })
+
   test("refuses a file URL whose symlink escapes the Session Location", async () => {
     const directory = await mkdtemp(join(scratch, "ycoding-attachment-"))
     try {
@@ -949,7 +977,7 @@ describe("operation mapping", () => {
         formCancel: async () => undefined,
         autonomySet: async () => ({ mode: "yolo" }),
         guardrailRequestList: async () => [{ id: "grq_1", sessionID: "ses_1", rootSessionID: "ses_1" }],
-        agentList: [], modelList: [], modelDefault: null, providerList: [], commandList: [], skillList: [], referenceList: [],
+        agentList: [{ id: "build", name: "Build", mode: "subagent", hidden: false }], modelList: [], modelDefault: null, providerList: [], commandList: [], skillList: [], referenceList: [],
         resourceCatalog: { resources: [{ name: "Accepted", uri: "mcp://accepted" }], templates: [] },
       },
     })

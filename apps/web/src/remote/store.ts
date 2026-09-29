@@ -275,6 +275,7 @@ export type RemoteStore = {
   readonly loadShellOutputPage: (shellID: string) => Promise<void>
   readonly sendPrompt: (input: { readonly text: string; readonly delivery: "steer" | "queue"; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[]; readonly skills?: readonly string[]; readonly agent?: string; readonly model?: ModelRefView }) => Promise<void | boolean>
   readonly runCommand: (input: { readonly command: string; readonly arguments?: string; readonly delivery: "steer" | "queue"; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[]; readonly agent?: string; readonly model?: ModelRefView }) => Promise<void | boolean>
+  readonly activateSkill: (skill: string) => Promise<boolean>
   readonly cancelUpload: () => void
   readonly switchModel: (model: ModelRefView) => Promise<boolean>
   readonly switchAgent: (agent: string) => Promise<boolean>
@@ -288,8 +289,8 @@ export type RemoteStore = {
   readonly replyGuardrail: (id: string, reply: "once" | "always" | "reject") => Promise<void>
   readonly replyForm: (formID: string, answer: Readonly<Record<string, string | number | boolean | readonly string[]>>) => Promise<void>
   readonly cancelForm: (formID: string) => Promise<void>
-  readonly setYolo: (level: 0 | 1 | 2 | 3) => Promise<void>
-  readonly setGoal: (text: string) => Promise<void>
+  readonly setYolo: (level: 0 | 1 | 2 | 3) => Promise<boolean>
+  readonly setGoal: (text: string) => Promise<boolean>
   readonly stopGoal: () => Promise<void>
   readonly setAutonomy: (autonomy: SessionAutonomyView) => void
   readonly dispose: () => void
@@ -2463,6 +2464,15 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         sessionID, operation: "session.switchAgent", input: { agent } }, { sessionID })
       return outcome.status === "ok"
     },
+    activateSkill: async (skill) => {
+      const sessionID = state.activeSessionID
+      const token = selectionToken
+      if (sessionID === undefined || !skill.trim()) return false
+      const id = createMessageID()
+      const outcome = await request({ id, kind: "skill", label: `Load ${skill}`, state: "sending", sessionID,
+        operation: "session.skill", input: { id, skill } }, { sessionID })
+      return outcome.status === "ok" && token === selectionToken && state.activeSessionID === sessionID
+    },
     sendPrompt: async (input) => {
       const sessionID = state.activeSessionID
       const token = selectionToken
@@ -2648,7 +2658,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     },
     setYolo: async (level) => {
       const sessionID = state.activeSessionID
-      if (sessionID === undefined) return
+      const token = selectionToken
+      if (sessionID === undefined) return false
       const outcome = await request(
         {
           id: `autonomy_${level}_${now()}`,
@@ -2662,10 +2673,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         { sessionID },
       )
       applyAutonomyResponse(outcome, sessionID)
+      return outcome.status === "ok" && token === selectionToken && state.activeSessionID === sessionID
     },
     setGoal: async (text) => {
       const sessionID = state.activeSessionID
-      if (sessionID === undefined) return
+      const token = selectionToken
+      if (sessionID === undefined) return false
       const outcome = await request(
         {
           id: `goal_${now()}`,
@@ -2679,6 +2692,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         { sessionID },
       )
       applyAutonomyResponse(outcome, sessionID)
+      return outcome.status === "ok" && token === selectionToken && state.activeSessionID === sessionID
     },
     stopGoal: async () => {
       const sessionID = state.activeSessionID

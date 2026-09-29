@@ -393,7 +393,7 @@ test("full skill list scrolls to the last skill without unrelated updates snappi
     await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
     await wait(page, `document.querySelector('.mini-composer__mount textarea') !== null`)
     await type(page, ".mini-composer__mount textarea", "$")
-    await wait(page, `document.querySelectorAll('.mini-composer__mount .mini-composer__autocomplete button').length === 65`)
+    await wait(page, `document.querySelectorAll('.mini-composer__mount .mini-composer__autocomplete button').length === 66`)
     await page.evaluate(`(() => { const list = document.querySelector('.mini-composer__mount .mini-composer__autocomplete'); list.scrollTop = list.scrollHeight; })()`)
     const before = await page.evaluate<number>(`document.querySelector('.mini-composer__mount .mini-composer__autocomplete').scrollTop`)
     expect(before).toBeGreaterThan(0)
@@ -796,6 +796,92 @@ test("keyboard and mouse autocomplete, pending identity, and creation work acros
     }
   }
 }, 180_000)
+
+test("selected slash, dollar, at and hash suggestions dispatch their TUI-equivalent operations", async () => {
+  const page = await browser!.openPage()
+  const input = ".mini-composer__mount textarea"
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    await wait(page, `document.querySelector(${JSON.stringify(input)}) !== null`)
+    const select = async (text: string, label: string) => {
+      await type(page, input, text)
+      await wait(page, `[...document.querySelectorAll('.mini-composer__mount .mini-composer__autocomplete button')].some(item => item.textContent.includes(${JSON.stringify(label)}))`)
+      await page.evaluate(`[...document.querySelectorAll('.mini-composer__mount .mini-composer__autocomplete button')].find(item => item.textContent.includes(${JSON.stringify(label)}))?.click()`)
+    }
+    const send = () => page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Send prompt"]')?.click()`)
+    const operations = () => page.evaluate<readonly { operation: string; input: unknown }[]>(`window.composerRequests()`)
+
+    await select("/go", "/goal")
+    await type(page, input, "/goal keep progress. Ship safely")
+    await send()
+    await wait(page, `window.composerRequests().some(item => item.operation === 'session.goal.set')`)
+    expect((await operations()).map((item) => item.operation)).toEqual(["session.goal.set"])
+    expect((await operations())[0]?.input).toEqual({ goal: "keep progress. Ship safely" })
+
+    await select("$gpt-", "$gpt-subgent-routing")
+    await send()
+    await wait(page, `window.composerRequests().length >= 3`)
+    expect((await operations()).slice(1).map((item) => item.operation)).toEqual(["session.skill", "session.prompt"])
+    expect((await operations())[1]?.input).toMatchObject({ skill: "gpt-subgent-routing" })
+
+    await select("#aud", "Audit")
+    expect(await page.evaluate<string>(`document.querySelector(${JSON.stringify(input)})?.value`)).toBe("$audit ")
+    await send()
+    await wait(page, `window.composerRequests().length >= 5`)
+    expect((await operations()).slice(3).map((item) => item.operation)).toEqual(["session.skill", "session.prompt"])
+    expect((await operations())[3]?.input).toMatchObject({ skill: "audit" })
+
+    await select("#rev", "Reviewer")
+    expect(await page.evaluate<string>(`document.querySelector(${JSON.stringify(input)})?.value`)).toBe("@reviewer ")
+    await send()
+    await wait(page, `window.composerRequests().length >= 6`)
+    expect((await operations())[5]).toMatchObject({ operation: "session.prompt", input: { agents: [{ name: "reviewer", mention: { text: "@reviewer" } }] } })
+
+    await select("@apps/web", "composer.tsx")
+    await send()
+    await wait(page, `window.composerRequests().length >= 7`)
+    expect((await operations())[6]).toMatchObject({ operation: "session.prompt", input: { files: [{ uri: "file:///workspace/ycoding/apps/web/src/remote/ui/composer.tsx", mention: { text: "@apps/web/src/remote/ui/composer.tsx" } }] } })
+
+    await select("/front", "/frontend-workflow")
+    await send()
+    await wait(page, `window.composerRequests().length >= 8`)
+    expect((await operations())[7]).toMatchObject({ operation: "session.skill", input: { skill: "frontend-workflow" } })
+    expect((await operations()).filter((item) => item.operation === "session.prompt")).toHaveLength(4)
+
+    await select("/pla", "/plan")
+    await type(page, input, "/plan now")
+    await send()
+    await wait(page, `window.composerRequests().length >= 9`)
+    expect((await operations())[8]).toMatchObject({ operation: "session.command", input: { command: "plan", arguments: "now" } })
+
+    await type(page, input, "/notacommand hi")
+    await send()
+    await wait(page, `window.composerRequests().length >= 10`)
+    expect((await operations())[9]).toMatchObject({ operation: "session.prompt", input: { text: "/notacommand hi" } })
+
+    await type(page, input, "/Users/me/file.ts explain")
+    await send()
+    await wait(page, `window.composerRequests().length >= 11`)
+    expect((await operations())[10]).toMatchObject({ operation: "session.prompt", input: { text: "/Users/me/file.ts explain" } })
+
+    await type(page, input, "/yolo 3")
+    await send()
+    await wait(page, `window.composerRequests().length >= 12`)
+    expect((await operations())[11]).toEqual({ operation: "session.autonomy.set", input: { yolo: 3 } })
+    await type(page, input, "/yolo")
+    await send()
+    await wait(page, `window.composerRequests().length >= 13`)
+    expect((await operations())[12]).toEqual({ operation: "session.autonomy.set", input: { yolo: 0 } })
+    expect((await operations()).filter((item) => item.operation === "session.prompt")).toHaveLength(6)
+
+    await type(page, ".new-session-composer textarea", "/go")
+    expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer .mini-composer__autocomplete button') !== null`)).toBe(false)
+    await type(page, ".new-session-composer textarea", "/goal new objective")
+    await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Create session"]')?.click()`)
+    expect(await page.evaluate<string>(`document.querySelector('.new-session-composer [role="alert"]')?.textContent ?? ''`)).toContain("Open a session")
+    expect((await operations()).filter((item) => item.operation === "session.create")).toHaveLength(0)
+  } finally { await page.close() }
+}, 30_000)
 
 async function type(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, selector: string, text: string) {
   await page.evaluate(`(() => { const field = document.querySelector(${JSON.stringify(selector)}); field.focus(); field.value = ${JSON.stringify(text)}; field.setSelectionRange(field.value.length, field.value.length); field.dispatchEvent(new InputEvent('input', { bubbles: true })); })()`)
