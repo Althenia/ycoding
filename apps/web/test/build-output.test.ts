@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { existsSync } from "node:fs"
+import { existsSync, readdirSync } from "node:fs"
 
 /**
  * Verifies the built artifact, not the source: the shell, the service worker,
@@ -129,5 +129,13 @@ describe("built web output", () => {
     expect(css).toContain(".workspace__rail{display:none")
     expect(css).toContain(".app--conversation.app--selected.workspace{grid-template-columns:minmax(220px,256px)minmax(0,1fr)")
     expect(css).not.toContain(".workspace__activity")
+  })
+
+  test("caches only content-hashed files under /assets as immutable", async () => {
+    const headers = await Bun.file(new URL("../dist/_headers", import.meta.url)).text()
+    expect(headers).toContain("/assets/*\n  Cache-Control: public, max-age=31536000, immutable")
+    const assets = readdirSync(new URL("../dist/assets", import.meta.url))
+    expect(assets.length).toBeGreaterThan(0)
+    expect(assets.filter((name) => !/-[A-Za-z0-9_-]{8}\.[a-z0-9]+$/.test(name))).toEqual([])
   })
 })

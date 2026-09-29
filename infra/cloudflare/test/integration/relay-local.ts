@@ -131,7 +131,20 @@ try {
   expect(asset.status === 200, `asset returned ${asset.status}`)
   expect(asset.headers.get("content-type")?.includes("javascript") === true, "asset content type is wrong")
   expect(asset.headers.get("x-frame-options") === null, "static sub-resources should bypass the worker")
-  checks.push("hashed static assets are served directly by the asset layer")
+  expect(
+    asset.headers.get("cache-control") === "public, max-age=31536000, immutable",
+    `hashed asset cache-control was ${asset.headers.get("cache-control")}`,
+  )
+  for (const page of ["/", "/docs", "/changelog", "/remote"]) {
+    const response = await fetch(`${workerOrigin}${page}`)
+    expect(response.status === 200, `${page} returned ${response.status}`)
+    expect(
+      response.headers.get("cache-control")?.includes("must-revalidate") === true,
+      `${page} cache-control was ${response.headers.get("cache-control")}`,
+    )
+  }
+  checks.push("hashed static assets are served directly by the asset layer and cached as immutable")
+  checks.push("HTML pages revalidate on every load")
 
   /* ---------------------------------------------------------------- sign in */
 
