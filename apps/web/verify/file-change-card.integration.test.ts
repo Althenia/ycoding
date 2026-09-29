@@ -9,7 +9,7 @@ let server: ReturnType<typeof Bun.spawn> | undefined
 let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined
 
 beforeAll(async () => {
-  server = Bun.spawn(["bun", "run", "dev", "--", "--host", "127.0.0.1", "--port", String(port), "--strictPort"], { cwd: new URL("..", import.meta.url).pathname, stdout: "ignore", stderr: "ignore" })
+  server = Bun.spawn(["bun", "run", "dev", "--", "--host", "127.0.0.1", "--port", String(port), "--strictPort"], { cwd: new URL("..", import.meta.url).pathname, env: { ...process.env, YCODING_WEB_VERIFY: "1" }, stdout: "ignore", stderr: "ignore" })
   for (let index = 0; index < 60; index++) {
     if (await fetch(`http://127.0.0.1:${port}/verify/transcript.html`).then((response) => response.ok, () => false)) {
       browser = await launchBrowser(executable, 1440, 900)
@@ -80,6 +80,25 @@ test("shows cumulative file counts after the last assistant and expands latest p
     }
   } finally { await page.close() }
 }, 60_000)
+
+test("holds captured changes until the selected Session stops running", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?file-changes=captured&status=running`)
+    expect(await page.evaluate<number>(`document.querySelectorAll('.file-change-card').length`)).toBe(0)
+    await page.evaluate(`window.setFileChangeStatus("idle")`)
+    for (let attempt = 0; attempt < 40 && !await page.evaluate(`document.querySelector('[data-message-id="msg_latest"] .file-change-card')`); attempt++) await Bun.sleep(50)
+    expect(await page.evaluate<boolean>(`!!document.querySelector('[data-message-id="msg_latest"] .file-change-card')`)).toBe(true)
+
+    await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?file-changes=captured&status=interrupted`)
+    expect(await page.evaluate<boolean>(`!!document.querySelector('[data-message-id="msg_latest"] .file-change-card')`)).toBe(true)
+
+    await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?file-changes=checkpoint&status=running`)
+    expect(await page.evaluate<number>(`document.querySelectorAll('.file-change-card').length`)).toBe(0)
+    await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?file-changes=checkpoint&status=idle`)
+    expect(await page.evaluate<number>(`document.querySelectorAll('.file-change-card').length`)).toBe(1)
+  } finally { await page.close() }
+}, 20_000)
 
 test("uses the completed compaction row when no assistant has completed", async () => {
   const page = await browser!.openPage()

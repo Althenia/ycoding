@@ -8,7 +8,7 @@
  */
 
 import type { CreateEnrollmentResponse } from "@ycoding-ai/remote"
-import type { FormAnswerView, FormFieldView, FormView, ShellOutputFetch, ShellOutputView } from "./projection"
+import type { FormAnswerView, FormFieldView, FormView, SessionView, ShellOutputFetch, ShellOutputView } from "./projection"
 
 export type FormDraft = Readonly<Record<string, FormAnswerView[string] | undefined>>
 
@@ -202,6 +202,10 @@ export type ConnectionSummary = {
 export type SessionChip = {
   readonly label: string
   readonly tone: "neutral" | "attention" | "success"
+}
+
+export function capturedChangesVisible(status: SessionView["status"] | undefined): boolean {
+  return status !== undefined && status !== "running"
 }
 
 export function sessionProjectLabel(session: { readonly projectID?: string; readonly directory?: string }): string {

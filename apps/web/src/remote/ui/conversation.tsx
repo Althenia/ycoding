@@ -22,7 +22,7 @@ import {
   type ShellOutputView,
   type ToolContentBlock,
 } from "../projection"
-import { shellOutputPaging } from "../view-model"
+import { capturedChangesVisible, shellOutputPaging } from "../view-model"
 import { FormRequest } from "./form-request"
 import { Markdown } from "./markdown"
 import { DotTrail } from "./dot-trail"
@@ -333,7 +333,9 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
   const kind = () => props.message().kind
   const remote = useRemote()
   const fileChanges = () => remote.state().view?.capturedChanges?.data ?? []
-  const showFileChanges = () => remote.state().view?.capturedChanges?.placementMessageID === props.message().id && fileChanges().length > 0 &&
+  const selectedView = () => remote.state().view
+  const showFileChanges = () => remote.state().activeSessionID === selectedView()?.id && capturedChangesVisible(selectedView()?.status) &&
+    selectedView()?.capturedChanges?.placementMessageID === props.message().id && fileChanges().length > 0 &&
     (remote.state().view?.capturedChanges?.mode === "transcript" && kind() === "assistant" || remote.state().view?.capturedChanges?.mode === "recovery" && kind() === "compaction")
   const catalog = () => remote.state().catalogs[catalogKey({ sessionID: remote.state().activeSessionID ?? "" })]
   const models = () => catalog()?.models ?? []

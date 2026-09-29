@@ -5,7 +5,7 @@ import { TodoPanel } from "../src/remote/ui/todo-panel"
 import { RemoteProvider } from "../src/remote/context"
 import { createRemoteStore } from "../src/remote/store"
 import { createRemoteHttp } from "../src/remote/http"
-import { applySessionEvent, createSessionView, readMessageList, readSnapshot, type RemoteMessageView } from "../src/remote/projection"
+import { applySessionEvent, createSessionView, readMessageList, readSnapshot, type RemoteMessageView, type SessionView } from "../src/remote/projection"
 import "../src/styles/tokens.css"
 import "../src/styles/base.css"
 import "../src/styles/remote.css"
@@ -37,6 +37,7 @@ const oversizedMode = new URLSearchParams(location.search).has("oversized")
 const pendingOversized = new URLSearchParams(location.search).get("oversized") === "pending"
 const compactionMode = new URLSearchParams(location.search).get("compaction")
 const fileChangesMode = new URLSearchParams(location.search).get("file-changes")
+const [fileChangeStatus, setFileChangeStatus] = createSignal<SessionView["status"]>(new URLSearchParams(location.search).get("status") === "running" ? "running" : "idle")
 const fileChanges = [
   { path: "apps/web/src/remote/ui/conversation.tsx", patch: fileChangesMode === "unavailable" ? "Binary files a/a.png and b/a.png differ" : "@@ -1,2 +1,3 @@\n-old value\n+new value\n+extra line\n tail", additions: 30, deletions: 5 },
   { path: "apps/web/src/remote/ui/long.ts", patch: `@@ -0,0 +1 @@\n+${"long line ".repeat(100)}`, additions: 1, deletions: 0 },
@@ -58,6 +59,10 @@ const fileChangeMessages: readonly RemoteMessageView[] = fileChangesMode === "ch
   ? [{ kind: "compaction", id: "msg_file_checkpoint", status: "completed", jobID: "cmp_file", created: 2 }]
   : [
       { kind: "user", id: "msg_file_request", state: "consumed", text: "Edit the files", created: 1 },
+      { kind: "assistant", id: "msg_tool_steps", parts: [
+        { kind: "tool", callID: "call_edit", name: "edit", status: "completed", input: { path: "src/a.ts" }, content: [], started: 2, completed: 3 },
+        { kind: "tool", callID: "call_patch", name: "patch", status: "completed", input: { path: "src/b.ts" }, content: [], started: 4, completed: 5 },
+      ], created: 2, completed: 5 },
       { kind: "assistant", id: "msg_earlier", parts: [{ kind: "text", ordinal: 0, text: "Starting the edits." }], created: 2, completed: 3 },
       { kind: "assistant", id: "msg_latest", parts: [{ kind: "text", ordinal: 0, text: "The files are updated." }], created: 4, completed: 5 },
     ]
@@ -160,7 +165,7 @@ if (!root) throw new Error("Missing transcript root")
 const store = createRemoteStore({ http: createRemoteHttp({ fetch: Object.assign(async () => new Response(null, { status: 401 }), { preconnect: () => {} }) }), createTransport: () => { throw new Error("Fixture transport must not connect") } })
 const fixtureState = { ...store.state(), activeSessionID: "ses_a", activeDeviceID: "dev_1" }
 const listeners = new Set<() => void>()
-Object.defineProperty(store, "state", { value: () => ({ ...fixtureState, history: history(), view: fileChangesMode ? { ...createSessionView("ses_a"), messages: messages(), fileChanges: fileChangesMode === "child-only" ? [] : fileChanges, capturedChanges } : compactionMode ? { ...createSessionView("ses_a"), compactionHistory: compactionHistory() } : fixtureState.view }) })
+Object.defineProperty(store, "state", { value: () => ({ ...fixtureState, history: history(), view: fileChangesMode ? { ...createSessionView("ses_a"), status: fileChangeStatus(), messages: messages(), fileChanges: fileChangesMode === "child-only" ? [] : fileChanges, capturedChanges } : compactionMode ? { ...createSessionView("ses_a"), compactionHistory: compactionHistory() } : fixtureState.view }) })
 Object.defineProperty(store, "subscribe", { value: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener) } })
 Object.defineProperty(store, "loadOlderMessages", { value: async () => {
   if (!history().before) return
@@ -169,6 +174,10 @@ Object.defineProperty(store, "loadOlderMessages", { value: async () => {
   listeners.forEach((listener) => listener())
 } })
 Object.defineProperty(store, "loadOversizedMessage", { value: async () => setMessages([{ kind: "user", id: "msg_big", text: "Recovered full content", state: "consumed", created: 2 }]) })
+if (fileChangesMode) Object.assign(window, { setFileChangeStatus: (status: SessionView["status"]) => {
+  setFileChangeStatus(status)
+  listeners.forEach((listener) => listener())
+} })
 if (compactionMode) Object.assign(window, { compactionUpdate: () => {
   setMessages((current) => current.map((message) => message.kind === "compaction" ? { ...message, id: "msg_compact", status: "completed", trigger: "manual", metrics: compressionMetrics } : message))
   if (compactionMode !== "old") setCompactionHistory({ data: [

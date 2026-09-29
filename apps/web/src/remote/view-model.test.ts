@@ -4,6 +4,7 @@ import {
   REMOTE_CAPABILITY_NAMES,
   accountReadState,
   accountSectionView,
+  capturedChangesVisible,
   cachedSessionsView,
   connectionBanner,
   createUnavailableRemoteViewModel,
@@ -83,6 +84,16 @@ describe("createUnavailableRemoteViewModel", () => {
       kind: "unavailable",
       reason: "no-connection",
     })
+  })
+})
+
+describe("capturedChangesVisible", () => {
+  test("waits for the selected Session to stop running and allows settled outcomes", () => {
+    expect(capturedChangesVisible("running")).toBe(false)
+    expect(capturedChangesVisible("idle")).toBe(true)
+    expect(capturedChangesVisible("interrupted")).toBe(true)
+    expect(capturedChangesVisible("failed")).toBe(true)
+    expect(capturedChangesVisible(undefined)).toBe(false)
   })
 })
 
