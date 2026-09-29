@@ -152,6 +152,7 @@ describe("running Sessions across workspaces", () => {
         expect(pending.height).toBeGreaterThanOrEqual(150)
         await page.evaluate(`window.runningSetCount(2)`)
         for (let attempt = 0; attempt < 40 && await page.evaluate<number>(`document.querySelectorAll('.running-sessions__item').length`) !== 2; attempt++) await Bun.sleep(20)
+        await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
         const revealed = await page.evaluate<{ headingTop: number; height: number; busy: boolean; name: string; duration: string }>(`(() => { const section = document.querySelector('.running-sessions'); const list = section.querySelector('.running-sessions__list'); return { headingTop: window.following.getBoundingClientRect().top, height: section.getBoundingClientRect().height, busy: section.getAttribute('aria-busy') === 'true', name: getComputedStyle(list).animationName, duration: getComputedStyle(list).animationDuration }; })()`)
         expect(revealed.busy).toBe(false)
         expect(Math.abs(revealed.headingTop - pending.headingTop)).toBeLessThanOrEqual(2)

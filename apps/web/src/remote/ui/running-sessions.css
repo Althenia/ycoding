@@ -1,10 +1,11 @@
 .running-sessions {
   display: grid;
+  grid-template-rows: auto auto 28px;
   gap: var(--yc-space-3);
   min-inline-size: 0;
 }
 
-.running-sessions--loading { min-block-size: 156px; }
+.running-sessions--loading { min-block-size: 196px; }
 .running-sessions--ready .running-sessions__list { animation: running-sessions-reveal var(--yc-dur-base) var(--yc-ease-entrance) both; }
 @keyframes running-sessions-reveal { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
