@@ -297,13 +297,18 @@ describe("OpenRouterPlugin", () => {
               name: "subagent_control",
               parameters: {
                 type: "object",
-                properties: {
-                  action: { type: "string" },
-                  text: { type: "string" },
-                },
-                required: ["action"],
                 $ref: "#/$defs/__ycoding_root",
-                $defs: { __ycoding_root: { type: "object", anyOf } },
+                $defs: {
+                  __ycoding_root: {
+                    type: "object",
+                    anyOf,
+                    properties: {
+                      action: { type: "string" },
+                      text: { type: "string" },
+                    },
+                    required: ["action"],
+                  },
+                },
               },
             },
           },

@@ -171,7 +171,7 @@ interface ParserState {
 const lowerTool = (tool: ToolDefinition, inputSchema: JsonSchema) => ({
   name: tool.name,
   description: tool.description,
-  parameters: GeminiToolSchema.convert(ToolSchemaProjection.objectRoot(inputSchema)),
+  parameters: GeminiToolSchema.convert(inputSchema),
 })
 
 const lowerToolConfig = (toolChoice: NonNullable<LLMRequest["toolChoice"]>) =>

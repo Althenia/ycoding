@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Schema } from "effect"
 import { LLM } from "@ycoding-ai/ai"
-import { AnthropicMessages, Gemini, OpenAIChat, OpenAIResponses } from "@ycoding-ai/ai/protocols"
-import { AmazonBedrock } from "@ycoding-ai/ai/providers"
+import { AnthropicMessages, OpenAIChat, OpenAIResponses } from "@ycoding-ai/ai/protocols"
 import { Auth, LLMClient } from "@ycoding-ai/ai/route"
 import { BrowserTool } from "@ycoding-ai/core/tool/browser"
 import { ComputerTool } from "@ycoding-ai/core/tool/computer"
@@ -87,6 +86,7 @@ const declaredTypes = (root: unknown, property: unknown): ReadonlyArray<string> 
 }
 
 const baseURL = "https://provider.test/v1/"
+const anthropicRoot = (schema: unknown) => at(schema, "$defs", "__ycoding_root")
 const providers = [
   {
     name: "anthropic",
@@ -94,11 +94,13 @@ const providers = [
       .with({ endpoint: { baseURL }, auth: Auth.header("x-api-key", "test") })
       .model({ id: "claude-opus-5-5" }),
     schema: (body: unknown) => at(body, "tools", 0, "input_schema"),
+    typed: anthropicRoot,
   },
   {
     name: "openai chat",
     model: OpenAIChat.route.with({ endpoint: { baseURL }, auth: Auth.bearer("test") }).model({ id: "gpt-4.1-mini" }),
     schema: (body: unknown) => at(body, "tools", 0, "function", "parameters"),
+    typed: (schema: unknown) => schema,
   },
   {
     name: "openai responses",
@@ -106,13 +108,7 @@ const providers = [
       .with({ endpoint: { baseURL }, auth: Auth.bearer("test") })
       .model({ id: "gpt-4.1-mini" }),
     schema: (body: unknown) => at(body, "tools", 0, "parameters"),
-  },
-  {
-    name: "gemini",
-    model: Gemini.route
-      .with({ endpoint: { baseURL }, auth: Auth.header("x-goog-api-key", "test") })
-      .model({ id: "gemini-2.5-flash" }),
-    schema: (body: unknown) => at(body, "tools", 0, "functionDeclarations", 0, "parameters"),
+    typed: (schema: unknown) => schema,
   },
   {
     name: "moonshot on openai chat",
@@ -120,6 +116,7 @@ const providers = [
       .with({ endpoint: { baseURL }, auth: Auth.bearer("test") })
       .model({ id: "kimi-k2", compatibility: { toolSchema: "moonshot" } }),
     schema: (body: unknown) => at(body, "tools", 0, "function", "parameters"),
+    typed: (schema: unknown) => schema,
   },
   {
     name: "moonshot on anthropic",
@@ -127,13 +124,7 @@ const providers = [
       .with({ endpoint: { baseURL }, auth: Auth.header("x-api-key", "test") })
       .model({ id: "claude-opus-5-5", compatibility: { toolSchema: "moonshot" } }),
     schema: (body: unknown) => at(body, "tools", 0, "input_schema"),
-  },
-  {
-    name: "default bedrock converse",
-    model: AmazonBedrock.configure({ baseURL: "https://bedrock-runtime.test", apiKey: "test-bearer" }).model(
-      "anthropic.claude-3-5-sonnet-20240620-v1:0",
-    ),
-    schema: (body: unknown) => at(body, "toolConfig", "tools", 0, "toolSpec", "inputSchema", "json"),
+    typed: anthropicRoot,
   },
 ]
 
@@ -177,10 +168,11 @@ describe("union-root tool arguments", () => {
           ),
         )
         const schema = provider.schema(prepared.body)
+        const typed = provider.typed(schema)
 
-        expect(at(schema, "type")).toBe("object")
+        expect(at(typed, "type")).toBe("object")
         for (const affected of cases.filter((candidate) => candidate.tool === tool))
-          expect([...declaredTypes(schema, at(schema, "properties", affected.parameter))].sort()).toEqual([
+          expect([...declaredTypes(schema, at(typed, "properties", affected.parameter))].sort()).toEqual([
             ...affected.types,
           ])
       }

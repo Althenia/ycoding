@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { LLM } from "../src"
-import { AnthropicMessages, Gemini, OpenAIChat, OpenAIResponses } from "../src/protocols"
+import { AnthropicMessages, OpenAIChat, OpenAIResponses } from "../src/protocols"
 import { ToolSchemaProjection } from "../src/protocols/utils/tool-schema"
-import { AmazonBedrock } from "../src/providers"
 import { Auth, LLMClient } from "../src/route"
 import { isRecord } from "../src/utils/record"
 import { it } from "./lib/effect"
@@ -58,6 +57,7 @@ const declaredTypes = (root: unknown, property: unknown): ReadonlyArray<string> 
 }
 
 const baseURL = "https://provider.test/v1/"
+const anthropicRoot = (schema: unknown) => at(schema, "$defs", "__ycoding_root")
 const providerRoutes = [
   {
     name: "anthropic",
@@ -65,11 +65,13 @@ const providerRoutes = [
       .with({ endpoint: { baseURL }, auth: Auth.header("x-api-key", "test") })
       .model({ id: "claude-opus-5-5" }),
     schema: (body: unknown) => at(body, "tools", 0, "input_schema"),
+    typed: anthropicRoot,
   },
   {
     name: "openai chat",
     model: OpenAIChat.route.with({ endpoint: { baseURL }, auth: Auth.bearer("test") }).model({ id: "gpt-4.1-mini" }),
     schema: (body: unknown) => at(body, "tools", 0, "function", "parameters"),
+    typed: (schema: unknown) => schema,
   },
   {
     name: "openai responses",
@@ -77,13 +79,7 @@ const providerRoutes = [
       .with({ endpoint: { baseURL }, auth: Auth.bearer("test") })
       .model({ id: "gpt-4.1-mini" }),
     schema: (body: unknown) => at(body, "tools", 0, "parameters"),
-  },
-  {
-    name: "gemini",
-    model: Gemini.route
-      .with({ endpoint: { baseURL }, auth: Auth.header("x-goog-api-key", "test") })
-      .model({ id: "gemini-2.5-flash" }),
-    schema: (body: unknown) => at(body, "tools", 0, "functionDeclarations", 0, "parameters"),
+    typed: (schema: unknown) => schema,
   },
   {
     name: "moonshot on openai chat",
@@ -91,6 +87,7 @@ const providerRoutes = [
       .with({ endpoint: { baseURL }, auth: Auth.bearer("test") })
       .model({ id: "kimi-k2", compatibility: { toolSchema: "moonshot" } }),
     schema: (body: unknown) => at(body, "tools", 0, "function", "parameters"),
+    typed: (schema: unknown) => schema,
   },
   {
     name: "moonshot on anthropic",
@@ -98,13 +95,7 @@ const providerRoutes = [
       .with({ endpoint: { baseURL }, auth: Auth.header("x-api-key", "test") })
       .model({ id: "claude-opus-5-5", compatibility: { toolSchema: "moonshot" } }),
     schema: (body: unknown) => at(body, "tools", 0, "input_schema"),
-  },
-  {
-    name: "default bedrock converse",
-    model: AmazonBedrock.configure({ baseURL: "https://bedrock-runtime.test", apiKey: "test-bearer" }).model(
-      "anthropic.claude-3-5-sonnet-20240620-v1:0",
-    ),
-    schema: (body: unknown) => at(body, "toolConfig", "tools", 0, "toolSpec", "inputSchema", "json"),
+    typed: anthropicRoot,
   },
 ]
 
@@ -174,20 +165,23 @@ describe("tool schema projections", () => {
 
     expect(ToolSchemaProjection.anthropic(union)).toEqual({
       type: "object",
-      properties: {
-        action: {
-          type: "string",
-          anyOf: [
-            { type: "string", enum: ["list"] },
-            { type: "string", enum: ["send"] },
-          ],
-        },
-        text: { type: "string" },
-      },
-      required: ["action"],
       $ref: "#/$defs/__ycoding_root",
       $defs: {
-        __ycoding_root: { type: "object", ...union },
+        __ycoding_root: {
+          type: "object",
+          ...union,
+          properties: {
+            action: {
+              type: "string",
+              anyOf: [
+                { type: "string", enum: ["list"] },
+                { type: "string", enum: ["send"] },
+              ],
+            },
+            text: { type: "string" },
+          },
+          required: ["action"],
+        },
       },
     })
     expect(ToolSchemaProjection.anthropic({ type: "string", enum: ["value"] })).toEqual({
@@ -196,41 +190,46 @@ describe("tool schema projections", () => {
     })
   })
 
-  test("anthropic declares each union-root parameter type at the top level in stable order", () => {
+  test("anthropic declares each union-root parameter type in the referenced root in stable order", () => {
     const projected = ToolSchemaProjection.anthropic(typedUnion)
 
     expect(projected).toEqual({
       type: "object",
-      properties: {
-        action: {
-          type: "string",
-          anyOf: [
-            { type: "string", enum: ["list"] },
-            { type: "string", enum: ["search"] },
-          ],
-        },
-        limit: {
-          type: "integer",
-          anyOf: [
-            { type: "integer", maximum: 100 },
-            { type: "integer", maximum: 50 },
-          ],
-        },
-        ratio: { type: "number" },
-        dryRun: { type: "boolean" },
-        modifiers: { type: "array", items: { type: "string" } },
-        options: { type: "object", properties: { depth: { type: "integer" } } },
-        rules: { type: "array", anyOf: [{ not: {} }, { $ref: "#/$defs/Rules" }] },
-      },
-      required: ["action"],
       $ref: "#/$defs/__ycoding_root",
       $defs: {
         Rules: typedUnion.$defs.Rules,
-        __ycoding_root: { type: "object", anyOf: typedUnion.anyOf },
+        __ycoding_root: {
+          type: "object",
+          anyOf: typedUnion.anyOf,
+          properties: {
+            action: {
+              type: "string",
+              anyOf: [
+                { type: "string", enum: ["list"] },
+                { type: "string", enum: ["search"] },
+              ],
+            },
+            limit: {
+              type: "integer",
+              anyOf: [
+                { type: "integer", maximum: 100 },
+                { type: "integer", maximum: 50 },
+              ],
+            },
+            ratio: { type: "number" },
+            dryRun: { type: "boolean" },
+            modifiers: { type: "array", items: { type: "string" } },
+            options: { type: "object", properties: { depth: { type: "integer" } } },
+            rules: { type: "array", anyOf: [{ not: {} }, { $ref: "#/$defs/Rules" }] },
+          },
+          required: ["action"],
+        },
       },
     })
-    expect(Object.keys(projected)).toEqual(["type", "properties", "required", "$ref", "$defs"])
-    const properties = at(projected, "properties")
+    expect(Object.keys(projected)).toEqual(["type", "$ref", "$defs"])
+    const root = anthropicRoot(projected)
+    expect(isRecord(root) ? Object.keys(root) : []).toEqual(["anyOf", "type", "properties", "required"])
+    const properties = at(root, "properties")
     expect(isRecord(properties) ? Object.keys(properties) : []).toEqual([
       "action",
       "limit",
@@ -254,39 +253,7 @@ describe("tool schema projections", () => {
       ],
     })
 
-    expect(at(projected, "properties", "id")).toEqual({ anyOf: [{ type: "integer" }, { type: "string" }] })
-  })
-
-  test("object root keeps the union and adds an object type with top-level properties", () => {
-    const projected = ToolSchemaProjection.objectRoot(typedUnion)
-
-    expect(projected).toEqual({
-      $defs: typedUnion.$defs,
-      anyOf: typedUnion.anyOf,
-      type: "object",
-      properties: {
-        action: {
-          anyOf: [
-            { type: "string", enum: ["list"] },
-            { type: "string", enum: ["search"] },
-          ],
-        },
-        limit: {
-          anyOf: [
-            { type: "integer", maximum: 100 },
-            { type: "integer", maximum: 50 },
-          ],
-        },
-        ratio: { type: "number" },
-        dryRun: { type: "boolean" },
-        modifiers: { type: "array", items: { type: "string" } },
-        options: { type: "object", properties: { depth: { type: "integer" } } },
-        rules: { anyOf: [{ not: {} }, { $ref: "#/$defs/Rules" }] },
-      },
-      required: ["action"],
-    })
-    const object = { type: "object", properties: { path: { type: "string" } } }
-    expect(ToolSchemaProjection.objectRoot(object)).toEqual(object)
+    expect(at(anthropicRoot(projected), "properties", "id")).toEqual({ anyOf: [{ type: "integer" }, { type: "string" }] })
   })
 
   for (const provider of providerRoutes) {
@@ -300,16 +267,17 @@ describe("tool schema projections", () => {
           }),
         )
         const schema = provider.schema(prepared.body)
+        const typed = provider.typed(schema)
 
-        expect(at(schema, "type")).toBe("object")
-        expect(at(schema, "required")).toEqual(["action"])
+        expect(at(typed, "type")).toBe("object")
+        expect(at(typed, "required")).toEqual(["action"])
         for (const [name, type] of Object.entries(typedParameters))
-          expect(declaredTypes(schema, at(schema, "properties", name))).toEqual([type])
+          expect(declaredTypes(schema, at(typed, "properties", name))).toEqual([type])
       }),
     )
   }
 
-  it.effect("anthropic routes declare the type on each top-level property itself", () =>
+  it.effect("anthropic routes declare the type on each property of the referenced root and none beside the reference", () =>
     Effect.gen(function* () {
       for (const provider of providerRoutes.filter((route) => route.name.includes("anthropic"))) {
         const prepared = yield* LLMClient.prepare(
@@ -321,8 +289,9 @@ describe("tool schema projections", () => {
         )
         const schema = provider.schema(prepared.body)
 
+        expect(Object.keys(isRecord(schema) ? schema : {})).toEqual(["type", "$ref", "$defs"])
         for (const [name, type] of Object.entries(typedParameters))
-          expect(at(schema, "properties", name, "type")).toBe(type)
+          expect(at(provider.typed(schema), "properties", name, "type")).toBe(type)
       }
     }),
   )

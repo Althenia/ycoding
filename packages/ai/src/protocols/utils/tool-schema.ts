@@ -76,18 +76,6 @@ const openAI = (schema: JsonSchema): JsonSchema => {
   return isRecord(normalized) ? normalized : { type: "object" }
 }
 
-const objectRoot = (schema: JsonSchema): JsonSchema => {
-  if (!Array.isArray(schema.anyOf)) return schema
-  const flattened = openAI(schema)
-  if (!isRecord(flattened.properties)) return schema
-  return {
-    ...schema,
-    type: "object",
-    properties: flattened.properties,
-    ...(flattened.required === undefined ? {} : { required: flattened.required }),
-  }
-}
-
 const declaredTypes = (schema: unknown, definitions: Record<string, unknown>): ReadonlyArray<string> => {
   if (!isRecord(schema)) return []
   if (typeof schema.type === "string") return [schema.type]
@@ -106,24 +94,24 @@ const anthropic = (schema: JsonSchema): JsonSchema => {
   let name = base
   let suffix = 0
   while (Object.hasOwn(definitions, name)) name = `${base}_${++suffix}`
-  const typed = objectRoot(normalized)
+  const flattened: JsonSchema = Array.isArray(normalized.anyOf) ? openAI(normalized) : {}
   return {
     type: "object",
-    ...(isRecord(typed.properties)
-      ? {
-          properties: Object.fromEntries(
-            Object.entries(typed.properties).map(([property, value]) => {
-              const types = [...new Set(declaredTypes(value, definitions))]
-              return [property, isRecord(value) && value.type === undefined && types.length === 1 ? { type: types[0], ...value } : value]
-            }),
-          ),
-          ...(typed.required === undefined ? {} : { required: typed.required }),
-        }
-      : {}),
     $ref: `#/$defs/${name}`,
     $defs: {
       ...definitions,
-      [name]: root,
+      [name]: isRecord(flattened.properties)
+        ? {
+            ...root,
+            properties: Object.fromEntries(
+              Object.entries(flattened.properties).map(([property, value]) => {
+                const types = [...new Set(declaredTypes(value, definitions))]
+                return [property, isRecord(value) && value.type === undefined && types.length === 1 ? { type: types[0], ...value } : value]
+              }),
+            ),
+            ...(flattened.required === undefined ? {} : { required: flattened.required }),
+          }
+        : root,
     },
   }
 }
@@ -148,6 +136,5 @@ export const ToolSchemaProjection = {
   gemini,
   modelCompatibility,
   moonshot,
-  objectRoot,
   openAI,
 } as const
