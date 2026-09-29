@@ -56,6 +56,19 @@ function verifySignature(application: string) {
   if (result.exitCode !== 0) throw new Error(`Computer helper app signature verification failed: ${result.stderr.toString().trim()}`)
 }
 
+export function computerHelperSigningNotice(application: string) {
+  const result = Bun.spawnSync(["/usr/bin/codesign", "-dvv", application])
+  if (result.exitCode !== 0) throw new Error(`Failed to read the signature of ${application}: ${result.stderr.toString().trim()}`)
+  return signingNotice(result.stderr.toString())
+}
+
+export function signingNotice(details: string) {
+  if (/^Signature=adhoc$/m.test(details))
+    return "The computer helper app is ad-hoc signed and each build has a different code requirement: remove old YCoding Computer Use entries in Privacy & Security and allow the new one when prompted."
+  const authority = /^Authority=(.+)$/m.exec(details)?.[1] ?? "a code-signing certificate"
+  return `The computer helper app is signed by ${authority}; macOS decides whether existing YCoding Computer Use grants in Privacy & Security apply to this build.`
+}
+
 if (import.meta.main) {
   const source = path.resolve(
     import.meta.dir,
@@ -63,14 +76,8 @@ if (import.meta.main) {
     `tui-${process.platform === "win32" ? "windows" : process.platform}-${process.arch}`,
     "bin",
   )
-  const installed = await installLocalBuild({
-    source,
-    destination: path.join(os.homedir(), ".local", "bin"),
-    platform: process.platform,
-  })
+  const destination = path.join(os.homedir(), ".local", "bin")
+  const installed = await installLocalBuild({ source, destination, platform: process.platform })
   for (const file of installed) console.log(`installed ${file}`)
-  if (process.platform === "darwin")
-    console.log(
-      "The computer helper app is re-signed by each build: remove old YCoding Computer Use entries in Privacy & Security and allow the new one when prompted.",
-    )
+  if (process.platform === "darwin") console.log(computerHelperSigningNotice(path.join(destination, COMPUTER_HELPER_APPLICATION)))
 }
