@@ -105,6 +105,8 @@ export class RemoteAgent {
   private retryTimer?: ReturnType<typeof setTimeout>
   private statusTimer?: ReturnType<typeof setTimeout>
   private statusReading?: RelayConnection
+  private statusOwner?: object
+  private statusRetryAttempt = 0
   private statusDirty = false
   private lastStatus?: string
   private attentionStatus?: readonly string[]
@@ -182,6 +184,8 @@ export class RemoteAgent {
       accessToken: credentials.accessToken,
       onOpen: () => {
         if (this.connection !== connection) return
+        this.resetStatusRetry()
+        this.statusOwner = {}
         this.sendQueue = Promise.resolve()
         this.nextSendAt = 0
         this.subscriptions.clear()
@@ -194,8 +198,6 @@ export class RemoteAgent {
         this.failedRoots.clear()
         this.failureChanges.clear()
         this.failuresHydrated = false
-        if (this.statusTimer !== undefined) clearTimeout(this.statusTimer)
-        this.statusTimer = undefined
         this.statusReading = undefined
         this.statusDirty = false
         void this.sendStatus()
@@ -295,7 +297,7 @@ export class RemoteAgent {
   }
 
   private scheduleStatus() {
-    if (this.state !== "live") return
+    if (this.state !== "live" || this.statusOwner === undefined) return
     if (this.statusReading === this.connection) {
       this.statusDirty = true
       return
@@ -309,7 +311,8 @@ export class RemoteAgent {
 
   private async sendStatus() {
     const connection = this.connection
-    if (connection === undefined || this.state !== "live") return
+    const owner = this.statusOwner
+    if (connection === undefined || owner === undefined || this.state !== "live") return
     if (this.statusReading === connection) {
       this.statusDirty = true
       return
@@ -319,7 +322,8 @@ export class RemoteAgent {
     try {
       const status = await sessionStatus(this.options.local, this.registry.snapshot(), this.attentionStatus,
         this.failuresHydrated ? this.failedRoots : undefined)
-      if (this.connection !== connection || this.state !== "live") return
+      if (this.connection !== connection || this.statusOwner !== owner || this.state !== "live") return
+      this.statusRetryAttempt = 0
       if (!this.failuresHydrated && generation === this.attentionGeneration) {
         this.failedRoots = new Set(status.failed)
         for (const [root, failed] of this.failureChanges) {
@@ -339,8 +343,18 @@ export class RemoteAgent {
       }
     } catch (error) {
       this.diagnostic(`could not read remote Session status: ${describe(error)}`)
+      if (this.connection === connection && this.statusOwner === owner && this.state === "live") {
+        const delay = Math.min(this.eventRetryInitialMs * 2 ** this.statusRetryAttempt, this.eventRetryMaxMs)
+        if (delay < this.eventRetryMaxMs) this.statusRetryAttempt++
+        const timer = setTimeout(() => {
+          if (this.statusTimer !== timer) return
+          this.statusTimer = undefined
+          if (this.statusOwner === owner) void this.sendStatus()
+        }, delay)
+        this.statusTimer = timer
+      }
     } finally {
-      if (this.statusReading === connection) {
+      if (this.statusReading === connection && this.statusOwner === owner) {
         this.statusReading = undefined
         if (this.statusDirty) {
           this.statusDirty = false
@@ -510,6 +524,8 @@ export class RemoteAgent {
 
   private onConnectionClosed(code: number | undefined, reason?: string) {
     if (this.state !== "live") return
+    this.statusOwner = undefined
+    this.resetStatusRetry()
     const reconnect = code === undefined || !terminalCloseCodes.includes(code) ||
       this.now() - this.lastAuthAttempt >= this.authRetryWindowMs
     this.diagnostic(`relay connection closed (code ${code ?? "unreported"}${reason ? `, reason: ${reason}` : ""}); ${reconnect ? "reconnecting" : "not reconnecting"}`)
@@ -527,6 +543,8 @@ export class RemoteAgent {
   private async recycleConnection(reason: string) {
     if (this.state !== "live") return
     const previous = this.connection
+    this.statusOwner = undefined
+    this.resetStatusRetry()
     this.connection = undefined
     this.uploads.clear()
     this.pendingEvents.splice(0)
@@ -557,6 +575,8 @@ export class RemoteAgent {
     }
     this.lastAuthAttempt = attempt
     const previous = this.connection
+    this.statusOwner = undefined
+    this.resetStatusRetry()
     this.connection = undefined
     this.uploads.clear()
     this.pendingEvents.splice(0)
@@ -602,10 +622,16 @@ export class RemoteAgent {
   private clearTimers() {
     if (this.refreshTimer) clearTimeout(this.refreshTimer)
     if (this.retryTimer) clearTimeout(this.retryTimer)
-    if (this.statusTimer) clearTimeout(this.statusTimer)
+    this.statusOwner = undefined
+    this.resetStatusRetry()
     this.refreshTimer = undefined
     this.retryTimer = undefined
+  }
+
+  private resetStatusRetry() {
+    if (this.statusTimer !== undefined) clearTimeout(this.statusTimer)
     this.statusTimer = undefined
+    this.statusRetryAttempt = 0
   }
 
   private diagnostic(message: string) {

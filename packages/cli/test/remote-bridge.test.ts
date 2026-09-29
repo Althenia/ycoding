@@ -253,6 +253,105 @@ describe("remote bridge", () => {
       ])
     } finally { await test.bridge.close() }
   })
+  test("a failed outstanding-work read retries the finished family without another event", async () => {
+    let running = true
+    let failNextRead = false
+    const test = harness({ results: {
+      activeSessions: () => running ? { ses_1: { type: "running" } } : {},
+      outstandingSessions: () => {
+        if (failNextRead) { failNextRead = false; throw new Error("transient status read") }
+        return { data: [], failed: [] }
+      },
+    } })
+    await test.bridge.connect()
+    try {
+      await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status" && frame.running.includes("ses_1")))
+      running = false
+      failNextRead = true
+      test.streams[0].stream.onEvent({ type: "session.execution.succeeded.1", data: { sessionID: "ses_1" } })
+      await waitFor(() => test.diagnostics.find((message) => message.startsWith("could not read remote Session status")))
+      expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status").at(-1)?.running).toEqual(["ses_1"])
+      await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status" && frame.running.length === 0))
+      expect(test.calls.filter((call) => call.method === "outstandingSessions")).toHaveLength(3)
+    } finally { await test.bridge.close() }
+  })
+  test("repeated status failures back off and a successful read resets retries", async () => {
+    let reads = 0
+    let running = false
+    const test = harness({ results: { activeSessions: () => {
+      if ([1, 2, 3, 5].includes(++reads)) throw new Error("transient status read")
+      return running ? { ses_1: { type: "running" } } : {}
+    } } })
+    await test.bridge.connect()
+    try {
+      await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status"))
+      expect(reads).toBe(4)
+      await Bun.sleep(30)
+      expect(reads).toBe(4)
+      running = true
+      test.streams[0].stream.onEvent({ type: "session.execution.started.1", data: { sessionID: "ses_1" } })
+      await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status" && frame.running.includes("ses_1")))
+      expect(reads).toBe(6)
+    } finally { await test.bridge.close() }
+  })
+  test("disconnect cancels a pending status-read retry until the connection reopens", async () => {
+    let reads = 0
+    const test = harness({ results: { activeSessions: () => {
+      if (++reads === 1) throw new Error("transient status read")
+      return {}
+    } } })
+    await test.bridge.connect()
+    try {
+      await waitFor(() => test.diagnostics.find((message) => message.startsWith("could not read remote Session status")))
+      test.records[0].input.onClose(1012)
+      await Bun.sleep(30)
+      expect(reads).toBe(1)
+      test.records[0].input.onOpen()
+      await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status"))
+      await Bun.sleep(30)
+      expect(reads).toBe(2)
+    } finally { await test.bridge.close() }
+  })
+  test("connection replacement cancels the predecessor's status-read retry", async () => {
+    let reads = 0
+    const test = harness({ results: { activeSessions: () => {
+      if (++reads === 1) throw new Error("transient status read")
+      return {}
+    } } })
+    await test.bridge.connect()
+    try {
+      await waitFor(() => test.diagnostics.find((message) => message.startsWith("could not read remote Session status")))
+      test.records[0].input.onClose(RemoteCloseCode.unauthorized)
+      await waitFor(() => test.records[1] && sentFrames(test.records[1]).find((frame) => frame.type === "status"))
+      await Bun.sleep(30)
+      expect(reads).toBe(2)
+    } finally { await test.bridge.close() }
+  })
+  test("a read settling after the same connection reopens cannot release the new read", async () => {
+    const first = Promise.withResolvers<unknown>()
+    const second = Promise.withResolvers<unknown>()
+    let reads = 0
+    const test = harness({ results: { activeSessions: () => {
+      if (++reads === 1) return first.promise
+      if (reads === 2) return second.promise
+      return {}
+    } } })
+    await test.bridge.connect()
+    try {
+      await waitFor(() => reads === 1 ? true : undefined)
+      test.records[0].input.onClose(1012)
+      test.records[0].input.onOpen()
+      await waitFor(() => reads === 2 ? true : undefined)
+      first.reject(new Error("old read failed"))
+      await waitFor(() => test.diagnostics.find((message) => message.startsWith("could not read remote Session status")))
+      test.streams[0].stream.onEvent({ type: "session.execution.started.1", data: { sessionID: "ses_1" } })
+      await Bun.sleep(300)
+      expect(reads).toBe(2)
+      second.resolve({})
+      await waitFor(() => reads === 3 ? true : undefined)
+      expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status")).toHaveLength(1)
+    } finally { second.resolve({}); await test.bridge.close() }
+  })
   test("reports the relay's policy close reason without hiding its cause", async () => {
     const test = harness({})
     await test.bridge.connect()
