@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test"
 import {
   DEFAULT_NOTIFICATION_PREFERENCES,
   NOTIFICATION_CATEGORIES,
+  NOTIFICATION_CHANNELS,
   NOTIFICATION_STORAGE_KEY,
-  countEnabledChannels,
   describeNotificationPermission,
   normalizeNotificationPreferences,
   readNotificationPreferences,
@@ -26,19 +26,19 @@ function storage(initial: Record<string, string> = {}) {
 }
 
 describe("notification categories", () => {
-  test("Settings labels describe finished work and attention across the root family", () => {
-    expect(NOTIFICATION_CATEGORIES.slice(0, 2)).toEqual([
+  test("Settings offers exactly three device-neutral categories and channels", () => {
+    expect(NOTIFICATION_CATEGORIES).toEqual([
       { id: "agent-completed", label: "Work finished", detail: "All work in a Session family has finished." },
-      { id: "approval-requested", label: "Needs your attention", detail: "A Session family is waiting for you or ended with an error." },
+      { id: "approval-requested", label: "Needs your attention", detail: "A Session family needs a decision, a guardrail blocked an action, or a run ended with an error." },
+      { id: "machine-offline", label: "Machine offline", detail: "A paired machine stopped reporting." },
     ])
+    expect(NOTIFICATION_CHANNELS).toEqual([{ id: "in-app", label: "In app" }, { id: "desktop", label: "System" }])
   })
   test("cover the configured user-facing categories", () => {
     expect(NOTIFICATION_CATEGORIES.map((category) => category.id)).toEqual([
       "agent-completed",
       "approval-requested",
-      "guardrail-blocked",
-      "error",
-      "device-disconnected",
+      "machine-offline",
     ])
     for (const category of NOTIFICATION_CATEGORIES) {
       expect(category.label.length).toBeGreaterThan(0)
@@ -69,11 +69,14 @@ describe("normalizeNotificationPreferences", () => {
   test("ignores malformed values instead of trusting them", () => {
     const normalized = normalizeNotificationPreferences({
       "agent-completed": { "in-app": "yes", desktop: null },
-      "guardrail-blocked": false,
+      "machine-offline": false,
+      "guardrail-blocked": { "in-app": false, desktop: false },
+      error: { "in-app": false, desktop: false },
+      "device-disconnected": { "in-app": false, desktop: false },
       unexpected: { "in-app": true },
     })
     expect(normalized["agent-completed"]).toEqual({ "in-app": true, desktop: true })
-    expect(normalized["guardrail-blocked"]).toEqual({ "in-app": true, desktop: true })
+    expect(normalized["machine-offline"]).toEqual({ "in-app": true, desktop: true })
     expect(Object.keys(normalized)).toHaveLength(NOTIFICATION_CATEGORIES.length)
   })
 })
@@ -82,10 +85,17 @@ describe("notification preference persistence", () => {
   test("reads stored preferences and falls back to defaults", () => {
     const stored = storage({
       [NOTIFICATION_STORAGE_KEY]: JSON.stringify({
+        "approval-requested": { "in-app": false, desktop: false },
+        "guardrail-blocked": { "in-app": false, desktop: false },
         error: { "in-app": false, desktop: false },
+        "device-disconnected": { "in-app": false, desktop: false },
       }),
     })
-    expect(readNotificationPreferences(stored).error).toEqual({ "in-app": false, desktop: false })
+    expect(readNotificationPreferences(stored)).toEqual({
+      "agent-completed": { "in-app": true, desktop: true },
+      "approval-requested": { "in-app": false, desktop: false },
+      "machine-offline": { "in-app": true, desktop: true },
+    })
     expect(readNotificationPreferences(storage({ [NOTIFICATION_STORAGE_KEY]: "{not json" }))).toEqual(
       DEFAULT_NOTIFICATION_PREFERENCES,
     )
@@ -127,24 +137,14 @@ describe("toggleNotificationChannel", () => {
     expect(before["approval-requested"].desktop).toBe(true)
     expect(after).not.toBe(before)
   })
-
-  test("counts enabled channels per category", () => {
-    expect(countEnabledChannels(normalizeNotificationPreferences(undefined))).toEqual({
-      "agent-completed": 2,
-      "approval-requested": 2,
-      "guardrail-blocked": 2,
-      error: 2,
-      "device-disconnected": 2,
-    })
-  })
 })
 
 describe("describeNotificationPermission", () => {
   test("describes every browser permission state in words", () => {
-    expect(describeNotificationPermission("granted")).toContain("allowed")
-    expect(describeNotificationPermission("denied")).toContain("blocked")
-    expect(describeNotificationPermission("default")).toContain("not requested")
-    expect(describeNotificationPermission(undefined)).toContain("not available")
-    expect(describeNotificationPermission("unknown-state")).toContain("not available")
+    expect(describeNotificationPermission("granted")).toBe("System alerts are allowed in this browser.")
+    expect(describeNotificationPermission("denied")).toBe("System alerts are blocked in this browser's site settings.")
+    expect(describeNotificationPermission("default")).toBe("System alerts are not requested yet.")
+    expect(describeNotificationPermission(undefined)).toBe("System alerts are not available in this browser.")
+    expect(describeNotificationPermission("unknown-state")).toBe("System alerts are not available in this browser.")
   })
 })

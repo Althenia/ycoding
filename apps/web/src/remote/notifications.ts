@@ -18,9 +18,7 @@ export type RemoteNotificationView = {
 export const NOTIFICATION_TEXT: Record<NotificationCategory, { readonly title: string; readonly body: string }> = {
   "agent-completed": { title: "YCoding — work finished", body: "A session finished all its work." },
   "approval-requested": { title: "YCoding — needs your attention", body: "A session is waiting for you." },
-  "guardrail-blocked": { title: "YCoding — guardrail blocked", body: "A guardrail decision blocked an action." },
-  error: { title: "YCoding — session failure", body: "A session step failed." },
-  "device-disconnected": { title: "YCoding — device disconnected", body: "The connected machine stopped reporting." },
+  "machine-offline": { title: "YCoding — machine offline", body: "The connected machine stopped reporting." },
 }
 
 /**
@@ -35,9 +33,9 @@ export function notificationCategory(payload: unknown): NotificationCategory | u
   switch (type) {
     case "session.execution.failed":
     case "session.step.failed":
-      return "error"
+      return "approval-requested"
     case "guardrail.decided":
-      return isRecord(payload.data) && isBlockingDecision(payload.data.decision) ? "guardrail-blocked" : undefined
+      return isBlockingDecision(payload.data.decision) ? "approval-requested" : undefined
     default:
       return undefined
   }
@@ -73,7 +71,7 @@ export function createDesktopNotifier(registration: () => Promise<DesktopRegistr
       })).catch(() => undefined)
     },
     dispose: (retainMachineOffline = false) => {
-      const tags = new Set([...raised].filter((tag) => !retainMachineOffline || tag !== "ycoding-remote-device-disconnected"))
+      const tags = new Set([...raised].filter((tag) => !retainMachineOffline || tag !== "ycoding-remote-machine-offline"))
       for (const tag of tags) raised.delete(tag)
       if (tags.size === 0) return
       void registration().then((worker) => worker?.getNotifications()).then((open) => {
@@ -143,7 +141,7 @@ export function createNotificationDelivery(options: NotificationDeliveryOptions 
     clear: () => { entries = [] },
     dispose: (retainMachineOffline = false) => {
       desktop.dispose(retainMachineOffline)
-      entries = retainMachineOffline ? entries.filter((entry) => entry.category === "device-disconnected") : []
+      entries = retainMachineOffline ? entries.filter((entry) => entry.category === "machine-offline") : []
     },
   }
 }

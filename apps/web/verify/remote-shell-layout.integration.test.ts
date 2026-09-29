@@ -135,7 +135,7 @@ describe("remote shell layout", () => {
 
   test("scrolls Settings from the window edge while its content stays one centered column", async () => {
     for (const [width, height] of [[1440, 900], [1920, 1080]] as const) {
-      const page = await fixture("view=settings&noSelection=1", width, "Desktop alerts", undefined, height)
+      const page = await fixture("view=settings&noSelection=1", width, "System alerts", undefined, height)
       try {
         await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`)
         const layout = await page.evaluate<{ scrollable: boolean; left: number; right: number; viewport: number; edgeScrolls: boolean; column: number; columnCenter: number; contentCenter: number }>(`(() => {

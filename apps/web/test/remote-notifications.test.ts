@@ -272,14 +272,14 @@ describe("remote notification delivery", () => {
       await test.flush()
 
       expect(test.store.state().notifications.map((entry) => entry.category)).toEqual([
-        "error",
-        "guardrail-blocked",
+        "approval-requested",
+        "approval-requested",
         "approval-requested",
       ])
       expect(test.alerts.map((alert) => alert.title)).toEqual([
         "YCoding — needs your attention",
-        "YCoding — guardrail blocked",
-        "YCoding — session failure",
+        "YCoding — needs your attention",
+        "YCoding — needs your attention",
       ])
       expect(test.alerts.every((alert) => !alert.body.includes("per_1") && !alert.body.includes("grq_1"))).toBe(true)
     } finally {
@@ -290,8 +290,8 @@ describe("remote notification delivery", () => {
   test("keeps a muted category silent on both channels", async () => {
     const test = await harness({
       muted: [
-        ["error", "in-app"],
-        ["error", "desktop"],
+        ["approval-requested", "in-app"],
+        ["approval-requested", "desktop"],
       ],
     })
     try {

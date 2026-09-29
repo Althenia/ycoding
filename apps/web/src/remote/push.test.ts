@@ -65,8 +65,10 @@ test("push Settings labels every capability and permission state without claimin
   expect(pushStatusView("unavailable")).toMatchObject({ label: "Unavailable", disabled: true, pressed: false })
   expect(pushStatusView("blocked")).toMatchObject({ label: "Blocked", disabled: true, pressed: false })
   expect(pushStatusView("off")).toMatchObject({ label: "Turn on", disabled: false, pressed: false })
+  expect(pushStatusView("off").detail).toBe("Enable work-finished and needs-attention alerts when the installed app is closed.")
   expect(pushStatusView("needs-setup")).toMatchObject({ label: "Re-enable", disabled: false, pressed: false })
   expect(pushStatusView("on")).toMatchObject({ label: "Turn off", disabled: false, pressed: true })
+  expect(pushStatusView("on").detail).toBe("Push is registered on this device for work-finished and needs-attention alerts.")
 })
 
 test("a granted device with a revoked browser subscription shows push off and offers re-enable", async () => {

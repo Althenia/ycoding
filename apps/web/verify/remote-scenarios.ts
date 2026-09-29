@@ -414,11 +414,9 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
     expectedText: [
       "Appearance",
       "Notifications",
-      "Agent completed",
-      "Approval requested",
-      "Guardrail block",
-      "Error or failure",
-      "Device disconnected",
+      "Work finished",
+      "Needs your attention",
+      "Machine offline",
     ],
   }
 }

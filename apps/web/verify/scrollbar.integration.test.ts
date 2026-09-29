@@ -26,7 +26,7 @@ afterAll(async () => { await browser?.close(); server?.kill(); if (server) await
 
 test("remote scroll regions draw the owned thumb at rest, under the pointer, and while dragged in both themes", async () => {
   for (const theme of ["light", "dark"] as const) {
-    const page = await remote("view=settings&noSelection=1", "Desktop alerts", 1440, 900, theme)
+    const page = await remote("view=settings&noSelection=1", "System alerts", 1440, 900, theme)
     try {
       const size = await scrollbarSize(page)
       const box = await scrollerBox(page, ".app--settings .workspace__scroll")
@@ -85,7 +85,7 @@ test("the public page and horizontal scroll regions use the same owned scrollbar
 
 test("primary scroll regions keep their content width when overflow appears", async () => {
   for (const [width, height] of [[1440, 900], [1024, 768]] as const) {
-    const page = await remote("view=settings&noSelection=1", "Desktop alerts", width, height, "light")
+    const page = await remote("view=settings&noSelection=1", "System alerts", width, height, "light")
     try {
       const overflowing = await scrollerBox(page, ".app--settings .workspace__scroll")
       expect(overflowing.scrollable).toBe(true)
@@ -117,7 +117,7 @@ test("the conversation column and composer keep shared edges beside a visible sc
 }, 30_000)
 
 test("touch pointers and forced colors keep the platform scrollbar", async () => {
-  const page = await remote("view=settings&noSelection=1", "Desktop alerts", 1440, 900, "light")
+  const page = await remote("view=settings&noSelection=1", "System alerts", 1440, 900, "light")
   try {
     const size = await scrollbarSize(page)
     await page.setCoarsePointer(true)

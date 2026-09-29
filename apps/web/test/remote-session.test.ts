@@ -923,12 +923,12 @@ describe("remote store integration", () => {
       await test.runUntil(() => test.store.state().sessions.length === 2)
       test.relay.dropConnections(1012, "Relay restarted")
       await test.runUntil(() => test.store.state().transport.kind === "open" && test.relay.connections >= 2)
-      expect(test.store.state().notifications.filter((entry) => entry.category === "device-disconnected")).toEqual([])
+      expect(test.store.state().notifications.filter((entry) => entry.category === "machine-offline")).toEqual([])
       expect(test.store.state().lastRelayDrop).toEqual({ code: 1012, reason: "Relay restarted" })
       expect(test.store.state().connection.kind).toBe("connected")
       test.relay.dropConnections(1001, "Phone relay link slept")
       await test.runUntil(() => test.store.state().transport.kind === "open" && test.relay.connections >= 3)
-      expect(test.store.state().notifications.filter((entry) => entry.category === "device-disconnected")).toEqual([])
+      expect(test.store.state().notifications.filter((entry) => entry.category === "machine-offline")).toEqual([])
       expect(test.store.state().lastRelayDrop).toEqual({ code: 1001, reason: "Phone relay link slept" })
       test.store.connect("dev_1")
       await test.runUntil(() => test.store.state().transport.kind === "open" && test.relay.connections >= 4)
@@ -942,7 +942,7 @@ describe("remote store integration", () => {
     let agent = "present"
     const test = await harness({ handler: () =>
       agent === "gone" ? { ok: false, code: "agent_unavailable", message: "No local agent is connected" } : "default" })
-    const notices = () => test.store.state().notifications.filter((entry) => entry.category === "device-disconnected")
+    const notices = () => test.store.state().notifications.filter((entry) => entry.category === "machine-offline")
     try {
       await test.store.load()
       await test.runUntil(() => test.store.state().sessions.length === 2)
@@ -971,7 +971,7 @@ describe("remote store integration", () => {
     let agent = "present"
     const test = await harness({ handler: () =>
       agent === "gone" ? { ok: false, code: "agent_unavailable", message: "No local agent is connected" } : "default" })
-    const notices = () => test.store.state().notifications.filter((entry) => entry.category === "device-disconnected")
+    const notices = () => test.store.state().notifications.filter((entry) => entry.category === "machine-offline")
     try {
       await test.store.load()
       await test.runUntil(() => test.store.state().sessions.length === 2)
@@ -1098,10 +1098,10 @@ describe("remote store integration", () => {
       expect(test.store.state().connection).toEqual({ kind: "offline", deviceName: "Studio Mac" })
       expect(test.store.state().activeDeviceID).toBe("dev_1")
       expect(test.store.state().sessions.map((session) => session.id)).toEqual(["ses_a", "ses_b"])
-      const offlineNotices = test.store.state().notifications.filter((entry) => entry.category === "device-disconnected")
+      const offlineNotices = test.store.state().notifications.filter((entry) => entry.category === "machine-offline")
       expect(offlineNotices).toHaveLength(1)
       await test.store.load()
-      expect(test.store.state().notifications.filter((entry) => entry.category === "device-disconnected").map((entry) => entry.id))
+      expect(test.store.state().notifications.filter((entry) => entry.category === "machine-offline").map((entry) => entry.id))
         .toEqual(offlineNotices.map((entry) => entry.id))
       test.store.searchSessions("no match")
       expect(test.store.state().sessions.map((session) => session.id)).toEqual(["ses_a", "ses_b"])

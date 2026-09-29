@@ -48,28 +48,23 @@ describe("remote responsive state behavior", () => {
   }, 30_000)
 
   test("notification headers stay on one line with toggles centered below both channel labels", async () => {
-    const page = await fixture("scenario=autonomy-goal-notification-settings-390", 390, "Notifications")
-    try {
-      const reports: { readonly names: readonly string[]; readonly lines: readonly number[]; readonly offsets: readonly number[]; readonly overflow: boolean }[] = []
-      for (const labels of [["Event", "In workspace", "Desktop"], ["Event", "In app", "System"]] as const) {
-        await page.evaluate(`document.querySelectorAll('.notification-table thead th').forEach((cell, index) => { cell.textContent = ${JSON.stringify(labels)}[index] })`)
-        if (labels[1] === "In app") await page.evaluate(`document.querySelectorAll('.notification-table tbody th > span:first-child').forEach((cell, index) => { cell.textContent = ['Work finished', 'Needs your attention', 'Machine offline'][index] ?? cell.textContent })`)
+    for (const width of [390, 1440] as const) {
+      const page = await fixture(`scenario=autonomy-goal-notification-settings-${width}`, width, "Notifications")
+      try {
         await page.evaluate(`document.querySelector('.notification-table')?.scrollIntoView({ block: 'center' })`)
-        await Bun.write(new URL(`../../../.cache/tmp/phone-settings-${process.env.PHONE_CAPTURE_PHASE ?? "after"}-notifications-${labels[1].replaceAll(" ", "-")}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
-        const layout = await page.evaluate<{ readonly names: readonly string[]; readonly lines: readonly number[]; readonly offsets: readonly number[]; readonly overflow: boolean }>(`(() => {
+        const layout = await page.evaluate<{ readonly names: readonly string[]; readonly categories: readonly string[]; readonly lines: readonly number[]; readonly offsets: readonly number[]; readonly overflow: boolean }>(`(() => {
           const table = document.querySelector('.notification-table'), heads = [...table.querySelectorAll('thead th')], row = table.querySelector('tbody tr');
-          return { names: heads.map(head => head.textContent.trim()), lines: heads.map(head => { const range = document.createRange(); range.selectNodeContents(head); return range.getClientRects().length }),
+          return { names: heads.map(head => head.textContent.trim()), categories: [...table.querySelectorAll('tbody th > span:first-child')].map(cell => cell.textContent.trim()),
+            lines: heads.map(head => { const range = document.createRange(); range.selectNodeContents(head); return range.getClientRects().length }),
             offsets: [...row.querySelectorAll('td')].map((cell, index) => Math.abs((cell.querySelector('.switch').getBoundingClientRect().left + cell.querySelector('.switch').getBoundingClientRect().right) / 2 - (heads[index + 1].getBoundingClientRect().left + heads[index + 1].getBoundingClientRect().right) / 2)),
             overflow: document.documentElement.scrollWidth > innerWidth }; })()`)
-        reports.push(layout)
-      }
-      for (const [index, layout] of reports.entries()) {
-        expect(layout.names).toEqual(index === 0 ? ["Event", "In workspace", "Desktop"] : ["Event", "In app", "System"])
+        expect(layout.names).toEqual(["Event", "In app", "System"])
+        expect(layout.categories).toEqual(["Work finished", "Needs your attention", "Machine offline"])
         expect(layout.lines, JSON.stringify(layout)).toEqual([1, 1, 1])
         expect(layout.offsets.every((offset) => offset <= 1), JSON.stringify(layout)).toBe(true)
         expect(layout.overflow).toBe(false)
-      }
-    } finally { await page.close() }
+      } finally { await page.close() }
+    }
   }, 20_000)
 
   test("keeps YOLO and goal controls out of Settings at desktop and phone widths", async () => {
@@ -82,7 +77,7 @@ describe("remote responsive state behavior", () => {
     }
   }, 30_000)
 
-  test("offers Desktop alert permission only while undecided and shows the settled browser state", async () => {
+  test("offers System alert permission only while undecided and shows the settled browser state", async () => {
     for (const permission of ["default", "granted", "denied"] as const) {
       const page = await browser!.openPage()
       try {
@@ -92,17 +87,17 @@ describe("remote responsive state behavior", () => {
         } })`)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=autonomy-goal-notification-settings-390`)
         for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('#notification-settings') !== null`); attempt += 1) await Bun.sleep(50)
-        const row = `(() => { const row = [...(document.querySelector('#notification-settings')?.closest('section')?.querySelectorAll('.defs__row') ?? [])].find(item => item.querySelector('.defs__key')?.textContent === 'Desktop alerts');
+        const row = `(() => { const row = [...(document.querySelector('#notification-settings')?.closest('section')?.querySelectorAll('.defs__row') ?? [])].find(item => item.querySelector('.defs__key')?.textContent === 'System alerts');
           return { button: row?.querySelector('button') !== null, status: row?.querySelector('.field__hint')?.textContent?.trim() ?? '' }; })()`
         expect(await page.evaluate<{ readonly button: boolean; readonly status: string }>(row)).toEqual({
           button: permission === "default",
-          status: permission === "granted" ? "Desktop alerts are allowed in this browser." : permission === "denied"
-            ? "Desktop alerts are blocked in this browser's site settings." : "Desktop alerts are not requested yet.",
+          status: permission === "granted" ? "System alerts are allowed in this browser." : permission === "denied"
+            ? "System alerts are blocked in this browser's site settings." : "System alerts are not requested yet.",
         })
         if (permission === "default") {
-          await page.evaluate(`[...(document.querySelector('#notification-settings')?.closest('section')?.querySelectorAll('.defs__row') ?? [])].find(item => item.querySelector('.defs__key')?.textContent === 'Desktop alerts')?.querySelector('button')?.click()`)
+          await page.evaluate(`[...(document.querySelector('#notification-settings')?.closest('section')?.querySelectorAll('.defs__row') ?? [])].find(item => item.querySelector('.defs__key')?.textContent === 'System alerts')?.querySelector('button')?.click()`)
           for (let attempt = 0; attempt < 40 && (await page.evaluate<{ readonly button: boolean; readonly status: string }>(row)).button; attempt += 1) await Bun.sleep(50)
-          expect(await page.evaluate<{ readonly button: boolean; readonly status: string }>(row)).toEqual({ button: false, status: "Desktop alerts are allowed in this browser." })
+          expect(await page.evaluate<{ readonly button: boolean; readonly status: string }>(row)).toEqual({ button: false, status: "System alerts are allowed in this browser." })
         }
       } finally { await page.close() }
     }
@@ -842,7 +837,7 @@ describe("remote responsive state behavior", () => {
   }, 30_000)
 
   test("keeps Settings controls in product order and density", async () => {
-    const mobile = await scenario("autonomy-goal-notification-settings", 390, "Device disconnected")
+    const mobile = await scenario("autonomy-goal-notification-settings", 390, "Machine offline")
     const state = await mobile.evaluate<{ readonly categoriesHidden: boolean; readonly themes: readonly string[]; readonly headingSizes: readonly number[] }>(`(() => ({
       categoriesHidden:[...document.querySelectorAll('#appearance-settings,#notification-settings')].every(heading=>{const section=heading.closest('section');const category=section?.querySelector('.settings__category');return category instanceof HTMLElement&&getComputedStyle(category).display==='none'}),
       themes:[...document.querySelectorAll('.appearance-segments [role="radio"]')].map(button=>button.textContent.trim()).slice(0,3),

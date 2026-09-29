@@ -102,8 +102,10 @@ describe("page structure", () => {
   test("the remote guide describes family-finished and attention categories", () => {
     const section = findDocPage("usage/remote")?.sections.find((entry) => entry.heading === "Notifications and availability")
     const text = JSON.stringify(section?.blocks)
+    expect(section?.blocks.flatMap((block) => block.kind === "table" ? block.rows.map((row) => row[0]) : [])).toEqual(["Work finished", "Needs your attention", "Machine offline"])
     expect(text).toContain("A root Session family has no executing work")
     expect(text).toContain("a run ends with an error")
+    expect(text).toContain("Machine offline does not send Web Push")
     expect(text).not.toContain("stops running")
   })
   test("configuration pages describe local attention without a removed remote notification tool", () => {

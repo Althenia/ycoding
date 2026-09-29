@@ -8,11 +8,9 @@ import type { NotificationCategory } from "../preferences"
 import "./notifications.css"
 
 const kinds: Record<NotificationCategory, { readonly icon: IconName; readonly label: string }> = {
-  "agent-completed": { icon: "check", label: "Stopped running" },
-  "approval-requested": { icon: "shield", label: "Waiting for your decision" },
-  "guardrail-blocked": { icon: "alert", label: "Guardrail review" },
-  error: { icon: "alert", label: "Step failed" },
-  "device-disconnected": { icon: "devices", label: "Machine disconnected" },
+  "agent-completed": { icon: "check", label: "Work finished" },
+  "approval-requested": { icon: "shield", label: "Needs your attention" },
+  "machine-offline": { icon: "devices", label: "Machine offline" },
 }
 
 export function notificationAge(at: number, now: number): string {

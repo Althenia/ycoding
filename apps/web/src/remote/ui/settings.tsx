@@ -22,7 +22,6 @@ import {
 import {
   NOTIFICATION_CATEGORIES,
   NOTIFICATION_CHANNELS,
-  countEnabledChannels,
   describeNotificationPermission,
   readNotificationPreferences,
   toggleNotificationChannel,
@@ -544,7 +543,6 @@ export function NotificationSettings(): JSX.Element {
   const pushHttp = createPushHttp()
   let pushPlatform: PushPlatform | undefined
   let active = true
-  const counts = () => countEnabledChannels(preferences())
 
   onMount(() => {
     pushPlatform = browserPushPlatform()
@@ -577,7 +575,7 @@ export function NotificationSettings(): JSX.Element {
       id="notification-settings"
       category="Notifications"
       title="Notifications"
-      hint="Categories apply to notices in this workspace and, once this browser is permitted, to desktop alerts while it is open. Push to this device can alert an installed app after it closes. If its subscription is missing, use Re-enable to restore alerts. Reopening a session never replays a past alert."
+      hint="Categories control in-app notices and System alerts while YCoding is open. Machine offline alerts require YCoding to be open. Push to this device can alert an installed app after it closes for Work finished and Needs your attention. If its subscription is missing, use Re-enable to restore alerts. Reopening a session never replays a past alert."
     >
       <div class="table-scroll">
         <table class="notification-table" aria-labelledby="notification-settings">
@@ -628,7 +626,7 @@ export function NotificationSettings(): JSX.Element {
           </span>
         </div>
         <div class="defs__row">
-          <span class="defs__key">Desktop alerts</span>
+          <span class="defs__key">System alerts</span>
           <span class="defs__value">
             <Show when={permission() === "default"}>
               <button type="button" class="button button--secondary button--small"
@@ -641,11 +639,6 @@ export function NotificationSettings(): JSX.Element {
           </span>
         </div>
       </div>
-      <p class="settings__hint">
-        {counts()["approval-requested"] === 0
-          ? "Approval requests are muted, so a blocked session will wait silently."
-          : "Approval requests notify you when a decision is needed."}
-      </p>
     </Section>
   )
 }

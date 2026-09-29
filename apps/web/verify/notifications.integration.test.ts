@@ -149,7 +149,7 @@ describe("notification center and live toasts", () => {
       for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.status-strip__body')?.textContent?.startsWith('Connected —') === true && document.querySelector('.status-strip__body')?.textContent?.includes('Last browser relay drop (1006): synthetic disconnect') === true`); attempt += 1) await Bun.sleep(50)
       expect(await page.evaluate<string>(`document.querySelector('.status-strip__body')?.textContent?.trim() ?? ''`)).toBe("Connected — Relay session active for Studio Mac. · Last browser relay drop (1006): synthetic disconnect")
       await page.evaluate(`document.querySelector('.yc-notification-center__trigger')?.click()`)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification--device-disconnected').length`)).toBe(0)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification--machine-offline').length`)).toBe(0)
     } finally { await page.close() }
   }, 15_000)
 
@@ -269,7 +269,7 @@ describe("notification center and live toasts", () => {
       expect(await page.evaluate<string[]>(`window.remoteOpened()`)).toEqual(["ses_alpha"])
       await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
       expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification').length`)).toBe(1)
-      await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click(); ['ses_alpha','ses_beta','ses_alpha','ses_beta'].forEach(id => window.remoteNotify('error', id))`)
+      await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click(); ['ses_alpha','ses_beta','ses_alpha','ses_beta'].forEach(id => window.remoteNotify('approval-requested', id))`)
       for (let attempt = 0; attempt < 30 && await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`) !== 3; attempt += 1) await Bun.sleep(30)
       expect(await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`)).toBe(3)
       await page.evaluate(`document.querySelector('.yc-toast__close').click()`)

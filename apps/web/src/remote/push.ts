@@ -9,10 +9,10 @@ export function pushStatusView(status: PushStatus) {
     case "unsupported": return { label: "Unsupported", detail: "Use a secure browser with Push support. On iPhone or iPad, install YCoding to your Home Screen.", disabled: true, pressed: false }
     case "unavailable": return { label: "Unavailable", detail: "This server has not enabled Web Push.", disabled: true, pressed: false }
     case "blocked": return { label: "Blocked", detail: "Allow notifications for this site in your browser settings.", disabled: true, pressed: false }
-    case "on": return { label: "Turn off", detail: "Push is registered on this device for approval and stopped-work alerts.", disabled: false, pressed: true }
+    case "on": return { label: "Turn off", detail: "Push is registered on this device for work-finished and needs-attention alerts.", disabled: false, pressed: true }
     case "needs-setup": return { label: "Re-enable", detail: "Push is off because this device has no active subscription. Re-enable alerts to this device.", disabled: false, pressed: false }
     case "error": return { label: "Retry setup", detail: "Push setup did not complete. Try again.", disabled: false, pressed: false }
-    case "off": return { label: "Turn on", detail: "Enable alerts when the installed app is closed.", disabled: false, pressed: false }
+    case "off": return { label: "Turn on", detail: "Enable work-finished and needs-attention alerts when the installed app is closed.", disabled: false, pressed: false }
   }
   throw new Error("Unknown push state")
 }

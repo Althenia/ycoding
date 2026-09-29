@@ -27,10 +27,8 @@ export const NOTIFICATION_STORAGE_KEY = "ycoding.notifications"
 
 export const NOTIFICATION_CATEGORIES = [
   { id: "agent-completed", label: "Work finished", detail: "All work in a Session family has finished." },
-  { id: "approval-requested", label: "Needs your attention", detail: "A Session family is waiting for you or ended with an error." },
-  { id: "guardrail-blocked", label: "Guardrail block", detail: "A guardrail review or denial stopped an action." },
-  { id: "error", label: "Error or failure", detail: "A session step or model request failed." },
-  { id: "device-disconnected", label: "Device disconnected", detail: "A paired machine stopped reporting." },
+  { id: "approval-requested", label: "Needs your attention", detail: "A Session family needs a decision, a guardrail blocked an action, or a run ended with an error." },
+  { id: "machine-offline", label: "Machine offline", detail: "A paired machine stopped reporting." },
 ] as const
 
 export type NotificationCategory = (typeof NOTIFICATION_CATEGORIES)[number]["id"]
@@ -39,16 +37,14 @@ export type NotificationPreference = Record<NotificationChannel, boolean>
 export type NotificationPreferences = Record<NotificationCategory, NotificationPreference>
 
 export const NOTIFICATION_CHANNELS: readonly { id: NotificationChannel; label: string }[] = [
-  { id: "in-app", label: "In workspace" },
-  { id: "desktop", label: "Desktop" },
+  { id: "in-app", label: "In app" },
+  { id: "desktop", label: "System" },
 ]
 
 export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
   "agent-completed": { "in-app": true, desktop: true },
   "approval-requested": { "in-app": true, desktop: true },
-  "guardrail-blocked": { "in-app": true, desktop: true },
-  error: { "in-app": true, desktop: true },
-  "device-disconnected": { "in-app": true, desktop: true },
+  "machine-offline": { "in-app": true, desktop: true },
 }
 
 /** Merges stored values over the defaults, ignoring anything that is not a boolean channel. */
@@ -89,21 +85,11 @@ export function toggleNotificationChannel(
   }
 }
 
-export function countEnabledChannels(preferences: NotificationPreferences): Record<NotificationCategory, number> {
-  return NOTIFICATION_CATEGORIES.reduce<Record<NotificationCategory, number>>(
-    (counts, category) => {
-      counts[category.id] = NOTIFICATION_CHANNELS.filter((channel) => preferences[category.id][channel.id]).length
-      return counts
-    },
-    {} as Record<NotificationCategory, number>,
-  )
-}
-
 export function describeNotificationPermission(permission: string | undefined): string {
-  if (permission === "granted") return "Desktop alerts are allowed in this browser."
-  if (permission === "denied") return "Desktop alerts are blocked in this browser's site settings."
-  if (permission === "default") return "Desktop alerts are not requested yet."
-  return "Desktop alerts are not available in this browser."
+  if (permission === "granted") return "System alerts are allowed in this browser."
+  if (permission === "denied") return "System alerts are blocked in this browser's site settings."
+  if (permission === "default") return "System alerts are not requested yet."
+  return "System alerts are not available in this browser."
 }
 
 function parseStored(raw: string): NotificationPreferences | undefined {

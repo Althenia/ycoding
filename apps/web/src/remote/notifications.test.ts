@@ -120,19 +120,20 @@ describe("notificationCategory", () => {
   test("finished and attention use fixed privacy-safe copy", () => {
     expect(NOTIFICATION_TEXT["agent-completed"]).toEqual({ title: "YCoding — work finished", body: "A session finished all its work." })
     expect(NOTIFICATION_TEXT["approval-requested"]).toEqual({ title: "YCoding — needs your attention", body: "A session is waiting for you." })
+    expect(NOTIFICATION_TEXT["machine-offline"]).toEqual({ title: "YCoding — machine offline", body: "The connected machine stopped reporting." })
   })
   test("maps each live event the workspace receives to one category", () => {
     expect(notificationCategory({ type: "session.execution.succeeded", data: {} })).toBeUndefined()
-    expect(notificationCategory({ type: "session.execution.failed", data: { error: { code: "x", message: "y" } } })).toBe("error")
-    expect(notificationCategory({ type: "session.step.failed", data: { assistantMessageID: "msg_1" } })).toBe("error")
+    expect(notificationCategory({ type: "session.execution.failed", data: { error: { code: "x", message: "y" } } })).toBe("approval-requested")
+    expect(notificationCategory({ type: "session.step.failed", data: { assistantMessageID: "msg_1" } })).toBe("approval-requested")
     expect(notificationCategory({ type: "permission.v2.asked", data: { id: "per_1" } })).toBeUndefined()
     expect(notificationCategory({ type: "form.created", data: { form: { id: "frm_1", sessionID: "ses_a" } } })).toBeUndefined()
     expect(notificationCategory({ type: "guardrail.asked", data: { id: "grq_1", hardReview: true } })).toBeUndefined()
   })
 
   test("treats only a blocking guardrail decision as a guardrail alert", () => {
-    expect(notificationCategory({ type: "guardrail.decided", data: { decision: "deny" } })).toBe("guardrail-blocked")
-    expect(notificationCategory({ type: "guardrail.decided", data: { decision: "cap_exceeded" } })).toBe("guardrail-blocked")
+    expect(notificationCategory({ type: "guardrail.decided", data: { decision: "deny" } })).toBe("approval-requested")
+    expect(notificationCategory({ type: "guardrail.decided", data: { decision: "cap_exceeded" } })).toBe("approval-requested")
     expect(notificationCategory({ type: "guardrail.decided", data: { decision: "allow" } })).toBeUndefined()
     expect(notificationCategory({ type: "guardrail.decided", data: { decision: "ask" } })).toBeUndefined()
   })
@@ -175,7 +176,7 @@ describe("createNotificationDelivery", () => {
     const test = deliveryWith({})
     test.delivery.deliver("agent-completed", { sessionID: "ses_a" })
     test.delivery.deliver("approval-requested", { sessionID: "ses_a" })
-    test.delivery.deliver("error", { sessionID: "ses_b" })
+    test.delivery.deliver("approval-requested", { sessionID: "ses_b" })
     test.delivery.markRead()
     const before = test.delivery.entries().map((entry) => [entry.id, entry.read, entry.category])
     expect(test.delivery.setSessionTitle("ses_a", "Named work")).toBe(true)
@@ -195,30 +196,37 @@ describe("createNotificationDelivery", () => {
     expect(test.recorder.alerts[0]?.tag.length).toBeGreaterThan(0)
   })
 
+  test("Machine offline uses one fixed in-app notice and System alert while the workspace is open", () => {
+    const test = deliveryWith({})
+    test.delivery.deliver("machine-offline")
+    expect(test.delivery.entries()).toMatchObject([{ category: "machine-offline", ...NOTIFICATION_TEXT["machine-offline"] }])
+    expect(test.recorder.alerts).toEqual([{ ...NOTIFICATION_TEXT["machine-offline"], tag: "ycoding-remote-machine-offline" }])
+  })
+
   test("honors the stored preference of each channel separately", () => {
-    const inAppMuted = deliveryWith({ preferences: () => mute("error", "in-app") })
-    inAppMuted.delivery.deliver("error")
+    const inAppMuted = deliveryWith({ preferences: () => mute("approval-requested", "in-app") })
+    inAppMuted.delivery.deliver("approval-requested")
     expect(inAppMuted.delivery.entries()).toHaveLength(0)
     expect(inAppMuted.recorder.alerts).toHaveLength(1)
 
-    const desktopMuted = deliveryWith({ preferences: () => mute("error", "desktop") })
-    desktopMuted.delivery.deliver("error")
+    const desktopMuted = deliveryWith({ preferences: () => mute("approval-requested", "desktop") })
+    desktopMuted.delivery.deliver("approval-requested")
     expect(desktopMuted.delivery.entries()).toHaveLength(1)
     expect(desktopMuted.recorder.alerts).toHaveLength(0)
 
     const bothMuted = deliveryWith({
-      preferences: () => mute("error", "in-app", mute("error", "desktop")),
+      preferences: () => mute("approval-requested", "in-app", mute("approval-requested", "desktop")),
     })
-    bothMuted.delivery.deliver("error")
+    bothMuted.delivery.deliver("approval-requested")
     expect(bothMuted.delivery.entries()).toHaveLength(0)
     expect(bothMuted.recorder.alerts).toHaveLength(0)
   })
 
   test("reads the preference at delivery time rather than at creation", () => {
-    let preferences = mute("error", "in-app")
+    let preferences = mute("approval-requested", "in-app")
     const test = deliveryWith({ preferences: () => preferences })
     preferences = normalizeNotificationPreferences(undefined)
-    test.delivery.deliver("error")
+    test.delivery.deliver("approval-requested")
     expect(test.delivery.entries()).toHaveLength(1)
   })
 
@@ -226,11 +234,11 @@ describe("createNotificationDelivery", () => {
     const test = deliveryWith({})
     const payload = { type: "session.step.failed", data: { error: { code: "secret_code", message: "leaked-token-abc" } } }
     const category = notificationCategory(payload)
-    expect(category).toBe("error")
+    expect(category).toBe("approval-requested")
     if (category === undefined) return
     test.delivery.deliver(category)
     const alert = test.recorder.alerts[0]
-    expect(alert?.body).toBe(NOTIFICATION_TEXT.error.body)
+    expect(alert?.body).toBe(NOTIFICATION_TEXT["approval-requested"].body)
     expect(alert?.title).not.toContain("secret_code")
     expect(alert?.body).not.toContain("leaked-token-abc")
     expect(test.delivery.entries()[0]?.body).not.toContain("leaked-token-abc")
@@ -241,20 +249,20 @@ describe("createNotificationDelivery", () => {
     for (const category of NOTIFICATION_CATEGORIES) test.delivery.deliver(category.id)
     expect(test.delivery.entries()).toHaveLength(NOTIFICATION_CATEGORIES.length)
 
-    for (let index = 0; index < 52; index += 1) test.delivery.deliver("error", { sessionID: `ses_${index}`, sessionTitle: `Session ${index}` })
+    for (let index = 0; index < 52; index += 1) test.delivery.deliver("approval-requested", { sessionID: `ses_${index}`, sessionTitle: `Session ${index}` })
     expect(test.delivery.entries()).toHaveLength(50)
-    expect(test.delivery.entries()[0]).toMatchObject({ category: "error", sessionID: "ses_51", sessionTitle: "Session 51", read: false })
+    expect(test.delivery.entries()[0]).toMatchObject({ category: "approval-requested", sessionID: "ses_51", sessionTitle: "Session 51", read: false })
     expect(test.delivery.entries().at(-1)?.sessionID).toBe("ses_2")
     test.delivery.markRead()
     expect(test.delivery.entries().every((entry) => entry.read)).toBe(true)
     test.delivery.clear()
     expect(test.delivery.entries()).toEqual([])
-    expect(test.recorder.alerts.at(-1)?.body).toBe(NOTIFICATION_TEXT.error.body)
+    expect(test.recorder.alerts.at(-1)?.body).toBe(NOTIFICATION_TEXT["approval-requested"].body)
   })
 
   test("dismisses one notice without touching the others", () => {
     const test = deliveryWith({})
-    test.delivery.deliver("error")
+    test.delivery.deliver("approval-requested")
     test.delivery.deliver("agent-completed")
     const ids = test.delivery.entries().map((entry) => entry.id)
     expect(ids).toHaveLength(2)
@@ -266,7 +274,7 @@ describe("createNotificationDelivery", () => {
 
   test("releases the desktop notifier and its notices on dispose", () => {
     const test = deliveryWith({})
-    test.delivery.deliver("error")
+    test.delivery.deliver("approval-requested")
     test.delivery.dispose()
     expect(test.recorder.disposals()).toBe(1)
     expect(test.delivery.entries()).toHaveLength(0)
@@ -274,8 +282,8 @@ describe("createNotificationDelivery", () => {
 
   test("keeps a machine-offline notice while disposing unrelated connection notices", () => {
     const test = deliveryWith({})
-    test.delivery.deliver("error")
-    test.delivery.deliver("device-disconnected")
+    test.delivery.deliver("approval-requested")
+    test.delivery.deliver("machine-offline")
     const id = test.delivery.entries()[0]!.id
     test.delivery.dispose(true)
     expect(test.delivery.entries().map((entry) => entry.id)).toEqual([id])
@@ -287,12 +295,12 @@ describe("createNotificationDelivery", () => {
 
   test("keeps delivering after dispose so the next connection can raise its own alerts", () => {
     const test = deliveryWith({})
-    test.delivery.deliver("error")
+    test.delivery.deliver("approval-requested")
     test.delivery.dispose()
     expect(test.delivery.entries()).toHaveLength(0)
 
-    test.delivery.deliver("error")
-    expect(test.delivery.entries().map((entry) => entry.category)).toEqual(["error"])
+    test.delivery.deliver("approval-requested")
+    expect(test.delivery.entries().map((entry) => entry.category)).toEqual(["approval-requested"])
     expect(test.recorder.alerts).toHaveLength(2)
     expect(test.recorder.disposals()).toBe(1)
   })
@@ -306,11 +314,11 @@ describe("createDesktopNotifier", () => {
         preferences: () => normalizeNotificationPreferences(undefined), desktop: createDesktopNotifier(async () => worker.registration),
       })
       delivery.deliver("approval-requested", { sessionID: "ses_a", sessionTitle: "Private Session" })
-      delivery.deliver("error")
+      delivery.deliver("approval-requested")
       await Bun.sleep(0)
       expect(worker.shown.map((item) => [item.title, item.options.tag, item.options.data])).toEqual([
         [NOTIFICATION_TEXT["approval-requested"].title, "ycoding-ses_a-approval-requested", { sessionID: "ses_a" }],
-        [NOTIFICATION_TEXT.error.title, "ycoding-remote-error", undefined],
+        [NOTIFICATION_TEXT["approval-requested"].title, "ycoding-remote-approval-requested", undefined],
       ])
       expect(worker.shown[0]?.options.body).toBe(NOTIFICATION_TEXT["approval-requested"].body)
       expect(worker.shown[0]?.options.body).not.toContain("Private Session")
@@ -392,9 +400,9 @@ describe("createDesktopNotifier", () => {
       const notifier = createDesktopNotifier(async () => worker.registration)
       notifier.show({ title: "first", body: "same Session", tag: "ycoding-ses_a-error", sessionID: "ses_a" })
       notifier.show({ title: "second", body: "same Session", tag: "ycoding-ses_a-error", sessionID: "ses_a" })
-      notifier.show({ title: "other", body: "no Session", tag: "ycoding-remote-device-disconnected" })
+      notifier.show({ title: "other", body: "no Session", tag: "ycoding-remote-machine-offline" })
       await Bun.sleep(0)
-      expect([...worker.open.keys()].sort()).toEqual(["ycoding-remote-device-disconnected", "ycoding-ses_a-error", "ycoding-ses_z-agent-completed"])
+      expect([...worker.open.keys()].sort()).toEqual(["ycoding-remote-machine-offline", "ycoding-ses_a-error", "ycoding-ses_z-agent-completed"])
       notifier.dispose()
       await Bun.sleep(0)
       expect([...worker.open.keys()]).toEqual(["ycoding-ses_z-agent-completed"])
@@ -405,12 +413,12 @@ describe("createDesktopNotifier", () => {
     await withFakeNotificationAsync("granted", async () => {
       const worker = fakeWorkerRegistration()
       const notifier = createDesktopNotifier(async () => worker.registration)
-      notifier.show({ title: "machine", body: "offline", tag: "ycoding-remote-device-disconnected" })
+      notifier.show({ title: "machine", body: "offline", tag: "ycoding-remote-machine-offline" })
       notifier.show({ title: "step", body: "failed", tag: "ycoding-ses_a-error", sessionID: "ses_a" })
       await Bun.sleep(0)
       notifier.dispose(true)
       await Bun.sleep(0)
-      expect([...worker.open.keys()]).toEqual(["ycoding-remote-device-disconnected"])
+      expect([...worker.open.keys()]).toEqual(["ycoding-remote-machine-offline"])
       notifier.dispose()
       await Bun.sleep(0)
       expect([...worker.open.keys()]).toEqual([])
@@ -440,7 +448,7 @@ describe("createDesktopNotifier", () => {
     try {
       let requested = 0
       const test = deliveryWith({ notifier: createDesktopNotifier(async () => { requested += 1; return undefined }) })
-      test.delivery.deliver("error")
+      test.delivery.deliver("approval-requested")
       expect(test.delivery.entries()).toHaveLength(1)
       expect(requested).toBe(0)
       test.delivery.dispose()

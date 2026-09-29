@@ -526,7 +526,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (state.activeDeviceID === undefined || offlineDeviceID === state.activeDeviceID ||
       !state.devices.some((device) => device.id === state.activeDeviceID && device.status === "active")) return
     offlineDeviceID = state.activeDeviceID
-    delivery.deliver("device-disconnected")
+    delivery.deliver("machine-offline")
     setState({ notifications: delivery.entries() })
   }
 
@@ -2092,7 +2092,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         setState({ owner: { id: me.value.user.id, expiresAt: me.value.session.expiresAt }, devices })
         disconnectDevice(alreadyOffline)
         offlineDeviceID = selected.id
-        if (wentOffline) delivery.deliver("device-disconnected")
+        if (wentOffline) delivery.deliver("machine-offline")
         setState({
           activeDeviceID: selected.id,
           sessions,
