@@ -10,6 +10,7 @@ import {
 import type { NotificationCategory } from "./preferences"
 import {
   applySessionEvent,
+  clearAssistantRetry,
   canReplyToRequest,
   createSessionView,
   ephemeralAssistantID,
@@ -1058,7 +1059,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       !state.carouselSessions?.some((row) => row.id === parentID)) return view
     if (status.running.has(parentID ?? view.id) || view.status === "failed" || view.status === "interrupted") return view
     if (view.status !== "running" && view.executionStarted === undefined) return view
-    return { ...view, status: "idle", executionStarted: undefined, retry: undefined }
+    return { ...clearAssistantRetry(view), status: "idle", executionStarted: undefined }
   }
 
   /**

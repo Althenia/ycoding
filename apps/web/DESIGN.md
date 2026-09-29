@@ -278,6 +278,8 @@ Use concise action labels and explicit pending, error, and unknown states. On re
 
 Composer mutations report sent, failed, and unknown outcomes in dismissible, accessible toasts above the workspace using the toast layer and semantic success, warning, or danger roles. Failed and unknown prompts retain an actionable status on their transcript message; a retry reuses its message identity. Reduced motion removes toast travel without hiding the outcome. An admitted steer displays Processing until promotion; a queued input displays Queued until promotion. The composer status row names an active goal without relying on color or an opened popover, and announces Setting goal while the selected Session's goal request is in flight (`verify/composer-controls.integration.test.ts`, `verify/remote-shell-layout.integration.test.ts`).
 
+The execution status slot counts down a scheduled retry for the latest unfinished assistant step. After the deadline, it says Retrying only until that step produces text, reasoning, or tool progress; a completed step or a non-running Session uses its ordinary state instead (`verify/composer-controls.integration.test.ts`).
+
 ## Touchpoints
 
 Public routes, documentation, changelog, remote workspace, offline shell, installed app icons, and browser theme-color use the same semantics but their route compositions remain owned by `site.css`, `docs.css`, `remote.css`, and the app shell. Use the canonical mark variants in `../../assets/brand` rather than a screenshot-derived approximation (`verify/pwa-shell.integration.test.ts`, `../../assets/brand/README.md`).

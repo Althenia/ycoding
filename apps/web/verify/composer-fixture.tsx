@@ -6,7 +6,7 @@ import { MessageRow } from "../src/remote/ui/conversation"
 import { NewSessionComposer } from "../src/remote/ui/new-session"
 import { catalogKey, type CatalogView } from "../src/remote/catalog"
 import type { RemoteStore, RemoteStoreState } from "../src/remote/store"
-import { createSessionView } from "../src/remote/projection"
+import { applySessionEvent, createSessionView } from "../src/remote/projection"
 import "../src/styles/tokens.css"
 import "../src/styles/base.css"
 import "../src/styles/remote.css"
@@ -86,6 +86,19 @@ Object.assign(window, { composerSetGoalStatus: (status: "active" | "completed" |
 Object.assign(window, { composerSetGoalPending: (pending: boolean) => update({ ...state(), mutations: pending
   ? [{ id: "goal_fixture", kind: "goal", label: "Set goal", state: "sending", sessionID: "ses_fixture", operation: "session.goal.set", input: { goal: "Finish task" } }]
   : [] }) })
+Object.assign(window, { composerSetRetryPhase: (phase: "countdown" | "retrying" | "progress" | "next" | "idle" | "failed") => {
+  const now = Date.now()
+  const event = (type: string, data: Record<string, unknown>) => ({ type, data })
+  const started = applySessionEvent({ ...createSessionView("ses_fixture"), autonomy: state().view?.autonomy }, event("session.execution.started", { sessionID: "ses_fixture" }), now - 1_000)
+  const step = applySessionEvent(started, event("session.step.started", { sessionID: "ses_fixture", assistantMessageID: "msg_retry" }), now - 900)
+  const retry = applySessionEvent(step, event("session.retry.scheduled", { sessionID: "ses_fixture", assistantMessageID: "msg_retry", attempt: 2, at: phase === "countdown" ? now + 4_000 : now - 1, error: { code: "rate_limit", message: "Slow down" } }), now)
+  const next = phase === "progress" ? applySessionEvent(retry, event("session.text.delta", { sessionID: "ses_fixture", assistantMessageID: "msg_retry", ordinal: 0, delta: "Recovered" }), now)
+    : phase === "next" ? applySessionEvent(retry, event("session.step.started", { sessionID: "ses_fixture", assistantMessageID: "msg_next" }), now)
+      : phase === "idle" ? applySessionEvent(retry, event("session.status", { sessionID: "ses_fixture", status: { type: "idle" } }), now)
+        : phase === "failed" ? applySessionEvent(retry, event("session.execution.failed", { sessionID: "ses_fixture", error: { code: "provider_error", message: "Stopped" } }), now)
+          : retry
+  update({ ...state(), view: next })
+} })
 Object.assign(window, { composerSetDiagnostics: (status: "known" | "unknown" | "mismatch") => {
   const selected = state().selectedSessionInfo?.model
   const model = status === "mismatch" ? { providerID: "anthropic", id: "claude-opus-5-5" } : selected

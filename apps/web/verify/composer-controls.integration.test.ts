@@ -135,6 +135,28 @@ test("pending prompts, mutation toasts, and the active goal remain accessible on
   }
 }, 30_000)
 
+test("retry status yields to progress and terminal state at phone and desktop widths", async () => {
+  for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width!, height!)
+      await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+      await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; window.composerSetRetryPhase('countdown')`)
+      expect(await page.evaluate<string>(`document.querySelector('.session-status__label')?.textContent?.trim()`)).toMatch(/1 failed · retry 2 · in [1-5]s/)
+      await page.evaluate(`window.composerSetRetryPhase('retrying')`)
+      await wait(page, `document.querySelector('.session-status__label')?.textContent?.trim() === 'retrying · attempt 2'`)
+      expect(await page.evaluate<string>(`document.querySelector('.session-status__label')?.textContent?.trim()`)).toBe("retrying · attempt 2")
+      for (const [phase, expected] of [["progress", "Running"], ["next", "Running"], ["idle", ""], ["failed", "provider error"]] as const) {
+        await page.evaluate(`window.composerSetRetryPhase(${JSON.stringify(phase)})`)
+        await wait(page, phase === "idle" ? `document.querySelector('.session-status__slot')?.classList.contains('session-status__slot--empty') === true`
+          : `document.querySelector('.session-status__label')?.textContent?.includes(${JSON.stringify(expected)}) === true`)
+        expect(await page.evaluate<string>(`document.querySelector('.session-status__label')?.textContent?.trim() ?? ''`)).toContain(expected)
+        expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+      }
+    } finally { await page.close() }
+  }
+}, 30_000)
+
 test("phone tool-running status text stays inside its pill and footer", async () => {
   for (const theme of ["light", "dark"]) {
     const page = await browser!.openPage()

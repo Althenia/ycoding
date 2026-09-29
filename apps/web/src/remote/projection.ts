@@ -332,7 +332,6 @@ export type SessionView = {
   readonly archived?: boolean
   readonly lastError?: { readonly code: string; readonly message: string }
   readonly autonomy?: SessionAutonomyView
-  readonly retry?: { readonly attempt: number; readonly at: number; readonly code: string }
   readonly executionStarted?: number
   readonly messages: readonly RemoteMessageView[]
   readonly compactionHistory?: RemoteCompactionHistory
@@ -427,12 +426,14 @@ export function sessionStatusLabel(view: SessionView, now: number, waiting = 0):
   const level = view.autonomy?.yolo ?? 0
   const prefix = level > 0 && goal ? `YOLO ${level} + Goal · autonomous` : level > 0 ? `YOLO ${level} · auto-approve` : goal ? "Goal · autonomous" : ""
   const assistant = view.messages.findLast((message) => message.kind === "assistant")
+  const retry = view.status === "running" && assistant?.kind === "assistant" && assistant.completed === undefined ? assistant.retry : undefined
+  const retryProgress = assistant?.kind === "assistant" && assistant.parts.some((part) => part.kind === "text" && part.text.length > 0 || part.kind === "reasoning" || part.kind === "tool")
   const activeTool = assistant?.kind === "assistant" ? assistant.parts.findLast((part) => part.kind === "tool" && (part.status === "running" || part.status === "streaming")) : undefined
   const activeReasoning = assistant?.kind === "assistant" ? assistant.parts.findLast((part) => part.kind === "reasoning" && part.completed === undefined) : undefined
   const elapsed = view.executionStarted === undefined ? "" : ` · ${formatElapsed(now - view.executionStarted)}`
   const status = view.status === "failed" ? "provider error"
-    : view.retry && view.retry.at > now ? `${view.retry.attempt - 1} failed · retry ${view.retry.attempt} · in ${Math.ceil((view.retry.at - now) / 1_000)}s`
-    : view.retry ? `retrying · attempt ${view.retry.attempt}`
+    : retry && retry.at > now ? `${retry.attempt - 1} failed · retry ${retry.attempt} · in ${Math.ceil((retry.at - now) / 1_000)}s`
+    : retry && !retryProgress ? `retrying · attempt ${retry.attempt}`
     : view.requests.length && view.status === "running" ? `? awaiting input${elapsed}`
     : view.status === "running" && activeTool ? `tool running${elapsed}`
     : view.status === "running" && activeReasoning ? `thinking${elapsed}`
@@ -444,8 +445,9 @@ export function sessionStatusLabel(view: SessionView, now: number, waiting = 0):
 
 export function sessionStatusTimed(view: SessionView, waiting = 0): boolean {
   if (view.status !== "running") return false
-  if (view.retry || view.requests.length || waiting === 0) return true
+  if (view.requests.length || waiting === 0) return true
   const assistant = view.messages.findLast((message) => message.kind === "assistant")
+  if (assistant?.kind === "assistant" && assistant.completed === undefined && assistant.retry) return true
   return assistant?.kind === "assistant" && assistant.parts.some((part) => part.kind === "tool" && (part.status === "running" || part.status === "streaming") || part.kind === "reasoning" && part.completed === undefined)
 }
 
@@ -836,27 +838,19 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         contextWindow: readContextWindow(data.diagnostics.model, context?.total, context?.limit), updatedAt: now }
     }
     case "session.execution.started":
-      return { ...view, status: "running", executionStarted: now, retry: undefined, updatedAt: now }
+      return { ...clearAssistantRetry(view), status: "running", executionStarted: now, updatedAt: now }
     case "session.execution.succeeded":
-      return { ...view, status: "idle", executionStarted: undefined, retry: undefined, updatedAt: now, activeAt }
+      return { ...clearAssistantRetry(view), status: "idle", executionStarted: undefined, updatedAt: now, activeAt }
     case "session.execution.failed":
-      return { ...view, status: "failed", executionStarted: undefined, lastError: readError(data.error), updatedAt: now, activeAt }
+      return { ...clearAssistantRetry(view), status: "failed", executionStarted: undefined, lastError: readError(data.error), updatedAt: now, activeAt }
     case "session.execution.interrupted":
-      return { ...view, status: "interrupted", executionStarted: undefined, retry: undefined, updatedAt: now, activeAt }
+      return { ...clearAssistantRetry(view), status: "interrupted", executionStarted: undefined, updatedAt: now, activeAt }
     case "session.status":
       return applyStatus(view, data, now)
     case "session.idle":
-      return { ...view, status: "idle", executionStarted: undefined, retry: undefined, updatedAt: now }
+      return { ...clearAssistantRetry(view), status: "idle", executionStarted: undefined, updatedAt: now }
     case "session.retry.scheduled":
-      return {
-        ...view,
-        retry: {
-          attempt: numberField(data.attempt) ?? 1,
-          at: numberField(data.at) ?? now,
-          code: readError(data.error)?.code ?? "unknown",
-        },
-        updatedAt: now,
-      }
+      return { ...withAssistant(view, data, now, (message) => ({ ...message, retry: readAssistantRetry(data) ?? message.retry })), status: "running", updatedAt: now }
     case "session.input.admitted":
       return applyAdmitted(view, data, now)
     case "session.input.promoted":
@@ -878,6 +872,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
           created: message.parts.length === 0 ? now : message.created,
           agent: stringField(data.agent) ?? message.agent,
           model: stepModel ?? message.model,
+          retry: undefined,
         }
       })
     case "session.step.ended":
@@ -886,6 +881,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
       return { ...withAssistant(view, data, now, (message) => ({
         ...message,
         completed: now,
+        retry: undefined,
         error: readError(data.error)?.message ?? "The step failed",
       })), activeAt }
     case "session.text.started":
@@ -1223,19 +1219,22 @@ export function readError(
   return { code: code ?? "error", message: message ?? code ?? "unknown error" }
 }
 
+function readAssistantRetry(value: unknown): Extract<RemoteMessageView, { kind: "assistant" }>["retry"] {
+  if (!isRecord(value)) return undefined
+  const attempt = positiveInteger(value.attempt)
+  const at = numberField(value.at)
+  return attempt === undefined || at === undefined || at < 0 ? undefined : { attempt, at, code: readError(value.error)?.code ?? "unknown" }
+}
+
 function applyStatus(view: SessionView, data: Record<string, unknown>, now: number): SessionView {
   const status = isRecord(data.status) ? data.status : {}
   if (status.type === "busy") return { ...view, status: "running", updatedAt: now }
-  if (status.type === "idle") return { ...view, status: "idle", executionStarted: undefined, retry: undefined, updatedAt: now }
+  if (status.type === "idle") return { ...clearAssistantRetry(view), status: "idle", executionStarted: undefined, updatedAt: now }
   if (status.type === "retry") {
-    return {
-      ...view,
+    const assistant = view.messages.findLast((message) => message.kind === "assistant")
+    return { ...(assistant?.kind !== "assistant" ? view : withAssistant(view, { assistantMessageID: assistant.id }, now, (message) => ({ ...message,
+      retry: { attempt: numberField(status.attempt) ?? 1, at: numberField(status.next) ?? now, code: stringField(status.message) ?? "retrying" } }))),
       status: "running",
-      retry: {
-        attempt: numberField(status.attempt) ?? 1,
-        at: numberField(status.next) ?? now,
-        code: stringField(status.message) ?? "retrying",
-      },
       updatedAt: now,
     }
   }
@@ -1322,6 +1321,11 @@ function withAssistant(
     existing ?? { kind: "assistant" as const, id, parts: [] as readonly AssistantPart[], created: now }
   const updated = update(message)
   return existing ? replaceMessage(view, updated) : pushMessage(view, updated)
+}
+
+export function clearAssistantRetry(view: SessionView): SessionView {
+  const assistant = view.messages.findLast((message) => message.kind === "assistant")
+  return assistant?.kind === "assistant" && assistant.retry ? replaceMessage(view, { ...assistant, retry: undefined }) : view
 }
 
 function withTextPart(
@@ -1675,6 +1679,7 @@ export function readProjectedMessage(value: unknown): RemoteMessageView | undefi
   if (type === "assistant") {
     const error = readError(value.error)
     const assistantModel = readModelRef(value.model)
+    const retry = readAssistantRetry(value.retry)
     return {
       kind: "assistant",
       id,
@@ -1684,6 +1689,7 @@ export function readProjectedMessage(value: unknown): RemoteMessageView | undefi
       created,
       ...(completed === undefined ? {} : { completed }),
       ...(error === undefined ? {} : { error: error.message }),
+      ...(retry === undefined ? {} : { retry }),
     }
   }
   return undefined

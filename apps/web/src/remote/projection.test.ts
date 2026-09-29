@@ -185,11 +185,11 @@ test("live diagnostics replace selected-Session speed and context, then clear on
 
 test("ends the elapsed clock on an idle status before the next execution starts", () => {
   const started = apply(createSessionView("ses_a"), "session.execution.started", {}, 1_000)
-  const retry = apply(started, "session.retry.scheduled", { attempt: 2, at: 6_000, code: "rate_limit" }, 2_000)
+  const retry = apply(apply(started, "session.step.started", { assistantMessageID: "msg_a" }, 1_100), "session.retry.scheduled", { assistantMessageID: "msg_a", attempt: 2, at: 6_000, error: { code: "rate_limit", message: "Slow down" } }, 2_000)
   const idle = apply(retry, "session.status", { status: { type: "idle" } }, 4_000)
   expect(idle).toMatchObject({ status: "idle" })
   expect(idle.executionStarted).toBeUndefined()
-  expect(idle.retry).toBeUndefined()
+  expect(idle.messages.find((message) => message.kind === "assistant")?.retry).toBeUndefined()
   const next = apply(idle, "session.execution.started", {}, 10_000)
   expect(next.executionStarted).toBe(10_000)
   expect(sessionStatusLabel(next, 11_000)).toBe("cooking · 1.0s")
@@ -200,6 +200,61 @@ test("starts a fresh elapsed clock when the previous terminal event was missed",
   const next = apply(started, "session.execution.started", {}, 10_000)
   expect(next.executionStarted).toBe(10_000)
   expect(sessionStatusLabel(next, 11_000)).toBe("cooking · 1.0s")
+})
+
+test("retry belongs to the latest unfinished assistant step and yields to progress", () => {
+  let view = apply(createSessionView("ses_a"), "session.execution.started", {}, 1_000)
+  view = apply(view, "session.step.started", { assistantMessageID: "msg_first" }, 1_100)
+  view = apply(view, "session.retry.scheduled", { assistantMessageID: "msg_first", attempt: 2, at: 6_000, error: { code: "rate_limit", message: "Slow down" } }, 2_000)
+  expect(sessionStatusLabel(view, 4_000)).toBe("1 failed · retry 2 · in 2s")
+  expect(sessionStatusLabel(view, 6_000)).toBe("retrying · attempt 2")
+  const failedStep = apply(view, "session.step.failed", { assistantMessageID: "msg_first", error: { code: "rate_limit", message: "Stopped" } }, 6_020)
+  expect(sessionStatusLabel(failedStep, 6_030)).toBe("cooking · 5.0s")
+  expect(failedStep.messages.find((message) => message.id === "msg_first")).toMatchObject({ kind: "assistant", retry: undefined })
+  view = apply(view, "session.text.started", { assistantMessageID: "msg_first", ordinal: 0 }, 6_050)
+  expect(sessionStatusLabel(view, 6_050)).toBe("retrying · attempt 2")
+  view = apply(view, "session.text.delta", { assistantMessageID: "msg_first", ordinal: 0, delta: "Recovered" }, 6_100)
+  expect(sessionStatusLabel(view, 6_200)).toBe("cooking · 5.2s")
+  view = apply(view, "session.step.ended", { assistantMessageID: "msg_first" }, 6_300)
+  view = apply(view, "session.step.started", { assistantMessageID: "msg_next" }, 6_400)
+  expect(sessionStatusLabel(view, 6_500)).toBe("cooking · 5.5s")
+  for (const [part, label] of [
+    [{ kind: "reasoning" as const, ordinal: 0, text: "", started: 6_000 }, "thinking · 5.5s"],
+    [{ kind: "tool" as const, callID: "call_a", name: "shell", status: "running" as const, content: [], started: 6_000 }, "tool running · 5.5s"],
+  ] as const) {
+    const active = { ...view, messages: [...view.messages.slice(0, -1), { kind: "assistant" as const, id: "msg_next", created: 6_400, parts: [part], retry: { attempt: 2, at: 6_000, code: "rate_limit" } }] }
+    expect(sessionStatusLabel(active, 6_500)).toBe(label)
+  }
+})
+
+test("retry from a status frame does not survive idle or an execution failure", () => {
+  let view = apply(createSessionView("ses_a"), "session.execution.started", {}, 1_000)
+  view = apply(view, "session.step.started", { assistantMessageID: "msg_a" }, 1_100)
+  view = apply(view, "session.status", { status: { type: "retry", attempt: 2, next: 5_000, message: "Slow down" } }, 2_000)
+  expect(sessionStatusLabel(view, 3_000)).toBe("1 failed · retry 2 · in 2s")
+  const idle = apply(view, "session.status", { status: { type: "idle" } }, 4_000)
+  expect(sessionStatusLabel(idle, 6_000)).toBe("ready")
+  expect(idle.messages.find((message) => message.id === "msg_a")).toMatchObject({ kind: "assistant", retry: undefined })
+  const failed = apply(view, "session.execution.failed", { error: { code: "provider_error", message: "Stopped" } }, 4_000)
+  expect(sessionStatusLabel(failed, 6_000)).toBe("provider error")
+  expect(failed.messages.find((message) => message.id === "msg_a")).toMatchObject({ kind: "assistant", retry: undefined })
+})
+
+test("a projected assistant retry is scoped to its unfinished step after reconnect", () => {
+  const snapshot = readSnapshot({ session: { id: "ses_a" }, watermark: { seq: 5 }, messages: [{
+    id: "msg_a", type: "assistant", agent: "gsd", model: { providerID: "openai", id: "gpt-5" }, content: [],
+    retry: { attempt: 2, at: 6_000, error: { code: "rate_limit", message: "Slow down" } }, time: { created: 2_000 },
+  }] })
+  expect(snapshot?.messages[0]).toMatchObject({ kind: "assistant", retry: { attempt: 2, at: 6_000, code: "rate_limit" } })
+  const active = { ...createSessionView("ses_a"), status: "running" as const, messages: snapshot?.messages ?? [] }
+  expect(sessionStatusLabel(active, 4_000)).toBe("1 failed · retry 2 · in 2s")
+  expect(sessionStatusLabel({ ...active, status: "idle" }, 6_000)).toBe("ready")
+})
+
+test("a durable retry establishes running status when the start event was missed", () => {
+  const view = apply(createSessionView("ses_a"), "session.retry.scheduled", { assistantMessageID: "msg_a", attempt: 2, at: 5_000, error: { code: "rate_limit", message: "Slow down" } }, 2_000)
+  expect(view.status).toBe("running")
+  expect(sessionStatusLabel(view, 3_000)).toBe("1 failed · retry 2 · in 2s")
 })
 
 test("keeps short row durations precise without changing live one-decimal elapsed", () => {
@@ -214,7 +269,7 @@ test("derives operational status and elapsed from active work and retry state", 
   expect(sessionStatusLabel({ ...base, autonomy: { mode: "yolo", yolo: 3 } }, 47_700)).toBe("YOLO 3 · auto-approve · cooking · 46.7s")
   expect(sessionStatusLabel({ ...base, messages: [{ kind: "assistant", id: "a", created: 2_000, parts: [{ kind: "reasoning", ordinal: 0, text: "…", started: 3_000 }] }] }, 49_700)).toBe("thinking · 48.7s")
   expect(sessionStatusLabel({ ...base, messages: [{ kind: "assistant", id: "a", created: 2_000, parts: [{ kind: "tool", callID: "c", name: "shell", status: "running", content: [], started: 3_000 }] }] }, 135_000)).toBe("tool running · 2m14s")
-  expect(sessionStatusLabel({ ...base, retry: { attempt: 2, at: 6_000, code: "rate_limit" } }, 4_000)).toBe("1 failed · retry 2 · in 2s")
+  expect(sessionStatusLabel({ ...base, messages: [{ kind: "assistant", id: "msg_retry", created: 2_000, parts: [], retry: { attempt: 2, at: 6_000, code: "rate_limit" } }] }, 4_000)).toBe("1 failed · retry 2 · in 2s")
   expect(sessionStatusLabel({ ...base, requests: [{ kind: "permission", id: "p", action: "read", resources: [], askedAt: 2_000 }] }, 3_000)).toBe("? awaiting input · 2.0s")
   expect(sessionStatusLabel(base, 3_000, 2)).toBe("waiting · 2 subagents")
   expect(sessionStatusTimed(base, 2)).toBe(false)
@@ -470,7 +525,7 @@ describe("session state", () => {
     view = apply(view, "session.execution.started", {})
     expect(view.status).toBe("running")
     view = apply(view, "session.retry.scheduled", { assistantMessageID: "msg_1", attempt: 2, at: 10, error: { code: "rate_limited", message: "slow down" } })
-    expect(view.retry).toEqual({ attempt: 2, at: 10, code: "rate_limited" })
+    expect(view.messages.find((message) => message.kind === "assistant")?.retry).toEqual({ attempt: 2, at: 10, code: "rate_limited" })
     view = apply(view, "session.execution.failed", { error: { code: "provider_error", message: "boom" } })
     expect(view.status).toBe("failed")
     expect(view.lastError).toEqual({ code: "provider_error", message: "boom" })

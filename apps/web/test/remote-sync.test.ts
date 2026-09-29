@@ -893,12 +893,15 @@ describe("session state reads", () => {
       await test.flush()
       expect(test.store.state().view?.status).toBe("running")
 
+      test.relay.pushEvent("ses_a", { type: "session.step.started", data: { sessionID: "ses_a", assistantMessageID: "msg_retry" } })
+      await test.flush()
+
       test.relay.pushEvent("ses_a", {
         type: "session.status",
         data: { sessionID: "ses_a", status: { type: "retry", attempt: 2, message: "rate limited", next: 5_000 } },
       })
       await test.flush()
-      expect(test.store.state().view?.retry).toMatchObject({ attempt: 2, code: "rate limited" })
+      expect(test.store.state().view?.messages.find((message) => message.id === "msg_retry")).toMatchObject({ retry: { attempt: 2, code: "rate limited" } })
 
       test.relay.pushEvent("ses_a", { type: "session.idle", data: { sessionID: "ses_a" } })
       await test.flush()
