@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  isGoalSteerAdmission,
   readTeamCue,
   noticeSummary,
   formatPartDuration,
@@ -112,6 +113,18 @@ test("extracts only durable live subagent delegation and terminal notification i
   } })).toEqual({ id: "evt_2:3:ses_child", kind: "reported", childID: "ses_child", outcome: "completed" })
   expect(readTeamCue({ id: "evt_3", type: "session.synthetic", data: { sessionID: "ses_root", metadata: { source: "subagent_notification", childID: "ses_child", type: "completed", revision: 3 } } })).toBeUndefined()
   expect(readTeamCue({ id: "evt_4", type: "session.synthetic", durable: { aggregateID: "ses_root", seq: 4 }, data: { sessionID: "ses_root", metadata: { source: "other", childID: "ses_child", type: "completed", revision: 4 } } })).toBeUndefined()
+})
+
+test("recognizes only the admitted synthetic goal steer as the durable fact that a goal is active", () => {
+  const admitted = (input: unknown) => ({ type: "session.input.admitted", data: { sessionID: "ses_a", inputID: "msg_1", input } })
+  const steer = { type: "synthetic", data: { text: "Continue", description: "Goal · steer", metadata: { autonomy: { yolo: 0, goal: true, iteration: 0 } } }, delivery: "steer" }
+  expect(isGoalSteerAdmission(admitted(steer))).toBe(true)
+  expect(isGoalSteerAdmission(admitted({ type: "user", data: { text: "Continue", metadata: { autonomy: { goal: true } } }, delivery: "steer" }))).toBe(false)
+  expect(isGoalSteerAdmission(admitted({ ...steer, data: { ...steer.data, metadata: { autonomy: { yolo: 2, goal: false } } } }))).toBe(false)
+  expect(isGoalSteerAdmission(admitted({ ...steer, data: { ...steer.data, metadata: { source: "subagent_notification" } } }))).toBe(false)
+  expect(isGoalSteerAdmission(admitted("not a record"))).toBe(false)
+  expect(isGoalSteerAdmission({ type: "session.synthetic", data: { metadata: { autonomy: { goal: true } } } })).toBe(false)
+  expect(isGoalSteerAdmission(undefined)).toBe(false)
 })
 
 const event = (type: string, data: Record<string, unknown>) => ({ id: `evt_${type}`, type, data })

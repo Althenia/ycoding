@@ -67,6 +67,10 @@ const formDelayMs = Number(accountParams.get("formDelay") ?? 0)
 /** `?formOutcome=unknown` leaves the native Form mutation unresolved without replay. */
 const formOutcome = accountParams.get("formOutcome")
 const promptOutcome = accountParams.get("promptOutcome")
+/** `?goalGate=1` holds `session.goal.set` until `window.remoteReleaseGoal("ok" | "failed" | "unknown")` settles it. */
+const goalGate = accountParams.get("goalGate") === "1"
+let releaseGoal: ((result: "ok" | "failed" | "unknown") => void) | undefined
+;(window as typeof window & { remoteReleaseGoal?: (result: "ok" | "failed" | "unknown") => void }).remoteReleaseGoal = (result) => releaseGoal?.(result)
 const deviceMode = accountParams.get("devices")
 const emptyBackend = remoteScenarioData?.emptyBackend ?? accountParams.get("sessions") === "empty"
 const fixtureTheme = accountParams.get("theme") ?? remoteScenarioData?.theme
@@ -753,7 +757,7 @@ function createFixtureStore(): Fixture {
           data: remoteScenarioData?.autonomy ?? {
             mode: "normal",
             yolo: 2,
-            goal: { text: "Ship the remote workspace", status: "active", iteration: 3, noProgress: 0, maxNoProgress: 5 },
+            ...(accountParams.get("goal") === "none" ? {} : { goal: { text: "Ship the remote workspace", status: "active", iteration: 3, noProgress: 0, maxNoProgress: 5 } }),
           },
         },
       }
@@ -798,8 +802,14 @@ function createFixtureStore(): Fixture {
     }
     if (operation === "session.goal.set") {
       if (typeof input?.goal !== "string") return { status: "failed", error: { code: "invalid_message", message: "Goal text is required" } }
-      return { status: "ok", value: { data: { mode: "goal", yolo: currentYolo,
+      const active: RemoteRequestOutcome = { status: "ok", value: { data: { mode: "goal", yolo: currentYolo,
         goal: { text: input.goal, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } } } }
+      if (!goalGate) return active
+      return new Promise((resolve) => {
+        releaseGoal = (result) => resolve(result === "ok" ? active : result === "failed"
+          ? { status: "failed", error: { code: "internal_error", message: "Goal calculation failed" } }
+          : { status: "unknown", error: { code: "outcome_unknown", message: "Request timed out" } })
+      })
     }
     if (operation === "session.goal.stop") return { status: "ok", value: { data: { mode: "normal", yolo: currentYolo } } }
     return { status: "ok", value: null }

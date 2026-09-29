@@ -378,6 +378,17 @@ export function readTeamCue(payload: unknown): TeamCue | undefined {
   return { id: `${id}:${revision}:${childID}`, kind: "reported", childID, outcome }
 }
 
+/**
+ * The durable fact that a goal is active: Core admits this synthetic steer only after
+ * the goal state is applied, and no dedicated autonomy event exists.
+ */
+export function isGoalSteerAdmission(payload: unknown): boolean {
+  if (!isRecord(payload) || payload.type !== "session.input.admitted" || !isRecord(payload.data) || !isRecord(payload.data.input)) return false
+  const input = payload.data.input
+  const autonomy = isRecord(input.data) ? recordField(recordField(input.data.metadata)?.autonomy) : undefined
+  return input.type === "synthetic" && autonomy?.goal === true
+}
+
 /** Caps a derived summary (compaction, non-text tool content) so it cannot dominate the page. */
 export const messageTextLimit = 4_000
 export const activityLimit = 200

@@ -112,9 +112,11 @@ test("pending prompts, mutation toasts, and the active goal remain accessible on
       expect(await page.evaluate<string>(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label')`)).toBe("Processing prompt")
       expect(await page.evaluate<string>(`document.querySelector('.session-status__active-goal')?.textContent?.trim()`)).toBe("Goal active · Finish task")
       await page.evaluate(`window.composerSetGoalStatus(null); window.composerSetGoalPending(true)`)
-      expect(await page.evaluate<string>(`document.querySelector('.session-status__goal-setting[role="status"]')?.textContent?.trim()`)).toBe("Setting goal…")
+      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .session-status__announce[role="status"]')?.textContent?.trim()`)).toBe("Setting goal…")
+      expect(await page.evaluate<boolean>(`document.querySelector('.session-status__goal-setting .transcript-dot-trail') !== null && document.querySelector('.session-status__goal-trigger')?.getAttribute('aria-busy') === 'true'`)).toBe(true)
       await page.evaluate(`window.composerSetGoalPending(false)`)
       expect(await page.evaluate<boolean>(`document.querySelector('.session-status__goal-setting') === null`)).toBe(true)
+      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .session-status__announce[role="status"]')?.textContent ?? 'missing'`)).toBe("")
       await page.evaluate(`window.composerSetPending('queue'); window.composerSetMutation('sending')`)
       expect(await page.evaluate<string>(`document.querySelector('.transcript-message__receipt')?.textContent?.trim()`)).toContain("Queued")
       expect(await page.evaluate<number>(`document.querySelectorAll('.mutation-toast').length`)).toBe(0)
@@ -320,7 +322,8 @@ test("Goal is visibly off after completion and other terminal states while its c
       await wait(page, `document.querySelector('.mini-composer__mount .session-status__goal-trigger') !== null`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; window.composerSetGoalStatus('active')`)
       await Bun.sleep(600)
-      const measure = () => page.evaluate<{ name: string | null; color: string; background: string; yoloBackground: string; count: boolean; asymmetry: number; height: number; left: number }>(`(() => { const button=document.querySelector('.mini-composer__mount .session-status__goal-trigger'), yolo=document.querySelector('.mini-composer__mount .session-status__yolo-trigger'), style=getComputedStyle(button), rect=button.getBoundingClientRect(), walker=document.createTreeWalker(button, NodeFilter.SHOW_TEXT), glyphs=[]; for (let node=walker.nextNode(); node; node=walker.nextNode()) { if (!node.textContent.trim() || getComputedStyle(node.parentElement).visibility === 'hidden') continue; const range=document.createRange(); range.selectNodeContents(node); glyphs.push(range.getBoundingClientRect()) } const left=Math.min(...glyphs.map(box => box.left)), right=Math.max(...glyphs.map(box => box.right)); return { name:button.getAttribute('aria-label'), color:style.color, background:style.backgroundColor, yoloBackground:getComputedStyle(yolo).backgroundColor, count:button.querySelector('.session-status__goal-count') !== null, asymmetry:Math.abs((left - rect.left) - (rect.right - right)), height:rect.height, left:rect.left } })()`)
+      const settle = () => page.evaluate(`Promise.all(document.querySelector('.mini-composer__mount .session-status__goal-trigger').getAnimations().map(animation => animation.finished.catch(() => {})))`)
+      const measure = async () => { await settle(); return page.evaluate<{ name: string | null; color: string; background: string; yoloBackground: string; count: boolean; asymmetry: number; height: number; left: number }>(`(() => { const button=document.querySelector('.mini-composer__mount .session-status__goal-trigger'), yolo=document.querySelector('.mini-composer__mount .session-status__yolo-trigger'), style=getComputedStyle(button), rect=button.getBoundingClientRect(), walker=document.createTreeWalker(button, NodeFilter.SHOW_TEXT), glyphs=[]; for (let node=walker.nextNode(); node; node=walker.nextNode()) { if (!node.textContent.trim() || getComputedStyle(node.parentElement).visibility === 'hidden') continue; const range=document.createRange(); range.selectNodeContents(node); glyphs.push(range.getBoundingClientRect()) } const left=Math.min(...glyphs.map(box => box.left)), right=Math.max(...glyphs.map(box => box.right)); return { name:button.getAttribute('aria-label'), color:style.color, background:style.backgroundColor, yoloBackground:getComputedStyle(yolo).backgroundColor, count:button.querySelector('.session-status__goal-count') !== null, asymmetry:Math.abs((left - rect.left) - (rect.right - right)), height:rect.height, left:rect.left } })()`) }
       const active = await measure()
       expect(active.name).toBe("Goal active")
       expect(await page.evaluate<string>(`document.querySelector('.session-status__active-goal')?.textContent?.trim()`)).toBe("Goal active · Finish task")
@@ -922,6 +925,83 @@ test("selected slash, dollar, at and hash suggestions dispatch their TUI-equival
     expect((await operations()).filter((item) => item.operation === "session.create")).toHaveLength(0)
   } finally { await page.close() }
 }, 30_000)
+
+test("setting a goal from the composer never blocks it and shows one stable, announced in-flight indicator", async () => {
+  const mount = ".workspace__main .mini-composer__mount"
+  const stable = [".composer", ".composer__input", ".mini-composer__send", ".composer__attach", ".composer__delivery-toggle", ".session-status__yolo-trigger", ".session-status__goal-trigger"]
+  for (const [width, height] of [[390, 844], [1440, 900]]) for (const reduced of [false, true]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width!, height!)
+      if (width === 390) await page.setCoarsePointer(true)
+      await page.setReducedMotion(reduced)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&goalGate=1&goal=none`)
+      await wait(page, `document.querySelector('${mount} textarea') !== null && document.querySelector('${mount} .session-status__goal-trigger') !== null`)
+      await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`)
+      const geometry = () => page.evaluate<readonly (readonly number[] | null)[]>(`${JSON.stringify(stable)}.map(selector => { const element = document.querySelector('${mount} ' + selector); if (!element) return null; const box = element.getBoundingClientRect(); return [box.x, box.y, box.width, box.height].map(value => Math.round(value * 10) / 10) })`)
+      const idle = await geometry()
+      expect(idle.every((box) => box !== null)).toBe(true)
+      const send = `document.querySelector('${mount} button[aria-label="Send prompt"]')?.click()`
+      await type(page, `${mount} textarea`, "/goal ship it safely")
+      await page.evaluate(send)
+      await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.goal.set')`)
+      await wait(page, `document.querySelector('${mount} .session-status__goal-setting') !== null`)
+
+      const pending = await page.evaluate<{ enabled: boolean; draft: string; busy: string | null; name: string | null; chip: string; chipHidden: string | null; dots: number; announced: string; dotAnimation: string; chipAnimation: string }>(`(() => { const chip = document.querySelector('${mount} .session-status__goal-setting'), trigger = document.querySelector('${mount} .session-status__goal-trigger'), field = document.querySelector('${mount} textarea'); return { enabled: !field.disabled, draft: field.value, busy: trigger.getAttribute('aria-busy'), name: trigger.getAttribute('aria-label'), chip: chip.innerText.trim(), chipHidden: chip.getAttribute('aria-hidden'), dots: chip.querySelectorAll('.transcript-dot-trail').length, announced: document.querySelector('${mount} .session-status__announce[role="status"]')?.textContent?.trim() ?? '', dotAnimation: chip.querySelector('.transcript-dot-trail span') ? getComputedStyle(chip.querySelector('.transcript-dot-trail span')).animationName : 'missing', chipAnimation: getComputedStyle(chip).animationName } })()`)
+      expect(pending).toMatchObject({ enabled: true, draft: "", busy: "true", name: "Setting goal", chip: width === 390 ? "Setting…" : "Setting goal…", chipHidden: "true", dots: 1, announced: "Setting goal…" })
+      expect(pending.dotAnimation === "none").toBe(reduced)
+      expect(pending.chipAnimation === "none").toBe(reduced)
+      expect(await geometry()).toEqual(idle)
+      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+      if (!reduced) await Bun.sleep(300)
+      if (!reduced) await Bun.write(new URL(`../../../.cache/tmp/composer-goal-setting-${width}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+
+      await type(page, `${mount} textarea`, "keep working meanwhile")
+      expect(await page.evaluate<boolean>(`document.querySelector('${mount} button[aria-label="Send prompt"]').disabled`)).toBe(false)
+      await page.evaluate(send)
+      await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.prompt' && item.input?.text === 'keep working meanwhile')`)
+      await wait(page, `document.querySelector('${mount} textarea').value === ''`)
+
+      await type(page, `${mount} textarea`, "/goal another objective")
+      await page.evaluate(send)
+      await wait(page, `document.querySelector('.notice-strip')?.textContent?.includes('A goal is already being set for this Session.') === true`)
+      expect(await page.evaluate<number>(`window.remoteMutationReport().filter(item => item.operation === 'session.goal.set').length`)).toBe(1)
+      expect(await page.evaluate<string>(`document.querySelector('${mount} textarea').value`)).toBe("/goal another objective")
+      await type(page, `${mount} textarea`, "")
+
+      await page.evaluate(`document.querySelector('${mount} .session-status__goal-trigger')?.click()`)
+      await wait(page, `document.querySelector('.session-status__goal-popover input[aria-label="Goal"]') !== null`)
+      await type(page, ".session-status__goal-popover input[aria-label='Goal']", "second from popover")
+      expect(await page.evaluate<boolean>(`document.querySelector('.session-status__goal-popover button[type="submit"]').disabled`)).toBe(true)
+      await page.pressEscape()
+
+      await page.evaluate(`window.remoteReleaseGoal('ok')`)
+      await wait(page, `document.querySelector('${mount} .session-status__goal-setting') === null`)
+      const settled = await page.evaluate<{ busy: string | null; name: string | null; announced: string; goal: string }>(`(() => { const trigger = document.querySelector('${mount} .session-status__goal-trigger'); return { busy: trigger.getAttribute('aria-busy'), name: trigger.getAttribute('aria-label'), announced: document.querySelector('${mount} .session-status__announce[role="status"]')?.textContent?.trim() ?? 'missing', goal: document.querySelector('${mount} .session-status__active-goal')?.textContent?.trim() ?? '' } })()`)
+      expect(settled).toEqual({ busy: null, name: "Goal active", announced: "", goal: "Goal active · ship it safely" })
+    } finally { await page.close() }
+  }
+}, 90_000)
+
+test("a failed or uncertain composer goal returns to the empty draft with its outcome toast", async () => {
+  const mount = ".workspace__main .mini-composer__mount"
+  for (const [result, toast] of [["failed", "failed"], ["unknown", "unknown"]] as const) {
+    const page = await browser!.openPage()
+    try {
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&goalGate=1&goal=none`)
+      await wait(page, `document.querySelector('${mount} textarea') !== null`)
+      await type(page, `${mount} textarea`, "/goal ship it safely")
+      await page.evaluate(`document.querySelector('${mount} button[aria-label="Send prompt"]')?.click()`)
+      await wait(page, `document.querySelector('${mount} .session-status__goal-setting') !== null`)
+      await page.evaluate(`window.remoteReleaseGoal(${JSON.stringify(result)})`)
+      await wait(page, `document.querySelector('.mutation-toast--${toast}') !== null`)
+      expect(await page.evaluate<string>(`document.querySelector('.mutation-toast')?.textContent ?? ''`)).toContain("Set goal")
+      expect(await page.evaluate<string>(`document.querySelector('${mount} textarea').value`)).toBe("/goal ship it safely")
+      expect(await page.evaluate<boolean>(`document.querySelector('${mount} .session-status__goal-setting') === null && document.querySelector('${mount} .session-status__goal-trigger').getAttribute('aria-busy') === null`)).toBe(true)
+      expect(await page.evaluate<number>(`window.remoteMutationReport().filter(item => item.operation === 'session.goal.set').length`)).toBe(1)
+    } finally { await page.close() }
+  }
+}, 60_000)
 
 async function type(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, selector: string, text: string) {
   await page.evaluate(`(() => { const field = document.querySelector(${JSON.stringify(selector)}); field.focus(); field.value = ${JSON.stringify(text)}; field.setSelectionRange(field.value.length, field.value.length); field.dispatchEvent(new InputEvent('input', { bubbles: true })); })()`)

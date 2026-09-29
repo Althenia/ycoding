@@ -681,7 +681,8 @@ try {
     30_000, "the YOLO-approved step did not settle")
   await store.setYolo(0)
   await store.setGoal("Finish the remote lifecycle verification")
-  expect(store.state().view?.autonomy.mode === "goal" && store.state().view?.autonomy.goal?.status === "active", "goal start did not reach the browser store")
+  await waitFor(() => store.state().view?.autonomy.mode === "goal" && store.state().view?.autonomy.goal?.status === "active" ? true : undefined,
+    30_000, "goal start did not reach the browser store")
   await store.stopGoal()
   const stoppedGoal = await local.autonomyGet(createdID, { directory: openedWorkspace })
   expect(isRecord(stoppedGoal) && isRecord(stoppedGoal.goal) && stoppedGoal.goal.status === "stopped",

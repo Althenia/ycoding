@@ -469,7 +469,9 @@ describe("remote data", () => {
       await waitFor(() => test.store.state().sessions.length === 2)
       await test.store.selectSession("ses_a")
       expect(await test.store.activateSkill("audit")).toBe(false)
-      expect(await test.store.setGoal("Finish safely")).toBe(false)
+      expect(await test.store.setGoal("Finish safely")).toBe(true)
+      await waitFor(() => test.store.state().mutations.some((item) => item.kind === "goal" && item.state === "failed"))
+      expect(test.store.state().mutationToasts?.at(-1)).toMatchObject({ label: "Set goal", state: "failed", detail: "Unavailable" })
       expect(test.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(0)
     } finally { await test.stop() }
   })
