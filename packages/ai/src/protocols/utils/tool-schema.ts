@@ -76,12 +76,21 @@ const openAI = (schema: JsonSchema): JsonSchema => {
   return isRecord(normalized) ? normalized : { type: "object" }
 }
 
-const declaredTypes = (schema: unknown, definitions: Record<string, unknown>): ReadonlyArray<string> => {
-  if (!isRecord(schema)) return []
+const declaredTypes = (
+  schema: unknown,
+  definitions: Record<string, unknown>,
+  visited: ReadonlySet<string> = new Set(),
+): ReadonlyArray<string | undefined> => {
+  if (!isRecord(schema)) return [undefined]
+  if (isRecord(schema.not) && Object.keys(schema.not).length === 0) return []
   if (typeof schema.type === "string") return [schema.type]
-  if (typeof schema.$ref === "string") return declaredTypes(definitions[schema.$ref.replace("#/$defs/", "")], definitions)
-  if (Array.isArray(schema.anyOf)) return schema.anyOf.flatMap((option) => declaredTypes(option, definitions))
-  return []
+  if (Array.isArray(schema.type)) return schema.type
+  if (typeof schema.$ref === "string") {
+    const name = schema.$ref.replace("#/$defs/", "")
+    return visited.has(name) ? [] : declaredTypes(definitions[name], definitions, new Set(visited).add(name))
+  }
+  if (Array.isArray(schema.anyOf)) return schema.anyOf.flatMap((option) => declaredTypes(option, definitions, visited))
+  return [undefined]
 }
 
 const anthropic = (schema: JsonSchema): JsonSchema => {
@@ -94,24 +103,32 @@ const anthropic = (schema: JsonSchema): JsonSchema => {
   let name = base
   let suffix = 0
   while (Object.hasOwn(definitions, name)) name = `${base}_${++suffix}`
-  const flattened: JsonSchema = Array.isArray(normalized.anyOf) ? openAI(normalized) : {}
+  const flattened: JsonSchema = Array.isArray(normalized.anyOf)
+    ? openAI({ ...root, properties: undefined, required: undefined })
+    : {}
+  const properties = {
+    ...(isRecord(flattened.properties) ? flattened.properties : {}),
+    ...(isRecord(root.properties) ? root.properties : {}),
+  }
+  const required = [...new Set([...(Array.isArray(root.required) ? root.required : []), ...(Array.isArray(flattened.required) ? flattened.required : [])])]
   return {
     type: "object",
     $ref: `#/$defs/${name}`,
     $defs: {
       ...definitions,
-      [name]: isRecord(flattened.properties)
-        ? {
-            ...root,
-            properties: Object.fromEntries(
-              Object.entries(flattened.properties).map(([property, value]) => {
-                const types = [...new Set(declaredTypes(value, definitions))]
-                return [property, isRecord(value) && value.type === undefined && types.length === 1 ? { type: types[0], ...value } : value]
-              }),
-            ),
-            ...(flattened.required === undefined ? {} : { required: flattened.required }),
-          }
-        : root,
+      [name]:
+        Object.keys(properties).length === 0
+          ? root
+          : {
+              ...root,
+              properties: Object.fromEntries(
+                Object.entries(properties).map(([property, value]) => {
+                  const types = [...new Set(declaredTypes(value, definitions))]
+                  return [property, isRecord(value) && value.type === undefined && types.length === 1 && types[0] !== undefined ? { type: types[0], ...value } : value]
+                }),
+              ),
+              ...(required.length === 0 ? {} : { required }),
+            },
     },
   }
 }

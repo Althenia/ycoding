@@ -256,6 +256,96 @@ describe("tool schema projections", () => {
     expect(at(anthropicRoot(projected), "properties", "id")).toEqual({ anyOf: [{ type: "integer" }, { type: "string" }] })
   })
 
+  test("anthropic projects a union over a self-referential definition without recursing forever", () => {
+    const recursive = (json: unknown) =>
+      ToolSchemaProjection.anthropic({
+        anyOf: [{ type: "object", properties: { value: { $ref: "#/$defs/Json" } }, required: ["value"] }],
+        $defs: { Json: json },
+      })
+
+    expect(
+      at(anthropicRoot(recursive({ anyOf: [{ type: "string" }, { type: "array", items: { $ref: "#/$defs/Json" } }] })), "properties", "value"),
+    ).toEqual({ $ref: "#/$defs/Json" })
+    expect(at(anthropicRoot(recursive({ anyOf: [{ $ref: "#/$defs/Json" }] })), "properties", "value")).toEqual({
+      $ref: "#/$defs/Json",
+    })
+    expect(at(anthropicRoot(recursive({ anyOf: [{ type: "string" }, { $ref: "#/$defs/Json" }] })), "properties", "value")).toEqual({
+      type: "string",
+      $ref: "#/$defs/Json",
+    })
+  })
+
+  test("anthropic keeps the root's own properties and required fields beside union alternatives", () => {
+    const root = anthropicRoot(
+      ToolSchemaProjection.anthropic({
+        type: "object",
+        properties: { name: { type: "string" }, count: { type: "number" } },
+        required: ["name"],
+        anyOf: [{ required: ["name"] }, { required: ["count"] }],
+      }),
+    )
+
+    expect(at(root, "properties")).toEqual({ name: { type: "string" }, count: { type: "number" } })
+    expect(at(root, "required")).toEqual(["name"])
+  })
+
+  test("anthropic merges the root's own properties and required fields with the alternatives'", () => {
+    const root = anthropicRoot(
+      ToolSchemaProjection.anthropic({
+        type: "object",
+        properties: { name: { type: "string" } },
+        required: ["name"],
+        anyOf: [
+          { type: "object", properties: { mode: { type: "string", enum: ["a"] }, size: { type: "integer" } }, required: ["mode"] },
+          { type: "object", properties: { mode: { type: "string", enum: ["b"] } }, required: ["mode"] },
+        ],
+      }),
+    )
+
+    expect(at(root, "properties")).toEqual({
+      mode: { type: "string", anyOf: [{ type: "string", enum: ["a"] }, { type: "string", enum: ["b"] }] },
+      size: { type: "integer" },
+      name: { type: "string" },
+    })
+    expect(at(root, "required")).toEqual(["name", "mode"])
+  })
+
+  test("anthropic keeps root properties when every alternative is a reference", () => {
+    const root = anthropicRoot(
+      ToolSchemaProjection.anthropic({
+        type: "object",
+        properties: { name: { type: "string" } },
+        anyOf: [{ $ref: "#/$defs/A" }, { $ref: "#/$defs/B" }],
+        $defs: { A: { required: ["name"] }, B: { required: ["other"] } },
+      }),
+    )
+
+    expect(at(root, "properties")).toEqual({ name: { type: "string" } })
+  })
+
+  test("anthropic leaves a property untyped when an alternative is array-typed, untyped, or unresolvable", () => {
+    const property = (alternative: unknown) =>
+      at(
+        anthropicRoot(
+          ToolSchemaProjection.anthropic({
+            anyOf: [
+              { type: "object", properties: { value: { type: "string" } } },
+              { type: "object", properties: { value: alternative } },
+            ],
+          }),
+        ),
+        "properties",
+        "value",
+      )
+
+    expect(property({ type: ["integer", "null"] })).toEqual({ anyOf: [{ type: "string" }, { type: ["integer", "null"] }] })
+    expect(property({})).toEqual({ anyOf: [{ type: "string" }, {}] })
+    expect(property({ enum: [1, 2] })).toEqual({ anyOf: [{ type: "string" }, { enum: [1, 2] }] })
+    expect(property({ $ref: "#/definitions/Missing" })).toEqual({
+      anyOf: [{ type: "string" }, { $ref: "#/definitions/Missing" }],
+    })
+  })
+
   for (const provider of providerRoutes) {
     it.effect(`${provider.name} exposes every union-root parameter type at the top level`, () =>
       Effect.gen(function* () {
