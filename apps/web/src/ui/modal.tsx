@@ -21,6 +21,7 @@ export function Modal(props: {
   readonly class?: string
   readonly label: string
   readonly header?: JSX.Element
+  readonly returnFocus?: HTMLElement
   readonly onClose: () => void
   readonly onDismiss?: () => void
   readonly requestClose?: (close: () => void) => void
@@ -43,7 +44,7 @@ export function Modal(props: {
     timer = setTimeout(props.onClose, parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--yc-dur-base")))
   }
   onMount(() => {
-    returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    returnFocus = props.returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null)
     element?.showModal()
     props.requestClose?.(close)
   })

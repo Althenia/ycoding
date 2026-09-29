@@ -116,6 +116,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const [teamClosing, setTeamClosing] = createSignal(false)
   const [teamGeneration, setTeamGeneration] = createSignal(1)
   let closeTeamSheet: (() => void) | undefined
+  let teamTrigger: HTMLButtonElement | undefined
   let teamLayer: HTMLElement | undefined
   let teamTimer: ReturnType<typeof setTimeout> | undefined
   let teamFrame: number | undefined
@@ -368,7 +369,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                     onChange={office.present}
                   />
                 </Show>
-                <button type="button" class="button button--secondary" aria-label="Open Team" aria-expanded={teamOpen() && !teamClosing()} onClick={openTeam}>Team {state().team?.activeTotal ?? state().team?.tasks.length ?? 0}</button>
+                <button ref={teamTrigger} type="button" class="button button--secondary" aria-label="Open Team" aria-expanded={teamOpen() && !teamClosing()} onClick={openTeam}>Team {state().team?.activeTotal ?? state().team?.tasks.length ?? 0}</button>
               </div>
             </Show>
             <div class="workspace__scroll" ref={scrollHost} onScroll={() => {
@@ -442,7 +443,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
         <Show when={(phoneLayout() ? teamOpen() : teamVisible()) && view() === "/remote" && state().team !== undefined && selected()}>
           <aside ref={teamLayer} class={`${phoneLayout() ? "team-control__phone" : "team-control__panel"}${teamEntering() ? " team-control--entering" : ""}${!teamOpen() ? " team-control--exiting" : ""}`} aria-label="Team controls" aria-hidden={!teamOpen() || teamClosing() ? "true" : undefined} inert={!teamOpen() || teamClosing()}
             onClick={(event) => { if (phoneLayout() && event.target === teamLayer?.querySelector("dialog.team-view__sheet")) closeTeam() }}>
-            {phoneLayout() ? <Show when={teamGeneration()} keyed>{(generation) => <Modal class="overlay--sheet team-view__sheet" label="Team" header={<TeamHeading data={() => state().team!} />} requestClose={(close) => { closeTeamSheet = close }}
+            {phoneLayout() ? <Show when={teamGeneration()} keyed>{(generation) => <Modal class="overlay--sheet team-view__sheet" label="Team" header={<TeamHeading data={() => state().team!} />} returnFocus={teamTrigger} requestClose={(close) => { closeTeamSheet = close }}
               onDismiss={() => setTeamClosing(true)} onClose={() => {
                 if (teamGeneration() !== generation) return
                 closeTeamSheet = undefined

@@ -29,7 +29,7 @@ export function TeamView(props: {
   readonly onLoadOlderSideChats: () => Promise<void>
 }): JSX.Element {
   const [tab, setTab] = createSignal<Tab>("subagents")
-  const [confirm, setConfirm] = createSignal<{ readonly kind: "cancel" | "kill"; readonly id: string; readonly label: string }>()
+  const [confirm, setConfirm] = createSignal<{ readonly kind: "cancel" | "kill"; readonly id: string; readonly label: string; readonly trigger: HTMLButtonElement }>()
   const [working, setWorking] = createSignal<string>()
   const [error, setError] = createSignal<string>()
   const [answerID, setAnswerID] = createSignal<string>()
@@ -134,7 +134,7 @@ export function TeamView(props: {
                 task(id).contextTotal === undefined ? undefined : `Context ${task(id).contextTotal?.toLocaleString("en-US")} / ${task(id).contextLimit === undefined ? "unreported" : task(id).contextLimit?.toLocaleString("en-US")}`,
                 formatCacheHit(task(id).cacheHitRatio), formatElapsed(task(id).startedAt, task(id).state === "running" || task(id).state === "waiting" || task(id).state === "starting" || task(id).state === "cancelling" ? props.now() : task(id).updatedAt)].filter(Boolean).join(" · ")}</p>
               <div class="team-view__actions"><button type="button" data-action="open" onClick={() => props.onOpen(id)}>Open</button>
-                <Show when={controlsAvailable() && canCancelSubagent(task(id).state)}><button type="button" data-action="cancel" disabled={working() !== undefined} onClick={() => setConfirm({ kind: "cancel", id, label: task(id).description })}>Cancel</button></Show>
+                <Show when={controlsAvailable() && canCancelSubagent(task(id).state)}><button type="button" data-action="cancel" disabled={working() !== undefined} onClick={(event) => setConfirm({ kind: "cancel", id, label: task(id).description, trigger: event.currentTarget })}>Cancel</button></Show>
                 <Show when={controlsAvailable() && task(id).question && task(id).state === "waiting"}><button type="button" data-action="answer" onClick={() => setAnswerID(answerID() === id ? undefined : id)}>Answer</button></Show></div>
               <Show when={controlsAvailable() && answerID() === id ? task(id).question?.id : undefined} keyed><TeamAnswerForm question={task(id).question!} onAnswer={(questionID, text) => props.onAnswer(id, questionID, text)} /></Show>
             </li>}</For></ul>
@@ -152,7 +152,7 @@ export function TeamView(props: {
             <div class="team-view__row"><span class="team-view__state">{working() === id ? "killing…" : shell(id).status}</span><strong>{shell(id).command}</strong></div>
             <p class="team-view__meta">{formatElapsed(shell(id).startedAt, shell(id).completedAt ?? props.now())}</p>
             <div class="team-view__actions"><button type="button" data-action="output" onClick={() => readOutput(shell(id).ownerID, id)}>View output</button>
-              <Show when={shell(id).status === "running"}><button type="button" data-action="kill" disabled={working() !== undefined} onClick={() => setConfirm({ kind: "kill", id, label: shell(id).command })}>Kill</button></Show></div>
+              <Show when={shell(id).status === "running"}><button type="button" data-action="kill" disabled={working() !== undefined} onClick={(event) => setConfirm({ kind: "kill", id, label: shell(id).command, trigger: event.currentTarget })}>Kill</button></Show></div>
           </li>}</For></ul>
           <Show when={props.data().shellTruncated}><p role="status">Showing the first 50 family shells. More are running on this machine.</p></Show>
           <Show when={output()}>{(current) => <section class="team-view__output" aria-label="Shell output"><h3>Output</h3><Show when={current().page?.text} fallback={current().loading ? <LoadingPlaceholder kind="output" label="Loading output…" /> : <pre tabindex="0">No output reported.</pre>}>{(text) => <pre tabindex="0">{text()}</pre>}</Show>
@@ -184,7 +184,7 @@ export function TeamView(props: {
     {panel}
     <Show when={confirm()} keyed>{(item) => {
       let close: (() => void) | undefined
-      return <Modal class="overlay--dialog" label={item.kind === "cancel" ? "Cancel subagent" : "Kill shell"} onClose={() => { if (confirm()?.id === item.id && confirm()?.kind === item.kind) setConfirm(undefined) }}
+      return <Modal class="overlay--dialog" label={item.kind === "cancel" ? "Cancel subagent" : "Kill shell"} returnFocus={item.trigger} onClose={() => { if (confirm()?.id === item.id && confirm()?.kind === item.kind) setConfirm(undefined) }}
         requestClose={(handoff) => { close = handoff }}>
       <div class="team-view__confirmation"><p>{item.kind === "cancel" ? `Cancel ${item.label}?` : `Kill ${item.label}?`}</p>
         <div><button type="button" data-action="keep" onClick={() => close?.()}>Keep running</button>

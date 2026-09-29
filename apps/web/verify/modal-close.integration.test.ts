@@ -34,13 +34,13 @@ afterAll(async () => {
   if (server) await server.exited
 })
 
-async function openTeam(width: 390 | 768, theme: "light" | "dark") {
+async function openTeam(width: 390 | 768, theme: "light" | "dark", focusTrigger = true) {
   const page = await browser!.openPage()
   await page.setViewport(width, width === 390 ? 844 : 560)
   await page.setCoarsePointer(true)
   await page.navigate(`${origin}/verify/remote.html?view=chat&team=two&theme=${theme}`)
   for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('[aria-label="Open Team"]')?.getBoundingClientRect().width > 0`); attempt += 1) await Bun.sleep(50)
-  await page.evaluate(`(() => { const trigger = document.querySelector('[aria-label="Open Team"]'); trigger.focus(); trigger.click() })()`)
+  await page.evaluate(`(() => { const trigger = document.querySelector('[aria-label="Open Team"]'); if (${focusTrigger}) trigger.focus(); trigger.click() })()`)
   for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('dialog.team-view__sheet[open]') !== null`); attempt += 1) await Bun.sleep(25)
   expect(await page.evaluate<boolean>(`document.querySelector('dialog.team-view__sheet[open]') !== null`)).toBe(true)
   return page
@@ -93,6 +93,18 @@ describe("one close control per modal", () => {
       expect(await page.evaluate<boolean>(`document.activeElement?.getAttribute('data-action') === 'cancel' && document.querySelector('dialog[aria-label="Cancel subagent"][open]') === null`)).toBe(true)
       await page.pressEscape()
       expect(await page.evaluate<boolean>(`document.activeElement?.getAttribute('aria-label') === 'Open Team'`)).toBe(true)
+    } finally { await page.close() }
+  }, 30_000)
+
+  test("Escape closes only the top dialog and restores each unfocused opener", async () => {
+    const page = await openTeam(390, "light", false)
+    try {
+      await page.evaluate(`document.querySelector('.team-view__task[data-session-id="ses_child"] [data-action="cancel"]').click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Cancel subagent"][open]') !== null`); attempt += 1) await Bun.sleep(25)
+      await page.pressEscape()
+      expect(await page.evaluate<boolean>(`document.querySelector('dialog.team-view__sheet[open]') !== null && document.querySelector('dialog[aria-label="Cancel subagent"][open]') === null && document.activeElement?.getAttribute('data-action') === 'cancel'`)).toBe(true)
+      await page.pressEscape()
+      expect(await page.evaluate<boolean>(`document.querySelector('dialog.team-view__sheet[open]') === null && document.activeElement?.getAttribute('aria-label') === 'Open Team'`)).toBe(true)
     } finally { await page.close() }
   }, 30_000)
 

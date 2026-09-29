@@ -288,7 +288,7 @@ export function DocsSearch(props: { readonly onNavigate?: () => void }): JSX.Ele
         <kbd>/</kbd>
       </button>
       <Show when={open()}>
-        <Modal class="overlay--dialog overlay--docs-search" label="Search docs" onClose={closeSearch}>
+        <Modal class="overlay--dialog overlay--docs-search" label="Search docs" returnFocus={trigger} onClose={closeSearch}>
           <div class="pane docs-search-pane">
             <label class="field" for="docs-search-field">
               <span class="visually-hidden">Search documentation</span>

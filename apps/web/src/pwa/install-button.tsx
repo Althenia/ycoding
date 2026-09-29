@@ -5,6 +5,7 @@ import { pwaInstall } from "./install"
 export function InstallPWAButton() {
   const [open, setOpen] = createSignal(false)
   const [error, setError] = createSignal(false)
+  let trigger: HTMLButtonElement | undefined
   const install = async () => {
     setError(false)
     const result = await pwaInstall.install()
@@ -13,11 +14,11 @@ export function InstallPWAButton() {
   }
   return <>
     <Show when={pwaInstall.canInstall()}>
-      <button type="button" class="button button--secondary button--small" onClick={() => void install()}>Install App</button>
+      <button ref={trigger} type="button" class="button button--secondary button--small" onClick={() => void install()}>Install App</button>
     </Show>
     <Show when={error()}><span class="settings__hint" role="alert">Installation couldn't start. Try the browser's install menu.</span></Show>
     <Show when={open() && !pwaInstall.isInstalled()}>
-      <Modal class="overlay--pwa-install" label="Install YCoding" onClose={() => setOpen(false)}>
+      <Modal class="overlay--pwa-install" label="Install YCoding" returnFocus={trigger} onClose={() => setOpen(false)}>
         <ol class="steps">
           <Show when={pwaInstall.installMethod() === "ios-manual"}>
             <li class="steps__item"><span class="steps__text">Tap the Share button in Safari.</span></li>

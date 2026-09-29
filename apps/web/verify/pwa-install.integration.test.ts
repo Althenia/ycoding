@@ -125,7 +125,7 @@ describe("Settings installation in a real Chrome render", () => {
       const page = await open(name === "macOS Safari" ? 1440 : 390, "light", setup)
       try {
         expect(await page.evaluate<boolean>(`document.querySelector('${button}') !== null`)).toBe(true)
-        await page.evaluate(`document.querySelector('${button}')?.focus(); document.querySelector('${button}')?.click()`)
+        await page.evaluate(`document.querySelector('${button}')?.click()`)
         for (let attempt = 0; attempt < 30 && !await page.evaluate<boolean>(`document.querySelector('${label}')?.open === true`); attempt += 1) await Bun.sleep(20)
         expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll('${label} li')].map(item => item.textContent.trim())`)).toEqual(expected)
         await page.evaluate(`Promise.all([...document.querySelector('${label}').getAnimations({ subtree: true })].map(animation => animation.finished.catch(() => {})))`)
