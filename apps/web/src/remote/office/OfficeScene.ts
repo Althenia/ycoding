@@ -39,7 +39,7 @@ export class OfficeScene extends Phaser.Scene {
   private failed = false
   private followSuspended = false
   private desiredZoom: number
-  private fitting = true
+  private fitting = false
   private latestFrames: readonly ActorFrame[] = []
   private lastLocations = ""
 
@@ -98,7 +98,7 @@ export class OfficeScene extends Phaser.Scene {
           frameRate: speed, repeat: -1 })
       }
     }
-    this.desiredZoom = this.minimumZoom()
+    this.desiredZoom = this.workingZoom()
     this.cameras.main.setZoom(this.desiredZoom)
     this.boundCamera()
     this.cameras.main.centerOn(worldWidth / 2, worldHeight / 2)
@@ -141,17 +141,25 @@ export class OfficeScene extends Phaser.Scene {
     this.boundCamera()
   }
 
+  panBy(x: number, y: number): void {
+    if (!this.ready) return
+    this.followSuspended = true
+    const camera = this.cameras.main
+    camera.setScroll(camera.scrollX + x * this.resolution / camera.zoom, camera.scrollY + y * this.resolution / camera.zoom)
+  }
+
   resize(): void {
     if (!this.ready) return
     this.desiredZoom = this.fitting ? this.minimumZoom() : Math.max(this.desiredZoom, this.minimumZoom())
     this.cameras.main.setZoom(this.desiredZoom)
     this.boundCamera()
+    if (this.fitting) this.cameras.main.centerOn(worldWidth / 2, worldHeight / 2)
   }
 
   defaultView(): void {
     if (!this.ready) return
-    this.fitting = true
-    this.desiredZoom = this.minimumZoom()
+    this.fitting = false
+    this.desiredZoom = this.workingZoom()
     this.cameras.main.setZoom(this.desiredZoom)
     this.boundCamera()
     this.followSuspended = false
@@ -196,6 +204,10 @@ export class OfficeScene extends Phaser.Scene {
     return Math.min(this.scale.width / worldWidth, this.scale.height / worldHeight)
   }
 
+  private workingZoom(): number {
+    return Math.max(this.scale.width / worldWidth, this.scale.height / worldHeight, this.resolution * 0.65)
+  }
+
   override update(time: number, delta: number): void {
     if (!this.ready) return
     this.desiredZoom = this.fitting ? this.minimumZoom() : Math.max(this.desiredZoom, this.minimumZoom())
@@ -238,8 +250,9 @@ export class OfficeScene extends Phaser.Scene {
     this.placeLabels(scale)
     const target = this.latestFrames.find((frame) => frame.actor.id === this.badgeActorID)
     this.badge?.setVisible(time < this.badgeUntil && !!target)
-    if (target) this.badge?.setPosition(target.position.x, target.position.y - 66).setScale(scale)
+    if (target) this.badge?.setPosition(target.position.x, target.position.y - 80).setScale(scale)
     const selected = this.latestFrames.find((frame) => frame.actor.selected)
+    if (this.selectedID === undefined && selected && !this.fitting) this.cameras.main.centerOn(selected.position.x, selected.position.y)
     if (selected?.actor.id !== this.selectedID) this.followSuspended = false
     if (input.preferences.followSelected && selected && !this.followSuspended) this.cameras.main.centerOn(selected.position.x, selected.position.y)
     this.selectedID = selected?.actor.id
@@ -281,7 +294,7 @@ export class OfficeScene extends Phaser.Scene {
       const width = objects.bubble.displayWidth + 18 * scale
       const height = objects.bubble.displayHeight + 10 * scale
       const x = Phaser.Math.Clamp(frame.position.x, view.left + width / 2 + spacing, view.right - width / 2 - spacing)
-      const y = frame.position.y - 67
+      const y = frame.position.y - objects.sprite.displayHeight - 8
       const candidates = [0, -height - spacing, height + spacing, -2 * (height + spacing), 2 * (height + spacing)]
         .flatMap((dy) => [0, -width / 2, width / 2].map((dx) => ({
           left: x + dx - width / 2, right: x + dx + width / 2,
@@ -314,7 +327,7 @@ export class OfficeScene extends Phaser.Scene {
       const height = objects.label.displayHeight + 8 * scale
       const baseline = frame.position.y + 8
       const offsets = [0, 16, -16, 32, -32, 48, -48, 80, -80].map((pixels) => pixels * scale)
-      const rowOffsets = [0, height + spacing, -height - spacing]
+      const rowOffsets = [0, 1, 2, 3, 4, -1, -2].map((row) => row * (height + spacing))
       const candidates = rowOffsets.flatMap((dy) => offsets.map((dx) => ({
         left: frame.position.x + dx - width / 2, right: frame.position.x + dx + width / 2,
         top: baseline + dy, bottom: baseline + dy + height,
@@ -336,7 +349,7 @@ export class OfficeScene extends Phaser.Scene {
     let objects = this.objects.get(frame.actor.id)
     if (!objects) {
       const sprite = this.add.sprite(0, 0, "characters", characterFrame(frame.appearance, frame.direction, 0))
-        .setName(frame.actor.id).setOrigin(0.5, 46 / 48).setInteractive({ useHandCursor: true })
+        .setName(frame.actor.id).setOrigin(0.5, 46 / 48).setScale(1.5).setInteractive({ useHandCursor: true })
       sprite.on("pointerup", (pointer: Phaser.Input.Pointer) => {
         if (pointer.getDistance() < 6 && !this.latestFrames.find((item) => item.actor.id === frame.actor.id)?.leaving) this.selectSession(frame.actor.sessionID)
       })
@@ -366,25 +379,23 @@ export class OfficeScene extends Phaser.Scene {
     objects.shadow.setPosition(x, y + 2).setDepth(y - 1).setAlpha(alpha * 0.55)
     objects.ring.setPosition(x, y + 2).setDepth(y - 0.5).setVisible(frame.actor.selected && !frame.leaving).setAlpha(alpha)
     const preferences = this.mailbox.read().preferences
-    const terminalTask = frame.actor.kind === "task" && ["completed", "cancelled", "lost", "failed"].includes(frame.actor.taskState ?? "")
-    objects.label.setText(terminalTask
-      ? `${shortText(frame.actor.name, 20)} · ${shortText(frame.actor.role, 16)}\n${frame.actor.statusText}`
-      : `${shortText(frame.actor.name, 20)} · ${shortText(frame.actor.role, 16)}`)
-      .setScale(scale).setVisible(preferences.labels && !frame.leaving)
-    objects.labelPlate.setVisible(preferences.labels && !frame.leaving)
+    const inView = this.cameras.main.worldView.contains(x, y)
+    objects.label.setText(shortText(frame.actor.name, 20))
+      .setScale(scale).setVisible(preferences.labels && !frame.leaving && inView)
+    objects.labelPlate.setVisible(preferences.labels && !frame.leaving && inView)
     const bubble = frame.actor.unknownOutcome ? "Action outcome unknown" : frame.actor.bubble ?? ""
-    const showBubble = !frame.leaving && preferences.bubbles !== "off" && !!bubble
+    const showBubble = !frame.leaving && inView && preferences.bubbles !== "off" && !!bubble
     objects.bubble.setText(bubble).setScale(scale).setVisible(showBubble)
     objects.bubblePlate.clear().setVisible(showBubble)
     const bubbleWidth = objects.bubble.displayWidth + 18 * scale
     const view = this.cameras.main.worldView
     const bubbleX = showBubble && view.width >= bubbleWidth + 8 * scale
       ? Phaser.Math.Clamp(x, view.left + bubbleWidth / 2 + 4 * scale, view.right - bubbleWidth / 2 - 4 * scale) : x
-    objects.bubble.setPosition(bubbleX, y - 67)
+    objects.bubble.setPosition(bubbleX, y - objects.sprite.displayHeight - 8)
     objects.marker.setText(frame.actor.status === "failed" ? "×" : "!").setScale(scale)
     const markerX = showBubble ? Math.min(view.right - objects.marker.displayWidth / 2, bubbleX + bubbleWidth / 2 + objects.marker.displayWidth / 2 + 5 * scale) : x + 20
-    objects.marker.setPosition(markerX, showBubble ? y - 67 : y - 48)
-      .setVisible(!frame.leaving && (frame.actor.status === "attention" || frame.actor.status === "failed" || frame.actor.unknownOutcome))
+    objects.marker.setPosition(markerX, y - objects.sprite.displayHeight - (showBubble ? 8 : 0))
+      .setVisible(!frame.leaving && inView && (frame.actor.status === "attention" || frame.actor.status === "failed" || frame.actor.unknownOutcome))
     if (snapshot.team.rootActorID === frame.actor.id) objects.ring.setStrokeStyle(2, 0x6de3b3)
   }
 }

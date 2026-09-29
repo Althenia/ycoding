@@ -7,6 +7,7 @@ export type OfficeHandle = {
   update: (input: OfficeFrameInput) => void
   fit: () => void
   zoomBy: (factor: number) => void
+  panBy: (x: number, y: number) => void
   follow: () => void
   focus: (actorID: string) => void
   destroy: () => void
@@ -69,7 +70,7 @@ export function mountOffice(host: HTMLElement, initial: OfficeFrameInput, select
     width: Math.max(1, Math.round(host.clientWidth * resolution)), height: Math.max(1, Math.round(host.clientHeight * resolution)),
     backgroundColor: "#1b2832", pixelArt: true,
     render: { antialias: false, roundPixels: true },
-    audio: { noAudio: true }, input: { keyboard: false }, autoFocus: false,
+    audio: { noAudio: true }, input: { keyboard: false, mouse: { preventDefaultWheel: false } }, autoFocus: false,
     fps: { target: 30, limit: initial.preferences.quality === "battery" ? 20 : 30, forceSetTimeOut: false },
     scale: { mode: Phaser.Scale.NONE }, scene: [scene],
     banner: false,
@@ -85,6 +86,13 @@ export function mountOffice(host: HTMLElement, initial: OfficeFrameInput, select
     zeroSize = false
   })
   resize.observe(host)
+  const wheel = (event: WheelEvent) => {
+    if (event.ctrlKey || event.metaKey || disposed || failed) return
+    event.preventDefault()
+    const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? host.clientHeight : 1
+    scene.panBy((event.deltaX || (event.shiftKey ? event.deltaY : 0)) * unit, (event.shiftKey ? 0 : event.deltaY) * unit)
+  }
+  host.addEventListener("wheel", wheel, { passive: false })
   const visibility = () => {
     if (disposed || failed) return
     if (document.hidden) { game.pause(); return }
@@ -109,12 +117,14 @@ export function mountOffice(host: HTMLElement, initial: OfficeFrameInput, select
     },
     fit: () => scene.fit(),
     zoomBy: (factor) => scene.zoomBy(factor),
+    panBy: (x, y) => scene.panBy(x, y),
     follow: () => scene.follow(),
     focus: (actorID) => scene.focus(actorID),
     destroy: () => {
       if (disposed) return
       disposed = true
       resize.disconnect()
+      host.removeEventListener("wheel", wheel)
       document.removeEventListener("visibilitychange", visibility)
       game.events.off("ready", ready)
       canvas()?.removeEventListener("webglcontextlost", contextLost)

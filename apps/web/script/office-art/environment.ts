@@ -4,8 +4,8 @@ import { environmentFurniture } from "./furniture"
 export { environmentFurniture }
 
 export function environmentTiles() {
-  const sheet = canvas(192, 32)
-  const bases = ["#eadcc6", "#b7bbc3", "#8595b7", "#e6e1ef", "#dce8e9", "#dcb48b"]
+  const sheet = canvas(288, 32)
+  const bases = ["#eadcc6", "#b7bbc3", "#8595b7", "#e6e1ef", "#dce8e9", "#dcb48b", "#b0bfa3", "#d3cec4", "#efdcc6"]
   for (const [frame, base] of bases.entries()) {
     const x = frame * 32
     sheet.rect(x, 0, 32, 32, base)
@@ -52,6 +52,29 @@ export function environmentTiles() {
         sheet.rect(x, y + 1, 32, 1, "#efd0a8")
         sheet.rect(x + (y % 16 ? 10 : 24), y + 2, 1, 6, "#b98b68")
         for (let dx = 2; dx < 32; dx += 9) sheet.rect(x + dx, y + 5, 5, 1, "#c99a72")
+      }
+    }
+    if (frame === 6) {
+      for (let y = 0; y < 32; y += 4) for (let dx = (y / 4) % 2 * 2; dx < 32; dx += 4) {
+        sheet.rect(x + dx, y, 2, 2, "#9fb094")
+        sheet.pixel(x + dx, y + 2, "#c2cfb5")
+      }
+    }
+    if (frame === 7) {
+      for (const edge of [0, 16]) {
+        sheet.rect(x, edge, 32, 1, "#b9b3a8")
+        sheet.rect(x, edge + 1, 32, 1, "#e6e2d9")
+        sheet.rect(x + (edge ? 0 : 8), edge + 1, 1, 15, "#b9b3a8")
+        sheet.rect(x + (edge ? 24 : 8) + (edge ? 0 : 16), edge + 1, 1, 15, "#b9b3a8")
+      }
+      for (const [dx, dy] of [[4, 6], [20, 4], [14, 22], [27, 26]] as const) sheet.rect(x + dx, dy, 3, 1, "#dfdad0")
+    }
+    if (frame === 8) {
+      for (let y = 0; y < 32; y += 16) for (let dx = 0; dx < 32; dx += 16) {
+        if ((y + dx) % 32 === 0) sheet.rect(x + dx, y, 16, 16, "#d9b596")
+        sheet.rect(x + dx, y, 16, 1, "#c99f7f")
+        sheet.rect(x + dx, y, 1, 16, "#c99f7f")
+        sheet.rect(x + dx + 3, y + 3, 4, 1, "#f6e9d7")
       }
     }
   }

@@ -4,9 +4,9 @@
   "assets": [
     {
       "file": "tiles.png",
-      "width": 192,
+      "width": 288,
       "height": 32,
-      "bytes": 580
+      "bytes": 831
     },
     {
       "file": "walls.png",
@@ -21,6 +21,18 @@
       "bytes": 782
     },
     {
+      "file": "developerDeskLamp.png",
+      "width": 96,
+      "height": 76,
+      "bytes": 869
+    },
+    {
+      "file": "developerDeskPlant.png",
+      "width": 96,
+      "height": 76,
+      "bytes": 882
+    },
+    {
       "file": "researchDesk.png",
       "width": 96,
       "height": 76,
@@ -31,6 +43,90 @@
       "width": 96,
       "height": 76,
       "bytes": 889
+    },
+    {
+      "file": "qaDeskMug.png",
+      "width": 96,
+      "height": 76,
+      "bytes": 941
+    },
+    {
+      "file": "compactDeskCode.png",
+      "width": 64,
+      "height": 76,
+      "bytes": 576
+    },
+    {
+      "file": "compactDeskChart.png",
+      "width": 64,
+      "height": 76,
+      "bytes": 608
+    },
+    {
+      "file": "compactDeskTest.png",
+      "width": 64,
+      "height": 76,
+      "bytes": 604
+    },
+    {
+      "file": "cornerDesk.png",
+      "width": 128,
+      "height": 76,
+      "bytes": 781
+    },
+    {
+      "file": "cornerReturn.png",
+      "width": 32,
+      "height": 64,
+      "bytes": 209
+    },
+    {
+      "file": "credenza.png",
+      "width": 64,
+      "height": 48,
+      "bytes": 419
+    },
+    {
+      "file": "partition.png",
+      "width": 64,
+      "height": 64,
+      "bytes": 314
+    },
+    {
+      "file": "coffeeMachine.png",
+      "width": 32,
+      "height": 48,
+      "bytes": 216
+    },
+    {
+      "file": "bistroTable.png",
+      "width": 64,
+      "height": 64,
+      "bytes": 473
+    },
+    {
+      "file": "rugRound.png",
+      "width": 96,
+      "height": 96,
+      "bytes": 627
+    },
+    {
+      "file": "rugRunner.png",
+      "width": 128,
+      "height": 64,
+      "bytes": 325
+    },
+    {
+      "file": "rugMat.png",
+      "width": 96,
+      "height": 64,
+      "bytes": 495
+    },
+    {
+      "file": "rugSage.png",
+      "width": 320,
+      "height": 160,
+      "bytes": 836
     },
     {
       "file": "conferenceTable.png",

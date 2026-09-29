@@ -50,6 +50,7 @@ export function OfficeCanvas(props: {
   })
   return <section class="office-stage" aria-label="Office visualization">
     <div class="office-camera-controls" aria-label="Office camera">
+      <p class="office-camera-hint" id="office-camera-hint">Drag / scroll · Arrow keys</p>
       <button type="button" onClick={() => handle?.zoomBy(1.25)} aria-label="Zoom in" data-tooltip="Zoom in"><Icon name="plus" size={22} /></button>
       <button type="button" onClick={() => handle?.zoomBy(0.8)} aria-label="Zoom out" data-tooltip="Zoom out"><Icon name="minus" size={22} /></button>
       <button type="button" onClick={() => handle?.fit()} aria-label="Fit office" data-tooltip="Fit office"><Icon name="maximize" size={22} /></button>
@@ -58,6 +59,13 @@ export function OfficeCanvas(props: {
     </div>
     <Show when={loading()}><LoadingPlaceholder kind="office" label="Loading the office renderer…" announce={false} /><p class="office-notice" role="status">Loading the office renderer…</p></Show>
     <Show when={error()}>{(message) => <p class="office-notice" role="alert">{message()} <button type="button" onClick={props.onNormalView}>Use normal view</button></p>}</Show>
-    <div ref={host} class="office-canvas-host" aria-hidden="true" />
+    <div ref={host} class="office-canvas-host" role="region" aria-label="Office floor" aria-describedby="office-camera-hint" tabindex="0" onKeyDown={(event) => {
+      if (event.altKey || event.ctrlKey || event.metaKey) return
+      const x = event.key === "ArrowLeft" ? -64 : event.key === "ArrowRight" ? 64 : 0
+      const y = event.key === "ArrowUp" ? -64 : event.key === "ArrowDown" ? 64 : 0
+      if (!x && !y) return
+      event.preventDefault()
+      handle?.panBy(x, y)
+    }} />
   </section>
 }

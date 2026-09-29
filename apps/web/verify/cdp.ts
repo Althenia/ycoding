@@ -100,6 +100,9 @@ export async function launchBrowser(executable: string, width: number, height: n
           buttons: type === "mousePressed" ? 1 : 0,
           clickCount: type === "mouseMoved" ? 0 : 1,
         }),
+        wheel: (x: number, y: number, deltaX: number, deltaY: number) => call("Input.dispatchMouseEvent", {
+          type: "mouseWheel", x, y, deltaX, deltaY,
+        }),
         async setCoarsePointer(enabled: boolean) {
           await call("Emulation.setTouchEmulationEnabled", { enabled, ...(enabled ? { maxTouchPoints: 1 } : {}) })
           await call("Emulation.setEmulatedMedia", {

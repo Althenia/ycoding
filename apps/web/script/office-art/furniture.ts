@@ -55,7 +55,9 @@ function chair(art: Painter, x: number, y: number, color = "#64788e") {
   art.rect(x + 4, y + 18, 18, 2, "#3b4b5c")
 }
 
-function workstation(style: "code" | "chart" | "test"): PixelArt {
+type DeskAccent = "lamp" | "plant" | "mug"
+
+function workstation(style: "code" | "chart" | "test", accent?: DeskAccent, seat = "#778ca8"): PixelArt {
   return piece(96, 76, (art) => {
     const width = art.width
     base(art, 1, 15, width - 2, 46, "#6e778d", "#f0edf1", "#ffffff")
@@ -67,9 +69,11 @@ function workstation(style: "code" | "chart" | "test"): PixelArt {
     art.rect(width / 2 - 18, 44, 36, 3, "#aeb9c7")
     for (let key = 0; key < 32; key += 4) art.pixel(width / 2 - 16 + key, 45, "#53637a")
     art.ellipse(width - 22, 42, 6, 4, "#425264")
-    art.rect(9, 22, 3, 18, "#596475")
-    art.ellipse(3, 16, 16, 9, "#f6d8a2")
-    art.rect(9, 40, 8, 2, "#3d4e5b")
+    if (accent !== "plant") {
+      art.rect(9, 22, 3, 18, "#596475")
+      art.ellipse(3, 16, 16, 9, accent === "lamp" ? "#f0b47e" : "#f6d8a2")
+      art.rect(9, 40, 8, 2, "#3d4e5b")
+    }
     art.rect(width - 31, 25, 14, 9, "#d8e6ed")
     art.rect(width - 29, 27, 10, 1, style === "test" ? "#d58487" : "#97a9ba")
     art.rect(width - 29, 30, 7, 1, "#97a9ba")
@@ -89,7 +93,220 @@ function workstation(style: "code" | "chart" | "test"): PixelArt {
       art.ellipse(72, 37, 9, 9, "#dfc995")
       art.ellipse(74, 39, 5, 5, "#84bcae")
     }
-    chair(art, width / 2 - 13, 54, "#778ca8")
+    if (accent === "plant") {
+      art.rect(4, 36, 12, 8, "#c07d62")
+      art.rect(3, 34, 14, 3, "#dea281")
+      for (const [leaf, color] of ["#4f8a6a", "#79a879", "#3f755d", "#8cb990"].entries()) {
+        art.line(10, 34, 4 + leaf * 4, 20 + leaf % 2 * 5, color)
+        art.ellipse(1 + leaf * 4, 16 + leaf % 2 * 5, 7, 6, color)
+      }
+    }
+    if (accent === "lamp") {
+      art.rect(width - 50, 26, 3, 3, "#e8d38c")
+      art.rect(width - 46, 24, 3, 3, "#d9a0b8")
+      art.rect(width - 42, 26, 3, 3, "#9fd2c6")
+      art.line(30, 6, 40, 2, "#3d4e5b")
+      art.line(40, 2, 50, 6, "#3d4e5b")
+      art.rect(28, 6, 4, 6, "#c98f7a")
+      art.rect(49, 6, 4, 6, "#c98f7a")
+    }
+    if (accent === "mug") {
+      art.rect(61, 37, 8, 8, "#e4b08a")
+      art.rect(69, 39, 2, 4, "#e4b08a")
+      art.rect(62, 38, 6, 2, "#5a3f39")
+      art.line(64, 34, 65, 31, "#dfe7ea")
+      art.line(67, 35, 66, 31, "#dfe7ea")
+    }
+    chair(art, width / 2 - 13, 54, seat)
+  })
+}
+
+function compactDesk(style: "code" | "chart" | "test", seat: string): PixelArt {
+  return piece(64, 76, (art) => {
+    base(art, 1, 15, 62, 46, "#6e778d", "#f0edf1", "#ffffff")
+    art.rect(5, 56, 9, 10, "#b4bbca")
+    art.rect(50, 56, 9, 10, "#b4bbca")
+    monitor(art, 33, 9, style)
+    art.rect(32, 43, 26, 4, "#455365")
+    art.rect(34, 44, 22, 2, "#aeb9c7")
+    art.ellipse(52, 41, 5, 4, "#425264")
+    if (style === "code") {
+      art.rect(4, 31, 22, 3, "#4b5568")
+      art.rect(6, 22, 18, 10, "#2f3c50")
+      art.rect(8, 24, 14, 6, "#88c8d1")
+      art.rect(10, 26, 6, 1, "#dbb1dc")
+      art.rect(5, 38, 8, 8, "#58728a")
+      art.rect(13, 40, 2, 4, "#58728a")
+      art.rect(6, 39, 6, 2, "#c5e6e4")
+    }
+    if (style === "chart") {
+      for (const [book, color] of ["#8592b9", "#b17d9a", "#d3a670"].entries()) art.rect(4, 42 - book * 4, 20 - book * 3, 4, color)
+      art.rect(6, 22, 5, 6, "#c07d62")
+      art.ellipse(3, 14, 11, 10, "#79a879")
+      art.ellipse(7, 11, 6, 6, "#4f8a6a")
+    }
+    if (style === "test") {
+      art.rect(4, 26, 8, 8, "#e8d38c")
+      art.rect(13, 28, 8, 8, "#9fd2c6")
+      art.rect(7, 36, 8, 8, "#d9a0b8")
+      art.rect(19, 36, 8, 12, "#293b4e")
+      art.rect(20, 37, 6, 9, "#a5d4d8")
+    }
+    chair(art, 35, 54, seat)
+  })
+}
+
+function cornerDesk(): PixelArt {
+  return piece(128, 76, (art) => {
+    base(art, 1, 15, 126, 46, "#6e778d", "#f0edf1", "#ffffff")
+    art.rect(5, 56, 9, 10, "#b4bbca")
+    art.rect(98, 30, 28, 46, "#f0edf1")
+    art.rect(98, 30, 2, 46, "#6e778d")
+    art.rect(126, 30, 2, 46, "#6e778d")
+    art.rect(100, 32, 24, 2, "#ffffff")
+    monitor(art, 33, 8, "code")
+    monitor(art, 66, 10, "chart")
+    art.rect(33, 43, 40, 4, "#455365")
+    art.rect(35, 44, 36, 2, "#aeb9c7")
+    art.ellipse(80, 42, 6, 4, "#425264")
+    art.rect(6, 24, 16, 12, "#e6eef2")
+    art.rect(8, 27, 12, 1, "#97a9ba")
+    art.rect(8, 30, 8, 1, "#97a9ba")
+    art.rect(24, 34, 8, 9, "#a0788c")
+    art.rect(32, 36, 2, 5, "#a0788c")
+    art.rect(102, 38, 20, 12, "#293b4e")
+    art.rect(104, 40, 16, 8, "#88c8d1")
+    art.rect(88, 20, 9, 3, "#d3a670")
+    art.rect(89, 23, 7, 3, "#8592b9")
+    chair(art, 35, 54, "#c07d62")
+  })
+}
+
+function cornerReturn(): PixelArt {
+  return piece(32, 64, (art) => {
+    art.rect(2, 0, 28, 50, "#f0edf1")
+    art.rect(2, 0, 2, 50, "#6e778d")
+    art.rect(28, 0, 2, 50, "#6e778d")
+    art.rect(4, 0, 24, 2, "#ffffff")
+    art.rect(8, 6, 16, 10, "#e6eef2")
+    art.rect(10, 9, 12, 1, "#97a9ba")
+    art.ellipse(4, 52, 24, 8, "#26304755")
+    art.rect(5, 46, 6, 14, "#b4bbca")
+    art.rect(21, 46, 6, 14, "#b4bbca")
+  })
+}
+
+function credenza(): PixelArt {
+  return piece(64, 48, (art) => {
+    base(art, 1, 12, 62, 34, "#5d4c5b", "#a58d86", "#d1b7a8")
+    for (const door of [0, 1]) {
+      art.rect(6 + door * 27, 22, 25, 16, "#8a726f")
+      art.rect(8 + door * 27, 24, 21, 12, "#b89c92")
+      art.rect(door ? 12 : 22, 28, 3, 5, "#e8ded7")
+    }
+    for (const [book, color] of ["#af7f9b", "#8099bd", "#c89f71", "#89aa8d"].entries()) art.rect(6 + book * 5, 6 + book % 2 * 2, 4, 14 - book % 2 * 2, color)
+    art.rect(38, 12, 10, 6, "#c07d62")
+    art.ellipse(37, 3, 12, 10, "#79a879")
+    art.ellipse(41, 1, 6, 8, "#4f8a6a")
+  })
+}
+
+function partition(): PixelArt {
+  return piece(64, 64, (art) => {
+    art.ellipse(3, 56, 58, 7, "#26304755")
+    art.rect(1, 4, 62, 54, "#4b5669")
+    art.rect(4, 7, 56, 46, "#93a7b5")
+    art.rect(4, 7, 56, 3, "#b8c8d2")
+    for (let stitch = 12; stitch < 52; stitch += 10) art.rect(4, stitch, 56, 1, "#7d93a3")
+    art.rect(10, 16, 12, 10, "#e8d38c")
+    art.rect(12, 19, 8, 1, "#9a8d5a")
+    art.rect(38, 22, 14, 11, "#d9a0b8")
+    art.rect(41, 25, 8, 1, "#98637c")
+    art.rect(6, 54, 8, 6, "#3d4e5b")
+    art.rect(50, 54, 8, 6, "#3d4e5b")
+  })
+}
+
+function rugRound(): PixelArt {
+  return piece(96, 96, (art) => {
+    art.ellipse(0, 0, 96, 96, "#5c6f8f")
+    art.ellipse(5, 5, 86, 86, "#a9b8d0")
+    art.ellipse(14, 14, 68, 68, "#e3d6c2")
+    art.ellipse(30, 30, 36, 36, "#c98f7a")
+    art.ellipse(38, 38, 20, 20, "#efc7a8")
+  })
+}
+
+function rugRunner(): PixelArt {
+  return piece(128, 64, (art) => {
+    art.roundRect(0, 0, 128, 64, "#8a5f6a")
+    art.roundRect(4, 4, 120, 56, "#d9c0a8")
+    for (let x = 12; x < 116; x += 16) {
+      art.rect(x, 8, 8, 48, x % 32 ? "#b9808a" : "#8fa9a2")
+      art.rect(x + 3, 8, 2, 48, "#f0e2cf")
+    }
+    art.rect(8, 30, 112, 4, "#8a5f6a")
+    for (let x = 14; x < 116; x += 16) art.rect(x, 31, 4, 2, "#e8d38c")
+  })
+}
+
+function rugMat(): PixelArt {
+  return piece(96, 64, (art) => {
+    art.roundRect(0, 0, 96, 64, "#5f8a86")
+    art.roundRect(4, 4, 88, 56, "#b9d4cc")
+    for (let step = 0; step < 4; step++) {
+      art.line(48, 10 + step * 4, 20 + step * 6, 32, "#5f8a86")
+      art.line(48, 54 - step * 4, 76 - step * 6, 32, "#5f8a86")
+    }
+    art.ellipse(38, 24, 20, 16, "#e8d38c")
+    art.ellipse(44, 28, 8, 8, "#c98f7a")
+    art.ellipse(46, 30, 4, 4, "#f3ead6")
+    art.rect(8, 8, 80, 2, "#e8d38c")
+    art.rect(8, 54, 80, 2, "#e8d38c")
+  })
+}
+
+function rugSage(): PixelArt {
+  return piece(320, 160, (art) => {
+    art.roundRect(0, 0, 320, 160, "#6f8563")
+    art.roundRect(6, 6, 308, 148, "#a9bb9d")
+    art.roundRect(16, 16, 288, 128, "#cfdcc4")
+    for (let x = 28; x < 292; x += 24) for (let y = 28; y < 132; y += 24) {
+      art.rect(x, y, 6, 6, ((x - 28) / 24 + (y - 28) / 24) % 2 ? "#a9bb9d" : "#8fa483")
+    }
+    art.rect(16, 16, 288, 2, "#e4ecdd")
+  })
+}
+
+function coffeeMachine(): PixelArt {
+  return piece(32, 48, (art) => {
+    art.ellipse(3, 41, 27, 5, "#26304755")
+    art.roundRect(4, 6, 24, 34, "#4b5568")
+    art.rect(7, 9, 18, 22, "#d7dde0")
+    art.rect(9, 11, 14, 5, "#7bb0a5")
+    art.pixel(10, 20, "#d98681")
+    art.pixel(14, 20, "#e8d38c")
+    art.pixel(18, 20, "#9bd3aa")
+    art.rect(8, 33, 16, 4, "#2f3746")
+    art.rect(13, 27, 6, 6, "#f1e6d8")
+    art.rect(14, 28, 4, 1, "#5a3f39")
+  })
+}
+
+function bistroTable(): PixelArt {
+  return piece(64, 64, (art) => {
+    art.ellipse(2, 52, 60, 10, "#26304755")
+    art.ellipse(1, 34, 18, 10, "#a0788c")
+    art.ellipse(45, 34, 18, 10, "#6f9a8c")
+    art.rect(8, 42, 4, 12, "#3d4e5b")
+    art.rect(52, 42, 4, 12, "#3d4e5b")
+    art.rect(30, 26, 4, 26, "#586a72")
+    art.ellipse(20, 40, 24, 6, "#586a72")
+    art.ellipse(12, 12, 40, 22, "#694b3e")
+    art.ellipse(13, 10, 38, 20, "#b7865e")
+    art.ellipse(17, 12, 14, 8, "#e9b77e")
+    art.rect(36, 10, 6, 6, "#f1e6d8")
+    art.rect(37, 11, 4, 1, "#5a3f39")
   })
 }
 
@@ -229,8 +446,24 @@ function beanBag(back: string, cushion: string, light: string): PixelArt {
 export function environmentFurniture(): Record<OfficeFurniture, PixelArt> {
   return {
     developerDesk: workstation("code"),
+    developerDeskLamp: workstation("code", "lamp", "#a0788c"),
+    developerDeskPlant: workstation("code", "plant", "#6f9a8c"),
     researchDesk: workstation("chart"),
     qaDesk: workstation("test"),
+    qaDeskMug: workstation("test", "mug", "#b08a70"),
+    compactDeskCode: compactDesk("code", "#778ca8"),
+    compactDeskChart: compactDesk("chart", "#6f9a8c"),
+    compactDeskTest: compactDesk("test", "#b08a70"),
+    cornerDesk: cornerDesk(),
+    cornerReturn: cornerReturn(),
+    credenza: credenza(),
+    partition: partition(),
+    coffeeMachine: coffeeMachine(),
+    bistroTable: bistroTable(),
+    rugRound: rugRound(),
+    rugRunner: rugRunner(),
+    rugMat: rugMat(),
+    rugSage: rugSage(),
     conferenceTable: piece(256, 112, (art) => {
       for (let seat = 0; seat < 4; seat++) {
         chair(art, 30 + seat * 52, 0, "#738e9a")

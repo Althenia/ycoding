@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { officeLayout, pods, tileSize } from "../src/remote/office/map"
+import { officeLayout, pods, tileSize, worldHeight, worldWidth } from "../src/remote/office/map"
 import { launchBrowser } from "./cdp"
 
 const browserPath = process.env.YCODING_WEB_CHROME
@@ -54,6 +54,24 @@ async function advance(page: Awaited<ReturnType<ReturnType<typeof requireBrowser
   await page.evaluate<void>(`(() => {const scene=window.__officeGame.scene.getScene('office');for(let step=0;step<${steps};step++)scene.update(performance.now()+step*50,50)})()`)
 }
 
+test("compact canvas names leave the role in the roster and characters lead their name plates", async () => {
+  const page = await requireBrowser().openPage()
+  try {
+    await page.setViewport(1440, 900)
+    await page.navigate(url("tool", "&workspace=1&team=multi&cue=0&freeCamera=1"))
+    await waitFor(page, "window.__officeGame?.scene.getScene('office').latestFrames.length===3")
+    const actors = await page.evaluate<readonly { readonly name: string; readonly label: string; readonly role: string; readonly roster: string; readonly characterHeight: number; readonly labelHeight: number }[]>(`(() => {
+      const scene=window.__officeGame.scene.getScene('office'),zoom=scene.cameras.main.zoom/scene.resolution;
+      return scene.latestFrames.map(frame=>{const objects=scene.objects.get(frame.actor.id);return {name:frame.actor.name,label:objects.label.text,role:frame.actor.role,roster:document.querySelector('.office-roster__row[data-session-id="'+frame.actor.sessionID+'"] .office-roster__name').textContent,characterHeight:objects.sprite.displayHeight*zoom,labelHeight:objects.label.displayHeight*zoom}})
+    })()`)
+    for (const actor of actors) {
+      expect(actor.label).toBe(actor.name)
+      expect(actor.roster).toContain(actor.role)
+      expect(actor.characterHeight).toBeGreaterThanOrEqual(actor.labelHeight * 2)
+    }
+  } finally { await page.close() }
+}, 30_000)
+
 test("renders one open floor for three widths and two themes through a multi-agent activity sequence", async () => {
   const page = await requireBrowser().openPage()
   await page.injectOnNewDocument("window.__officeErrors=[];window.addEventListener('error',event=>window.__officeErrors.push(event.message));window.addEventListener('unhandledrejection',event=>window.__officeErrors.push(String(event.reason)))")
@@ -61,6 +79,8 @@ test("renders one open floor for three widths and two themes through a multi-age
     await page.setViewport(width, height)
     await page.navigate(url("tool", "&workspace=1&team=multi&cue=0&freeCamera=1&sequence=1"))
     await waitFor(page, "window.__officeGame?.scene.getScene('office').latestFrames.length===3 && !document.querySelector('.office-notice[role=status]')")
+    await page.evaluate<void>("document.querySelector('[aria-label=\"Fit office\"]').click()")
+    await waitFor(page, "(()=>{const camera=window.__officeGame.scene.getScene('office').cameras.main;return Math.abs(camera.worldView.width-camera.width/camera.zoom)<1&&Math.abs(camera.worldView.height-camera.height/camera.zoom)<1})()")
     const controls = await page.evaluate<readonly { readonly name: string; readonly width: number; readonly height: number }[]>("[...document.querySelectorAll('.office-camera-controls button')].map(button=>({name:button.getAttribute('aria-label'),width:button.getBoundingClientRect().width,height:button.getBoundingClientRect().height}))")
     expect(controls.map((button) => button.name)).toEqual(["Zoom in", "Zoom out", "Fit office", "Follow selected", "Back to conversation"])
     expect(controls.every((button) => button.width >= 44 && button.height >= 44)).toBe(true)
@@ -73,17 +93,17 @@ test("renders one open floor for three widths and two themes through a multi-age
       const state = await page.evaluate<{ readonly rooms: readonly string[]; readonly positions: readonly { readonly x: number; readonly y: number }[]; readonly zoom: number; readonly fit: number; readonly ratio: number; readonly labels: number; readonly bounds: readonly number[] }>(`(() => {const scene=window.__officeGame.scene.getScene('office'),camera=scene.cameras.main,canvas=document.querySelector('.office-canvas-host canvas');return {
         rooms:scene.latestFrames.map(frame=>frame.room),positions:scene.latestFrames.map(frame=>({x:Math.floor(frame.position.x/32),y:Math.floor(frame.position.y/32)})),zoom:camera.zoom,
         fit:Math.min(camera.width/${officeLayout.columns * tileSize},camera.height/${officeLayout.rows * tileSize}),ratio:canvas.width/canvas.getBoundingClientRect().width,
-        labels:scene.children.list.filter(object=>object.type==='Text'&&object.text.includes(' · ')).length,
+        labels:[...scene.objects.values()].filter(object=>object.label.visible&&object.label.text).length,
         bounds:[camera.worldView.left,camera.worldView.top,camera.worldView.right,camera.worldView.bottom]}})()`)
       expect(state.rooms.every((room) => room === "block")).toBe(true)
       expect(new Set(state.positions.map((point) => `${point.x},${point.y}`)).size).toBe(3)
       expect(state.positions.every((point, index) => point.x >= pods[index]!.left && point.x <= pods[index]!.right && point.y >= pods[index]!.top && point.y <= pods[index]!.bottom)).toBe(true)
       expect(state.positions).toEqual(activities.map((activity, index) => pods[index]!.spots[activity].cell))
       expect(state.zoom).toBeCloseTo(state.fit, 2)
-      expect(state.bounds[0]!).toBeLessThanOrEqual(0)
-      expect(state.bounds[1]!).toBeLessThanOrEqual(0)
-      expect(state.bounds[2]!).toBeGreaterThanOrEqual(officeLayout.columns * tileSize)
-      expect(state.bounds[3]!).toBeGreaterThanOrEqual(officeLayout.rows * tileSize)
+      expect(state.bounds[0]!).toBeLessThanOrEqual(0.000001)
+      expect(state.bounds[1]!).toBeLessThanOrEqual(0.000001)
+      expect(state.bounds[2]!).toBeGreaterThanOrEqual(officeLayout.columns * tileSize - 0.000001)
+      expect(state.bounds[3]!).toBeGreaterThanOrEqual(officeLayout.rows * tileSize - 0.000001)
       expect(state.ratio).toBeGreaterThanOrEqual(1)
       expect(state.labels).toBeGreaterThanOrEqual(3)
       const overlays = await page.evaluate<{ readonly bubbles: readonly { readonly left: number; readonly right: number; readonly top: number; readonly bottom: number }[]; readonly labels: readonly { readonly left: number; readonly right: number; readonly top: number; readonly bottom: number }[] }>(`(() => {const scene=window.__officeGame.scene.getScene('office'),scale=scene.resolution/scene.cameras.main.zoom;return {
@@ -106,13 +126,22 @@ test("renders one open floor for three widths and two themes through a multi-age
   await page.close()
 }, 120_000)
 
-test("default and Fit show the entire floor; zoom, follow and resize remain usable", async () => {
+test("Office opens at a readable working scale and Fit shows the entire floor", async () => {
   const page = await requireBrowser().openPage()
   for (const [width, height] of [[1440, 900], [1024, 768], [390, 844]] as const) {
     await page.setViewport(width, height)
     await page.navigate(url("tool", "&freeCamera=1&workspace=1"))
     await waitFor(page, "window.__officeGame?.scene.getScene('office').latestFrames.length===1")
-    const measure = "(()=>{const scene=window.__officeGame.scene.getScene('office'),camera=scene.cameras.main,host=document.querySelector('.office-engine-host').getBoundingClientRect(),stage=document.querySelector('.office-workspace').getBoundingClientRect();return {zoom:camera.zoom,fit:Math.min(camera.width/2048,camera.height/1280),hostBottom:host.bottom,stageBottom:stage.bottom,stageHeight:stage.height,canvasWidth:document.querySelector('canvas').width,cssWidth:document.querySelector('canvas').getBoundingClientRect().width}})()"
+    await waitFor(page, "window.__officeGame.scene.getScene('office').cameras.main.worldView.width>0")
+    const opening = await page.evaluate<{ readonly zoom: number; readonly cover: number; readonly bounds: readonly number[] }>(`(() => {const scene=window.__officeGame.scene.getScene('office'),camera=scene.cameras.main;return {zoom:camera.zoom/scene.resolution,cover:Math.max(camera.width/${worldWidth},camera.height/${worldHeight})/scene.resolution,bounds:[camera.worldView.left,camera.worldView.top,camera.worldView.right,camera.worldView.bottom]}})()`)
+    expect(opening.zoom).toBeGreaterThanOrEqual(0.65)
+    expect(opening.zoom).toBeGreaterThanOrEqual(opening.cover)
+    expect(opening.bounds[0]!).toBeGreaterThanOrEqual(-1)
+    expect(opening.bounds[1]!).toBeGreaterThanOrEqual(-1)
+    expect(opening.bounds[2]!).toBeLessThanOrEqual(worldWidth + 1)
+    expect(opening.bounds[3]!).toBeLessThanOrEqual(worldHeight + 1)
+    await page.evaluate<void>("document.querySelector('[aria-label=\"Fit office\"]').click()")
+    const measure = `(()=>{const scene=window.__officeGame.scene.getScene('office'),camera=scene.cameras.main,host=document.querySelector('.office-engine-host').getBoundingClientRect(),stage=document.querySelector('.office-workspace').getBoundingClientRect();return {zoom:camera.zoom,fit:Math.min(camera.width/${worldWidth},camera.height/${worldHeight}),hostBottom:host.bottom,stageBottom:stage.bottom,stageHeight:stage.height,canvasWidth:document.querySelector('canvas').width,cssWidth:document.querySelector('canvas').getBoundingClientRect().width}})()`
     const before = await page.evaluate<{ readonly zoom: number; readonly fit: number; readonly hostBottom: number; readonly stageBottom: number; readonly stageHeight: number; readonly canvasWidth: number; readonly cssWidth: number }>(measure)
     expect(before.zoom).toBeCloseTo(before.fit, 2)
     if (width !== 390) expect(before.stageBottom).toBeCloseTo(before.hostBottom, 0)
@@ -153,7 +182,8 @@ test("DPR two and a live resize preserve crisp canvas backing size and whole-flo
   await page.setViewport(1024, 768)
   await page.navigate(url("tool", "&workspace=1&freeCamera=1"))
   await waitFor(page, "window.__officeGame?.scene.getScene('office').latestFrames.length===1")
-  const measure = "(()=>{const canvas=document.querySelector('canvas'),camera=window.__officeGame.scene.getScene('office').cameras.main;return {ratio:canvas.width/canvas.getBoundingClientRect().width,zoom:camera.zoom,fit:Math.min(camera.width/2048,camera.height/1280)}})()"
+  await page.evaluate<void>("document.querySelector('[aria-label=\"Fit office\"]').click()")
+  const measure = `(()=>{const canvas=document.querySelector('canvas'),camera=window.__officeGame.scene.getScene('office').cameras.main;return {ratio:canvas.width/canvas.getBoundingClientRect().width,zoom:camera.zoom,fit:Math.min(camera.width/${worldWidth},camera.height/${worldHeight})}})()`
   const before = await page.evaluate<{ readonly ratio: number; readonly zoom: number; readonly fit: number }>(measure)
   expect(before.ratio).toBeGreaterThan(1.9)
   expect(before.ratio).toBeLessThanOrEqual(2.1)

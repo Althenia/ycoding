@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { launchBrowser } from "./cdp"
+import { worldHeight, worldWidth } from "../src/remote/office/map"
 
 const port = 45_000 + Math.floor(Math.random() * 10_000)
 const browserPath = process.env.YCODING_WEB_CHROME
@@ -36,6 +37,69 @@ afterAll(async () => {
 })
 
 describe("remote Office presentation", () => {
+  test("Fit keeps the whole floor inside the real shell with notices, short heights and resize", async () => {
+    const page = await openRemote("view=chat&promptOutcome=unknown&inspectOffice=1")
+    try {
+      await page.evaluate<void>(`document.querySelector('.fixture__banner').style.display='none';document.querySelector('.fixture__controls').style.display='none'`)
+      expect(await until(page, `document.querySelector('.composer__input')!==null && document.querySelector('button[aria-label="Send prompt"]')!==null`)).toBe(true)
+      await page.evaluate<void>(`(() => {const field=document.querySelector('.composer__input');field.value='Check Office navigation';field.dispatchEvent(new InputEvent('input',{bubbles:true}));document.querySelector('button[aria-label="Send prompt"]').click()})()`)
+      expect(await until(page, `document.querySelector('.workspace__scroll > .notice-strip--warning')!==null`)).toBe(true)
+      await choosePresentation(page, "Office")
+      expect(await until(page, `!!window.__officeGame?.scene.getScene('office').latestFrames.length`, 150)).toBe(true)
+      expect(await until(page, `document.querySelector('.office-workspace').parentElement.getAnimations().every(animation=>animation.playState==='finished')`)).toBe(true)
+      for (const [width, height] of [[1440, 900], [1440, 560], [1024, 640], [820, 1180], [1440, 900]] as const) {
+        await page.setViewport(width, height)
+        await page.evaluate<void>(`document.querySelector('button[aria-label="Fit office"]').click()`)
+        expect(await until(page, `(() => {const canvas=document.querySelector('canvas'),box=canvas.getBoundingClientRect(),camera=window.__officeGame.scene.getScene('office').cameras.main;return Math.abs(canvas.width/box.width-window.devicePixelRatio)<0.1&&Math.abs(canvas.height/box.height-window.devicePixelRatio)<0.1&&Math.abs(camera.height-box.height*window.devicePixelRatio)<2})()`)).toBe(true)
+        expect(await until(page, `(() => {const camera=window.__officeGame.scene.getScene('office').cameras.main;return Math.abs(camera.worldView.width-camera.width/camera.zoom)<1})()`)).toBe(true)
+        const geometry = await page.evaluate<{ readonly bottom: number; readonly availableBottom: number; readonly noticeTop: number; readonly scrollTop: number; readonly noticeBottom: number; readonly officeTop: number; readonly height: number; readonly pageHeight: number; readonly zoom: number; readonly fit: number; readonly bounds: readonly number[] }>(`(() => {
+          const canvas=document.querySelector('.office-canvas-host').getBoundingClientRect(),office=document.querySelector('.office-workspace').getBoundingClientRect(),scroll=document.querySelector('.workspace__scroll'),camera=window.__officeGame.scene.getScene('office').cameras.main;
+          return {bottom:office.bottom,availableBottom:scroll.getBoundingClientRect().bottom-parseFloat(getComputedStyle(scroll).paddingBottom),noticeTop:document.querySelector('.notice-strip--warning').getBoundingClientRect().top,scrollTop:scroll.getBoundingClientRect().top,noticeBottom:document.querySelector('.notice-strip--warning').getBoundingClientRect().bottom,officeTop:office.top,height:canvas.height,pageHeight:document.documentElement.scrollHeight,zoom:camera.zoom,fit:Math.min(camera.width/${worldWidth},camera.height/${worldHeight}),bounds:[camera.worldView.left,camera.worldView.top,camera.worldView.right,camera.worldView.bottom]}
+        })()`)
+        console.log("Office shell geometry", width, height, geometry)
+        await Bun.write(join(captures, `notices-${width}x${height}.png`), Buffer.from(await page.screenshot(), "base64"))
+        expect(geometry.bottom).toBeLessThanOrEqual(geometry.availableBottom + 1)
+        expect(geometry.bottom).toBeGreaterThanOrEqual(geometry.availableBottom - 1)
+        expect(geometry.noticeTop).toBeGreaterThanOrEqual(geometry.scrollTop)
+        expect(geometry.officeTop).toBeGreaterThanOrEqual(geometry.noticeBottom)
+        expect(geometry.height).toBeGreaterThan(120)
+        expect(geometry.pageHeight).toBeLessThanOrEqual(height + 1)
+        expect(geometry.zoom).toBeCloseTo(geometry.fit, 2)
+        expect(geometry.bounds[0]!).toBeLessThanOrEqual(1)
+        expect(geometry.bounds[1]!).toBeLessThanOrEqual(1)
+        expect(geometry.bounds[2]!).toBeGreaterThanOrEqual(worldWidth - 1)
+        expect(geometry.bounds[3]!).toBeGreaterThanOrEqual(worldHeight - 1)
+      }
+    } finally { await page.close() }
+  }, 60_000)
+
+  test("wheel, trackpad and focused arrow keys pan the zoomed floor without changing the selected Session", async () => {
+    const page = await openRemote("view=chat&presentation=office&inspectOffice=1")
+    try {
+      await page.evaluate<void>(`document.querySelector('.fixture__banner').style.display='none';document.querySelector('.fixture__controls').style.display='none'`)
+      expect(await until(page, `!!window.__officeGame?.scene.getScene('office').latestFrames.length`, 150)).toBe(true)
+      await page.evaluate<void>(`document.querySelector('button[aria-label="Fit office"]').click();for(let index=0;index<5;index++)document.querySelector('button[aria-label="Zoom in"]').click()`)
+      expect(await until(page, `(() => {const camera=window.__officeGame.scene.getScene('office').cameras.main;return Math.abs(camera.worldView.width-camera.width/camera.zoom)<1})()`)).toBe(true)
+      const host = await page.evaluate<{ readonly x: number; readonly y: number }>(`(() => {const box=document.querySelector('.office-canvas-host').getBoundingClientRect();return {x:box.left+box.width/2,y:box.top+box.height/2}})()`)
+      const view = `(() => {const camera=window.__officeGame.scene.getScene('office').cameras.main;return {x:camera.worldView.x,y:camera.worldView.y,bottom:camera.worldView.bottom,right:camera.worldView.right}})()`
+      const before = await page.evaluate<{ readonly x: number; readonly y: number; readonly bottom: number; readonly right: number }>(view)
+      const session = await page.evaluate<string>(`document.querySelector('.office-roster__row[aria-current="true"]').dataset.sessionId`)
+      await page.wheel(host.x, host.y, 160, 180)
+      expect(await until(page, `(${view}).x>${before.x + 10}&&(${view}).y>${before.y + 10}`, 10)).toBe(true)
+      await page.wheel(host.x, host.y, 10_000, 10_000)
+      expect(await until(page, `(${view}).bottom>=${worldHeight - 1}&&(${view}).right>=${worldWidth - 1}`, 10)).toBe(true)
+      await page.evaluate<void>(`document.querySelector('.office-canvas-host').focus()`)
+      expect(await page.evaluate<boolean>(`document.activeElement===document.querySelector('.office-canvas-host')`)).toBe(true)
+      const edge = await page.evaluate<typeof before>(view)
+      await page.pressKey("ArrowUp", "ArrowUp", 38)
+      await page.pressKey("ArrowLeft", "ArrowLeft", 37)
+      expect(await until(page, `(${view}).x<${edge.x - 10}&&(${view}).y<${edge.y - 10}`, 10)).toBe(true)
+      expect(await page.evaluate<string>(`document.querySelector('.office-roster__row[aria-current="true"]').dataset.sessionId`)).toBe(session)
+      await page.evaluate<void>(`document.querySelector('button[aria-label="Fit office"]').click()`)
+      expect(await until(page, `(${view}).bottom>=${worldHeight - 1}&&(${view}).right>=${worldWidth - 1}&&(${view}).x<=1&&(${view}).y<=1`, 10)).toBe(true)
+    } finally { await page.close() }
+  }, 45_000)
+
   test("switches Conversation and Office 50 times without reconnecting, resending, or losing the draft", async () => {
     const page = await openRemote("view=chat")
     try {
@@ -146,6 +210,8 @@ describe("remote Office presentation", () => {
       try {
         await page.setViewport(width, height)
         expect(await until(page, `window.__officeGame?.scene.getScene('office').latestFrames.some(frame=>frame.actor.sessionID==='ses_fixture'&&frame.room==='lounge'&&!frame.moving)`, 150)).toBe(true)
+        await page.evaluate<void>(`document.querySelector('button[aria-label="Fit office"]').click()`)
+        expect(await until(page, `window.__officeGame.scene.getScene('office').children.list.some(node=>node.type==='Text'&&node.visible&&node.text==='Reading projection.ts')`)).toBe(true)
         const activity = await page.evaluate<{ readonly root: string; readonly roster: readonly string[]; readonly bubbles: readonly string[] }>(`(() => {
           const scene=window.__officeGame.scene.getScene('office');return {root:scene.latestFrames.find(frame=>frame.actor.sessionID==='ses_fixture').actor.status,
             roster:[...document.querySelectorAll('.office-roster__row .office-roster__status')].map(node=>node.textContent),
@@ -279,13 +345,15 @@ describe("remote Office presentation", () => {
   }, 60_000)
 
   test("fills the main area with a responsive canvas and accessible roster at each breakpoint and theme", async () => {
-    for (const [width, height] of [[820, 1180], [1024, 768], [1440, 900], [1920, 1080]] as const) {
-      const page = await openRemote("view=chat&presentation=office", width)
+    for (const [width, height] of [[820, 1180], [1024, 768], [1440, 560], [1440, 900], [1920, 1080]] as const) {
+      const page = await openRemote("view=chat&presentation=office&inspectOffice=1", width)
       try {
         await page.evaluate<void>(`document.querySelector('.fixture__banner').style.display='none';document.querySelector('.fixture__controls').style.display='none'`)
+        await page.setCoarsePointer(width < 1024)
         await page.setViewport(width, height)
         expect(await until(page, `document.querySelectorAll('.office-roster__row').length >= 1 && document.querySelectorAll('.office-workspace canvas').length === 1`, 150)).toBe(true)
-        expect(await until(page, `document.querySelector('.office-workspace__canvas')?.getBoundingClientRect().height >= ${width >= 1024 ? 300 : 220}`, 150)).toBe(true)
+        const minimumStage = height < 600 ? 180 : width >= 1024 ? 300 : 220
+        expect(await until(page, `document.querySelector('.office-workspace__canvas')?.getBoundingClientRect().height >= ${minimumStage}`, 150)).toBe(true)
         if (width >= 768 && width < 1024) {
           expect(await page.evaluate<boolean>(`document.querySelector('.office-roster__toggle')?.getAttribute('aria-expanded') === 'false'`)).toBe(true)
           await page.evaluate(`document.querySelector('.office-roster__toggle').click()`)
@@ -317,7 +385,7 @@ describe("remote Office presentation", () => {
         expect(layout.overflow).toBe(false)
         expect(layout.verticalOverflow).toBe(false)
         expect(await officeHidesComposerAndInspector(page)).toBe(true)
-        expect(layout.stage).toBeGreaterThanOrEqual(width >= 1024 ? 300 : 220)
+        expect(layout.stage).toBeGreaterThanOrEqual(minimumStage)
         expect(layout.stage).toBeGreaterThan(layout.main * 0.45)
         expect(layout.side).toBe(width >= 1024)
         if (width >= 1024) expect(layout.independentlyScrollable).toBe(true)
@@ -326,9 +394,18 @@ describe("remote Office presentation", () => {
         expect(await until(page, `[...document.querySelectorAll('.office-roster__row')].every(row=>row.getAnimations().every(animation=>animation.playState==='finished'))`)).toBe(true)
         for (const theme of ["light", "dark"] as const) {
           await page.evaluate<void>(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`)
+          await Bun.sleep(600)
           const capture = join(captures, `${width}x${height}-${theme}.png`)
           await Bun.write(capture, Buffer.from(await page.screenshot(), "base64"))
           expect((await Bun.file(capture).arrayBuffer()).byteLength).toBeGreaterThan(12_000)
+        }
+        await page.setReducedMotion(true)
+        await page.evaluate<void>(`document.querySelector('button[aria-label="Fit office"]').click()`)
+        expect(await until(page, `(() => {const scene=window.__officeGame.scene.getScene('office'),camera=scene.cameras.main;return scene.latestFrames.every(frame=>!frame.moving)&&camera.worldView.left<=1&&camera.worldView.top<=1&&camera.worldView.right>=${worldWidth - 1}&&camera.worldView.bottom>=${worldHeight - 1}})()`)).toBe(true)
+        for (const theme of ["light", "dark"] as const) {
+          await page.evaluate<void>(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`)
+          await Bun.sleep(600)
+          await Bun.write(join(captures, `${width}x${height}-${theme}-fit-reduced.png`), Buffer.from(await page.screenshot(), "base64"))
         }
       } finally {
         await page.close()
