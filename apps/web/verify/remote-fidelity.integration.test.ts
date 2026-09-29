@@ -489,7 +489,7 @@ describe("remote responsive state behavior", () => {
     await mobile.close()
   }, 30_000)
 
-  test("replaces every remote route with one centered OAuth sign-in panel for a signed-out browser", async () => {
+  test("replaces every remote route with one centered sign-in panel for a signed-out browser", async () => {
     for (const view of ["chat", "sessions", "activity", "settings"] as const) {
       const page = await fixture(`view=${view}&account=signedout`, 390, "Continue with Google")
       for (const width of [320, 390, 768, 1440] as const) {
@@ -517,7 +517,7 @@ describe("remote responsive state behavior", () => {
         })()`)
         expect(state.workspace).toBe(false)
         expect(state.heading).toBe("Sign in to your workspace")
-        expect(state.providers.map((provider) => provider.label)).toEqual(["Continue with Google"])
+        expect(state.providers.map((provider) => provider.label)).toEqual(["Continue with Google", "Sign in"])
         expect(state.providers.every((provider) => provider.height >= 44 && Math.abs(provider.width - state.panelWidth) <= 1)).toBe(true)
         expect(state.centered).toBe(true)
         expect(state.overflowing).toBe(false)
