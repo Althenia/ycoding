@@ -44,6 +44,30 @@ test("the maskable icon fills its canvas and keeps the mark inside the maskable 
   expect(Math.max(...rows) - Math.min(...rows)).toBeGreaterThanOrEqual(image.height * 0.4)
 })
 
+test("the app icon keeps a small, even margin around the Y mark", async () => {
+  const image = await loadImage(path.join(brand, "ycoding-icon-512.png"))
+  const canvas = createCanvas(image.width, image.height)
+  const context = canvas.getContext("2d")
+  context.drawImage(image, 0, 0)
+  const pixels = context.getImageData(0, 0, image.width, image.height).data
+  const markColors = [[0x67, 0xd7, 0xa4], [0xf2, 0xf3, 0xf5], [0xf0, 0xbe, 0x62]]
+  const mark = Array.from({ length: image.width * image.height }, (_, index) => index).filter((index) => {
+    const offset = index * 4
+    return markColors.some((color) => Math.hypot(...color.map((value, channel) => pixels[offset + channel] - value)) < 60)
+  })
+  const columns = mark.map((index) => index % image.width)
+  const rows = mark.map((index) => Math.floor(index / image.width))
+  const margins = [
+    Math.min(...columns) / image.width,
+    Math.min(...rows) / image.height,
+    (image.width - 1 - Math.max(...columns)) / image.width,
+    (image.height - 1 - Math.max(...rows)) / image.height,
+  ]
+
+  expect(margins.every((margin) => margin >= 0.17)).toBe(true)
+  expect(Math.max(...margins) - Math.min(...margins)).toBeLessThanOrEqual(0.01)
+})
+
 test("generated YCoding PNG assets have exact dimensions", async () => {
   for (const [name, size] of [
     ["ycoding-mark-256.png", 256],

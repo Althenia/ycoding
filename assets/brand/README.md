@@ -8,7 +8,7 @@ Canonical design source: Penpot page **09 YCoding Brand**.
 | --- | --- |
 | `ycoding-mark.svg` | Transparent canonical color mark. |
 | `ycoding-mark-mono.svg` | One-color terminal and monochrome mark. |
-| `ycoding-icon.svg` | Dark rounded-square release and repository icon. |
+| `ycoding-icon.svg` | Dark rounded-square release and repository icon with a centered Y spanning about 62% of the tile. |
 | `ycoding-wordmark.svg` | Mark, `YCoding` wordmark, and terminal-product descriptor. |
 | `ycoding-mark-256.png`, `ycoding-mark-512.png` | Transparent raster derivatives. |
 | `ycoding-icon-256.png`, `ycoding-icon-512.png` | Dark app-icon raster derivatives. |
