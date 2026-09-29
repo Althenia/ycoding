@@ -150,7 +150,7 @@ describe("remote navigation", () => {
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=dark`)
         await until(page, `document.querySelector(".session-row--active .live-dot") !== null || document.querySelector(".live-dot") !== null`)
         expect(await page.evaluate<boolean>(`document.querySelector(".yc-notification-center__badge") === null`)).toBe(true)
-        await page.evaluate(`window.remoteStatus([], ["ses_fixture", "ses_archived"])`)
+        await page.evaluate(`window.remoteStatus([], ["ses_archived"])`)
         await until(page, `document.querySelector(".yc-notification-center__badge") !== null`)
         await page.evaluate(`document.querySelector(".yc-notification-center__trigger").click()`)
         await until(page, `document.querySelector(".yc-notification-panel") !== null`)
@@ -170,7 +170,7 @@ describe("remote navigation", () => {
             inViewport: panel.left >= 0 && panel.right <= innerWidth && panel.top >= 0,
           }
         })()`)
-        expect(report.titles.length).toBeGreaterThanOrEqual(2)
+        expect(report.titles).toEqual(["Work finished", "Needs your attention"])
         expect(report.details).toContain("Stream remote output safely")
         expect(report.details).toContain("Archived: release notes")
         expect(report.badge).toBe(false)

@@ -210,22 +210,25 @@ function Breadcrumbs(props: { readonly page: DocPage; readonly label: string; re
 
 export function DocsSearch(props: { readonly onNavigate?: () => void }): JSX.Element {
   const [open, setOpen] = createSignal(false)
+  const [closing, setClosing] = createSignal(false)
+  const [generation, setGeneration] = createSignal(1)
   const [query, setQuery] = createSignal("")
   const [active, setActive] = createSignal(0)
   const router = useRouter()
   let trigger: HTMLButtonElement | undefined
+  let requestClose: (() => void) | undefined
   const hits = createMemo(() => searchDocs(query(), 8))
   const optionId = (index: number) => `docs-search-option-${index}`
+  const openSearch = () => {
+    if (closing()) setGeneration((current) => current + 1)
+    setOpen(true)
+    setClosing(false)
+  }
 
   const ownsShortcut = () => {
     const openDialogs = document.querySelectorAll("dialog[open]")
     const activeDialog = openDialogs.item(openDialogs.length - 1)
     return activeDialog === trigger?.closest("dialog[open]")
-  }
-
-  const closeSearch = () => {
-    setOpen(false)
-    setTimeout(() => trigger?.focus())
   }
 
   const keydown = (event: KeyboardEvent) => {
@@ -235,13 +238,13 @@ export function DocsSearch(props: { readonly onNavigate?: () => void }): JSX.Ele
       (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
     if (event.key === "Escape" && open()) {
       event.preventDefault()
-      closeSearch()
+      requestClose?.()
       return
     }
     if ((event.key === "k" && (event.metaKey || event.ctrlKey)) || (event.key === "/" && !typing)) {
       if (!ownsShortcut()) return
       event.preventDefault()
-      setOpen(true)
+      openSearch()
       return
     }
     if (!open()) return
@@ -281,14 +284,16 @@ export function DocsSearch(props: { readonly onNavigate?: () => void }): JSX.Ele
         aria-label="Search docs"
         aria-haspopup="dialog"
         aria-expanded={open()}
-        onClick={() => setOpen(true)}
+        onClick={openSearch}
       >
         <Icon name="search" size={16} />
         <span>Search docs</span>
         <kbd>/</kbd>
       </button>
-      <Show when={open()}>
-        <Modal class="overlay--dialog overlay--docs-search" label="Search docs" returnFocus={trigger!} onClose={closeSearch}>
+      <Show when={open() || closing()}>
+        <Show when={generation()} keyed>{(current) => <Modal class="overlay--dialog overlay--docs-search" label="Search docs" returnFocus={trigger!}
+          requestClose={(close) => { requestClose = close }} onDismiss={() => { setClosing(true); setOpen(false) }}
+          onClose={() => { if (generation() === current) setClosing(false) }}>
           <div class="pane docs-search-pane">
             <label class="field" for="docs-search-field">
               <span class="visually-hidden">Search documentation</span>
@@ -336,7 +341,7 @@ export function DocsSearch(props: { readonly onNavigate?: () => void }): JSX.Ele
               </ul>
             </Show>
           </div>
-        </Modal>
+        </Modal>}</Show>
       </Show>
     </>
   )
