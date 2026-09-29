@@ -113,7 +113,7 @@ test("light and dark presentation retains contained public and workspace surface
       ["changelog", "/changelog", ".release"],
       ["new-session", `/verify/remote.html?view=chat&theme=${theme}&noSelection=1`, ".new-session-composer textarea"],
       ["conversation", `/verify/remote.html?view=chat&theme=${theme}`, ".remote-conversation-view"],
-      ["settings", `/verify/remote.html?view=settings&theme=${theme}`, ".office-settings"],
+      ["settings", `/verify/remote.html?view=settings&theme=${theme}`, width < 768 ? ".settings" : ".office-settings"],
     ] as const) {
       const page = await browser!.openPage()
       try {
@@ -123,6 +123,7 @@ test("light and dark presentation retains contained public and workspace surface
         await page.navigate(`http://127.0.0.1:${port}${route}`)
         for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector)}) !== null`); attempt++) await Bun.sleep(100)
         expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector)}) !== null`), `${name} rendered`).toBe(true)
+        if (name === "settings" && width < 768) expect(await page.evaluate<boolean>(`document.querySelector('.office-settings') === null`)).toBe(true)
         await page.evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`)
         await page.evaluate(`document.querySelectorAll('.fixture__banner,.fixture__controls').forEach((element) => element.remove())`)
         await Bun.sleep(850)
