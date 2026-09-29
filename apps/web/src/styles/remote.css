@@ -1203,11 +1203,6 @@ body:has(.app) {
   grid-column: 1 / -1;
 }
 
-.app--settings .workspace__scroll {
-  inline-size: min(100%, 1180px);
-  margin-inline: auto;
-}
-
 .app--activity .workspace__scroll {
   padding: 0;
 }
