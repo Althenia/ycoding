@@ -87,6 +87,14 @@ const layer = Layer.effect(
               ),
               render: { initial: (instruction) => instruction, changed: (_previous, instruction) => instruction },
             }),
+            Instructions.make({
+              key: Instructions.Key.make("core/git-attribution"),
+              codec: Schema.toCodecJson(Schema.String),
+              read: Effect.succeed(
+                "When creating commits, use the user's existing Git author and committer identity and write messages without Co-authored-by trailers or AI, model, agent, or provider attribution. Do not set `user.name`, `user.email`, or `GIT_AUTHOR_*`/`GIT_COMMITTER_*`, or pass `--author` or `--reset-author`, as part of committing. If Git reports a missing identity, report it and ask the user to configure their own identity; never invent one.",
+              ),
+              render: { initial: (instruction) => instruction, changed: (_previous, instruction) => instruction },
+            }),
           ]),
         ),
     })

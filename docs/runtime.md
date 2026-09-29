@@ -504,6 +504,7 @@ Instruction state is Session-owned.
 
 - Built-ins live in `packages/core/src/instructions`.
 - The built-in Git worktree guidance directs agents to create each worktree at `<main repository root>/.worktrees/<name>`, creating `.worktrees` when missing, on a named branch identical to the worktree name, never as a detached HEAD. It keeps history linear when integrating a worktree branch: the agent rebases the branch onto a moved target branch, then fast-forwards the target with `git merge --ff-only --autostash <name>` and never creates a merge commit.
+- The built-in Git attribution guidance requires commit messages without co-author trailers or AI, model, agent, or provider attribution. When committing, agents use the user's configured Git author and committer identity without `--author`, `--reset-author`, identity configuration changes, or `GIT_AUTHOR_*`/`GIT_COMMITTER_*` overrides. A missing Git identity is reported so the user can configure it, rather than invented. This is model instruction, not a runtime filter on arbitrary shell commands.
 - Discovery observes ambient global and upward-project instruction sources.
 - Guidance and persisted instruction entries are composed explicitly by the session runner.
 - `session.instructions.updated` stores changed source keys and content hashes.
