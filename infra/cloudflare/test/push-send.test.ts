@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import { base64UrlEncode } from "../src/auth/crypto"
 import { deriveWebPushKeys } from "../src/push/crypto"
 import { sendPushToOwner } from "../src/push/send"
@@ -89,4 +89,34 @@ test("relay status diff drives an encrypted push without delaying frame forwardi
   const key = await crypto.subtle.importKey("raw", cek, "AES-GCM", false, ["decrypt"])
   const clear = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce }, key, body.slice(86)))
   expect(JSON.parse(new TextDecoder().decode(clear.slice(0, -1)))).toEqual({ category: "approval-requested", sessionID: "ses_1", deviceID: "dev_1" })
+})
+
+test("push attempts report only category, service host, target count, and response or error class", async () => {
+  const receiver = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"])
+  const vapid = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"])
+  const endpoint = "https://fcm.googleapis.com/fcm/send/private-token"
+  const subscription: PushSubscription = { endpoint, accountID: "usr_private", keys: {
+    p256dh: base64UrlEncode(new Uint8Array(await crypto.subtle.exportKey("raw", receiver.publicKey))),
+    auth: base64UrlEncode(crypto.getRandomValues(new Uint8Array(16))),
+  }, createdAt: 1, failures: 0 }
+  const outcomes: string[] = []
+  const info = spyOn(console, "info").mockImplementation((line: string) => { outcomes.push(line) })
+  let sends = 0
+  try {
+    const input = { store: { list: async () => [subscription], upsert: async () => {}, remove: async () => {}, recordFailure: async () => {} },
+      accountID: subscription.accountID, event: { category: "agent-completed" as const, sessionID: "ses_private", deviceID: "dev_private" },
+      publicKey: base64UrlEncode(new Uint8Array(await crypto.subtle.exportKey("raw", vapid.publicKey))),
+      privateKey: (await crypto.subtle.exportKey("jwk", vapid.privateKey)).d ?? "", subject: "mailto:push@example.invalid", now: Date.now,
+      fetch: Object.assign(async () => { sends++; if (sends === 2) throw new Error("private failure detail"); return new Response(null, { status: 201 }) }, { preconnect: fetch.preconnect }),
+    }
+    await sendPushToOwner(input)
+    await sendPushToOwner(input)
+    await sendPushToOwner({ ...input, store: { ...input.store, list: async () => [] } })
+  } finally { info.mockRestore() }
+  expect(outcomes.map((line) => JSON.parse(line))).toEqual([
+    { component: "web-push", category: "agent-completed", host: "fcm.googleapis.com", targetCount: 1, status: 201 },
+    { component: "web-push", category: "agent-completed", host: "fcm.googleapis.com", targetCount: 1, errorClass: "delivery_error" },
+    { component: "web-push", category: "agent-completed", host: "none", targetCount: 0, errorClass: "no_subscriptions" },
+  ])
+  expect(outcomes.join(" ")).not.toMatch(/private|fcm\/send|mailto:|p256dh|auth|token/i)
 })

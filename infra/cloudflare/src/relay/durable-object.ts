@@ -72,9 +72,14 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
       const publicKey = this.env.VAPID_PUBLIC_KEY
       const privateKey = this.env.VAPID_PRIVATE_KEY
       const subject = this.env.VAPID_SUBJECT
-      if (!publicKey || !privateKey || !subject) return
+      if (!publicKey || !privateKey || !subject) {
+        console.info(JSON.stringify({ component: "web-push", category: event.category, host: "none", targetCount: 0, errorClass: "configuration_missing" }))
+        return
+      }
       this.ctx.waitUntil(sendPushToOwner({ store: createD1PushStore(this.env.DB), accountID, event,
-        publicKey, privateKey, subject, now: Date.now, fetch: (input, init) => globalThis.fetch(input, init) }).catch(() => undefined))
+        publicKey, privateKey, subject, now: Date.now, fetch: (input, init) => globalThis.fetch(input, init) }).catch(() => {
+        console.error(JSON.stringify({ component: "web-push", category: event.category, host: "unknown", targetCount: null, errorClass: "dispatch_error" }))
+      }))
     },
   })
   readonly #attached = new Set<string>()

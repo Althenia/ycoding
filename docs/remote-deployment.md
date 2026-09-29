@@ -71,15 +71,16 @@ No user-facing privacy policy is published from this repository. The durable dat
 
 Current application capability:
 
-- `infra/cloudflare/src` emits no custom `console.*` output, so there are no custom log messages to search.
+- Push delivery emits sanitized `web-push` outcome records; other request paths have no custom diagnostic logging.
 - `GET /health` is the only observability endpoint. It runs `SELECT 1` against D1 and returns `{"status":"ok"}` with `200`, or `{"status":"error"}` with `503`. It deliberately omits provider and database detail.
 
 Platform log surfaces:
 
 - Real-time logs (`wrangler tail`, dashboard **Logs → Live**) stream invocation events, custom logs, errors, and uncaught exceptions without storing them. An event carries the request method, URL, and request/response headers. High traffic can force sampling, which drops messages.
-- Workers Logs persists invocation and custom logs when the Worker's `observability` setting is enabled. `wrangler.jsonc` does not set `observability`, so persistence follows the account default for this Worker. The provider caps retention at 7 days on Workers Paid and 3 days on Workers Free. With no custom `console` calls, only invocation logs can appear.
+- Workers Logs persists invocation and custom logs when the Worker's `observability` setting is enabled. `wrangler.jsonc` does not set `observability`, so persistence follows the account default for this Worker. The provider caps retention at 7 days on Workers Paid and 3 days on Workers Free. Push sends log `web-push` outcomes with event category, push-service host, subscription count, and HTTP status or fixed error class; no endpoint path, keys, account, device, or Session identifier is logged.
 
 Verify the account's logging settings before relying on persistence or retention.
+
 The local connector diagnostic records the relay close code and reason. A `1008`
 with `Agent message rate exceeded` means more than 500 agent frames arrived in
 ten seconds; after upgrading the connector, verify a busy Session runs and stops
@@ -88,6 +89,11 @@ Session to completion and separately create one unresolved human approval: each
 should yield one fixed-copy push per subscribed device when the browser is closed.
 Check only aggregate subscription/failure counts and locally observed notification
 delivery; a successful push-service response is not proof of device display.
+
+Use the sanitized `web-push` outcomes in a private live tail to distinguish
+no attempt, a failed attempt, and an accepted request; retain only category,
+service host, target count, status, and fixed error class. An accepted response
+still requires a browser-side notification check.
 
 ### Privacy rules for logging
 

@@ -42,7 +42,9 @@ import {
 import { createRemoteHttp } from "../../../../apps/web/src/remote/http"
 import { createPushHttp } from "../../../../apps/web/src/remote/http"
 import { generateVapidKeys } from "../../script/vapid-keys"
+import { deriveWebPushKeys } from "../../src/push/crypto"
 import { createRemoteStore } from "../../../../apps/web/src/remote/store"
+import { openChromePush } from "./chrome-push"
 import { createRemoteTransport, type RemoteTransportStatus } from "../../../../apps/web/src/remote/transport"
 import { base64UrlEncode } from "../../src/auth/crypto"
 import { deltaChunk, finishChunk, toolCallChunk } from "../../../../packages/ai/test/lib/openai-chunks"
@@ -269,6 +271,12 @@ try {
   })
   const googleOrigin = `http://127.0.0.1:${google.port}`
   const vapid = await generateVapidKeys()
+  const pushRequests: { method: string; ttl: string | null; body: Uint8Array }[] = []
+  const pushStub = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async (request) => {
+    pushRequests.push({ method: request.method, ttl: request.headers.get("ttl"), body: new Uint8Array(await request.arrayBuffer()) })
+    return new Response(null, { status: 201 })
+  } })
+  disposals.push(async () => pushStub.stop(true))
 
   await run(wranglerBin, ["d1", "migrations", "apply", "ycoding-prod-db", "--local", "--config", configPath, "--persist-to", persist])
   // Refuse to silently reuse a stale dev server on this port: the proof must run
@@ -282,8 +290,10 @@ try {
     [
       wranglerBin,
       "dev",
+      "infra/cloudflare/test/integration/push-stub-worker.ts",
       "--config",
       configPath,
+      "--define", `PUSH_STUB_PORT:${pushStub.port}`,
       "--persist-to",
       persist,
       "--port",
@@ -356,14 +366,14 @@ try {
   expect(pushKey.ok && pushKey.value.publicKey === vapid.VAPID_PUBLIC_KEY, "the authenticated push key route did not return this deployment's public key")
   const receiver = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"])
   if (!(receiver instanceof Object) || !("publicKey" in receiver)) throw new Error("ECDH pair unavailable")
+  const pushAuth = crypto.getRandomValues(new Uint8Array(16))
+  const pushReceiver = new Uint8Array(await crypto.subtle.exportKey("raw", receiver.publicKey))
   const endpoint = "https://fcm.googleapis.com/fcm/send/flow-local-only"
   const registeredPush = await pushHttp.subscribe({ endpoint, keys: {
-    p256dh: base64UrlEncode(new Uint8Array(await crypto.subtle.exportKey("raw", receiver.publicKey))),
-    auth: base64UrlEncode(crypto.getRandomValues(new Uint8Array(16))),
+    p256dh: base64UrlEncode(pushReceiver), auth: base64UrlEncode(pushAuth),
   } })
   expect(registeredPush.ok, `the authenticated push subscription was not stored in local D1: ${JSON.stringify(registeredPush)}`)
-  expect((await pushHttp.remove(endpoint)).ok, "the authenticated push subscription was not removed")
-  checks.push("push key, subscription, and removal reached the real Worker and local D1")
+  checks.push("push key and subscription reached the real Worker and local D1")
 
   /* --------------------------------------------------- real browser store */
 
@@ -1160,6 +1170,13 @@ try {
 
   /* --------------------------------------- interrupt through the real service */
 
+  const chrome = process.argv.includes("--push-chrome")
+    ? await openChromePush({ home, origin: workerOrigin, cookie })
+    : undefined
+  if (chrome) {
+    disposals.push(() => chrome.close())
+    if (!process.argv.includes("--page-alert")) await chrome.leavePage()
+  }
   providerMode = "hold"
   providerTurn = { text: providerText, prompt: "hold the stream open" }
   const executing = await probeRequest("session.prompt", {
@@ -1172,6 +1189,9 @@ try {
     30_000,
     "the held step never streamed content before the interrupt",
   )
+  await waitFor(() => store.state().sessionStatus?.running.has(sessionID) ? true : undefined, 30_000,
+    "the held step did not publish a running status baseline")
+  const pushesBeforeStop = pushRequests.length
   const interrupted = await probeRequest("session.interrupt", { sessionID })
   expect(interrupted.status === "ok", `interrupt failed: ${JSON.stringify(interrupted)}`)
   releaseStream?.()
@@ -1185,6 +1205,38 @@ try {
     30_000,
     "the interrupted session stayed active",
   )
+  await waitFor(() => pushRequests.length > pushesBeforeStop ? true : undefined, 30_000,
+    "the Durable Object did not finish its outbound stopped-work push POST")
+  const pushPayloads = await Promise.all(pushRequests.slice(pushesBeforeStop).map(async (request) => {
+    const sender = request.body.slice(21, 86)
+    const publicSender = await crypto.subtle.importKey("raw", sender, { name: "ECDH", namedCurve: "P-256" }, false, [])
+    const shared = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: publicSender }, receiver.privateKey, 256))
+    const { cek, nonce } = await deriveWebPushKeys(shared, pushAuth, pushReceiver, sender, request.body.slice(0, 16))
+    const key = await crypto.subtle.importKey("raw", cek, "AES-GCM", false, ["decrypt"])
+    const clear = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce }, key, request.body.slice(86)))
+    return { method: request.method, ttl: request.ttl, payload: JSON.parse(new TextDecoder().decode(clear.slice(0, -1))) }
+  }))
+  expect(pushPayloads.some((item) => item.method === "POST" && item.ttl === "600" &&
+    item.payload.category === "agent-completed" && item.payload.sessionID === sessionID),
+  "the hibernatable Durable Object did not complete the stopped Session's encrypted push POST")
+  if (chrome) {
+    if (process.argv.includes("--page-alert")) {
+      await waitFor(async () => {
+        const tags = await chrome.pageAlerts()
+        return Array.isArray(tags) && tags.includes(`ycoding-${sessionID}-agent-completed`) ? true : undefined
+      }, 30_000, "the open workspace did not invoke the page-level service worker notification on the status transition")
+      checks.push("an open Chrome workspace invoked the page-level desktop notifier on a real running-to-idle status frame")
+    } else {
+      const notifications = await waitFor(async () => {
+        const shown = await chrome.notifications()
+        return Array.isArray(shown) && shown.some((item) => isRecord(item) && item.title === "YCoding — work stopped" && item.tag === `ycoding-${sessionID}-agent-completed`) ? shown : undefined
+      }, 90_000, "headed Chrome did not show a decrypted Web Push notification from FCM")
+      expect(notifications.length > 0, "headed Chrome received no notification")
+      checks.push("headed Chrome received the FCM push through the built service worker and showed the stopped-work notification")
+    }
+  }
+  expect((await pushHttp.remove(endpoint)).ok, "the authenticated push subscription was not removed")
+  checks.push("running-to-idle status reached the hibernatable Durable Object and completed a push POST to the local endpoint stub")
   checks.push("interrupt stopped the running step through the real local service")
 
   await Bun.sleep(RemoteLimits.clientRateWindowMs + 1)
