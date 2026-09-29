@@ -78,16 +78,42 @@ test("release workflow packages and checksums every CLI archive", () => {
   )
   expect(workflow).toContain('zip -r "../../release/ycoding-$version-windows-x64.zip" ycoding.exe ycoding-chrome-extension')
   expect(workflow).toContain(
-    '(cd release && sha256sum "ycoding-$version-"*.tar.gz "ycoding-$version-"*.zip > "ycoding-$version-checksums.txt")',
+    '(cd release && sha256sum "ycoding-$version-"*.tar.gz "ycoding-$version-"*.zip LICENSE NOTICE > "ycoding-$version-checksums.txt")',
   )
   expect(workflow).toContain("needs: [build, isolated-browser-acceptance]")
 })
 
-test("macOS release builds ship an ad-hoc signed app without signing secrets", () => {
-  expect(workflow).not.toContain("secrets.MACOS_SIGNING")
-  expect(workflow).not.toContain("Import macOS signing identity")
-  expect(workflow).not.toContain("designated => cdhash")
-  expect(workflow).toContain('codesign --verify --deep --strict "$staging/YCoding Computer Use.app"')
+test("macOS release builds sign the app with the pinned release certificate and never fall back to ad hoc", () => {
+  const build = workflow.split("\n  build:")[1]?.split("\n  isolated-browser-acceptance:")[0] ?? ""
+  const importStep = build.split("      - name: Import macOS signing identity")[1]?.split("      - name: Build TUI artifact")[0] ?? ""
+  const stage = build.split("      - name: Stage native executables")[1]?.split("      - name: Upload native executables")[0] ?? ""
+  expect(build).toContain("      YCODING_MACOS_SIGNING_IDENTITY: YCoding Code Signing")
+  expect(build).toContain("      YCODING_MACOS_SIGNING_SHA1: 9dd524184b0db949ffac7f0ada0ae860ac7f5f85\n")
+  expect(importStep).toContain("if: runner.os == 'macOS'")
+  expect(importStep).toContain("YCODING_MACOS_SIGNING_P12: ${{ secrets.YCODING_MACOS_SIGNING_P12 }}")
+  expect(importStep).toContain("YCODING_MACOS_SIGNING_PASSWORD: ${{ secrets.YCODING_MACOS_SIGNING_PASSWORD }}")
+  expect(importStep).toContain('test -n "$YCODING_MACOS_SIGNING_P12" || { echo "Missing YCODING_MACOS_SIGNING_P12 Actions secret" >&2; exit 1; }')
+  expect(importStep).toContain('test -n "$YCODING_MACOS_SIGNING_PASSWORD" || { echo "Missing YCODING_MACOS_SIGNING_PASSWORD Actions secret" >&2; exit 1; }')
+  for (const command of [
+    'security create-keychain -p "$keychain_password" "$keychain"',
+    'security unlock-keychain -p "$keychain_password" "$keychain"',
+    '-T /usr/bin/codesign',
+    'security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"',
+    'security list-keychains -d user -s "$keychain" ${original[@]+"${original[@]}"}',
+    'echo "::add-mask::$keychain_password"',
+  ])
+    expect(importStep).toContain(command)
+  expect(importStep).not.toContain("|| true")
+  expect(importStep).not.toContain("login.keychain")
+  expect(importStep).toContain('grep -F "$(printf \'%s\' "$YCODING_MACOS_SIGNING_SHA1" | tr a-f A-F) \\"$YCODING_MACOS_SIGNING_IDENTITY\\""')
+  expect(build.indexOf("- name: Import macOS signing identity")).toBeLessThan(build.indexOf("- name: Build TUI artifact"))
+  expect(stage).toContain('codesign --verify --deep --strict "$staging/YCoding Computer Use.app"')
+  expect(stage).toContain('codesign -d -r- "$staging/YCoding Computer Use.app" 2>&1 | grep -Ex "designated => identifier')
+  expect(build).toContain("if: ${{ always() && runner.os == 'macOS' }}")
+  expect(build).toContain('security list-keychains -d user -s "${original[@]}"')
+  expect(build).toContain('security delete-keychain "$keychain"')
+  expect(workflow).not.toContain("codesign --force --sign -")
+  expect(workflow).not.toContain("ad-hoc")
 })
 
 test("isolated-browser acceptance accepts installed Chrome 152 or newer", async () => {
@@ -120,7 +146,7 @@ test("macOS release archives stage the signed app and preserve its bundle tree",
   expect(workflow).toContain('codesign --verify --deep --strict "$staging/YCoding Computer Use.app"')
   expect(workflow).toContain('"unpacked/ycoding-darwin-arm64/YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use"')
   expect(workflow).toContain('app="unpacked/ycoding-$target/YCoding Computer Use.app"')
-  expect(workflow).toContain("mac_entries=(ycoding ycoding-chrome-extension LICENSE NOTICE)")
+  expect(workflow).toContain("mac_entries=(ycoding ycoding-chrome-extension)")
   expect(workflow).toContain(`grep -x 'YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use'`)
   expect(workflow).not.toContain("bin/ycoding-computer-use")
   expect(workflow).toContain('mac_entries+=("YCoding Computer Use.app")')
@@ -134,13 +160,74 @@ test("macOS release archives stage the signed app and preserve its bundle tree",
   expect(packageJob).toContain('find "$app" -mindepth 1 -printf')
 })
 
-test("release archives carry LICENSE and NOTICE on every platform", () => {
-  expect(workflow).toContain('cp LICENSE NOTICE "$staging/"')
-  expect(workflow).toContain('"release/ycoding-$version-linux-x64.tar.gz" ycoding ycoding-chrome-extension LICENSE NOTICE')
-  expect(workflow).toContain("ycoding.exe ycoding-chrome-extension LICENSE NOTICE)")
-  expect(workflow).toContain('for file in LICENSE NOTICE; do tar -tzf "release/ycoding-$version-$target.tar.gz" | grep -x "$file" >/dev/null; done')
-  expect(workflow).toContain('for file in LICENSE NOTICE; do unzip -Z1 "release/ycoding-$version-windows-x64.zip" | grep -x "$file" >/dev/null; done')
+const pin = "9dd524184b0db949ffac7f0ada0ae860ac7f5f85"
+
+test.each([
+  ["a self-signed root requirement", `identifier "app.ycoding.computer-use" and certificate root = H"${pin}"`, true],
+  ["a self-signed leaf requirement", `identifier "app.ycoding.computer-use" and certificate leaf = H"${pin}"`, true],
+  ["an ad-hoc cdhash requirement", 'cdhash H"1593f00c9269224608bcfc16986b4c7b1b09a2d5"', false],
+  ["a different certificate", `identifier "app.ycoding.computer-use" and certificate leaf = H"${"0".repeat(40)}"`, false],
+  ["a different identifier", `identifier "app.ycoding.other" and certificate leaf = H"${pin}"`, false],
+  ["an unanchored identifier only", 'identifier "app.ycoding.computer-use"', false],
+])("the release signature check accepts only the pinned certificate: %s", (_, requirement, accepted) => {
+  const stage = workflow.split("      - name: Stage native executables")[1]?.split("      - name: Upload native executables")[0] ?? ""
+  const check = stage.split("\n").find((line) => line.includes("codesign -d -r-"))?.trim()
+  expect(check).toBeDefined()
+  const command = check!.replace(/^codesign -d -r- "[^"]+" 2>&1/, 'printf "%s\\n" "designated => $REQUIREMENT"')
+  const result = Bun.spawnSync(["bash", "-euo", "pipefail", "-c", command], {
+    env: { ...process.env, REQUIREMENT: requirement, YCODING_MACOS_SIGNING_SHA1: pin },
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  expect(result.exitCode === 0, result.stderr.toString()).toBe(accepted)
 })
+
+test("release archives keep the layout installed updaters accept and ship the license texts as separate assets", () => {
+  expect(workflow).not.toContain('cp LICENSE NOTICE "$staging/"')
+  expect(workflow).not.toMatch(/ycoding-chrome-extension LICENSE/)
+  expect(workflow).toContain("cp LICENSE NOTICE release/\n")
+  const packageJob = workflow.split("\n  package:")[1]?.split("\n  release-tui:")[0] ?? ""
+  expect(packageJob.indexOf("cp LICENSE NOTICE release/")).toBeLessThan(packageJob.indexOf("sha256sum"))
+  expect(workflow.split("\n  release-tui:")[1]).toContain("gh release create \"v$version\" release/*")
+})
+
+for (const extra of [undefined, "LICENSE", "NOTICE", "extra"])
+  test(
+    extra
+      ? `the archive layout guard rejects an extra ${extra} entry`
+      : "the archive layout guard accepts exactly the entries installed updaters accept",
+    async () => {
+      const guard = /\n *for target in darwin-arm64 darwin-x64 linux-x64; do\n *expected=[\s\S]*?\n(?= *cp LICENSE NOTICE release\/)/.exec(workflow)?.[0]
+      expect(guard).toBeDefined()
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-release-layout-"))
+      try {
+        const source = path.join(root, "source")
+        await fs.mkdir(path.join(source, "YCoding Computer Use.app/Contents"), { recursive: true })
+        await fs.mkdir(path.join(source, "ycoding-chrome-extension"))
+        for (const file of ["ycoding", "ycoding.exe", "ycoding-chrome-extension/manifest.json", "YCoding Computer Use.app/Contents/Info.plist", "LICENSE", "NOTICE", "extra"])
+          await Bun.write(path.join(source, file), `${file}\n`)
+        await fs.mkdir(path.join(root, "release"))
+        const add = extra ? [extra] : []
+        const mac = ["ycoding", "ycoding-chrome-extension", "YCoding Computer Use.app", ...add]
+        for (const [name, entries] of [
+          ["darwin-arm64", mac],
+          ["darwin-x64", mac],
+          ["linux-x64", ["ycoding", "ycoding-chrome-extension", ...add]],
+        ] as const)
+          expect(Bun.spawnSync(["tar", "-C", source, "-czf", path.join(root, `release/ycoding-9.9.9-${name}.tar.gz`), ...entries], { env: { ...process.env, COPYFILE_DISABLE: "1" } }).exitCode).toBe(0)
+        expect(
+          Bun.spawnSync(["zip", "-qr", path.join(root, "release/ycoding-9.9.9-windows-x64.zip"), "ycoding.exe", "ycoding-chrome-extension", ...add], { cwd: source }).exitCode,
+        ).toBe(0)
+        const result = Bun.spawnSync(
+          ["bash", "-euo", "pipefail", "-c", `version=9.9.9\nmac_entries=(ycoding ycoding-chrome-extension 'YCoding Computer Use.app')\n${guard}`],
+          { cwd: root, stdout: "pipe", stderr: "pipe" },
+        )
+        expect(result.exitCode === 0, result.stderr.toString()).toBe(extra === undefined)
+      } finally {
+        await fs.rm(root, { recursive: true, force: true })
+      }
+    },
+  )
 
 test("one v tag verifies a shared note and publishes only the TUI GitHub release", () => {
   const verify = workflow.split("\n  verify-source:")[1]?.split("\n  build:")[0]

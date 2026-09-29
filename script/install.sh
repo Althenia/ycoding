@@ -22,7 +22,6 @@ legacy_helper=ycoding-computer-helper
 extension_name=ycoding-chrome-extension
 extension_files="icons/ycoding-128.png icons/ycoding-16.png icons/ycoding-32.png icons/ycoding-48.png manifest.json popup.css popup.html popup.js protocol.js service-worker.js"
 extension_required=false
-license_required=false
 extension_candidate=
 extension_backup=
 install_transaction=false
@@ -228,10 +227,6 @@ if printf '%s\n' "${version_core%%-*}" | awk -F . '
   $1 > 0 || ($1 == 0 && ($2 > 7 || ($2 == 7 && $3 > 1))) { found=1 }
   END { exit !found }
 '; then extension_required=true; fi
-if printf '%s\n' "${version_core%%-*}" | awk -F . '
-  $1 > 0 || ($1 == 0 && ($2 > 7 || ($2 == 7 && $3 > 13))) { found=1 }
-  END { exit !found }
-'; then license_required=true; fi
 if [ "$operating_system" = darwin ]; then
   prerelease=false
   case "$version_core" in *-*) prerelease=true ;; esac
@@ -254,41 +249,39 @@ if [ "$operating_system" = darwin ]; then
 fi
 
 tar -tzf "$temporary/$asset" >"$temporary/entries" || fail "Failed to inspect $asset"
-entries=$(LC_ALL=C sort "$temporary/entries")
-expected_entries=ycoding
+tar -tvzf "$temporary/$asset" >"$temporary/details" || fail "Failed to inspect archive entry types"
+[ "$(wc -l <"$temporary/entries")" -eq "$(wc -l <"$temporary/details")" ] || fail "Release archive has invalid entry names"
+LC_ALL=C awk '
+  { name = $0; sub(/\/$/, "", name) }
+  name == "" || name ~ /^\// || name ~ /\/$/ || name ~ /\\/ || name ~ /[[:cntrl:]]/ || name ~ /(^|\/)\.\.?(\/|$)/ { bad = 1 }
+  seen[name]++ { bad = 1 }
+  END { exit bad || NR > 1024 }
+' "$temporary/entries" || fail "Release archive has unsafe or duplicate entry names, or too many entries"
+required_files=ycoding
 if [ "$operating_system" = "darwin" ]; then
-  bare_helper=
-  if [ "$helper_required" = true ]; then bare_helper=$legacy_helper; fi
-  expected_entries=$(printf '%s\n' ycoding ${bare_helper:+"$bare_helper"} | LC_ALL=C sort)
+  if [ "$helper_required" = true ]; then required_files=$(printf '%s\n' "$required_files" "$legacy_helper"); fi
   if [ "$app_required" = true ]; then
-    expected_entries=$(printf '%s\n' ycoding ${bare_helper:+"$bare_helper"} \
-      "$app_name/" \
-      "$app_name/Contents/" \
+    required_files=$(printf '%s\n' "$required_files" \
       "$app_name/Contents/Info.plist" \
-      "$app_name/Contents/MacOS/" \
       "$app_name/Contents/MacOS/$app_executable" \
-      "$app_name/Contents/Resources/" \
       "$app_name/Contents/Resources/YCoding.icns" \
-      "$app_name/Contents/_CodeSignature/" \
-      "$app_name/Contents/_CodeSignature/CodeResources" | LC_ALL=C sort)
+      "$app_name/Contents/_CodeSignature/CodeResources")
   fi
 fi
 if [ "$extension_required" = true ]; then
-  expected_entries=$({
-    printf '%s\n' "$expected_entries" "$extension_name/" "$extension_name/icons/"
+  required_files=$({
+    printf '%s\n' "$required_files"
     for file in $extension_files; do printf '%s\n' "$extension_name/$file"; done
-  } | LC_ALL=C sort)
+  })
 fi
-if [ "$license_required" = true ]; then
-  expected_entries=$(printf '%s\n' "$expected_entries" LICENSE NOTICE | LC_ALL=C sort)
-fi
-[ "$entries" = "$expected_entries" ] || fail "Release archive has invalid direct entries"
+printf '%s\n' "$required_files" >"$temporary/required"
+missing=$(while IFS= read -r file; do grep -Fx -- "$file" "$temporary/entries" >/dev/null || printf '%s ' "$file"; done <"$temporary/required")
+[ -z "$missing" ] || fail "Release archive is missing required entries: $missing"
 # Check types and advertised uncompressed sizes before writing extracted files.
-tar -tvzf "$temporary/$asset" >"$temporary/details" || fail "Failed to inspect archive entry types"
 awk '
   substr($1, 1, 1) == "d" { next }
   { size = $3 ~ /^[0-9]+$/ ? $3 : $5 }
-  substr($1, 1, 1) != "-" || size !~ /^[0-9]+$/ || size < 1 || size > 536870912 { exit 1 }
+  substr($1, 1, 1) != "-" || size !~ /^[0-9]+$/ || size > 536870912 { exit 1 }
   { total += size; if (total > 536870912) exit 1 }
 ' "$temporary/details" || fail "Release archive has invalid entry types or sizes"
 awk '{ print substr($1, 1, 1) }' "$temporary/details" >"$temporary/types" || fail "Failed to inspect archive entry types"
@@ -299,7 +292,7 @@ paste "$temporary/entries" "$temporary/types" | while IFS="$(printf '\t')" read 
   esac
 done || fail "Release archive has invalid entry types"
 mkdir "$temporary/extract"
-tar -xzf "$temporary/$asset" -C "$temporary/extract" || fail "Failed to extract $asset"
+tar -xzf "$temporary/$asset" -C "$temporary/extract" -T "$temporary/required" || fail "Failed to extract $asset"
 [ -f "$temporary/extract/ycoding" ] && [ ! -L "$temporary/extract/ycoding" ] && [ -s "$temporary/extract/ycoding" ] ||
   fail "Release archive did not contain a regular ycoding executable"
 if [ "$operating_system" = "darwin" ] && [ "$helper_required" = true ]; then

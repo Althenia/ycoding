@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test"
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
+import { chmod, copyFile, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { BrowserExtension } from "../packages/core/src/browser/extension"
@@ -172,7 +172,8 @@ exec /bin/mv "$@"
     await writeFile(path.join(install, "ycoding-computer-helper"), "old helper\n")
     const result = await runInstaller(fixture)
     expect(result.exitCode).not.toBe(0)
-    expect(result.stderr).toContain("invalid direct entries")
+    expect(result.stderr).toContain("missing required entries")
+    expect(result.stderr).toContain("YCoding.icns")
     expect(await readFile(path.join(install, "ycoding"), "utf8")).toBe("old executable\n")
     expect(await Bun.file(path.join(install, "ycoding-computer-helper.app")).exists()).toBe(false)
   })
@@ -209,23 +210,77 @@ exec /bin/mv "$@"
     expect(await Array.fromAsync(new Bun.Glob(".ycoding*").scan({ cwd: install, dot: true, onlyFiles: false }))).toEqual([])
   })
 
-  test("installs a v0.7.14 release that carries LICENSE and NOTICE without copying them into the install directory", async () => {
-    const fixture = await setup({ system: "Linux", machine: "x86_64", version: "0.7.14" })
+  test.each(["0.7.14", "0.7.15"])("installs a v%s release that carries LICENSE and NOTICE without copying them into the install directory", async (version) => {
+    const fixture = await setup({ system: "Linux", machine: "x86_64", version })
     await linuxExtensionArchive(fixture, ["LICENSE", "NOTICE"])
     const install = path.join(fixture.home, ".local/bin")
     const result = await runInstaller(fixture)
     expect(result.exitCode, result.stderr).toBe(0)
-    expect(await Bun.file(path.join(install, "ycoding")).exists()).toBe(true)
-    expect(await Bun.file(path.join(install, "LICENSE")).exists()).toBe(false)
-    expect(await Bun.file(path.join(install, "NOTICE")).exists()).toBe(false)
+    expect((await readdir(install)).sort()).toEqual(["ycoding", "ycoding-chrome-extension"])
   })
 
-  test("rejects a v0.7.14 release archive without LICENSE and NOTICE", async () => {
-    const fixture = await setup({ system: "Linux", machine: "x86_64", version: "0.7.14" })
+  test("installs a release archive without LICENSE and NOTICE", async () => {
+    const fixture = await setup({ system: "Linux", machine: "x86_64", version: "0.7.16" })
     await linuxExtensionArchive(fixture)
+    const install = path.join(fixture.home, ".local/bin")
+    const result = await runInstaller(fixture)
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect((await readdir(install)).sort()).toEqual(["ycoding", "ycoding-chrome-extension"])
+  })
+
+  test("skips unknown archive files and directories without extracting or installing them", async () => {
+    const fixture = await setup({ system: "Linux", machine: "x86_64", version: "0.7.2" })
+    await linuxExtensionArchive(fixture, ["LICENSE"])
+    await writeFile(path.join(fixture.fixture, "extra"), "extra\n")
+    await mkdir(path.join(fixture.fixture, "nested/deep"), { recursive: true })
+    await writeFile(path.join(fixture.fixture, "nested/deep/file"), "nested\n")
+    await writeFile(path.join(fixture.fixture, "ycoding-chrome-extension/unlisted.js"), "unlisted\n")
+    const tar = Bun.spawnSync(["tar", "-C", fixture.fixture, "-czf", path.join(fixture.fixture, fixture.asset), "ycoding", "ycoding-chrome-extension", "LICENSE", "extra", "nested"], { env: { ...process.env, COPYFILE_DISABLE: "1" } })
+    expect(tar.exitCode).toBe(0)
+    await writeChecksum(fixture.fixture, fixture.asset)
+    const install = path.join(fixture.home, ".local/bin")
+    const result = await runInstaller(fixture)
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect((await readdir(install)).sort()).toEqual(["ycoding", "ycoding-chrome-extension"])
+    expect((await readdir(path.join(install, "ycoding-chrome-extension"))).sort()).toEqual(["icons", ...BrowserExtension.files.filter((file) => !file.includes("/"))].sort())
+  })
+
+  test.each([
+    ["symbolic link", "invalid entry types", tarEntry("link", { type: "2", link: "ycoding" })],
+    ["hard link", "invalid entry types", tarEntry("link", { type: "1", link: "ycoding" })],
+    ["named pipe", "invalid entry types", tarEntry("pipe", { type: "6" })],
+    ["absolute path", "unsafe or duplicate entry names", tarEntry("/tmp/ycoding-escape", { content: "x\n" })],
+    ["parent directory", "unsafe or duplicate entry names", tarEntry("../ycoding-escape", { content: "x\n" })],
+    ["nested parent directory", "unsafe or duplicate entry names", tarEntry("nested/../ycoding-escape", { content: "x\n" })],
+    ["current directory prefix", "unsafe or duplicate entry names", tarEntry("./extra", { content: "x\n" })],
+    ["control character", "unsafe or duplicate entry names", tarEntry("bad\u0007name", { content: "x\n" })],
+    ["backslash", "unsafe or duplicate entry names", tarEntry("nested\\extra", { content: "x\n" })],
+    ["duplicate entry", "unsafe or duplicate entry names", tarEntry("ycoding", { content: "replacement\n" })],
+  ])("rejects an unknown %s entry before installing anything", async (_, message, entry) => {
+    const fixture = await setup({ system: "Linux", machine: "x86_64", version: "0.7.0" })
+    await craftedArchive(fixture, [tarEntry("ycoding", { content: "new executable\n" }), entry])
     const result = await runInstaller(fixture)
     expect(result.exitCode).not.toBe(0)
-    expect(result.stderr).toContain("invalid direct entries")
+    expect(result.stderr).toContain(message)
+    expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding")).exists()).toBe(false)
+    expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding-escape")).exists()).toBe(false)
+  })
+
+  test("rejects an archive with more entries than the limit before installing anything", async () => {
+    const fixture = await setup({ system: "Linux", machine: "x86_64", version: "0.7.0" })
+    await craftedArchive(fixture, [tarEntry("ycoding", { content: "new executable\n" }), ...Array.from({ length: 1025 }, (_, index) => tarEntry(`extra-${index}`, { content: "x" }))])
+    const result = await runInstaller(fixture)
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain("too many entries")
+    expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding")).exists()).toBe(false)
+  })
+
+  test("rejects an entry that declares more than the archive size limit before installing anything", async () => {
+    const fixture = await setup({ system: "Linux", machine: "x86_64", version: "0.7.0" })
+    await craftedArchive(fixture, [tarEntry("ycoding", { content: "new executable\n" }), tarEntry("extra", { size: 600 * 1024 * 1024 })])
+    const result = await runInstaller(fixture)
+    expect(result.exitCode).not.toBe(0)
+    expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding")).exists()).toBe(false)
   })
 
   test("restores the installed Chrome extension when final executable replacement fails", async () => {
@@ -243,16 +298,16 @@ exec /bin/mv "$@"
     expect(await Array.fromAsync(new Bun.Glob(".ycoding*").scan({ cwd: install, dot: true, onlyFiles: false }))).toEqual([])
   })
 
-  macTest("rejects a bare computer-use executable in a later release", async () => {
+  macTest("skips a bare computer-use executable in a later release", async () => {
     const fixture = await setup({ version: "0.7.2" })
     await appArchive(fixture, false, true, true)
     await copyFile(path.join(fixture.fixture, "ycoding-computer-helper"), path.join(fixture.fixture, "ycoding-computer-use"))
-    const tar = Bun.spawnSync(["tar", "-C", fixture.fixture, "-czf", path.join(fixture.fixture, fixture.asset), "ycoding", "ycoding-computer-use", "YCoding Computer Use.app"], { env: { ...process.env, COPYFILE_DISABLE: "1" } })
+    const tar = Bun.spawnSync(["tar", "-C", fixture.fixture, "-czf", path.join(fixture.fixture, fixture.asset), "ycoding", "ycoding-computer-use", "ycoding-chrome-extension", "YCoding Computer Use.app"], { env: { ...process.env, COPYFILE_DISABLE: "1" } })
     expect(tar.exitCode).toBe(0)
     await writeChecksum(fixture.fixture, fixture.asset)
     const result = await runInstaller(fixture)
-    expect(result.exitCode).not.toBe(0)
-    expect(result.stderr).toContain("invalid direct entries")
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect((await readdir(path.join(fixture.home, ".local/bin"))).sort()).toEqual(["YCoding Computer Use.app", "ycoding", "ycoding-chrome-extension"])
   })
 
   macTest("rejects v0.7.1 helper names in a later release", async () => {
@@ -260,7 +315,15 @@ exec /bin/mv "$@"
     await appArchive(fixture)
     const result = await runInstaller(fixture)
     expect(result.exitCode).not.toBe(0)
-    expect(result.stderr).toContain("invalid direct entries")
+    expect(result.stderr).toContain("missing required entries")
+  })
+
+  macTest.each(["0.7.14", "0.7.15"])("installs the published macOS %s layout with LICENSE and NOTICE and installs neither", async (version) => {
+    const fixture = await setup({ version })
+    await appArchive(fixture, false, true, true, ["LICENSE", "NOTICE"])
+    const result = await runInstaller(fixture)
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect((await readdir(path.join(fixture.home, ".local/bin"))).sort()).toEqual(["YCoding Computer Use.app", "ycoding", "ycoding-chrome-extension"])
   })
 
   macTest("restores superseded helpers when a renamed release fails its final replacement", async () => {
@@ -295,7 +358,7 @@ exec /bin/mv "$@"
     const install = path.join(fixture.home, ".local/bin")
     await mkdir(install, { recursive: true })
     await writeFile(path.join(install, "ycoding"), "old executable\n")
-    expect((await runInstaller(fixture)).stderr).toContain("invalid")
+    expect((await runInstaller(fixture)).stderr).toContain("missing required entries")
     await appArchive(fixture, true)
     const result = await runInstaller(fixture)
     expect(result.exitCode).not.toBe(0)
@@ -392,7 +455,7 @@ exec /bin/mv "$@"
     const result = await runInstaller(fixture)
 
     expect(result.exitCode).not.toBe(0)
-    expect(result.stderr).toContain("Release archive has invalid direct entries")
+    expect(result.stderr).toContain("missing required entries: ycoding-computer-helper")
     expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding")).exists()).toBe(false)
     expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding-computer-helper")).exists()).toBe(false)
   })
@@ -542,7 +605,7 @@ async function writeChecksum(fixture: string, asset: string) {
   await writeFile(path.join(fixture, "checksums"), `${digest}  ${asset}\n`)
 }
 
-async function appArchive(fixture: Awaited<ReturnType<typeof setup>>, linked = false, icon = true, renamed = false) {
+async function appArchive(fixture: Awaited<ReturnType<typeof setup>>, linked = false, icon = true, renamed = false, files: string[] = []) {
   const name = renamed ? "YCoding Computer Use.app" : "ycoding-computer-helper.app"
   const helper = renamed ? "ycoding-computer-use" : "ycoding-computer-helper"
   const bundleID = renamed ? "app.ycoding.computer-use" : "app.ycoding.computer-helper"
@@ -560,7 +623,8 @@ async function appArchive(fixture: Awaited<ReturnType<typeof setup>>, linked = f
     expect(sign.exitCode).toBe(0)
   }
   if (linked) await writeFile(path.join(contents, "_CodeSignature/CodeResources"), "signature\n")
-  const tar = Bun.spawnSync(["tar", "-C", fixture.fixture, "-czf", path.join(fixture.fixture, fixture.asset), "ycoding", ...(renamed ? [] : [helper]), name, ...(renamed ? [await writeExtension(fixture.fixture)] : [])], { env: { ...process.env, COPYFILE_DISABLE: "1" } })
+  for (const file of files) await writeFile(path.join(fixture.fixture, file), `fixture ${file}\n`)
+  const tar = Bun.spawnSync(["tar", "-C", fixture.fixture, "-czf", path.join(fixture.fixture, fixture.asset), "ycoding", ...(renamed ? [] : [helper]), name, ...(renamed ? [await writeExtension(fixture.fixture)] : []), ...files], { env: { ...process.env, COPYFILE_DISABLE: "1" } })
   expect(tar.exitCode).toBe(0)
   await writeChecksum(fixture.fixture, fixture.asset)
 }
@@ -578,4 +642,30 @@ async function linuxExtensionArchive(fixture: Awaited<ReturnType<typeof setup>>,
   const tar = Bun.spawnSync(["tar", "-C", fixture.fixture, "-czf", path.join(fixture.fixture, fixture.asset), "ycoding", extension, ...files], { env: { ...process.env, COPYFILE_DISABLE: "1" } })
   expect(tar.exitCode).toBe(0)
   await writeChecksum(fixture.fixture, fixture.asset)
+}
+
+async function craftedArchive(fixture: Awaited<ReturnType<typeof setup>>, parts: Uint8Array[]) {
+  await writeFile(path.join(fixture.fixture, fixture.asset), Bun.gzipSync(Buffer.concat([...parts, new Uint8Array(1024)])))
+  await writeChecksum(fixture.fixture, fixture.asset)
+}
+
+function tarEntry(name: string, options: { type?: string; content?: string; link?: string; size?: number } = {}) {
+  const text = new TextEncoder()
+  const content = text.encode(options.content ?? "")
+  const header = new Uint8Array(512)
+  const field = (value: string, offset: number) => header.set(text.encode(value), offset)
+  field(name, 0)
+  field("0000644\0", 100)
+  field("0000000\0", 108)
+  field("0000000\0", 116)
+  field(`${(options.size ?? content.length).toString(8).padStart(11, "0")}\0`, 124)
+  field("00000000000\0", 136)
+  field("        ", 148)
+  field(options.type ?? "0", 156)
+  field(options.link ?? "", 157)
+  field("ustar\x0000", 257)
+  field(`${header.reduce((sum, byte) => sum + byte, 0).toString(8).padStart(6, "0")}\0 `, 148)
+  const data = new Uint8Array(Math.ceil(content.length / 512) * 512)
+  data.set(content)
+  return Buffer.concat([header, data])
 }

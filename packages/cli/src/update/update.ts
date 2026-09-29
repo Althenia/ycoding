@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdir, mkdtemp, readdir, rename, rm } from "node:fs/promises"
+import { chmod, lstat, mkdir, mkdtemp, rename, rm } from "node:fs/promises"
 import path from "node:path"
 import { Readable } from "node:stream"
 import { createGunzip } from "node:zlib"
@@ -9,6 +9,7 @@ import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
 const repository = "Althenia/ycoding"
 const maxArchiveBytes = 512 * 1024 * 1024
 const maxChecksumsBytes = 1024 * 1024
+const maxArchiveEntries = 1024
 const pairedMacOSRelease = "0.2.0"
 const appMacOSRelease = "0.7.1"
 // Releases after 0.7.1, including their prereleases, ship YCoding Computer Use.app without a bare helper on macOS
@@ -109,54 +110,20 @@ export async function installRelease(input: InstallReleaseInput) {
       `${computerApp}/Contents/Resources/YCoding.icns`,
     ]
     const extension = BrowserExtension.directory
-    const appContents: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
-      [computerApp, ["Contents"]],
-      [`${computerApp}/Contents`, ["Info.plist", "MacOS", "Resources", "_CodeSignature"]],
-      [`${computerApp}/Contents/MacOS`, [appExecutable]],
-      [`${computerApp}/Contents/Resources`, ["YCoding.icns"]],
-      [`${computerApp}/Contents/_CodeSignature`, ["CodeResources"]],
-    ]
-    const extensionContents: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
-      [extension, [...new Set(BrowserExtension.files.map((file) => file.split("/")[0]))]],
-      [`${extension}/icons`, BrowserExtension.files.filter((file) => file.startsWith("icons/")).map((file) => path.basename(file))],
-    ]
-    const directoryContents = [...(appRequired ? appContents : []), ...(currentLayout ? extensionContents : [])]
-    const directories = directoryContents.map(([directory]) => directory)
-    const names = [
+    const required = [
       ...installedNames,
       ...(appRequired ? appFiles : []),
       ...(currentLayout ? BrowserExtension.files.map((file) => `${extension}/${file}`) : []),
-    ].sort()
-    const topLevel = [...installedNames, ...(appRequired ? [computerApp] : []), ...(currentLayout ? [extension] : [])].sort()
-    await inspectArchive(archive, names, directories)
-    const releaseArchive = new Bun.Archive(archive)
-    const archiveFiles = await releaseArchive.files()
-    const files = [...archiveFiles.keys()].sort()
-    if (files.length !== names.length || files.some((entry, index) => entry !== names[index])) {
-      throw new Error(`Release archive did not contain the exact direct entries: ${names.join(", ")}`)
-    }
-    const sizes = names.map((name) => archiveFiles.get(name)?.size ?? 0)
-    if (
-      sizes.some((size) => size === 0 || size > maxArchiveBytes) ||
-      sizes.reduce((sum, size) => sum + size, 0) > maxArchiveBytes
-    ) {
-      throw new Error("Release archive entries must be bounded regular nonempty direct files")
-    }
-    await Promise.all(directories.map((directory) => mkdir(path.join(temporary, directory), { recursive: true })))
-    await Promise.all(names.map((name) => Bun.write(path.join(temporary, name), archiveFiles.get(name)!)))
-    const entries = (await readdir(temporary)).sort()
-    if (entries.length !== topLevel.length || entries.some((entry, index) => entry !== topLevel[index])) {
-      throw new Error(`Release archive did not contain the exact direct entries: ${names.join(", ")}`)
-    }
-    for (const [directory, expected] of directoryContents) {
-      const actual = (await readdir(path.join(temporary, directory))).sort()
-      const sorted = [...expected].sort()
-      if (actual.length !== sorted.length || actual.some((entry, index) => entry !== sorted[index])) {
-        throw new Error(`Release archive entry ${directory} contains unexpected files`)
-      }
-      const info = await lstat(path.join(temporary, directory))
-      if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`Release archive entry ${directory} must be a directory`)
-    }
+    ]
+    const files = readArchive(await expandArchive(archive), required)
+    await Promise.all(
+      required.map(async (name) => {
+        const candidate = path.join(temporary, name)
+        await mkdir(path.dirname(candidate), { recursive: true })
+        await Bun.write(candidate, files.get(name)!)
+        if (name === "ycoding" || name === legacyComputerHelper || name === appFiles[1]) await chmod(candidate, 0o755)
+      }),
+    )
     if (appRequired) {
       const metadata = await Bun.file(path.join(temporary, appFiles[0])).text()
       if (
@@ -165,18 +132,6 @@ export async function installRelease(input: InstallReleaseInput) {
         !metadata.includes("<key>CFBundleIconFile</key><string>YCoding.icns</string>")
       )
         throw new Error("Computer helper app has invalid bundle metadata")
-    }
-    await Promise.all(
-      names.map(async (name) => {
-        const candidate = path.join(temporary, name)
-        const file = await lstat(candidate)
-        if (!file.isFile() || file.isSymbolicLink() || file.size === 0 || file.size > maxArchiveBytes) {
-          throw new Error(`Release archive entry ${name} must be a bounded regular nonempty direct file`)
-        }
-        if (name === "ycoding" || name === legacyComputerHelper || name === appFiles[1]) await chmod(candidate, 0o755)
-      }),
-    )
-    if (appRequired) {
       const application = path.join(temporary, computerApp)
       if (input.filesystem?.verifyApplication) await input.filesystem.verifyApplication(application)
       else {
@@ -435,62 +390,65 @@ function checksum(text: string, asset: string) {
   return matches[0][1]
 }
 
-async function inspectArchive(archive: Uint8Array, files: string[], directoryNames: ReadonlyArray<string>) {
-  const directories = directoryNames.map((directory) => `${directory}/`)
-  const expected = [...files, ...directories].sort()
-  const entries: string[] = []
-  const header = new Uint8Array(512)
-  let headerBytes = 0
-  let skip = 0
+async function expandArchive(archive: Uint8Array) {
+  const chunks: Buffer[] = []
   let expanded = 0
-  let ended = false
   for await (const chunk of Readable.from([archive]).pipe(createGunzip())) {
     expanded += chunk.length
     if (expanded > maxArchiveBytes + 1024 * 1024) throw new Error("Release archive is too large when expanded")
-    for (let offset = 0; offset < chunk.length; ) {
-      if (skip > 0) {
-        const consumed = Math.min(skip, chunk.length - offset)
-        skip -= consumed
-        offset += consumed
-        continue
-      }
-      const consumed = Math.min(512 - headerBytes, chunk.length - offset)
-      header.set(chunk.subarray(offset, offset + consumed), headerBytes)
-      headerBytes += consumed
-      offset += consumed
-      if (headerBytes !== 512) continue
-      headerBytes = 0
-      if (header.every((byte) => byte === 0)) {
-        ended = true
-        continue
-      }
-      if (ended) throw new Error("Release archive has entries after its terminator")
-      const name = Buffer.from(header.subarray(0, 100)).toString("utf8").split("\0", 1)[0]
-      const prefix = Buffer.from(header.subarray(345, 500)).toString("utf8").split("\0", 1)[0]
-      const sizeField = Buffer.from(header.subarray(124, 136)).toString("ascii").replace(/\0.*$/, "").trim()
-      if (prefix || !/^[0-7]+$/.test(sizeField)) throw new Error("Release archive has invalid entry metadata")
-      const size = Number.parseInt(sizeField, 8)
-      const type = header[156]
-      if (type === 120 && size <= 16 * 1024 && entries.length <= expected.length) {
-        skip = Math.ceil(size / 512) * 512
-        continue
-      }
-      if (
-        (type === 53 && directories.includes(name) && size === 0) ||
-        ((type === 48 || type === 0) && files.includes(name) && size > 0 && size <= maxArchiveBytes)
-      ) {
-        entries.push(name)
-        if (entries.length > expected.length) throw new Error("Release archive has unexpected entries")
-        skip = Math.ceil(size / 512) * 512
-        continue
-      }
-      if ((type === 48 || type === 0) && files.includes(name)) {
-        throw new Error("Release archive entries must be bounded regular nonempty direct files")
-      }
-      throw new Error(`Release archive did not contain the exact direct entries: ${expected.join(", ")}`)
-    }
+    chunks.push(chunk)
   }
-  if (headerBytes !== 0 || skip !== 0 || !ended || entries.sort().some((entry, index) => entry !== expected[index]) || entries.length !== expected.length) {
-    throw new Error(`Release archive did not contain the exact direct entries: ${expected.join(", ")}`)
-  }
+  return Buffer.concat(chunks)
 }
+
+function readArchive(tar: Uint8Array, required: ReadonlyArray<string>) {
+  const files = new Map<string, Uint8Array>()
+  const names = new Set<string>()
+  let offset = 0
+  let total = 0
+  while (true) {
+    if (offset + 512 > tar.length) throw new Error("Release archive is truncated")
+    const header = tar.subarray(offset, offset + 512)
+    offset += 512
+    if (header.every((byte) => byte === 0)) break
+    const sizeField = Buffer.from(header.subarray(124, 136)).toString("ascii").replace(/\0.*$/, "").trim()
+    if (!/^[0-7]+$/.test(sizeField)) throw new Error("Release archive has invalid entry metadata")
+    const size = Number.parseInt(sizeField, 8)
+    const type = header[156]
+    const name = entryName(header)
+    if (type === 120 && size <= 16 * 1024) {
+      offset += Math.ceil(size / 512) * 512
+      continue
+    }
+    const directory = type === 53 && size === 0
+    if (!directory && type !== 48 && type !== 0) throw new Error(`Release archive entry ${name} has an unsupported type`)
+    const normalized = directory ? name.replace(/\/$/, "") : name
+    if (!safeName(normalized)) throw new Error(`Release archive entry has an unsafe name: ${JSON.stringify(name)}`)
+    if (names.has(normalized)) throw new Error(`Release archive has duplicate entry ${normalized}`)
+    names.add(normalized)
+    if (names.size > maxArchiveEntries) throw new Error("Release archive has too many entries")
+    total += size
+    if (size > maxArchiveBytes || total > maxArchiveBytes) {
+      throw new Error(`Release archive entry ${normalized} exceeds the size limit`)
+    }
+    const next = offset + Math.ceil(size / 512) * 512
+    if (next > tar.length) throw new Error("Release archive is truncated")
+    if (!directory && required.includes(normalized)) files.set(normalized, tar.subarray(offset, offset + size))
+    offset = next
+  }
+  if (!tar.subarray(offset).every((byte) => byte === 0)) throw new Error("Release archive has entries after its terminator")
+  const missing = required.filter((name) => !files.has(name))
+  if (missing.length > 0) throw new Error(`Release archive is missing required entries: ${missing.join(", ")}`)
+  const empty = required.find((name) => files.get(name)!.length === 0)
+  if (empty) throw new Error(`Release archive entry ${empty} must be nonempty`)
+  return files
+}
+
+function entryName(header: Uint8Array) {
+  const field = (start: number, end: number) => Buffer.from(header.subarray(start, end)).toString("utf8").split("\0", 1)[0]
+  const prefix = field(345, 500)
+  return prefix ? `${prefix}/${field(0, 100)}` : field(0, 100)
+}
+
+const safeName = (name: string) =>
+  !/[\\\x00-\x1f\x7f]/.test(name) && name.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..")

@@ -170,6 +170,9 @@ jobs:
             arch: x64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    env:
+      YCODING_MACOS_SIGNING_IDENTITY: YCoding Code Signing
+      YCODING_MACOS_SIGNING_SHA1: 9dd524184b0db949ffac7f0ada0ae860ac7f5f85
     defaults:
       run:
         shell: bash
@@ -210,6 +213,32 @@ jobs:
             }
           '
 
+      - name: Import macOS signing identity
+        if: runner.os == 'macOS'
+        env:
+          YCODING_MACOS_SIGNING_P12: ${{ secrets.YCODING_MACOS_SIGNING_P12 }}
+          YCODING_MACOS_SIGNING_PASSWORD: ${{ secrets.YCODING_MACOS_SIGNING_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$YCODING_MACOS_SIGNING_P12" || { echo "Missing YCODING_MACOS_SIGNING_P12 Actions secret" >&2; exit 1; }
+          test -n "$YCODING_MACOS_SIGNING_PASSWORD" || { echo "Missing YCODING_MACOS_SIGNING_PASSWORD Actions secret" >&2; exit 1; }
+          keychain="$RUNNER_TEMP/ycoding-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 32)"
+          echo "::add-mask::$keychain_password"
+          printf '%s' "$YCODING_MACOS_SIGNING_P12" | base64 --decode > "$RUNNER_TEMP/ycoding-signing.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/ycoding-signing.p12" -k "$keychain" -P "$YCODING_MACOS_SIGNING_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/ycoding-signing.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//' > "$RUNNER_TEMP/ycoding-keychains.txt"
+          original=()
+          while IFS= read -r line; do original+=("$line"); done < "$RUNNER_TEMP/ycoding-keychains.txt"
+          security list-keychains -d user -s "$keychain" ${original[@]+"${original[@]}"}
+          security find-identity -p codesigning "$keychain" | grep -F "$(printf '%s' "$YCODING_MACOS_SIGNING_SHA1" | tr a-f A-F) \"$YCODING_MACOS_SIGNING_IDENTITY\"" >/dev/null \
+            || { echo "The signing bundle does not contain the pinned $YCODING_MACOS_SIGNING_IDENTITY certificate" >&2; exit 1; }
+
       - name: Build TUI artifact
         run: bun run build:tui
 
@@ -229,13 +258,12 @@ jobs:
           set -euo pipefail
           staging="dist/release-bin/${{ matrix.target }}"
           mkdir -p "$staging"
-          cp LICENSE NOTICE "$staging/"
           cp "dist/tui/tui-${{ matrix.target }}/bin/ycoding${{ runner.os == 'Windows' && '.exe' || '' }}" "$staging/"
           cp -R "dist/tui/tui-${{ matrix.target }}/bin/ycoding-chrome-extension" "$staging/"
           if [ "${{ runner.os }}" = "macOS" ]; then
             cp -R "dist/tui/tui-${{ matrix.target }}/bin/YCoding Computer Use.app" "$staging/"
-            # The app is ad-hoc signed; the signature must still be complete and valid.
             codesign --verify --deep --strict "$staging/YCoding Computer Use.app"
+            codesign -d -r- "$staging/YCoding Computer Use.app" 2>&1 | grep -Ex "designated => identifier \"app\.ycoding\.computer-use\" and certificate (leaf|root) = H\"$YCODING_MACOS_SIGNING_SHA1\"" >/dev/null
           fi
 
       - name: Upload native executables
@@ -245,6 +273,21 @@ jobs:
           path: dist/release-bin/${{ matrix.target }}/
           if-no-files-found: error
           retention-days: 7
+
+      - name: Remove macOS signing keychain
+        if: ${{ always() && runner.os == 'macOS' }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/ycoding-signing.keychain-db"
+          saved="$RUNNER_TEMP/ycoding-keychains.txt"
+          rm -f "$RUNNER_TEMP/ycoding-signing.p12"
+          if [ -e "$saved" ]; then
+            original=()
+            while IFS= read -r line; do original+=("$line"); done < "$saved"
+            if [ "${#original[@]}" -gt 0 ]; then security list-keychains -d user -s "${original[@]}"; fi
+            rm -f "$saved"
+          fi
+          if [ -e "$keychain" ]; then security delete-keychain "$keychain"; fi
 
   isolated-browser-acceptance:
     name: isolated browser acceptance (darwin-arm64, Chrome 152+)
@@ -330,7 +373,7 @@ jobs:
             grep -Fq '<key>CFBundleIconFile</key><string>YCoding.icns</string>' "$app/Contents/Info.plist"
           done
           test -x unpacked/ycoding-linux-x64/ycoding
-          mac_entries=(ycoding ycoding-chrome-extension LICENSE NOTICE)
+          mac_entries=(ycoding ycoding-chrome-extension)
           version_core="${version%%+*}"
           prerelease=false
           if [[ "$version_core" == *-* ]]; then prerelease=true; fi
@@ -340,8 +383,8 @@ jobs:
           '; then mac_entries+=("YCoding Computer Use.app"); fi
           tar -C unpacked/ycoding-darwin-arm64 -czf "release/ycoding-$version-darwin-arm64.tar.gz" "${mac_entries[@]}"
           tar -C unpacked/ycoding-darwin-x64 -czf "release/ycoding-$version-darwin-x64.tar.gz" "${mac_entries[@]}"
-          tar -C unpacked/ycoding-linux-x64 -czf "release/ycoding-$version-linux-x64.tar.gz" ycoding ycoding-chrome-extension LICENSE NOTICE
-          (cd unpacked/ycoding-windows-x64 && zip -r "../../release/ycoding-$version-windows-x64.zip" ycoding.exe ycoding-chrome-extension LICENSE NOTICE)
+          tar -C unpacked/ycoding-linux-x64 -czf "release/ycoding-$version-linux-x64.tar.gz" ycoding ycoding-chrome-extension
+          (cd unpacked/ycoding-windows-x64 && zip -r "../../release/ycoding-$version-windows-x64.zip" ycoding.exe ycoding-chrome-extension)
           tar -tzvf "release/ycoding-$version-darwin-arm64.tar.gz" | grep '^-rwx' >/dev/null
           tar -tzvf "release/ycoding-$version-darwin-x64.tar.gz" | grep '^-rwx' >/dev/null
           tar -tzvf "release/ycoding-$version-linux-x64.tar.gz" | grep '^-rwx' >/dev/null
@@ -351,12 +394,15 @@ jobs:
           tar -tzf "release/ycoding-$version-darwin-x64.tar.gz" | grep -x 'ycoding-chrome-extension/manifest.json' >/dev/null
           tar -tzf "release/ycoding-$version-linux-x64.tar.gz" | grep -x 'ycoding-chrome-extension/manifest.json' >/dev/null
           for target in darwin-arm64 darwin-x64 linux-x64; do
-            for file in LICENSE NOTICE; do tar -tzf "release/ycoding-$version-$target.tar.gz" | grep -x "$file" >/dev/null; done
+            expected=(ycoding ycoding-chrome-extension)
+            if [ "${target%%-*}" = darwin ]; then expected=("${mac_entries[@]}"); fi
+            test "$(tar -tzf "release/ycoding-$version-$target.tar.gz" | cut -d/ -f1 | LC_ALL=C sort -u)" = "$(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)"
           done
-          for file in LICENSE NOTICE; do unzip -Z1 "release/ycoding-$version-windows-x64.zip" | grep -x "$file" >/dev/null; done
-          # One checksum file covers every released archive, so the installer
+          test "$(unzip -Z1 "release/ycoding-$version-windows-x64.zip" | cut -d/ -f1 | LC_ALL=C sort -u)" = "$(printf '%s\n' ycoding.exe ycoding-chrome-extension | LC_ALL=C sort)"
+          cp LICENSE NOTICE release/
+          # One checksum file covers every released asset, so the installer
           # verifies each download with the same rule.
-          (cd release && sha256sum "ycoding-$version-"*.tar.gz "ycoding-$version-"*.zip > "ycoding-$version-checksums.txt")
+          (cd release && sha256sum "ycoding-$version-"*.tar.gz "ycoding-$version-"*.zip LICENSE NOTICE > "ycoding-$version-checksums.txt")
 
       - name: Upload prepared release assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

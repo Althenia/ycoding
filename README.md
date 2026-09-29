@@ -26,7 +26,7 @@ The agent, repository, filesystem, shell, tools, and model execution remain in t
 curl -fsSL https://ycoding.althenia.app/install.sh | sh
 ```
 
-The installer downloads the latest release, verifies its SHA-256 checksum, and installs `ycoding` in `~/.local/bin`. Release archives also contain the `LICENSE` and `NOTICE` files, which the installer requires but does not install. macOS releases from v0.7.1 also install an ad-hoc signed computer helper app; window control requires Accessibility and Screen Recording grants to that installed app, granted again after each update. If you download a release archive with a browser instead, clear the quarantine attribute after extracting it: `xattr -dr com.apple.quarantine <extracted-folder>`. Follow the PATH instructions, then open a new terminal and run:
+The installer downloads the latest release, verifies its SHA-256 checksum, and installs `ycoding` in `~/.local/bin`. Each release attaches `LICENSE` and `NOTICE` as separate files listed in its checksum file; the archives contain only the executable and its companion folders. macOS releases from v0.7.1 also install an ad-hoc signed computer helper app; window control requires Accessibility and Screen Recording grants to that installed app, granted again after each update. If you download a release archive with a browser instead, clear the quarantine attribute after extracting it: `xattr -dr com.apple.quarantine <extracted-folder>`. Follow the PATH instructions, then open a new terminal and run:
 
 ```sh
 ycoding
@@ -96,7 +96,7 @@ The web build writes `apps/web/dist` and includes the maintained installer, gene
 
 TUI and web ship together under one version. Write a single nonempty release note at `docs/releases/v<version>.md` (for example, `docs/releases/v0.6.5.md`).
 
-The release workflow (`release.yml`) triggers on `push` to `v<version>` tags. It verifies TUI artifacts and the web application, deploys the web build to Cloudflare after the required checks, then creates one TUI GitHub Release with native archives, checksums, and the shared note. Deployment requires the `CLOUDFLARE_API_TOKEN` GitHub Actions secret; if deployment fails, no GitHub Release is published. Manual workflow runs prepare artifacts without publishing or deploying.
+The release workflow (`release.yml`) triggers on `push` to `v<version>` tags. It verifies TUI artifacts and the web application, deploys the web build to Cloudflare after the required checks, then creates one TUI GitHub Release with native archives, the `LICENSE` and `NOTICE` files, checksums, and the shared note. Deployment requires the `CLOUDFLARE_API_TOKEN` GitHub Actions secret; if deployment fails, no GitHub Release is published. Manual workflow runs prepare artifacts without publishing or deploying.
 
 ## License
 
