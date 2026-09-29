@@ -3516,32 +3516,24 @@ test("caches durable session usage independently from diagnostics", async () => 
   }
 })
 
-test("refreshes the resident parent ledger after a durable child file-change event", async () => {
+test("lists every direct subagent task across pages regardless of state", async () => {
   const events = createEventStream()
-  const sessionID = "ses_file_change_parent"
-  const childID = "ses_file_change_child"
-  let requests = 0
-  let files = [{ path: "src/first.ts", patch: "--- a/src/first.ts\n+++ b/src/first.ts", additions: 1, deletions: 0 }]
+  const parentID = "ses_children_parent"
+  const task = (sessionID: string, state: SessionOrchestrationTask["state"]): SessionOrchestrationTask => ({
+    sessionID,
+    parentID,
+    description: "Edit a file",
+    agent: "build",
+    model: { providerID: "anthropic", id: "claude-opus-5" },
+    background: true,
+    state,
+    revision: 1,
+    time: { created: 0, updated: 0 },
+  })
   const calls = createFetch((url) => {
-    if (url.pathname === `/api/session/${sessionID}/subagent`)
-      return json(
-        subagentPage([
-          {
-            sessionID: childID,
-            parentID: sessionID,
-            description: "Edit a file",
-            agent: "build",
-            model: { providerID: "anthropic", id: "claude-opus-5" },
-            background: true,
-            state: "completed",
-            revision: 1,
-            time: { created: 0, updated: 0 },
-          },
-        ]),
-      )
-    if (url.pathname !== `/api/session/${sessionID}/file-change`) return undefined
-    requests++
-    return json({ data: files })
+    if (url.pathname !== `/api/session/${parentID}/subagent`) return undefined
+    if (url.searchParams.get("cursor") === "page_2") return json(subagentPage([task("ses_running", "running")]))
+    return json(subagentPage([task("ses_completed", "completed")], { next: "page_2" }))
   }, events)
   let data!: ReturnType<typeof useData>
 
@@ -3563,28 +3555,10 @@ test("refreshes the resident parent ledger after a durable child file-change eve
   ))
 
   try {
-    await data.session.subagent.sync(sessionID)
-    await data.session.fileChange.sync(sessionID)
-    expect(data.session.fileChange.list(sessionID)).toEqual(files)
-
-    files = [
-      ...files,
-      { path: "src/second.ts", patch: "--- a/src/second.ts\n+++ b/src/second.ts", additions: 1, deletions: 0 },
-    ]
-    emitEvent(events, {
-      id: "evt_file_change",
-      created: 1,
-      type: "session.file-change.recorded",
-      durable: durable(childID, 1),
-      data: {
-        sessionID: childID,
-        change: files[1],
-      },
-    } as YCodingEvent)
-
-    await wait(() => data.session.fileChange.list(sessionID).length === 2)
-    expect(data.session.fileChange.list(sessionID)).toEqual(files)
-    expect(requests).toBe(2)
+    expect((await data.session.subagent.children(parentID)).map((child) => [child.sessionID, child.state])).toEqual([
+      ["ses_completed", "completed"],
+      ["ses_running", "running"],
+    ])
   } finally {
     app.renderer.destroy()
   }

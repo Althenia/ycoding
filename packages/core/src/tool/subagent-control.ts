@@ -8,8 +8,7 @@ import { PluginRuntime } from "../plugin/runtime"
 import { PermissionV2 } from "../permission"
 import { SessionOrchestration } from "../session/orchestration"
 import { Tool } from "./tool"
-import { Hash } from "../util/hash"
-import { SessionMessage } from "../session/message"
+import { SessionOrchestrationIdentity } from "../session/orchestration-identity"
 
 export const name = "subagent_control"
 export const Input = Control
@@ -52,9 +51,7 @@ export const Plugin = {
                     task: yield* orchestration.send({
                       parentID: context.sessionID,
                       childID: input.sessionID,
-                      messageID: SessionMessage.ID.make(
-                        `msg_task_send_${Hash.sha256(`${context.sessionID}\0${context.messageID}\0${context.callID}`).slice(0, 24)}`,
-                      ),
+                      messageID: SessionOrchestrationIdentity.send(context.sessionID, context.messageID, context.callID),
                       text: input.text,
                       delivery: input.delivery,
                     }),

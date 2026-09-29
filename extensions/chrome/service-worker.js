@@ -8,6 +8,7 @@ import {
   safePage,
   tabID,
 } from "./protocol.js"
+import { LABELS, TITLE_PREFIX, markerScript, timing, tokens } from "./indicator.js"
 
 const PROTOCOL_VERSION = "1.3"
 const STORAGE_KEY = "browserPairing"
@@ -17,63 +18,10 @@ const RECOVERY_ALARM = "browser-recovery"
 const MAX_CAPTURE_INSPECTION_DEPTH = 32
 const MAX_CAPTURE_INSPECTION_NODES = 10_000
 const CURSOR_WORLD = "ycoding-agent-cursor"
-const CURSOR_ANIMATION_TIMEOUT_MS = 500
 const CURSOR_COMMAND_TIMEOUT_MS = 600
 const INPUT_COMMAND_TIMEOUT_MS = 2000
-const CURSOR_SCRIPT = `async ({x,y,click,remove}) => {
-  const hosts = [...document.querySelectorAll('[data-ycoding-agent-cursor]')]
-  const previous = hosts.at(-1)
-  const startX = previous ? Number(previous.dataset.x) : innerWidth / 2
-  const startY = previous ? Number(previous.dataset.y) : innerHeight / 2
-  if (remove) {
-    for (const host of hosts) host.remove()
-    return
-  }
-  for (const host of hosts) host.remove()
-  const host = document.createElement("div")
-  host.dataset.ycodingAgentCursor = ""
-  host.dataset.x = String(startX)
-  host.dataset.y = String(startY)
-  host.style.cssText = "position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;"
-  const root = host.attachShadow({mode:'closed'})
-  root.innerHTML = '<style>:host,.cursor,.arrow,.label,.ripple{pointer-events:none}.cursor{position:fixed;left:0;top:0;will-change:transform;color:#8b5cf6;font:12px/1.2 system-ui,sans-serif;filter:drop-shadow(0 1px 2px #0008)}.arrow{font-size:24px;line-height:20px}.label{position:absolute;left:14px;top:15px;padding:3px 6px;border-radius:5px;background:#6d28d9;color:white;white-space:nowrap}.ripple{position:fixed;width:22px;height:22px;margin:-11px;border:2px solid #a78bfa;border-radius:50%;animation:ripple .45s ease-out forwards}@keyframes ripple{to{transform:scale(2);opacity:0}}</style><div class="cursor"><span class="arrow">➤</span><span class="label">YCoding</span></div>'
-  document.documentElement.append(host)
-  const node = root.querySelector('.cursor')
-  node.style.transform = 'translate(' + startX + 'px,' + startY + 'px)'
-  if (document.visibilityState === "visible") {
-    let active = true
-    let timeout
-    await Promise.race([
-      new Promise(resolve => {
-        const started = performance.now()
-        const frame = now => {
-          if (!active) return resolve()
-          const progress = Math.min(1, (now - started) / 320)
-          const eased = 1 - Math.pow(1 - progress, 3)
-          const px = startX + (x - startX) * eased, py = startY + (y - startY) * eased
-          node.style.transform = 'translate(' + px + 'px,' + py + 'px)'
-          if (progress < 1) requestAnimationFrame(frame)
-          else resolve()
-        }
-        requestAnimationFrame(frame)
-      }),
-      new Promise(resolve => { timeout = setTimeout(resolve, ${CURSOR_ANIMATION_TIMEOUT_MS}) }),
-    ])
-    active = false
-    clearTimeout(timeout)
-  }
-  node.style.transform = 'translate(' + x + 'px,' + y + 'px)'
-  host.dataset.x = String(x)
-  host.dataset.y = String(y)
-  if (click) {
-    const ripple = document.createElement('span')
-    ripple.className = 'ripple'
-    ripple.style.left = x + 'px'
-    ripple.style.top = y + 'px'
-    root.append(ripple)
-    setTimeout(() => ripple.remove(), 500)
-  }
-}`
+const MARKER_FAILED = "YCoding could not show its control marker on this page"
+const MARKER_TEXT = TITLE_PREFIX.trimEnd()
 const interactiveRoles = new Set([
   "button",
   "checkbox",
@@ -94,6 +42,7 @@ let generation
 let pairing
 let requestedPause = false
 let heartbeatTimer
+let refreshTimer
 let reconnectAttempt = 0
 let reconnectScheduled = false
 const tabs = new Map()
@@ -166,7 +115,7 @@ chrome.tabs.onUpdated.addListener((chromeTabID, change, info) => {
     send({
       type: "updated",
       tabID: current.id,
-      title: info.title ?? "",
+      title: current.marked ? stripMarker(info.title ?? "") : (info.title ?? ""),
       url: current.url,
       documentGeneration: current.documentGeneration,
     })
@@ -186,13 +135,14 @@ chrome.debugger.onDetach.addListener((source) => {
   const id = chromeTabs.get(source.tabId)
   if (!id) return
   const tab = tabs.get(id)
-  if (tab) void removeCursor(tab)
+  if (tab?.profile && !tab.attached) return
   if (tab && !tab.owned) {
     deniedTabs.add(tab.chromeTabID)
     void persistDeniedTabs()
   }
   chromeTabs.delete(source.tabId)
   tabs.delete(id)
+  syncRefreshTimer()
   clearBadge(source.tabId)
   send({ type: "revoked", tabID: id })
   if (tab?.owned) void removeInactive(tab.chromeTabID)
@@ -212,6 +162,8 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
   tab.revision = 0
   tab.refs.clear()
   tab.url = params.frame.url
+  tab.world = undefined
+  if (tab.marked) void mark(tab)
   tabInfo(tab).then(
     (info) => {
       if (tabs.get(tab.id) !== tab || tab.url !== params.frame.url) return
@@ -466,11 +418,11 @@ function persistDeniedTabs() {
 
 async function revokeTab(tab) {
   if (!tab || tabs.get(tab.id) !== tab) return
-  void removeCursor(tab)
   chromeTabs.delete(tab.chromeTabID)
   tabs.delete(tab.id)
   clearBadge(tab.chromeTabID)
   send({ type: "revoked", tabID: tab.id })
+  await clearMarker(tab)
   if (!tab.profile || tab.attached) await chrome.debugger.detach({ tabId: tab.chromeTabID }).catch(() => {})
   if (tab.owned) await removeInactive(tab.chromeTabID)
 }
@@ -524,6 +476,7 @@ async function receive(raw, current = socket) {
   if (message.type === "action") await act(message)
   if (message.type === "open") await openTab(message)
   if (message.type === "close") await closeTab(message)
+  if (message.type === "relinquish") await relinquish(message)
   if (message.type === "release" && message.generation === generation) {
     const tab = tabs.get(message.tabID)
     if (tab?.owned) await revokeTab(tab)
@@ -559,6 +512,7 @@ async function openTab(message) {
       chromeTabID,
       windowID: created.windowId,
       owned: true,
+      attached: true,
       documentGeneration: 1,
       revision: 0,
       refs: new Map(),
@@ -579,6 +533,7 @@ async function openTab(message) {
     )
       throw new Error("Created tab reached an unapproved site or lost its bridge")
     tab.url = info.url
+    if (!(await mark(tab))) throw new Error(MARKER_FAILED)
     send({
       type: "opened",
       callID: message.callID,
@@ -593,6 +548,7 @@ async function openTab(message) {
     if (chromeTabID !== undefined) {
       if (chromeTabs.get(chromeTabID) === message.tabID) chromeTabs.delete(chromeTabID)
       if (tabs.get(message.tabID)?.chromeTabID === chromeTabID) tabs.delete(message.tabID)
+      syncRefreshTimer()
       clearBadge(chromeTabID)
       await chrome.debugger.detach({ tabId: chromeTabID }).catch(() => {})
       await removeInactive(chromeTabID)
@@ -609,6 +565,7 @@ async function closeTab(message) {
     if (await isActive(tab)) throw new Error("The owned tab is active and controlled by the user")
     chromeTabs.delete(tab.chromeTabID)
     tabs.delete(tab.id)
+    syncRefreshTimer()
     clearBadge(tab.chromeTabID)
     dispatched = true
     await chrome.tabs.remove(tab.chromeTabID)
@@ -651,6 +608,7 @@ async function groupTabs(message) {
       !pairing?.enabled
     )
       throw new Error("Profile tab grant changed")
+    await controlTabs(selected)
     dispatched = true
     const groupID = await chrome.tabs.group({ tabIds: info.map((tab) => tab.id) })
     groups.set(
@@ -667,7 +625,7 @@ async function groupTabs(message) {
       documentGeneration: anchor.documentGeneration,
       observationRevision: anchor.revision,
       status: "completed",
-      title: info[request.tabIDs.indexOf(message.tabID)].title ?? "",
+      title: (await tabInfo(anchor)).title ?? "",
       url: anchor.url,
       groupID,
     })
@@ -702,6 +660,7 @@ async function ungroupTabs(message) {
       ids.some((id) => !tabs.get(chromeTabs.get(id))?.profile)
     )
       throw new Error("Group tabs changed or are controlled by the user")
+    await controlTabs(ids.map((id) => tabs.get(chromeTabs.get(id))))
     dispatched = true
     await chrome.tabs.ungroup(ids)
     groups.delete(request.groupID)
@@ -714,7 +673,7 @@ async function ungroupTabs(message) {
       documentGeneration: anchor.documentGeneration,
       observationRevision: anchor.revision,
       status: "completed",
-      title: info[ids.indexOf(anchor.chromeTabID)].title ?? "",
+      title: (await tabInfo(anchor)).title ?? "",
       url: anchor.url,
       groupID: request.groupID,
     })
@@ -724,10 +683,12 @@ async function ungroupTabs(message) {
 }
 
 async function observe(message) {
+  let fresh
   try {
     const tab = requireTab(message)
     await isActive(tab)
-    await attachProfile(tab)
+    fresh = tab.profile && !tab.attached ? tab : undefined
+    await controlTabs([tab])
     const documentGeneration = tab.documentGeneration
     const tree = await command(tab.chromeTabID, "Accessibility.getFullAXTree", { depth: 12 })
     const candidates = tree.nodes.filter(
@@ -761,7 +722,7 @@ async function observe(message) {
       await revokeTab(tab)
       return fail(message, "The shared tab changed to an unapproved site")
     }
-    if (tab.documentGeneration !== documentGeneration) return fail(message, "The shared tab observation is stale")
+    if (tab.documentGeneration !== documentGeneration) throw new Error("The shared tab observation is stale")
     send({
       type: "observation",
       callID: message.callID,
@@ -775,12 +736,18 @@ async function observe(message) {
       truncated: candidates.length > MAX_ELEMENTS,
     })
   } catch (error) {
+    await abandonFresh(fresh)
     fail(message, safeError(error))
   }
 }
 
+async function abandonFresh(tab) {
+  if (tab && tabs.get(tab.id) === tab) await releaseControl(tab)
+}
+
 async function act(message) {
   let dispatched = false
+  let fresh
   let input
   try {
     const tab = requireTab(message)
@@ -790,7 +757,8 @@ async function act(message) {
       return fail(message, "The shared tab observation is stale")
     if (message.action.type === "group") return groupTabs(message)
     if (message.action.type === "ungroup") return ungroupTabs(message)
-    await attachProfile(tab)
+    fresh = tab.profile && !tab.attached ? tab : undefined
+    await controlTabs([tab])
     tab.allowedOrigins = new Set(message.allowedOrigins)
     if (message.action.type === "navigate") await navigate(tab, message.action.url, () => (dispatched = true))
     if (message.action.type === "click") input = await click(tab, message.action.ref, () => (dispatched = true))
@@ -824,6 +792,7 @@ async function act(message) {
       input,
     })
   } catch (error) {
+    if (!dispatched) await abandonFresh(fresh)
     fail(message, safeError(error), dispatched)
   }
 }
@@ -881,7 +850,7 @@ async function click(tab, ref, markDispatched) {
   const y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4
   if (tabs.get(tab.id) !== tab || tab.documentGeneration !== documentGeneration)
     throw new Error("The shared tab observation is stale")
-  await moveCursor(tab, x, y, true)
+  await moveCursor(tab, x, y, LABELS.click, true)
   if (await pageHidden(tab)) {
     const { object } = await command(tab.chromeTabID, "DOM.resolveNode", {
       backendNodeId,
@@ -904,21 +873,26 @@ async function scroll(tab, deltaY, markDispatched) {
   const { layoutViewport } = await command(tab.chromeTabID, "Page.getLayoutMetrics")
   const x = (layoutViewport?.clientWidth ?? 0) / 2
   const y = (layoutViewport?.clientHeight ?? 0) / 2
-  await moveCursor(tab, x, y)
+  await moveCursor(tab, x, y, LABELS.scroll)
   const hidden = await pageHidden(tab)
   markDispatched()
   if (hidden) {
-    await command(tab.chromeTabID, "Runtime.evaluate", {
-      expression: `scrollBy(0, ${Number(deltaY)})`,
-      contextId: await isolatedWorld(tab),
-    })
+    await pageEvaluate(tab, `scrollBy(0, ${Number(deltaY)})`)
     return "scripted"
   }
   await inputCommand(tab, { type: "mouseWheel", x, y, deltaX: 0, deltaY })
   return "trusted"
 }
 
-async function isolatedWorld(tab) {
+function isolatedWorld(tab) {
+  tab.world ??= createWorld(tab).catch((error) => {
+    tab.world = undefined
+    throw error
+  })
+  return tab.world
+}
+
+async function createWorld(tab) {
   const { frameTree } = await command(tab.chromeTabID, "Page.getFrameTree")
   const { executionContextId } = await command(tab.chromeTabID, "Page.createIsolatedWorld", {
     frameId: frameTree.frame.id,
@@ -927,15 +901,36 @@ async function isolatedWorld(tab) {
   return executionContextId
 }
 
+async function pageEvaluate(tab, expression, extra = {}) {
+  const run = async () =>
+    command(tab.chromeTabID, "Runtime.evaluate", {
+      expression,
+      contextId: await isolatedWorld(tab),
+      returnByValue: true,
+      ...extra,
+    })
+  return run().catch((error) => {
+    tab.world = undefined
+    if (!/Cannot find context/i.test(error instanceof Error ? error.message : String(error))) throw error
+    return run()
+  })
+}
+
+function bounded(promise, milliseconds, message) {
+  let timeout
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timeout = setTimeout(() => reject(new Error(message)), milliseconds)
+    }),
+  ]).finally(() => clearTimeout(timeout))
+}
+
 async function pageHidden(tab) {
   let timeout
   const hidden = await Promise.race([
     (async () => {
-      const { result } = await command(tab.chromeTabID, "Runtime.evaluate", {
-        expression: "document.visibilityState",
-        contextId: await isolatedWorld(tab),
-        returnByValue: true,
-      })
+      const { result } = await pageEvaluate(tab, "document.visibilityState")
       return result?.value === "hidden"
     })().catch(() => false),
     new Promise((resolve) => {
@@ -975,46 +970,110 @@ async function typeText(tab, ref, text, markDispatched) {
     tab,
     (quad[0] + quad[2] + quad[4] + quad[6]) / 4,
     (quad[1] + quad[3] + quad[5] + quad[7]) / 4,
+    LABELS.type,
   )
   markDispatched()
   await command(tab.chromeTabID, "DOM.focus", { backendNodeId })
   await command(tab.chromeTabID, "Input.insertText", { text })
 }
 
-async function moveCursor(tab, x, y, click = false) {
-  let timeout
-  await Promise.race([
-    (async () => {
-      try {
-        await command(tab.chromeTabID, "Runtime.evaluate", {
-          expression: `(${CURSOR_SCRIPT})(${JSON.stringify({ x, y, click })})`,
-          contextId: await isolatedWorld(tab),
-          awaitPromise: true,
-          returnByValue: true,
-        })
-      } catch {}
-    })(),
-    new Promise((resolve) => {
-      timeout = setTimeout(resolve, CURSOR_COMMAND_TIMEOUT_MS)
-    }),
-  ])
-  clearTimeout(timeout)
+async function moveCursor(tab, x, y, label, click = false) {
+  await bounded(mark(tab, { x, y, label, click }), CURSOR_COMMAND_TIMEOUT_MS, "Cursor placement timed out").catch(() => {})
 }
 
-async function removeCursor(tab) {
-  if (!tab?.attached) return
+function serialize(tab, work) {
+  const run = (tab.markerWork ?? Promise.resolve()).then(work)
+  tab.markerWork = run.catch(() => {})
+  return run
+}
+
+async function mark(tab, cursor) {
+  const epoch = tab.controlEpoch
+  const controlled = () => tab.controlEpoch === epoch && tab.attached && tabs.get(tab.id) === tab
+  const ok = await serialize(tab, async () => {
+    if (!controlled()) return false
+    const applied = await bounded(
+      pageEvaluate(tab, markerScript("mark", cursor), { awaitPromise: true }),
+      timing.mark,
+      "Control marker timed out",
+    ).then(
+      ({ result }) => result?.value?.ok === true,
+      () => false,
+    )
+    return applied && controlled()
+  })
+  if (ok) tab.marked = true
+  syncRefreshTimer()
+  return ok
+}
+
+async function clearMarker(tab) {
+  tab.controlEpoch = (tab.controlEpoch ?? 0) + 1
+  tab.marked = false
+  syncRefreshTimer()
+  if (!tab.attached) return
+  await bounded(
+    serialize(tab, () => pageEvaluate(tab, markerScript("clear"))),
+    timing.clear,
+    "Control marker cleanup timed out",
+  ).catch(() => {})
+  tab.world = undefined
+}
+
+async function ensureControlled(tab) {
+  const info = await chrome.tabs.get(tab.chromeTabID)
+  if (info.pinned) throw new Error("Pinned tabs cannot show the YCoding control marker; unpin the tab first")
+  await attachProfile(tab)
+  if (!(await mark(tab))) throw new Error(MARKER_FAILED)
+}
+
+async function controlTabs(list) {
+  const fresh = list.filter((tab) => tab.profile && !tab.attached)
   try {
-    const { frameTree } = await command(tab.chromeTabID, "Page.getFrameTree")
-    const { executionContextId } = await command(tab.chromeTabID, "Page.createIsolatedWorld", {
-      frameId: frameTree.frame.id,
-      worldName: CURSOR_WORLD,
-    })
-    await command(tab.chromeTabID, "Runtime.evaluate", {
-      expression: `(${CURSOR_SCRIPT})({remove:true})`,
-      contextId: executionContextId,
-      returnByValue: true,
-    })
-  } catch {}
+    for (const tab of list) await ensureControlled(tab)
+  } catch (error) {
+    await Promise.all(fresh.filter((tab) => tabs.get(tab.id) === tab).map(releaseControl))
+    throw error
+  }
+}
+
+async function releaseControl(tab) {
+  await clearMarker(tab)
+  tab.attached = false
+  await chrome.debugger.detach({ tabId: tab.chromeTabID }).catch(() => {})
+  clearBadge(tab.chromeTabID)
+  tab.revision = 0
+  tab.refs.clear()
+}
+
+async function relinquish(message) {
+  try {
+    requireConnection()
+    if (message.generation !== generation) throw new Error("Stale bridge generation")
+    const tab = tabs.get(message.tabID)
+    if (tab && !tab.profile) throw new Error("Only paired profile tab control can be released")
+    if (tab) await releaseControl(tab)
+    send({ type: "relinquished", callID: message.callID, tabID: message.tabID, generation })
+  } catch (error) {
+    fail(message, safeError(error))
+  }
+}
+
+function syncRefreshTimer() {
+  const needed = [...tabs.values()].some((tab) => tab.marked)
+  if (needed && !refreshTimer) refreshTimer = setInterval(refreshMarkers, timing.refresh)
+  if (!needed && refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = undefined
+  }
+}
+
+function refreshMarkers() {
+  return Promise.all([...tabs.values()].filter((tab) => tab.marked && tab.attached).map((tab) => mark(tab)))
+}
+
+function stripMarker(title) {
+  return title.startsWith(MARKER_TEXT) ? title.slice(MARKER_TEXT.length).replace(/^ /, "") : title
 }
 
 async function capture(tab) {
@@ -1105,10 +1164,11 @@ async function isActive(tab) {
 
 async function tabInfo(tab) {
   const info = await chrome.tabs.get(tab.chromeTabID)
-  if (!tab.owned) return info
+  if (!tab.owned) return tab.marked ? { ...info, title: stripMarker(info.title ?? "") } : info
   const history = await command(tab.chromeTabID, "Page.getNavigationHistory")
   const entry = history.entries[history.currentIndex] ?? history.entries.at(-1)
-  return { active: info.active, title: entry?.title ?? "", url: entry?.url }
+  const title = entry?.title ?? ""
+  return { active: info.active, title: tab.marked ? stripMarker(title) : title, url: entry?.url }
 }
 
 async function removeInactive(chromeTabID) {
@@ -1178,8 +1238,10 @@ async function stop(disconnected) {
   const attached = [...tabs.values()]
   tabs.clear()
   chromeTabs.clear()
+  syncRefreshTimer()
   for (const tab of attached) {
     clearBadge(tab.chromeTabID)
+    await clearMarker(tab)
     if (!tab.profile || tab.attached) await chrome.debugger.detach({ tabId: tab.chromeTabID }).catch(() => {})
     if (tab.owned) await removeInactive(tab.chromeTabID)
   }
@@ -1310,7 +1372,7 @@ function safeError(error) {
 function updateBadge(tab) {
   if (tab.profile && !tab.attached) return
   void chrome.action.setBadgeText({ tabId: tab.chromeTabID, text: "ON" }).catch(() => {})
-  void chrome.action.setBadgeBackgroundColor({ tabId: tab.chromeTabID, color: "#28753e" }).catch(() => {})
+  void chrome.action.setBadgeBackgroundColor({ tabId: tab.chromeTabID, color: tokens.colors["badge-on"] }).catch(() => {})
 }
 
 function clearBadge(chromeTabID) {

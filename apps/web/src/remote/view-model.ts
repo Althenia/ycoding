@@ -195,8 +195,11 @@ export type SessionChip = {
   readonly tone: "neutral" | "attention" | "success"
 }
 
-export function capturedChangesVisible(status: SessionView["status"] | undefined): boolean {
-  return status !== undefined && status !== "running"
+export function capturedChangesVisible(status: SessionView["status"] | undefined, messages: readonly { readonly id: string; readonly kind: string }[], placementMessageID: string): boolean {
+  if (status === undefined) return false
+  if (status !== "running") return true
+  const placement = messages.findIndex((message) => message.id === placementMessageID)
+  return placement >= 0 && messages.slice(placement + 1).some((message) => message.kind === "user")
 }
 
 export function sessionProjectLabel(session: { readonly projectID?: string; readonly directory?: string }): string {

@@ -330,11 +330,10 @@ function ReasoningPart(props: { readonly text: () => string; readonly parts: () 
 export function MessageRow(props: { readonly message: () => RemoteMessageView }): JSX.Element {
   const kind = () => props.message().kind
   const remote = useRemote()
-  const fileChanges = () => remote.state().view?.capturedChanges?.data ?? []
   const selectedView = () => remote.state().view
-  const showFileChanges = () => remote.state().activeSessionID === selectedView()?.id && capturedChangesVisible(selectedView()?.status) &&
-    selectedView()?.capturedChanges?.placementMessageID === props.message().id && fileChanges().length > 0 &&
-    (remote.state().view?.capturedChanges?.mode === "transcript" && kind() === "assistant" || remote.state().view?.capturedChanges?.mode === "recovery" && kind() === "compaction")
+  const fileChanges = () => selectedView()?.capturedChanges?.filter((group) => group.placementMessageID === props.message().id) ?? []
+  const showFileChanges = () => remote.state().activeSessionID === selectedView()?.id && fileChanges().length > 0 &&
+    capturedChangesVisible(selectedView()?.status, selectedView()?.messages ?? [], props.message().id)
   const catalog = () => remote.state().catalogs[catalogKey({ sessionID: remote.state().activeSessionID ?? "" })]
   const models = () => catalog()?.models ?? []
   const agent = () => {
@@ -412,7 +411,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
         <Show when={kind() === "compaction"}>
           <CompactionDivider message={props.message} />
         </Show>
-        <Show when={(kind() === "assistant" || kind() === "compaction") && showFileChanges()}>
+        <Show when={kind() === "assistant" && showFileChanges()}>
           <FileChangeCard files={fileChanges} />
         </Show>
       </article>

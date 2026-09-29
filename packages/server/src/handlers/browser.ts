@@ -68,6 +68,14 @@ export const BrowserHandler = HttpApiBuilder.group(Api, "server.browser", (handl
         }),
       )
       .handle(
+        "browser.release",
+        Effect.fn(function* (ctx) {
+          const browser = yield* Browser.Service
+          yield* browser.release({ sessionID: ctx.params.sessionID, ...ctx.payload }).pipe(Effect.mapError(mapOperation))
+          return HttpApiSchema.NoContent.make()
+        }),
+      )
+      .handle(
         "browser.start",
         Effect.fn(function* (ctx) {
           const browser = yield* Browser.Service

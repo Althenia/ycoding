@@ -65,6 +65,7 @@ export const Tab = Schema.Struct({
   pauseReason: PauseReason.pipe(optional),
   uncertainCallID: CallID.pipe(optional),
   mode: Schema.Literals(["owned", "profile"]).pipe(optional),
+  lease: Schema.Literals(["self", "other"]).pipe(optional),
 }).annotate({ identifier: "Browser.Tab" })
 export interface Tab extends Schema.Schema.Type<typeof Tab> {}
 
@@ -169,6 +170,14 @@ export const CloseInput = Schema.Struct({
   callID: CallID,
 }).annotate({ identifier: "Browser.CloseInput" })
 export interface CloseInput extends Schema.Schema.Type<typeof CloseInput> {}
+
+export const ReleaseInput = Schema.Struct({
+  sessionID: SessionID,
+  tabID: TabID,
+  generation: Generation,
+  callID: CallID,
+}).annotate({ identifier: "Browser.ReleaseInput" })
+export interface ReleaseInput extends Schema.Schema.Type<typeof ReleaseInput> {}
 
 const CaptureData = Schema.String.check(
   Schema.isMaxLength(Math.ceil((MAX_CAPTURE_BYTES * 4) / 3) + 8),

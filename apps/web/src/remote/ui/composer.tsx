@@ -6,7 +6,7 @@ import { useRemote } from "../context"
 import { defaultComposerModel, readPreferredModel, writePreferredModel } from "../preferences"
 import { contextWindowDisplay, generationSpeedDisplay } from "../projection"
 import type { ModelRefView } from "../projection"
-import { applyMention, optionsForTrigger, pairedFastModel, reconcileMentions, submission, triggerAt, type MentionPart } from "./composer-logic"
+import { applyMention, autocompleteBound, optionsForTrigger, pairedFastModel, reconcileMentions, submission, suggestionTrigger, tokenKey, triggerAt, type MentionPart } from "./composer-logic"
 import { ComposerPicker } from "./composer-picker"
 import { attachmentLimit, encodeAttachment, type ComposerAttachment } from "./composer-attachment"
 import { ModelControl } from "./model-control"
@@ -41,12 +41,14 @@ export function MiniComposer(props: {
   const [fileResult, setFileResult] = createSignal<readonly FileOption[]>([])
   const [fileError, setFileError] = createSignal<string>()
   const [active, setActive] = createSignal(0)
-  const [closed, setClosed] = createSignal(false)
+  const [dismissed, setDismissed] = createSignal<string>()
+  const [bound, setBound] = createSignal<number>()
   const [mobileOpen, setMobileOpen] = createSignal(false)
   const [contextOpen, setContextOpen] = createSignal(false)
   const [contextPinned, setContextPinned] = createSignal(false)
   const [contextLeaving, setContextLeaving] = createSignal(false)
   let input: HTMLTextAreaElement | undefined
+  let inputWrap: HTMLDivElement | undefined
   let fileInput: HTMLInputElement | undefined
   let mobileTrigger: HTMLButtonElement | undefined
   let mobileSheet: HTMLElement | undefined
@@ -98,8 +100,35 @@ export function MiniComposer(props: {
     cancelContextClose()
     contextCloseTimer = setTimeout(() => { if (!contextPinned()) closeContext() }, 100)
   }
-  const trigger = createMemo(() => closed() ? undefined : triggerAt(props.text, cursor()))
+  const trigger = createMemo(() => suggestionTrigger(props.text, cursor(), dismissed()))
   const options = () => trigger() ? optionsForTrigger(trigger()!.trigger, trigger()!.query, catalog(), fileResult(), !!props.target && "sessionID" in props.target) : []
+  const suggesting = () => options().length > 0 || fileError() !== undefined
+  const dismissSuggestions = (returnFocus = true) => {
+    const match = trigger()
+    if (!match) return
+    setDismissed(tokenKey(match))
+    if (returnFocus) queueMicrotask(() => input?.focus())
+  }
+  const measureBound = () => {
+    if (!inputWrap) return
+    const viewport = window.visualViewport
+    const region = inputWrap.closest<HTMLElement>(".workspace__scroll") ?? inputWrap.closest(".workspace__main")?.querySelector<HTMLElement>(":scope > .workspace__scroll")
+    const top = Math.max(viewport?.offsetTop ?? 0, region?.getBoundingClientRect().top ?? 0)
+    setBound(autocompleteBound(inputWrap.getBoundingClientRect().top - top, viewport?.height ?? window.innerHeight))
+  }
+  createEffect(() => {
+    if (!suggesting()) return
+    measureBound()
+    const viewport = window.visualViewport
+    viewport?.addEventListener("resize", measureBound)
+    viewport?.addEventListener("scroll", measureBound)
+    window.addEventListener("resize", measureBound)
+    onCleanup(() => {
+      viewport?.removeEventListener("resize", measureBound)
+      viewport?.removeEventListener("scroll", measureBound)
+      window.removeEventListener("resize", measureBound)
+    })
+  })
   createEffect(() => {
     const key = targetKey()
     attachmentGeneration++
@@ -123,7 +152,9 @@ export function MiniComposer(props: {
   })
   onMount(() => {
     const outside = (event: PointerEvent) => {
-      if (contextOpen() && event.target instanceof Node && !contextTrigger?.parentElement?.contains(event.target)) closeContext()
+      if (!(event.target instanceof Node)) return
+      if (contextOpen() && !contextTrigger?.parentElement?.contains(event.target)) closeContext()
+      if (suggesting() && !inputWrap?.contains(event.target)) dismissSuggestions(false)
     }
     document.addEventListener("pointerdown", outside)
     onCleanup(() => { document.removeEventListener("pointerdown", outside); cancelContextClose() })
@@ -156,7 +187,8 @@ export function MiniComposer(props: {
     props.onText(text)
     setAttachmentError(undefined)
     setCursor(position)
-    setClosed(false)
+    const next = triggerAt(text, position)
+    if (!next || tokenKey(next) !== dismissed()) setDismissed(undefined)
   }
   const select = (index: number) => {
     const option = options()[index]
@@ -165,7 +197,6 @@ export function MiniComposer(props: {
     const result = applyMention(props.text, match.start, cursor(), option, parts())
     props.onText(result.text)
     setParts(result.parts)
-    setClosed(true)
     setCursor(result.cursor)
     queueMicrotask(() => { input?.focus(); input?.setSelectionRange(result.cursor, result.cursor) })
   }
@@ -219,7 +250,6 @@ export function MiniComposer(props: {
       setParts([])
       setAttachments([])
       setAttachmentError(undefined)
-      setClosed(true)
     } catch (cause) {
       if (generation === attachmentGeneration) setAttachmentError(cause instanceof Error ? cause.message : "The attachment could not be sent.")
     } finally { setSending(false) }
@@ -237,9 +267,9 @@ export function MiniComposer(props: {
       select(active())
       return
     }
-    if (event.key === "Escape" && options().length) {
+    if (event.key === "Escape" && suggesting()) {
       event.preventDefault()
-      setClosed(true)
+      dismissSuggestions()
       return
     }
     if (event.key === "Enter" && !event.shiftKey) {
@@ -267,18 +297,21 @@ export function MiniComposer(props: {
     </Portal></Show>
     <div class="composer">
     <div class="composer__row" classList={{ "composer__row--dragging": dragging() }} onDragOver={(event) => { if (event.dataTransfer?.types.includes("Files")) { event.preventDefault(); setDragging(true) } }} onDragLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDragging(false) }} onDrop={(event) => { setDragging(false); if (!event.dataTransfer?.files.length) return; event.preventDefault(); void addFiles(Array.from(event.dataTransfer.files)) }}>
-      <div class="mini-composer__input-wrap">
+      <div ref={inputWrap} class="mini-composer__input-wrap">
         <textarea ref={input} class="composer__input" rows={1} aria-label="Message your agent" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded={options().length > 0} aria-controls="composer-autocomplete" aria-activedescendant={options().length ? `composer-option-${active()}` : undefined}
           placeholder="Ask anything…" disabled={props.disabled || sending()} value={props.text}
           onInput={(event) => edit(event.currentTarget.value, event.currentTarget.selectionStart)}
           onPaste={(event) => { const files = Array.from(event.clipboardData?.files ?? []); if (!files.length) return; event.preventDefault(); void addFiles(files) }}
-          onClick={(event) => { setCursor(event.currentTarget.selectionStart); setClosed(false) }}
+          onClick={(event) => setCursor(event.currentTarget.selectionStart)}
           onKeyUp={(event) => { if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) setCursor(event.currentTarget.selectionStart) }} onKeyDown={keyDown} />
-        <Show when={options().length || fileError()}><div class="mini-composer__autocomplete" id="composer-autocomplete" role="listbox" aria-label="Suggestions" style={{ "--composer-name-width": `${Math.min(20, Math.max(9, ...options().map((item) => item.label.length)))}ch` }}>
-          <For each={options()}>{(option, index) => <button id={`composer-option-${index()}`} type="button" role="option" aria-selected={index() === active()} classList={{ "mini-composer__option--active": index() === active() }} onPointerDown={(event) => event.preventDefault()} onClick={() => select(index())}>
-            <span>{option.label}</span><small title={option.description}>{option.description}</small>
-          </button>}</For>
-          <Show when={fileError()}><p role="status">{fileError()}</p></Show>
+        <Show when={suggesting()}><div class="mini-composer__suggestions" style={{ "--composer-suggest-max": bound() === undefined ? undefined : `${bound()}px` }}>
+          <div class="mini-composer__suggestions-head"><strong>Suggestions</strong><button type="button" aria-label="Close suggestions" onPointerDown={(event) => event.preventDefault()} onClick={() => dismissSuggestions()}><Icon name="close" size={16} />Close</button></div>
+          <div class="mini-composer__autocomplete" id="composer-autocomplete" role="listbox" aria-label="Suggestions" style={{ "--composer-name-width": `${Math.min(20, Math.max(9, ...options().map((item) => item.label.length)))}ch` }}>
+            <For each={options()}>{(option, index) => <button id={`composer-option-${index()}`} type="button" role="option" aria-selected={index() === active()} classList={{ "mini-composer__option--active": index() === active() }} onPointerDown={(event) => event.preventDefault()} onClick={() => select(index())}>
+              <span>{option.label}</span><small title={option.description}>{option.description}</small>
+            </button>}</For>
+          </div>
+          <Show when={fileError()}><p class="mini-composer__suggestions-status" role="status">{fileError()}</p></Show>
         </div></Show>
       </div>
       <Show when={attachments().length}><div class="composer__attachments" aria-label="Attachments"><For each={attachments()}>{(item) => <div class="composer__attachment"><Show when={item.mime.startsWith("image/")}><img src={item.uri} alt="" /></Show><span class="composer__attachment-name" title={item.name}>{item.name}</span><span class="composer__attachment-size">{item.size < 1024 ? `${item.size} B` : `${(item.size / 1024).toFixed(1)} KiB`}</span><button type="button" aria-label={`Remove ${item.name}`} onClick={() => { setAttachments((items) => items.filter((entry) => entry.id !== item.id)); setAttachmentError(undefined) }}><Icon name="close" /></button></div>}</For></div></Show>

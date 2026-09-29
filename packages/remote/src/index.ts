@@ -140,9 +140,8 @@ export const remoteSessionOperations = [
 export type RemoteOperation = (typeof remoteOperations)[number]
 
 export type RemoteCapturedChangesPage = {
-  readonly mode: "none" | "transcript" | "recovery"
-  readonly placementMessageID?: string
   readonly data: readonly {
+    readonly placementMessageID: string
     readonly path: string
     readonly additions: number
     readonly deletions: number

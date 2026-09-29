@@ -42,7 +42,8 @@ import type {
   SessionInfo,
   SessionAutonomyState,
 } from "@ycoding-ai/client"
-import { capturedPatch, groupCapturedPatches, summarizeCapturedChanges } from "@ycoding-ai/client/file-change-summary"
+import { capturedChildSessionIDs, capturedPartPatches, capturedPatch, groupCapturedPatches, summarizeCapturedChanges } from "@ycoding-ai/client/file-change-summary"
+import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
 import { useLocal } from "../../context/local"
 import { Locale } from "../../util/locale"
 import { contextCompositionBar } from "../../util/provider-usage"
@@ -115,6 +116,7 @@ import {
   messageBoundaryIDs,
   resolveMessageJump,
   resolvePart,
+  sessionRowMessageID,
   type PartRef,
   type SessionRow,
 } from "./rows"
@@ -223,9 +225,27 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const messages = () => data.session.message.list(route.sessionID)
   const [capturedChildIDs, setCapturedChildIDs] = createSignal<string[]>([])
   let capturedChangesGeneration = 0
-  const capturedSummary = createMemo(() => summarizeCapturedChanges(messages(), capturedChildIDs().map((sessionID) => data.session.message.list(sessionID)), data.session.fileChange.list(route.sessionID)))
-  const capturedChanges = createMemo(() => capturedSummary().mode === "transcript" ? capturedSummary().files.flatMap((file) => file.files) : [])
-  const durableCapturedChanges = createMemo(() => capturedSummary().mode === "recovery" ? capturedSummary().files.flatMap((file) => file.files) : [])
+  const dispatchedChildKey = createMemo(() => (session()?.parentID ? "" : capturedChildSessionIDs(messages()).join(",")))
+  const capturedUnits = createMemo(() =>
+    summarizeCapturedChanges(
+      messages(),
+      new Map(capturedChildIDs().map((sessionID) => [sessionID, data.session.message.list(sessionID)])),
+      (assistantMessageID, callID) => SessionOrchestrationIdentity.send(route.sessionID, assistantMessageID, callID),
+    ),
+  )
+  const capturedAnchors = createMemo(() => {
+    const anchors = new Map<SessionRow, InlineDiffFile[]>()
+    capturedUnits().forEach((unit) => {
+      if (!data.session.message.get(route.sessionID, unit.placementMessageID)) return
+      const anchor = rows.findLast(
+        (row) =>
+          (row.type === "part" || row.type === "group" || row.type === "assistant-footer") &&
+          unit.assistantMessageIDs.includes(sessionRowMessageID(row) ?? ""),
+      )
+      if (anchor) anchors.set(anchor, unit.files.flatMap((file) => file.files))
+    })
+    return anchors
+  })
   const location = createMemo(() => session()?.location)
   const currentLocation = useLocation()
 
@@ -607,32 +627,20 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const rows = createSessionRows(() => route.sessionID)
   createEffect(
     on(
-      [() => route.sessionID, () => session()?.parentID, () => client.connection.status()],
-      ([sessionID, parentID, status]) => {
+      [() => route.sessionID, () => session()?.parentID, () => client.connection.status(), dispatchedChildKey],
+      ([sessionID, parentID, status, dispatched]) => {
         const generation = ++capturedChangesGeneration
-        if (parentID || status !== "connected") {
+        if (parentID || status !== "connected" || dispatched === "") {
           setCapturedChildIDs([])
           return
         }
         void (async () => {
           await data.session.subagent.sync(sessionID)
-          const children = await data.session.subagent.completed(sessionID)
-          await Promise.all(children.map((child) => data.session.message.sync(child.sessionID)))
-          if (generation === capturedChangesGeneration) setCapturedChildIDs(children.map((child) => child.sessionID))
+          const family = new Set((await data.session.subagent.children(sessionID)).map((child) => child.sessionID))
+          const children = dispatched.split(",").filter((childID) => family.has(childID))
+          await Promise.all(children.map((childID) => data.session.message.sync(childID)))
+          if (generation === capturedChangesGeneration) setCapturedChildIDs(children)
         })().catch(() => undefined)
-      },
-    ),
-  )
-  createEffect(
-    on(
-      [
-        () => route.sessionID,
-        () => messages().some((message) => message.type === "compaction" && message.status === "completed"),
-        () => messages().some((message) => message.type === "assistant" && message.time.completed),
-      ],
-      ([sessionID, compacted, completedAssistant]) => {
-        if (!compacted || completedAssistant) return
-        void data.session.fileChange.sync(sessionID).catch(() => undefined)
       },
     ),
   )
@@ -1536,32 +1544,28 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                 </Show>
                 <For each={mountedRows()}>
                   {(row, index) => (
-                    <SessionRowView
-                      row={row}
-                      message={(messageID) => data.session.message.get(route.sessionID, messageID)}
-                      compaction={(jobID) => data.session.compaction.get(route.sessionID, jobID)}
-                      compactions={() => data.session.compaction.list(route.sessionID)}
-                      assistantIdentity={assistantIdentity()}
-                      boundaryID={mountedBoundaries()[index()]}
-                      width={contentWidth()}
-                      hidden={!!blockedQuestion()}
-                      running={data.session.status(route.sessionID) === "running"}
-                      guardrail={(requestID) => setGuardrailReview(requestID)}
-                      subagent={(sessionID) => navigate({ type: "session", sessionID })}
-                      capturedChanges={
-                        row.type === "assistant-footer" &&
-                        row.messageID ===
-                          messages().findLast((message) => message.type === "assistant" && message.time.completed)?.id
-                          ? capturedChanges()
-                          : undefined
-                      }
-                      durableCapturedChanges={
-                        row.type === "compaction" ||
-                        (row.type === "message" && data.session.message.get(route.sessionID, row.messageID)?.type === "compaction")
-                          ? durableCapturedChanges()
-                          : undefined
-                      }
-                    />
+                    <>
+                      <SessionRowView
+                        row={row}
+                        message={(messageID) => data.session.message.get(route.sessionID, messageID)}
+                        compaction={(jobID) => data.session.compaction.get(route.sessionID, jobID)}
+                        compactions={() => data.session.compaction.list(route.sessionID)}
+                        assistantIdentity={assistantIdentity()}
+                        boundaryID={mountedBoundaries()[index()]}
+                        width={contentWidth()}
+                        hidden={!!blockedQuestion()}
+                        running={data.session.status(route.sessionID) === "running"}
+                        guardrail={(requestID) => setGuardrailReview(requestID)}
+                        subagent={(sessionID) => navigate({ type: "session", sessionID })}
+                      />
+                      <Show when={capturedAnchors().get(row)}>
+                        {(files) => (
+                          <box width="100%" marginTop={1} flexShrink={0} visible={!blockedQuestion()}>
+                            <FileChangeBlock files={files()} label="Captured changes" collapsed />
+                          </box>
+                        )}
+                      </Show>
+                    </>
                   )}
                 </For>
                 <BackgroundToolHint messages={messages()} />
@@ -1776,8 +1780,6 @@ export function SessionRowView(props: {
   running?: boolean
   guardrail?: (requestID: string) => void
   subagent?: (sessionID: string) => void
-  capturedChanges?: InlineDiffFile[]
-  durableCapturedChanges?: InlineDiffFile[]
 }) {
   // Rows can outlive a session eviction for one reactive frame. Resolve every message-backed row
   // before mounting its component so stale refs consume no space.
@@ -1821,28 +1823,14 @@ export function SessionRowView(props: {
           <Match when={props.row.type === "message" ? props.row : undefined}>
             {(row) => (
               <Show when={props.message(row().messageID)}>
-                {(message) => (
-                  <>
-                    <SessionMessageView message={message()} />
-                    <Show when={message().type === "compaction" && props.durableCapturedChanges?.length}>
-                      <FileChangeBlock files={props.durableCapturedChanges!} label="Captured changes" collapsed />
-                    </Show>
-                  </>
-                )}
+                {(message) => <SessionMessageView message={message()} />}
               </Show>
             )}
           </Match>
           <Match when={props.row.type === "compaction" ? props.row : undefined}>
             {(row) => (
               <Show when={props.compaction?.(row().jobID)}>
-                {(item) => (
-                  <>
-                    <CompactionLifecycleMessage lifecycle={item()} compactions={props.compactions?.()} />
-                    <Show when={props.durableCapturedChanges?.length}>
-                      <FileChangeBlock files={props.durableCapturedChanges!} label="Captured changes" collapsed />
-                    </Show>
-                  </>
-                )}
+                {(item) => <CompactionLifecycleMessage lifecycle={item()} compactions={props.compactions?.()} />}
               </Show>
             )}
           </Match>
@@ -1898,9 +1886,6 @@ export function SessionRowView(props: {
                 {(message) => (
                   <Show when={message().type === "assistant"}>
                     <AssistantFooter message={message() as SessionMessageAssistant} />
-                    <Show when={props.capturedChanges?.length}>
-                      <FileChangeBlock files={props.capturedChanges!} label="Captured changes" collapsed />
-                    </Show>
                   </Show>
                 )}
               </Show>
@@ -3082,6 +3067,7 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean }
         }),
   )
   const diffPresentation = createMemo(() => {
+    if (props.part.state.status !== "completed") return undefined
     const item = presentation()
     if (item?.type === "diff") return { files: [item] }
     if (item?.type === "diffs") return item
@@ -4583,7 +4569,7 @@ function recordValue(value: unknown): Record<string, unknown> | undefined {
 }
 
 function transcriptToolPartVisible(part: SessionMessageAssistantTool) {
-  if (part.name === "goal") return false
+  if (part.name === "goal" || capturedPartPatches(part).length > 0) return false
   return (
     part.name !== "skill" ||
     part.state.status !== "completed" ||

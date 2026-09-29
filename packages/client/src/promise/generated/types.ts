@@ -2164,6 +2164,7 @@ export type BrowserTab = {
   pauseReason?: "user_active" | "requested" | "uncertain" | "disconnected"
   uncertainCallID?: string
   mode?: "owned" | "profile"
+  lease?: "self" | "other"
 }
 
 export type BrowserElement = {
@@ -7680,6 +7681,15 @@ export type BrowserCloseInput = {
 }
 
 export type BrowserCloseOutput = void
+
+export type BrowserReleaseInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly tabID: { readonly tabID: string; readonly generation: number; readonly callID: string }["tabID"]
+  readonly generation: { readonly tabID: string; readonly generation: number; readonly callID: string }["generation"]
+  readonly callID: { readonly tabID: string; readonly generation: number; readonly callID: string }["callID"]
+}
+
+export type BrowserReleaseOutput = void
 
 export type BrowserActionInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]

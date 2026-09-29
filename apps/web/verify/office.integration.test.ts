@@ -104,7 +104,7 @@ describe("remote Office presentation", () => {
     const page = await openRemote("view=chat")
     try {
       expect(await until(page, `document.querySelector('.conversation-breadcrumb strong') !== null && document.querySelector('.composer textarea') !== null`)).toBe(true)
-      expect(await page.evaluate<boolean>(`(() => { const bar = document.querySelector('.workspace__topbar'); return bar?.parentElement === document.querySelector('.workspace__main') && Boolean(bar?.querySelector('.presentation-switch') && bar?.querySelector('[aria-label="Open Team"]')) && !document.querySelector('.workspace__scroll')?.contains(bar) })()`)).toBe(true)
+      expect(await page.evaluate<boolean>(`(() => { const bar = document.querySelector('.workspace__topbar'); return bar?.parentElement === document.querySelector('.workspace__main') && Boolean(bar?.querySelector('.presentation-switch')) && bar?.querySelector('[aria-label="Open Team"]') === null && document.querySelector('.app-header [aria-label="Open Team"]') !== null && !document.querySelector('.workspace__scroll')?.contains(bar) })()`)).toBe(true)
       await page.evaluate(`(() => {
         window.officeErrors = []
         addEventListener('error', (event) => window.officeErrors.push(String(event.message)))
@@ -132,7 +132,7 @@ describe("remote Office presentation", () => {
       expect(after.operations["session.prompt"] ?? 0).toBe(0)
       expect(await page.evaluate<string>(`document.querySelector('.composer textarea').value`)).toBe("Unsent office draft")
       expect(await page.evaluate<number>(`document.querySelectorAll('.composer').length`)).toBe(1)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.workspace__topbar .presentation-switch, .workspace__topbar [aria-label="Open Team"]').length`)).toBe(2)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.workspace__topbar .presentation-switch, .app-header [aria-label="Open Team"]').length`)).toBe(2)
       expect(await page.evaluate<string>(`document.querySelector('.conversation-breadcrumb strong').textContent`)).toBe(title)
       expect(await page.evaluate<readonly string[]>(`window.officeErrors`)).toEqual([])
     } finally {

@@ -206,6 +206,18 @@ const editTranscript = [
   },
 ] as SessionMessageInfo[]
 
+const editAssistant = editTranscript[1] as Extract<SessionMessageInfo, { type: "assistant" }>
+const editedTranscript = [
+  editTranscript[0],
+  {
+    ...editAssistant,
+    id: "msg_assistant_edited",
+    content: [editAssistant.content[1]],
+    finish: "stop",
+    time: { created: 2, completed: 3 },
+  },
+] as SessionMessageInfo[]
+
 const narrowTranscript = [
   { id: "msg_user_narrow", type: "user", text: "Run the long tool", time: { created: 1 } },
   {
@@ -630,16 +642,12 @@ function routeFor(
   autonomy: SessionAutonomyState = { mode: "normal", yolo: false },
   todos: SessionTodoInfo[] = [],
 ) {
-  const completedCompactionFileChanges = messages.some(
-    (message) => message.type === "compaction" && message.status === "completed",
-  )
   return (url: URL) => {
     if (url.pathname === "/api/fs/list") return json({ location, data: [] })
     if (url.pathname === "/api/location") return json(location)
     if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
     if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
     if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: messages, cursor: {} })
-    if (completedCompactionFileChanges && url.pathname === `/api/session/${sessionID}/file-change`) return json({ data: [] })
     if (url.pathname === `/api/session/${sessionID}/pending`) return json({ data: pending })
     if (url.pathname === `/api/session/${sessionID}/guardrail/request`) return json({ location, data: guardrails })
     if (url.pathname === `/api/session/${sessionID}/subagent`)
@@ -1231,37 +1239,59 @@ test("renders subagent notifications as compact safe activity rows", async () =>
   }
 }, 60_000)
 
-test("collapses file edit results before expanding the board diff grid", async () => {
+test("keeps a running patch row honest beside the segment summary of its completed edits", async () => {
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
     args: { sessionID },
     route: routeFor(editTranscript),
-    settle: "docs/runtime.md",
+    settle: "Applying the usage edit.",
   })
 
   try {
     const lines = screen.lines()
     const railStart = DESIGN_VIEWPORT.width - railWidth(DESIGN_VIEWPORT.width)
-    const rowOf = (text: string) => lines.findIndex((line) => line.includes(text) && line.indexOf(text) < railStart)
-    const header = lines[rowOf("Edited 2 files")] ?? ""
+    expect(screen.frame()).not.toContain("Edited 2 files")
+    expect(screen.frame()).toContain("Captured changes 2 files")
+    expect(screen.frame()).not.toContain("docs/runtime.md")
+    const running = lines.find((line) => line.indexOf("..") === 3 && line.indexOf("..") < railStart) ?? ""
+    expect(running.indexOf("..")).toBe(3)
+    expect(SPINNER_FRAMES.some((frame) => running.slice(0, 10).includes(frame))).toBe(true)
+    expect(transcriptSlice(running, DESIGN_VIEWPORT.width).trimEnd()).toMatch(/\d+[smhdw]$/)
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
 
-    expect(header.indexOf("Edited 2 files")).toBe(10)
-    const edited = lines[rowOf("docs/runtime.md")] ?? ""
+test("collapses the segment's edit summary before expanding the board diff grid", async () => {
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    route: routeFor(editedTranscript),
+    settle: "Captured changes 2 files",
+  })
+
+  try {
+    const railStart = DESIGN_VIEWPORT.width - railWidth(DESIGN_VIEWPORT.width)
+    const rowIn = (lines: string[], text: string) => lines.findIndex((line) => line.includes(text) && line.indexOf(text) < railStart)
+    const header = screen.lines()[rowIn(screen.lines(), "Captured changes 2 files")] ?? ""
+    expect(header.indexOf("Captured changes 2 files")).toBe(10)
+    expect(screen.frame()).not.toContain("docs/runtime.md")
+    await screen.mouse.click(12, rowIn(screen.lines(), "Captured changes 2 files"))
+    await waitForFrame(screen.frame, "docs/runtime.md")
+    const edited = screen.lines()[rowIn(screen.lines(), "docs/runtime.md")] ?? ""
     expect(edited.indexOf("docs/runtime.md")).toBe(12)
     expect(edited).toContain("+1")
     expect(edited).toContain("−1")
     expect(screen.frame()).not.toContain("Old cache note")
 
-    await screen.mouse.click(12, rowOf("docs/runtime.md"))
+    await screen.mouse.click(12, rowIn(screen.lines(), "docs/runtime.md"))
     await waitForFrame(() => {
       const scroll = screen.scrollbox()
       scroll?.scrollTo(scroll.scrollHeight)
       return screen.frame()
     }, "+ Current cache note")
     const expanded = screen.lines()
-    const expandedRowOf = (text: string) =>
-      expanded.findIndex((line) => line.includes(text) && line.indexOf(text) < railStart)
-    const split = transcriptSlice(expanded[expandedRowOf("- Old cache note")] ?? "", DESIGN_VIEWPORT.width)
+    const split = transcriptSlice(expanded[rowIn(expanded, "- Old cache note")] ?? "", DESIGN_VIEWPORT.width)
     const oldColumn = split.indexOf("- Old cache note")
     const newColumn = split.indexOf("+ Current cache note")
     expect(oldColumn).toBe(12)
@@ -1276,14 +1306,6 @@ test("collapses file edit results before expanding the board diff grid", async (
     expect(addedBackground).toBeDefined()
     expect(addedBackground).not.toEqual(removedBackground)
     expect(screen.frame()).not.toContain("const fresh = usage.cacheRead")
-
-    // The in-progress row is identified by its marker rather than a label, so the assertion holds
-    // whichever presentation the patch tool resolves to. The requirement is that a running row is
-    // obvious: the `..` marker at the grid's marker column plus an animated spinner beside it.
-    const running = lines.find((line) => line.indexOf("..") === 3 && line.indexOf("..") < railStart) ?? ""
-    expect(running.indexOf("..")).toBe(3)
-    expect(SPINNER_FRAMES.some((frame) => running.slice(0, 10).includes(frame))).toBe(true)
-    expect(transcriptSlice(running, DESIGN_VIEWPORT.width).trimEnd()).toMatch(/\d+[smhdw]$/)
   } finally {
     await screen.dispose()
   }
@@ -1294,16 +1316,17 @@ test("keeps the board diff grid in unified transcript view", async () => {
     ...DESIGN_VIEWPORT,
     config: { diffs: { view: "unified" } },
     args: { sessionID },
-    route: routeFor(editTranscript),
-    settle: "docs/runtime.md",
+    route: routeFor(editedTranscript),
+    settle: "Captured changes 2 files",
   })
   try {
     const railStart = DESIGN_VIEWPORT.width - railWidth(DESIGN_VIEWPORT.width)
-    const lines = screen.lines()
-    const rowOf = (text: string) => lines.findIndex((line) => line.includes(text) && line.indexOf(text) < railStart)
-    expect((lines[rowOf("Edited 2 files")] ?? "").indexOf("Edited 2 files")).toBe(10)
-    expect((lines[rowOf("docs/runtime.md")] ?? "").indexOf("docs/runtime.md")).toBe(12)
-    await screen.mouse.click(12, rowOf("docs/runtime.md"))
+    const rowIn = (lines: string[], text: string) => lines.findIndex((line) => line.includes(text) && line.indexOf(text) < railStart)
+    expect((screen.lines()[rowIn(screen.lines(), "Captured changes 2 files")] ?? "").indexOf("Captured changes 2 files")).toBe(10)
+    await screen.mouse.click(12, rowIn(screen.lines(), "Captured changes 2 files"))
+    await waitForFrame(screen.frame, "docs/runtime.md")
+    expect((screen.lines()[rowIn(screen.lines(), "docs/runtime.md")] ?? "").indexOf("docs/runtime.md")).toBe(12)
+    await screen.mouse.click(12, rowIn(screen.lines(), "docs/runtime.md"))
     await waitForFrame(() => {
       screen.scrollbox()?.scrollTo(screen.scrollbox()!.scrollHeight)
       return screen.frame()

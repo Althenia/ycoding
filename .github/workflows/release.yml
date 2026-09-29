@@ -123,6 +123,10 @@ jobs:
         working-directory: packages/cli
         run: bun test --timeout 30000
 
+      - name: Verify Chrome extension suites
+        if: matrix.suite == 'cli'
+        run: bun run test:extension
+
       - name: Verify transcript and approval suites
         if: matrix.suite == 'tui'
         working-directory: packages/tui
@@ -135,7 +139,7 @@ jobs:
 
       - name: Verify installer and web assets
         if: matrix.suite == 'web'
-        run: cd /tmp && bun test "$GITHUB_WORKSPACE/script/install.test.ts" "$GITHUB_WORKSPACE/script/build-web-assets.test.ts" "$GITHUB_WORKSPACE/script/release.test.ts"
+        run: cd /tmp && bun test "$GITHUB_WORKSPACE/script/install.test.ts" "$GITHUB_WORKSPACE/script/build-web-assets.test.ts" "$GITHUB_WORKSPACE/script/release.test.ts" "$GITHUB_WORKSPACE/script/chrome-for-testing.test.ts"
 
       - name: Verify approved browser host
         if: matrix.suite == 'browser'
@@ -144,6 +148,17 @@ jobs:
       - name: Verify isolated-browser integration suites
         if: matrix.suite == 'browser'
         run: bun run test:integration:browser
+
+      - name: Provision Chrome for Testing
+        if: matrix.suite == 'browser'
+        run: |
+          set -euo pipefail
+          executable="$(bun script/chrome-for-testing.ts "$RUNNER_TEMP/chrome-for-testing")"
+          echo "YCODING_TEST_ISOLATED_BROWSER_CHROME=$executable" >> "$GITHUB_ENV"
+
+      - name: Verify Chrome extension integration suite
+        if: matrix.suite == 'browser'
+        run: bun run test:integration:extension
 
   build:
     name: build ${{ matrix.target }}

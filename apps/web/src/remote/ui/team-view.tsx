@@ -2,14 +2,14 @@ import { For, Show, createEffect, createMemo, createSignal, type JSX } from "sol
 import { Modal } from "../../ui/modal"
 import { TeamAnswerForm } from "./subagent-bar"
 import { LoadingPlaceholder } from "./loading"
-import { canCancelSubagent, formatCacheHit, formatElapsed, isActiveSubagent, shellRows, taskRows, type TeamActionOutcome, type TeamPanelData, type TeamShellOutput } from "./team-model"
+import { canCancelSubagent, formatCacheHit, formatElapsed, teamActiveCount, shellRows, taskRows, type TeamActionOutcome, type TeamPanelData, type TeamShellOutput } from "./team-model"
 import "./team-view.css"
 
 type Tab = "subagents" | "shell" | "side-chats"
 const tabs: readonly Tab[] = ["subagents", "shell", "side-chats"]
 
 export function TeamHeading(props: { readonly data: () => TeamPanelData }): JSX.Element {
-  return <div class="team-view__heading"><h2>Team</h2><span>{props.data().activeTotal ?? props.data().tasks.filter((entry) => isActiveSubagent(entry.state)).length} active</span></div>
+  return <div class="team-view__heading"><h2>Team</h2><span>{teamActiveCount(props.data())} active</span></div>
 }
 
 export function TeamView(props: {

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { canCancelSubagent, formatCacheHit, formatElapsed, isManagedSubagent, shellRows, siblingTargets, taskRows, type TeamSubagent } from "./team-model"
+import { canCancelSubagent, teamActiveCount, formatCacheHit, formatElapsed, isManagedSubagent, shellRows, siblingTargets, taskRows, type TeamSubagent } from "./team-model"
 
 const task = (id: string, state: TeamSubagent["state"], updatedAt: number): TeamSubagent => ({
   sessionID: id, parentID: "ses_root", agent: "omoikane", description: `Review ${id}`, state, revision: 1,
@@ -44,4 +44,11 @@ test("shell groups keep owner and shell IDs stable across fresh rows", () => {
   ]
   expect(shellRows(shells)).toEqual(["owner:ses_root", "sh_1", "sh_3", "owner:ses_child", "sh_2"])
   expect(shellRows(shells.map((entry) => ({ ...entry })))).toEqual(shellRows(shells))
+})
+
+test("the Team count is the reported active total, else the active tasks in the loaded page", () => {
+  const tasks = [task("ses_a", "running", 3_000), task("ses_b", "completed", 2_000), task("ses_c", "waiting", 1_000)]
+  expect(teamActiveCount({ activeTotal: 7, tasks })).toBe(7)
+  expect(teamActiveCount({ tasks })).toBe(2)
+  expect(teamActiveCount({ tasks: [] })).toBe(0)
 })

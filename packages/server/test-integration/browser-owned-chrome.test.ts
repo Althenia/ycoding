@@ -9,6 +9,8 @@ import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { Readable, Writable } from "node:stream"
+import { timing } from "../../../extensions/chrome/indicator.js"
+import { copyChromeExtension } from "../../cli/script/chrome-extension"
 
 const chrome = process.env.YCODING_TEST_ISOLATED_BROWSER_CHROME
 const extension = resolve(import.meta.dir, "../../../extensions/chrome")
@@ -820,6 +822,431 @@ test("recovers a stopped Chrome worker without reopening its popup or repeating 
     }
   }
 }, 180_000)
+
+const markerOwner = "ses_marker_live_owner"
+const markerOther = "ses_marker_live_other"
+
+async function startMarkerBridge(extensionDirectory: string) {
+  if (!chrome) throw new Error("Set YCODING_TEST_ISOLATED_BROWSER_CHROME to an installed Chrome for Testing executable")
+  if (!(await Bun.file(chrome).exists())) throw new Error("Chrome for Testing executable is unavailable")
+  const directory = await mkdtemp(join(tmpdir(), "ycoding-marker-chrome-"))
+  const scope = await Effect.runPromise(Scope.make())
+  const button = "<button aria-label='Go'>Go</button>"
+  const html = (body: string, headers: Record<string, string> = {}) =>
+    new Response(body, { headers: { "content-type": "text/html", ...headers } })
+  const fixture = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const path = new URL(request.url).pathname
+      if (path === "/second") return html(`<!doctype html><title>Second fixture</title>${button}`)
+      if (path === "/pinned") return html(`<!doctype html><title>Pinned fixture</title>${button}`)
+      if (path === "/csp")
+        return html(`<!doctype html><title>CSP fixture</title>${button}`, {
+          "content-security-policy":
+            "default-src 'none'; style-src 'none'; img-src 'none'; require-trusted-types-for 'script'; trusted-types 'none'",
+        })
+      if (path === "/dynamic")
+        return html(
+          "<!doctype html><title>tick 0</title><script>let n=0;setInterval(()=>{document.title='tick '+(++n)},200)</script>",
+        )
+      if (path === "/notitle") return html(`<!doctype html>${button}`)
+      if (path === "/password") return html("<!doctype html><title>Password fixture</title><input type='password' aria-label='Secret'>")
+      return html(`<!doctype html><title>Plain fixture</title>${button}<a href='/second' aria-label='Next'>Next</a>`)
+    },
+  })
+  const port = await availablePort()
+  const base = `http://127.0.0.1:${port}`
+  const request = (path: string, options: RequestInit = {}) => {
+    const headers = new Headers(options.headers)
+    headers.set("authorization", auth)
+    return fetch(`${base}${path}`, { ...options, headers })
+  }
+  let child: ReturnType<typeof spawn> | undefined
+  let cdp: Client | undefined
+  const dispose = async () => {
+    try {
+      if (cdp) {
+        await cdp.send("Browser.close").catch(() => {})
+        cdp.close()
+      }
+      if (child) await terminate(child)
+    } finally {
+      try {
+        await Effect.runPromise(Scope.close(scope, Exit.void))
+      } finally {
+        await fixture.stop(true)
+        await rm(directory, { recursive: true, force: true })
+      }
+    }
+  }
+  try {
+    const startingRaw = ServerProcess.start<never, never>({
+      hostname: "127.0.0.1",
+      port,
+      password: "test-password",
+      database: { path: ":memory:" },
+      config: { directory, project: false, content: "{}" },
+      fs: { filewatcher: false, fff: false },
+    }).pipe(Effect.provideService(Scope.Scope, scope))
+    const starting = startingRaw as Effect.Effect<Effect.Success<typeof startingRaw>, Effect.Error<typeof startingRaw>>
+    await Effect.runPromise(starting)
+    for (const sessionID of [markerOwner, markerOther]) {
+      const created = await request("/api/session", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: sessionID, location: { directory } }),
+      })
+      expect(created.status, await created.text()).toBe(200)
+    }
+    const pairingHTTP = await request(`/api/session/${markerOwner}/browser/start`, { method: "POST" })
+    expect(pairingHTTP.status).toBe(200)
+    const pairing = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Pairing }))(await pairingHTTP.json()).data
+    child = spawn(
+      chrome,
+      [
+        "--headless=new",
+        `--user-data-dir=${join(directory, "profile")}`,
+        "--remote-debugging-pipe",
+        "--use-mock-keychain",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-background-networking",
+        "--disable-component-update",
+        "--disable-sync",
+        "--disable-breakpad",
+        `--disable-extensions-except=${extensionDirectory}`,
+        `--load-extension=${extensionDirectory}`,
+        "about:blank",
+      ],
+      { detached: true, stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"] },
+    )
+    const readable = child.stdio[4]
+    const writable = child.stdio[3]
+    if (!(readable instanceof Readable) || !(writable instanceof Writable))
+      throw new Error("Private Chrome did not expose its control pipe")
+    const client = connect(readable, writable)
+    cdp = client
+    const version = record(await client.send("Browser.getVersion"))
+    expect(Number(/^Chrome\/(\d+)\./.exec(String(version.product))?.[1])).toBeGreaterThanOrEqual(152)
+    await client.send("Target.setDiscoverTargets", { discover: true })
+    const worker = await eventually(async () => {
+      const infos = record(await client.send("Target.getTargets")).targetInfos
+      return Array.isArray(infos)
+        ? infos
+            .map(record)
+            .find(
+              (info) =>
+                info.type === "service_worker" &&
+                /^chrome-extension:\/\/[a-p]{32}\/service-worker\.js$/.test(String(info.url)),
+            )
+        : undefined
+    }, "private extension service worker")
+    const extensionID = /^chrome-extension:\/\/([a-p]{32})\//.exec(string(worker.url))?.[1]
+    if (!extensionID) throw new Error("Private extension identity unavailable")
+    const blank = record(await client.send("Target.getTargets")).targetInfos
+    const page = Array.isArray(blank)
+      ? blank.map(record).find((info) => info.type === "page" && info.url === "about:blank")
+      : undefined
+    if (!page) throw new Error("Private Chrome did not provide an inert page for worker lifecycle events")
+    const pageSession = string(
+      record(await client.send("Target.attachToTarget", { targetId: string(page.targetId), flatten: true })).sessionId,
+    )
+    let workerVersion: string | undefined
+    client.subscribe((event) => {
+      if (event.method !== "ServiceWorker.workerVersionUpdated") return
+      const versions = event.params?.versions
+      if (!Array.isArray(versions)) return
+      const matching = versions
+        .map(record)
+        .find((item) => /^chrome-extension:\/\/[a-p]{32}\/service-worker\.js$/.test(String(item.scriptURL)))
+      if (matching) workerVersion = string(matching.versionId)
+    })
+    await client.send("ServiceWorker.enable", {}, pageSession)
+    const workerSession = string(
+      record(await client.send("Target.attachToTarget", { targetId: string(worker.targetId), flatten: true })).sessionId,
+    )
+    await client.send("Runtime.enable", {}, workerSession)
+    const popup = record(await client.send("Target.createTarget", { url: `chrome-extension://${extensionID}/popup.html` }))
+    const popupSession = string(
+      record(await client.send("Target.attachToTarget", { targetId: string(popup.targetId), flatten: true })).sessionId,
+    )
+    await client.send("Runtime.enable", {}, popupSession)
+    await eventually(
+      async () =>
+        (await evaluate(client, popupSession, "typeof chrome === 'object' && !!chrome.runtime?.sendMessage")) === true
+          ? true
+          : undefined,
+      "private extension popup",
+    )
+    const paired = record(
+      await evaluate(
+        client,
+        popupSession,
+        `chrome.runtime.sendMessage({type:'pair',serverURL:${JSON.stringify(base)},secret:${JSON.stringify(pairing.secret)}})`,
+      ),
+    )
+    expect(paired).toMatchObject({ paired: true, connected: true, profileGranted: true })
+
+    const origin = `http://127.0.0.1:${fixture.port}`
+    const decodeTabs = Schema.decodeUnknownSync(Schema.Struct({ data: Schema.Array(Browser.Tab) }))
+    const listTabs = async (sessionID: string) =>
+      decodeTabs(await (await request(`/api/session/${sessionID}/browser/tabs`)).json()).data
+    const post = (sessionID: string, route: string, body: unknown) =>
+      request(`/api/session/${sessionID}/browser/${route}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      })
+    const profileAt = (sessionID: string, path: string) =>
+      eventually(
+        async () => (await listTabs(sessionID)).find((tab) => tab.mode === "profile" && tab.page.path === path),
+        `profile tab ${path}`,
+      )
+    const observe = (sessionID: string, tab: Browser.Tab, callID: string) =>
+      post(sessionID, "observe", { tabID: tab.id, generation: tab.generation, callID })
+    const open = async (path: string, options: { pinned?: boolean; active?: boolean } = {}) => {
+      const url = `${origin}${path}`
+      const created = record(
+        await evaluate(
+          client,
+          popupSession,
+          `chrome.tabs.create({url:${JSON.stringify(url)},active:${options.active ?? false},pinned:${options.pinned ?? false}})`,
+        ),
+      )
+      const id = number(created.id)
+      await eventually(async () => {
+        const native = record(await evaluate(client, popupSession, `chrome.tabs.get(${id})`))
+        return native.url === url && native.status === "complete" ? true : undefined
+      }, `loaded ${path}`)
+      return id
+    }
+    const targetTitle = async (path: string) => {
+      const infos = record(await client.send("Target.getTargets")).targetInfos
+      const match = Array.isArray(infos)
+        ? infos.map(record).find((info) => info.type === "page" && String(info.url).startsWith(`${origin}${path}`))
+        : undefined
+      return match ? String(match.title) : undefined
+    }
+    const pageSessionAt = async (path: string) => {
+      const infos = record(await client.send("Target.getTargets")).targetInfos
+      const match = Array.isArray(infos)
+        ? infos.map(record).find((info) => info.type === "page" && String(info.url).startsWith(`${origin}${path}`))
+        : undefined
+      if (!match) throw new Error(`No page target for ${path}`)
+      return string(
+        record(await client.send("Target.attachToTarget", { targetId: string(match.targetId), flatten: true })).sessionId,
+      )
+    }
+    return {
+      base, origin, client, request, post, listTabs, profileAt, observe, open, targetTitle, pageSessionAt,
+      popupSession, workerSession, pageSession, dispose,
+      workerVersion: () => workerVersion,
+      awaitTitle: (path: string, expected: (title: string) => boolean, label: string, timeoutMs = 10_000) =>
+        eventuallyFor(async () => {
+          const title = await targetTitle(path)
+          return title !== undefined && expected(title) ? title : undefined
+        }, label, timeoutMs),
+    }
+  } catch (error) {
+    await dispose()
+    throw error
+  }
+}
+
+async function withExtension(variant: "source" | "packaged", use: (directory: string) => Promise<void>) {
+  if (variant === "source") return use(extension)
+  const bin = await mkdtemp(join(tmpdir(), "ycoding-packaged-extension-"))
+  try {
+    await copyChromeExtension(bin)
+    return await use(join(bin, "ycoding-chrome-extension"))
+  } finally {
+    await rm(bin, { recursive: true, force: true })
+  }
+}
+
+test.each(["source", "packaged"] as const)("%s extension marks controlled tabs in the tab title, holds an exclusive lease, and cleans up on release, stop, and navigation", (variant) => withExtension(variant, markerLifecycle), 150_000)
+
+test.each(["source", "packaged"] as const)("%s extension removes an abandoned marker within the page expiry when the worker is lost, including a hidden and a frozen page", (variant) => withExtension(variant, markerExpiry), 150_000)
+
+async function markerLifecycle(extensionDirectory: string) {
+  const live = await startMarkerBridge(extensionDirectory)
+  try {
+    const { client, popupSession, workerSession } = live
+    const prefix = "[YCoding] "
+    const plainID = await live.open("/plain")
+    const cspID = await live.open("/csp")
+    const dynamicID = await live.open("/dynamic")
+    const noTitleID = await live.open("/notitle")
+    const pinnedID = await live.open("/pinned", { pinned: true })
+    const plain = await live.profileAt(markerOwner, "/plain")
+
+    const observed = await live.observe(markerOwner, plain, "marker-plain")
+    expect(observed.status, await observed.clone().text()).toBe(200)
+    await live.awaitTitle("/plain", (title) => title === `${prefix}Plain fixture`, "marked native tab title")
+    const plainPage = await live.pageSessionAt("/plain")
+    expect(await evaluate(client, plainPage, "document.querySelectorAll('[data-ycoding-agent-marker]').length")).toBe(1)
+    expect((await live.listTabs(markerOwner)).find((tab) => tab.id === plain.id)?.lease).toBe("self")
+    expect((await live.listTabs(markerOther)).find((tab) => tab.id === plain.id)?.lease).toBe("other")
+    const refused = await live.observe(markerOther, plain, "marker-foreign")
+    expect(refused.status).toBe(403)
+    const plainObservation = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Observation }))(await observed.json()).data
+    const go = plainObservation.elements.find((element) => element.name === "Go")
+    if (!go) throw new Error("Go button was not observed")
+    const clicked = await live.post(markerOwner, "action", {
+      tabID: plain.id, generation: plain.generation, documentGeneration: plainObservation.documentGeneration,
+      observationRevision: plainObservation.revision, callID: "marker-click", action: { type: "click", ref: go.ref },
+    })
+    expect(clicked.status, await clicked.clone().text()).toBe(200)
+    expect(
+      await evaluate(client, plainPage, `(() => {
+        const hosts = [...document.querySelectorAll('[data-ycoding-agent-cursor]')]
+        return { count: hosts.length, pointerEvents: hosts[0] && getComputedStyle(hosts[0]).pointerEvents }
+      })()`),
+    ).toEqual({ count: 1, pointerEvents: "none" })
+    await client.send("Target.detachFromTarget", { sessionId: plainPage })
+
+    const csp = await live.profileAt(markerOther, "/csp")
+    const cspPage = await live.pageSessionAt("/csp")
+    await evaluate(client, cspPage, "window.__violations=[];document.addEventListener('securitypolicyviolation',e=>window.__violations.push(e.violatedDirective))")
+    const cspObserved = await live.observe(markerOther, csp, "marker-csp")
+    expect(cspObserved.status, await cspObserved.clone().text()).toBe(200)
+    const cspObservation = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Observation }))(await cspObserved.json()).data
+    const cspGo = cspObservation.elements.find((element) => element.name === "Go")
+    if (!cspGo) throw new Error("CSP Go button was not observed")
+    const cspClick = await live.post(markerOther, "action", {
+      tabID: csp.id, generation: csp.generation, documentGeneration: cspObservation.documentGeneration,
+      observationRevision: cspObservation.revision, callID: "marker-csp-click", action: { type: "click", ref: cspGo.ref },
+    })
+    expect(cspClick.status, await cspClick.clone().text()).toBe(200)
+    await live.awaitTitle("/csp", (title) => title === `${prefix}CSP fixture`, "marked title under strict CSP and Trusted Types")
+    expect(await evaluate(client, cspPage, "window.__violations")).toEqual([])
+    expect(await evaluate(client, cspPage, "document.querySelectorAll('[data-ycoding-agent-cursor]').length")).toBe(1)
+    await client.send("Target.detachFromTarget", { sessionId: cspPage })
+
+    const dynamic = await live.profileAt(markerOwner, "/dynamic")
+    expect((await live.observe(markerOwner, dynamic, "marker-dynamic")).status).toBe(200)
+    const tick = (title: string) => Number(/^\[YCoding\] tick (\d+)$/.exec(title)?.[1] ?? Number.NaN)
+    const first = tick(await live.awaitTitle("/dynamic", (title) => tick(title) >= 0, "marked dynamic title"))
+    await live.awaitTitle("/dynamic", (title) => tick(title) > first, "dynamic title keeps changing under the marker")
+    const released = await live.post(markerOwner, "release", { tabID: dynamic.id, generation: dynamic.generation, callID: "release-dynamic" })
+    expect(released.status, await released.clone().text()).toBe(204)
+    await live.awaitTitle("/dynamic", (title) => /^tick \d+$/.test(title), "restored dynamic page title")
+    expect(await debuggerAttached(client, workerSession, dynamicID)).toBe(false)
+    expect(await evaluate(client, popupSession, `chrome.action.getBadgeText({tabId:${dynamicID}})`)).toBe("")
+    expect((await live.listTabs(markerOther)).find((tab) => tab.id === dynamic.id)?.lease).toBeUndefined()
+
+    const passwordID = await live.open("/password")
+    const password = await live.profileAt(markerOther, "/password")
+    const capture = await live.post(markerOther, "action", {
+      tabID: password.id, generation: password.generation, documentGeneration: password.documentGeneration,
+      observationRevision: password.observationRevision, callID: "capture-password", action: { type: "capture" },
+    })
+    expect(capture.status, await capture.clone().text()).toBe(200)
+    expect(Schema.decodeUnknownSync(Schema.Struct({ data: Browser.ActionResult }))(await capture.json()).data.status).toBe("rejected")
+    await eventually(async () => ((await debuggerAttached(client, workerSession, passwordID)) ? undefined : true), "first failed capture detached")
+    expect(await live.targetTitle("/password")).toBe("Password fixture")
+    expect((await live.listTabs(markerOwner)).find((tab) => tab.id === password.id)?.lease).toBeUndefined()
+
+    const noTitle = await live.profileAt(markerOther, "/notitle")
+    expect((await live.observe(markerOther, noTitle, "marker-notitle")).status).toBe(200)
+    await live.awaitTitle("/notitle", (title) => title === "[YCoding]", "marked page without a title")
+    const noTitlePage = await live.pageSessionAt("/notitle")
+    expect((await live.post(markerOther, "release", { tabID: noTitle.id, generation: noTitle.generation, callID: "release-notitle" })).status).toBe(204)
+    await eventually(async () => ((await evaluate(client, noTitlePage, "document.querySelector('title')")) === null ? true : undefined), "created title element removed")
+    await client.send("Target.detachFromTarget", { sessionId: noTitlePage })
+
+    const pinned = await live.profileAt(markerOwner, "/pinned")
+    const pinnedTitle = await live.targetTitle("/pinned")
+    const pinnedRead = await live.observe(markerOwner, pinned, "marker-pinned")
+    expect(pinnedRead.ok).toBe(false)
+    expect(await pinnedRead.text()).toContain("Pinned")
+    expect(await debuggerAttached(client, workerSession, pinnedID)).toBe(false)
+    expect(await live.targetTitle("/pinned")).toBe(pinnedTitle)
+    expect((await live.listTabs(markerOther)).find((tab) => tab.id === pinned.id)?.lease).toBeUndefined()
+
+    expect((await live.post(markerOwner, "release", { tabID: plain.id, generation: plain.generation, callID: "release-plain" })).status).toBe(204)
+    await live.awaitTitle("/plain", (title) => title === "Plain fixture", "restored plain title")
+    const transferred = await live.observe(markerOther, plain, "marker-transfer")
+    expect(transferred.status, await transferred.clone().text()).toBe(200)
+    await live.awaitTitle("/plain", (title) => title === `${prefix}Plain fixture`, "marked title after transfer")
+    const transferObservation = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Observation }))(await transferred.json()).data
+    const next = transferObservation.elements.find((element) => element.name === "Next")
+    if (!next) throw new Error("Next link was not observed")
+    const navigated = await live.post(markerOther, "action", {
+      tabID: plain.id, generation: plain.generation, documentGeneration: transferObservation.documentGeneration,
+      observationRevision: transferObservation.revision, callID: "marker-navigate", action: { type: "click", ref: next.ref },
+    })
+    expect(navigated.status, await navigated.clone().text()).toBe(200)
+    await live.awaitTitle("/second", (title) => title === `${prefix}Second fixture`, "marker re-applied after navigation")
+    expect(await debuggerAttached(client, workerSession, plainID)).toBe(true)
+
+    const contexts = new Set<number>()
+    const secondPage = await live.pageSessionAt("/second")
+    const stop = client.subscribe((event) => {
+      const context = event.params?.context
+      if (event.method !== "Runtime.executionContextCreated" || event.sessionId !== secondPage || typeof context !== "object" || context === null) return
+      const details = record(context)
+      if (details.name === "ycoding-agent-cursor") contexts.add(number(details.id))
+    })
+    await client.send("Runtime.enable", {}, secondPage)
+    await Bun.sleep(timing.refresh * 2 + 1_000)
+    stop()
+    expect(contexts.size).toBe(1)
+    await client.send("Runtime.disable", {}, secondPage)
+    await client.send("Target.detachFromTarget", { sessionId: secondPage })
+
+    expect(cspID).toBeGreaterThan(0)
+    expect(noTitleID).toBeGreaterThan(0)
+    const stopped = await live.request(`/api/session/${markerOwner}/browser`, { method: "DELETE" })
+    expect(stopped.status, await stopped.clone().text()).toBe(204)
+    await live.awaitTitle("/second", (title) => title === "Second fixture", "marker cleared before stop detached the tab")
+    await live.awaitTitle("/csp", (title) => title === "CSP fixture", "csp marker cleared on stop")
+    for (const id of [plainID, cspID])
+      await eventually(async () => ((await debuggerAttached(client, workerSession, id)) ? undefined : true), `tab ${id} detached after stop`)
+  } finally {
+    await live.dispose()
+  }
+}
+
+async function markerExpiry(extensionDirectory: string) {
+  const live = await startMarkerBridge(extensionDirectory)
+  try {
+    const { client } = live
+    const visible = await live.open("/plain", { active: true })
+    const hidden = await live.open("/second")
+    const frozen = await live.open("/csp")
+    expect([visible, hidden, frozen].every((id) => id > 0)).toBe(true)
+    const visibleTab = await live.profileAt(markerOwner, "/plain")
+    const hiddenTab = await live.profileAt(markerOwner, "/second")
+    const frozenTab = await live.profileAt(markerOwner, "/csp")
+    for (const tab of [visibleTab, hiddenTab, frozenTab])
+      expect((await live.observe(markerOwner, tab, `expire-${tab.id}`)).status).toBe(200)
+    await live.awaitTitle("/plain", (title) => title.startsWith("[YCoding] "), "visible marker")
+    await live.awaitTitle("/second", (title) => title.startsWith("[YCoding] "), "hidden marker")
+    await live.awaitTitle("/csp", (title) => title.startsWith("[YCoding] "), "frozen marker")
+
+    const frozenPage = await live.pageSessionAt("/csp")
+    await client.send("Page.enable", {}, frozenPage)
+    const versionID = await eventually(async () => live.workerVersion(), "Chrome extension worker version")
+    const lostAt = Date.now()
+    await client.send("ServiceWorker.stopWorker", { versionId: versionID }, live.pageSession)
+    await client.send("Page.setWebLifecycleState", { state: "frozen" }, frozenPage)
+
+    const bound = timing.expiry + timing.check + 10_000
+    await live.awaitTitle("/plain", (title) => title === "Plain fixture", "visible marker expiry after worker loss", bound)
+    await live.awaitTitle("/second", (title) => title === "Second fixture", "hidden marker expiry after worker loss", bound)
+    expect(Date.now() - lostAt).toBeLessThan(bound)
+
+    const frozenUntil = lostAt + timing.expiry + 3_000
+    await Bun.sleep(Math.max(0, frozenUntil - Date.now()))
+    expect(await live.targetTitle("/csp")).toMatch(/^\[YCoding\] /)
+    await client.send("Page.setWebLifecycleState", { state: "active" }, frozenPage)
+    await live.awaitTitle("/csp", (title) => title === "CSP fixture", "frozen marker removed after the page is thawed", timing.check + 4_000)
+  } finally {
+    await live.dispose()
+  }
+}
 
 async function evaluate(cdp: Client, sessionID: string, expression: string) {
   const result = record(

@@ -18,8 +18,9 @@ const refreshCycle = new URLSearchParams(location.search).has("refresh-cycle")
 const initialLoading = new URLSearchParams(location.search).has("initial-loading")
 const largeValues = new URLSearchParams(location.search).has("large-values")
 const unknownUsage = new URLSearchParams(location.search).has("unknown-usage")
+const longDistribution = new URLSearchParams(location.search).has("distribution-long-values")
 const providers: UsageProvider[] = [
-  { providerID: "openai", label: "Codex", profile: "Personal", status: "available", source: "provider_api", stability: "stable", updatedAt: Date.now(), windows: [
+  { providerID: "openai", label: longDistribution ? "Provider with a long descriptive name and a shared workspace plan" : "Codex", profile: "Personal", status: "available", source: "provider_api", stability: "stable", updatedAt: Date.now(), windows: [
     { id: "session", label: "Session allowance", unit: "percent", used: 38, resetAt: Date.now() + 2 * 3600_000, periodSeconds: 5 * 3600 },
     { id: "week", label: "Weekly allowance", unit: "percent", used: 72, resetAt: Date.now() + 3 * 86_400_000, periodSeconds: 7 * 86_400 },
   ] },
@@ -49,7 +50,9 @@ const providers: UsageProvider[] = [
   { providerID: "empty", label: "Empty provider", status: "available", source: "provider_api", stability: "stable", updatedAt: Date.now(), windows: [] },
   { providerID: "failed", label: "Provider with an error", status: "error", source: "provider_api", stability: "best_effort", updatedAt: Date.now(), windows: [], message: "Quota refresh failed." },
 ]
-const tokens = { input: 12_400, output: 3_200, reasoning: 1_440, cache: { read: 5_600, write: 320 } }
+const tokens = longDistribution
+  ? { input: 1_000_000_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+  : { input: 12_400, output: 3_200, reasoning: 1_440, cache: { read: 5_600, write: 320 } }
 const rows: UsageReportRow[] = Array.from({ length: 30 }, (_, index) => ({
   key: new Date(today - (29 - index) * 86_400_000).toISOString().slice(0, 10),
   label: new Date(today - (29 - index) * 86_400_000).toISOString().slice(0, 10),
@@ -58,9 +61,9 @@ const rows: UsageReportRow[] = Array.from({ length: 30 }, (_, index) => ({
   costProvenance: index % 6 === 0 ? undefined : index % 3 === 0 ? "current_catalog" : "recorded", tokens,
 }))
 const monthlyRows: UsageReportRow[] = [
-  { ...rows[1]!, key: "openai/gpt-6-sol", label: "openai/gpt-6-sol", cost: 6, costProvenance: "recorded" },
-  { ...rows[2]!, key: "openai/gpt-5", label: "openai/gpt-5", cost: 4, costProvenance: "current_catalog" },
-  { ...rows[3]!, key: "openrouter/deepseek-v4", label: "openrouter/deepseek-v4", cost: 5, costProvenance: "recorded" },
+  { ...rows[1]!, key: "openai/gpt-6-sol", label: "openai/gpt-6-sol", cost: longDistribution ? 12_000_000 : 6, costProvenance: "recorded" },
+  { ...rows[2]!, key: "openai/gpt-5", label: "openai/gpt-5", cost: longDistribution ? 3_000_000 : 4, costProvenance: "current_catalog" },
+  { ...rows[3]!, key: "openrouter/deepseek-v4", label: "openrouter/deepseek-v4", cost: longDistribution ? 5_000_000 : 5, costProvenance: "recorded" },
   { ...rows[0]!, key: "github-copilot/gpt-4o", label: "github-copilot/gpt-4o", cost: undefined, costProvenance: undefined },
 ]
 const sample = ["GPT-6 Sol", "Claude Opus", "Gemini Pro", "DeepSeek V3", "Llama 4", "Qwen 3"]
@@ -146,7 +149,7 @@ const store = {
       update({ ...state().usage, reports: { ...state().usage.reports, [reportKey(input)]: old ? { status: "unsupported" } : { status: "ready", data: {
         group: "model", rows: refreshCycle ? monthlyRows.map((row) => ({ ...row, cost: row.cost === undefined ? undefined : row.cost + revision })) : monthlyRows,
         total: { logical: 4, physical: 4, helpers: 0, continued: 0, fallback: 0,
-          cost: 15 + (refreshCycle ? 3 * revision : 0), costProvenance: "current_catalog", tokens: { input: tokens.input * 4, output: tokens.output * 4, reasoning: tokens.reasoning * 4, cache: { read: tokens.cache.read * 4, write: tokens.cache.write * 4 } } }, rowCount: 4,
+          cost: (longDistribution ? 20_000_000 : 15) + (refreshCycle ? 3 * revision : 0), costProvenance: "current_catalog", tokens: { input: tokens.input * 4, output: tokens.output * 4, reasoning: tokens.reasoning * 4, cache: { read: tokens.cache.read * 4, write: tokens.cache.write * 4 } } }, rowCount: 4,
       } } } })
       return
     }

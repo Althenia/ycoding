@@ -21,6 +21,7 @@ const { sessionID: _observeSessionID, ...ObservePayload } = Browser.ObserveInput
 const { sessionID: _actionSessionID, ...ActionPayload } = Browser.ActionInput.fields
 const { sessionID: _openSessionID, ...OpenPayload } = Browser.OpenInput.fields
 const { sessionID: _closeSessionID, ...ClosePayload } = Browser.CloseInput.fields
+const { sessionID: _releaseSessionID, ...ReleasePayload } = Browser.ReleaseInput.fields
 
 const BROWSER_CONNECT_PATH = "/api/browser/connect"
 
@@ -104,6 +105,15 @@ export const makeBrowserGroup = <SessionLocationId extends HttpApiMiddleware.Any
       }).annotateMerge(OpenApi.annotations({
         identifier: "v2.browser.close", summary: "Close an agent-created Chrome tab",
         description: "Close only a tab owned by the caller Session and fenced to the current bridge generation.",
+      })),
+    )
+    .add(
+      HttpApiEndpoint.post("browser.release", "/api/session/:sessionID/browser/release", {
+        params: { sessionID: Session.ID }, payload: Schema.Struct(ReleasePayload),
+        success: HttpApiSchema.NoContent, error: operationErrors,
+      }).annotateMerge(OpenApi.annotations({
+        identifier: "v2.browser.release", summary: "Release control of a paired Chrome tab",
+        description: "Detach the caller Session's lease on a paired profile tab after the extension confirms cleanup.",
       })),
     )
     .add(

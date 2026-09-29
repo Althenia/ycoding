@@ -25,7 +25,6 @@ import type {
   SessionMessageAssistantTool,
   SessionInfo,
   SessionDiagnosticsOutput,
-  SessionEventFileChangeInfo,
   SessionOrchestrationPage,
   SessionPendingInfo,
   SessionTodoInfo,
@@ -169,7 +168,6 @@ type Store = {
     active: Record<string, DataSessionStatus>
     diagnostics: Record<string, SessionDiagnosticsOutput>
     usage: Record<string, ProviderRequestSummary>
-    fileChange: Record<string, SessionEventFileChangeInfo[]>
     message: Record<string, SessionMessageInfo[]>
     compaction: Record<string, Record<string, DataSessionCompactionLifecycle>>
     pending: Record<string, SessionPendingInfo[]>
@@ -548,7 +546,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         active: {},
         diagnostics: {},
         usage: {},
-        fileChange: {},
         message: {},
         compaction: {},
         pending: {},
@@ -890,12 +887,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       })
     }
 
-    async function completedSubagents(parentID: string) {
+    async function directSubagents(parentID: string) {
       const tasks = []
       let cursor: string | undefined
       do {
         const page = await client.api.session.subagent.list({ parentID, limit: 10, ...(cursor ? { cursor } : {}) })
-        tasks.push(...page.data.filter((task) => task.state === "completed"))
+        tasks.push(...page.data)
         cursor = page.cursor.next
       } while (cursor)
       return tasks
@@ -1010,20 +1007,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         case "todo.updated":
           setStore("session", "todo", event.data.sessionID, reconcile(event.data.todos))
           break
-        case "session.file-change.recorded": {
-          const parentID =
-            store.session.info[event.data.sessionID]?.parentID ??
-            Object.entries(store.session.subagent).find(([, page]) =>
-              page.data.some((task) => task.sessionID === event.data.sessionID),
-            )?.[0]
-          const sessionIDs = [event.data.sessionID, parentID].filter((sessionID): sessionID is string => !!sessionID)
-          sessionIDs.forEach((sessionID) => {
-            result.session.fileChange.invalidate(sessionID)
-            if (store.session.fileChange[sessionID] === undefined) return
-            void result.session.fileChange.sync(sessionID).catch(() => undefined)
-          })
-          break
-        }
         case "session.model.selected":
           if (store.session.info[event.data.sessionID])
             setStore("session", "info", event.data.sessionID, "model", event.data.model)
@@ -1703,8 +1686,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               Math.max(0, page.offset - loaded.data.length),
             )
           },
-          completed(parentID: string) {
-            return completedSubagents(parentID)
+          children(parentID: string) {
+            return directSubagents(parentID)
           },
           invalidate(parentID: string) {
             subagentGeneration.set(parentID, (subagentGeneration.get(parentID) ?? 0) + 1)
@@ -1744,19 +1727,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           invalidate(sessionID: string) {
             sync.invalidate(`session.usage:${sessionID}`)
-          },
-        },
-        fileChange: {
-          list(sessionID: string) {
-            return store.session.fileChange[sessionID] ?? []
-          },
-          sync(sessionID: string) {
-            return sync.run(`session.fileChange:${sessionID}`, async () => {
-              setStore("session", "fileChange", sessionID, await client.api.session["file-change"].list({ sessionID }))
-            })
-          },
-          invalidate(sessionID: string) {
-            sync.invalidate(`session.fileChange:${sessionID}`)
           },
         },
         todo: {

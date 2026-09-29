@@ -313,9 +313,9 @@ describe("remote shell layout", () => {
     }
   }, 30_000)
 
-  test("pins the combined presentation and Team bar above scrolling Conversation and Office content", async () => {
+  test("pins the presentation bar above scrolling Conversation and Office content while Team lives in the header", async () => {
     for (const [width, height] of [[1440, 900], [820, 1180]] as const) {
-      const page = await fixture("view=chat&team=two", width, "Team", undefined, height)
+      const page = await fixture("view=chat&team=two", width, "Stream remote output safely", undefined, height)
       try {
         await page.evaluate(`(() => {
           document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove();
@@ -325,7 +325,7 @@ describe("remote shell layout", () => {
         await page.evaluate(`(() => { const scroll = document.querySelector('.workspace__scroll'); scroll.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -200 })); scroll.scrollTop = 0; })()`)
         const layout = () => page.evaluate<{ readonly combined: boolean; readonly top: number; readonly bottom: number; readonly scrollTop: number; readonly scrollBoxTop: number; readonly firstRowTop: number }>(`(() => {
           const bar = document.querySelector('.workspace__topbar'); const scroll = document.querySelector('.workspace__scroll');
-          return { combined: bar?.parentElement === document.querySelector('.workspace__main') && Boolean(bar?.querySelector('.presentation-switch') && bar?.querySelector('[aria-label="Open Team"]')),
+          return { combined: bar?.parentElement === document.querySelector('.workspace__main') && Boolean(bar?.querySelector('.presentation-switch')) && bar?.querySelector('[aria-label="Open Team"]') === null && document.querySelector('.app-header [aria-label="Open Team"]') !== null,
             top: bar?.getBoundingClientRect().top ?? -1, bottom: bar?.getBoundingClientRect().bottom ?? -1,
             scrollTop: scroll.scrollTop, scrollBoxTop: scroll.getBoundingClientRect().top,
             firstRowTop: document.querySelector('.conversation-breadcrumb')?.getBoundingClientRect().top ?? -1 };
@@ -342,7 +342,7 @@ describe("remote shell layout", () => {
         const conversation = await layout()
         expect(conversation.scrollTop).toBeGreaterThan(200)
         expect(Math.abs(conversation.top - initial.top)).toBeLessThanOrEqual(1)
-        const jump = width >= 1024 ? '.transcript-navigation__desktop-controls [aria-label="Jump to top"]' : '.transcript-navigation__mobile-controls [aria-label="Jump to top"]'
+        const jump = '.conversation-jump-slot .transcript-navigation__controls [aria-label="Jump to top"]'
         for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(jump)}) !== null`); attempt += 1) await Bun.sleep(50)
         expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(jump)}) !== null`)).toBe(true)
         await page.evaluate(`document.querySelector(${JSON.stringify(jump)})?.click()`)
@@ -414,11 +414,11 @@ describe("remote shell layout", () => {
     }
   }, 120_000)
 
-  test("Conversation and Office selection slides without moving the pinned Team control", async () => {
+  test("Conversation and Office selection slides without moving the header Team control", async () => {
     for (const width of [1440, 820]) {
-      const page = await fixture("view=chat", width, "Team")
+      const page = await fixture("view=chat", width, "Stream remote output safely")
       try {
-        const measure = () => page.evaluate<{ left: number; width: number; target: number; targetWidth: number; duration: string; property: string; switchWidth: number; switchHeight: number; teamLeft: number; teamDuration: string }>(`(() => { const switcher=document.querySelector('.presentation-switch'), selected=switcher.querySelector('[aria-checked="true"]'), indicator=switcher.querySelector('.presentation-switch__indicator'), team=document.querySelector('.workspace__topbar [aria-label="Open Team"]'); const r=indicator?.getBoundingClientRect(), s=selected.getBoundingClientRect(), bar=switcher.getBoundingClientRect(); return { left:r?.left ?? -1, width:r?.width ?? 0, target:s.left, targetWidth:s.width, duration:indicator ? getComputedStyle(indicator).transitionDuration : '0s', property:indicator ? getComputedStyle(indicator).transitionProperty : '', switchWidth:bar.width, switchHeight:bar.height, teamLeft:team.getBoundingClientRect().left, teamDuration:getComputedStyle(team).transitionDuration } })()`)
+        const measure = () => page.evaluate<{ left: number; width: number; target: number; targetWidth: number; duration: string; property: string; switchWidth: number; switchHeight: number; teamLeft: number; teamDuration: string }>(`(() => { const switcher=document.querySelector('.presentation-switch'), selected=switcher.querySelector('[aria-checked="true"]'), indicator=switcher.querySelector('.presentation-switch__indicator'), team=document.querySelector('.app-header [aria-label="Open Team"]'); const r=indicator?.getBoundingClientRect(), s=selected.getBoundingClientRect(), bar=switcher.getBoundingClientRect(); return { left:r?.left ?? -1, width:r?.width ?? 0, target:s.left, targetWidth:s.width, duration:indicator ? getComputedStyle(indicator).transitionDuration : '0s', property:indicator ? getComputedStyle(indicator).transitionProperty : '', switchWidth:bar.width, switchHeight:bar.height, teamLeft:team.getBoundingClientRect().left, teamDuration:getComputedStyle(team).transitionDuration } })()`)
         for (let attempt = 0; attempt < 20; attempt += 1) { const current = await measure(); if (Math.abs(current.left - current.target) <= 1 && Math.abs(current.width - current.targetWidth) <= 1) break; await Bun.sleep(20) }
         const initial = await measure()
         expect(Math.abs(initial.left - initial.target)).toBeLessThanOrEqual(1)
@@ -436,9 +436,9 @@ describe("remote shell layout", () => {
         expect(Math.abs(office.teamLeft - initial.teamLeft)).toBeLessThanOrEqual(1)
         expect(office.teamDuration).not.toBe("0s")
         await Bun.write(new URL(`../../../.cache/tmp/presentation-switch-${width}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
-        await page.evaluate(`document.querySelector('.workspace__topbar [aria-label="Open Team"]')?.click()`)
-        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.workspace__topbar [aria-label="Open Team"]')?.getAttribute('aria-expanded') === 'true'`); attempt += 1) await Bun.sleep(25)
-        expect(await page.evaluate<string>(`document.querySelector('.workspace__topbar [aria-label="Open Team"]')?.getAttribute('aria-expanded')`)).toBe("true")
+        await page.evaluate(`document.querySelector('.app-header [aria-label="Open Team"]')?.click()`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.app-header [aria-label="Open Team"]')?.getAttribute('aria-expanded') === 'true'`); attempt += 1) await Bun.sleep(25)
+        expect(await page.evaluate<string>(`document.querySelector('.app-header [aria-label="Open Team"]')?.getAttribute('aria-expanded')`)).toBe("true")
         await page.setReducedMotion(true)
         const reduced = await measure()
         expect(reduced.duration).toBe("0s")
@@ -447,23 +447,134 @@ describe("remote shell layout", () => {
     }
   }, 30_000)
 
-  test("keeps the phone Team bar above scrolling Conversation content while Office stays hidden", async () => {
-    const page = await fixture("view=chat&team=two", 390, "Team", undefined, 844)
+  test("replaces the phone Team bar with a header icon and count while Office stays hidden", async () => {
+    for (const width of [320, 390, 430]) {
+      const page = await fixture("view=chat&team=two", width, "Stream remote output safely", undefined, 844)
+      try {
+        await page.setCoarsePointer(true)
+        await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.transcript-message') !== null && document.querySelector('.app-header [aria-label="Open Team"]') !== null`); attempt += 1) await Bun.sleep(50)
+        const state = () => page.evaluate<{ readonly bar: boolean; readonly office: boolean; readonly team: boolean; readonly width: number; readonly height: number; readonly count: string; readonly description: string | null; readonly nextToNotifications: boolean; readonly inHeader: boolean; readonly scrollTop: number; readonly headerBottom: number; readonly scrollBoxTop: number; readonly overflow: boolean }>(`(() => {
+          const team = document.querySelector('.app-header [aria-label="Open Team"]'), header = document.querySelector('.app-header').getBoundingClientRect(), bell = document.querySelector('.yc-notification-center__trigger')
+          const rect = team?.getBoundingClientRect(), bellRect = bell?.getBoundingClientRect()
+          return { bar: document.querySelector('.workspace__topbar') !== null, office: document.querySelector('.presentation-switch') !== null, team: team !== null,
+            width: rect?.width ?? 0, height: rect?.height ?? 0, count: team?.querySelector('.app-header__team-count')?.textContent ?? '', description: team?.getAttribute('aria-description') ?? null,
+            nextToNotifications: !!rect && !!bellRect && rect.right <= bellRect.left + 1 && bellRect.left - rect.right <= 12,
+            inHeader: !!rect && rect.top >= header.top && rect.bottom <= header.bottom && rect.left >= header.left && rect.right <= header.right,
+            scrollTop: document.querySelector('.workspace__scroll').scrollTop, headerBottom: header.bottom, scrollBoxTop: document.querySelector('.workspace__scroll').getBoundingClientRect().top,
+            overflow: document.documentElement.scrollWidth > innerWidth }
+        })()`)
+        const initial = await state()
+        expect(initial).toMatchObject({ bar: false, office: false, team: true, nextToNotifications: true, inHeader: true, overflow: false })
+        expect(initial.width).toBeGreaterThanOrEqual(44)
+        expect(initial.height).toBeGreaterThanOrEqual(44)
+        expect(initial.count).toMatch(/^[0-9]+$/)
+        expect(initial.description).toBe(`${initial.count} active`)
+        expect(initial.scrollBoxTop).toBeLessThanOrEqual(initial.headerBottom + 1)
+        await page.evaluate(`(() => { const scroll = document.querySelector('.workspace__scroll'); document.querySelector('.conversation-pane').style.minHeight = '1900px'; scroll.scrollTop = scroll.scrollHeight })()`)
+        const scrolled = await state()
+        expect(scrolled.scrollTop).toBeGreaterThan(0)
+        expect(scrolled.headerBottom).toBeCloseTo(initial.headerBottom, 0)
+        expect(scrolled.inHeader).toBe(true)
+      } finally { await page.close() }
+    }
+  }, 30_000)
+
+  test("bounds Suggestions by the visual viewport above the composer without covering it at every width and with a keyboard-sized viewport", async () => {
+    for (const [width, height] of [[320, 640], [390, 844], [430, 932], [844, 390], [768, 1024], [1440, 900]] as const) for (const theme of ["dark", "light"] as const) {
+      const page = await fixture("view=chat", width, "Stream remote output safely", theme, height)
+      try {
+        const coarse = width < 768 || height < 600
+        if (coarse) await page.setCoarsePointer(true)
+        await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount textarea') !== null`); attempt += 1) await Bun.sleep(50)
+        await page.evaluate(`(() => { const field = document.querySelector('.mini-composer__mount textarea'); field.focus(); field.value = '/'; field.setSelectionRange(1, 1); field.dispatchEvent(new InputEvent('input', { bubbles: true })) })()`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.mini-composer__suggestions [role="option"]') !== null`); attempt += 1) await Bun.sleep(50)
+        const measure = () => page.evaluate<{ readonly top: number; readonly bottom: number; readonly left: number; readonly right: number; readonly height: number; readonly fieldTop: number; readonly composerBottom: number; readonly viewport: number; readonly offsetTop: number; readonly regionTop: number; readonly close: readonly number[]; readonly closeVisible: boolean; readonly pillOverPanel: boolean; readonly listScrolls: boolean; readonly value: string; readonly overflow: boolean }>(`(async () => {
+          await Promise.all(document.querySelector('.mini-composer__suggestions').getAnimations().map((animation) => animation.finished))
+          const panel = document.querySelector('.mini-composer__suggestions').getBoundingClientRect(), field = document.querySelector('.mini-composer__mount textarea'), fieldRect = field.getBoundingClientRect()
+          const close = document.querySelector('.mini-composer__suggestions-head button'), closeRect = close.getBoundingClientRect(), viewport = window.visualViewport, list = document.querySelector('.mini-composer__suggestions [role="listbox"]')
+          return { top: panel.top, bottom: panel.bottom, left: panel.left, right: panel.right, height: panel.height, fieldTop: fieldRect.top, composerBottom: document.querySelector('.composer__row').getBoundingClientRect().bottom, viewport: viewport.height, offsetTop: viewport.offsetTop, regionTop: document.querySelector('.workspace__scroll').getBoundingClientRect().top,
+            close: [closeRect.width, closeRect.height], closeVisible: closeRect.top >= panel.top - 1 && closeRect.bottom <= panel.bottom + 1 && close.contains(document.elementFromPoint((closeRect.left + closeRect.right) / 2, (closeRect.top + closeRect.bottom) / 2)),
+            pillOverPanel: (() => { const pill = document.querySelector('.transcript-navigation__controls')?.getBoundingClientRect(); if (!pill || pill.width === 0) return false; const left = Math.max(pill.left, panel.left), right = Math.min(pill.right, panel.right), top = Math.max(pill.top, panel.top), bottom = Math.min(pill.bottom, panel.bottom); if (right <= left || bottom <= top) return false; return !document.querySelector('.mini-composer__suggestions').contains(document.elementFromPoint((left + right) / 2, (top + bottom) / 2)) })(),
+            listScrolls: list.scrollHeight >= list.clientHeight, value: field.value, overflow: document.documentElement.scrollWidth > innerWidth }
+        })()`)
+        const check = (label: string, measured: Awaited<ReturnType<typeof measure>>) => {
+          expect(measured.left, `${label} left`).toBeGreaterThanOrEqual(0)
+          expect(measured.right, `${label} right`).toBeLessThanOrEqual(width + 1)
+          expect(measured.bottom, `${label} above the field`).toBeLessThanOrEqual(measured.fieldTop + 1)
+          expect(measured.height, `${label} bounded`).toBeLessThanOrEqual(Math.max(54, Math.min(360, measured.viewport * 0.4)) + 1)
+          expect(measured.top, `${label} inside the visual viewport`).toBeGreaterThanOrEqual(measured.offsetTop - 1)
+          expect(measured.top, `${label} below the workspace toolbar`).toBeGreaterThanOrEqual(measured.regionTop - 1)
+          expect(measured.composerBottom, `${label} composer stays visible`).toBeLessThanOrEqual(measured.viewport + measured.offsetTop + 1)
+          expect(measured.close[1], `${label} Close height`).toBeGreaterThanOrEqual(coarse ? 44 : 36)
+          expect(measured.close[0], `${label} Close width`).toBeGreaterThanOrEqual(coarse ? 44 : 36)
+          expect(measured.closeVisible, `${label} Close reachable`).toBe(true)
+          expect(measured.pillOverPanel, `${label} suggestions paint above the jump control`).toBe(false)
+          expect(measured.listScrolls, `${label} options scroll inside the panel`).toBe(true)
+          expect(measured.value, `${label} draft`).toBe("/")
+          expect(measured.overflow, `${label} page overflow`).toBe(false)
+        }
+        check(`${width}x${height} ${theme}`, await measure())
+        if (width < 768 && height > 600) {
+          await page.setViewport(width, 380)
+          for (let attempt = 0; attempt < 40; attempt += 1) { const current = await measure(); if (current.viewport <= 380 && current.height <= Math.max(54, Math.min(360, current.viewport * 0.4)) + 1) break; await Bun.sleep(50) }
+          const keyboard = await measure()
+          check(`${width}x380 ${theme} keyboard-sized`, keyboard)
+          expect(keyboard.height).toBeLessThanOrEqual(Math.max(54, 380 * 0.4) + 1)
+        }
+        await Bun.write(new URL(`../../../.cache/tmp/suggestions-${width}x${height}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      } finally { await page.close() }
+    }
+  }, 120_000)
+
+  test("follows a VisualViewport that shrinks and shifts while the layout viewport stays put (stubbed VisualViewport, not a real on-screen keyboard)", async () => {
+    const page = await fixture("view=chat", 390, "Stream remote output safely", "dark", 844)
     try {
-      await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`)
-      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.transcript-message') !== null`); attempt += 1) await Bun.sleep(50)
-      const initial = await page.evaluate<{ readonly top: number; readonly bottom: number; readonly scrollBoxTop: number; readonly hasTeam: boolean; readonly hasOffice: boolean }>(`(() => { const bar = document.querySelector('.workspace__topbar'); return { top: bar.getBoundingClientRect().top, bottom: bar.getBoundingClientRect().bottom, scrollBoxTop: document.querySelector('.workspace__scroll').getBoundingClientRect().top, hasTeam: bar.querySelector('[aria-label="Open Team"]') !== null, hasOffice: bar.querySelector('.presentation-switch') !== null }; })()`)
-      expect(initial.hasTeam).toBe(true)
-      expect(initial.hasOffice).toBe(false)
-      expect(initial.bottom).toBeLessThanOrEqual(initial.scrollBoxTop + 1)
-      const visible = await page.evaluate<{ readonly scrollTop: number; readonly top: number; readonly barTop: number }>(`(() => { const scroll = document.querySelector('.workspace__scroll'); const row = document.querySelector('.transcript-message'); document.querySelector('.conversation-pane').style.minHeight = '1900px'; scroll.scrollTop = Math.max(1, row.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 4); return { scrollTop: scroll.scrollTop, top: row.getBoundingClientRect().top, barTop: document.querySelector('.workspace__topbar').getBoundingClientRect().top }; })()`)
-      expect(visible.scrollTop).toBeGreaterThan(0)
-      expect(visible.barTop).toBeCloseTo(initial.top, 0)
-      expect(visible.top).toBeGreaterThanOrEqual(initial.bottom)
-      await page.evaluate(`document.querySelector('.workspace__scroll').scrollTop = document.querySelector('.workspace__scroll').scrollHeight`)
-      expect(await page.evaluate<number>(`document.querySelector('.workspace__topbar').getBoundingClientRect().top`)).toBeCloseTo(initial.top, 0)
+      await page.setCoarsePointer(true)
+      await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden';
+        const stub = Object.assign(new EventTarget(), { height: 420, width: 390, offsetTop: 300, offsetLeft: 0, scale: 1, pageTop: 300, pageLeft: 0 })
+        Object.defineProperty(window, 'visualViewport', { configurable: true, value: stub }); window.viewportStub = stub })()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount textarea') !== null`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`(() => { const field = document.querySelector('.mini-composer__mount textarea'); field.focus(); field.value = '/'; field.setSelectionRange(1, 1); field.dispatchEvent(new InputEvent('input', { bubbles: true })) })()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.mini-composer__suggestions [role="option"]') !== null`); attempt += 1) await Bun.sleep(50)
+      const read = () => page.evaluate<{ readonly height: number; readonly top: number; readonly fieldTop: number; readonly layout: number }>(`(async () => { await Promise.all(document.querySelector('.mini-composer__suggestions').getAnimations().map((animation) => animation.finished)); const panel = document.querySelector('.mini-composer__suggestions').getBoundingClientRect(); return { height: panel.height, top: panel.top, fieldTop: document.querySelector('.mini-composer__mount textarea').getBoundingClientRect().top, layout: innerHeight } })()`)
+      const first = await read()
+      expect(first.layout).toBe(844)
+      expect(first.height).toBeLessThanOrEqual(Math.min(360, 420 * 0.4, first.fieldTop - 300 - 8) + 1)
+      expect(first.top).toBeGreaterThanOrEqual(300 - 1)
+      await page.evaluate(`Object.assign(window.viewportStub, { height: 250, pageTop: 440, offsetTop: 440 }); window.viewportStub.dispatchEvent(new Event('resize'))`)
+      for (let attempt = 0; attempt < 40 && (await read()).height > Math.min(360, 250 * 0.4, (await read()).fieldTop - 440 - 8) + 1; attempt += 1) await Bun.sleep(25)
+      const second = await read()
+      expect(second.layout).toBe(844)
+      expect(second.height).toBeLessThanOrEqual(Math.max(54, Math.min(360, 250 * 0.4, second.fieldTop - 440 - 8)) + 1)
+      expect(second.height).toBeLessThan(first.height)
+      await page.evaluate(`Object.assign(window.viewportStub, { height: 150, pageTop: 640, offsetTop: 640 }); window.viewportStub.dispatchEvent(new Event('scroll'))`)
+      for (let attempt = 0; attempt < 40 && (await read()).height > 55; attempt += 1) await Bun.sleep(25)
+      expect((await read()).height).toBeLessThanOrEqual(55)
+      expect(await page.evaluate<boolean>(`(() => { const close = document.querySelector('.mini-composer__suggestions-head button').getBoundingClientRect(), panel = document.querySelector('.mini-composer__suggestions').getBoundingClientRect(); return close.top >= panel.top - 1 && close.bottom <= panel.bottom + 1 && close.height >= 44 })()`)).toBe(true)
     } finally { await page.close() }
-  }, 15_000)
+  }, 30_000)
+
+  test("an outside press dismisses Suggestions and leaves focus and the action with the pressed control", async () => {
+    for (const [width, height, coarse] of [[1440, 900, false], [390, 844, true]] as const) {
+      const page = await fixture("view=chat&team=two", width, "Stream remote output safely", "dark", height)
+      try {
+        if (coarse) await page.setCoarsePointer(true)
+        await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount textarea') !== null && document.querySelector('.app-header [aria-label="Open Team"]') !== null`); attempt += 1) await Bun.sleep(50)
+        await page.evaluate(`(() => { const field = document.querySelector('.mini-composer__mount textarea'); field.focus(); field.value = '/'; field.setSelectionRange(1, 1); field.dispatchEvent(new InputEvent('input', { bubbles: true })) })()`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.mini-composer__suggestions [role="option"]') !== null`); attempt += 1) await Bun.sleep(50)
+        const target = await page.evaluate<{ x: number; y: number }>(`(() => { const r = document.querySelector('.app-header [aria-label="Open Team"]').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`)
+        await page.mouse("mouseMoved", target.x, target.y)
+        await page.mouse("mousePressed", target.x, target.y)
+        await page.mouse("mouseReleased", target.x, target.y)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.app-header [aria-label="Open Team"]').getAttribute('aria-expanded') === 'true'`); attempt += 1) await Bun.sleep(25)
+        const after = await page.evaluate<{ readonly suggestions: boolean; readonly team: string | null; readonly draft: string; readonly fieldFocused: boolean }>(`({ suggestions: document.querySelector('.mini-composer__suggestions') !== null, team: document.querySelector('.app-header [aria-label="Open Team"]').getAttribute('aria-expanded'), draft: document.querySelector('.mini-composer__mount textarea').value, fieldFocused: document.activeElement === document.querySelector('.mini-composer__mount textarea') })`)
+        expect(after, `${width}px`).toEqual({ suggestions: false, team: "true", draft: "/", fieldFocused: false })
+      } finally { await page.close() }
+    }
+  }, 30_000)
 
   test("shows running roots before recent cross-workspace Sessions on desktop and phone", async () => {
     for (const [width, height] of [[1440, 900], [390, 844]] as const) {

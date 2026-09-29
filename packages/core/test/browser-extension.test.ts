@@ -10,9 +10,9 @@ describe("Chrome extension location", () => {
     expect(BrowserExtension.location("/opt/ycoding/bin/ycoding")).toBe("/opt/ycoding/bin/ycoding-chrome-extension")
   })
 
-  test("ships every extension runtime file and no tests", async () => {
+  test("ships every extension runtime file except the indicator module bundled into the service worker", async () => {
     const files = (await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: source })))
-      .filter((file) => !file.startsWith("test/"))
+      .filter((file) => !file.startsWith("test/") && file !== "DESIGN.md" && file !== "indicator.js")
       .sort()
     expect(files).toEqual([...BrowserExtension.files])
   })

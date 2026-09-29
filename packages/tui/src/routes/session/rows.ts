@@ -553,7 +553,7 @@ function compactionRowIndex(
   })
 }
 
-function sessionRowMessageID(row: SessionRow) {
+export function sessionRowMessageID(row: SessionRow) {
   if (row.type === "message" || row.type === "assistant-footer") return row.messageID
   if (row.type === "part") return row.ref.messageID
   if (row.type === "group") return row.refs[0]?.messageID ?? (row.kind === "exploration" ? row.pending[0]?.messageID : undefined)

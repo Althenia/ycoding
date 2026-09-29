@@ -54,6 +54,10 @@ export function canCancelSubagent(state: TeamSubagent["state"]): boolean {
   return state === "starting" || state === "running" || state === "waiting"
 }
 
+export function teamActiveCount(data: Pick<TeamPanelData, "activeTotal" | "tasks">): number {
+  return data.activeTotal ?? data.tasks.filter((entry) => isActiveSubagent(entry.state)).length
+}
+
 export function isActiveSubagent(state: TeamSubagent["state"]): boolean {
   return canCancelSubagent(state) || state === "cancelling"
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { optionsForTrigger, applyMention, reconcileMentions, submission, triggerAt, orderedVariants, visibleModels, pairedFastModel, switchFastModel, effortLevel } from "./composer-logic"
+import { autocompleteBound, optionsForTrigger, applyMention, reconcileMentions, submission, suggestionTrigger, tokenKey, triggerAt, orderedVariants, visibleModels, pairedFastModel, switchFastModel, effortLevel } from "./composer-logic"
 import type { CatalogView, ModelOption } from "../catalog"
 
 const models: ModelOption[] = [
@@ -87,4 +87,25 @@ describe("composer input semantics", () => {
     expect(submission("/unknown", [], catalog, "steer")).toEqual({ kind: "prompt", input: { text: "/unknown", delivery: "steer" } })
   })
 
+})
+
+test("suggestions never exceed the space above the composer or the viewport share, and keep a header tall enough to hold Close", () => {
+  expect(autocompleteBound(700, 844)).toBe(337)
+  expect(autocompleteBound(300, 400)).toBe(160)
+  expect(autocompleteBound(220, 900)).toBe(212)
+  expect(autocompleteBound(900, 1400)).toBe(360)
+  expect(autocompleteBound(90, 200)).toBe(80)
+  expect(autocompleteBound(60, 300)).toBe(54)
+  expect(autocompleteBound(30, 300)).toBe(54)
+})
+
+test("a dismissed suggestion token stays closed until the token changes or another token is chosen", () => {
+  const text = "hello @rev"
+  const dismissed = tokenKey(triggerAt(text, text.length)!)
+  expect(suggestionTrigger(text, text.length, dismissed)).toBeUndefined()
+  expect(suggestionTrigger(text, text.length, undefined)).toEqual({ trigger: "@", start: 6, query: "rev" })
+  expect(suggestionTrigger("hello @revi", 11, dismissed)).toEqual({ trigger: "@", start: 6, query: "revi" })
+  expect(suggestionTrigger("hello @re", 9, dismissed)).toEqual({ trigger: "@", start: 6, query: "re" })
+  expect(suggestionTrigger("@a hello @rev", 2, dismissed)).toEqual({ trigger: "@", start: 0, query: "a" })
+  expect(suggestionTrigger("no token", 8, dismissed)).toBeUndefined()
 })

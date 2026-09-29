@@ -25,6 +25,7 @@ import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionPending } from "@ycoding-ai/core/session/pending"
 import { SessionOrchestrationNotifier } from "@ycoding-ai/core/session/orchestration-notifier"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
+import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionStore } from "@ycoding-ai/core/session/store"
@@ -729,7 +730,7 @@ describe("SubagentTool", () => {
             messageID: SessionMessage.ID.make("msg_interrupted_parent"),
             callID: "call_interrupted",
           }
-          const interruptedIDs = SessionOrchestration.identities(
+          const interruptedIDs = SessionOrchestrationIdentity.launch(
             parent.id,
             interruptedSource.messageID,
             interruptedSource.callID,
@@ -799,7 +800,7 @@ describe("SubagentTool", () => {
             agent: AgentV2.ID.make("reviewer"),
             caller: toolIdentity.agent,
           }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location)))
-          const ids = SessionOrchestration.identities(parent.id, source.messageID, source.callID)
+          const ids = SessionOrchestrationIdentity.launch(parent.id, source.messageID, source.callID)
           yield* sessions.create({
             id: ids.childID,
             parentID: parent.id,
@@ -1563,6 +1564,57 @@ describe("SubagentTool", () => {
           const childID = outputSessionID(settled.output?.structured)
           expect(settled.output?.structured).toMatchObject({ sessionID: childID, status: "running" })
           expect((yield* (yield* PluginRuntime.Service).orchestration.get(parent.id, childID)).background).toBe(true)
+        }),
+      ),
+    ),
+  )
+
+  it.live("delivers a control send to the child under the ID derived from the parent's assistant message and call", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const sessions = yield* SessionV2.Service
+          const parent = yield* sessions.create({ location, model: parentModel })
+          yield* withSubagent(parent.location)
+          const locations = yield* LocationServiceMap.Service
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+          yield* waitForTool(registry, SubagentTool.name)
+          yield* waitForTool(registry, SubagentControlTool.name)
+          const launched = yield* settleTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-send-launch",
+              name: SubagentTool.name,
+              input: { agent: "reviewer", description: "held", prompt: "wait", background: true },
+            },
+          })
+          const childID = outputSessionID(launched.output?.structured)
+          const sent = yield* settleTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-send-control",
+              name: SubagentControlTool.name,
+              input: { action: "send", sessionID: childID, text: "continue", delivery: "steer" },
+            },
+          })
+          expect(sent.output?.structured).toMatchObject({ action: "send", task: { sessionID: childID } })
+          const delivered = (yield* sessions.pending(childID)).filter((item) => item.type === "synthetic")
+          const expected = SessionOrchestrationIdentity.send(parent.id, toolIdentity.messageID, "call-send-control")
+          expect(String(expected)).toBe(
+            `msg_task_send_${Hash.sha256(`${parent.id}\0${toolIdentity.messageID}\0call-send-control`).slice(0, 24)}`,
+          )
+          expect(delivered.map((item) => item.id)).toContain(expected)
+          expect(
+            SessionOrchestrationIdentity.send(parent.id, toolIdentity.messageID, "call-other"),
+          ).not.toBe(expected)
         }),
       ),
     ),

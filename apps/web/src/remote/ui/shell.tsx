@@ -62,7 +62,7 @@ import { RunningSessions } from "./running-sessions"
 import { LoadingPlaceholder } from "./loading"
 import { SubagentBar } from "./subagent-bar"
 import { TeamHeading, TeamView } from "./team-view"
-import { isManagedSubagent, siblingTargets } from "./team-model"
+import { isManagedSubagent, siblingTargets, teamActiveCount } from "./team-model"
 
 const views = ["/remote", "/remote/sessions", "/remote/usage", "/remote/settings"] as const
 
@@ -295,6 +295,13 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
           navControls={tabletRailToggle() ? "session-rail" : undefined}
           onOpenNav={openSessionsNavigation}
           onOpenSession={openSession}
+          team={view() === "/remote" && selected() && !newSessionOpen() ? {
+            count: state().team === undefined ? 0 : teamActiveCount(state().team!),
+            expanded: teamOpen() && !teamClosing(),
+            loading: selectedLoading(),
+            ref: (element) => { teamTrigger = element },
+            onOpen: openTeam,
+          } : undefined}
           view={view()}
         />
 
@@ -311,16 +318,13 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
           </Show>
 
           <main id="remote-main" tabindex="-1" class="workspace__main">
-            <Show when={view() === "/remote" && selected() && !newSessionOpen()}>
+            <Show when={view() === "/remote" && selected() && !newSessionOpen() && !phoneLayout()}>
               <div class="workspace__topbar" data-toast-clearance aria-hidden={selectedLoading() ? "true" : undefined} inert={selectedLoading()}>
-                <Show when={!phoneLayout()}>
-                  <PresentationSwitch
-                    value={office.presentation()}
-                    attention={(state().view?.requests.length ?? 0) > 0}
-                    onChange={office.present}
-                  />
-                </Show>
-                <button ref={teamTrigger} type="button" class="button button--secondary" aria-label="Open Team" aria-expanded={teamOpen() && !teamClosing()} onClick={openTeam}>Team {state().team?.activeTotal ?? state().team?.tasks.length ?? 0}</button>
+                <PresentationSwitch
+                  value={office.presentation()}
+                  attention={(state().view?.requests.length ?? 0) > 0}
+                  onChange={office.present}
+                />
               </div>
             </Show>
             <div class="workspace__scroll" ref={scrollHost} onScroll={() => {
@@ -355,11 +359,9 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                 </Show>
               </Show>
             </div>
+            <div class="conversation-jump-slot" />
             <Show when={composition().showComposer && !officeShown() && !newSessionOpen()}>
-              <>
-                <div class="conversation-jump-slot" />
-                <TodoPanel todos={state().todos} />
-              </>
+              <TodoPanel todos={state().todos} />
             </Show>
             <Show when={selected()}>
                 <RoutePanel active={!managedChild()} preserve class="composer-resident"><Composer
@@ -659,6 +661,13 @@ function RemoteHeader(props: {
   readonly navControls?: string
   readonly onOpenNav: (trigger: HTMLButtonElement) => void
   readonly onOpenSession: (sessionID: string) => void
+  readonly team?: {
+    readonly count: number
+    readonly expanded: boolean
+    readonly loading: boolean
+    readonly ref: (element: HTMLButtonElement) => void
+    readonly onOpen: () => void
+  }
   readonly view: RemoteView
 }): JSX.Element {
   const remote = useRemote()
@@ -710,6 +719,22 @@ function RemoteHeader(props: {
           </span>
         </div>
         <div class="app-header__end">
+          <Show when={props.team}>{(team) => (
+            <button
+              ref={team().ref}
+              type="button"
+              class="button button--ghost app-header__team"
+              aria-label="Open Team"
+              aria-description={`${team().count} active`}
+              aria-expanded={team().expanded}
+              aria-hidden={team().loading ? "true" : undefined}
+              inert={team().loading}
+              onClick={team().onOpen}
+            >
+              <Icon name="team" />
+              <span class="app-header__team-count">{team().count}</span>
+            </button>
+          )}</Show>
           <NotificationCenter onOpenSession={props.onOpenSession} />
           <span class="remote-header__theme">
             <ThemeToggle />

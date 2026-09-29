@@ -6,6 +6,32 @@ const TAGS = ["Added", "Changed", "Fixed"] as const
 describe("release entries", () => {
   test("includes the latest TUI release at the top of the public changelog", () => {
     expect(RELEASES[0]).toEqual({
+      version: "0.7.16",
+      date: "2026-09-29",
+      title: "Scoped file changes, compact controls, and visible browser control",
+      tags: ["Added", "Changed", "Fixed"],
+      changes: [
+        { tag: "Added", text: "Show a control indicator, marked tab title, and action cursor in paired Chrome, with exclusive control of each profile tab by one Session." },
+        { tag: "Added", text: "Keep shared Session notices until read, synchronize dismissals across browsers viewing the same machine, and load older stored notices on demand." },
+        { tag: "Added", text: "Add Send test alert and Re-enable in Settings to check push-service acceptance and restore an expired device subscription." },
+        { tag: "Changed", text: "Give Office varied personal desks, lounge seating, a meeting area and a coffee corner, with a readable opening scale, floor panning and a Fit view that survives resize." },
+        { tag: "Changed", text: "Keep Sessions, Conversation, Usage and Settings navigation; move Team into the header, float jump controls, collapse Edited files, and hide the extra healthy-connection row." },
+        { tag: "Changed", text: "Keep captured changes with each prompt's reply, aggregate repeated edits by file, and attribute resumed subagent work to the request that dispatched it." },
+        { tag: "Changed", text: "Keep the user's Git author and committer identity, omit co-author trailers, and report a missing identity instead of inventing one." },
+        { tag: "Changed", text: "Sign macOS computer-use apps with a stable release identity so future signed updates can retain privacy grants." },
+        { tag: "Fixed", text: "Add Close to composer suggestions, bound the popup to available space, and dismiss without changing the draft or immediately reopening it." },
+        { tag: "Fixed", text: "Keep full provider totals and long names inside Usage cards, with one provider legend instead of a duplicate table." },
+        { tag: "Fixed", text: "Apply System switches to closed-app pushes, preserve choices during registration and across Settings tabs, and report Machine offline only after a confirmed outage." },
+        { tag: "Fixed", text: "Keep goal setup nonblocking, confirm only its own successful response, and restore failed or uncertain objectives without overwriting newer drafts." },
+        { tag: "Fixed", text: "Show a Session whose last run failed as Failed rather than waiting for your decision." },
+        { tag: "Fixed", text: "Preserve typed Anthropic tool arguments for union-root schemas, referenced branches and root constraints." },
+        { tag: "Fixed", text: "Accept the files each update needs, retain the archive layout supported by installed updaters, and report the local helper's actual signing identity." },
+      ],
+    })
+  })
+
+  test("retains the 0.7.15 release content", () => {
+    expect(RELEASES.find((item) => item.version === "0.7.15")).toEqual({
       version: "0.7.15",
       date: "2026-09-29",
       title: "Outcome toasts below the header and exact agent edits",
@@ -317,7 +343,7 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 10)).toEqual(["0.7.15", "0.7.14", "0.7.13", "0.7.12", "0.7.11", "0.7.10", "0.7.9", "0.7.8", "0.7.7", "0.7.6"])
+    expect(versions.slice(0, 11)).toEqual(["0.7.16", "0.7.15", "0.7.14", "0.7.13", "0.7.12", "0.7.11", "0.7.10", "0.7.9", "0.7.8", "0.7.7", "0.7.6"])
     expect(new Set(versions).size).toBe(versions.length)
     const sorted = [...versions].sort((a, b) => compare(b, a))
     expect(versions).toEqual(sorted)

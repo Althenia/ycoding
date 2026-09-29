@@ -201,8 +201,8 @@ describe("relay core: role separation", () => {
     expect(h.messagesTo("client-1").at(-1)).toEqual(frame)
     expect(h.storedStatus()).toEqual(frame)
     expect(h.pushed).toEqual([
-      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_b", deviceID: "dev_1" },
-      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_c", deviceID: "dev_1" },
+      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_b", deviceID: "dev_1", noticeID: "ntc_1" },
+      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_c", deviceID: "dev_1", noticeID: "ntc_2" },
     ])
   })
 

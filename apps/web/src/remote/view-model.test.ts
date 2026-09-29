@@ -88,12 +88,18 @@ describe("createUnavailableRemoteViewModel", () => {
 })
 
 describe("capturedChangesVisible", () => {
-  test("waits for the selected Session to stop running and allows settled outcomes", () => {
-    expect(capturedChangesVisible("running")).toBe(false)
-    expect(capturedChangesVisible("idle")).toBe(true)
-    expect(capturedChangesVisible("interrupted")).toBe(true)
-    expect(capturedChangesVisible("failed")).toBe(true)
-    expect(capturedChangesVisible(undefined)).toBe(false)
+  const messages = [{ id: "msg_user_1", kind: "user" }, { id: "msg_reply_1", kind: "assistant" }, { id: "msg_user_2", kind: "user" }, { id: "msg_reply_2", kind: "assistant" }]
+  test("holds only the unfinished prompt segment's card while the Session runs", () => {
+    expect(capturedChangesVisible("running", messages, "msg_reply_2")).toBe(false)
+    expect(capturedChangesVisible("running", messages, "msg_reply_1")).toBe(true)
+    expect(capturedChangesVisible("running", messages, "msg_missing")).toBe(false)
+  })
+  test("shows every segment once the Session settles and nothing before its status is known", () => {
+    for (const status of ["idle", "interrupted", "failed"] as const) {
+      expect(capturedChangesVisible(status, messages, "msg_reply_2")).toBe(true)
+      expect(capturedChangesVisible(status, messages, "msg_reply_1")).toBe(true)
+    }
+    expect(capturedChangesVisible(undefined, messages, "msg_reply_1")).toBe(false)
   })
 })
 

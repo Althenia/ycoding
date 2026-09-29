@@ -41,6 +41,8 @@
     "random": "echo 'Random script'",
     "sso": "aws sso login --sso-session=ycoding --no-browser",
     "test": "echo 'do not run tests from root' && exit 1",
+    "test:extension": "cd extensions/chrome && bun test",
+    "test:integration:extension": "bun run --cwd packages/server test:integration:extension",
     "test:unit:browser": "bun run --cwd packages/core test:unit:browser && bun run --cwd packages/tui test:unit:browser",
     "test:integration:browser": "bun run --cwd packages/core test:integration:browser && bun run --cwd packages/server test:integration:browser && bun run --cwd packages/tui test:integration:browser"
   },

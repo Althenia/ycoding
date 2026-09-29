@@ -22,7 +22,7 @@ describe("Chrome bridge protocol", () => {
     }
   })
   test("keeps pairing and reconnect credentials in first frames rather than URLs", () => {
-    expect(VERSION).toBe(3)
+    expect(VERSION).toBe(4)
     expect(connectURL("http://127.0.0.1:4096")).toBe("ws://127.0.0.1:4096/api/browser/connect")
     expect(reconnectDelay(0)).toBe(1_000)
     expect(reconnectDelay(4)).toBe(16_000)

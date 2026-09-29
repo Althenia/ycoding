@@ -28,6 +28,7 @@ export type IconName =
   | "external"
   | "file"
   | "user"
+  | "team"
   | "key"
   | "plus"
   | "minus"
@@ -76,6 +77,7 @@ const paths: Record<IconName, readonly string[]> = {
   refresh: ["M20 12a8 8 0 1 1-2.5-5.8", "M20 4v4h-4"],
   external: ["M14 4h6v6", "M20 4l-8 8", "M18 14v6H4V6h6"],
   file: ["M6 3h8l4 4v14H6z", "M14 3v4h4"],
+  team: ["M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z", "M3 19c0-3 2.7-5 6-5s6 2 6 5", "M16 6.2a2.8 2.8 0 0 1 0 5.2", "M17.5 14.3c2 .5 3.5 2 3.5 4.7"],
   user: ["M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M4 21c0-4 3.6-6 8-6s8 2 8 6"],
   key: ["M15 5a5 5 0 1 1-4.6 7L9 13.5H6.5L5 15v2H3v-2l7.4-7.4A5 5 0 0 1 15 5z", "M16.5 8h.01"],
   plus: ["M12 5v14", "M5 12h14"],

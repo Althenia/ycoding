@@ -49,3 +49,37 @@ test("failed owned-tab creation is not retried or redirected to selected tabs", 
   expect(requests).toHaveLength(1)
   expect(new URL(requests[0].url).pathname).toBe("/api/session/ses_owner/browser/open")
 })
+
+test("profile control release carries the tab, generation, and call fences and tabs expose the lease", async () => {
+  const requests: Request[] = []
+  const tab = {
+    id: "btab_profile",
+    sessionID: "ses_holder",
+    title: "Fixture",
+    page: { origin: "https://example.test", path: "/fixture" },
+    status: "shared" as const,
+    generation: 3,
+    documentGeneration: 1,
+    observationRevision: 0,
+    mode: "profile" as const,
+    lease: "other" as const,
+  }
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      requests.push(request)
+      if (new URL(request.url).pathname.endsWith("/release")) return new Response(null, { status: 204 })
+      return Response.json({ data: [tab] })
+    },
+  })
+
+  expect(await client.browser.tabs({ sessionID: "ses_holder" })).toEqual([tab])
+  await client.browser.release({ sessionID: "ses_holder", tabID: tab.id, generation: 3, callID: "call_release" })
+
+  expect(requests.map((request) => [request.method, new URL(request.url).pathname])).toEqual([
+    ["GET", "/api/session/ses_holder/browser/tabs"],
+    ["POST", "/api/session/ses_holder/browser/release"],
+  ])
+  expect(await requests[1].json()).toEqual({ tabID: "btab_profile", generation: 3, callID: "call_release" })
+})

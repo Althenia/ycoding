@@ -455,13 +455,18 @@ test("renders restored instruction notices through the markdown path", async () 
   }
 }, 60_000)
 
-test("collapses file edit results into a summary block that expands to the diff view", async () => {
-  const screen = await transcriptScreen(editTranscript, "docs/runtime.md")
+test("collapses a segment's file edits into one summary block that expands to the diff view", async () => {
+  const screen = await transcriptScreen(editTranscript, "Captured changes 3 files")
 
   try {
+    const header = transcriptLines(screen.lines()).find((line) => line.includes("Captured changes 3 files")) ?? ""
+    expect(header.indexOf("Captured changes 3 files")).toBe(10)
+    expect(screen.frame()).not.toContain("Edited 3 files")
+    expect(screen.frame()).not.toContain("docs/runtime.md")
+    await screen.mouse.click(12, screen.lines().findIndex((line) => line.includes("Captured changes 3 files")))
+    const opened = Date.now() + 2_000
+    while (Date.now() < opened && !screen.frame().includes("docs/configuration.md")) await Bun.sleep(20)
     const lines = transcriptLines(screen.lines())
-    const header = lines.find((line) => line.includes("Edited 3 files")) ?? ""
-    expect(header.indexOf("Edited 3 files")).toBe(10)
 
     for (const [path, additions, deletions] of [
       ["packages/core/src/provider/usage.ts", "+3", "−1"],
@@ -474,7 +479,6 @@ test("collapses file edit results into a summary block that expands to the diff 
       expect(row.indexOf(additions)).toBeLessThan(row.indexOf(deletions))
     }
 
-    // Collapsed is the default: no diff body is painted until the block is expanded.
     expect(screen.frame()).not.toContain("Old cache note")
     expect(screen.frame()).not.toContain("Current cache note")
 

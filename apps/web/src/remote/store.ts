@@ -1334,31 +1334,27 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const read = { owner, sessionID, token }
     capturedRead = read
     lastCapturedRead = now()
-    const pages = [] as NonNullable<SessionView["capturedChanges"]>["data"][number][]
+    const groups = [] as NonNullable<SessionView["capturedChanges"]>[number][]
     const seen = new Set<string>()
     let cursor: string | undefined
-    let mode: "none" | "transcript" | "recovery" | undefined
-    let placementMessageID: string | undefined
     for (;;) {
       const outcome = await owner.request("session.capturedChanges.list", { sessionID, ...(cursor === undefined ? {} : { input: { cursor } }) })
       if (capturedRead !== read || token !== selectionToken || !isCurrentConnection(owner) || state.activeSessionID !== sessionID) return
       if (outcome.status === "failed" && outcome.error.code === "unknown_operation") capturedUnsupported = true
       const page = outcome.status === "ok" ? readCapturedChangesPage(outcome.value) : undefined
-      if (page === undefined || mode !== undefined && (page.mode !== mode || page.placementMessageID !== placementMessageID)) {
+      if (page === undefined) {
         setState({ view: state.view?.id === sessionID ? { ...state.view, capturedChanges: undefined } : state.view })
         if (capturedRead === read) capturedRead = undefined
         return
       }
-      mode = page.mode
-      placementMessageID = page.placementMessageID
-      pages.push(...page.data)
+      groups.push(...page.data)
       cursor = page.cursor?.next
       if (cursor === undefined || seen.has(cursor)) break
       seen.add(cursor)
     }
     if (capturedRead === read) capturedRead = undefined
-    if (cursor !== undefined || mode === undefined || state.view?.id !== sessionID) return
-    setState({ view: { ...state.view, capturedChanges: { mode, ...(placementMessageID === undefined ? {} : { placementMessageID }), data: pages } } })
+    if (cursor !== undefined || state.view?.id !== sessionID) return
+    setState({ view: { ...state.view, capturedChanges: groups } })
   }
 
   const scheduleCapturedRefresh = () => {

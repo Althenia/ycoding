@@ -3,7 +3,7 @@ export * as BrowserProtocol from "./protocol"
 import { Browser } from "@ycoding-ai/schema/browser"
 import { Option, Schema } from "effect"
 
-export const VERSION = 3
+export const VERSION = 4
 export const MAX_FRAME_BYTES = 2 * 1024 * 1024
 export const MAX_SHARED_TABS = 8
 
@@ -99,6 +99,9 @@ const Opened = Schema.Struct({
 const Closed = Schema.Struct({
   type: Schema.Literal("closed"), callID: Browser.CallID, tabID: Browser.TabID, generation: Browser.Generation,
 })
+const Relinquished = Schema.Struct({
+  type: Schema.Literal("relinquished"), callID: Browser.CallID, tabID: Browser.TabID, generation: Browser.Generation,
+})
 
 export const ClientMessage = Schema.Union([
   Pair,
@@ -115,6 +118,7 @@ export const ClientMessage = Schema.Union([
   Forget,
   Opened,
   Closed,
+  Relinquished,
 ])
 export type ClientMessage = typeof ClientMessage.Type
 export type Handshake = typeof Pair.Type | typeof Authenticate.Type
@@ -122,7 +126,7 @@ export type Handshake = typeof Pair.Type | typeof Authenticate.Type
 export type ServerMessage =
   | {
       readonly type: "paired"
-      readonly version: 3
+      readonly version: 4
       readonly generation: number
       readonly serverID: string
       readonly credential?: string
@@ -143,6 +147,7 @@ export type ServerMessage =
   | { readonly type: "open"; readonly callID: string; readonly tabID: Browser.TabID; readonly generation: number; readonly url: string }
   | { readonly type: "close"; readonly callID: string; readonly tabID: Browser.TabID; readonly generation: number }
   | { readonly type: "release"; readonly tabID: Browser.TabID; readonly generation: number }
+  | { readonly type: "relinquish"; readonly callID: string; readonly tabID: Browser.TabID; readonly generation: number }
   | { readonly type: "error"; readonly message: string }
 
 const decode = Schema.decodeUnknownOption(ClientMessage)

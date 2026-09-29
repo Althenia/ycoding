@@ -381,14 +381,26 @@ test("source verification legs start in parallel with the native builds", () => 
     ["Verify local remote integration", "matrix.suite == 'remote'"],
     ["Verify Cloudflare Worker", "matrix.suite == 'web'"],
     ["Verify CLI suites", "matrix.suite == 'cli'"],
+    ["Verify Chrome extension suites", "matrix.suite == 'cli'"],
     ["Verify transcript and approval suites", "matrix.suite == 'tui'"],
     ["Verify goal continuation", "matrix.suite == 'tui'"],
     ["Verify installer and web assets", "matrix.suite == 'web'"],
     ["Verify approved browser host", "matrix.suite == 'browser'"],
     ["Verify isolated-browser integration suites", "matrix.suite == 'browser'"],
+    ["Provision Chrome for Testing", "matrix.suite == 'browser'"],
+    ["Verify Chrome extension integration suite", "matrix.suite == 'browser'"],
   ])
     expect(verify).toContain(`      - name: ${step}\n        if: ${condition}\n`)
   expect(verify).toContain("uses: ./.github/actions/verify-browser-host")
+  expect(verify).toContain("run: bun run test:extension")
+  expect(verify).toContain("run: bun run test:integration:extension")
+  expect(verify).toContain('executable="$(bun script/chrome-for-testing.ts "$RUNNER_TEMP/chrome-for-testing")"')
+  expect(verify).toContain("YCODING_TEST_ISOLATED_BROWSER_CHROME=$executable")
+  expect(verify).not.toContain("puppeteer")
+  expect(verify).toContain('"$GITHUB_WORKSPACE/script/chrome-for-testing.test.ts"')
+  expect(verify.indexOf("- name: Provision Chrome for Testing")).toBeLessThan(
+    verify.indexOf("- name: Verify Chrome extension integration suite"),
+  )
 })
 
 test("the packaged isolated-browser smoke waits for the native builds on the approved host", () => {

@@ -14,6 +14,7 @@ import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
+import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
 import { SessionOrchestrationNotifier } from "@ycoding-ai/core/session/orchestration-notifier"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
@@ -441,9 +442,9 @@ describe("Session orchestration helpers", () => {
 
   it.effect("derives deterministic launch, input, answer, and notification identities", () =>
     Effect.sync(() => {
-      const first = SessionOrchestration.identities(parentID, SessionMessage.ID.make("msg_parent"), "call_1")
-      const retry = SessionOrchestration.identities(parentID, SessionMessage.ID.make("msg_parent"), "call_1")
-      const other = SessionOrchestration.identities(parentID, SessionMessage.ID.make("msg_parent"), "call_2")
+      const first = SessionOrchestrationIdentity.launch(parentID, SessionMessage.ID.make("msg_parent"), "call_1")
+      const retry = SessionOrchestrationIdentity.launch(parentID, SessionMessage.ID.make("msg_parent"), "call_1")
+      const other = SessionOrchestrationIdentity.launch(parentID, SessionMessage.ID.make("msg_parent"), "call_2")
       expect(retry.childID).toBe(first.childID)
       expect(retry.inputID).toBe(first.inputID)
       expect(retry.launchEventID).toBe(first.launchEventID)

@@ -97,26 +97,26 @@ function deferred(): { readonly promise: Promise<void>; readonly release: () => 
 }
 
 describe("captured file changes", () => {
-  test("reads the connector's captured summary", async () => {
+  const change = (path: string, placementMessageID = "msg_reply") => ({ placementMessageID, path, additions: 1, deletions: 1, status: "modified", files: [{ path, diff: "@@ -1 +1 @@\n-old\n+new", additions: 1, deletions: 1, status: "modified" }] })
+  test("reads the connector's per-segment captured summary", async () => {
     const test = await harness({ handler: (request) => request.operation === "session.capturedChanges.list"
-      ? { ok: true, value: { mode: "transcript", placementMessageID: "msg_reply", data: [{ path: "src/child.ts", additions: 1, deletions: 1, status: "modified", files: [{ path: "src/child.ts", diff: "@@ -1 +1 @@\n-old\n+new", additions: 1, deletions: 1, status: "modified" }] }] } }
+      ? { ok: true, value: { data: [change("src/a.ts", "msg_reply_1"), change("src/b.ts", "msg_reply_2")] } }
       : "default" })
     try {
       await connect(test)
       await test.store.selectSession("ses_a")
-      await test.runUntil(() => test.store.state().view?.capturedChanges?.data.length === 1)
-      expect(test.store.state().view?.capturedChanges).toMatchObject({ mode: "transcript", placementMessageID: "msg_reply", data: [{ path: "src/child.ts", additions: 1 }] })
+      await test.runUntil(() => test.store.state().view?.capturedChanges?.length === 2)
+      expect(test.store.state().view?.capturedChanges).toMatchObject([{ placementMessageID: "msg_reply_1", path: "src/a.ts" }, { placementMessageID: "msg_reply_2", path: "src/b.ts" }])
       expect(test.relay.requests.filter((request) => request.operation === "session.capturedChanges.list")).toHaveLength(1)
     } finally { await test.stop() }
   })
 
   test("publishes captured pages only after the final cursor page settles", async () => {
     const gate = deferred()
-    const change = (path: string) => ({ path, additions: 1, deletions: 1, status: "modified", files: [{ path, diff: "@@ -1 +1 @@\n-old\n+new", additions: 1, deletions: 1, status: "modified" }] })
     const test = await harness({ handler: async (request) => {
       if (request.operation !== "session.capturedChanges.list") return "default"
-      if (request.input?.cursor === "page_2") { await gate.promise; return { ok: true, value: { mode: "transcript", placementMessageID: "msg_reply", data: [change("src/b.ts")] } } }
-      return { ok: true, value: { mode: "transcript", placementMessageID: "msg_reply", data: [change("src/a.ts")], cursor: { next: "page_2" } } }
+      if (request.input?.cursor === "page_2") { await gate.promise; return { ok: true, value: { data: [change("src/b.ts", "msg_reply_2")] } } }
+      return { ok: true, value: { data: [change("src/a.ts", "msg_reply_1")], cursor: { next: "page_2" } } }
     } })
     try {
       await connect(test)
@@ -124,23 +124,23 @@ describe("captured file changes", () => {
       await test.runUntil(() => test.relay.requests.filter((request) => request.operation === "session.capturedChanges.list").length === 2)
       expect(test.store.state().view?.capturedChanges).toBeUndefined()
       gate.release()
-      await test.runUntil(() => test.store.state().view?.capturedChanges?.data.length === 2)
-      expect(test.store.state().view?.capturedChanges?.data.map((file) => file.path)).toEqual(["src/a.ts", "src/b.ts"])
+      await test.runUntil(() => test.store.state().view?.capturedChanges?.length === 2)
+      expect(test.store.state().view?.capturedChanges?.map((file) => [file.placementMessageID, file.path])).toEqual([["msg_reply_1", "src/a.ts"], ["msg_reply_2", "src/b.ts"]])
     } finally { gate.release(); await test.stop() }
   })
 
   test("re-reads captured changes after a same-device reconnect", async () => {
     let revision = 0
     const test = await harness({ handler: (request) => request.operation === "session.capturedChanges.list"
-      ? { ok: true, value: revision === 0 ? { mode: "none", data: [] } : { mode: "transcript", placementMessageID: "msg_reply", data: [{ path: "src/new.ts", additions: 1, deletions: 0, status: "modified", files: [{ path: "src/new.ts", diff: "@@ -0,0 +1 @@\n+new", additions: 1, deletions: 0, status: "modified" }] }] } }
+      ? { ok: true, value: revision === 0 ? { data: [] } : { data: [change("src/new.ts")] } }
       : "default" })
     try {
       await connect(test)
       await test.store.selectSession("ses_a")
-      await test.runUntil(() => test.store.state().view?.capturedChanges?.mode === "none")
+      await test.runUntil(() => test.store.state().view?.capturedChanges?.length === 0)
       revision = 1
       test.relay.dropConnections(1006, "")
-      await test.runUntil(() => test.store.state().view?.capturedChanges?.data.length === 1)
+      await test.runUntil(() => test.store.state().view?.capturedChanges?.length === 1)
       expect(test.relay.requests.filter((request) => request.operation === "session.capturedChanges.list").length).toBeGreaterThanOrEqual(2)
     } finally { await test.stop() }
   })
@@ -149,17 +149,17 @@ describe("captured file changes", () => {
     let clock = 1_000
     let revision = 0
     const test = await harness({ now: () => clock, handler: (request) => request.operation === "session.capturedChanges.list"
-      ? { ok: true, value: revision === 0 ? { mode: "none", data: [] } : { mode: "transcript", placementMessageID: "msg_reply", data: [{ path: "src/child.ts", additions: 1, deletions: 1, status: "modified", files: [{ path: "src/child.ts", diff: "@@ -1 +1 @@\n-old\n+new", additions: 1, deletions: 1, status: "modified" }] }] } }
+      ? { ok: true, value: revision === 0 ? { data: [] } : { data: [change("src/child.ts")] } }
       : "default" })
     try {
       await connect(test)
       await test.store.selectSession("ses_a")
-      await test.runUntil(() => test.store.state().view?.capturedChanges?.mode === "none")
+      await test.runUntil(() => test.store.state().view?.capturedChanges?.length === 0)
       revision = 1
       clock += 10_000
       test.relay.pushEvent("ses_a", { id: "evt_step", type: "session.step.ended", data: { sessionID: "ses_a", assistantMessageID: "msg_reply" } })
       test.relay.pushEvent("ses_a", { id: "evt_child", type: "session.synthetic", durable: { aggregateID: "ses_a", seq: 2 }, data: { sessionID: "ses_a", metadata: { source: "subagent_notification", childID: "ses_child", type: "completed", revision: 1 }, text: "Child completed" } })
-      await test.runUntil(() => test.store.state().view?.capturedChanges?.mode === "transcript")
+      await test.runUntil(() => test.store.state().view?.capturedChanges?.length === 1)
       expect(test.relay.requests.filter((request) => request.operation === "session.capturedChanges.list")).toHaveLength(2)
     } finally { await test.stop() }
   })

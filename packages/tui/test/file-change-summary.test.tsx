@@ -20,142 +20,59 @@ const session = {
   tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
   time: { created: 1, updated: 3 },
 }
-const parentPatch = [
-  "--- a/src/parent.ts",
-  "+++ b/src/parent.ts",
-  "@@ -1 +1 @@",
-  "-export const value = 'old'",
-  "+export const value = 'new'",
-].join("\n")
-const childPatch = [
+const patchFor = (path: string, line: string) => [`--- a/${path}`, `+++ b/${path}`, "@@ -1 +1 @@", "-export const value = 'old'", `+export const value = '${line}'`].join("\n")
+const parentPatch = patchFor("src/parent.ts", "new")
+const secondPatch = [
   "--- a/src/parent.ts",
   "+++ b/src/parent.ts",
   "@@ -1 +1 @@",
   "-export const next = 'old'",
   "+export const next = 'new'",
 ].join("\n")
-const sixPathFiles = [
-  "src/parent.ts",
-  "src/child.ts",
-  "src/feature.ts",
-  "src/config.ts",
-  "src/routes.ts",
-  "src/styles.ts",
-].map((path) => ({
-  path,
-  patch: [
-    `--- a/${path}`,
-    `+++ b/${path}`,
-    "@@ -1 +1 @@",
-    "-export const value = 'old'",
-    "+export const value = 'new'",
-  ].join("\n"),
-  additions: 1,
-  deletions: 1,
-}))
-const workingTranscript = [
-  { id: "msg_user", type: "user", text: "Apply the changes", time: { created: 1 } },
-  {
-    id: "msg_assistant_working",
-    type: "assistant",
-    agent: "build",
-    model,
-    content: [
-      {
-        type: "tool",
-        id: "call_edit_parent",
-        name: "edit",
-        state: {
-          status: "running",
-          input: { path: "src/parent.ts" },
-          content: [],
-          structured: { files: [{ file: "src/parent.ts", patch: parentPatch, additions: 1, deletions: 1 }] },
-        },
-        time: { created: 2, ran: 2 },
-      },
-    ],
-    finish: "tool-calls",
-    time: { created: 2 },
-  },
-] as SessionMessageInfo[]
-const aggregateTranscript = [
-  ...workingTranscript.slice(0, 1),
-  {
-    id: "msg_assistant_complete",
-    type: "assistant",
-    agent: "build",
-    model,
-    content: [
-      {
-        type: "tool",
-        id: "call_edit_parent_complete",
-        name: "edit",
-        state: {
-          status: "completed",
-          input: { path: "src/parent.ts" },
-          content: [],
-          structured: {
-            files: [
-              { file: "src/parent.ts", patch: parentPatch, additions: 1, deletions: 1 },
-              { file: "src/parent.ts", patch: childPatch, additions: 1, deletions: 1 },
-            ],
-          },
-        },
-        time: { created: 2, ran: 2, completed: 3 },
-      },
-    ],
-    finish: "stop",
-    time: { created: 2, completed: 3 },
-  },
-] as SessionMessageInfo[]
-const childTranscript = [{
-  id: "msg_child_complete", type: "assistant", agent: "build", model,
-  content: [{ type: "tool", id: "call_edit_child", name: "edit", state: {
-    status: "completed", input: { path: "src/parent.ts" }, content: [],
-    structured: { files: [{ file: "src/parent.ts", patch: childPatch, additions: 1, deletions: 1 }] },
-  }, time: { created: 2, ran: 2, completed: 3 } }], finish: "stop", time: { created: 2, completed: 3 },
-}] as SessionMessageInfo[]
-const compactedTranscript = [
-  {
-    id: "msg_compaction",
-    type: "compaction",
-    status: "completed",
-    reason: "manual",
-    summary: "Compacted transcript",
-    recent: "",
-    time: { created: 3 },
-  },
-] as SessionMessageInfo[]
-const afterCompactionTranscript = [
-  ...compactedTranscript,
-  {
-    id: "msg_assistant_after_compaction",
-    type: "assistant",
-    agent: "build",
-    model,
-    content: [
-      {
-        type: "tool",
-        id: "call_edit_after_compaction",
-        name: "edit",
-        state: {
-          status: "completed",
-          input: { path: "src/parent.ts" },
-          content: [],
-          structured: { files: [{ file: "src/parent.ts", patch: parentPatch, additions: 1, deletions: 1 }] },
-        },
-        time: { created: 4, ran: 4, completed: 5 },
-      },
-    ],
-    finish: "stop",
-    time: { created: 4, completed: 5 },
-  },
-] as SessionMessageInfo[]
-function routeFor(
-  messages: SessionMessageInfo[],
-  options: { fileChanges?: typeof sixPathFiles; fileChangeFailure?: boolean; onFileChange?: () => void } = {},
-) {
+const sixPaths = ["src/parent.ts", "src/child.ts", "src/feature.ts", "src/config.ts", "src/routes.ts", "src/styles.ts"]
+const user = (id: string, text: string) => ({ id, type: "user", text, time: { created: 1 } })
+const assistant = (id: string, content: unknown[], completed = true) => ({
+  id, type: "assistant", agent: "build", model, content, finish: completed ? "stop" : "tool-calls",
+  time: { created: 2, ...(completed ? { completed: 3 } : {}) },
+})
+const editPart = (id: string, path: string, patch: string, status = "completed") => ({
+  type: "tool", id, name: "edit",
+  state: status === "error"
+    ? { status, input: { path }, content: [], structured: {}, error: { type: "tool.execution", message: "edit denied" } }
+    : { status, input: { path }, content: [], structured: { files: [{ file: path, patch, additions: 1, deletions: 1 }] } },
+  time: { created: 2, ran: 2, ...(status === "completed" ? { completed: 3 } : {}) },
+})
+const asMessages = (messages: unknown[]) => messages as SessionMessageInfo[]
+const workingTranscript = asMessages([user("msg_user", "Apply the changes"), assistant("msg_assistant_working", [editPart("call_edit_running", "src/parent.ts", parentPatch, "running")], false)])
+const singleTranscript = asMessages([user("msg_user", "Apply the changes"), assistant("msg_assistant_complete", [editPart("call_edit_parent", "src/parent.ts", parentPatch)])])
+const mergedTranscript = asMessages([user("msg_user", "Apply the changes"),
+  assistant("msg_assistant_complete", [editPart("call_edit_one", "src/parent.ts", parentPatch), editPart("call_edit_two", "src/parent.ts", secondPatch)])])
+const segmentsTranscript = asMessages([
+  user("msg_user_1", "First request"), assistant("msg_reply_1", [editPart("call_edit_1", "src/parent.ts", parentPatch)]),
+  user("msg_user_2", "Second request"), assistant("msg_reply_2", [{ type: "text", text: "Nothing to change." }]),
+  user("msg_steer", "Steered request"), assistant("msg_reply_3", [editPart("call_edit_3", "src/parent.ts", secondPatch)]),
+])
+const compactedSegmentsTranscript = asMessages([
+  user("msg_user_1", "First request"), assistant("msg_reply_1", [editPart("call_edit_1", "src/first.ts", patchFor("src/first.ts", "first"))]),
+  { id: "msg_compaction", type: "compaction", status: "completed", reason: "manual", summary: "Compacted transcript", recent: "", time: { created: 3 } },
+  user("msg_user_2", "Second request"), assistant("msg_reply_2", [editPart("call_edit_2", "src/second.ts", patchFor("src/second.ts", "second"))]),
+])
+const sixFilesTranscript = asMessages([user("msg_user", "Apply the changes"),
+  assistant("msg_assistant_six", sixPaths.map((path, index) => editPart(`call_edit_${index}`, path, patchFor(path, "new"))))])
+const runningStepTranscript = asMessages([user("msg_user", "Apply the changes"),
+  assistant("msg_step_done", [editPart("call_edit_one", "src/parent.ts", parentPatch)], false),
+  assistant("msg_step_live", [{ type: "text", text: "Still working." }], false)])
+const footerlessTranscript = asMessages([user("msg_user", "Apply the changes"),
+  { ...assistant("msg_step_unknown", [editPart("call_edit_one", "src/parent.ts", parentPatch)]), finish: "unknown" },
+  user("msg_user_2", "Next request"), assistant("msg_reply_2", [{ type: "text", text: "Nothing to change." }])])
+const nextSegmentRunningTranscript = asMessages([
+  user("msg_user_1", "First request"), assistant("msg_reply_1", [editPart("call_edit_1", "src/first.ts", patchFor("src/first.ts", "first"))]),
+  user("msg_user_2", "Second request"), assistant("msg_step_2", [editPart("call_edit_2", "src/second.ts", patchFor("src/second.ts", "second"))], false),
+])
+const failedTranscript = asMessages([user("msg_user", "Apply the changes"), assistant("msg_assistant_failed", [editPart("call_edit_failed", "src/parent.ts", parentPatch, "error")])])
+function routeFor(messages: SessionMessageInfo[], options: { onFileChange?: () => void; running?: boolean } = {}) {
   return (url: URL) => {
+    if (url.pathname === "/api/session/active") return json({ data: options.running ? { [sessionID]: {} } : {} })
     if (url.pathname === "/api/fs/list") return json({ location, data: [] })
     if (url.pathname === "/api/location") return json(location)
     if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
@@ -163,14 +80,11 @@ function routeFor(
     if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: messages, cursor: {} })
     if (url.pathname === `/api/session/${sessionID}/file-change`) {
       options.onFileChange?.()
-      if (options.fileChangeFailure) return json({ message: "file changes unavailable" }, { status: 500 })
-      return json({ data: options.fileChanges ?? sixPathFiles })
+      return json({ data: [] })
     }
-    if (url.pathname === "/api/session/ses_child/message") return json({ data: childTranscript, cursor: {} })
     if (url.pathname === `/api/session/${sessionID}/pending`) return json({ data: [] })
     if (url.pathname === `/api/session/${sessionID}/guardrail/request`) return json({ location, data: [] })
-    if (url.pathname === `/api/session/${sessionID}/subagent`)
-      return json({ data: [{ sessionID: "ses_child", parentID: sessionID, description: "Update child file", agent: "build", model, background: true, state: "completed", revision: 1, time: { created: 2, updated: 3 } }], summary: { total: 1, active: 0, running: 0, waiting: 0 }, cursor: {} })
+    if (url.pathname === `/api/session/${sessionID}/subagent`) return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
     if (
       [
         `/api/session/${sessionID}/permission`,
@@ -200,16 +114,6 @@ function routeFor(
   }
 }
 
-test("keeps an in-progress file row compact", async () => {
-  const screen = await renderScreen({ ...DESIGN_VIEWPORT, args: { sessionID }, route: routeFor(workingTranscript), settle: "src/parent.ts" })
-  try {
-    expect(screen.frame()).toContain("src/parent.ts")
-    expect(screen.frame()).not.toContain("export const value = 'new'")
-  } finally {
-    await screen.dispose()
-  }
-}, 60_000)
-
 async function waitForFrame(frame: () => string, text: string) {
   const deadline = Date.now() + 2_000
   while (Date.now() < deadline) {
@@ -218,6 +122,142 @@ async function waitForFrame(frame: () => string, text: string) {
   }
   throw new Error(`screen did not settle on ${text}`)
 }
+
+const headerRows = (lines: string[], header: string) => lines.flatMap((line, index) => (line.includes(header) ? [index] : []))
+
+test("shows a running edit as its own row and never as an edited or captured summary", async () => {
+  const screen = await renderScreen({ ...DESIGN_VIEWPORT, args: { sessionID }, route: routeFor(workingTranscript), settle: "src/parent.ts" })
+  try {
+    expect(screen.frame()).toContain("src/parent.ts")
+    expect(screen.frame()).not.toContain("export const value = 'new'")
+    expect(screen.frame()).not.toContain("Edited 1 file")
+    expect(screen.frame()).not.toContain("Captured changes")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("keeps a completed edit visible in the summary while its step is still running", async () => {
+  const screen = await renderScreen({ ...DESIGN_VIEWPORT, height: 60, args: { sessionID }, route: routeFor(runningStepTranscript, { running: true }), settle: "Still working." })
+  try {
+    await waitForFrame(screen.frame, "Captured changes 1 file")
+    const line = (text: string) => screen.lines().findIndex((row) => row.includes(text))
+    expect(line("Still working.")).toBeLessThan(line("Captured changes 1 file"))
+    expect(screen.frame()).not.toContain("Edited 1 file")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("shows the summary after an assistant that ended without a footer", async () => {
+  const screen = await renderScreen({ ...DESIGN_VIEWPORT, height: 60, args: { sessionID }, route: routeFor(footerlessTranscript), settle: "Apply the changes" })
+  try {
+    await waitForFrame(screen.frame, "Captured changes 1 file")
+    const line = (text: string) => screen.lines().findIndex((row) => row.includes(text))
+    expect(line("Apply the changes")).toBeLessThan(line("Captured changes 1 file"))
+    expect(line("Captured changes 1 file")).toBeLessThan(line("Next request"))
+    expect(screen.frame()).not.toContain("Edited 1 file")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("keeps a finished segment's summary in place while the next segment is running", async () => {
+  const screen = await renderScreen({ ...DESIGN_VIEWPORT, height: 80, args: { sessionID }, route: routeFor(nextSegmentRunningTranscript, { running: true }), settle: "Second request" })
+  try {
+    await waitFor(() => headerRows(screen.lines(), "Captured changes 1 file").length === 2, "two segment summaries")
+    const [first, second] = headerRows(screen.lines(), "Captured changes 1 file")
+    const line = (text: string) => screen.lines().findIndex((row) => row.includes(text))
+    expect(line("First request")).toBeLessThan(first!)
+    expect(first!).toBeLessThan(line("Second request"))
+    expect(line("Second request")).toBeLessThan(second!)
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("keeps a failed edit as its own failed row without a summary", async () => {
+  const screen = await renderScreen({ ...DESIGN_VIEWPORT, args: { sessionID }, route: routeFor(failedTranscript), settle: "Apply the changes" })
+  try {
+    await waitForFrame(screen.frame, "edit")
+    expect(screen.frame()).not.toContain("Captured changes")
+    expect(screen.frame()).not.toContain("Edited 1 file")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("merges repeated edits to one file into one summary row and hides the per-tool edit blocks", async () => {
+  const screen = await renderScreen({ ...DESIGN_VIEWPORT, height: 60, args: { sessionID }, route: routeFor(mergedTranscript), settle: "Captured changes 1 file" })
+  try {
+    await waitForFrame(screen.frame, "Captured changes 1 file")
+    expect(screen.frame()).not.toContain("Edited 1 file")
+    expect(screen.lines().filter((line) => line.includes("src/parent.ts"))).toHaveLength(0)
+    await screen.mouse.click(12, headerRows(screen.lines(), "Captured changes 1 file")[0]!)
+    await waitForFrame(screen.frame, "src/parent.ts")
+    const rows = screen.lines().filter((line) => line.includes("src/parent.ts"))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toContain("+2")
+    expect(screen.frame()).not.toContain("export const value = 'new'")
+    expect(screen.frame()).not.toContain("export const next = 'new'")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("keeps one summary per prompt segment on its own reply, omits an unchanged segment, and reads no ledger", async () => {
+  let ledgerRequested = false
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT, height: 80, args: { sessionID }, route: routeFor(segmentsTranscript, { onFileChange: () => (ledgerRequested = true) }),
+    settle: "Captured changes 1 file",
+  })
+  try {
+    await waitForFrame(screen.frame, "Steered request")
+    await waitFor(() => headerRows(screen.lines(), "Captured changes 1 file").length === 2, "two segment summaries")
+    const [first, second] = headerRows(screen.lines(), "Captured changes 1 file")
+    const line = (text: string) => screen.lines().findIndex((row) => row.includes(text))
+    expect(line("First request")).toBeLessThan(first!)
+    expect(first!).toBeLessThan(line("Second request"))
+    expect(line("Nothing to change.")).toBeLessThan(line("Steered request"))
+    expect(line("Steered request")).toBeLessThan(second!)
+    expect(screen.frame()).not.toContain("Edited 1 file")
+    expect(ledgerRequested).toBe(false)
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("keeps earlier segment summaries across a compaction", async () => {
+  const screen = await renderScreen({ ...DESIGN_VIEWPORT, height: 80, args: { sessionID }, route: routeFor(compactedSegmentsTranscript), settle: "Captured changes 1 file" })
+  try {
+    await waitFor(() => headerRows(screen.lines(), "Captured changes 1 file").length === 2, "two segment summaries")
+    const [first, second] = headerRows(screen.lines(), "Captured changes 1 file")
+    await screen.mouse.click(12, first!)
+    await waitForFrame(screen.frame, "src/first.ts")
+    expect(screen.frame()).not.toContain("src/second.ts")
+    expect(screen.lines().findIndex((row) => row.includes("src/first.ts"))).toBeLessThan(headerRows(screen.lines(), "Captured changes 1 file")[1]!)
+    expect(second).toBeGreaterThan(first!)
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("lists every edited file of one segment and expands a patch", async () => {
+  const screen = await renderScreen({ ...DESIGN_VIEWPORT, height: 80, args: { sessionID }, route: routeFor(sixFilesTranscript), settle: "Captured changes 6 files" })
+  try {
+    await waitForFrame(screen.frame, "Captured changes 6 files")
+    await screen.mouse.click(12, headerRows(screen.lines(), "Captured changes 6 files")[0]!)
+    await waitForFrame(screen.frame, sixPaths.at(-1)!)
+    expect(screen.lines().filter((line) => sixPaths.some((path) => line.includes(path)))).toHaveLength(6)
+    await screen.mouse.click(12, screen.lines().findIndex((line) => line.includes(sixPaths[0]!)))
+    await waitForFrame(screen.frame, "export const value = 'new'")
+    const row = screen.lines().find((line) => line.includes(sixPaths[0]!)) ?? ""
+    expect(row).toContain("+1")
+    expect(row).toContain("−1")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
 
 async function waitFor(condition: () => boolean, label: string) {
   const deadline = Date.now() + 2_000
@@ -228,79 +268,6 @@ async function waitFor(condition: () => boolean, label: string) {
   throw new Error(`screen did not settle on ${label}`)
 }
 
-test("merges repeated edits to the same file into one row", async () => {
-  const screen = await renderScreen({ ...DESIGN_VIEWPORT, args: { sessionID }, route: routeFor(aggregateTranscript), settle: "src/parent.ts" })
-  try {
-    await waitForFrame(screen.frame, "Captured changes 1 file")
-    // Both blocks fold repeated edits to one path into a single row: the per-tool block merges the
-    // two patches this tool produced, and the captured block also folds in the child session edit.
-    expect(screen.frame()).toContain("Edited 1 file")
-    expect(screen.frame()).toContain("Captured changes 1 file")
-    // The captured block is collapsed by default, so only the per-tool row is listed, carrying the
-    // merged +2 from its two patches rather than one row per patch.
-    const parentRows = screen.lines().flatMap((line, index) => (line.includes("src/parent.ts") ? [index] : []))
-    expect(parentRows).toHaveLength(1)
-    expect(screen.lines()[parentRows[0]!]).toContain("+2")
-    // Both patch bodies stay collapsed behind the single merged row. Expanding a block is covered
-    // by captured-file-changes-summary.test.tsx; driving it from here is unreliable once an earlier
-    // render has run in the same process.
-    expect(screen.frame()).not.toContain("export const value = 'new'")
-    expect(screen.frame()).not.toContain("export const next = 'new'")
-  } finally {
-    await screen.dispose()
-  }
-}, 60_000)
-
-test("renders durable captured changes after transcript compaction", async () => {
-  const screen = await renderScreen({
-    ...DESIGN_VIEWPORT,
-    height: 80,
-    args: { sessionID },
-    route: routeFor(compactedTranscript),
-    settle: "Captured changes 6 files",
-  })
-  try {
-    await waitForFrame(screen.frame, "Captured changes 6 files")
-    expect(screen.frame()).toContain("Captured changes 6 files")
-    const header = screen.lines().findIndex((line) => line.includes("Captured changes 6 files"))
-    await screen.mouse.click(12, header)
-    await waitForFrame(screen.frame, sixPathFiles.at(-1)!.path)
-    expect(sixPathFiles.every((file) => screen.lines().some((line) => line.includes(file.path)))).toBe(true)
-    expect(screen.lines().filter((line) => sixPathFiles.some((file) => line.includes(file.path)))).toHaveLength(6)
-    const firstFile = screen.lines().findIndex((line) => line.includes(sixPathFiles[0]!.path))
-    await screen.mouse.click(12, firstFile)
-    await waitForFrame(screen.frame, "export const value = 'new'")
-    expect(screen.frame()).toContain("export const value = 'new'")
-  } finally {
-    await screen.dispose()
-  }
-}, 60_000)
-
-test("recovery summary counts describe the displayed patch rather than cumulative ledger edits", async () => {
-  const screen = await renderScreen({
-    ...DESIGN_VIEWPORT,
-    height: 80,
-    args: { sessionID },
-    route: routeFor(compactedTranscript, { fileChanges: [{ ...sixPathFiles[0]!, additions: 65, deletions: 3 }] }),
-    settle: "Captured changes 1 file",
-  })
-  try {
-    const header = screen.lines().findIndex((line) => line.includes("Captured changes 1 file"))
-    await screen.mouse.click(12, header)
-    await waitForFrame(screen.frame, "src/parent.ts")
-    const row = screen.lines().find((line) => line.includes("src/parent.ts")) ?? ""
-    expect(row).toContain("+1")
-    expect(row).toContain("−1")
-    expect(row).not.toContain("+65")
-    expect(row).not.toContain("−3")
-    await screen.mouse.click(12, screen.lines().findIndex((line) => line.includes("src/parent.ts")))
-    await waitForFrame(screen.frame, "export const value = 'new'")
-    expect(screen.frame()).toContain("export const value = 'old'")
-  } finally {
-    await screen.dispose()
-  }
-}, 60_000)
-
 for (const { name, width, config, split } of [
   { name: "wide auto", width: 189, config: undefined, split: true },
   { name: "wide split preference", width: 189, config: { diffs: { view: "split" } }, split: true },
@@ -310,7 +277,7 @@ for (const { name, width, config, split } of [
 ]) test(`renders an expanded captured file with ${name} layout`, async () => {
   const screen = await renderScreen({
     width, height: 80, config, args: { sessionID },
-    route: routeFor(compactedTranscript, { fileChanges: [sixPathFiles[0]!] }),
+    route: routeFor(singleTranscript),
     settle: "Captured changes 1 file",
   })
   try {
@@ -334,57 +301,6 @@ for (const { name, width, config, split } of [
       expect(oldRow).not.toContain("export const value = 'new'")
       expect(screen.lines().find((line) => line.includes("export const value = 'new'"))).toMatch(/\b1\b/)
     }
-  } finally {
-    await screen.dispose()
-  }
-}, 60_000)
-
-test("keeps the durable recovery empty when compaction recorded no changes", async () => {
-  let fileChangeRequested = false
-  const screen = await renderScreen({
-    ...DESIGN_VIEWPORT,
-    args: { sessionID },
-    route: routeFor(compactedTranscript, { fileChanges: [], onFileChange: () => (fileChangeRequested = true) }),
-    settle: "File change summary",
-  })
-  try {
-    await waitFor(() => fileChangeRequested, "file changes")
-    expect(screen.frame()).not.toContain("Captured changes")
-  } finally {
-    await screen.dispose()
-  }
-}, 60_000)
-
-test("keeps the transcript usable when durable compaction recovery fails", async () => {
-  let fileChangeRequested = false
-  const screen = await renderScreen({
-    ...DESIGN_VIEWPORT,
-    args: { sessionID },
-    route: routeFor(compactedTranscript, { fileChangeFailure: true, onFileChange: () => (fileChangeRequested = true) }),
-    settle: "File change summary",
-  })
-  try {
-    await waitFor(() => fileChangeRequested, "file changes")
-    expect(screen.frame()).not.toContain("Captured changes")
-  } finally {
-    await screen.dispose()
-  }
-}, 60_000)
-
-test("keeps post-compaction assistant summaries transcript-scoped", async () => {
-  let fileChangeRequested = false
-  const screen = await renderScreen({
-    ...DESIGN_VIEWPORT,
-    args: { sessionID },
-    route: routeFor(afterCompactionTranscript, { onFileChange: () => (fileChangeRequested = true) }),
-    settle: "Captured changes 1 file",
-  })
-  try {
-    await waitForFrame(screen.frame, "Captured changes 1 file")
-    expect(screen.frame()).toContain("Captured changes 1 file")
-    expect(screen.frame()).not.toContain("Captured changes 6 files")
-    expect(screen.frame()).not.toContain("src/child.ts")
-    expect(fileChangeRequested).toBe(false)
   } finally {
     await screen.dispose()
   }

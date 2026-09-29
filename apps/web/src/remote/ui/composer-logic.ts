@@ -53,6 +53,19 @@ export function triggerAt(text: string, cursor: number): { trigger: Trigger; sta
   return { trigger, start, query: match[3]! }
 }
 
+export function tokenKey(match: { readonly trigger: Trigger; readonly start: number; readonly query: string }): string {
+  return `${match.trigger}${match.start}:${match.query}`
+}
+
+export function suggestionTrigger(text: string, cursor: number, dismissed: string | undefined) {
+  const match = triggerAt(text, cursor)
+  return match && tokenKey(match) !== dismissed ? match : undefined
+}
+
+export function autocompleteBound(availableAbove: number, viewportHeight: number): number {
+  return Math.floor(Math.max(54, Math.min(360, viewportHeight * 0.4, availableAbove - 8)))
+}
+
 function fuzzy(value: string, query: string): number {
   if (!query) return 1
   const target = value.toLocaleLowerCase()

@@ -113,7 +113,6 @@ export type LocalServer = {
   readonly guardrailStatus: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly guardrailRequestList: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly formList: (sessionID: string, location: LocalLocation) => Promise<readonly FormInfo[]>
-  readonly fileChangeList: (sessionID: string, location: LocalLocation) => Promise<unknown>
   /** Reads one shell's info at the bound Location; the caller proves Session ownership from its metadata. */
   readonly shellGet: (shellID: string, location: LocalLocation) => Promise<unknown>
   /** Reads one bounded page of a shell's captured output at the bound Location. */
@@ -264,8 +263,6 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     guardrailRequestList: (sessionID, location) =>
       call(() => client.guardrail.request.list({ sessionID }, request(location, timeoutMs))),
     formList: (sessionID, location) => call(() => client.form.list({ sessionID }, request(location, timeoutMs))),
-    fileChangeList: (sessionID, location) =>
-      call(() => client.session["file-change"].list({ sessionID }, request(location, timeoutMs))),
     shellGet: (shellID, location) =>
       call(async () => (await client.shell.get({ id: shellID }, request(location, timeoutMs))).data),
     shellOutput: (shellID, location, input) =>

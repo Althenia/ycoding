@@ -436,14 +436,14 @@ test("full skill list scrolls to the last skill without unrelated updates snappi
     await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
     await wait(page, `document.querySelector('.mini-composer__mount textarea') !== null`)
     await type(page, ".mini-composer__mount textarea", "$")
-    await wait(page, `document.querySelectorAll('.mini-composer__mount .mini-composer__autocomplete button').length === 66`)
-    await page.evaluate(`(() => { const list = document.querySelector('.mini-composer__mount .mini-composer__autocomplete'); list.scrollTop = list.scrollHeight; })()`)
-    const before = await page.evaluate<number>(`document.querySelector('.mini-composer__mount .mini-composer__autocomplete').scrollTop`)
+    await wait(page, `document.querySelectorAll('.mini-composer__mount [role="option"]').length === 66`)
+    await page.evaluate(`(() => { const list = document.querySelector('.mini-composer__mount [role="listbox"][aria-label="Suggestions"]'); list.scrollTop = list.scrollHeight; })()`)
+    const before = await page.evaluate<number>(`document.querySelector('.mini-composer__mount [role="listbox"][aria-label="Suggestions"]').scrollTop`)
     expect(before).toBeGreaterThan(0)
     await page.evaluate(`window.composerSetStatus('running')`)
-    expect(await page.evaluate<number>(`document.querySelector('.mini-composer__mount .mini-composer__autocomplete').scrollTop`)).toBe(before)
-    expect(await page.evaluate<boolean>(`(() => { const list = document.querySelector('.mini-composer__mount .mini-composer__autocomplete'); const last = [...list.querySelectorAll('button')].at(-1); return last?.textContent?.includes('skill-62') && last.getBoundingClientRect().bottom <= list.getBoundingClientRect().bottom })()`)).toBe(true)
-    await page.evaluate(`document.querySelector('.mini-composer__mount .mini-composer__autocomplete button:last-of-type')?.click()`)
+    expect(await page.evaluate<number>(`document.querySelector('.mini-composer__mount [role="listbox"][aria-label="Suggestions"]').scrollTop`)).toBe(before)
+    expect(await page.evaluate<boolean>(`(() => { const list = document.querySelector('.mini-composer__mount [role="listbox"][aria-label="Suggestions"]'); const last = [...list.querySelectorAll('[role="option"]')].at(-1); return last?.textContent?.includes('skill-62') && last.getBoundingClientRect().bottom <= list.getBoundingClientRect().bottom })()`)).toBe(true)
+    await page.evaluate(`document.querySelector('.mini-composer__mount [role="option"]:last-of-type')?.click()`)
     expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount textarea')?.value`)).toBe("$skill-62 ")
   } finally { await page.close() }
 }, 30_000)
@@ -758,27 +758,27 @@ test("keyboard and mouse autocomplete, pending identity, and creation work acros
         const input = ".mini-composer__mount textarea"
         for (const [trigger, choice, expected] of [["/pla", "/plan", "/plan "], ["@rev", "@reviewer", "@reviewer "], ["$aud", "$audit", "$audit "], ["#rev", "Reviewer", "@reviewer "]] as const) {
           await type(page, input, trigger)
-          await wait(page, `document.querySelector('.mini-composer__mount .mini-composer__autocomplete button')?.textContent?.includes(${JSON.stringify(choice)}) === true`)
+          await wait(page, `document.querySelector('.mini-composer__mount [role="option"]')?.textContent?.includes(${JSON.stringify(choice)}) === true`)
           if (trigger === "/pla" || trigger === "$aud") await page.pressKey("Enter", "Enter", 13)
-          else await page.evaluate(`document.querySelector('.mini-composer__mount .mini-composer__autocomplete button')?.click()`)
+          else await page.evaluate(`document.querySelector('.mini-composer__mount [role="option"]')?.click()`)
           expect(await page.evaluate<string>(`document.querySelector(${JSON.stringify(input)})?.value`)).toBe(expected)
         }
         await type(page, input, "@apps/web")
-        await wait(page, `document.querySelector('.mini-composer__mount .mini-composer__autocomplete')?.textContent?.includes('composer.tsx') === true`)
-        await page.evaluate(`document.querySelector('.mini-composer__mount .mini-composer__autocomplete button')?.click()`)
+        await wait(page, `document.querySelector('.mini-composer__mount [role="listbox"][aria-label="Suggestions"]')?.textContent?.includes('composer.tsx') === true`)
+        await page.evaluate(`document.querySelector('.mini-composer__mount [role="option"]')?.click()`)
         expect(await page.evaluate<string>(`document.querySelector(${JSON.stringify(input)})?.value`)).toContain("composer.tsx")
         await type(page, input, "@")
-        await wait(page, `document.querySelectorAll('.mini-composer__mount .mini-composer__autocomplete button small').length >= 2`)
-        const suggestionLayout = await page.evaluate<{ starts: number[]; lines: number[] }>(`(() => { const items = [...document.querySelectorAll('.mini-composer__mount .mini-composer__autocomplete button small')].filter(item => item.textContent.trim()); return { starts: items.map(item => item.getBoundingClientRect().left), lines: items.map(item => Math.round(item.getBoundingClientRect().height / parseFloat(getComputedStyle(item).lineHeight))) } })()`)
+        await wait(page, `document.querySelectorAll('.mini-composer__mount [role="option"] small').length >= 2`)
+        const suggestionLayout = await page.evaluate<{ starts: number[]; lines: number[] }>(`(() => { const items = [...document.querySelectorAll('.mini-composer__mount [role="option"] small')].filter(item => item.textContent.trim()); return { starts: items.map(item => item.getBoundingClientRect().left), lines: items.map(item => Math.round(item.getBoundingClientRect().height / parseFloat(getComputedStyle(item).lineHeight))) } })()`)
         expect(new Set(suggestionLayout.starts).size).toBe(1)
         expect(suggestionLayout.lines.every((lines) => lines === 1)).toBe(true)
         if (width === 390 && theme === "light") {
           await type(page, input, "@slow")
           await Bun.sleep(250)
           await type(page, input, "@apps")
-          await wait(page, `document.querySelector('.mini-composer__mount .mini-composer__autocomplete')?.textContent?.includes('composer.tsx') === true`)
+          await wait(page, `document.querySelector('.mini-composer__mount [role="listbox"][aria-label="Suggestions"]')?.textContent?.includes('composer.tsx') === true`)
           await Bun.sleep(420)
-          expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount .mini-composer__autocomplete')?.textContent?.includes('slow.txt') ?? false`)).toBe(false)
+          expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount [role="listbox"][aria-label="Suggestions"]')?.textContent?.includes('slow.txt') ?? false`)).toBe(false)
         }
         if (width! < 480) {
           await page.evaluate(`document.querySelector('.composer__mobile-trigger')?.click()`)
@@ -825,8 +825,8 @@ test("keyboard and mouse autocomplete, pending identity, and creation work acros
         await wait(page, `document.querySelector('.mini-picker__surface [role="option"]') !== null`)
         await page.evaluate(`[...document.querySelectorAll('.mini-picker__surface [role="option"]')].find(item => item.textContent.includes('Other repository'))?.click()`)
         await type(page, ".new-session-composer textarea", "Use @apps/web")
-        await wait(page, `document.querySelector('.new-session-composer .mini-composer__autocomplete')?.textContent?.includes('composer.tsx') === true`)
-        await page.evaluate(`document.querySelector('.new-session-composer .mini-composer__autocomplete button')?.click()`)
+        await wait(page, `document.querySelector('.new-session-composer [role="listbox"][aria-label="Suggestions"]')?.textContent?.includes('composer.tsx') === true`)
+        await page.evaluate(`document.querySelector('.new-session-composer [role="option"]')?.click()`)
         await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Create session"]')?.click()`)
         await wait(page, `document.querySelector('output')?.textContent?.includes('ses_created') === true`)
         expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)?.input`)).toMatchObject({ workspaceID: "work_two", model: { providerID: "anthropic", id: "claude-opus-5-5", variant: "max" }, prompt: { text: "Use @apps/web/src/remote/ui/composer.tsx", files: [{ uri: "file:///workspace/ycoding/apps/web/src/remote/ui/composer.tsx", mention: { start: 4, text: "@apps/web/src/remote/ui/composer.tsx" } }] } })
@@ -848,8 +848,8 @@ test("selected slash, dollar, at and hash suggestions dispatch their TUI-equival
     await wait(page, `document.querySelector(${JSON.stringify(input)}) !== null`)
     const select = async (text: string, label: string) => {
       await type(page, input, text)
-      await wait(page, `[...document.querySelectorAll('.mini-composer__mount .mini-composer__autocomplete button')].some(item => item.textContent.includes(${JSON.stringify(label)}))`)
-      await page.evaluate(`[...document.querySelectorAll('.mini-composer__mount .mini-composer__autocomplete button')].find(item => item.textContent.includes(${JSON.stringify(label)}))?.click()`)
+      await wait(page, `[...document.querySelectorAll('.mini-composer__mount [role="option"]')].some(item => item.textContent.includes(${JSON.stringify(label)}))`)
+      await page.evaluate(`[...document.querySelectorAll('.mini-composer__mount [role="option"]')].find(item => item.textContent.includes(${JSON.stringify(label)}))?.click()`)
     }
     const send = () => page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Send prompt"]')?.click()`)
     const operations = () => page.evaluate<readonly { operation: string; input: unknown }[]>(`window.composerRequests()`)
@@ -918,7 +918,7 @@ test("selected slash, dollar, at and hash suggestions dispatch their TUI-equival
     expect((await operations()).filter((item) => item.operation === "session.prompt")).toHaveLength(6)
 
     await type(page, ".new-session-composer textarea", "/go")
-    expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer .mini-composer__autocomplete button') !== null`)).toBe(false)
+    expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer [role="option"]') !== null`)).toBe(false)
     await type(page, ".new-session-composer textarea", "/goal new objective")
     await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Create session"]')?.click()`)
     expect(await page.evaluate<string>(`document.querySelector('.new-session-composer [role="alert"]')?.textContent ?? ''`)).toContain("Open a session")
@@ -1002,6 +1002,78 @@ test("a failed or uncertain composer goal returns to the empty draft with its ou
     } finally { await page.close() }
   }
 }, 60_000)
+
+test("suggestions offer a named Close and stay dismissed on an unchanged token after Close, an outside press, or Escape", async () => {
+  for (const [width, height, coarse] of [[390, 844, true], [768, 1024, false], [1440, 900, false]] as const) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width, height)
+      if (coarse) await page.setCoarsePointer(true)
+      await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+      await wait(page, `document.querySelector('.mini-composer__mount textarea') !== null`)
+      const field = ".mini-composer__mount textarea"
+      const state = () => page.evaluate<{ open: boolean; expanded: string | null; value: string; focused: boolean; close: string; name: string; hit: number[]; options: number; overflow: boolean }>(`(async () => {
+        await Promise.all((document.querySelector('.mini-composer__mount .mini-composer__suggestions')?.getAnimations() ?? []).map((animation) => animation.finished))
+        const field = document.querySelector(${JSON.stringify(field)}), panel = document.querySelector('.mini-composer__mount .mini-composer__suggestions'), close = panel?.querySelector('.mini-composer__suggestions-head button'), rect = close?.getBoundingClientRect()
+        return { open: panel !== null && panel.querySelector('[role="listbox"][aria-label="Suggestions"]') !== null, expanded: field.getAttribute('aria-expanded'), value: field.value, focused: document.activeElement === field,
+          close: close?.textContent?.trim() ?? '', name: close?.getAttribute('aria-label') ?? '', hit: rect ? [rect.width, rect.height] : [0, 0], options: panel?.querySelectorAll('[role="option"]').length ?? 0, overflow: document.documentElement.scrollWidth > innerWidth }
+      })()`)
+      await type(page, field, "$")
+      await wait(page, `document.querySelectorAll('.mini-composer__mount [role="option"]').length === 66`)
+      const open = await state()
+      expect(open).toMatchObject({ open: true, expanded: "true", value: "$", close: "Close", overflow: false })
+      expect(open.name).toContain("Close")
+      expect(open.hit[1]).toBeGreaterThanOrEqual(coarse ? 44 : 36)
+      expect(open.hit[0]).toBeGreaterThanOrEqual(coarse ? 44 : 36)
+
+      await page.evaluate(`document.querySelector('.mini-composer__suggestions-head button').click()`)
+      expect(await state()).toMatchObject({ open: false, expanded: "false", value: "$", focused: true })
+      await page.evaluate(`document.querySelector(${JSON.stringify(field)}).click()`)
+      expect((await state()).open).toBe(false)
+
+      await type(page, field, "$s")
+      await wait(page, `document.querySelector('.mini-composer__mount .mini-composer__suggestions') !== null`)
+      await page.pressEscape()
+      expect(await state()).toMatchObject({ open: false, value: "$s", focused: true })
+      await page.evaluate(`document.querySelector(${JSON.stringify(field)}).click()`)
+      expect((await state()).open).toBe(false)
+
+      await type(page, field, "$sk")
+      await wait(page, `document.querySelector('.mini-composer__mount .mini-composer__suggestions') !== null`)
+      await page.evaluate(`document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }))`)
+      expect(await state()).toMatchObject({ open: false, value: "$sk" })
+      await page.evaluate(`document.querySelector(${JSON.stringify(field)}).click()`)
+      expect((await state()).open).toBe(false)
+
+      await type(page, field, "$sk @rev")
+      await wait(page, `document.querySelector('.mini-composer__mount .mini-composer__suggestions') !== null`)
+      expect(await state()).toMatchObject({ open: true, value: "$sk @rev" })
+    } finally { await page.close() }
+  }
+}, 60_000)
+
+test("a failed file search leaves no stuck panel: Escape and Close dismiss it and the draft survives", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    await wait(page, `document.querySelector('.mini-composer__mount textarea') !== null`)
+    const field = ".mini-composer__mount textarea"
+    const panel = () => page.evaluate<{ open: boolean; options: number; status: string; value: string; focused: boolean }>(`(() => { const p = document.querySelector('.mini-composer__mount .mini-composer__suggestions'), f = document.querySelector(${JSON.stringify(field)}); return { open: p !== null, options: p?.querySelectorAll('[role="option"]').length ?? 0, status: p?.querySelector('[role="status"]')?.textContent ?? '', value: f.value, focused: document.activeElement === f } })()`)
+    for (const dismiss of ["escape", "close"] as const) {
+      await type(page, field, "@fai")
+      await Bun.sleep(320)
+      expect((await panel()).open).toBe(false)
+      await type(page, field, "@fail")
+      await wait(page, `document.querySelector('.mini-composer__mount .mini-composer__suggestions [role="status"]') !== null`)
+      expect(await panel()).toMatchObject({ open: true, options: 0, status: "File search is unavailable", value: "@fail" })
+      if (dismiss === "escape") await page.pressEscape()
+      else await page.evaluate(`document.querySelector('.mini-composer__suggestions-head button').click()`)
+      expect(await panel()).toMatchObject({ open: false, value: "@fail", focused: true })
+      await Bun.sleep(320)
+      expect((await panel()).open).toBe(false)
+    }
+  } finally { await page.close() }
+}, 30_000)
 
 async function type(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, selector: string, text: string) {
   await page.evaluate(`(() => { const field = document.querySelector(${JSON.stringify(selector)}); field.focus(); field.value = ${JSON.stringify(text)}; field.setSelectionRange(field.value.length, field.value.length); field.dispatchEvent(new InputEvent('input', { bubbles: true })); })()`)

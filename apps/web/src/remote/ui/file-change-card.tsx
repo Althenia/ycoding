@@ -7,27 +7,20 @@ import "./file-change-card.css"
 type CapturedFile = RemoteCapturedChangesPage["data"][number]
 
 export function FileChangeCard(props: { readonly files: () => readonly CapturedFile[] }): JSX.Element {
-  const [showAll, setShowAll] = createSignal(false)
+  const [open, setOpen] = createSignal(false)
   const filesID = createUniqueId()
   const totals = createMemo(() => summarizeFileChanges(props.files()))
-  const shown = () => showAll() ? props.files() : props.files().slice(0, 3)
-  const remaining = () => Math.max(0, props.files().length - 3)
   return (
     <section class="file-change-card" aria-label="Captured file changes">
-      <header class="file-change-card__header">
+      <button type="button" class="file-change-card__summary" aria-expanded={open()} aria-controls={filesID} onClick={() => setOpen(!open())}>
         <span class="file-change-card__icon" aria-hidden="true"><Icon name="file" size={16} /></span>
         <strong class="file-change-card__title">Edited {totals().files} {totals().files === 1 ? "file" : "files"}</strong>
         <span class="file-change-card__totals" aria-label={`${totals().additions} additions, ${totals().deletions} deletions`}>
           <span class="file-change-card__added">+{totals().additions}</span>{" "}<span class="file-change-card__removed">−{totals().deletions}</span>
         </span>
-      </header>
-      <ul class="file-change-card__files" id={filesID}><For each={shown()}>{(file) => <FileChangeRow file={file} />}</For></ul>
-      <Show when={remaining() > 0}>
-        <button type="button" class="file-change-card__more" aria-expanded={showAll()} aria-controls={filesID} onClick={() => setShowAll(!showAll())}>
-          {showAll() ? "Show fewer files" : `Show ${remaining()} more ${remaining() === 1 ? "file" : "files"}`}
-          <Icon name="chevron-down" size={14} />
-        </button>
-      </Show>
+        <span class="file-change-card__chevron" aria-hidden="true"><Icon name="chevron-down" size={14} /></span>
+      </button>
+      <ul class="file-change-card__files" id={filesID} hidden={!open()}><For each={props.files()}>{(file) => <FileChangeRow file={file} />}</For></ul>
     </section>
   )
 }

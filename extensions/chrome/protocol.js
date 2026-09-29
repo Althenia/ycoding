@@ -1,4 +1,4 @@
-export const VERSION = 3
+export const VERSION = 4
 export const MAX_CAPTURE_BYTES = 1024 * 1024
 export const MAX_ELEMENTS = 200
 export const MAX_SHARED_TABS = 8

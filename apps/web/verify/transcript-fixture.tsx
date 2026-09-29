@@ -48,15 +48,21 @@ const capturedFiles = fileChanges.map((file, index) => {
   const unavailable = fileChangesMode === "unavailable" && index === 0
   const additions = unavailable ? 0 : index === 0 ? 2 : 1
   const deletions = unavailable ? 0 : index === 1 ? 0 : 1
-  return { path: file.path, additions, deletions, status: "modified" as const, files: [{ path: file.path, diff: unavailable ? "" : file.patch, additions, deletions, status: "modified" as const, ...(unavailable ? { unavailable: true } : {}) }] }
+  return { placementMessageID: "msg_latest", path: file.path, additions, deletions, status: "modified" as const, files: [{ path: file.path, diff: unavailable ? "" : file.patch, additions, deletions, status: "modified" as const, ...(unavailable ? { unavailable: true } : {}) }] }
 })
-const capturedChanges = fileChangesMode === "no-edits" ? { mode: "none" as const, data: [] }
-  : fileChangesMode === "checkpoint" ? { mode: "recovery" as const, placementMessageID: "msg_file_checkpoint", data: capturedFiles }
-  : { mode: "transcript" as const, placementMessageID: "msg_latest", data: fileChangesMode === "child-only" ? capturedFiles.slice(0, 1)
-    : fileChangesMode === "repeated" ? [{ ...capturedFiles[0]!, additions: 3, deletions: 2,
-        files: [...capturedFiles[0]!.files, { path: capturedFiles[0]!.path, diff: "@@ -2 +2 @@\n-before second\n+after second", additions: 1, deletions: 1, status: "modified" as const }] }] : capturedFiles }
-const fileChangeMessages: readonly RemoteMessageView[] = fileChangesMode === "checkpoint"
-  ? [{ kind: "compaction", id: "msg_file_checkpoint", status: "completed", jobID: "cmp_file", created: 2 }]
+const capturedChanges = fileChangesMode === "no-edits" ? []
+  : fileChangesMode === "segments" ? [{ ...capturedFiles[2]!, placementMessageID: "msg_first_reply" }, ...capturedFiles.slice(0, 2)]
+  : fileChangesMode === "child-only" ? capturedFiles.slice(0, 1)
+  : fileChangesMode === "repeated" ? [{ ...capturedFiles[0]!, additions: 3, deletions: 2,
+      files: [...capturedFiles[0]!.files, { path: capturedFiles[0]!.path, diff: "@@ -2 +2 @@\n-before second\n+after second", additions: 1, deletions: 1, status: "modified" as const }] }]
+  : capturedFiles
+const fileChangeMessages: readonly RemoteMessageView[] = fileChangesMode === "segments"
+  ? [
+      { kind: "user", id: "msg_first_request", state: "consumed", text: "Make the first edit", created: 1 },
+      { kind: "assistant", id: "msg_first_reply", parts: [{ kind: "text", ordinal: 0, text: "The first edit is done." }], created: 2, completed: 3 },
+      { kind: "user", id: "msg_file_request", state: "consumed", text: "Make the second edit", created: 4 },
+      { kind: "assistant", id: "msg_latest", parts: [{ kind: "text", ordinal: 0, text: "The second edit is done." }], created: 5, completed: 6 },
+    ]
   : [
       { kind: "user", id: "msg_file_request", state: "consumed", text: "Edit the files", created: 1 },
       { kind: "assistant", id: "msg_tool_steps", parts: [

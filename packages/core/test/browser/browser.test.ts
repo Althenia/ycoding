@@ -125,7 +125,7 @@ async function attached(
   const attachment = await Effect.runPromise(
     browser.attach({
       origin: `chrome-extension://${extensionID}`,
-      handshake: { type: "pair", version: 3, extensionID, secret: pairing.secret },
+      handshake: { type: "pair", version: 4, extensionID, secret: pairing.secret },
       transport: {
         send: (message) => Queue.offerUnsafe(outbox, message),
         close,
@@ -144,7 +144,7 @@ async function pairedTrust(browser: Browser.Interface, session = sessionID) {
   const attachment = await Effect.runPromise(
     browser.attach({
       origin: `chrome-extension://${extensionID}`,
-      handshake: { type: "pair", version: 3, extensionID, secret: pairing.secret },
+      handshake: { type: "pair", version: 4, extensionID, secret: pairing.secret },
       transport: {
         send: (message) => Queue.offerUnsafe(outbox, message),
         close: () => {},
@@ -430,7 +430,18 @@ describe("paired Chrome browser service", () => {
             title: "Fixture",
             url: "https://example.test/page",
           })
-          expect(yield* Fiber.join(acting)).toMatchObject({ status: "completed", tab: { sessionID: viewer } })
+          expect(yield* Fiber.join(acting)).toMatchObject({ status: "completed", tab: { sessionID: viewer, lease: "self" } })
+          const releasing = yield* browser
+            .release({ sessionID: viewer, tabID, generation: connected.generation, callID: `release-${viewer}` })
+            .pipe(Effect.forkScoped)
+          expect(yield* Queue.take(outbox)).toMatchObject({ type: "relinquish", tabID })
+          yield* connected.attachment.receive({
+            type: "relinquished",
+            callID: `release-${viewer}`,
+            tabID,
+            generation: connected.generation,
+          })
+          yield* Fiber.join(releasing)
         }
         expect(Exit.isFailure(yield* browser.list(SessionSchema.ID.make("ses_missing")).pipe(Effect.exit))).toBe(true)
         yield* browser.stop(foreignSessionID)
@@ -533,7 +544,7 @@ describe("paired Chrome browser service", () => {
               origin: `chrome-extension://${extensionID}`,
               handshake: {
                 type: "authenticate",
-                version: 3,
+                version: 4,
                 extensionID,
                 serverID: trust.response.serverID,
                 credential: trust.response.credential,
@@ -566,7 +577,7 @@ describe("paired Chrome browser service", () => {
           origin: `chrome-extension://${extensionID}`,
           handshake: {
             type: "authenticate",
-            version: 3,
+            version: 4,
             extensionID,
             serverID: trust.response.serverID,
             credential: trust.response.credential,
@@ -575,7 +586,7 @@ describe("paired Chrome browser service", () => {
         })
         expect(yield* Queue.take(outbox)).toMatchObject({
           type: "paired",
-          version: 3,
+          version: 4,
           serverID: trust.response.serverID,
           credential: undefined,
         })
@@ -585,7 +596,7 @@ describe("paired Chrome browser service", () => {
             origin: `chrome-extension://${extensionID}`,
             handshake: {
               type: "authenticate",
-              version: 3,
+              version: 4,
               extensionID,
               serverID: "different-server-identity",
               credential: trust.response.credential,
@@ -626,7 +637,7 @@ describe("paired Chrome browser service", () => {
               origin: `chrome-extension://${extensionID}`,
               handshake: {
                 type: "authenticate",
-                version: 3,
+                version: 4,
                 extensionID,
                 serverID: trust.response.serverID,
                 credential: trust.response.credential,
@@ -660,7 +671,7 @@ describe("paired Chrome browser service", () => {
               origin: `chrome-extension://${extensionID}`,
               handshake: {
                 type: "authenticate",
-                version: 3,
+                version: 4,
                 extensionID,
                 serverID: trust.serverID,
                 credential,
@@ -689,7 +700,7 @@ describe("paired Chrome browser service", () => {
         const pairing = yield* browser.start(sessionID)
         yield* browser.attach({
           origin: `chrome-extension://${extensionID}`,
-          handshake: { type: "pair", version: 3, extensionID, secret: pairing.secret },
+          handshake: { type: "pair", version: 4, extensionID, secret: pairing.secret },
           transport: {
             send: (message) => Queue.offerUnsafe(outbox, message),
             close: (code, reason) => closed.push({ code, reason }),
@@ -710,7 +721,7 @@ describe("paired Chrome browser service", () => {
             origin: `chrome-extension://${extensionID}`,
             handshake: {
               type: "authenticate",
-              version: 3,
+              version: 4,
               extensionID,
               serverID: first.serverID,
               credential: first.credential,
@@ -731,7 +742,7 @@ describe("paired Chrome browser service", () => {
         const rejected = yield* browser
           .attach({
             origin: "https://website.example",
-            handshake: { type: "pair", version: 3, extensionID, secret: pairing.secret },
+            handshake: { type: "pair", version: 4, extensionID, secret: pairing.secret },
             transport: { send: () => true, close: () => {} },
           })
           .pipe(Effect.exit)
@@ -742,7 +753,7 @@ describe("paired Chrome browser service", () => {
         const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
         const connected = yield* browser.attach({
           origin: `chrome-extension://${extensionID}`,
-          handshake: { type: "pair", version: 3, extensionID, secret: pairing.secret },
+          handshake: { type: "pair", version: 4, extensionID, secret: pairing.secret },
           transport: { send: (message) => Queue.offerUnsafe(outbox, message), close: () => {} },
         })
         const paired = yield* Queue.take(outbox)
@@ -750,7 +761,7 @@ describe("paired Chrome browser service", () => {
         const reused = yield* browser
           .attach({
             origin: `chrome-extension://${extensionID}`,
-            handshake: { type: "pair", version: 3, extensionID, secret: pairing.secret },
+            handshake: { type: "pair", version: 4, extensionID, secret: pairing.secret },
             transport: { send: () => true, close: () => {} },
           })
           .pipe(Effect.exit)
@@ -809,7 +820,7 @@ describe("paired Chrome browser service", () => {
             origin: `chrome-extension://${extensionID}`,
             handshake: {
               type: "authenticate",
-              version: 3,
+              version: 4,
               extensionID,
               serverID: paired.response.serverID,
               credential: paired.response.credential,
@@ -1041,5 +1052,296 @@ describe("paired Chrome browser service", () => {
         })
       }),
     )
+  })
+})
+
+type Connected = { readonly attachment: Browser.Attachment; readonly generation: number }
+const executionEvent = (
+  definition: typeof SessionEvent.Execution.Succeeded | typeof SessionEvent.Execution.Failed | typeof SessionEvent.Execution.Interrupted,
+  target = sessionID,
+) =>
+  Schema.decodeUnknownSync(definition)({
+    id: EventV2.ID.create(),
+    created: 1,
+    type: definition.type,
+    durable: { aggregateID: target, seq: 0, version: definition.durable.version },
+    data:
+      definition === SessionEvent.Execution.Interrupted
+        ? { sessionID: target, reason: "user" }
+        : definition === SessionEvent.Execution.Failed
+          ? { sessionID: target, error: { type: "unknown", message: "failed" } }
+          : { sessionID: target },
+  })
+
+describe("paired profile tab leases", () => {
+  const sharedTab = (connected: Connected, tabID: typeof Browser.TabID.Type) =>
+    connected.attachment.receive({
+      type: "shared",
+      mode: "profile",
+      tabID,
+      title: "Fixture",
+      url: "https://example.test/page",
+      documentGeneration: 1,
+      active: false,
+    })
+
+  const observed = (
+    browser: Browser.Interface,
+    outbox: Queue.Queue<BrowserProtocol.ServerMessage>,
+    connected: Connected,
+    viewer: SessionSchema.ID,
+    tabID: typeof Browser.TabID.Type,
+    callID: string,
+  ) =>
+    Effect.gen(function* () {
+      const observing = yield* browser
+        .observe({ sessionID: viewer, tabID, generation: connected.generation, callID })
+        .pipe(Effect.forkScoped)
+      expect(yield* Queue.take(outbox)).toMatchObject({ type: "observe", tabID })
+      yield* connected.attachment.receive({
+        type: "observation",
+        callID,
+        tabID,
+        generation: connected.generation,
+        documentGeneration: 1,
+        revision: 1,
+        title: "Fixture",
+        url: "https://example.test/page",
+        elements: [],
+        truncated: false,
+      })
+      return yield* Fiber.join(observing)
+    })
+
+  const released = (
+    browser: Browser.Interface,
+    outbox: Queue.Queue<BrowserProtocol.ServerMessage>,
+    connected: Connected,
+    viewer: SessionSchema.ID,
+    tabID: typeof Browser.TabID.Type,
+    callID: string,
+  ) =>
+    Effect.gen(function* () {
+      const releasing = yield* browser
+        .release({ sessionID: viewer, tabID, generation: connected.generation, callID })
+        .pipe(Effect.forkScoped)
+      expect(yield* Queue.take(outbox)).toMatchObject({ type: "relinquish", callID, tabID, generation: connected.generation })
+      yield* connected.attachment.receive({ type: "relinquished", callID, tabID, generation: connected.generation })
+      yield* Fiber.join(releasing)
+    })
+
+  const setup = Effect.gen(function* () {
+    const browser = yield* Browser.Service
+    const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
+    const connected = yield* Effect.promise(() => attached(browser, outbox))
+    return { browser, outbox, connected }
+  })
+
+  test("the first observe claims a profile tab and another Session fails before any frame while listing stays available", async () => {
+    await run(Effect.gen(function* () {
+      const { browser, outbox, connected } = yield* setup
+      const tabID = Browser.TabID.make("btab_lease_claim")
+      const other = Browser.TabID.make("btab_lease_free")
+      yield* sharedTab(connected, tabID)
+      yield* sharedTab(connected, other)
+      yield* observed(browser, outbox, connected, sessionID, tabID, "holder-observe")
+      expect(yield* browser.list(sessionID)).toMatchObject([{ id: tabID, lease: "self" }, { id: other }])
+      expect(yield* browser.list(otherSessionID)).toMatchObject([{ id: tabID, lease: "other" }, { id: other }])
+      expect((yield* browser.list(otherSessionID))[1]?.lease).toBeUndefined()
+      const refused = yield* browser
+        .observe({ sessionID: otherSessionID, tabID, generation: connected.generation, callID: "foreign-observe" })
+        .pipe(Effect.flip)
+      const refusedAction = yield* browser
+        .action({ sessionID: otherSessionID, tabID, generation: connected.generation, documentGeneration: 1,
+          observationRevision: 1, callID: "foreign-action", action: { type: "scroll", deltaY: 10 } })
+        .pipe(Effect.flip)
+      expect(refusedAction._tag).toBe("Browser.OwnershipError")
+      expect(refused._tag).toBe("Browser.OwnershipError")
+      expect(yield* Queue.size(outbox)).toBe(0)
+      expect((yield* observed(browser, outbox, connected, otherSessionID, other, "other-observe")).tabID).toBe(other)
+    }))
+  })
+
+  test("group and ungroup claim every member atomically or none", async () => {
+    await run(Effect.gen(function* () {
+      const { browser, outbox, connected } = yield* setup
+      const first = Browser.TabID.make("btab_group_first")
+      const second = Browser.TabID.make("btab_group_second")
+      yield* sharedTab(connected, first)
+      yield* sharedTab(connected, second)
+      yield* observed(browser, outbox, connected, otherSessionID, second, "foreign-holder")
+      yield* observed(browser, outbox, connected, sessionID, first, "group-anchor")
+      const refused = yield* browser.action({ sessionID, tabID: first, generation: connected.generation,
+        documentGeneration: 1, observationRevision: 1, callID: "group-foreign-member",
+        action: { type: "group", tabIDs: [first, second], title: "Task" } }).pipe(Effect.flip)
+      expect(refused._tag).toBe("Browser.OwnershipError")
+      expect(yield* Queue.size(outbox)).toBe(0)
+      yield* released(browser, outbox, connected, otherSessionID, second, "release-second")
+      const grouping = yield* browser.action({ sessionID, tabID: first, generation: connected.generation,
+        documentGeneration: 1, observationRevision: 1, callID: "group-both",
+        action: { type: "group", tabIDs: [first, second], title: "Task" } }).pipe(Effect.forkScoped)
+      expect(yield* Queue.take(outbox)).toMatchObject({ type: "action", callID: "group-both" })
+      expect((yield* browser.list(otherSessionID)).map((tab) => [tab.id, tab.lease])).toEqual([[first, "other"], [second, "other"]])
+      yield* connected.attachment.receive({ type: "result", tabID: first, callID: "group-both",
+        generation: connected.generation, documentGeneration: 1, observationRevision: 1, status: "completed",
+        title: "Fixture", url: "https://example.test/page", groupID: 7 })
+      expect(yield* Fiber.join(grouping)).toMatchObject({ status: "completed", groupID: 7 })
+    }))
+  })
+
+  test("release keeps the lease until the extension acknowledges cleanup and invalidates prior fences", async () => {
+    await run(Effect.gen(function* () {
+      const { browser, outbox, connected } = yield* setup
+      const tabID = Browser.TabID.make("btab_release_ack")
+      yield* sharedTab(connected, tabID)
+      yield* observed(browser, outbox, connected, sessionID, tabID, "release-holder")
+      const releasing = yield* browser.release({ sessionID, tabID, generation: connected.generation, callID: "release-call" })
+        .pipe(Effect.forkScoped)
+      expect(yield* Queue.take(outbox)).toMatchObject({ type: "relinquish", callID: "release-call", tabID })
+      expect((yield* browser.observe({ sessionID: otherSessionID, tabID, generation: connected.generation,
+        callID: "early-claim" }).pipe(Effect.flip))._tag).toBe("Browser.OwnershipError")
+      expect((yield* browser.observe({ sessionID, tabID, generation: connected.generation,
+        callID: "holder-during-release" }).pipe(Effect.flip))._tag).toBe("Browser.BusyError")
+      yield* connected.attachment.receive({ type: "relinquished", callID: "release-call", tabID, generation: connected.generation })
+      yield* Fiber.join(releasing)
+      expect((yield* browser.list(sessionID))[0]?.lease).toBeUndefined()
+      expect((yield* browser.action({ sessionID, tabID, generation: connected.generation, documentGeneration: 1,
+        observationRevision: 1, callID: "stale-after-release", action: { type: "scroll", deltaY: 1 } }).pipe(Effect.flip))._tag)
+        .toBe("Browser.FenceError")
+      yield* observed(browser, outbox, connected, otherSessionID, tabID, "new-holder")
+      expect((yield* browser.list(sessionID))[0]?.lease).toBe("other")
+    }))
+  })
+
+  test("an unacknowledged release fails and keeps the holder until a retry is acknowledged", async () => {
+    await run(Effect.gen(function* () {
+      const { browser, outbox, connected } = yield* setup
+      const tabID = Browser.TabID.make("btab_release_lost")
+      yield* sharedTab(connected, tabID)
+      yield* observed(browser, outbox, connected, sessionID, tabID, "lost-holder")
+      const lost = yield* browser.release({ sessionID, tabID, generation: connected.generation, callID: "release-lost" })
+        .pipe(Effect.flip)
+      expect(lost._tag).toBe("Browser.UnavailableError")
+      expect(yield* Queue.take(outbox)).toMatchObject({ type: "relinquish", callID: "release-lost" })
+      expect((yield* browser.list(otherSessionID))[0]?.lease).toBe("other")
+      yield* released(browser, outbox, connected, sessionID, tabID, "release-retry")
+      expect((yield* browser.list(otherSessionID))[0]?.lease).toBeUndefined()
+    }))
+  })
+
+  test("release is idempotent for a free tab and rejects a non-holder or stale generation", async () => {
+    await run(Effect.gen(function* () {
+      const { browser, outbox, connected } = yield* setup
+      const tabID = Browser.TabID.make("btab_release_guard")
+      yield* sharedTab(connected, tabID)
+      yield* browser.release({ sessionID, tabID, generation: connected.generation, callID: "free-release" })
+      expect(yield* Queue.size(outbox)).toBe(0)
+      yield* observed(browser, outbox, connected, sessionID, tabID, "guard-holder")
+      expect((yield* browser.release({ sessionID: otherSessionID, tabID, generation: connected.generation,
+        callID: "foreign-release" }).pipe(Effect.flip))._tag).toBe("Browser.OwnershipError")
+      expect((yield* browser.release({ sessionID, tabID, generation: connected.generation + 1,
+        callID: "stale-release" }).pipe(Effect.flip))._tag).toBe("Browser.FenceError")
+      expect(yield* Queue.size(outbox)).toBe(0)
+    }))
+  })
+
+  test("an extension error before dispatch releases only the claim that command made", async () => {
+    await run(Effect.gen(function* () {
+      const { browser, outbox, connected } = yield* setup
+      const tabID = Browser.TabID.make("btab_claim_rollback")
+      yield* sharedTab(connected, tabID)
+      const observing = yield* browser.observe({ sessionID, tabID, generation: connected.generation, callID: "marker-fail" })
+        .pipe(Effect.forkScoped)
+      yield* Queue.take(outbox)
+      yield* connected.attachment.receive({ type: "error", callID: "marker-fail", tabID, generation: connected.generation,
+        dispatched: false, message: "marker unavailable" })
+      expect((yield* Fiber.join(observing).pipe(Effect.flip))._tag).toBe("Browser.BridgeError")
+      expect((yield* browser.list(otherSessionID))[0]?.lease).toBeUndefined()
+      yield* observed(browser, outbox, connected, sessionID, tabID, "holder-again")
+      const rejected = yield* browser.action({ sessionID, tabID, generation: connected.generation, documentGeneration: 1,
+        observationRevision: 1, callID: "reject-keeps", action: { type: "scroll", deltaY: 5 } }).pipe(Effect.forkScoped)
+      yield* Queue.take(outbox)
+      yield* connected.attachment.receive({ type: "error", callID: "reject-keeps", tabID, generation: connected.generation,
+        dispatched: false, message: "pinned" })
+      expect(yield* Fiber.join(rejected)).toMatchObject({ status: "rejected" })
+      expect((yield* browser.list(otherSessionID))[0]?.lease).toBe("other")
+    }))
+  })
+
+  const executionEnds = [SessionEvent.Execution.Succeeded, SessionEvent.Execution.Failed, SessionEvent.Execution.Interrupted]
+  executionEnds.forEach((event) => {
+    test(`${event.type} releases only profile control after acknowledgement and keeps owned tabs`, async () => {
+      await run(Effect.gen(function* () {
+        const { browser, outbox, connected } = yield* setup
+        const tabID = Browser.TabID.make("btab_exec_release")
+        yield* sharedTab(connected, tabID)
+        const opening = yield* browser.open({ sessionID, generation: connected.generation,
+          url: "https://example.test/owned", callID: "exec-open" }).pipe(Effect.forkScoped)
+        const open = yield* Queue.take(outbox)
+        if (open.type !== "open") throw new Error("expected open frame")
+        yield* connected.attachment.receive({ type: "opened", callID: open.callID, tabID: open.tabID,
+          generation: open.generation, title: "Owned", url: open.url, documentGeneration: 1, active: false })
+        yield* Fiber.join(opening)
+        yield* observed(browser, outbox, connected, sessionID, tabID, "exec-holder")
+        yield* PubSub.publish(lifecycleEvents, executionEvent(event))
+        const relinquish = yield* Queue.take(outbox)
+        if (relinquish.type !== "relinquish") throw new Error("expected relinquish frame")
+        expect(relinquish).toMatchObject({ tabID, generation: connected.generation })
+        expect((yield* browser.list(otherSessionID))[0]?.lease).toBe("other")
+        yield* connected.attachment.receive({ type: "relinquished", callID: relinquish.callID, tabID, generation: connected.generation })
+        yield* Effect.yieldNow
+        expect((yield* browser.list(otherSessionID))[0]?.lease).toBeUndefined()
+        expect((yield* browser.list(sessionID)).map((tab) => tab.mode)).toEqual(["profile", "owned"])
+        expect(yield* Queue.size(outbox)).toBe(0)
+      }))
+    })
+  })
+
+  test("execution end waits for an in-flight mutation to settle before it releases control", async () => {
+    await run(Effect.gen(function* () {
+      const { browser, outbox, connected } = yield* setup
+      const tabID = Browser.TabID.make("btab_exec_pending")
+      yield* sharedTab(connected, tabID)
+      yield* observed(browser, outbox, connected, sessionID, tabID, "pending-holder")
+      const mutating = yield* browser.action({ sessionID, tabID, generation: connected.generation,
+        documentGeneration: 1, observationRevision: 1, callID: "pending-navigate",
+        action: { type: "navigate", url: "https://example.test/next" } }).pipe(Effect.forkScoped)
+      expect(yield* Queue.take(outbox)).toMatchObject({ type: "action", callID: "pending-navigate" })
+      yield* PubSub.publish(lifecycleEvents, executionEvent(SessionEvent.Execution.Interrupted))
+      yield* Effect.sleep("60 millis")
+      expect(yield* Queue.size(outbox)).toBe(0)
+      expect(yield* Fiber.join(mutating)).toMatchObject({ status: "uncertain" })
+      expect((yield* browser.list(otherSessionID))[0]?.lease).toBe("other")
+      yield* connected.attachment.receive({ type: "result", tabID, callID: "pending-navigate",
+        generation: connected.generation, documentGeneration: 2, observationRevision: 0, status: "completed",
+        title: "Next", url: "https://example.test/next" })
+      expect(yield* Queue.take(outbox)).toMatchObject({ type: "relinquish", tabID })
+    }))
+  })
+
+  test("Session deletion releases profile control after acknowledgement", async () => {
+    await run(Effect.gen(function* () {
+      const { browser, outbox, connected } = yield* setup
+      const tabID = Browser.TabID.make("btab_delete_release")
+      yield* sharedTab(connected, tabID)
+      yield* observed(browser, outbox, connected, sessionID, tabID, "delete-holder")
+      yield* PubSub.publish(lifecycleEvents, lifecycleEvent(SessionEvent.Deleted))
+      const relinquish = yield* Queue.take(outbox)
+      if (relinquish.type !== "relinquish") throw new Error("expected relinquish frame")
+      yield* connected.attachment.receive({ type: "relinquished", callID: relinquish.callID, tabID, generation: connected.generation })
+      yield* Effect.yieldNow
+      expect((yield* browser.list(otherSessionID))[0]?.lease).toBeUndefined()
+    }))
+  })
+
+  test("global stop and bridge loss clear every lease without an acknowledgement", async () => {
+    await run(Effect.gen(function* () {
+      const { browser, outbox, connected } = yield* setup
+      const tabID = Browser.TabID.make("btab_stop_release")
+      yield* sharedTab(connected, tabID)
+      yield* observed(browser, outbox, connected, sessionID, tabID, "stop-holder")
+      yield* browser.stop(otherSessionID)
+      expect(yield* browser.list(sessionID)).toEqual([])
+    }))
   })
 })

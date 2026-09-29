@@ -58,6 +58,7 @@ const store: RemoteStore = {
       await new Promise((resolve) => setTimeout(resolve, 400))
       return { status: "ok", files: [{ path: "slow.txt", uri: "file:///workspace/ycoding/slow.txt", kind: "file" as const }] }
     }
+    if (query === "fail") return { status: "failed", message: "File search is unavailable" }
     return { status: "ok", files: [{ path: "apps/web/src/remote/ui/composer.tsx", uri: "file:///workspace/ycoding/apps/web/src/remote/ui/composer.tsx", kind: "file" as const }].filter((item) => item.path.includes(query)) }
   },
   setDraft: (sessionID: string, text: string) => update({ ...state(), drafts: { ...state().drafts, [sessionID]: text } }),

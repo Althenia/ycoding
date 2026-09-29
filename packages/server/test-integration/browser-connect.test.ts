@@ -115,14 +115,14 @@ test("pairs an exact Chrome extension origin without URL secrets and exposes an 
       socket.addEventListener("open", () => resolve(), { once: true })
       socket.addEventListener("error", () => reject(new Error("browser websocket failed to open")), { once: true })
     })
-    socket.send(JSON.stringify({ type: "pair", version: 3, extensionID, secret: pairing.secret }))
+    socket.send(JSON.stringify({ type: "pair", version: 4, extensionID, secret: pairing.secret }))
     const paired = await next(messages, waiters)
     const trust = Schema.decodeUnknownSync(Schema.Struct({ serverID: Schema.String, credential: Schema.String }))(
       paired,
     )
     expect(paired).toMatchObject({
       type: "paired",
-      version: 3,
+      version: 4,
       generation: 1,
       serverID: expect.any(String),
       credential: expect.any(String),
@@ -218,7 +218,7 @@ test("pairs an exact Chrome extension origin without URL secrets and exposes an 
     reconnect.send(
       JSON.stringify({
         type: "authenticate",
-        version: 3,
+        version: 4,
         extensionID,
         serverID: trust.serverID,
         credential: trust.credential,
@@ -226,7 +226,7 @@ test("pairs an exact Chrome extension origin without URL secrets and exposes an 
     )
     expect(await next(reconnectMessages, reconnectWaiters)).toMatchObject({
       type: "paired",
-      version: 3,
+      version: 4,
       generation: 2,
       serverID: trust.serverID,
     })
@@ -250,7 +250,7 @@ test("pairs an exact Chrome extension origin without URL secrets and exposes an 
     revoked.send(
       JSON.stringify({
         type: "authenticate",
-        version: 3,
+        version: 4,
         extensionID,
         serverID: trust.serverID,
         credential: trust.credential,
@@ -317,7 +317,7 @@ test("authenticates the approved Session after a server restart without restorin
       else firstMessages.push(message)
     })
     await opened(firstSocket)
-    firstSocket.send(JSON.stringify({ type: "pair", version: 3, extensionID, secret: pairing.secret }))
+    firstSocket.send(JSON.stringify({ type: "pair", version: 4, extensionID, secret: pairing.secret }))
     const trust = Schema.decodeUnknownSync(Schema.Struct({ serverID: Schema.String, credential: Schema.String }))(
       await next(firstMessages, firstWaiters),
     )
@@ -340,7 +340,7 @@ test("authenticates the approved Session after a server restart without restorin
     secondSocket.send(
       JSON.stringify({
         type: "authenticate",
-        version: 3,
+        version: 4,
         extensionID,
         serverID: trust.serverID,
         credential: trust.credential,
@@ -348,7 +348,7 @@ test("authenticates the approved Session after a server restart without restorin
     )
     expect(await next(secondMessages, secondWaiters)).toMatchObject({
       type: "paired",
-      version: 3,
+      version: 4,
       serverID: trust.serverID,
     })
     expect(

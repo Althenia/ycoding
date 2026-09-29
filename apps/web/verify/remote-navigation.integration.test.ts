@@ -147,7 +147,7 @@ describe("remote navigation", () => {
             return {
               tab: document.querySelector(".presentation-switch .filters__option--attention")?.getAttribute("aria-label") ?? null,
               tabDot: visible(document.querySelector(".presentation-switch .filters__option--attention .attention-dot")),
-              bar: (() => { const bar = document.querySelector('.workspace__topbar'); return bar?.parentElement === document.querySelector('.workspace__main') && Boolean(bar?.querySelector('[aria-label="Open Team"]')) && (innerWidth < 768 ? bar.querySelector('.presentation-switch') === null : bar.querySelector('.presentation-switch') !== null) })(),
+              bar: (() => { const bar = document.querySelector('.workspace__topbar'); const team = document.querySelector('.app-header [aria-label="Open Team"]'); return Boolean(team) && bar?.querySelector('[aria-label="Open Team"]') == null && (innerWidth < 768 ? bar === null : bar?.parentElement === document.querySelector('.workspace__main') && bar.querySelector('.presentation-switch') !== null) })(),
               navDot: visible(document.querySelector('.remote-nav a[href="/remote"] .attention-dot')),
               bottomDot: visible(document.querySelector('.bottom-nav a[href="/remote"] .attention-dot')),
               rowDot: document.querySelector(".session-row--active .session-row__attention") !== null,

@@ -7,7 +7,8 @@ import { basename, relative, resolve, sep } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { Project } from "@ycoding-ai/schema/project"
 import type { FormAnswer, SessionInfo } from "@ycoding-ai/client/promise"
-import { residentCapturedMessages, summarizeCapturedChanges } from "@ycoding-ai/client/file-change-summary"
+import { capturedChildSessionIDs, summarizeCapturedChanges } from "@ycoding-ai/client/file-change-summary"
+import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
 import {
   RemoteLimits,
   isSessionID,
@@ -1116,46 +1117,28 @@ async function requireFamilyMember(input: OperationInput, root: SessionInfo, mem
 }
 
 async function capturedChangesPage(input: OperationInput, owner: SessionInfo, sessionID: string, location: LocalLocation, requestID: string, cursor?: string): Promise<RemoteCapturedChangesPage> {
-  const parent = residentCapturedMessages(await input.local.messages(sessionID, location))
-  const children: (typeof parent)[] = []
+  const parent = await input.local.messages(sessionID, location)
+  const children = new Map<string, typeof parent>()
   if (owner.parentID === undefined) {
-    let next: string | undefined
-    do {
-      const response = await input.local.subagentPage(sessionID, location, next)
-      if (!response || typeof response !== "object" || !("data" in response) || !Array.isArray(response.data) || !("cursor" in response) || !response.cursor || typeof response.cursor !== "object")
-        throw new OperationError("internal_error", "Completed subagent list was unreadable")
-      for (const task of response.data) {
-        if (!task || typeof task !== "object" || !("state" in task) || task.state !== "completed" || !("sessionID" in task) || typeof task.sessionID !== "string") continue
-        const child = await requireFamilyMember(input, owner, task.sessionID, true)
-        children.push(residentCapturedMessages(await input.local.messages(child.id, locationInfo(child))))
-      }
-      const candidate = "next" in response.cursor ? response.cursor.next : undefined
-      if (candidate !== undefined && (typeof candidate !== "string" || candidate.length === 0 || candidate.length > 1_024 || candidate === next))
-        throw new OperationError("internal_error", "Completed subagent cursor was unreadable")
-      next = candidate
-    } while (next !== undefined)
+    for (const childID of capturedChildSessionIDs(parent)) {
+      const child = await input.sessions.verify(childID)
+      if (child?.parentID !== owner.id || child.agent === "btw") continue
+      children.set(childID, await input.local.messages(child.id, locationInfo(child)))
+    }
   }
-  const recover = !parent.some((message) => message.type === "assistant" && message.time?.completed !== undefined) &&
-    parent.some((message) => message.type === "compaction" && message.status === "completed")
-  const raw = recover ? await input.local.fileChangeList(sessionID, location) : []
-  if (!Array.isArray(raw)) throw new OperationError("internal_error", "Captured change ledger was unreadable")
-  const ledger = raw.flatMap((item: unknown) => {
-    if (!item || typeof item !== "object" || !("path" in item) || typeof item.path !== "string" || !("patch" in item) || typeof item.patch !== "string" ||
-      !("additions" in item) || typeof item.additions !== "number" || !("deletions" in item) || typeof item.deletions !== "number") return []
-    return [{ path: item.path, patch: item.patch, additions: item.additions, deletions: item.deletions }]
-  })
-  const summary = summarizeCapturedChanges(parent, children, ledger)
-  if (summary.mode === "none") {
+  const groups = summarizeCapturedChanges(parent, children, (assistantMessageID, callID) => SessionOrchestrationIdentity.send(sessionID, assistantMessageID, callID))
+    .flatMap((unit) => unit.files.map((file) => ({ placementMessageID: unit.placementMessageID, ...file })))
+  if (groups.length === 0) {
     if (cursor !== undefined) throw new OperationError("invalid_message", "Captured change cursor is stale")
-    return { mode: "none", data: [] }
+    return { data: [] }
   }
-  const digest = createHash("sha256").update(sessionID).update(JSON.stringify(summary)).digest("hex")
+  const digest = createHash("sha256").update(sessionID).update(JSON.stringify(groups)).digest("hex")
   let offset = 0
   if (cursor !== undefined) {
     try {
       const parsed: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"))
       if (!parsed || typeof parsed !== "object" || !("offset" in parsed) || !("digest" in parsed) || typeof parsed.offset !== "number" ||
-        !Number.isSafeInteger(parsed.offset) || parsed.offset < 1 || parsed.offset >= summary.files.length || parsed.digest !== digest)
+        !Number.isSafeInteger(parsed.offset) || parsed.offset < 1 || parsed.offset >= groups.length || parsed.digest !== digest)
         throw new OperationError("invalid_message", "Captured change cursor is stale")
       offset = parsed.offset
     } catch (cause) {
@@ -1164,7 +1147,7 @@ async function capturedChangesPage(input: OperationInput, owner: SessionInfo, se
     }
   }
   const files: Array<RemoteCapturedChangesPage["data"][number]> = []
-  for (const original of summary.files.slice(offset)) {
+  for (const original of groups.slice(offset)) {
     const group = JSON.stringify(original).length > maxCapturedPageChars
       ? { ...original, additions: 0, deletions: 0, files: [{ path: original.path, diff: "", additions: 0, deletions: 0, status: original.status, unavailable: true }] }
       : original
@@ -1173,10 +1156,8 @@ async function capturedChangesPage(input: OperationInput, owner: SessionInfo, se
   }
   const end = offset + files.length
   const page: RemoteCapturedChangesPage = {
-    mode: summary.mode,
-    placementMessageID: summary.placementMessageID,
     data: files,
-    ...(end < summary.files.length ? { cursor: { next: Buffer.from(JSON.stringify({ offset: end, digest })).toString("base64url") } } : {}),
+    ...(end < groups.length ? { cursor: { next: Buffer.from(JSON.stringify({ offset: end, digest })).toString("base64url") } } : {}),
   }
   if (successFrames(requestID, page)[0]?.ok === false) throw new OperationError("message_too_large", "Captured change page exceeds the response bound")
   return page

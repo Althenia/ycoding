@@ -17,6 +17,51 @@ beforeAll(async () => {
 })
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
+test("provider distribution keeps exact large values readable in one accessible legend", async () => {
+  for (const width of [320, 390, 1440]) {
+    for (const theme of ["light", "dark"]) {
+      const page = await browser!.openPage()
+      try {
+        await page.setViewport(width, 900)
+        await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?distribution-long-values`)
+        await wait(page, `document.querySelectorAll('.usage-donut__arc').length === 2`)
+        await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
+        for (const metric of ["Spend", "Tokens"]) {
+          await page.evaluate(`[...document.querySelectorAll('[aria-label="Distribution metric"] button')].find(button => button.textContent === ${JSON.stringify(metric)}).click()`)
+          const expected = metric === "Spend" ? "$20,000,000.00" : "4,000,000,000"
+          await wait(page, `document.querySelector('.usage-donut__total')?.textContent === ${JSON.stringify(expected)}`)
+          await page.evaluate(`Promise.all(document.querySelector('.usage-distribution').getAnimations({subtree:true}).map(animation => animation.finished))`)
+          const result = await page.evaluate<{ total: string; unit: string; below: boolean; contained: boolean; overflow: boolean; rows: string[]; description: string }>(`(() => {
+            const card = document.querySelector('.usage-distribution');
+            const total = card.querySelector('.usage-donut__total');
+            const chart = card.querySelector('.usage-donut').getBoundingClientRect();
+            const bounds = card.getBoundingClientRect();
+            const nodes = [...card.querySelectorAll('.usage-donut__total, .usage-donut__caption, .usage-distribution__legend li > span, .usage-distribution__legend li > strong')];
+            return {total:total.textContent, unit:card.querySelector('.usage-donut__caption').textContent,
+              below:total.getBoundingClientRect().top >= chart.bottom,
+              contained:nodes.every(node => { const rect=node.getBoundingClientRect(); return rect.left >= bounds.left && rect.right <= bounds.right && rect.top >= bounds.top && rect.bottom <= bounds.bottom && node.scrollWidth <= node.clientWidth; }),
+              overflow:document.documentElement.scrollWidth > document.documentElement.clientWidth,
+              rows:[...card.querySelectorAll('.usage-distribution__legend li')].map(node=>node.textContent),
+              description:card.querySelector('.usage-donut').getAttribute('aria-label')};
+          })()`)
+          expect(result.total).toBe(expected)
+          expect(result.unit).toBe(metric === "Spend" ? "estimated USD" : "tokens")
+          expect(result.below).toBe(true)
+          expect(result.contained).toBe(true)
+          expect(result.overflow).toBe(false)
+          expect(result.rows.length).toBe(metric === "Spend" ? 2 : 3)
+          expect(result.rows[0]).toContain("Provider with a long descriptive name and a shared workspace plan")
+          expect(result.rows[0]).toContain(metric === "Spend" ? "$15,000,000.00" : "2,000,000,000")
+          expect(result.description).toContain("legend")
+          expect(await page.evaluate<number>(`document.querySelectorAll('.usage-distribution table, .usage-distribution__table-toggle').length`)).toBe(0)
+        }
+        await page.evaluate(`document.querySelector('.usage-distribution').scrollIntoView()`)
+        await Bun.write(new URL(`../../../.cache/tmp/usage-distribution-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      } finally { await page.close() }
+    }
+  }
+}, 180000)
+
 test("provider allowances, spend, chart and breakdown reflow without overflow across themes", async () => {
   for (const [width, height] of [[390, 844], [820, 1180], [1024, 768], [1440, 900]]) {
     for (const theme of ["light", "dark"]) {
@@ -80,8 +125,8 @@ test("provider allowances, spend, chart and breakdown reflow without overflow ac
           await page.evaluate(`document.querySelector('.usage-distribution .usage-toggle button:last-child')?.click()`)
           expect(await page.evaluate<string>(`document.querySelector('.usage-donut__total')?.textContent ?? ''`)).toBe("91,840")
           expect(await page.evaluate<number>(`document.querySelectorAll('.usage-donut__arc').length`)).toBe(3)
-          await page.evaluate(`document.querySelector('.usage-distribution__table-toggle')?.click()`)
-          expect(await page.evaluate<number>(`document.querySelectorAll('#usage-distribution-table tbody tr').length`)).toBe(3)
+          expect(await page.evaluate<number>(`document.querySelectorAll('.usage-distribution__legend li').length`)).toBe(3)
+          expect(await page.evaluate<number>(`document.querySelectorAll('.usage-distribution table, .usage-distribution__table-toggle').length`)).toBe(0)
           expect(await page.evaluate<string>(`document.querySelector('.usage-head p')?.textContent ?? ''`)).toContain("Studio Mac")
           expect(await page.evaluate<number>(`document.querySelectorAll('.usage-tile svg').length`)).toBe(1)
           await page.evaluate(`document.querySelector('.usage-chart__head button')?.click()`)

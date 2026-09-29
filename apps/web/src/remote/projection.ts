@@ -319,7 +319,7 @@ export type SessionView = {
   readonly messages: readonly RemoteMessageView[]
   readonly compactionHistory?: RemoteCompactionHistory
   readonly requests: readonly PendingRequestView[]
-  readonly capturedChanges?: RemoteCapturedChangesPage
+  readonly capturedChanges?: RemoteCapturedChangesPage["data"]
   readonly unhandledEvents: number
   readonly updatedAt?: number
   readonly activeAt?: number
@@ -1802,11 +1802,10 @@ export function readFormRequests(payload: unknown, now: number): readonly Extrac
 }
 
 export function readCapturedChangesPage(value: unknown): RemoteCapturedChangesPage | undefined {
-  if (!isRecord(value) || !["none", "transcript", "recovery"].includes(String(value.mode)) || !Array.isArray(value.data) ||
-    (value.mode === "none" ? value.data.length !== 0 : typeof value.placementMessageID !== "string") ||
+  if (!isRecord(value) || !Array.isArray(value.data) ||
     (value.cursor !== undefined && (!isRecord(value.cursor) || value.cursor.next !== undefined && (typeof value.cursor.next !== "string" || value.cursor.next.length === 0 || value.cursor.next.length > 256)))) return undefined
   const files = value.data.map((entry: unknown) => {
-    if (!isRecord(entry) || typeof entry.path !== "string" || !Number.isSafeInteger(entry.additions) || !Number.isSafeInteger(entry.deletions) ||
+    if (!isRecord(entry) || typeof entry.placementMessageID !== "string" || entry.placementMessageID === "" || typeof entry.path !== "string" || !Number.isSafeInteger(entry.additions) || !Number.isSafeInteger(entry.deletions) ||
       (entry.additions as number) < 0 || (entry.deletions as number) < 0 || !["created", "deleted", "modified"].includes(String(entry.status)) || !Array.isArray(entry.files)) return undefined
     const patches = entry.files.map((patch: unknown) => {
       if (!isRecord(patch) || typeof patch.diff !== "string" || patch.path !== entry.path || !Number.isSafeInteger(patch.additions) || !Number.isSafeInteger(patch.deletions) ||
@@ -1822,12 +1821,11 @@ export function readCapturedChangesPage(value: unknown): RemoteCapturedChangesPa
     if (patches.some((patch) => patch === undefined) || patches.length === 0 ||
       patches.reduce((total, patch) => total + (patch?.additions ?? 0), 0) !== entry.additions ||
       patches.reduce((total, patch) => total + (patch?.deletions ?? 0), 0) !== entry.deletions) return undefined
-    return { path: entry.path, additions: entry.additions as number, deletions: entry.deletions as number,
+    return { placementMessageID: entry.placementMessageID, path: entry.path, additions: entry.additions as number, deletions: entry.deletions as number,
       status: entry.status as "created" | "deleted" | "modified", files: patches.filter((patch): patch is NonNullable<typeof patch> => patch !== undefined) }
   })
   if (files.some((file) => file === undefined)) return undefined
-  return { mode: value.mode as RemoteCapturedChangesPage["mode"],
-    ...(typeof value.placementMessageID === "string" ? { placementMessageID: value.placementMessageID } : {}),
+  return {
     data: files.filter((file): file is NonNullable<typeof file> => file !== undefined),
     ...(isRecord(value.cursor) && typeof value.cursor.next === "string" ? { cursor: { next: value.cursor.next } } : {}) }
 }

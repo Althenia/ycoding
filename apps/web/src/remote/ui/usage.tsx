@@ -28,7 +28,6 @@ export function UsagePage() {
   const [order, setOrder] = createSignal<UsageReportInput["order"]>("desc")
   const [offset, setOffset] = createSignal(0)
   const [tableOpen, setTableOpen] = createSignal(false)
-  const [distributionTableOpen, setDistributionTableOpen] = createSignal(false)
   const [breakdownTableOpen, setBreakdownTableOpen] = createSignal(false)
   const [distributionMetric, setDistributionMetric] = createSignal<"spend" | "tokens">("spend")
   const [shownBreakdown, setShownBreakdown] = createSignal<{ readonly deviceID: string; readonly report: UsageReport; readonly input: BreakdownInput }>()
@@ -223,7 +222,7 @@ export function UsagePage() {
             <div class="usage-distribution__controls"><div class={`usage-toggle${distributionMetric() === "tokens" ? " usage-toggle--tokens" : ""}`} role="group" aria-label="Distribution metric">
               <button type="button" aria-pressed={distributionMetric() === "spend"} onClick={() => setDistributionMetric("spend")}>Spend</button>
               <button type="button" aria-pressed={distributionMetric() === "tokens"} onClick={() => setDistributionMetric("tokens")}>Tokens</button>
-            </div><button class="usage-distribution__table-toggle" type="button" aria-expanded={distributionTableOpen()} aria-controls="usage-distribution-table" onClick={() => setDistributionTableOpen(!distributionTableOpen())}>{distributionTableOpen() ? "Hide table" : "View table"}</button></div>
+            </div></div>
           </div>
           <Show when={monthlyData() && monthly()?.status === "error"}><p class="usage-message" role="alert">{monthly()?.message ?? "Monthly usage could not be loaded."} <button type="button" onClick={() => void remote.store.loadUsageReport(monthlyInput(), { refresh: true })}>Retry</button></p></Show>
           <Show when={!monthlyData() && connected() && (monthly()?.status === "loading" || monthly() === undefined)}><LoadingPlaceholder kind="chart" label="Loading monthly usage…" /></Show>
@@ -231,7 +230,8 @@ export function UsagePage() {
           <Show when={!monthlyData() && monthly()?.status === "error"}><p class="usage-distribution__empty" role="alert">{monthly()?.message} <button type="button" onClick={() => void remote.store.loadUsageReport(monthlyInput(), { refresh: true })}>Retry</button></p></Show>
           <Show when={monthlyData()}><Show when={distribution().total > 0} fallback={<p class="usage-distribution__empty">No {distributionMetric() === "spend" ? "priced" : "token"} usage this month.</p>}>
             <div class="usage-distribution__body">
-              <svg class="usage-donut" viewBox="0 0 200 200" role="img" aria-label={`${distributionMetric() === "spend" ? "Estimated spend" : "Tokens"} by provider this ${zoneLabel()} month; exact values are available in the table`}>
+              <div class="usage-distribution__chart">
+              <svg class="usage-donut" viewBox="0 0 200 200" role="img" aria-label={`${distributionMetric() === "spend" ? "Estimated spend" : "Tokens"} by provider this ${zoneLabel()} month; exact values are available in the legend`}>
                 <circle class="usage-donut__track" cx="100" cy="100" r="72" fill="none" stroke-width="26" />
                 <For each={segmentIDs()}>{(id, index) => {
                   const initial = arcs().find((segment) => segment.providerID === id)!
@@ -244,11 +244,12 @@ export function UsagePage() {
                     onFocus={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setActiveProvider(id); queueMicrotask(() => placeProvider(rect.left + rect.width / 2, rect.top + rect.height / 2)) }}
                     onBlur={() => setActiveProvider(undefined)} onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setActiveProvider(id); queueMicrotask(() => placeProvider(event.clientX || rect.left + rect.width / 2, event.clientY || rect.top + rect.height / 2)) }} />
                 }}</For>
-                <text x="100" y="96" class="usage-donut__total">{distributionMetric() === "spend" ? money(distribution().total) : count(distribution().total)}</text>
-                <text x="100" y="120" class="usage-donut__caption">{distributionMetric() === "spend" ? "estimated USD" : "tokens"}</text>
               </svg>
+              <strong class="usage-donut__total">{distributionMetric() === "spend" ? money(distribution().total) : count(distribution().total)}</strong>
+              <span class="usage-donut__caption">{distributionMetric() === "spend" ? "estimated USD" : "tokens"}</span>
+              </div>
               <Show when={activeSegment()}>{(segment) => <div class="usage-distribution__tooltip" ref={providerTooltip} style={{ left: `${providerPosition().left}px`, top: `${providerPosition().top}px` }} role="status"><strong>{segment().label}</strong><span>Estimated cost {money(providerCosts().get(segment().providerID) ?? 0)} · {Math.round(segment().share * 100)}% share</span><Show when={distributionMetric() === "tokens"}><span>{count(segment().value)} tokens</span></Show></div>}</Show>
-              <ul class="usage-distribution__legend"><For each={segmentIDs()}>{(id, index) => {
+              <ul class="usage-distribution__legend" aria-label={distributionMetric() === "spend" ? "Providers by estimated spend in USD" : "Providers by tokens"}><For each={segmentIDs()}>{(id, index) => {
                 const initial = distribution().segments.find((segment) => segment.providerID === id)!
                 const segment = () => distribution().segments.find((item) => item.providerID === id) ?? initial
                 return <li>
@@ -257,7 +258,6 @@ export function UsagePage() {
               </li>
               }}</For></ul>
             </div>
-            <Show when={distributionTableOpen()}><div id="usage-distribution-table" class="usage-table-wrap"><table><caption>Monthly {distributionMetric() === "spend" ? "estimated spend" : "tokens"} by provider</caption><thead><tr><th scope="col">Provider</th><th scope="col">{distributionMetric() === "spend" ? "Estimated spend" : "Tokens"}</th><th scope="col">Share</th></tr></thead><tbody><For each={distribution().segments}>{(segment) => <tr><th scope="row">{segment.label}</th><td>{distributionMetric() === "spend" ? money(segment.value) : count(segment.value)}</td><td>{Math.round(segment.share * 100)}%</td></tr>}</For></tbody></table></div></Show>
           </Show></Show>
         </div>
       </div>

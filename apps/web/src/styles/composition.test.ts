@@ -169,6 +169,33 @@ describe("responsive contract", () => {
     expect(label).toMatchObject({ position: "absolute", "clip-path": "inset(50%)" })
   })
 
+  test("floats the jump controls in a zero-height slot at every width", async () => {
+    const remote = await readStylesheet("remote.css")
+    const nav = await readStylesheet("../remote/ui/transcript-nav.css")
+    const slot = declarationsWhere(remote, (rule) => rule.header.includes(".conversation-jump-slot") && rule.header.includes(":not(") && rule.conditions.length === 0)
+    expect(slot).toMatchObject({ position: "relative", display: "block", "block-size": "0" })
+    expect(base(nav, ".transcript-navigation__controls")).toMatchObject({ position: "absolute" })
+    expect(nav.rules.some((rule) => rule.header.includes("transcript-navigation__controls") && rule.declarations.display === "none")).toBe(false)
+    expect(nav.rules.some((rule) => rule.header.includes("desktop-controls") || rule.header.includes("mobile-controls"))).toBe(false)
+    expect(declarationsWhere(remote, (rule) => rule.header === ".app--conversation.app--selected:not(.app--office, .app--new-session) .workspace__scroll" && rule.conditions.length === 0)["padding-block-end"]).toBe("var(--yc-space-20)")
+  })
+
+  test("anchors suggestions inside the composer and bounds them by the measured viewport space", async () => {
+    const composer = await readStylesheet("../remote/ui/composer.css")
+    expect(composer.rules.some((rule) => rule.header.includes(".mini-composer__autocomplete") && rule.declarations.position === "fixed")).toBe(false)
+    const panel = base(composer, ".mini-composer__suggestions")
+    expect(panel).toMatchObject({ position: "absolute", display: "flex", overflow: "hidden" })
+    expect(panel["max-block-size"]).toContain("--composer-suggest-max")
+    expect(base(composer, ".mini-composer__autocomplete")).toMatchObject({ overflow: "auto", "min-block-size": "0" })
+  })
+
+  test("keeps the header Team control visible in the compact header end group", async () => {
+    const remote = await readStylesheet("remote.css")
+    const hidden = remote.rules.filter((rule) => rule.header.includes(".app-header__end > :not("))
+    expect(hidden.length).toBeGreaterThan(0)
+    for (const rule of hidden) expect(rule.header).toContain(".app-header__team")
+  })
+
   test("bounds the application shell column to the viewport", async () => {
     const remote = await readStylesheet("remote.css")
     const app = declarationsWhere(remote, (rule) => rule.header === ".app" && rule.conditions.length === 0)

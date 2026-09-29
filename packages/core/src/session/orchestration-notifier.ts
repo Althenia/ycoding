@@ -9,7 +9,7 @@ import { EventV2 } from "../event"
 import { SessionV2 } from "../session"
 import { SessionExecution } from "./execution"
 import { SessionEvent } from "./event"
-import { identities } from "./orchestration"
+import { SessionOrchestrationIdentity } from "./orchestration-identity"
 import { SessionTaskNotificationTable, SessionTaskTable } from "./sql"
 
 export const NotificationBatchSize = 100
@@ -68,7 +68,7 @@ const layer = Layer.effect(
       deliver: (row) => {
         const notification = row.notification
         const task = row.task
-        const id = identities(task.parent_id, task.parent_assistant_message_id, task.tool_call_id).notification(
+        const id = SessionOrchestrationIdentity.launch(task.parent_id, task.parent_assistant_message_id, task.tool_call_id).notification(
           notification.revision,
           notification.type,
         )

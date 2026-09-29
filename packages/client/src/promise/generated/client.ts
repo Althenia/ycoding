@@ -327,6 +327,8 @@ import type {
   BrowserOpenOutput,
   BrowserCloseInput,
   BrowserCloseOutput,
+  BrowserReleaseInput,
+  BrowserReleaseOutput,
   BrowserActionInput,
   BrowserActionOutput,
   BrowserControlInput,
@@ -2697,6 +2699,18 @@ export function make(options: ClientOptions) {
           {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/browser/close`,
+            body: { tabID: input["tabID"], generation: input["generation"], callID: input["callID"] },
+            successStatus: 204,
+            declaredStatuses: [404, 403, 409, 400, 503, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
+      release: (input: BrowserReleaseInput, requestOptions?: RequestOptions) =>
+        request<BrowserReleaseOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/browser/release`,
             body: { tabID: input["tabID"], generation: input["generation"], callID: input["callID"] },
             successStatus: 204,
             declaredStatuses: [404, 403, 409, 400, 503, 401],

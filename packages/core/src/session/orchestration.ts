@@ -8,7 +8,6 @@ import {
   truncateUtf8,
   ListAnchor,
   type Change,
-  type NotificationType,
   type State,
 } from "@ycoding-ai/schema/session-orchestration"
 import { AgentV2 } from "../agent"
@@ -28,6 +27,7 @@ import { SessionAutonomy } from "./autonomy"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 import { SessionPermissionCeiling } from "./permission-ceiling"
+import { SessionOrchestrationIdentity } from "./orchestration-identity"
 import { SessionRunnerModel } from "./runner/model"
 import { SessionSchema } from "./schema"
 import { SessionPendingTable, SessionTable, SessionTaskTable } from "./sql"
@@ -203,19 +203,6 @@ export const snapshot = Effect.fn("SessionOrchestration.snapshot")(function* (
     )
     .pipe(Effect.catchTag("SqlError", Effect.die))
 })
-
-export const identities = (parentID: SessionSchema.ID, messageID: SessionMessage.ID, callID: string) => {
-  const digest = Hash.sha256(`${parentID}\0${messageID}\0${callID}`)
-  return {
-    childID: SessionSchema.ID.make(`ses_task_${digest.slice(0, 24)}`),
-    inputID: SessionMessage.ID.make(`msg_task_${digest.slice(0, 24)}`),
-    launchEventID: `evt_task_${digest.slice(0, 24)}`,
-    answer: (questionID: QuestionID) =>
-      SessionMessage.ID.make(`msg_task_answer_${Hash.sha256(`${digest}\0${questionID}`).slice(0, 24)}`),
-    notification: (revision: number, type: NotificationType) =>
-      SessionMessage.ID.make(`msg_task_notice_${Hash.sha256(`${digest}\0${revision}\0${type}`).slice(0, 24)}`),
-  }
-}
 
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("SessionOrchestration.NotFoundError", {
   parentID: SessionSchema.ID,
@@ -439,7 +426,7 @@ const layer = Layer.effect(
         return taskFromRow(yield* owned(parentID, childID))
       }),
       launch: Effect.fn("SessionOrchestration.launch")((input) => {
-        const ids = identities(input.parentID, input.parentAssistantMessageID, input.toolCallID)
+        const ids = SessionOrchestrationIdentity.launch(input.parentID, input.parentAssistantMessageID, input.toolCallID)
         return locks.withLock(ids.childID)(
           Effect.gen(function* () {
             const parent = yield* sessions.get(input.parentID)
@@ -577,7 +564,7 @@ const layer = Layer.effect(
               return yield* new ConflictError({ message: `Question ${input.questionID} is not open` })
             if (input.text === undefined && input.data === undefined)
               return yield* new InvalidRequestError({ message: "An answer requires text or data" })
-            const id = identities(row.parent_id, row.parent_assistant_message_id, row.tool_call_id).answer(
+            const id = SessionOrchestrationIdentity.launch(row.parent_id, row.parent_assistant_message_id, row.tool_call_id).answer(
               input.questionID,
             )
             yield* sessions
@@ -676,7 +663,7 @@ const layer = Layer.effect(
             if (yield* autonomy.canAutoAnswer(childID).pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))) {
               yield* sessions
                 .synthetic({
-                  id: identities(row.parent_id, row.parent_assistant_message_id, row.tool_call_id).answer(question.id),
+                  id: SessionOrchestrationIdentity.launch(row.parent_id, row.parent_assistant_message_id, row.tool_call_id).answer(question.id),
                   sessionID: childID,
                   text: `Parent answer:\n${JSON.stringify({
                     questionID: question.id,

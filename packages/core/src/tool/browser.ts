@@ -11,6 +11,8 @@ import { Tool } from "./tool"
 
 export const name = "browser"
 
+const LEASE_HELD = "Chrome tab is controlled by another Session; wait for it to release control"
+
 const Mode = Schema.Literals(["isolated", "owned", "profile"]).pipe(Schema.optional)
 const integer = <S extends Schema.Constraint>(schema: S) =>
   Schema.Union([schema, Schema.NumberFromString.pipe(Schema.decodeTo(schema))])
@@ -82,6 +84,9 @@ const OpenOperation = Schema.Struct({ operation: Schema.Literal("open"), mode: S
 const CloseOperation = Schema.Struct({ operation: Schema.Literal("close"), mode: Schema.Literal("owned"), tabID: Browser.TabID,
   generation: integer(Browser.Schema.Generation) })
 
+const ReleaseOperation = Schema.Struct({ operation: Schema.Literal("release"), mode: Schema.Literal("profile"), tabID: Browser.TabID,
+  generation: integer(Browser.Schema.Generation) })
+
 export const Input = Schema.Union([
   StatusOperation,
   TabsOperation,
@@ -93,6 +98,7 @@ export const Input = Schema.Union([
   StopOperation,
   OpenOperation,
   CloseOperation,
+  ReleaseOperation,
 ])
 
 const Output = Schema.Union([
@@ -108,6 +114,7 @@ const Output = Schema.Union([
   Schema.Struct({ type: Schema.Literal("tabs"), mode: Schema.Literal("profile"), tabs: Schema.Array(Browser.Schema.Tab) }),
   Schema.Struct({ type: Schema.Literal("opened"), tab: Browser.Schema.Tab }),
   Schema.Struct({ type: Schema.Literal("closed"), mode: Schema.Literal("owned") }),
+  Schema.Struct({ type: Schema.Literal("released"), mode: Schema.Literal("profile") }),
   Schema.Struct({ type: Schema.Literal("observation"), observation: IsolatedBrowser.Schema.Observation }),
   Schema.Struct({ type: Schema.Literal("observation"), observation: Browser.Schema.Observation }),
   Schema.Struct({ type: Schema.Literal("action"), result: IsolatedBrowser.Schema.ActionResult }),
@@ -130,7 +137,7 @@ export const Plugin = {
           name,
           Tool.make({
             description:
-              "Use status once, then tabs. Reuse returned tabID, generation, documentGeneration, and observationRevision fences exactly as numbers; never invent refs. Observe for semantic refs, then act only by a returned ref. Action results return updated tab fences, not a semantic observation; carry those fences forward for actions without refs, and observe again before another ref-based action because each action invalidates prior refs. Capture only when semantic observation is insufficient. On a stale-fence error, observe once and retry once; never replay an uncertain mutation—observe first. Prefer mode:'owned' background tabs for new work so user tabs stay untouched. Paired Chrome is the default; mode:'profile' selects it explicitly, and mode:'isolated' uses the user-started temporary headless browser. Profile tabs can group or ungroup granted inactive tabs. Owned mode only creates and closes its own tabs. In a hidden background tab, click and scroll run as page scripts (input:'scripted'): they cannot open popups, use the clipboard, or open file pickers, so observe to confirm the effect.",
+              "Use status once, then tabs. Reuse returned tabID, generation, documentGeneration, and observationRevision fences exactly as numbers; never invent refs. Observe for semantic refs, then act only by a returned ref. Action results return updated tab fences, not a semantic observation; carry those fences forward for actions without refs, and observe again before another ref-based action because each action invalidates prior refs. Capture only when semantic observation is insufficient. On a stale-fence error, observe once and retry once; never replay an uncertain mutation—observe first. Prefer mode:'owned' background tabs for new work so user tabs stay untouched. Paired Chrome is the default; mode:'profile' selects it explicitly, and mode:'isolated' uses the user-started temporary headless browser. Profile tabs can group or ungroup granted inactive tabs. The first observe or action claims a profile tab for this Session; lease:'other' means another Session controls it, so choose another tab or wait. Call operation:'release' with mode:'profile' when finished with a tab; control also ends when the Session goes idle. Owned mode only creates and closes its own tabs. In a hidden background tab, click and scroll run as page scripts (input:'scripted'): they cannot open popups, use the clipboard, or open file pickers, so observe to confirm the effect.",
             input: Input,
             output: Output,
             toModelOutput: ({ output }) => {
@@ -215,6 +222,15 @@ export const Plugin = {
                     callID: context.callID }).pipe(Effect.ensuring(reservation.release))
                   return { type: "closed" as const, mode: "owned" as const }
                 }
+                if (input.operation === "release") {
+                  const held = (yield* browser.list(context.sessionID)).find(
+                    (item) => item.id === input.tabID && item.mode === "profile",
+                  )
+                  if (!held) return yield* new ToolFailure({ message: "Chrome tab is not available in this mode" })
+                  yield* browser.release({ sessionID: context.sessionID, tabID: input.tabID, generation: input.generation,
+                    callID: context.callID })
+                  return { type: "released" as const, mode: "profile" as const }
+                }
                 if (input.operation === "status") {
                   const status = yield* isolatedMode
                     ? isolated.status(context.sessionID)
@@ -279,6 +295,7 @@ export const Plugin = {
                     (isolatedMode || (ownedMode ? item.mode === "owned" :
                       item.mode === "profile")))
                 if (!tab) return yield* new ToolFailure({ message: "Chrome tab is not available in this mode" })
+                if (tab.lease === "other") return yield* new ToolFailure({ message: LEASE_HELD })
                 const page = `${tab.page.origin}${tab.page.path}`
                 if (input.operation === "observe") {
                   yield* permission.assert({
@@ -325,6 +342,7 @@ export const Plugin = {
                     .filter((item) => groupAction.tabIDs.includes(item.id) && item.mode === "profile")
                   if (members.length !== groupAction.tabIDs.length || !groupAction.tabIDs.includes(tab.id))
                     return yield* new ToolFailure({ message: "Group members are not granted profile tabs" })
+                  if (members.some((item) => item.lease === "other")) return yield* new ToolFailure({ message: LEASE_HELD })
                   const resources = members.map((item) => `${item.page.origin}${item.page.path}`)
                   yield* permission.assert({ action: "browser_read", resources,
                     save: members.map((item) => item.page.origin), metadata: { operation: input.action.type },

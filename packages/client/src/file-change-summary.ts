@@ -1,17 +1,21 @@
+type CapturePart = {
+  readonly type: string
+  readonly id?: string
+  readonly name?: string
+  readonly state?: { readonly status?: string; readonly input?: unknown; readonly structured?: unknown }
+}
+
 type CaptureMessage = {
   readonly id: string
   readonly type: string
   readonly time?: { readonly created?: number; readonly completed?: number }
-  readonly content?: readonly { readonly type: string; readonly name?: string; readonly state?: { readonly status?: string; readonly structured?: unknown } }[]
-  readonly status?: string
-  readonly boundary?: { readonly messageID: string }
+  readonly metadata?: { readonly [key: string]: unknown }
+  readonly content?: readonly CapturePart[]
 }
-
-type LedgerChange = { readonly path: string; readonly patch: string; readonly additions: number; readonly deletions: number }
 
 export type CapturedPatch = { readonly diff: string; readonly path: string; readonly additions: number; readonly deletions: number; readonly status: "created" | "deleted" | "modified" }
 export type CapturedFile = { path: string; additions: number; deletions: number; status: CapturedPatch["status"]; files: CapturedPatch[] }
-export type CapturedSummary = { readonly mode: "none" | "transcript" | "recovery"; readonly placementMessageID?: string; readonly files: CapturedFile[] }
+export type CapturedUnit = { readonly placementMessageID: string; readonly assistantMessageIDs: string[]; readonly files: CapturedFile[] }
 
 function patchFacts(diff: string) {
   let old = 0
@@ -65,18 +69,20 @@ export function capturedPatch(diff: string, path?: string, status?: string): Cap
   return { diff, path: resolved, additions: facts.additions, deletions: facts.deletions, status: state }
 }
 
-export function capturedToolPatches(messages: readonly CaptureMessage[]): CapturedPatch[] {
-  return messages.flatMap((message) => message.type !== "assistant" ? [] : (message.content ?? []).flatMap((part) => {
-    if (part.type !== "tool" || part.state?.status !== "completed" || !["edit", "patch", "apply_patch"].includes(part.name ?? "")) return []
-    const structured = part.state.structured
-    if (!structured || typeof structured !== "object" || !("files" in structured) || !Array.isArray(structured.files)) return []
-    return structured.files.flatMap((entry: unknown) => {
-      if (!entry || typeof entry !== "object" || !("patch" in entry) || typeof entry.patch !== "string") return []
-      const patch = capturedPatch(entry.patch, "file" in entry && typeof entry.file === "string" ? entry.file : undefined,
-        "status" in entry && typeof entry.status === "string" ? entry.status : undefined)
-      return patch ? [patch] : []
-    })
-  }))
+export function capturedPartPatches(part: CapturePart): CapturedPatch[] {
+  if (part.type !== "tool" || part.state?.status !== "completed" || !["edit", "patch", "apply_patch"].includes(part.name ?? "")) return []
+  const structured = part.state.structured
+  if (!structured || typeof structured !== "object" || !("files" in structured) || !Array.isArray(structured.files)) return []
+  return structured.files.flatMap((entry: unknown) => {
+    if (!entry || typeof entry !== "object" || !("patch" in entry) || typeof entry.patch !== "string") return []
+    const patch = capturedPatch(entry.patch, "file" in entry && typeof entry.file === "string" ? entry.file : undefined,
+      "status" in entry && typeof entry.status === "string" ? entry.status : undefined)
+    return patch ? [patch] : []
+  })
+}
+
+function messagePatches(messages: readonly CaptureMessage[]) {
+  return messages.flatMap((message) => message.type === "assistant" ? (message.content ?? []).flatMap(capturedPartPatches) : [])
 }
 
 export function groupCapturedPatches(files: readonly CapturedPatch[]): CapturedFile[] {
@@ -95,26 +101,77 @@ export function groupCapturedPatches(files: readonly CapturedPatch[]): CapturedF
   return [...groups.values()]
 }
 
-export function residentCapturedMessages<T extends CaptureMessage>(messages: readonly T[]): T[] {
-  const positions = new Map(messages.map((message, index) => [message.id, index]))
-  const boundary = messages.reduce((latest, message) => {
-    if (message.type !== "compaction" || message.status !== "completed" || !message.boundary) return latest
-    return Math.max(latest, positions.get(message.boundary.messageID) ?? -1)
-  }, -1)
-  return boundary < 0 ? [...messages] : messages.filter((message, index) => index > boundary || message.type === "compaction")
+type Dispatch =
+  | { readonly kind: "launch"; readonly childID: string }
+  | { readonly kind: "send"; readonly childID: string; readonly callID: string }
+  | { readonly kind: "answer"; readonly childID: string; readonly questionID?: string }
+
+function record(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? Object.fromEntries(Object.entries(value)) : undefined
 }
 
-export function summarizeCapturedChanges(parent: readonly CaptureMessage[], children: readonly (readonly CaptureMessage[])[], ledger: readonly LedgerChange[]): CapturedSummary {
-  const assistant = parent.findLast((message) => message.type === "assistant" && message.time?.completed !== undefined)
-  if (assistant) {
-    const files = groupCapturedPatches(capturedToolPatches([...parent, ...children.flat()]))
-    return files.length ? { mode: "transcript", placementMessageID: assistant.id, files } : { mode: "none", files: [] }
-  }
-  const compaction = parent.findLast((message) => message.type === "compaction" && message.status === "completed")
-  if (!compaction) return { mode: "none", files: [] }
-  const files = groupCapturedPatches(ledger.flatMap((entry) => {
-    const patch = capturedPatch(entry.patch, entry.path)
-    return patch ? [patch] : []
+function dispatchOf(part: CapturePart): Dispatch | undefined {
+  if (part.type !== "tool") return undefined
+  const structured = record(part.state?.structured)
+  if (part.name === "subagent") return typeof structured?.sessionID === "string" ? { kind: "launch", childID: structured.sessionID } : undefined
+  if (part.name !== "subagent_control" || part.state?.status !== "completed") return undefined
+  const childID = record(structured?.task)?.sessionID
+  if (typeof childID !== "string") return undefined
+  if (structured?.action === "send" && typeof part.id === "string") return { kind: "send", childID, callID: part.id }
+  if (structured?.action !== "answer") return undefined
+  const questionID = record(part.state.input)?.questionID
+  return { kind: "answer", childID, ...(typeof questionID === "string" ? { questionID } : {}) }
+}
+
+function assistantDispatches(messages: readonly CaptureMessage[]) {
+  return messages.flatMap((message) => message.type !== "assistant" ? [] : (message.content ?? []).flatMap((part) => {
+    const dispatch = dispatchOf(part)
+    return dispatch ? [{ assistantMessageID: message.id, dispatch }] : []
   }))
-  return files.length ? { mode: "recovery", placementMessageID: compaction.id, files } : { mode: "none", files: [] }
+}
+
+export function capturedChildSessionIDs(parent: readonly CaptureMessage[]): string[] {
+  return [...new Set(assistantDispatches(parent).map((item) => item.dispatch.childID))]
+}
+
+function boundaryIndex(child: readonly CaptureMessage[], dispatch: Dispatch, assistantMessageID: string, sendMessageID: (assistantMessageID: string, callID: string) => string) {
+  if (dispatch.kind === "launch") return child.findIndex((message) => message.type === "user")
+  if (dispatch.kind === "send") {
+    const id = sendMessageID(assistantMessageID, dispatch.callID)
+    return child.findIndex((message) => message.id === id)
+  }
+  const questionID = dispatch.questionID
+  if (questionID === undefined) return -1
+  return child.findIndex((message) => message.type === "synthetic" && message.metadata?.kind === "answer" && message.metadata.questionID === questionID)
+}
+
+function childInput(message: CaptureMessage) {
+  return message.type === "user" || message.type === "synthetic" && message.metadata?.kind === "answer"
+}
+
+export function summarizeCapturedChanges(
+  parent: readonly CaptureMessage[],
+  children: ReadonlyMap<string, readonly CaptureMessage[]>,
+  sendMessageID: (assistantMessageID: string, callID: string) => string,
+): CapturedUnit[] {
+  const units = parent.reduce<CaptureMessage[][]>((groups, message) => {
+    if (message.type === "user" || groups.length === 0) groups.push([message])
+    else groups.at(-1)!.push(message)
+    return groups
+  }, [])
+  const claims = units.flatMap((messages, unitIndex) => assistantDispatches(messages).flatMap((item) => {
+    const child = children.get(item.dispatch.childID)
+    const index = child ? boundaryIndex(child, item.dispatch, item.assistantMessageID, sendMessageID) : -1
+    return index < 0 ? [] : [{ unitIndex, childID: item.dispatch.childID, index }]
+  })).filter((claim, position, all) => all.findIndex((other) => other.childID === claim.childID && other.index === claim.index) === position)
+  const childPatches = claims.map((claim) => {
+    const child = children.get(claim.childID)!
+    const next = child.findIndex((message, index) => index > claim.index && (childInput(message) || claims.some((other) => other.childID === claim.childID && other.index === index)))
+    return { unitIndex: claim.unitIndex, patches: messagePatches(child.slice(claim.index, next < 0 ? child.length : next)) }
+  })
+  return units.flatMap((messages, unitIndex) => {
+    const assistants = messages.filter((message) => message.type === "assistant")
+    const files = groupCapturedPatches([...messagePatches(messages), ...childPatches.filter((claim) => claim.unitIndex === unitIndex).flatMap((claim) => claim.patches)])
+    return assistants.length && files.length ? [{ placementMessageID: assistants.at(-1)!.id, assistantMessageIDs: assistants.map((message) => message.id), files }] : []
+  })
 }

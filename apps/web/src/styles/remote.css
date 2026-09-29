@@ -1218,13 +1218,21 @@ body:has(.app) {
 
 .conversation-jump-slot { display: none; }
 
-@media (max-width: 1023px) {
-  .app--conversation.app--selected .conversation-jump-slot:has(.transcript-navigation__mobile-controls--visible) {
-    display: flex;
-    justify-content: flex-end;
-    inline-size: min(calc(100% - 2 * var(--yc-gutter)), var(--remote-column));
-    margin-inline: auto;
-    padding-block: var(--yc-space-2) var(--yc-space-3);
+.app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading) .conversation-jump-slot {
+  position: relative;
+  display: block;
+  block-size: 0;
+  inline-size: min(calc(100% - 2 * var(--yc-gutter)), var(--remote-column));
+  margin-inline: auto;
+}
+
+.app--conversation.app--selected:not(.app--office, .app--new-session) .workspace__scroll {
+  padding-block-end: var(--yc-space-20);
+}
+
+@media (min-width: 1024px) {
+  .app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading) .conversation-jump-slot {
+    inline-size: min(calc(100% - 2 * var(--yc-gutter) - var(--yc-space-12)), var(--remote-column));
   }
 }
 
@@ -1648,7 +1656,7 @@ body:has(.app) {
     inline-size: min(150px, calc(100vw - 174px));
   }
 
-  .app .app-header__end > :not(:first-child) {
+  .app .app-header__end > :not(.yc-notification-center, .app-header__team) {
     display: none;
   }
 
@@ -2065,8 +2073,11 @@ body:has(.app) {
   color: var(--yc-text);
 }
 
-.workspace__topbar [aria-label="Open Team"] { transition: background-color var(--yc-dur-base) var(--yc-ease-standard), border-color var(--yc-dur-base) var(--yc-ease-standard), color var(--yc-dur-base) var(--yc-ease-standard); }
-.workspace__topbar [aria-label="Open Team"][aria-expanded="true"] { border-color: var(--yc-green-strong); background: var(--yc-green-soft); color: var(--yc-green-strong); }
+.app-header__team { gap: var(--yc-space-1); min-inline-size: var(--yc-control-h); padding-inline: var(--yc-space-2); border-radius: var(--yc-radius-pill); font-family: var(--yc-font-mono); transition: background-color var(--yc-dur-base) var(--yc-ease-standard), border-color var(--yc-dur-base) var(--yc-ease-standard), color var(--yc-dur-base) var(--yc-ease-standard); }
+.app-header__team[aria-expanded="true"] { border-color: var(--yc-green-strong); background: var(--yc-green-soft); color: var(--yc-green-strong); }
+.app-header__team[inert] { clip-path: inset(100%); }
+.app-header__team svg { flex: none; }
+.app-header__team-count { font-variant-numeric: tabular-nums; }
 
 .office-settings .list__control.filters {
   display: flex;

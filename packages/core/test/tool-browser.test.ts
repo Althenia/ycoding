@@ -247,6 +247,65 @@ describe("BrowserTool", () => {
       expect(sequence).not.toContain("action:denied-profile-group")
     }),
   )
+  const heldTab: Browser.Tab = { ...profileTab, id: Browser.TabID.make("btab_profile_held"), lease: "other" }
+  const leased = browserTests(permission, guardrail, Layer.mock(Browser.Service, {
+    list: () => Effect.succeed([{ ...profileTab, lease: "self" as const }, heldTab]),
+    observe: () => Effect.sync(() => {
+      sequence.push("observe")
+      return { tabID: profileTab.id, generation: 1, documentGeneration: 1, revision: 1, title: "Fixture",
+        page: profileTab.page, elements: [], truncated: false }
+    }),
+    action: (input) => Effect.sync(() => {
+      sequence.push(`action:${input.callID}`)
+      return { callID: input.callID, tab: profileTab, status: "completed" as const }
+    }),
+    release: (input) => Effect.sync(() => { sequence.push(`release:${input.callID}:${input.tabID}:${input.generation}`) }),
+  }))
+  leased.effect("lists a tab held by another Session with its lease and does not fail the listing", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      const registry = yield* ToolRegistry.Service
+      const listing = yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "leased-list", name: "browser", input: { operation: "tabs" } } })
+      expect(JSON.stringify(listing)).toContain('\\"lease\\":\\"other\\"')
+      expect(JSON.stringify(listing)).toContain('\\"lease\\":\\"self\\"')
+    }),
+  )
+  leased.effect("fails observe, action, and group on another Session's tab before permission or dispatch", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      requests.length = 0
+      const registry = yield* ToolRegistry.Service
+      const attempts = [
+        { operation: "observe", tabID: heldTab.id, generation: 1 },
+        { operation: "action", tabID: heldTab.id, generation: 1, documentGeneration: 1, observationRevision: 1,
+          action: { type: "scroll", deltaY: 10 } },
+        { operation: "action", tabID: profileTab.id, generation: 1, documentGeneration: 1, observationRevision: 1,
+          action: { type: "group", tabIDs: [profileTab.id, heldTab.id], title: "Task" } },
+      ]
+      for (const [index, input] of attempts.entries()) {
+        const result = yield* executeTool(registry, { sessionID, ...toolIdentity,
+          call: { type: "tool-call", id: `leased-${index}`, name: "browser", input } })
+        expect(result).toMatchObject({ type: "error" })
+        expect(JSON.stringify(result)).toContain("controlled by another Session")
+      }
+      expect(sequence).toEqual([])
+      expect(requests).toEqual([])
+    }),
+  )
+  leased.effect("releases the caller's profile control without a site permission or review", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      requests.length = 0
+      const registry = yield* ToolRegistry.Service
+      const result = yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "profile-release", name: "browser",
+          input: { operation: "release", mode: "profile", tabID: profileTab.id, generation: 1 } } })
+      expect(JSON.stringify(result)).toContain('\\"type\\":\\"released\\"')
+      expect(sequence).toEqual([`release:profile-release:${profileTab.id}:1`])
+      expect(requests).toEqual([])
+    }),
+  )
   it.effect("keeps personal profile tabs out of owned mode and rejects their actions", () =>
     Effect.gen(function* () {
       sequence.length = 0

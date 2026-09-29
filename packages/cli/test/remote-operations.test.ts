@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test"
 import type { SessionInfo } from "@ycoding-ai/client/promise"
 import { Project } from "@ycoding-ai/schema/project"
 import { RemoteLimits, parseChunkedValue, requireSession, type RemoteRequest } from "@ycoding-ai/remote"
+import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
 import { assertPrivateEndpoint, type LocalLocation, type LocalServer } from "../src/remote-local"
 import { LocalFailure as LocalFailureClass } from "../src/remote-local"
 import {
@@ -142,75 +143,90 @@ test("windowed snapshots shrink under the relay chunk cap and fail a single over
   expect(errorOf(await executeRemoteOperation({ request: request("session.snapshot", { limit: 1 }), sessions: oversized.registry, subscriptions: oversized.subscriptions, local: oversized.local })).code).toBe("message_too_large")
 })
 
-test("captured changes reads completed direct-child diffs at the verified Location and returns one grouped summary", async () => {
-  const patch = "--- a/src/child.ts\n+++ b/src/child.ts\n@@ -1 +1 @@\n-old\n+new"
-  const root = sessionInfo("ses_1", { updated: 1 })
-  const child = sessionInfo("ses_child", { updated: 2, directory: "/child", parentID: "ses_1" })
-  const test = await harness({ sessions: [root, child], results: {
-    subagentPage: async () => ({ data: [{ sessionID: "ses_child", state: "completed" }], cursor: {} }),
-    messages: async (id: string) => id === "ses_1"
-      ? [{ id: "msg_reply", type: "assistant", time: { created: 3, completed: 4 }, content: [] }]
-      : [{ id: "msg_child", type: "assistant", time: { created: 2, completed: 3 }, content: [{ type: "tool", name: "edit", state: { status: "completed", structured: { files: [{ file: "src/child.ts", patch, additions: 65, deletions: 3 }] } } }] }],
-    fileChangeList: async () => [],
-  } })
-  const outcome = await executeRemoteOperation({ request: request("session.capturedChanges.list"), sessions: test.registry, subscriptions: test.subscriptions, local: test.local })
-  expect(valueOf(outcome)).toMatchObject({ mode: "transcript", placementMessageID: "msg_reply", data: [{ path: "src/child.ts", additions: 1, deletions: 1, files: [{ diff: patch }] }] })
+const capturedPatch = (file: string, line = "new") => `--- a/${file}\n+++ b/${file}\n@@ -1 +1 @@\n-old\n+${line}`
+const capturedEdit = (file: string, patch = capturedPatch(file), status = "completed") => ({ type: "tool", id: `call_${file}`, name: "edit",
+  state: { status, structured: status === "completed" ? { files: [{ file, patch, additions: 65, deletions: 3 }] } : {} } })
+const capturedReply = (id: string, content: unknown[] = []) => ({ id, type: "assistant", time: { created: 2, completed: 3 }, content })
+const capturedRun = (test: Awaited<ReturnType<typeof harness>>, cursor?: string, sessionID = "ses_1") => executeRemoteOperation({
+  request: { ...request("session.capturedChanges.list", cursor ? { cursor } : undefined), sessionID }, local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
+
+test("captured changes groups each prompt segment's repeated edits once, tags them with their own reply, and reads no ledger", async () => {
+  const test = await harness({ results: { messages: async () => [
+    { id: "msg_user_1", type: "user" },
+    capturedReply("msg_step_1", [capturedEdit("src/a.ts", capturedPatch("src/a.ts", "one")), capturedEdit("src/b.ts")]),
+    capturedReply("msg_reply_1", [capturedEdit("src/a.ts", capturedPatch("src/a.ts", "two"))]),
+    { id: "msg_compact", type: "compaction", status: "completed", boundary: { messageID: "msg_step_1" } },
+    { id: "msg_user_2", type: "user" }, capturedReply("msg_reply_2", []),
+    { id: "msg_steer", type: "user" }, capturedReply("msg_reply_3", [capturedEdit("src/a.ts", capturedPatch("src/a.ts", "three"))]),
+  ] } })
+  const page = valueOf(await capturedRun(test)) as { data: { placementMessageID: string; path: string; additions: number; files: unknown[] }[]; cursor?: unknown }
+  expect(page.data.map((group) => [group.placementMessageID, group.path, group.additions, group.files.length])).toEqual([
+    ["msg_reply_1", "src/a.ts", 2, 2], ["msg_reply_1", "src/b.ts", 1, 1], ["msg_reply_3", "src/a.ts", 1, 1],
+  ])
+  expect(page.cursor).toBeUndefined()
+  expect(test.calls.filter((call) => call.method === "messages" || call.method === "subagentPage" || call.method === "fileChangeList").map((call) => call.method)).toEqual(["messages"])
+})
+
+test("captured changes attributes a reused child's work to the parent segment that dispatched it and skips unverified children", async () => {
+  const send = SessionOrchestrationIdentity.send("ses_1", "msg_reply_2", "call_send")
+  const test = await harness({ sessions: [sessionInfo("ses_1", { updated: 1 }), sessionInfo("ses_child", { updated: 2, directory: "/child", parentID: "ses_1" }),
+    sessionInfo("ses_foreign", { updated: 3, parentID: "ses_other" })], results: { messages: async (id: string) => id === "ses_1" ? [
+    { id: "msg_user_1", type: "user" }, capturedReply("msg_reply_1", [{ type: "tool", id: "call_launch", name: "subagent", state: { status: "completed", structured: { sessionID: "ses_child" } } }]),
+    { id: "msg_user_2", type: "user" }, capturedReply("msg_reply_2", [
+      { type: "tool", id: "call_send", name: "subagent_control", state: { status: "completed", structured: { action: "send", task: { sessionID: "ses_child" } } } },
+      { type: "tool", id: "call_forged", name: "subagent", state: { status: "completed", structured: { sessionID: "ses_foreign" } } }]),
+  ] : [
+    { id: "msg_task_launch", type: "user" }, capturedReply("msg_child_1", [capturedEdit("src/first.ts")]),
+    { id: send, type: "synthetic", metadata: { source: "subagent_parent", kind: "message" } }, capturedReply("msg_child_2", [capturedEdit("src/later.ts")]),
+  ] } })
+  const page = valueOf(await capturedRun(test)) as { data: { placementMessageID: string; path: string }[] }
+  expect(page.data.map((group) => [group.placementMessageID, group.path])).toEqual([["msg_reply_1", "src/first.ts"], ["msg_reply_2", "src/later.ts"]])
   expect(test.calls.filter((call) => call.method === "messages").map((call) => call.args)).toEqual([
     ["ses_1", { directory: "/work" }], ["ses_child", { directory: "/child" }],
   ])
 })
 
-test("captured changes does not attach pre-compaction edits to a later completed reply", async () => {
-  const patch = "--- a/src/old.ts\n+++ b/src/old.ts\n@@ -1 +1 @@\n-old\n+new"
-  const test = await harness({ results: {
-    subagentPage: async () => ({ data: [], cursor: {} }),
-    messages: async () => [
-      { id: "msg_old", type: "assistant", time: { created: 1, completed: 2 }, content: [{ type: "tool", name: "edit", state: { status: "completed", structured: { files: [{ file: "src/old.ts", patch }] } } }] },
-      { id: "msg_compact", type: "compaction", status: "completed", boundary: { messageID: "msg_old" } },
-      { id: "msg_reply", type: "assistant", time: { created: 3, completed: 4 }, content: [] },
-    ],
-    fileChangeList: async () => [{ path: "src/old.ts", patch, additions: 65, deletions: 3 }],
-  } })
-  const outcome = await executeRemoteOperation({ request: request("session.capturedChanges.list"), sessions: test.registry, subscriptions: test.subscriptions, local: test.local })
-  expect(valueOf(outcome)).toEqual({ mode: "none", data: [] })
-})
-
-test("captured changes pages complete groups and labels a patch too large for one page", async () => {
-  const patch = "@@ -1 +1 @@\n-old\n+new"
-  const files = Array.from({ length: 101 }, (_, index) => ({ file: `src/file-${index}.ts`, patch }))
-  const test = await harness({ sessions: [sessionInfo("ses_1", { updated: 1 }), sessionInfo("ses_2", { updated: 1 })], results: {
-    subagentPage: async () => ({ data: [], cursor: {} }),
-    messages: async () => [{ id: "msg_reply", type: "assistant", time: { created: 2, completed: 3 }, content: [
-      { type: "tool", name: "edit", state: { status: "completed", structured: { files } } },
-    ] }],
-  } })
-  const run = (cursor?: string) => executeRemoteOperation({ request: request("session.capturedChanges.list", cursor ? { cursor } : undefined), local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
-  const first = valueOf(await run()) as { data: { path: string }[]; cursor: { next: string } }
+test("captured changes pages complete groups across segments and labels a patch too large for one page", async () => {
+  const files = (prefix: string) => Array.from({ length: 60 }, (_, index) => ({ file: `src/${prefix}-${index}.ts`, patch: capturedPatch(`src/${prefix}-${index}.ts`) }))
+  const test = await harness({ sessions: [sessionInfo("ses_1", { updated: 1 }), sessionInfo("ses_2", { updated: 1 })], results: { messages: async () => [
+    { id: "msg_user_1", type: "user" }, capturedReply("msg_reply_1", [{ type: "tool", id: "call_a", name: "edit", state: { status: "completed", structured: { files: files("a") } } }]),
+    { id: "msg_user_2", type: "user" }, capturedReply("msg_reply_2", [{ type: "tool", id: "call_b", name: "edit", state: { status: "completed", structured: { files: files("b") } } }]),
+  ] } })
+  const first = valueOf(await capturedRun(test)) as { data: { placementMessageID: string; path: string }[]; cursor: { next: string } }
   expect(first.data).toHaveLength(100)
-  const second = valueOf(await run(first.cursor.next)) as { data: { path: string }[] }
-  expect(second.data.map((file) => file.path)).toEqual(["src/file-100.ts"])
-  expect(errorOf(await executeRemoteOperation({ request: { ...request("session.capturedChanges.list", { cursor: first.cursor.next }), sessionID: "ses_2" }, local: test.local, sessions: test.registry, subscriptions: test.subscriptions })).code).toBe("invalid_message")
-  expect(errorOf(await run("bad".repeat(100))).code).toBe("invalid_message")
+  expect(first.data.filter((group) => group.placementMessageID === "msg_reply_2")).toHaveLength(40)
+  const second = valueOf(await capturedRun(test, first.cursor.next)) as { data: { placementMessageID: string; path: string }[]; cursor?: unknown }
+  expect(second.data.map((group) => group.path)).toEqual(Array.from({ length: 20 }, (_, index) => `src/b-${index + 40}.ts`))
+  expect(second.data.every((group) => group.placementMessageID === "msg_reply_2") && second.cursor === undefined).toBe(true)
+  expect(errorOf(await capturedRun(test, first.cursor.next, "ses_2")).code).toBe("invalid_message")
+  expect(errorOf(await capturedRun(test, "bad".repeat(100))).code).toBe("invalid_message")
 
   const largePatch = `@@ -1 +1 @@\n-old\n+${"x".repeat(600_000)}`
-  const large = await harness({ results: {
-    subagentPage: async () => ({ data: [], cursor: {} }),
-    messages: async () => [{ id: "msg_reply", type: "assistant", time: { created: 2, completed: 3 }, content: [
-      { type: "tool", name: "edit", state: { status: "completed", structured: { files: [{ file: "src/large.ts", patch: largePatch }] } } },
-    ] }],
-  } })
-  const frames = await executeRemoteOperation({ request: request("session.capturedChanges.list"), local: large.local, sessions: large.registry, subscriptions: large.subscriptions })
+  const large = await harness({ results: { messages: async () => [{ id: "msg_user", type: "user" },
+    capturedReply("msg_reply", [capturedEdit("src/large.ts", largePatch)])] } })
+  const frames = await capturedRun(large)
   expect(frames.length).toBeLessThanOrEqual(RemoteLimits.maxChunksPerResponse)
-  expect(valueOf(frames)).toMatchObject({ mode: "transcript", data: [{ path: "src/large.ts", additions: 0, deletions: 0, files: [{ diff: "", unavailable: true }] }] })
+  expect(valueOf(frames)).toMatchObject({ data: [{ placementMessageID: "msg_reply", path: "src/large.ts", additions: 0, deletions: 0, files: [{ diff: "", unavailable: true }] }] })
 })
 
-test("captured changes rejects a forged completed child outside the verified family", async () => {
-  const test = await harness({ sessions: [sessionInfo("ses_1", { updated: 1 }), sessionInfo("ses_foreign", { updated: 2 })], results: {
-    subagentPage: async () => ({ data: [{ sessionID: "ses_foreign", state: "completed" }], cursor: {} }),
-    messages: async () => [],
-  } })
-  expect(errorOf(await executeRemoteOperation({ request: request("session.capturedChanges.list"), local: test.local, sessions: test.registry, subscriptions: test.subscriptions })).code).toBe("forbidden")
-  expect(test.calls.filter((call) => call.method === "messages")).toHaveLength(1)
+test("captured changes tags a running segment's completed edit with its last assistant and ends a child segment at a manual input", async () => {
+  const test = await harness({ sessions: [sessionInfo("ses_1", { updated: 1 }), sessionInfo("ses_child", { updated: 2, directory: "/child", parentID: "ses_1" })], results: { messages: async (id: string) => id === "ses_1" ? [
+    { id: "msg_user", type: "user" },
+    capturedReply("msg_step_1", [capturedEdit("src/a.ts"), { type: "tool", id: "call_launch", name: "subagent", state: { status: "running", structured: { sessionID: "ses_child" } } }]),
+    { id: "msg_step_2", type: "assistant", time: { created: 4 }, content: [] },
+  ] : [
+    { id: "msg_task_launch", type: "user" }, capturedReply("msg_child_1", [capturedEdit("src/child.ts")]),
+    { id: "msg_manual", type: "user" }, capturedReply("msg_child_2", [capturedEdit("src/manual.ts")]),
+  ] } })
+  const page = valueOf(await capturedRun(test)) as { data: { placementMessageID: string; path: string }[] }
+  expect(page.data.map((group) => [group.placementMessageID, group.path])).toEqual([["msg_step_2", "src/a.ts"], ["msg_step_2", "src/child.ts"]])
+})
+
+test("captured changes returns nothing for a Session with no completed edit and rejects a cursor for it", async () => {
+  const test = await harness({ results: { messages: async () => [{ id: "msg_user", type: "user" },
+    capturedReply("msg_reply", [capturedEdit("src/a.ts", undefined, "error"), capturedEdit("src/b.ts", undefined, "running")])] } })
+  expect(valueOf(await capturedRun(test))).toEqual({ data: [] })
+  expect(errorOf(await capturedRun(test, "AAAA")).code).toBe("invalid_message")
 })
 
 test("a 10 MiB managed attachment fits the bounded relay response without wasting half of each frame", () => {
