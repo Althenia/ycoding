@@ -73,7 +73,7 @@ function OfficeRoster(props: {
           <For each={actorIDs()}>
             {(id) => {
               const actor = createMemo(() => actors().find((item) => item.id === id)!)
-              return <OfficeRosterRow actor={actor()} room={Object.hasOwn(props.locations, id) ? props.locations[id] : actor().status === "idle" ? "lounge" : actor().homeRoom} onFocusActor={props.onFocusActor} />
+              return <OfficeRosterRow actor={actor()} room={Object.hasOwn(props.locations, id) ? props.locations[id] : actor().status === "idle" ? "lounge" : "block"} onFocusActor={props.onFocusActor} />
             }}
           </For>
         </ul>

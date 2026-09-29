@@ -146,8 +146,8 @@ describe("office adapter", () => {
       sessions: [session("ses_a", { agent: "build" }), session("ses_c", { parentID: "ses_a", agent: "code-reviewer" })],
     }))
     expect(input.sessions.map((item) => [item.id, item.parentID])).toEqual([["ses_a", undefined], ["ses_c", "ses_a"]])
-    expect(projectOffice(input, defaultOfficePreferences).actors.map((actor) => [actor.sessionID, actor.homeRoom]))
-      .toEqual([["ses_a", "developer"]])
+    expect(projectOffice(input, defaultOfficePreferences).actors.map((actor) => actor.sessionID))
+      .toEqual(["ses_a"])
   })
 
   test("maps connection state without claiming readiness it does not have", () => {

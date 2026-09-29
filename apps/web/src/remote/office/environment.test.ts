@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { props } from "./map"
 import { environmentFurniture, environmentTiles, wallTiles } from "../../../script/office-art/environment"
 
-test("original environment sheets cover every authored prop and six distinct 32px floors", () => {
+test("open-floor props use authored furniture sprites and the existing tile sheets", () => {
   const floors = environmentTiles()
   const walls = wallTiles()
   const furniture = environmentFurniture()
@@ -10,7 +10,8 @@ test("original environment sheets cover every authored prop and six distinct 32p
   expect(floors.height).toBe(32)
   expect(walls.width).toBe(4 * 32)
   expect(walls.height).toBe(32)
-  expect(new Set<string>(props.map((prop) => prop.kind))).toEqual(new Set(Object.keys(furniture)))
+  expect(props.every((prop) => Object.hasOwn(furniture, prop.kind))).toBe(true)
+  expect(new Set(props.filter((prop) => prop.pod !== undefined).map((prop) => prop.kind))).toEqual(new Set(["developerDesk", "bookshelf", "qaDesk", "whiteboard"]))
   for (const [kind, image] of Object.entries(furniture)) {
     expect(image.width).toBeGreaterThanOrEqual(32)
     expect(image.height).toBeGreaterThanOrEqual(32)

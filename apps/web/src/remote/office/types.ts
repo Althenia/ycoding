@@ -20,8 +20,7 @@ export type SessionSummary = {
   readonly running?: boolean
 }
 
-export type OfficeHomeRoom = "developer" | "research" | "qa"
-export type OfficeRoomID = OfficeHomeRoom | "meeting" | "lounge" | "hall"
+export type OfficeRoomID = "block" | "lounge" | "hall"
 export type OfficeActivity = "research" | "implement" | "coordinate" | "verify" | "hold"
 export type Direction = "down" | "left" | "right" | "up"
 
@@ -85,7 +84,6 @@ export type OfficeActor = {
   readonly source: "projection" | "summary" | "unavailable"
   readonly bubble?: string
   readonly unknownOutcome: boolean
-  readonly homeRoom: OfficeHomeRoom
   readonly activity?: OfficeActivity
   readonly teamRootSessionID?: string
   readonly taskState?: TaskState
@@ -126,8 +124,7 @@ export type OfficeLayout = {
   readonly tileSize: number
   readonly walkable: (x: number, y: number) => boolean
   readonly door: Point
-  readonly work: Readonly<Record<OfficeHomeRoom, readonly OfficeSpot[]>>
-  readonly meeting: readonly OfficeSpot[]
+  readonly pods: readonly { readonly left: number; readonly right: number; readonly top: number; readonly bottom: number; readonly spots: Readonly<Record<"implement" | "research" | "verify" | "coordinate", OfficeSpot>> }[]
   readonly lounge: readonly OfficeSpot[]
   readonly roomAt: (cell: Point) => OfficeRoomID | undefined
 }

@@ -1,59 +1,37 @@
 import { appearanceFor } from "./sprites"
 import { findPath } from "./navigation"
-import type { ActorFrame, ActorSpeech, OfficeActor, OfficeCue, OfficeHomeRoom, OfficeLayout, OfficeSnapshot, OfficeSpot, Point } from "./types"
-
-const movementTiming = {
-  activityCommitMs: 3_000,
-  workMinimumDwellMs: 5_000,
-  idleLoungeDelayMs: 6_000,
-  easingMs: 400,
-  tilesPerSecond: 4.5,
-} as const
+import type { ActorFrame, ActorSpeech, OfficeActor, OfficeCue, OfficeLayout, OfficeSnapshot, OfficeSpot, Point } from "./types"
 
 type ActorState = {
   actor: OfficeActor
-  appliedActivity: OfficeActor["activity"]
-  activityCandidate: OfficeActor["activity"]
-  activityPending: boolean
-  activityAge: number
-  idlePending: boolean
-  idleAge: number
+  pod: number
   position: Point
-  direction: ActorFrame["direction"]
-  speed: number
-  path: Point[]
   target: Point
-  work: OfficeSpot
-  workRoom: OfficeHomeRoom | "meeting"
-  workDwell: number
-  roomDwell: number
-  entersWorkRoom: boolean
-  lounge?: OfficeSpot
+  path: Point[]
+  speed: number
+  direction: ActorFrame["direction"]
   blocked: boolean
   leaving: boolean
-  opacityAge: number
   leavingAge: number
+  opacityAge: number
+  idleAge: number
+  lounge?: OfficeSpot
   speech?: ActorSpeech
   speechAge: number
-  cue?: string
-  legAge: number
-  legDeadline: number
-  dwell: number
-  random: number
   lastChat: number
 }
 
-type Briefing = { supervisor: string; children: string[]; talked: string[]; activeChild?: string; timer: number; talking: boolean; returning: boolean }
-type Report = { child: string; supervisor: string; timer: number; talking: boolean; returning: boolean }
+const center = (layout: OfficeLayout, cell: Point): Point => ({ x: cell.x * layout.tileSize + layout.tileSize / 2, y: cell.y * layout.tileSize + layout.tileSize / 2 })
+const cellAt = (layout: OfficeLayout, position: Point): Point => ({ x: Math.floor(position.x / layout.tileSize), y: Math.floor(position.y / layout.tileSize) })
+const same = (a: Point, b: Point) => a.x === b.x && a.y === b.y
 
 export class OfficeDirector {
   private readonly actors = new Map<string, ActorState>()
-  private readonly briefings = new Map<string, Briefing>()
-  private readonly reports = new Map<string, Report>()
   private readonly departed = new Set<string>()
   private scope?: string
   private snapshot?: OfficeSnapshot
   private hydrated = false
+  private reduced = false
   private elapsed = 0
   private ambientClock = 0
 
@@ -61,20 +39,19 @@ export class OfficeDirector {
 
   sync(snapshot: OfficeSnapshot): void {
     if (snapshot.scope !== this.scope) {
-      this.clear()
+      this.actors.clear()
+      this.departed.clear()
+      this.elapsed = 0
+      this.ambientClock = 0
       this.scope = snapshot.scope
-      this.snapshot = snapshot
-      this.hydrate(snapshot)
-      return
+      this.hydrated = false
     }
-    const previous = this.snapshot
+    const priorRoot = this.snapshot?.team.rootActorID
     this.snapshot = snapshot
-    const rootChanged = previous?.team.rootActorID !== snapshot.team.rootActorID
     const visible = new Set(snapshot.actors.map((actor) => actor.id))
     for (const [id, state] of this.actors) {
       if (visible.has(id)) continue
-      const immediate = snapshot.connection !== "ready" || state.actor.kind === "task" && rootChanged || this.reduced
-      if (immediate || !this.hydrated) this.drop(id)
+      if (!this.hydrated || snapshot.connection !== "ready" || this.reduced || state.actor.kind === "task" && priorRoot !== snapshot.team.rootActorID) this.actors.delete(id)
       else this.depart(state)
     }
     for (const actor of snapshot.actors) {
@@ -83,36 +60,32 @@ export class OfficeDirector {
       if (state) {
         const previousStatus = state.actor.status
         const previousSource = state.actor.source
-        const returned = state.leaving
         state.actor = actor
-        this.trackActivity(state, actor.activity)
-        if (previousStatus !== "idle" && actor.status === "idle") {
-          state.idlePending = true
-          state.idleAge = 0
-        }
-        if (actor.status !== "idle") {
-          state.idlePending = false
-          state.idleAge = 0
-        }
-        if (terminalTask(actor) && !state.leaving && !state.cue && !snapshot.cues.some((cue) => cue.kind === "report" && cue.fromActorID === actor.id)) {
+        if (terminalTask(actor) && !state.leaving && !snapshot.cues.some((cue) => cue.kind === "report" && cue.fromActorID === actor.id)) {
           this.departed.add(actor.id)
           this.depart(state)
           continue
         }
-        if (state.leaving) {
-          if (this.departed.has(actor.id)) continue
-          state.leaving = false
-          state.leavingAge = 0
-          state.opacityAge = 400
+        if (state.leaving && this.departed.has(actor.id)) continue
+        if (state.leaving) { state.leaving = false; state.leavingAge = 0; state.opacityAge = 400 }
+        if (previousStatus !== actor.status && actor.status === "idle") state.idleAge = 0
+        if (actor.status !== "idle") state.idleAge = 0
+        if (snapshot.connection === "ready" && actor.source !== "unavailable") {
+          if (actor.status !== "idle" || previousSource === "unavailable" || previousStatus !== actor.status) this.route(state)
         }
-        if (snapshot.connection === "ready" && actor.source !== "unavailable" && !state.cue
-          && (returned || previousSource === "unavailable" || previousStatus === "idle" && actor.status !== "idle")) this.routeDestination(state)
         continue
       }
       if (this.departed.has(actor.id) || terminalTask(actor)) continue
-      const direct = !this.hydrated || actor.kind === "task" && rootChanged && previous?.team.rootActorID !== undefined || snapshot.connection !== "ready" || this.reduced
-      this.add(actor, direct ? undefined : this.layout.door, !direct)
-      if (!direct) this.routeDestination(this.actors.get(actor.id)!)
+      const pod = this.layout.pods.findIndex((_, index) => ![...this.actors.values()].some((current) => current.pod === index))
+      if (pod < 0) continue
+      const direct = !this.hydrated || snapshot.connection !== "ready" || this.reduced || actor.kind === "task" && priorRoot !== snapshot.team.rootActorID
+      const lounge = actor.status === "idle" ? this.claimLounge(actor) : undefined
+      const target = actor.status === "idle" ? lounge!.cell : this.workSpot(pod, actor).cell
+      const position = direct ? target : this.layout.door
+      const added: ActorState = { actor, pod, position: center(this.layout, position), target: position, path: [], speed: 0, direction: "down", blocked: false,
+        leaving: false, leavingAge: 0, opacityAge: direct ? 400 : 0, idleAge: 0, lounge, speechAge: 0, lastChat: -20_000 }
+      this.actors.set(actor.id, added)
+      if (!direct) this.route(added)
     }
     this.hydrated = true
   }
@@ -121,63 +94,25 @@ export class OfficeDirector {
     const source = this.actors.get(cue.fromActorID)
     const recipient = this.actors.get(cue.toActorID)
     if (!source || !recipient || source === recipient || source.actor.source === "unavailable" || recipient.actor.source === "unavailable" || this.snapshot?.connection !== "ready") return false
-    if (cue.kind === "delegate") {
-      let briefing = [...this.briefings.values()].find((item) => item.supervisor === source.actor.id)
-      if (!briefing) {
-        briefing = { supervisor: source.actor.id, children: [], talked: [], timer: 0, talking: false, returning: false }
-        this.briefings.set(cue.id, briefing)
-        source.cue = cue.id
-        source.legAge = 0
-        this.move(source, this.freeSpot(this.layout.meeting, [source.actor.id]).cell)
-      }
-      if (briefing.children.includes(recipient.actor.id)) return false
-      briefing.children.push(recipient.actor.id)
-      recipient.cue = cue.id
-      recipient.legAge = 0
-      this.move(recipient, this.freeSpot(this.layout.meeting, [recipient.actor.id]).cell)
-      return true
-    }
-    if (source.cue || recipient.cue) return false
-    const report: Report = { child: source.actor.id, supervisor: recipient.actor.id, timer: 0, talking: false, returning: false }
-    this.reports.set(cue.id, report)
-    source.cue = cue.id
-    recipient.cue = cue.id
-    const resting = recipient.path.length ? recipient.target : cellAt(this.layout, recipient.position)
-    const adjacent = [{ x: resting.x + 1, y: resting.y }, { x: resting.x - 1, y: resting.y }, { x: resting.x, y: resting.y + 1 }, { x: resting.x, y: resting.y - 1 }]
-      .find((point) => this.layout.walkable(point.x, point.y) && findPath(this.layout, cellAt(this.layout, source.position), point) !== undefined)
-    if (!adjacent) {
-      this.reports.delete(cue.id)
-      source.cue = undefined
-      recipient.cue = undefined
-      return false
-    }
-    this.move(source, adjacent)
+    source.speech = cue.kind === "delegate" ? "delegate" : "report"
+    recipient.speech = "chat"
+    source.speechAge = recipient.speechAge = cue.kind === "delegate" ? 2_450 : 2_000
     return true
   }
 
-  cueActive(actorID: string): boolean {
-    return [...this.briefings.values()].some((briefing) => briefing.supervisor === actorID || briefing.children.includes(actorID)) || [...this.reports.values()].some((report) => report.child === actorID || report.supervisor === actorID)
-  }
+  cueActive(actorID: string): boolean { return (this.actors.get(actorID)?.speechAge ?? 0) > 0 }
 
   settle(): void {
-    this.briefings.clear()
-    this.reports.clear()
     for (const [id, state] of this.actors) {
-      if (state.leaving) {
-        this.drop(id)
-        continue
-      }
-      state.cue = undefined
+      if (state.leaving || terminalTask(state.actor)) { this.actors.delete(id); continue }
       state.speech = undefined
       state.speechAge = 0
-      state.lastChat = this.elapsed
-      state.dwell = 8_000
-      state.opacityAge = 400
       state.path = []
       state.speed = 0
       state.blocked = false
+      state.opacityAge = 400
       if (state.actor.source !== "unavailable") {
-        state.target = this.destination(state.actor, state)
+        state.target = state.actor.status === "idle" ? (state.lounge ??= this.claimLounge(state.actor)).cell : this.workSpot(state.pod, state.actor).cell
         state.position = center(this.layout, state.target)
       }
     }
@@ -189,151 +124,79 @@ export class OfficeDirector {
     const delta = Math.max(0, Math.min(Number.isFinite(deltaMs) ? deltaMs : 0, 50))
     this.elapsed += delta
     this.ambientClock += delta
-    for (const state of this.actors.values()) {
+    for (const [id, state] of this.actors) {
       if (state.actor.source === "unavailable") continue
-      if (state.opacityAge < 400) state.opacityAge = Math.min(400, state.opacityAge + delta)
+      state.opacityAge = Math.min(400, state.opacityAge + delta)
       if (state.leaving) state.leavingAge += delta
-      if (state.speechAge > 0 && !state.cue) {
+      if (state.speechAge > 0) {
         state.speechAge = Math.max(0, state.speechAge - delta)
-        if (!state.speechAge) state.speech = undefined
-      }
-      state.legAge += state.cue ? delta : 0
-      if (!state.cue && !state.leaving && this.layout.roomAt(cellAt(this.layout, state.position)) === state.workRoom) {
-        state.roomDwell = Math.max(0, state.roomDwell - delta)
-      }
-      if (state.activityPending && !state.cue && !state.leaving && this.snapshot?.connection === "ready") {
-        state.activityAge += delta
-        this.commitActivity(state)
-      }
-      if (state.idlePending && state.actor.status === "idle" && !state.cue && !state.leaving && this.snapshot?.connection === "ready") {
-        state.idleAge += delta
-        if (state.idleAge >= movementTiming.idleLoungeDelayMs) {
-          state.idlePending = false
-          this.routeDestination(state)
+        if (!state.speechAge) {
+          state.speech = undefined
+          if (terminalTask(state.actor)) { this.departed.add(id); this.depart(state) }
         }
       }
-      this.advance(state, delta, reducedMotion || this.snapshot?.connection !== "ready")
-      if (!state.path.length && !state.cue && !state.leaving && state.actor.status === "idle" && this.isLounge(state)) state.dwell -= delta
-      if (!state.path.length && !state.cue && !state.leaving && (state.appliedActivity === "research" || state.appliedActivity === "verify")) state.workDwell -= delta
+      if (!state.leaving && state.actor.status === "idle" && !state.lounge && this.snapshot?.connection === "ready") {
+        state.idleAge += delta
+        if (state.idleAge >= 6_000) { state.lounge = this.claimLounge(state.actor); this.route(state) }
+      }
+      this.advance(state, delta, reducedMotion)
+      if (state.leaving && state.leavingAge >= 400 && !state.path.length) this.actors.delete(id)
     }
-    this.advanceChoreography(delta)
-    if (!reducedMotion && this.snapshot?.connection === "ready") this.ambient()
-    for (const [id, state] of this.actors) if (state.leaving && state.leavingAge >= 400 && !state.path.length) this.drop(id)
+    if (!reducedMotion && this.snapshot?.connection === "ready" && this.ambientClock >= 5_000) {
+      this.ambientClock %= 5_000
+      const resting = [...this.actors.values()].filter((state) => state.actor.status === "idle" && !state.path.length && !state.leaving && !state.speech && this.layout.roomAt(cellAt(this.layout, state.position)) === "lounge")
+      for (const [index, first] of resting.entries()) for (const second of resting.slice(index + 1)) {
+        const a = cellAt(this.layout, first.position)
+        const b = cellAt(this.layout, second.position)
+        if (Math.abs(a.x - b.x) + Math.abs(a.y - b.y) > 3 || this.elapsed - first.lastChat < 20_000 || this.elapsed - second.lastChat < 20_000) continue
+        first.speech = second.speech = "chat"
+        first.speechAge = second.speechAge = 3_000
+        first.lastChat = second.lastChat = this.elapsed
+      }
+    }
     return [...this.actors.values()].map((state) => this.frame(state, reducedMotion))
   }
 
-  private reduced = false
-
-  private hydrate(snapshot: OfficeSnapshot): void {
-    for (const actor of snapshot.actors) if (!terminalTask(actor)) this.add(actor)
-    this.hydrated = true
-  }
-
-  private add(actor: OfficeActor, start?: Point, arrival = false): void {
-    const workRoom = this.workRoom(actor)
-    const work = this.claimWork(actor, workRoom)
-    const lounge = actor.status === "idle" ? this.claimLounge(actor) : undefined
-    const position = start ?? (actor.status === "idle" ? lounge!.cell : work.cell)
-    const state: ActorState = {
-      actor, appliedActivity: actor.activity, activityCandidate: actor.activity, activityPending: false, activityAge: 0,
-      idlePending: false, idleAge: 0, position: center(this.layout, position), direction: "down", speed: 0, path: [], target: position,
-      work, workRoom, workDwell: 1_500, roomDwell: start || actor.status === "idle" ? 0 : movementTiming.workMinimumDwellMs, entersWorkRoom: false,
-      lounge, blocked: false, leaving: false, opacityAge: arrival ? 0 : 400,
-      leavingAge: 0, legAge: 0, legDeadline: 4_000, speechAge: 0, dwell: 8_000 + this.randomFor(actor.sessionID) % 8_001,
-      random: hash(actor.sessionID), lastChat: -20_000,
-    }
-    this.actors.set(actor.id, state)
-  }
-
-  private workRoom(actor: OfficeActor): OfficeHomeRoom | "meeting" {
-    if (actor.activity === "coordinate") return "meeting"
-    if (actor.activity === "research") return "research"
-    if (actor.activity === "verify") return "qa"
-    if (actor.activity === "implement") return "developer"
-    return actor.homeRoom
-  }
-
-  private trackActivity(state: ActorState, activity: OfficeActor["activity"]): void {
-    if (activity === state.appliedActivity) {
-      state.activityCandidate = activity
-      state.activityPending = false
-      state.activityAge = 0
-      return
-    }
-    if (state.activityPending && state.activityCandidate === activity) return
-    state.activityCandidate = activity
-    state.activityPending = true
-    state.activityAge = 0
-  }
-
-  private commitActivity(state: ActorState): void {
-    if (state.activityAge < movementTiming.activityCommitMs) return
-    const activity = state.activityCandidate
-    const room = this.workRoom({ ...state.actor, activity })
-    if (activity !== "hold" && room !== state.workRoom && state.roomDwell > 0) return
-    state.appliedActivity = activity
-    state.activityPending = false
-    state.activityAge = 0
-    if (activity === "hold" || room === state.workRoom) return
-    state.workRoom = room
-    state.work = this.claimWork({ ...state.actor, activity }, room)
-    state.workDwell = 1_500
-    if (state.actor.status !== "idle") this.routeDestination(state)
-  }
-
-  private claimWork(actor: OfficeActor, room: OfficeHomeRoom | "meeting"): OfficeSpot {
-    const spots = room === "meeting" ? this.layout.meeting : this.layout.work[room]
-    const occupied = new Set([...this.actors.values()].filter((state) => state.workRoom === room && state.actor.id !== actor.id).map((state) => key(state.work.cell)))
-    return spots.find((spot) => !occupied.has(key(spot.cell))) ?? spots[this.actors.size % spots.length]!
+  private workSpot(pod: number, actor: OfficeActor): OfficeSpot {
+    const activity = actor.activity === "research" || actor.activity === "verify" || actor.activity === "coordinate" ? actor.activity : "implement"
+    return this.layout.pods[pod]!.spots[activity]
   }
 
   private claimLounge(actor: OfficeActor): OfficeSpot {
-    const spots = this.layout.lounge
-    const occupied = new Set([...this.actors.values()].flatMap((state) => state.lounge ? [key(state.lounge.cell)] : []))
-    const offset = appearanceFor(actor.sessionID) % spots.length
-    return spots.map((_, index) => spots[(offset + index) % spots.length]!).find((spot) => !occupied.has(key(spot.cell))) ?? spots[offset]!
+    const occupied = new Set([...this.actors.values()].flatMap((state) => state.lounge ? [`${state.lounge.cell.x},${state.lounge.cell.y}`] : []))
+    const offset = appearanceFor(actor.sessionID) % this.layout.lounge.length
+    return this.layout.lounge.map((_, index) => this.layout.lounge[(offset + index) % this.layout.lounge.length]!)
+      .find((spot) => !occupied.has(`${spot.cell.x},${spot.cell.y}`)) ?? this.layout.lounge[offset]!
   }
 
-  private destination(actor: OfficeActor, state = this.actors.get(actor.id)): Point {
-    if (actor.status === "idle") return state?.lounge?.cell ?? this.claimLounge(actor).cell
-    if (state?.appliedActivity === "hold") return state.target
-    return state?.work.cell ?? this.claimWork(actor, this.workRoom(actor)).cell
-  }
-
-  private routeDestination(state: ActorState): void {
-    if (state.actor.source === "unavailable" || state.leaving) return
-    if (state.actor.status === "idle") {
-      state.idlePending = false
-      state.idleAge = 0
-      if (!state.lounge) state.lounge = this.claimLounge(state.actor)
-    }
+  private route(state: ActorState): void {
+    if (state.leaving || state.actor.source === "unavailable") return
     if (state.actor.status !== "idle") state.lounge = undefined
-    const target = this.destination(state.actor, state)
+    const target = state.actor.status === "idle" ? state.lounge?.cell ?? this.layout.pods[state.pod]!.spots.implement.cell : this.workSpot(state.pod, state.actor).cell
     if (same(target, state.target)) return
     this.move(state, target)
   }
 
   private move(state: ActorState, target: Point): void {
-    const path = findPath(this.layout, cellAt(this.layout, state.position), target)
+    const allowed = (point: Point) => {
+      const owning = this.layout.pods.findIndex((item) => point.x >= item.left && point.x <= item.right && point.y >= item.top && point.y <= item.bottom)
+      return owning < 0 || owning === state.pod
+    }
+    const path = findPath(this.layout, cellAt(this.layout, state.position), target, allowed)
     state.target = target
     state.path = path ? [...path] : []
     state.blocked = path === undefined
     state.speed = 0
-    state.legAge = 0
-    state.legDeadline = (path?.length ?? 0) * 1000 / movementTiming.tilesPerSecond + 4_000
-    state.entersWorkRoom = this.layout.roomAt(cellAt(this.layout, state.position)) !== state.workRoom && this.layout.roomAt(target) === state.workRoom
   }
 
   private advance(state: ActorState, delta: number, reducedMotion: boolean): void {
     if (!state.path.length || reducedMotion || this.snapshot?.connection !== "ready") return
-    const maxSpeed = this.layout.tileSize * movementTiming.tilesPerSecond / 1000
-    const acceleration = maxSpeed / movementTiming.easingMs
+    const maxSpeed = this.layout.tileSize * 4.5 / 1000
+    const acceleration = maxSpeed / 400
     const first = center(this.layout, state.path[0]!)
     const remaining = Math.hypot(first.x - state.position.x, first.y - state.position.y) + (state.path.length - 1) * this.layout.tileSize
     const targetSpeed = Math.min(maxSpeed, Math.sqrt(2 * acceleration * remaining))
-    const nextSpeed = targetSpeed < state.speed
-      ? Math.max(targetSpeed, state.speed - acceleration * delta)
-      : Math.min(targetSpeed, state.speed + acceleration * delta)
+    const nextSpeed = targetSpeed < state.speed ? Math.max(targetSpeed, state.speed - acceleration * delta) : Math.min(targetSpeed, state.speed + acceleration * delta)
     let distance = Math.min(remaining, (state.speed + nextSpeed) / 2 * delta)
     state.speed = nextSpeed
     while (state.path.length && distance > 0) {
@@ -345,9 +208,6 @@ export class OfficeDirector {
         state.position = target
         state.path.shift()
         distance -= length
-        if (!state.path.length && state.entersWorkRoom) state.roomDwell = movementTiming.workMinimumDwellMs
-        if (!state.path.length) state.entersWorkRoom = false
-        if (!state.path.length && state.actor.status === "idle" && this.isLounge(state)) state.dwell = 8_000 + this.nextRandom(state) % 8_001
         continue
       }
       state.direction = Math.abs(dx) > Math.abs(dy) ? dx > 0 ? "right" : "left" : dy > 0 ? "down" : "up"
@@ -357,227 +217,30 @@ export class OfficeDirector {
     if (!state.path.length) state.speed = 0
   }
 
-  private advanceChoreography(delta: number): void {
-    for (const [id, briefing] of this.briefings) {
-      const supervisor = this.actors.get(briefing.supervisor)
-      const children = briefing.children.map((child) => this.actors.get(child)).filter((state): state is ActorState => !!state)
-      if (!supervisor || [...children, supervisor].some((state) => state.legAge > state.legDeadline && (state.path.length || state.blocked))) {
-        for (const state of [supervisor, ...children]) if (state) this.finishCueActor(state)
-        this.briefings.delete(id)
-        continue
-      }
-      const nextChild = children.find((state) => !state.path.length && !briefing.talked.includes(state.actor.id))
-      if (!briefing.talking && !briefing.returning && !supervisor.path.length && nextChild) {
-        briefing.talking = true
-        briefing.timer = 2_450
-        briefing.activeChild = nextChild.actor.id
-        supervisor.speech = "delegate"
-        nextChild.speech = "chat"
-      }
-      if (briefing.talking) {
-        briefing.timer -= delta
-        if (briefing.timer <= 0) {
-          const completedChild = children.find((state) => state.actor.id === briefing.activeChild)
-          if (completedChild) completedChild.speech = undefined
-          if (briefing.activeChild && !briefing.talked.includes(briefing.activeChild)) briefing.talked.push(briefing.activeChild)
-          supervisor.speech = undefined
-          briefing.talking = false
-          briefing.activeChild = undefined
-          if (children.every((state) => briefing.talked.includes(state.actor.id))) {
-            for (const child of children) {
-              if (terminalTask(child.actor)) { this.departed.add(child.actor.id); this.depart(child) }
-              else this.routeDestination(child)
-            }
-            this.routeDestination(supervisor)
-            briefing.returning = true
-          }
-        }
-      } else if (briefing.returning && !supervisor.path.length && children.every((state) => !state.path.length)) {
-        for (const state of [supervisor, ...children]) state.cue = undefined
-        this.briefings.delete(id)
-      }
-    }
-    for (const [id, report] of this.reports) {
-      const child = this.actors.get(report.child)
-      const supervisor = this.actors.get(report.supervisor)
-      if (!child || !supervisor || [child, supervisor].some((state) => state.legAge > state.legDeadline && (state.path.length || state.blocked))) {
-        if (child) this.finishCueActor(child)
-        if (supervisor) this.finishCueActor(supervisor)
-        this.reports.delete(id)
-        continue
-      }
-      if (!report.talking && !report.returning && !child.path.length) {
-        report.talking = true
-        report.timer = 2_000
-        child.speech = "report"
-        supervisor.speech = "chat"
-      }
-      if (report.talking) {
-        report.timer -= delta
-        if (report.timer <= 0) {
-          child.speech = undefined
-          supervisor.speech = undefined
-          if (terminalTask(child.actor)) { this.departed.add(child.actor.id); this.depart(child) }
-          else this.routeDestination(child)
-          this.routeDestination(supervisor)
-          report.talking = false
-          report.returning = true
-        }
-      } else if (report.returning && !child.path.length && !supervisor.path.length) {
-        child.cue = undefined
-        supervisor.cue = undefined
-        this.reports.delete(id)
-      }
-    }
-  }
-
-  private ambient(): void {
-    for (const state of this.actors.values()) {
-      if ((state.appliedActivity === "research" || state.appliedActivity === "verify") && state.actor.status !== "idle" && state.actor.source !== "unavailable"
-        && !state.path.length && !state.cue && !state.leaving && state.workDwell <= 0) {
-        const spots = this.layout.work[state.workRoom === "meeting" ? state.actor.homeRoom : state.workRoom]
-          .filter((spot) => !same(spot.cell, state.work.cell))
-        const next = this.freeSpot(spots, [state.actor.id])
-        state.work = next
-        this.move(state, next.cell)
-        state.workDwell = 1_000 + this.nextRandom(state) % 1_500
-      }
-      if (state.actor.status !== "idle" || state.actor.source === "unavailable" || state.path.length || state.cue || state.dwell > 0 || !this.isLounge(state)) continue
-      const next = this.freeSpot(this.layout.lounge.filter((spot) => !state.lounge || !same(spot.cell, state.lounge.cell)), [state.actor.id])
-      state.lounge = next
-      this.move(state, next.cell)
-      state.dwell = 8_000 + this.nextRandom(state) % 8_001
-    }
-    if (this.ambientClock < 5_000) return
-    this.ambientClock %= 5_000
-    const idle = [...this.actors.values()].filter((state) => state.actor.status === "idle" && state.actor.source !== "unavailable" && !state.path.length && !state.cue && this.isLounge(state))
-    for (let left = 0; left < idle.length; left++) for (let right = left + 1; right < idle.length; right++) {
-      const a = idle[left]!
-      const b = idle[right]!
-      const aCell = cellAt(this.layout, a.position)
-      const bCell = cellAt(this.layout, b.position)
-      if (Math.abs(aCell.x - bCell.x) + Math.abs(aCell.y - bCell.y) > 3 || this.elapsed - a.lastChat < 20_000 || this.elapsed - b.lastChat < 20_000) continue
-      if (this.nextRandom(a) % 100 >= 30) continue
-      a.speech = "chat"
-      b.speech = "chat"
-      a.speechAge = 3_000
-      b.speechAge = 3_000
-      a.lastChat = this.elapsed
-      b.lastChat = this.elapsed
-      a.dwell = Math.max(a.dwell, 3_000)
-      b.dwell = Math.max(b.dwell, 3_000)
-    }
-  }
-
   private frame(state: ActorState, reducedMotion: boolean): ActorFrame {
-    const cell = cellAt(this.layout, state.position)
-    const spot = state.actor.status === "idle" ? state.lounge : state.work
-    const workStatus = ["working", "tool", "compacting"].includes(state.actor.status)
-    const atWork = !state.path.length && same(cell, state.work.cell)
-    const pose: ActorFrame["pose"] = state.path.length && !reducedMotion ? "walk"
-      : state.speech ? "talk"
-      : state.actor.status === "attention" && atWork ? "wave"
-      : spot?.pose ?? "stand"
-    const other = [...this.actors.values()].find((item) => item.speech && item.actor.id !== state.actor.id)
-    const reportSupervisor = other?.speech === "report" && state.speech === "chat"
-    const mayFaceOther = !reportSupervisor || spot?.pose === "stand"
+    const atWork = !state.path.length && same(cellAt(this.layout, state.position), this.workSpot(state.pod, state.actor).cell)
+    const spot = state.actor.status === "idle" && state.lounge ? state.lounge : this.workSpot(state.pod, state.actor)
+    const working = ["working", "tool", "compacting"].includes(state.actor.status)
     return {
-      actor: state.actor,
-      appearance: appearanceFor(state.actor.sessionID),
-      position: state.position,
-      direction: state.path.length ? state.direction : other && mayFaceOther ? face(state.position, other.position) : spot?.facing ?? state.direction,
-      pose: state.path.length && !reducedMotion ? "walk" : state.speech ? "talk" : workStatus && atWork && (state.appliedActivity === "implement" || state.appliedActivity === undefined) ? "type" : pose,
+      actor: state.actor, appearance: appearanceFor(state.actor.sessionID), position: state.position,
+      direction: state.path.length ? state.direction : spot.facing,
+      pose: state.path.length && !reducedMotion ? "walk" : state.speech ? "talk" : state.actor.status === "attention" && atWork ? "wave" : working && atWork && (!state.actor.activity || state.actor.activity === "implement") ? "type" : spot.pose,
       moving: state.path.length > 0 && !reducedMotion && state.actor.source !== "unavailable",
-      blocked: state.blocked,
-      room: this.layout.roomAt(cell),
-      speech: state.speech,
-      leaving: state.leaving,
-      opacity: state.leaving ? Math.max(0, 1 - state.leavingAge / 400) : state.opacityAge / 400,
+      blocked: state.blocked, room: this.layout.roomAt(cellAt(this.layout, state.position)), speech: state.speech,
+      leaving: state.leaving, opacity: state.leaving ? Math.max(0, 1 - state.leavingAge / 400) : state.opacityAge / 400,
     }
-  }
-
-  private freeSpot(spots: readonly OfficeSpot[], except: readonly string[]): OfficeSpot {
-    const excluded = new Set(except)
-    const occupied = new Set([...this.actors.values()].filter((state) => !excluded.has(state.actor.id)).map((state) => key(state.target)))
-    return spots.find((spot) => !occupied.has(key(spot.cell))) ?? spots[0]!
-  }
-
-  private isLounge(state: ActorState): boolean {
-    return !!state.lounge && same(cellAt(this.layout, state.position), state.lounge.cell)
-  }
-
-  private finishCueActor(state: ActorState): void {
-    state.cue = undefined
-    state.speech = undefined
-    if (terminalTask(state.actor)) { this.departed.add(state.actor.id); this.depart(state); return }
-    this.routeDestination(state)
   }
 
   private depart(state: ActorState): void {
     state.leaving = true
     state.leavingAge = 0
     state.speech = undefined
+    state.speechAge = 0
     state.lounge = undefined
     this.move(state, this.layout.door)
-  }
-
-  private drop(id: string): void {
-    this.actors.delete(id)
-  }
-
-  private clear(): void {
-    this.actors.clear()
-    this.briefings.clear()
-    this.reports.clear()
-    this.departed.clear()
-    this.hydrated = false
-    this.elapsed = 0
-    this.ambientClock = 0
-  }
-
-  private randomFor(seed: string): number {
-    return nextHash(hash(seed))
-  }
-
-  private nextRandom(state: ActorState): number {
-    state.random = nextHash(state.random)
-    return state.random
   }
 }
 
 function terminalTask(actor: OfficeActor): boolean {
   return actor.kind === "task" && (actor.taskState === "completed" || actor.taskState === "cancelled" || actor.taskState === "failed" || actor.taskState === "lost")
-}
-
-function center(layout: OfficeLayout, point: Point): Point {
-  return { x: point.x * layout.tileSize + layout.tileSize / 2, y: point.y * layout.tileSize + layout.tileSize / 2 }
-}
-
-function cellAt(layout: OfficeLayout, point: Point): Point {
-  return { x: Math.floor(point.x / layout.tileSize), y: Math.floor(point.y / layout.tileSize) }
-}
-
-function key(point: Point): string {
-  return `${point.x},${point.y}`
-}
-
-function same(left: Point, right: Point): boolean {
-  return left.x === right.x && left.y === right.y
-}
-
-function face(from: Point, to: Point): ActorFrame["direction"] {
-  const dx = to.x - from.x
-  const dy = to.y - from.y
-  return Math.abs(dx) > Math.abs(dy) ? dx > 0 ? "right" : "left" : dy > 0 ? "down" : "up"
-}
-
-function hash(value: string): number {
-  return Array.from(value).reduce((result, character) => Math.imul(result ^ character.codePointAt(0)!, 16777619) >>> 0, 2166136261)
-}
-
-function nextHash(value: number): number {
-  let current = value + 0x6d2b79f5
-  current = Math.imul(current ^ current >>> 15, current | 1)
-  current ^= current + Math.imul(current ^ current >>> 7, current | 61)
-  return (current ^ current >>> 14) >>> 0
 }

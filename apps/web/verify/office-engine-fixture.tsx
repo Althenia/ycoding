@@ -11,6 +11,7 @@ function Fixture() {
   const query = new URLSearchParams(location.search)
   const [state, setState] = createSignal(query.get("state") ?? "idle")
   const [revision, setRevision] = createSignal(0)
+  const [activityStep, setActivityStep] = createSignal(0)
   const [mounted, setMounted] = createSignal(query.get("mounted") !== "0")
   const [normal, setNormal] = createSignal(false)
   const [selected, setSelected] = createSignal("session-a")
@@ -36,13 +37,13 @@ function Fixture() {
       { sessionID: "session-a", executing: !["idle", "failed", "interrupted"].includes(state()),
         ...(["idle", "failed", "interrupted"].includes(state()) ? {} : { activity: state() === "thinking" || query.has("snapshots") && pulse % 2 === 1
           ? { kind: "thinking" as const, room: "hold" as const, text: "Thinking" }
-          : { kind: "tool" as const, room: query.get("activity") === "verify" ? "qa" as const : query.get("activity") === "research" ? "research" as const
+          : { kind: "tool" as const, room: query.has("sequence") ? (["developer", "research", "qa", "meeting"] as const)[activityStep() % 4]! : query.get("activity") === "verify" ? "qa" as const : query.get("activity") === "research" ? "research" as const
             : query.get("activity") === "coordinate" ? "meeting" as const : "developer" as const,
           text: query.get("activity") === "verify" ? "Running bun test" : query.get("activity") === "research" ? "Reading store.ts"
             : query.get("activity") === "coordinate" ? "Dispatching a subagent" : "Editing app.ts" } }) },
       ...(query.has("team") ? [{ sessionID: "session-b", executing: ["starting", "running", "cancelling"].includes(taskState()),
-        ...(["starting", "running", "cancelling"].includes(taskState()) ? { activity: { kind: "tool" as const, room: "qa" as const, text: "Running bun test" } } : {}) }] : []),
-      ...(query.get("team") === "multi" ? [{ sessionID: "session-d", executing: true, activity: { kind: "tool" as const, room: "research" as const, text: "Reading model.ts" } }] : []),
+        ...(["starting", "running", "cancelling"].includes(taskState()) ? { activity: { kind: "tool" as const, room: query.has("sequence") ? (["qa", "meeting", "developer", "research"] as const)[activityStep() % 4]! : "qa" as const, text: "Running bun test" } } : {}) }] : []),
+      ...(query.get("team") === "multi" ? [{ sessionID: "session-d", executing: true, activity: { kind: "tool" as const, room: query.has("sequence") ? (["research", "developer", "meeting", "qa"] as const)[activityStep() % 4]! : "research" as const, text: "Reading model.ts" } }] : []),
       ...(extraSession() ? [{ sessionID: "session-new", executing: true, activity: { kind: "tool" as const, room: "research" as const, text: "Searching files" } }] : []),
     ] },
     ...(query.has("team") || query.has("arrival") ? { team: {
@@ -60,6 +61,17 @@ function Fixture() {
     } } : {}),
   }, preferences())
   })
+  if (query.has("shell")) {
+    void import("../src/styles/base.css")
+    void import("../src/styles/remote.css")
+    return <div class="app app--office" style={{ display: "grid", "grid-template-rows": "60px 36px minmax(0, 1fr)", height: "100dvh", overflow: "hidden" }}>
+      <header style={{ "background-color": "var(--yc-surface)", padding: "12px" }}>Office workspace header</header>
+      <div style={{ "background-color": "var(--yc-surface-sunken)", padding: "4px 12px" }}>Connected</div>
+      <div class="workspace__main"><div class="workspace__scroll"><div class="remote-conversation-view route-panel">
+        <OfficeWorkspace snapshot={snapshot()} preferences={preferences()} renderKey="shell" requestCount={0} onSelectSession={setSelected} onNormalView={() => setNormal(true)} onShowRequests={() => setNormal(true)} onLoadMoreTeam={() => {}} />
+      </div></div></div>
+    </div>
+  }
   return <main style={{ "font-family": "system-ui", margin: "0 auto", padding: "16px", "max-width": "1400px" }}>
     <h1>Office engine verification fixture</h1>
     <p>Synthetic visual states only. No connection, command, or approval is available.</p>
@@ -69,6 +81,7 @@ function Fixture() {
       </select></label>
       <button type="button" onClick={() => setMounted(!mounted())}>{mounted() ? "Unmount office" : "Mount office"}</button>
       <Show when={query.has("snapshots")}><button type="button" onClick={() => setRevision((value) => value + 1)}>Refresh snapshot</button></Show>
+      <Show when={query.has("sequence")}><button type="button" onClick={() => setActivityStep((value) => value + 1)}>Next activities</button></Show>
       <button type="button" onClick={() => setZeroSize(!zeroSize())}>{zeroSize() ? "Restore size" : "Zero size"}</button>
       <button type="button" onClick={() => setPreferences({ ...preferences(), motion: preferences().motion === "system" ? "reduced" : "system" })}>Toggle reduced motion</button>
       <button type="button" onClick={() => setPreferences({ ...preferences(), quality: preferences().quality === "standard" ? "battery" : "standard" })}>Toggle quality</button>

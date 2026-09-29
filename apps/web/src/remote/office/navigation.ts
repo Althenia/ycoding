@@ -1,7 +1,7 @@
 import type { OfficeLayout, Point } from "./types"
 
-export function findPath(layout: OfficeLayout, start: Point, end: Point): readonly Point[] | undefined {
-  if (!layout.walkable(start.x, start.y) || !layout.walkable(end.x, end.y)) return undefined
+export function findPath(layout: OfficeLayout, start: Point, end: Point, allowed: (point: Point) => boolean = () => true): readonly Point[] | undefined {
+  if (!layout.walkable(start.x, start.y) || !layout.walkable(end.x, end.y) || !allowed(start) || !allowed(end)) return undefined
   const key = (point: Point) => point.y * layout.columns + point.x
   const queue: Point[] = [start]
   const parent = new Map<number, Point | undefined>([[key(start), undefined]])
@@ -17,7 +17,7 @@ export function findPath(layout: OfficeLayout, start: Point, end: Point): readon
       return path.reverse().slice(1)
     }
     for (const next of [{ x: point.x + 1, y: point.y }, { x: point.x - 1, y: point.y }, { x: point.x, y: point.y + 1 }, { x: point.x, y: point.y - 1 }]) {
-      if (!layout.walkable(next.x, next.y) || parent.has(key(next))) continue
+      if (!layout.walkable(next.x, next.y) || !allowed(next) || parent.has(key(next))) continue
       parent.set(key(next), point)
       queue.push(next)
     }

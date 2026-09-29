@@ -2,7 +2,6 @@ import type {
   OfficeActor,
   OfficeActivity,
   OfficeCue,
-  OfficeHomeRoom,
   OfficeInput,
   OfficePreferences,
   OfficeRoomID,
@@ -17,8 +16,7 @@ export const maxOfficeActors = 16
 
 export function officeLocationLabel(room: OfficeRoomID | undefined): string {
   const labels: Record<OfficeRoomID, string> = {
-    developer: "Developer room", research: "Research lab", qa: "QA lab",
-    meeting: "Meeting room", lounge: "Lounge", hall: "Hallway",
+    block: "Agent block", lounge: "Relax area", hall: "Open floor",
   }
   return room ? labels[room] : "Entrance"
 }
@@ -101,7 +99,6 @@ function sessionActor(input: OfficeInput, preferences: OfficePreferences, sessio
     source,
     bubble: bubbleFor(preferences, status, label),
     unknownOutcome: detail?.unknownOutcome ?? false,
-    homeRoom: "developer",
     activity,
   }
 }
@@ -111,7 +108,6 @@ function taskActor(input: OfficeInput, preferences: OfficePreferences, member: T
   const current = familyMember(input, member.sessionID)
   const status = ["completed", "cancelled", "lost"].includes(member.state) ? "idle" : statusFor(input.connection, current, detail, member.state === "waiting", member.state === "failed")
   const source = sourceFor(input, current)
-  const homeRoom = responsibilityRoom(detail?.agent ?? member.agent, member.description)
   const activity = roomActivity(current, status)
   const statusText = memberLabel(current, status)
   return {
@@ -127,25 +123,10 @@ function taskActor(input: OfficeInput, preferences: OfficePreferences, member: T
     source,
     bubble: bubbleFor(preferences, status, statusText),
     unknownOutcome: detail?.unknownOutcome ?? false,
-    homeRoom,
     activity,
     teamRootSessionID: member.parentID,
     taskState: member.state,
   }
-}
-
-const qaWords = /\b(qa|test|tests|tester|testing|review|reviews|reviewer|reviewing|verify|verifier|verification|audit|auditor|auditing|validate|validator|validation)\b/i
-const researchWords = /\b(research|researcher|researching|explore|explorer|exploring|exploration|investigate|investigator|investigating|investigation|analyze|analyse|analyzing|analysis|analyst|scout|survey|study|inspect|inspection|diagnose|diagnosis)\b/i
-
-function responsibilityRoom(agent: string | undefined, task: string): OfficeHomeRoom {
-  return responsibility(agent ?? "") ?? responsibility(task.trim().split(/\s+/).slice(0, 3).join(" ")) ?? "developer"
-}
-
-function responsibility(text: string): OfficeHomeRoom | undefined {
-  const qa = text.search(qaWords)
-  const research = text.search(researchWords)
-  if (qa < 0 && research < 0) return undefined
-  return research < 0 || (qa >= 0 && qa < research) ? "qa" : "research"
 }
 
 function corroboratedCues(input: OfficeInput, actors: readonly OfficeActor[], root: OfficeActor): readonly OfficeCue[] {

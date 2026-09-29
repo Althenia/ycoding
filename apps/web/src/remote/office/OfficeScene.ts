@@ -1,7 +1,7 @@
 import Phaser from "phaser"
 import { OfficeDirector } from "./director"
 import type { OfficeMailbox } from "./bridge"
-import { columns, floorFrameAt, officeLayout, props, rooms, rows, tileSize, wallAt, wallFrameAt, worldHeight, worldWidth } from "./map"
+import { columns, floorFrameAt, officeLayout, props, rows, tileSize, wallAt, wallFrameAt, worldHeight, worldWidth } from "./map"
 import { shortText } from "./model"
 import { hasReducedMotion } from "./preferences"
 import { characterAppearances, characterColumns, characterDirections, characterFrame } from "./sprites"
@@ -20,12 +20,10 @@ type ActorObjects = {
   bubblePlate: Phaser.GameObjects.Graphics
   marker: Phaser.GameObjects.Text
 }
-type RoomTitle = { readonly room: (typeof rooms)[number]; readonly text: Phaser.GameObjects.Text; readonly plate: Phaser.GameObjects.Graphics }
 
 export class OfficeScene extends Phaser.Scene {
   private readonly director = new OfficeDirector(officeLayout)
   private readonly objects = new Map<string, ActorObjects>()
-  private readonly roomTitles: RoomTitle[] = []
   private readonly seenCues = new Set<string>()
   private badgeQueue: OfficeCue[] = []
   private badge?: Phaser.GameObjects.Text
@@ -41,6 +39,7 @@ export class OfficeScene extends Phaser.Scene {
   private failed = false
   private followSuspended = false
   private desiredZoom: number
+  private fitting = true
   private latestFrames: readonly ActorFrame[] = []
   private lastLocations = ""
 
@@ -78,7 +77,7 @@ export class OfficeScene extends Phaser.Scene {
       if (wallAt(x, y)) this.add.image(x * tileSize, y * tileSize, "walls", wallFrameAt(x, y))
         .setOrigin(0).setDepth((y + 1) * tileSize - 1)
     }
-    for (const door of [...rooms.flatMap((room) => room.doors), officeLayout.door, { x: officeLayout.door.x + 1, y: officeLayout.door.y }]) {
+    for (const door of [officeLayout.door, { x: officeLayout.door.x + 1, y: officeLayout.door.y }]) {
       this.add.image(door.x * tileSize, door.y * tileSize, "walls", door.y === rows - 1 ? 3 : 2)
         .setOrigin(0).setDepth((door.y + 1) * tileSize - 1)
     }
@@ -86,12 +85,6 @@ export class OfficeScene extends Phaser.Scene {
       const image = this.add.image(prop.cell.x * tileSize, prop.layer === "floor" ? prop.cell.y * tileSize : (prop.cell.y + prop.height) * tileSize, prop.kind)
       if (prop.layer === "floor") image.setOrigin(0).setDisplaySize(prop.width * tileSize, prop.height * tileSize).setDepth(-1900)
       if (prop.layer === "object") image.setOrigin(0, 1).setScale(prop.width * tileSize / image.width).setDepth((prop.cell.y + prop.height) * tileSize - 1)
-    }
-    for (const room of rooms) {
-      const text = this.add.text((room.label.x + 0.5) * tileSize, (room.label.y + 0.5) * tileSize, room.title, {
-        fontFamily: "sans-serif", fontStyle: "bold", fontSize: "17px", color: "#455264", resolution: this.resolution,
-      }).setOrigin(0.5).setDepth(9000)
-      this.roomTitles.push({ room, text, plate: this.add.graphics().setDepth(8999) })
     }
     this.badge = this.add.text(0, 0, "", { fontFamily: "sans-serif", fontSize: "13px", color: "#1e2934", backgroundColor: "#f4bd3d", padding: { x: 6, y: 3 }, resolution: this.resolution })
       .setOrigin(0.5, 1).setDepth(10007).setVisible(false)
@@ -105,7 +98,7 @@ export class OfficeScene extends Phaser.Scene {
           frameRate: speed, repeat: -1 })
       }
     }
-    this.desiredZoom = Math.max(this.resolution, this.minimumZoom())
+    this.desiredZoom = this.minimumZoom()
     this.cameras.main.setZoom(this.desiredZoom)
     this.boundCamera()
     this.cameras.main.centerOn(worldWidth / 2, worldHeight / 2)
@@ -124,7 +117,7 @@ export class OfficeScene extends Phaser.Scene {
     this.lastConnection = this.mailbox.read().snapshot.connection
     for (const cue of this.mailbox.read().snapshot.cues) this.seenCues.add(cue.id)
     this.events.once("shutdown", () => {
-      this.objects.clear(); this.roomTitles.length = 0; this.badge = undefined
+      this.objects.clear(); this.badge = undefined
       this.badgeQueue = []; this.seenCues.clear(); this.ready = false
     })
     this.ready = true
@@ -133,6 +126,7 @@ export class OfficeScene extends Phaser.Scene {
   fit(): void {
     if (!this.ready) return
     this.followSuspended = true
+    this.fitting = true
     this.desiredZoom = this.minimumZoom()
     this.cameras.main.setZoom(this.desiredZoom)
     this.boundCamera()
@@ -141,6 +135,7 @@ export class OfficeScene extends Phaser.Scene {
 
   zoomBy(factor: number): void {
     if (!this.ready) return
+    this.fitting = false
     this.desiredZoom = Phaser.Math.Clamp(this.cameras.main.zoom * factor, this.minimumZoom(), Math.max(this.minimumZoom(), this.resolution * 2))
     this.cameras.main.setZoom(this.desiredZoom)
     this.boundCamera()
@@ -148,14 +143,15 @@ export class OfficeScene extends Phaser.Scene {
 
   resize(): void {
     if (!this.ready) return
-    this.desiredZoom = Math.max(this.desiredZoom, this.minimumZoom())
+    this.desiredZoom = this.fitting ? this.minimumZoom() : Math.max(this.desiredZoom, this.minimumZoom())
     this.cameras.main.setZoom(this.desiredZoom)
     this.boundCamera()
   }
 
   defaultView(): void {
     if (!this.ready) return
-    this.desiredZoom = Math.max(this.resolution, this.minimumZoom())
+    this.fitting = true
+    this.desiredZoom = this.minimumZoom()
     this.cameras.main.setZoom(this.desiredZoom)
     this.boundCamera()
     this.followSuspended = false
@@ -190,16 +186,19 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   private boundCamera(): void {
-    this.cameras.main.setBounds(0, 0, worldWidth, worldHeight)
+    const camera = this.cameras.main
+    const insetX = Math.max(0, (this.scale.width / camera.zoom - worldWidth) / 2)
+    const insetY = Math.max(0, (this.scale.height / camera.zoom - worldHeight) / 2)
+    camera.setBounds(-insetX, -insetY, worldWidth + insetX * 2, worldHeight + insetY * 2)
   }
 
   private minimumZoom(): number {
-    return Math.max(this.scale.width / worldWidth, this.scale.height / worldHeight)
+    return Math.min(this.scale.width / worldWidth, this.scale.height / worldHeight)
   }
 
   override update(time: number, delta: number): void {
     if (!this.ready) return
-    this.desiredZoom = Math.max(this.desiredZoom, this.minimumZoom())
+    this.desiredZoom = this.fitting ? this.minimumZoom() : Math.max(this.desiredZoom, this.minimumZoom())
     if (this.cameras.main.zoom !== this.desiredZoom) {
       this.cameras.main.setZoom(this.desiredZoom)
       this.boundCamera()
@@ -227,19 +226,6 @@ export class OfficeScene extends Phaser.Scene {
       this.onLocations(locations)
     }
     const scale = this.resolution / this.cameras.main.zoom
-    for (const title of this.roomTitles) {
-      title.text.setX(Phaser.Math.Linear((title.room.label.x + 0.5) * tileSize, (title.room.center.x + 0.5) * tileSize,
-        Phaser.Math.Clamp((scale - 1) / 1.5, 0, 1)))
-      title.text.setScale(scale)
-      const width = title.text.displayWidth + 24 * scale
-      const height = title.text.displayHeight + 12 * scale
-      const view = this.cameras.main.worldView
-      const visible = title.text.x - width / 2 >= view.left && title.text.x + width / 2 <= view.right
-        && title.text.y - height / 2 >= view.top && title.text.y + height / 2 <= view.bottom
-      title.text.setVisible(visible)
-      title.plate.clear().setVisible(visible)
-      if (visible) title.plate.fillStyle(0xf4f2f3, 0.85).fillRoundedRect(title.text.x - width / 2, title.text.y - height / 2, width, height, 8 * scale)
-    }
     const present = new Set(this.latestFrames.map((frame) => frame.actor.id))
     for (const [id, objects] of this.objects) {
       if (present.has(id)) continue
@@ -248,22 +234,8 @@ export class OfficeScene extends Phaser.Scene {
       this.objects.delete(id)
     }
     for (const frame of this.latestFrames) this.paintActor(frame, input.snapshot, scale)
+    this.placeBubbles(scale)
     this.placeLabels(scale)
-    for (const title of this.roomTitles) {
-      if (!title.text.visible) continue
-      const left = title.text.x - title.text.displayWidth / 2 - 12 * scale
-      const right = title.text.x + title.text.displayWidth / 2 + 12 * scale
-      const top = title.text.y - title.text.displayHeight / 2 - 6 * scale
-      const bottom = title.text.y + title.text.displayHeight / 2 + 6 * scale
-      const overlaps = (itemLeft: number, itemRight: number, itemTop: number, itemBottom: number) =>
-        left < itemRight && right > itemLeft && top < itemBottom && bottom > itemTop
-      const covered = [...this.objects.values()].some((objects) => objects.bubble.visible && overlaps(
-        objects.bubble.x - objects.bubble.displayWidth / 2 - 9 * scale, objects.bubble.x + objects.bubble.displayWidth / 2 + 9 * scale,
-        objects.bubble.y - objects.bubble.displayHeight - 5 * scale, objects.bubble.y + 5 * scale,
-      ))
-      title.text.setAlpha(covered ? 0.25 : 1)
-      title.plate.setAlpha(covered ? 0.15 : 1)
-    }
     const target = this.latestFrames.find((frame) => frame.actor.id === this.badgeActorID)
     this.badge?.setVisible(time < this.badgeUntil && !!target)
     if (target) this.badge?.setPosition(target.position.x, target.position.y - 66).setScale(scale)
@@ -299,10 +271,42 @@ export class OfficeScene extends Phaser.Scene {
     this.badgeUntil = time + 750
   }
 
+  private placeBubbles(scale: number): void {
+    const view = this.cameras.main.worldView
+    const spacing = 8 * scale
+    const placed: { left: number; right: number; top: number; bottom: number }[] = []
+    for (const frame of [...this.latestFrames].sort((a, b) => Number(b.actor.selected) - Number(a.actor.selected))) {
+      const objects = this.objects.get(frame.actor.id)
+      if (!objects?.bubble.visible) continue
+      const width = objects.bubble.displayWidth + 18 * scale
+      const height = objects.bubble.displayHeight + 10 * scale
+      const x = Phaser.Math.Clamp(frame.position.x, view.left + width / 2 + spacing, view.right - width / 2 - spacing)
+      const y = frame.position.y - 67
+      const candidates = [0, -height - spacing, height + spacing, -2 * (height + spacing), 2 * (height + spacing)]
+        .flatMap((dy) => [0, -width / 2, width / 2].map((dx) => ({
+          left: x + dx - width / 2, right: x + dx + width / 2,
+          top: y + dy - height, bottom: y + dy,
+        })))
+      const choice = candidates.find((candidate) => candidate.left >= view.left && candidate.right <= view.right
+        && candidate.top >= view.top && candidate.bottom <= view.bottom
+        && placed.every((other) => candidate.right + spacing <= other.left || candidate.left >= other.right + spacing
+          || candidate.bottom + spacing <= other.top || candidate.top >= other.bottom + spacing)) ?? candidates[0]!
+      placed.push(choice)
+      objects.bubble.setPosition((choice.left + choice.right) / 2, choice.bottom)
+      objects.bubblePlate.clear().fillStyle(0xfaf7ef, 0.97).fillRoundedRect(choice.left, choice.top + 5 * scale, width, height, 6 * scale)
+      if (objects.marker.visible) objects.marker.setPosition(Math.min(view.right - objects.marker.displayWidth / 2, choice.right + objects.marker.displayWidth / 2 + 5 * scale), choice.bottom)
+    }
+  }
+
   private placeLabels(scale: number): void {
     const view = this.cameras.main.worldView
     const spacing = 6 * scale
-    const placed: { left: number; right: number; top: number; bottom: number }[] = []
+    const placed = [...this.objects.values()].filter((objects) => objects.bubble.visible).map((objects) => ({
+      left: objects.bubble.x - (objects.bubble.displayWidth + 18 * scale) / 2,
+      right: objects.bubble.x + (objects.bubble.displayWidth + 18 * scale) / 2,
+      top: objects.bubble.y - objects.bubble.displayHeight - 10 * scale,
+      bottom: objects.bubble.y,
+    }))
     for (const frame of [...this.latestFrames].sort((a, b) => Number(b.actor.selected) - Number(a.actor.selected))) {
       const objects = this.objects.get(frame.actor.id)
       if (!objects?.label.visible) continue
@@ -377,10 +381,6 @@ export class OfficeScene extends Phaser.Scene {
     const bubbleX = showBubble && view.width >= bubbleWidth + 8 * scale
       ? Phaser.Math.Clamp(x, view.left + bubbleWidth / 2 + 4 * scale, view.right - bubbleWidth / 2 - 4 * scale) : x
     objects.bubble.setPosition(bubbleX, y - 67)
-    if (showBubble) {
-      const height = objects.bubble.displayHeight + 10 * scale
-      objects.bubblePlate.fillStyle(0xfaf7ef, 0.97).fillRoundedRect(bubbleX - bubbleWidth / 2, y - 67 - height + 5 * scale, bubbleWidth, height, 6 * scale)
-    }
     objects.marker.setText(frame.actor.status === "failed" ? "×" : "!").setScale(scale)
     const markerX = showBubble ? Math.min(view.right - objects.marker.displayWidth / 2, bubbleX + bubbleWidth / 2 + objects.marker.displayWidth / 2 + 5 * scale) : x + 20
     objects.marker.setPosition(markerX, showBubble ? y - 67 : y - 48)

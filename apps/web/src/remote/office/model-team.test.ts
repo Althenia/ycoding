@@ -45,7 +45,7 @@ function office(team: TeamInput | undefined, patch: Partial<OfficeInput> = {}) {
 const actorID = (sessionID: string) => JSON.stringify(["dev_1", sessionID])
 
 describe("office team projection", () => {
-  test("an idle root stays in the Lounge while only its child executes a named action", () => {
+  test("an idle root stays idle while only its child executes a named action", () => {
     const snapshot = office(ready([member("ses_child", "running")]), { familyActivity: {
       status: "ready", members: [
         { sessionID: "ses_root", executing: false },

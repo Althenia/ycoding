@@ -1,4 +1,4 @@
-import type { OfficeLayout, OfficeRoomID, OfficeSpot, Point } from "./types"
+import type { OfficeLayout, OfficeSpot, Point } from "./types"
 
 export const tileSize = 32
 export const columns = 64
@@ -12,9 +12,8 @@ export type OfficeFurniture = "developerDesk" | "researchDesk" | "qaDesk" | "con
   | "plantFern" | "plantMonstera" | "plantBamboo" | "plantSucculent" | "plantFlowers"
   | "globe" | "readingSeat" | "receptionDesk" | "blueRug"
   | "wallArt" | "clock" | "floorLamp" | "sideTable" | "filingCabinet" | "printer"
-
 export type OfficeProp = {
-  readonly room: OfficeRoomID
+  readonly pod?: number
   readonly kind: OfficeFurniture
   readonly cell: Point
   readonly width: number
@@ -23,165 +22,82 @@ export type OfficeProp = {
   readonly layer: "floor" | "object"
 }
 
-type OfficeRoom = {
-  readonly id: Exclude<OfficeRoomID, "hall">
-  readonly title: string
+export type OfficePod = {
   readonly left: number
-  readonly top: number
   readonly right: number
+  readonly top: number
   readonly bottom: number
-  readonly center: Point
-  readonly label: Point
-  readonly doors: readonly Point[]
-  readonly floor: number
+  readonly spots: Readonly<Record<"implement" | "research" | "verify" | "coordinate", OfficeSpot>>
 }
 
-export const rooms: readonly OfficeRoom[] = [
-  { id: "meeting", title: "MEETING ROOM", left: 2, top: 2, right: 16, bottom: 16, center: { x: 9, y: 9 }, label: { x: 9, y: 1 }, doors: [{ x: 8, y: 17 }, { x: 9, y: 17 }], floor: 4 },
-  { id: "research", title: "RESEARCH LAB", left: 19, top: 2, right: 36, bottom: 16, center: { x: 27, y: 9 }, label: { x: 27, y: 1 }, doors: [{ x: 27, y: 17 }, { x: 28, y: 17 }], floor: 2 },
-  { id: "qa", title: "QA LAB", left: 40, top: 2, right: 61, bottom: 16, center: { x: 50, y: 9 }, label: { x: 50, y: 1 }, doors: [{ x: 49, y: 17 }, { x: 50, y: 17 }], floor: 3 },
-  { id: "developer", title: "DEVELOPER STUDIO", left: 2, top: 22, right: 35, bottom: 35, center: { x: 18, y: 28 }, label: { x: 8, y: 20.7 }, doors: [{ x: 10, y: 21 }, { x: 11, y: 21 }, { x: 29, y: 21 }, { x: 30, y: 21 }, { x: 10, y: 36 }, { x: 11, y: 36 }, { x: 29, y: 36 }, { x: 30, y: 36 }], floor: 1 },
-  { id: "lounge", title: "LOUNGE", left: 40, top: 22, right: 61, bottom: 35, center: { x: 50, y: 28 }, label: { x: 43, y: 20.7 }, doors: [{ x: 46, y: 21 }, { x: 47, y: 21 }, { x: 56, y: 21 }, { x: 57, y: 21 }, { x: 46, y: 36 }, { x: 47, y: 36 }, { x: 56, y: 36 }, { x: 57, y: 36 }], floor: 5 },
-]
+export const pods: readonly OfficePod[] = [2, 11, 20, 29].flatMap((top) => [2, 17, 32, 47].map((left) => ({
+  left, right: left + 11, top, bottom: top + 6,
+  spots: {
+    implement: { cell: { x: left + 2, y: top + 3 }, facing: "up", pose: "sit" },
+    research: { cell: { x: left + 6, y: top + 3 }, facing: "up", pose: "stand" },
+    verify: { cell: { x: left + 9, y: top + 3 }, facing: "up", pose: "sit" },
+    coordinate: { cell: { x: left + 6, y: top + 5 }, facing: "down", pose: "stand" },
+  },
+})))
 
-const outerDoor = { x: 31, y: 39 }
-
-function prop(room: OfficeRoomID, kind: OfficeFurniture, x: number, y: number, width: number, height: number, blocks = true, layer: OfficeProp["layer"] = "object"): OfficeProp {
-  return { room, kind, cell: { x, y }, width, height, blocks, layer }
+function prop(kind: OfficeFurniture, x: number, y: number, width: number, height: number, pod?: number, blocks = true, layer: OfficeProp["layer"] = "object"): OfficeProp {
+  return { kind, cell: { x, y }, width, height, pod, blocks, layer }
 }
 
 export const props: readonly OfficeProp[] = [
-  prop("meeting", "blueRug", 3, 4, 12, 9, false, "floor"),
-  prop("meeting", "conferenceTable", 4, 5, 8, 3),
-  prop("meeting", "wallTv", 6, 2, 4, 1, false),
-  prop("meeting", "whiteboard", 13, 2, 2, 1, false),
-  prop("meeting", "waterDispenser", 2, 12, 1, 2),
-  prop("meeting", "plantMonstera", 15, 14, 1, 1),
-  prop("meeting", "wallArt", 2, 2, 2, 1, false),
-  prop("meeting", "clock", 15, 2, 1, 1, false),
-  prop("meeting", "floorLamp", 15, 10, 1, 1),
-  prop("meeting", "printer", 2, 10, 1, 1),
-  ...[23, 26, 29, 32].flatMap((y) => [3, 9, 15, 24, 30].map((x) => prop("developer", "developerDesk", x, y, 3, 2))),
-  prop("developer", "serverRack", 18, 23, 2, 3),
-  prop("developer", "whiteboard", 6, 22, 4, 1, false),
-  prop("developer", "plantFern", 2, 34, 1, 1),
-  prop("developer", "plantBamboo", 19, 34, 1, 1),
-  prop("developer", "blueRug", 7, 34, 5, 1, false, "floor"),
-  prop("developer", "wallArt", 13, 22, 2, 1, false),
-  prop("developer", "clock", 3, 22, 1, 1, false),
-  prop("developer", "floorLamp", 2, 30, 1, 1),
-  prop("developer", "filingCabinet", 18, 29, 2, 2),
-  prop("developer", "blueRug", 24, 24, 11, 8, false, "floor"),
-  prop("developer", "plantMonstera", 34, 34, 1, 1),
-  ...[4, 8, 12].flatMap((y) => [21, 29].map((x) => prop("research", "researchDesk", x, y, 3, 2))),
-  prop("research", "bookshelf", 34, 3, 2, 3),
-  prop("research", "bookshelf", 34, 6, 2, 3),
-  prop("research", "bookshelf", 34, 9, 2, 3),
-  prop("research", "bookshelf", 34, 12, 2, 3),
-  prop("research", "readingSeat", 20, 15, 3, 2),
-  prop("research", "whiteboard", 25, 2, 4, 1, false),
-  prop("research", "globe", 26, 13, 1, 1),
-  prop("research", "plantBamboo", 20, 3, 1, 1),
-  prop("research", "blueRug", 20, 15, 6, 2, false, "floor"),
-  prop("research", "wallArt", 22, 2, 2, 1, false),
-  prop("research", "clock", 31, 2, 1, 1, false),
-  prop("research", "floorLamp", 23, 15, 1, 1),
-  prop("research", "sideTable", 24, 15, 1, 1),
-  prop("research", "filingCabinet", 34, 15, 2, 2),
-  ...[4, 8, 12].flatMap((y) => [41, 48, 55].map((x) => prop("qa", "qaDesk", x, y, 3, 2))),
-  prop("qa", "bugBoard", 46, 2, 4, 1, false),
-  prop("qa", "deviceRack", 59, 7, 2, 3),
-  prop("qa", "plantSucculent", 40, 14, 1, 1),
-  prop("qa", "plantFlowers", 60, 14, 1, 1),
-  prop("qa", "blueRug", 45, 14, 8, 2, false, "floor"),
-  prop("qa", "wallArt", 40, 2, 2, 1, false),
-  prop("qa", "clock", 58, 2, 1, 1, false),
-  prop("qa", "floorLamp", 40, 9, 1, 1),
-  prop("qa", "filingCabinet", 59, 12, 2, 2),
-  prop("lounge", "blueRug", 41, 24, 11, 9, false, "floor"),
-  prop("lounge", "sofaPeach", 41, 24, 5, 2),
-  prop("lounge", "sofaOrange", 48, 24, 5, 2),
-  prop("lounge", "coffeeTable", 45, 27, 3, 1),
-  prop("lounge", "beanBag", 42, 29, 2, 2),
-  prop("lounge", "beanBagBlue", 46, 29, 2, 2),
-  prop("lounge", "beanBagPink", 50, 29, 2, 2),
-  prop("lounge", "pingPong", 45, 31, 4, 2),
-  prop("lounge", "kitchenCounter", 40, 34, 5, 1),
-  prop("lounge", "fridge", 52, 32, 1, 2),
-  prop("lounge", "waterDispenser", 50, 33, 1, 2),
-  prop("lounge", "wallTv", 46, 22, 3, 1, false),
-  prop("lounge", "plantFern", 40, 32, 1, 1),
-  prop("lounge", "plantFlowers", 53, 34, 1, 1),
-  prop("lounge", "wallArt", 40, 22, 2, 1, false),
-  prop("lounge", "clock", 52, 22, 1, 1, false),
-  prop("lounge", "floorLamp", 53, 29, 1, 1),
-  prop("lounge", "printer", 40, 27, 1, 1),
-  prop("lounge", "sofaPeach", 55, 24, 5, 2),
-  prop("lounge", "beanBagBlue", 56, 29, 2, 2),
-  prop("lounge", "pingPong", 55, 31, 4, 2),
-  prop("lounge", "plantMonstera", 60, 34, 1, 1),
-  prop("hall", "blueRug", 30, 38, 4, 1, false, "floor"),
-  prop("hall", "receptionDesk", 36, 37, 2, 1),
-  prop("hall", "plantBamboo", 28, 37, 1, 1),
-  prop("hall", "plantMonstera", 39, 37, 1, 1),
+  ...pods.flatMap((pod, index) => [
+    prop("developerDesk", pod.left + 1, pod.top + 1, 3, 2, index),
+    prop("bookshelf", pod.left + 5, pod.top + 1, 2, 2, index),
+    prop("qaDesk", pod.left + 8, pod.top + 1, 3, 2, index),
+    prop("whiteboard", pod.left + 5, pod.top + 6, 3, 1, index, false),
+  ]),
+  prop("blueRug", 19, 37, 16, 2, undefined, false, "floor"),
+  prop("sofaPeach", 19, 37, 4, 1),
+  prop("sofaOrange", 29, 37, 4, 1),
+  prop("coffeeTable", 24, 37, 3, 1),
+  prop("beanBag", 34, 37, 2, 2),
+  prop("beanBagBlue", 37, 37, 2, 2),
+  prop("kitchenCounter", 40, 37, 4, 1),
+  prop("fridge", 45, 37, 1, 2),
+  prop("receptionDesk", 9, 37, 2, 1),
+  prop("plantFern", 6, 37, 1, 1),
+  prop("plantMonstera", 51, 37, 1, 1),
+  prop("plantBamboo", 55, 37, 1, 1),
 ]
 
 const occupied = new Set(props.filter((item) => item.blocks).flatMap((item) =>
   Array.from({ length: item.height }, (_, dy) => Array.from({ length: item.width }, (_, dx) => `${item.cell.x + dx},${item.cell.y + dy}`)).flat(),
 ))
+const outerDoor = { x: 31, y: rows - 1 }
 
 export function wallAt(x: number, y: number): boolean {
   if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= columns || y >= rows) return true
   if (y === rows - 1 && (x === outerDoor.x || x === outerDoor.x + 1)) return false
-  if (x === 0 || x === columns - 1 || y === 0 || y === rows - 1) return true
-  return rooms.some((room) => {
-    if (room.doors.some((door) => door.x === x && door.y === y)) return false
-    return x >= room.left - 1 && x <= room.right + 1 && y >= room.top - 1 && y <= room.bottom + 1
-      && (x === room.left - 1 || x === room.right + 1 || y === room.top - 1 || y === room.bottom + 1)
-  })
+  return x === 0 || x === columns - 1 || y === 0 || y === rows - 1
 }
 
 export function walkable(x: number, y: number): boolean {
   return !wallAt(x, y) && !occupied.has(`${x},${y}`)
 }
 
-export function roomAt(cell: Point): OfficeRoomID | undefined {
+export function roomAt(cell: Point): "block" | "lounge" | "hall" | undefined {
   if (wallAt(cell.x, cell.y)) return undefined
-  return rooms.find((room) => cell.x >= room.left && cell.x <= room.right && cell.y >= room.top && cell.y <= room.bottom)?.id ?? "hall"
+  if (pods.some((pod) => cell.x >= pod.left && cell.x <= pod.right && cell.y >= pod.top && cell.y <= pod.bottom)) return "block"
+  if (cell.y >= 37 && cell.x >= 18 && cell.x <= 46) return "lounge"
+  return "hall"
 }
 
 export function floorFrameAt(x: number, y: number): number {
-  const room = rooms.find((item) => x >= item.left && x <= item.right && y >= item.top && y <= item.bottom)
-  return room?.floor ?? 0
+  return pods.some((pod) => x >= pod.left && x <= pod.right && y >= pod.top && y <= pod.bottom) ? 1 : 0
 }
 
 export function wallFrameAt(x: number, y: number): number {
-  if (y === rows - 1 && (x === outerDoor.x || x === outerDoor.x + 1)) return 3
-  if (!wallAt(x, y)) return 2
-  if (rooms.some((room) => y === room.top - 1 && x >= room.left + 2 && x <= room.right - 2 && x % 4 < 2)) return 1
-  return 0
-}
-
-function spots(roomID: Exclude<OfficeRoomID, "hall">, seated: readonly Point[]): readonly OfficeSpot[] {
-  const room = rooms.find((item) => item.id === roomID)!
-  const seats: OfficeSpot[] = seated.map((cell) => ({ cell, facing: "up", pose: "sit" }))
-  const used = new Set(seats.map((spot) => `${spot.cell.x},${spot.cell.y}`))
-  const standing = Array.from({ length: room.bottom - room.top + 1 }, (_, dy) => room.top + dy)
-    .flatMap((y) => Array.from({ length: room.right - room.left + 1 }, (_, dx) => ({ x: room.left + dx, y })))
-    .filter((cell) => walkable(cell.x, cell.y) && !used.has(`${cell.x},${cell.y}`))
-    .map((cell): OfficeSpot => ({ cell, facing: "down", pose: "stand" }))
-  return [...seats, ...standing.slice(0, Math.max(0, 16 - seats.length))]
+  return y === rows - 1 && (x === outerDoor.x || x === outerDoor.x + 1) ? 3 : wallAt(x, y) ? 0 : 2
 }
 
 export const officeLayout: OfficeLayout = {
-  columns, rows, tileSize, walkable, roomAt, door: outerDoor,
-  work: {
-    developer: spots("developer", [25, 28, 31, 34].flatMap((y) => [4, 10, 16, 25, 31].map((x) => ({ x, y })))),
-    research: spots("research", [6, 10, 14].flatMap((y) => [22, 30].map((x) => ({ x, y })))),
-    qa: spots("qa", [6, 10, 14].flatMap((y) => [42, 49, 56].map((x) => ({ x, y })))),
-  },
-  meeting: spots("meeting", [...[5, 7, 9, 11].map((x) => ({ x, y: 4 })), ...[5, 7, 9, 11].map((x) => ({ x, y: 8 }))]),
-  lounge: spots("lounge", [...[42, 43, 44, 45].map((x) => ({ x, y: 26 })), ...[49, 50, 51, 52].map((x) => ({ x, y: 26 })), { x: 43, y: 31 }, { x: 50, y: 31 }]),
+  columns, rows, tileSize, walkable, roomAt, door: outerDoor, pods,
+  lounge: [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 39, 42].map((x) => ({ cell: { x, y: 38 }, facing: "up", pose: "stand" })),
 }
 
 export function center(cell: Point): Point {

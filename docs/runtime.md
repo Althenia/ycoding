@@ -74,6 +74,8 @@ A drain discovers the session's Location when execution starts. There is no clus
 
 ### Remote relay agent
 
+The remote Office displays the selected root and up to 15 direct children on one open floor. Each visible character claims a separate block containing its desk, reference shelf, test terminal, and whiteboard; editing, reading/search, tests/commands, and subagent/todo coordination respectively use those objects within the block. Activity changes retarget immediately with at most twelve tiles between task spots. The shared perimeter entrance handles arrival and departure, and idle characters may visit a shared relax area without crossing another character's block. A family above sixteen visible characters counts the rest outside the scene rather than sharing task furniture. Delegation and report cues appear as in-place bubbles in each character's block; reduced motion settles characters without travel. The Office stage fills the available tablet/desktop workspace height and its default camera fits the entire floor.
+
 The connector sends outbound relay frames at least 25 ms apart, leaving headroom
 under the relay's 500-message-per-10-second policy for control traffic. Up to
 4,096 live events can wait for authorization and delivery during a stream burst;
