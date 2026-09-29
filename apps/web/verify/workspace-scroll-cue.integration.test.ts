@@ -41,6 +41,14 @@ async function open(theme: "light" | "dark", workspaces: "overflow" | "default")
   const expected = workspaces === "overflow" ? 22 : 1
   for (let attempt = 0; attempt < 80 && await page.evaluate<number>(`document.querySelectorAll('.sessions-page .workspace-nav__item').length`) !== expected; attempt += 1) await Bun.sleep(50)
   expect(await page.evaluate<number>(`document.querySelectorAll('.sessions-page .workspace-nav__item').length`)).toBe(expected)
+  await page.evaluate(`(() => {
+    document.querySelector('.fixture__banner')?.remove();
+    document.querySelector('.fixture__controls')?.remove();
+    const fixture = document.querySelector('.fixture');
+    fixture.style.height = '100dvh';
+    fixture.style.minHeight = '0';
+    fixture.style.overflow = 'hidden';
+  })()`)
   return page
 }
 
