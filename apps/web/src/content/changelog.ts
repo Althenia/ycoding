@@ -22,6 +22,24 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.7.14",
+    date: "2026-09-29",
+    title: "Installable app, restored pending prompts, and Work finished alerts for the whole Session family",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Install the remote workspace as an app from Settings → App, with browser install dialogs in Chrome and Edge and Home Screen or Dock steps in Safari." },
+      { tag: "Added", text: "Keep accepted prompts across a reload or reconnect, with Processing and Queued labels, Retry send on failed or unknown sends, and dismissible outcome toasts." },
+      { tag: "Changed", text: "Relicense YCoding under AGPL-3.0-only, keep the upstream MIT notice in NOTICE, and ship LICENSE and NOTICE in release archives and the CLI, AI, and client npm packages." },
+      { tag: "Changed", text: "Reduce notification settings to Work finished, Needs your attention, and Machine offline, with Work finished waiting for subagents, background shells, and goals to finish." },
+      { tag: "Changed", text: "Redesign Office as one open floor with a block per agent, show Edited files once a Session stops, show Last active on Running and recent cards, and fade the Workspaces list while more are below." },
+      { tag: "Changed", text: "Have built-in agents commit only when a task, phase, or complete piece of functionality is finished, and cache the app's fingerprinted assets for a year." },
+      { tag: "Fixed", text: "Let remote goal setup finish with a Setting goal status, keep Retrying limited to the retrying assistant step, and retry failed machine status reads so running state and Work finished alerts stay current." },
+      { tag: "Fixed", text: "Keep the machine connected during busy Sessions instead of closing on the relay's message rate limit." },
+      { tag: "Fixed", text: "Return keyboard focus to the opening button when any dialog or sheet closes." },
+      { tag: "Fixed", text: "Neutralize the light-mode landing hero, sharpen light composer edges, fill tall landing pages, and tidy the phone Team sheet and Settings." },
+    ],
+  },
+  {
     version: "0.7.13",
     date: "2026-09-29",
     title: "Invite links with access keys, matching file-change counts, and honest generation speeds",
