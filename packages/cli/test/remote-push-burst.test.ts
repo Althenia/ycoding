@@ -30,7 +30,8 @@ test("a fast 2355-delta provider stream with several subscribers preserves the s
   let stream: LocalEventStream | undefined
   let running = true
   let attention = false
-  let status: { type: "status"; running: string[]; attention: string[] } | undefined
+  let outstanding = false
+  let status: { type: "status"; running: string[]; attention: string[]; outstanding?: string[] } | undefined
   let input: ConnectionInput | undefined
   let connected = false
   const relay = createRelay({
@@ -49,7 +50,8 @@ test("a fast 2355-delta provider stream with several subscribers preserves the s
     },
     saveSubscriptions: () => {}, savePending: () => {},
     loadStatus: async () => status,
-    saveStatus: async (value) => { status = { type: "status", running: [...value.running], attention: [...value.attention] } },
+    saveStatus: async (value) => { status = { type: "status", running: [...value.running], attention: [...value.attention],
+      ...(value.outstanding === undefined ? {} : { outstanding: [...value.outstanding] }) } },
     authorizeClientCommand: async () => ({ ok: true }),
     authorizeAgentCommand: async () => ({ ok: true }),
     authorityTtlMs: 60_000,
@@ -69,6 +71,7 @@ test("a fast 2355-delta provider stream with several subscribers preserves the s
   const local = Object.assign(createLocalServer({ url: "http://127.0.0.1:1" }), {
     listPage: async () => ({ data: [{ id: sessionID, title: "Burst", projectID: "prj_burst", time: { created: 1, updated: 1 }, location: { directory: "/work" } }] }),
     activeSessions: async () => running ? { [sessionID]: { type: "running" } } : {},
+    outstandingSessions: async () => ({ data: outstanding ? [sessionID] : [], failed: [] }),
     permissionRequests: async () => attention ? [{ sessionID }] : [], formRequests: async () => [], guardrailRequestList: async () => [],
     events: async (value: LocalEventStream) => { stream = value; return async () => {} },
   })
@@ -105,12 +108,19 @@ test("a fast 2355-delta provider stream with several subscribers preserves the s
     attention = true
     stream?.onEvent({ type: "permission.v2.requested", data: { sessionID } })
     await until(() => pushes.includes("approval-requested"))
+    attention = false
+    stream?.onEvent({ type: "permission.v2.replied", data: { sessionID } })
+    await until(() => status?.attention.length === 0)
+    outstanding = true
     running = false
     stream?.onEvent({ type: "session.execution.succeeded.1", data: { sessionID } })
-    await Bun.sleep(350)
-    expect(closes).toEqual([])
-    expect(clientEvents).toEqual([deltas + 2, deltas + 2, deltas + 2])
+    await until(() => status?.running.length === 0 && status.outstanding?.includes(sessionID) === true)
+    expect(pushes).toEqual(["approval-requested"])
+    outstanding = false
+    stream?.onEvent({ type: "session.shell.ended", data: { sessionID } })
     await until(() => pushes.length === 2)
+    expect(closes).toEqual([])
+    expect(clientEvents).toEqual([deltas + 4, deltas + 4, deltas + 4])
     expect(pushes).toEqual(["approval-requested", "agent-completed"])
     await Promise.all(pushSends)
     expect(pushRequests).toHaveLength(2)
