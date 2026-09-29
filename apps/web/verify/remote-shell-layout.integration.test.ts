@@ -414,8 +414,8 @@ describe("remote shell layout", () => {
           expect(await settings.evaluate<boolean>(`matchMedia('(pointer: coarse)').matches`)).toBe(coarse)
           await settings.setViewport(width, height)
           await settings.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=settings&presentation=office`)
-          for (let attempt = 0; attempt < 40 && !await settings.evaluate<boolean>(`document.querySelector('#office-settings') !== null`); attempt += 1) await Bun.sleep(50)
-          expect(await settings.evaluate<boolean>(`getComputedStyle(document.querySelector('#office-settings')).display !== 'none'`)).toBe(visible)
+          for (let attempt = 0; attempt < 40 && !await settings.evaluate<boolean>(`document.querySelector('.settings__section[aria-labelledby="notification-settings"]') !== null`); attempt += 1) await Bun.sleep(50)
+          expect(await settings.evaluate<boolean>(`document.querySelector('.settings__section[aria-labelledby="office-settings"]') !== null`)).toBe(visible)
         }
       } finally { await settings.close() }
     } finally { await page.close() }

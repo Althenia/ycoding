@@ -2,7 +2,7 @@ import { Show, createSignal } from "solid-js"
 import { render } from "solid-js/web"
 import { isManagedSubagent, siblingTargets, type TeamActionOutcome, type TeamPanelData, type TeamSubagent } from "../src/remote/ui/team-model"
 import { SubagentBar } from "../src/remote/ui/subagent-bar"
-import { TeamView } from "../src/remote/ui/team-view"
+import { TeamHeading, TeamView } from "../src/remote/ui/team-view"
 import { Modal } from "../src/ui/modal"
 import "../src/styles/tokens.css"
 import "../src/styles/base.css"
@@ -14,7 +14,11 @@ const initialTasks: readonly TeamSubagent[] = [
   { sessionID: "ses_waiting", parentID: "ses_root", description: "Investigate deployment", agent: "researcher", modelLabel: "anthropic/opus#high", state: "waiting", revision: 1, startedAt: 1_000, updatedAt: 3_000, question: { id: "qst_1", text: "Which environment?" } },
   { sessionID: "ses_done", parentID: "ses_root", description: "Run focused tests", agent: "tester", state: "completed", revision: 1, startedAt: 1_000, updatedAt: 4_000 },
 ]
-const [tasks, setTasks] = createSignal(initialTasks)
+const crowdedTasks: readonly TeamSubagent[] = params.has("crowded") ? [
+  ...initialTasks,
+  ...[1, 2, 3].map((index) => ({ sessionID: `ses_extra_${index}`, parentID: "ses_root", description: `Review additional task ${index}`, agent: "reviewer", state: "running" as const, revision: 1, startedAt: 1_000, updatedAt: 2_000 })),
+] : initialTasks
+const [tasks, setTasks] = createSignal(crowdedTasks)
 const [rootID, setRootID] = createSignal("ses_root")
 const [shells, setShells] = createSignal<TeamPanelData["shells"]>([{ id: "sh_1", ownerID: "ses_root", command: "bun test", status: "running", startedAt: 1_000 },
   ...(params.has("sideShell") ? [{ id: "sh_btw", ownerID: "ses_btw", command: "bun lint", status: "running" as const, startedAt: 2_000 }] : [])])
@@ -25,7 +29,7 @@ const [next, setNext] = createSignal<string | undefined>("older")
 const [sideNext, setSideNext] = createSignal<string | undefined>("older")
 const events: string[] = []
 let releaseCancel: ((outcome: TeamActionOutcome) => void) | undefined
-const panel = (): TeamPanelData => ({ rootID: rootID(), status: params.has("unsupported") ? "unsupported" : "ready", tasks: tasks(), total: 4, activeTotal: tasks().filter((task) => task.state === "running" || task.state === "waiting" || task.state === "starting" || task.state === "cancelling").length, next: next(), pageLoading: false,
+const panel = (): TeamPanelData => ({ rootID: rootID(), status: params.has("unsupported") ? "unsupported" : "ready", tasks: tasks(), total: params.has("crowded") ? 53 : 4, activeTotal: tasks().filter((task) => task.state === "running" || task.state === "waiting" || task.state === "starting" || task.state === "cancelling").length, next: next(), pageLoading: false,
   shells: shells(), shellStatus: params.has("unsupported") ? "unsupported" : "ready", sideChats: sideChats(), sideChatStatus: params.has("unsupported") ? "unsupported" : "ready", sideChatNext: sideNext(), sideChatLoading: false })
 const success: TeamActionOutcome = { status: "ok" }
 const select = (id: string) => { setSelectedID(id); events.push(`open:${id}`) }
@@ -69,6 +73,6 @@ render(() => <main class="team-fixture">
       onAnswer={(questionID, text) => answer(selectedID(), questionID, text)} />
   </Show>
   <Show when={open()}>{matchMedia("(max-width: 767px)").matches
-    ? <Modal class="overlay--sheet team-view__sheet" label="Team" onClose={() => setOpen(false)}>{teamContent(true)}</Modal>
+    ? <Modal class="overlay--sheet team-view__sheet" label="Team" header={<TeamHeading data={panel} />} onClose={() => setOpen(false)}>{teamContent(true)}</Modal>
     : teamContent(false)}</Show>
 </main>, root)

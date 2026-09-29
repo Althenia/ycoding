@@ -579,41 +579,43 @@ export function NotificationSettings(): JSX.Element {
       title="Notifications"
       hint="Categories apply to notices in this workspace and, once this browser is permitted, to desktop alerts while it is open. Push to this device can alert an installed app after it closes. If its subscription is missing, use Re-enable to restore alerts. Reopening a session never replays a past alert."
     >
-      <table class="notification-table" aria-labelledby="notification-settings">
-        <thead>
-          <tr>
-            <th scope="col">Event</th>
-            <For each={NOTIFICATION_CHANNELS}>{(channel) => <th scope="col">{channel.label}</th>}</For>
-          </tr>
-        </thead>
-        <tbody>
-          <For each={NOTIFICATION_CATEGORIES}>
-            {(category) => (
-              <tr>
-                <th scope="row">
-                  <span>{category.label}</span>
-                  <span class="field__hint">{category.detail}</span>
-                </th>
-                <For each={NOTIFICATION_CHANNELS}>
-                  {(channel) => (
-                    <td>
-                      <label class="switch">
-                        <input
-                          type="checkbox"
-                          aria-label={`${category.label} via ${channel.label}`}
-                          checked={preferences()[category.id][channel.id]}
-                          onChange={() => update(category.id, channel.id)}
-                        />
-                        <span class="visually-hidden">{channel.label}</span>
-                      </label>
-                    </td>
-                  )}
-                </For>
-              </tr>
-            )}
-          </For>
-        </tbody>
-      </table>
+      <div class="table-scroll">
+        <table class="notification-table" aria-labelledby="notification-settings">
+          <thead>
+            <tr>
+              <th scope="col">Event</th>
+              <For each={NOTIFICATION_CHANNELS}>{(channel) => <th scope="col">{channel.label}</th>}</For>
+            </tr>
+          </thead>
+          <tbody>
+            <For each={NOTIFICATION_CATEGORIES}>
+              {(category) => (
+                <tr>
+                  <th scope="row">
+                    <span>{category.label}</span>
+                    <span class="field__hint">{category.detail}</span>
+                  </th>
+                  <For each={NOTIFICATION_CHANNELS}>
+                    {(channel) => (
+                      <td>
+                        <label class="switch">
+                          <input
+                            type="checkbox"
+                            aria-label={`${category.label} via ${channel.label}`}
+                            checked={preferences()[category.id][channel.id]}
+                            onChange={() => update(category.id, channel.id)}
+                          />
+                          <span class="visually-hidden">{channel.label}</span>
+                        </label>
+                      </td>
+                    )}
+                  </For>
+                </tr>
+              )}
+            </For>
+          </tbody>
+        </table>
+      </div>
       <div class="defs">
         <div class="defs__row">
           <span class="defs__key">Push to this device</span>

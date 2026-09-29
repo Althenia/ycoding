@@ -8,6 +8,10 @@ import "./team-view.css"
 type Tab = "subagents" | "shell" | "side-chats"
 const tabs: readonly Tab[] = ["subagents", "shell", "side-chats"]
 
+export function TeamHeading(props: { readonly data: () => TeamPanelData }): JSX.Element {
+  return <div class="team-view__heading"><h2>Team</h2><span>{props.data().activeTotal ?? props.data().tasks.filter((entry) => isActiveSubagent(entry.state)).length} active</span></div>
+}
+
 export function TeamView(props: {
   readonly data: () => TeamPanelData
   readonly currentSessionID: string
@@ -56,7 +60,6 @@ export function TeamView(props: {
     const chat = props.data().sideChats.find((item) => item.id === id)
     return chat ? `Side chat · ${chat.title}` : "Unknown session"
   }
-  const activeCount = () => props.data().tasks.filter((entry) => isActiveSubagent(entry.state)).length
   const controlsAvailable = () => props.data().shellStatus === "ready" || props.data().sideChatStatus === "ready" || props.data().tasks.some((entry) => entry.tokens !== undefined)
   const canConfirm = () => {
     const item = confirm()
@@ -109,7 +112,7 @@ export function TeamView(props: {
     void action().catch((cause: unknown) => { if (rootID === props.data().rootID) setError(cause instanceof Error ? cause.message : "The page could not be loaded.") })
   }
   const panel = <section class="team-view" ref={section} aria-label="Team">
-    <div class="team-view__header"><div><h2>Team</h2><span>{props.data().activeTotal ?? activeCount()} active</span></div><Show when={!props.sheet}><button type="button" aria-label="Close Team" onClick={props.onClose}>Close</button></Show></div>
+    <Show when={!props.sheet}><div class="team-view__header"><TeamHeading data={props.data} /><button type="button" aria-label="Close Team" onClick={props.onClose}>Close</button></div></Show>
     <div class="team-view__tabs" role="tablist" aria-label="Team sections">
       <For each={tabs}>{(value, index) => <button type="button" role="tab" data-tab={value} aria-selected={tab() === value} aria-controls={`team-panel-${value}`}
         tabIndex={tab() === value ? 0 : -1} onClick={() => selectTab(value)} onKeyDown={(event) => moveTab(event, index())}>

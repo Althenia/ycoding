@@ -1832,14 +1832,17 @@ body:has(.app) {
     display: none;
   }
 
+  .notification-table {
+    table-layout: auto;
+  }
+
   .notification-table th,
   .notification-table td {
     padding-inline: var(--yc-space-1);
   }
 
   .notification-table thead th:not(:first-child) {
-    inline-size: 72px;
-    white-space: normal;
+    inline-size: auto;
   }
 }
 
@@ -2396,7 +2399,6 @@ body:has(.app) {
 :root { --yc-phone-layout: 0; }
 @media (max-width: 767px), (max-height: 599px) and (pointer: coarse) {
   :root { --yc-phone-layout: 1; }
-  #office-settings { display: none; }
 }
 
 .bottom-nav__icon {

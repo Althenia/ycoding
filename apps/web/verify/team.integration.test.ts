@@ -159,6 +159,46 @@ test("Team tabs keep keyed rows, counts, and navigation across phone, tablet, an
   }
 }, 30_000)
 
+test("Team keeps one titled header, sheet padding, and a non-overlapping older control", async () => {
+  if (!browser) throw new Error("Browser not started")
+  const reports: { readonly width: number; readonly theme: string; readonly headings: number; readonly closes: number; readonly count: string; readonly left: number; readonly right: number; readonly token: number; readonly olderClear: boolean; readonly listScrolls: boolean; readonly olderVisible: boolean }[] = []
+  for (const theme of ["light", "dark"] as const) for (const width of [390, 768] as const) {
+    const page = await browser.openPage()
+    try {
+      await page.setViewport(width, 844)
+      await page.navigate(`http://127.0.0.1:${port}/verify/team-fixture.html?mode=team&crowded&theme=${theme}`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.team-view__more') !== null`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`(() => { const panel = document.querySelector('.team-view'), body = panel.closest('dialog')?.querySelector('.overlay__body'); if (body) body.scrollTop = body.scrollHeight; else panel.querySelector('.team-view__list').scrollTop = panel.querySelector('.team-view__list').scrollHeight })()`)
+      await Bun.write(new URL(`../../../.cache/tmp/phone-settings-${process.env.PHONE_CAPTURE_PHASE ?? "after"}-team-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      const layout = await page.evaluate<{ readonly headings: number; readonly closes: number; readonly count: string; readonly left: number; readonly right: number; readonly token: number; readonly olderClear: boolean; readonly listScrolls: boolean; readonly olderVisible: boolean }>(`(() => {
+        const panel = document.querySelector('.team-view'), sheet = panel.closest('dialog'), head = sheet?.querySelector('.overlay__head') ?? panel.querySelector('.team-view__header');
+        const body = sheet?.querySelector('.overlay__body'), card = panel.querySelector('.team-view__task'), list = panel.querySelector('.team-view__list'), more = panel.querySelector('.team-view__more');
+        const container = (body ?? panel).getBoundingClientRect(), content = (card ?? list).getBoundingClientRect(), older = more.getBoundingClientRect();
+        return { headings: [...head.querySelectorAll('.overlay__title, h2')].filter(node => node.textContent.trim() === 'Team').length + [...panel.querySelectorAll('h2')].filter(node => node.textContent.trim() === 'Team' && !head.contains(node)).length,
+          closes: [...(sheet ?? panel).querySelectorAll('button[aria-label="Close Team"]')].filter(button => button.getClientRects().length).length,
+          count: head.textContent.trim(), left: content.left - container.left, right: container.right - content.right,
+          token: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-space-4')),
+          olderClear: [...panel.querySelectorAll('.team-view__task')].every(task => { const box = task.getBoundingClientRect(); return older.bottom <= box.top || older.top >= box.bottom + parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-space-2')) || older.right <= box.left || older.left >= box.right }),
+          listScrolls: list.scrollHeight > list.clientHeight + 1,
+          olderVisible: !body || (older.top >= body.getBoundingClientRect().top && older.bottom <= body.getBoundingClientRect().bottom) };
+      })()`)
+      reports.push({ width, theme, ...layout })
+    } finally { await page.close() }
+  }
+  for (const layout of reports) {
+    expect(layout.headings, JSON.stringify(layout)).toBe(1)
+    expect(layout.closes).toBe(1)
+    expect(layout.count).toContain("5 active")
+    if (layout.width === 390) {
+      expect(layout.left).toBeGreaterThanOrEqual(layout.token)
+      expect(layout.right).toBeGreaterThanOrEqual(layout.token)
+      expect(layout.listScrolls).toBe(false)
+      expect(layout.olderVisible).toBe(true)
+    }
+    expect(layout.olderClear).toBe(true)
+  }
+}, 30_000)
+
 test("Team controls confirm cancellation and shell kill, answer a blocked child, and page side chats", async () => {
   if (!browser) throw new Error("Browser not started")
   const page = await browser.openPage()

@@ -83,10 +83,10 @@ describe("responsive contract", () => {
     }
   })
 
-  test("shares one portrait-or-landscape phone condition with Office visibility", async () => {
+  test("leaves Office visibility to the shell's phone-layout flag, not heading-only CSS", async () => {
     const remote = await readStylesheet("remote.css")
     expect(remote.rules.some((rule) => rule.header === ":root" && rule.conditions.includes(PHONE_LAYOUT_QUERY) && rule.declarations["--yc-phone-layout"] === "1")).toBe(true)
-    expect(remote.rules.some((rule) => rule.header === "#office-settings" && rule.conditions.includes(PHONE_LAYOUT_QUERY) && rule.declarations.display === "none")).toBe(true)
+    expect(remote.rules.some((rule) => rule.header === "#office-settings" && rule.conditions.includes(PHONE_LAYOUT_QUERY) && rule.declarations.display === "none")).toBe(false)
   })
 
   test("declares the inline gutter step in one place", async () => {

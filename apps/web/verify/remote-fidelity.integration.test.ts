@@ -27,6 +27,51 @@ afterAll(async () => {
 })
 
 describe("remote responsive state behavior", () => {
+  test("Office settings follow Office availability, not heading-only CSS", async () => {
+    const reports: { readonly width: number; readonly section: boolean; readonly controls: number; readonly text: string }[] = []
+    for (const width of [390, 768, 1440] as const) {
+      const page = await fixture(`scenario=autonomy-goal-notification-settings-${width}`, width, "Settings")
+      try {
+        const state = await page.evaluate<{ readonly section: boolean; readonly controls: number; readonly text: string }>(`(() => { const section = document.querySelector('.settings__section[aria-labelledby="office-settings"]'); return {
+          section: section !== null, controls: [...(section?.querySelectorAll('button') ?? [])].filter(button => button.getClientRects().length && getComputedStyle(button).visibility !== 'hidden').length,
+          text: section?.innerText ?? '' }; })()`)
+        await Bun.write(new URL(`../../../.cache/tmp/phone-settings-${process.env.PHONE_CAPTURE_PHASE ?? "after"}-office-${width}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        reports.push({ width, ...state })
+      } finally { await page.close() }
+    }
+    expect(reports[0]).toEqual({ width: 390, section: false, controls: 0, text: "" })
+    for (const state of reports.slice(1)) {
+      expect(state.section).toBe(true)
+      expect(state.controls).toBeGreaterThan(0)
+      expect(state.text).toContain("Workspace view")
+    }
+  }, 30_000)
+
+  test("notification headers stay on one line with toggles centered below both channel labels", async () => {
+    const page = await fixture("scenario=autonomy-goal-notification-settings-390", 390, "Notifications")
+    try {
+      const reports: { readonly names: readonly string[]; readonly lines: readonly number[]; readonly offsets: readonly number[]; readonly overflow: boolean }[] = []
+      for (const labels of [["Event", "In workspace", "Desktop"], ["Event", "In app", "System"]] as const) {
+        await page.evaluate(`document.querySelectorAll('.notification-table thead th').forEach((cell, index) => { cell.textContent = ${JSON.stringify(labels)}[index] })`)
+        if (labels[1] === "In app") await page.evaluate(`document.querySelectorAll('.notification-table tbody th > span:first-child').forEach((cell, index) => { cell.textContent = ['Work finished', 'Needs your attention', 'Machine offline'][index] ?? cell.textContent })`)
+        await page.evaluate(`document.querySelector('.notification-table')?.scrollIntoView({ block: 'center' })`)
+        await Bun.write(new URL(`../../../.cache/tmp/phone-settings-${process.env.PHONE_CAPTURE_PHASE ?? "after"}-notifications-${labels[1].replaceAll(" ", "-")}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        const layout = await page.evaluate<{ readonly names: readonly string[]; readonly lines: readonly number[]; readonly offsets: readonly number[]; readonly overflow: boolean }>(`(() => {
+          const table = document.querySelector('.notification-table'), heads = [...table.querySelectorAll('thead th')], row = table.querySelector('tbody tr');
+          return { names: heads.map(head => head.textContent.trim()), lines: heads.map(head => { const range = document.createRange(); range.selectNodeContents(head); return range.getClientRects().length }),
+            offsets: [...row.querySelectorAll('td')].map((cell, index) => Math.abs((cell.querySelector('.switch').getBoundingClientRect().left + cell.querySelector('.switch').getBoundingClientRect().right) / 2 - (heads[index + 1].getBoundingClientRect().left + heads[index + 1].getBoundingClientRect().right) / 2)),
+            overflow: document.documentElement.scrollWidth > innerWidth }; })()`)
+        reports.push(layout)
+      }
+      for (const [index, layout] of reports.entries()) {
+        expect(layout.names).toEqual(index === 0 ? ["Event", "In workspace", "Desktop"] : ["Event", "In app", "System"])
+        expect(layout.lines, JSON.stringify(layout)).toEqual([1, 1, 1])
+        expect(layout.offsets.every((offset) => offset <= 1), JSON.stringify(layout)).toBe(true)
+        expect(layout.overflow).toBe(false)
+      }
+    } finally { await page.close() }
+  }, 20_000)
+
   test("keeps YOLO and goal controls out of Settings at desktop and phone widths", async () => {
     for (const width of [1440, 390] as const) {
       const page = await fixture(`scenario=autonomy-goal-notification-settings-${width}`, width, "Appearance")

@@ -61,7 +61,7 @@ import { TodoPanel } from "./todo-panel"
 import { RunningSessions } from "./running-sessions"
 import { LoadingPlaceholder } from "./loading"
 import { SubagentBar } from "./subagent-bar"
-import { TeamView } from "./team-view"
+import { TeamHeading, TeamView } from "./team-view"
 import { isManagedSubagent, siblingTargets } from "./team-model"
 
 const views = ["/remote", "/remote/sessions", "/remote/activity", "/remote/usage", "/remote/settings"] as const
@@ -396,7 +396,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                   </RoutePanel>
                   <RoutePanel active={view() === "/remote/activity"}><ActivityPage onSelectSession={(sessionID) => void remote.store.selectSession(sessionID)} /></RoutePanel>
                   <RoutePanel active={view() === "/remote/usage"}><UsagePage /></RoutePanel>
-                  <RoutePanel active={view() === "/remote/settings"}><SettingsPage office={office} /></RoutePanel>
+                  <RoutePanel active={view() === "/remote/settings"}><SettingsPage office={office} phoneLayout={phoneLayout()} /></RoutePanel>
                 </>}>
                 <LoadingPlaceholder kind="screen" label="Checking account and connecting to machine…" />
                 <Show when={view() === "/remote/settings"}>
@@ -442,7 +442,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
         <Show when={(phoneLayout() ? teamOpen() : teamVisible()) && view() === "/remote" && state().team !== undefined && selected()}>
           <aside ref={teamLayer} class={`${phoneLayout() ? "team-control__phone" : "team-control__panel"}${teamEntering() ? " team-control--entering" : ""}${!teamOpen() ? " team-control--exiting" : ""}`} aria-label="Team controls" aria-hidden={!teamOpen() || teamClosing() ? "true" : undefined} inert={!teamOpen() || teamClosing()}
             onClick={(event) => { if (phoneLayout() && event.target === teamLayer?.querySelector("dialog.team-view__sheet")) closeTeam() }}>
-            {phoneLayout() ? <Show when={teamGeneration()} keyed>{(generation) => <Modal class="overlay--sheet team-view__sheet" label="Team" requestClose={(close) => { closeTeamSheet = close }}
+            {phoneLayout() ? <Show when={teamGeneration()} keyed>{(generation) => <Modal class="overlay--sheet team-view__sheet" label="Team" header={<TeamHeading data={() => state().team!} />} requestClose={(close) => { closeTeamSheet = close }}
               onDismiss={() => setTeamClosing(true)} onClose={() => {
                 if (teamGeneration() !== generation) return
                 closeTeamSheet = undefined
@@ -1737,7 +1737,7 @@ function ActivityPage(props: { readonly onSelectSession: (sessionID: string) => 
   )
 }
 
-function SettingsPage(props: { readonly office: OfficeSettingsStore }): JSX.Element {
+function SettingsPage(props: { readonly office: OfficeSettingsStore; readonly phoneLayout: boolean }): JSX.Element {
   return (
     <>
       <div class="page-head">
@@ -1753,7 +1753,7 @@ function SettingsPage(props: { readonly office: OfficeSettingsStore }): JSX.Elem
           <DeviceSettings />
           <AppSettings />
           <AppearanceSettings />
-          <OfficeSettings office={props.office} />
+          <Show when={!props.phoneLayout}><OfficeSettings office={props.office} /></Show>
           <NotificationSettings />
         </div>
       </div>
