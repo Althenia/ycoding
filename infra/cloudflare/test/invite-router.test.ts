@@ -74,12 +74,15 @@ test("admin routes fail closed, compare bearer securely, bound failed attempts, 
   }
   const h = await harness()
   try {
+    const missing = await h.call("GET", "/api/admin/invites")
+    expect(missing.status).toBe(401)
+    expect(missing.headers.get("cache-control")).toBe("no-store")
     for (const bearer of ["", "wrong"]) {
       const response = await h.admin("GET", "/api/admin/invites", undefined, bearer)
       expect(response.status).toBe(401)
       expect(response.headers.get("cache-control")).toBe("no-store")
     }
-    for (let attempt = 0; attempt < 28; attempt += 1) expect((await h.admin("GET", "/api/admin/invites", undefined, "wrong")).status).toBe(401)
+    for (let attempt = 0; attempt < 27; attempt += 1) expect((await h.admin("GET", "/api/admin/invites", undefined, "wrong")).status).toBe(401)
     expect((await h.admin("GET", "/api/admin/invites", undefined, "wrong")).status).toBe(429)
     expect((await h.admin("GET", "/api/admin/invites")).status).toBe(200)
     expect((await h.call("GET", "/api/admin/invites", undefined, { authorization: "Bearer wrong", "cf-connecting-ip": "another-client" })).status).toBe(401)
@@ -109,6 +112,9 @@ test("create, list, and validate labeled or unlabeled single-use fragment invite
       { id: created.id, label: "Teammate", createdAt: 100, redeemedAt: null },
     ].sort((a, b) => a.id < b.id ? 1 : -1) })
     expect(JSON.stringify(await (await h.admin("GET", "/api/admin/invites")).json())).not.toContain(created.url.split("#")[1])
+    const pendingID = h.sqlite.prepare("SELECT id FROM invite WHERE label IS NULL").get()?.id
+    expect((await h.admin("DELETE", `/api/admin/invites/${pendingID}`)).status).toBe(204)
+    expect(h.sqlite.prepare("SELECT COUNT(*) AS count FROM invite").get()).toEqual({ count: 1 })
   } finally { h.sqlite.close() }
 })
 
