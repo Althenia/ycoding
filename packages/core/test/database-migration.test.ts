@@ -51,6 +51,8 @@ const currentMigrations = [
   { id: "20260908062843_session-archive-retention" },
   { id: "20260922051821_long_spitfire" },
   { id: "20260924030327_prompt-cache-request-timing" },
+  { id: "20260926113528_session-pin" },
+  { id: "20260929044715_session-active" },
 ]
 const selectiveCompactionTables = [
   "compaction_manifest_blob",
