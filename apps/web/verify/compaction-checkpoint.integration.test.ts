@@ -60,7 +60,7 @@ describe("compaction checkpoint in the conversation", () => {
               { jobID: 'cmp_latest', trigger: 'manual', status: 'completed', created: 4, metrics },
             ], truncated: false, completedBefore: 0, completedCount: 2, totalSavedTokens: 1200 } }
           window.olderRequests = 0
-          const store = { state: () => ({ activeSessionID: 'ses_a', view, history: { status: 'idle', before: 'covered' } }),
+          const store = { state: () => ({ activeSessionID: 'ses_a', view, history: { status: 'idle', before: 'covered' }, mutations: [] }),
             subscribe: () => () => {}, load: async () => {}, dispose: () => {},
             loadOlderMessages: async () => { window.olderRequests++ } }
           render(() => createComponent(RemoteProvider, { createStore: () => store,

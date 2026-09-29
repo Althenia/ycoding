@@ -1,4 +1,5 @@
 import {
+  RemoteLimits,
   RemoteWebSocketPath,
   parseClientMessage,
   serializeEvent,
@@ -8,6 +9,8 @@ import {
   type RemoteErrorCode,
   type RemoteRequest,
 } from "@ycoding-ai/remote"
+
+export const pacedFlowTimeoutMs = RemoteLimits.clientRateWindowMs + 5_000
 
 export type RelayHandlerOutcome =
   | { readonly ok: true; readonly value: unknown; readonly chunks?: readonly { readonly index: number; readonly slice: string }[] }

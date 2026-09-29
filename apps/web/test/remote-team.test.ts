@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore, readSessionInfo } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
-import { startRelayDouble, waitFor, type RelayHandlerOutcome, type RelayHandlerResult } from "./relay-double"
+import { pacedFlowTimeoutMs, startRelayDouble, waitFor, type RelayHandlerOutcome, type RelayHandlerResult } from "./relay-double"
 import type { RemoteRequest } from "@ycoding-ai/remote"
 
 const task = (sessionID: string, parentID = "ses_a", state = "running") => ({
@@ -181,7 +181,7 @@ describe("remote team facts", () => {
       expect(test.store.state().team?.tasks).toEqual(rows)
       expect(test.store.state().familyActivity?.members).toEqual(family)
     } finally { await test.stop() }
-  })
+  }, pacedFlowTimeoutMs)
   test("a history size failure still loads todos, requests, and the selected root team", async () => {
     const todos = [{ content: "Check output", status: "in_progress", priority: "high" }] as const
     const test = await setup(() => ({ ok: true, value: { data: [task("ses_child")], summary: { total: 1 }, cursor: {} } }),

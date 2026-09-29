@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
-import { startRelayDouble, waitFor, type RelayHandlerOutcome, type RelayRequestHandler } from "./relay-double"
+import { pacedFlowTimeoutMs, startRelayDouble, waitFor, type RelayHandlerOutcome, type RelayRequestHandler } from "./relay-double"
 
 const workspace = { id: "workspace_alpha", projectID: "project_alpha", directory: "/workspace/alpha", name: "Alpha" }
 const other = { id: "workspace_beta", projectID: "project_beta", directory: "/workspace/beta", name: "Beta" }
@@ -74,7 +74,7 @@ describe("remote workspace session creation", () => {
       expect(h.relay.requests.filter((request) => request.operation === "session.create")).toHaveLength(1)
       expect(h.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(1)
     } finally { await h.stop() }
-  })
+  }, pacedFlowTimeoutMs)
   test("keeps drafts with their Session across selection and same-device reconnect, but not another device", async () => {
     const h = await setup()
     try {
