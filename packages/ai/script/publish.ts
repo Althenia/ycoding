@@ -15,6 +15,7 @@ const originalText = await Bun.file("package.json").text()
 const pkg = JSON.parse(originalText) as {
   name: string
   version: string
+  files: string[]
   exports: Record<string, string>
 }
 if (await published(pkg.name, pkg.version)) {
@@ -28,11 +29,14 @@ if (await published(pkg.name, pkg.version)) {
       types: file + ".d.ts",
     }
   }
+  pkg.files = [...pkg.files, "LICENSE", "NOTICE"]
   await Bun.write("package.json", JSON.stringify(pkg, null, 2))
   try {
+    await $`cp ../../LICENSE ../../NOTICE .`
     await $`bun pm pack`
     await $`npm publish *.tgz --tag ${Script.channel} --access public`
   } finally {
     await Bun.write("package.json", originalText)
+    await $`rm -f LICENSE NOTICE`
   }
 }

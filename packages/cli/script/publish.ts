@@ -34,6 +34,7 @@ async function publishDistribution(input: { root: string; name: string; binary: 
 
   await $`mkdir -p ${input.root}/${input.name}/bin`
   await $`cp ./script/postinstall.mjs ${input.root}/${input.name}/postinstall.mjs`
+  await $`cp ../../LICENSE ../../NOTICE ${input.root}/${input.name}/`
   await Bun.file(`${input.root}/${input.name}/bin/${input.binary}.exe`).write(
     [
       `echo "Error: ${input.name}'s postinstall script was not run." >&2`,

@@ -229,6 +229,7 @@ jobs:
           set -euo pipefail
           staging="dist/release-bin/${{ matrix.target }}"
           mkdir -p "$staging"
+          cp LICENSE NOTICE "$staging/"
           cp "dist/tui/tui-${{ matrix.target }}/bin/ycoding${{ runner.os == 'Windows' && '.exe' || '' }}" "$staging/"
           cp -R "dist/tui/tui-${{ matrix.target }}/bin/ycoding-chrome-extension" "$staging/"
           if [ "${{ runner.os }}" = "macOS" ]; then
@@ -329,7 +330,7 @@ jobs:
             grep -Fq '<key>CFBundleIconFile</key><string>YCoding.icns</string>' "$app/Contents/Info.plist"
           done
           test -x unpacked/ycoding-linux-x64/ycoding
-          mac_entries=(ycoding ycoding-chrome-extension)
+          mac_entries=(ycoding ycoding-chrome-extension LICENSE NOTICE)
           version_core="${version%%+*}"
           prerelease=false
           if [[ "$version_core" == *-* ]]; then prerelease=true; fi
@@ -339,8 +340,8 @@ jobs:
           '; then mac_entries+=("YCoding Computer Use.app"); fi
           tar -C unpacked/ycoding-darwin-arm64 -czf "release/ycoding-$version-darwin-arm64.tar.gz" "${mac_entries[@]}"
           tar -C unpacked/ycoding-darwin-x64 -czf "release/ycoding-$version-darwin-x64.tar.gz" "${mac_entries[@]}"
-          tar -C unpacked/ycoding-linux-x64 -czf "release/ycoding-$version-linux-x64.tar.gz" ycoding ycoding-chrome-extension
-          (cd unpacked/ycoding-windows-x64 && zip -r "../../release/ycoding-$version-windows-x64.zip" ycoding.exe ycoding-chrome-extension)
+          tar -C unpacked/ycoding-linux-x64 -czf "release/ycoding-$version-linux-x64.tar.gz" ycoding ycoding-chrome-extension LICENSE NOTICE
+          (cd unpacked/ycoding-windows-x64 && zip -r "../../release/ycoding-$version-windows-x64.zip" ycoding.exe ycoding-chrome-extension LICENSE NOTICE)
           tar -tzvf "release/ycoding-$version-darwin-arm64.tar.gz" | grep '^-rwx' >/dev/null
           tar -tzvf "release/ycoding-$version-darwin-x64.tar.gz" | grep '^-rwx' >/dev/null
           tar -tzvf "release/ycoding-$version-linux-x64.tar.gz" | grep '^-rwx' >/dev/null
@@ -349,6 +350,10 @@ jobs:
           tar -tzf "release/ycoding-$version-darwin-arm64.tar.gz" | grep -x 'ycoding-chrome-extension/manifest.json' >/dev/null
           tar -tzf "release/ycoding-$version-darwin-x64.tar.gz" | grep -x 'ycoding-chrome-extension/manifest.json' >/dev/null
           tar -tzf "release/ycoding-$version-linux-x64.tar.gz" | grep -x 'ycoding-chrome-extension/manifest.json' >/dev/null
+          for target in darwin-arm64 darwin-x64 linux-x64; do
+            for file in LICENSE NOTICE; do tar -tzf "release/ycoding-$version-$target.tar.gz" | grep -x "$file" >/dev/null; done
+          done
+          for file in LICENSE NOTICE; do unzip -Z1 "release/ycoding-$version-windows-x64.zip" | grep -x "$file" >/dev/null; done
           # One checksum file covers every released archive, so the installer
           # verifies each download with the same rule.
           (cd release && sha256sum "ycoding-$version-"*.tar.gz "ycoding-$version-"*.zip > "ycoding-$version-checksums.txt")

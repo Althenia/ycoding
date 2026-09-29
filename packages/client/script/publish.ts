@@ -11,6 +11,7 @@ const originalText = await Bun.file("package.json").text()
 const pkg = JSON.parse(originalText) as {
   name: string
   version: string
+  files: string[]
   exports: Record<string, string | { import: string; types: string }>
 }
 const tarball = `${pkg.name.replace("@", "").replace("/", "-")}-${pkg.version}.tgz`
@@ -35,11 +36,13 @@ try {
       ]
     }),
   )
+  pkg.files = [...pkg.files, "LICENSE", "NOTICE"]
   await Bun.write("package.json", JSON.stringify(pkg, null, 2) + "\n")
   await rm(tarball, { force: true })
+  await $`cp ../../LICENSE ../../NOTICE .`
   await $`bun pm pack`
   await $`npm publish ${tarball} --tag ${Script.channel} --access public`
 } finally {
   await Bun.write("package.json", originalText)
-  await rm(tarball, { force: true })
+  await Promise.all([tarball, "LICENSE", "NOTICE"].map((file) => rm(file, { force: true })))
 }

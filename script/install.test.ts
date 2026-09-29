@@ -209,6 +209,25 @@ exec /bin/mv "$@"
     expect(await Array.fromAsync(new Bun.Glob(".ycoding*").scan({ cwd: install, dot: true, onlyFiles: false }))).toEqual([])
   })
 
+  test("installs a v0.7.14 release that carries LICENSE and NOTICE without copying them into the install directory", async () => {
+    const fixture = await setup({ system: "Linux", machine: "x86_64", version: "0.7.14" })
+    await linuxExtensionArchive(fixture, ["LICENSE", "NOTICE"])
+    const install = path.join(fixture.home, ".local/bin")
+    const result = await runInstaller(fixture)
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect(await Bun.file(path.join(install, "ycoding")).exists()).toBe(true)
+    expect(await Bun.file(path.join(install, "LICENSE")).exists()).toBe(false)
+    expect(await Bun.file(path.join(install, "NOTICE")).exists()).toBe(false)
+  })
+
+  test("rejects a v0.7.14 release archive without LICENSE and NOTICE", async () => {
+    const fixture = await setup({ system: "Linux", machine: "x86_64", version: "0.7.14" })
+    await linuxExtensionArchive(fixture)
+    const result = await runInstaller(fixture)
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain("invalid direct entries")
+  })
+
   test("restores the installed Chrome extension when final executable replacement fails", async () => {
     const fixture = await setup({ system: "Linux", machine: "x86_64", version: "0.7.2" })
     await linuxExtensionArchive(fixture)
@@ -553,9 +572,10 @@ async function writeExtension(directory: string) {
   return "ycoding-chrome-extension"
 }
 
-async function linuxExtensionArchive(fixture: Awaited<ReturnType<typeof setup>>) {
+async function linuxExtensionArchive(fixture: Awaited<ReturnType<typeof setup>>, files: string[] = []) {
   const extension = await writeExtension(fixture.fixture)
-  const tar = Bun.spawnSync(["tar", "-C", fixture.fixture, "-czf", path.join(fixture.fixture, fixture.asset), "ycoding", extension], { env: { ...process.env, COPYFILE_DISABLE: "1" } })
+  for (const file of files) await writeFile(path.join(fixture.fixture, file), `fixture ${file}\n`)
+  const tar = Bun.spawnSync(["tar", "-C", fixture.fixture, "-czf", path.join(fixture.fixture, fixture.asset), "ycoding", extension, ...files], { env: { ...process.env, COPYFILE_DISABLE: "1" } })
   expect(tar.exitCode).toBe(0)
   await writeChecksum(fixture.fixture, fixture.asset)
 }

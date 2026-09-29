@@ -22,6 +22,7 @@ legacy_helper=ycoding-computer-helper
 extension_name=ycoding-chrome-extension
 extension_files="icons/ycoding-128.png icons/ycoding-16.png icons/ycoding-32.png icons/ycoding-48.png manifest.json popup.css popup.html popup.js protocol.js service-worker.js"
 extension_required=false
+license_required=false
 extension_candidate=
 extension_backup=
 install_transaction=false
@@ -227,6 +228,10 @@ if printf '%s\n' "${version_core%%-*}" | awk -F . '
   $1 > 0 || ($1 == 0 && ($2 > 7 || ($2 == 7 && $3 > 1))) { found=1 }
   END { exit !found }
 '; then extension_required=true; fi
+if printf '%s\n' "${version_core%%-*}" | awk -F . '
+  $1 > 0 || ($1 == 0 && ($2 > 7 || ($2 == 7 && $3 > 13))) { found=1 }
+  END { exit !found }
+'; then license_required=true; fi
 if [ "$operating_system" = darwin ]; then
   prerelease=false
   case "$version_core" in *-*) prerelease=true ;; esac
@@ -273,6 +278,9 @@ if [ "$extension_required" = true ]; then
     printf '%s\n' "$expected_entries" "$extension_name/" "$extension_name/icons/"
     for file in $extension_files; do printf '%s\n' "$extension_name/$file"; done
   } | LC_ALL=C sort)
+fi
+if [ "$license_required" = true ]; then
+  expected_entries=$(printf '%s\n' "$expected_entries" LICENSE NOTICE | LC_ALL=C sort)
 fi
 [ "$entries" = "$expected_entries" ] || fail "Release archive has invalid direct entries"
 # Check types and advertised uncompressed sizes before writing extracted files.

@@ -120,7 +120,7 @@ test("macOS release archives stage the signed app and preserve its bundle tree",
   expect(workflow).toContain('codesign --verify --deep --strict "$staging/YCoding Computer Use.app"')
   expect(workflow).toContain('"unpacked/ycoding-darwin-arm64/YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use"')
   expect(workflow).toContain('app="unpacked/ycoding-$target/YCoding Computer Use.app"')
-  expect(workflow).toContain("mac_entries=(ycoding ycoding-chrome-extension)")
+  expect(workflow).toContain("mac_entries=(ycoding ycoding-chrome-extension LICENSE NOTICE)")
   expect(workflow).toContain(`grep -x 'YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use'`)
   expect(workflow).not.toContain("bin/ycoding-computer-use")
   expect(workflow).toContain('mac_entries+=("YCoding Computer Use.app")')
@@ -132,6 +132,14 @@ test("macOS release archives stage the signed app and preserve its bundle tree",
   const packageJob = workflow.split("\n  package:")[1]?.split("\n  release-tui:")[0]
   expect(packageJob).toContain("runs-on: ubuntu-24.04")
   expect(packageJob).toContain('find "$app" -mindepth 1 -printf')
+})
+
+test("release archives carry LICENSE and NOTICE on every platform", () => {
+  expect(workflow).toContain('cp LICENSE NOTICE "$staging/"')
+  expect(workflow).toContain('"release/ycoding-$version-linux-x64.tar.gz" ycoding ycoding-chrome-extension LICENSE NOTICE')
+  expect(workflow).toContain("ycoding.exe ycoding-chrome-extension LICENSE NOTICE)")
+  expect(workflow).toContain('for file in LICENSE NOTICE; do tar -tzf "release/ycoding-$version-$target.tar.gz" | grep -x "$file" >/dev/null; done')
+  expect(workflow).toContain('for file in LICENSE NOTICE; do unzip -Z1 "release/ycoding-$version-windows-x64.zip" | grep -x "$file" >/dev/null; done')
 })
 
 test("one v tag verifies a shared note and publishes only the TUI GitHub release", () => {

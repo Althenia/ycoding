@@ -132,4 +132,7 @@ for (const item of targets) {
       2,
     ),
   )
+  await Promise.all(
+    ["LICENSE", "NOTICE"].map((file) => Bun.write(path.join(outdir, name, file), Bun.file(path.join(dir, "../..", file)))),
+  )
 }
