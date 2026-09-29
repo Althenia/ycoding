@@ -390,6 +390,41 @@ describe("EditTool", () => {
     ),
   )
 
+  it.live("inserts replacement text literally, including $ patterns", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        const single = path.join(tmp.path, "single.txt")
+        const all = path.join(tmp.path, "all.txt")
+        return Effect.promise(() => Promise.all([fs.writeFile(single, "price = old;"), fs.writeFile(all, "a a")])).pipe(
+          Effect.andThen(
+            withTool(tmp.path, (registry) =>
+              Effect.all([
+                executeTool(
+                  registry,
+                  call({ path: "single.txt", oldString: "old", newString: "$& $` $' $$ $1" }, "call-single"),
+                ),
+                executeTool(
+                  registry,
+                  call({ path: "all.txt", oldString: "a", newString: "$'$&", replaceAll: true }, "call-all"),
+                ),
+              ]),
+            ),
+          ),
+          Effect.andThen((results) =>
+            Effect.gen(function* () {
+              expect(results).toMatchObject([{ type: "text" }, { type: "text" }])
+              expect(yield* Effect.promise(() => fs.readFile(single, "utf8"))).toBe("price = $& $` $' $$ $1;")
+              expect(yield* Effect.promise(() => fs.readFile(all, "utf8"))).toBe("$'$& $'$&")
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
   it.live("preserves BOM and CRLF line endings", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
