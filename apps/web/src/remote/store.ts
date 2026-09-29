@@ -246,6 +246,7 @@ export type RemoteStore = {
   readonly selectSession: (sessionID: string) => Promise<void>
   readonly restoreSession: (sessionID: string) => Promise<"selected" | "missing" | "unavailable">
   readonly watchTeam: (enabled: boolean) => void
+  readonly watchFileChanges: (enabled: boolean) => void
   readonly watchFamilyActivity: (enabled: boolean) => void
   readonly loadMoreTeam: () => Promise<void>
   readonly loadTeamControls: () => Promise<void>
@@ -384,6 +385,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   let teamWatching = false
   let teamWatchToken = 0
   let activityWatching = false
+  let fileChangesWatching = false
   let activityWatchToken = 0
   let teamRead: { readonly owner: RemoteTransport; readonly token: number; readonly rootID: string; readonly watchToken: number } | undefined
   let pendingTeamRead: { readonly owner: RemoteTransport; readonly token: number; readonly rootID: string; readonly watchToken: number; readonly refresh: boolean } | undefined
@@ -443,7 +445,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
    * the device's ledger at one instant; a record this client applied after the read was
    * issued is newer, so it is re-applied over the read instead of being replaced by it.
    */
-  let fileChangeRead: { readonly sessionID: string; readonly live: FileChangeView[] } | undefined
+  let fileChangeRead: { readonly sessionID: string; readonly token: number; readonly live: FileChangeView[] } | undefined
   let capturedRead: { readonly sessionID: string; readonly owner: RemoteTransport; readonly token: number } | undefined
   let cancelCapturedRefresh: (() => void) | undefined
   let lastCapturedRead = -Infinity
@@ -1097,18 +1099,16 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   const loadSessionReads = async (sessionID: string, token: number, notice?: string) => {
     const active = transport
     if (!active) return
-    const pending = { sessionID, live: [] as FileChangeView[] }
     const requestsDuringRead = { sessionID, live: [] as { readonly event: unknown; readonly at: number }[] }
-    fileChangeRead = pending
     requestReads.add(requestsDuringRead)
     void loadTodos(active, sessionID, token)
+    if (fileChangesWatching) void loadFileChanges(active, sessionID, token)
     try {
-      const [autonomy, permissions, guardrails, forms, changes] = await Promise.all([
+      const [autonomy, permissions, guardrails, forms] = await Promise.all([
         active.request("session.autonomy.get", { sessionID }),
         active.request("session.permission.list", { sessionID }),
         active.request("session.guardrail.request.list", { sessionID }),
         active.request("session.form.list", { sessionID }),
-        active.request("session.fileChange.list", { sessionID }),
       ])
       if (token !== selectionToken || state.activeSessionID !== sessionID) return
       const view = state.view
@@ -1122,20 +1122,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         (current, item) => applySessionEvent({ ...view, requests: current }, item.event, item.at).requests,
         requests,
       ))
-      // The ledger read is authoritative except for records that arrived while it was
-      // pending: those describe a later instant than the read does.
-      const withChanges =
-        changes.status === "ok"
-          ? replaceFileChanges(withRequests, mergeFileChanges(readFileChangeList(changes.value), pending.live))
-          : withRequests
-      const failure = [autonomy, permissions, guardrails, forms, changes].find(
+      const failure = [autonomy, permissions, guardrails, forms].find(
         (outcome) => outcome.status !== "ok",
       )
       setState({
         view:
           autonomy.status === "ok"
-            ? { ...withChanges, autonomy: readAutonomy(autonomy.value) ?? withChanges.autonomy }
-            : withChanges,
+            ? { ...withRequests, autonomy: readAutonomy(autonomy.value) ?? withRequests.autonomy }
+            : withRequests,
         ...(notice === undefined
           ? failure === undefined
             ? {}
@@ -1143,8 +1137,25 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           : { notice }),
       })
     } finally {
-      if (fileChangeRead === pending) fileChangeRead = undefined
       requestReads.delete(requestsDuringRead)
+    }
+  }
+
+  const loadFileChanges = async (owner: RemoteTransport, sessionID: string, token: number) => {
+    if (fileChangeRead?.sessionID === sessionID && fileChangeRead.token === token) return
+    const pending = { sessionID, token, live: [] as FileChangeView[] }
+    fileChangeRead = pending
+    try {
+      const changes = await owner.request("session.fileChange.list", { sessionID })
+      const view = state.view
+      if (token !== selectionToken || !isCurrentConnection(owner) || state.activeSessionID !== sessionID || view?.id !== sessionID) return
+      // The ledger read is authoritative except for records that arrived while it was
+      // pending: those describe a later instant than the read does.
+      setState(changes.status === "ok"
+        ? { view: replaceFileChanges(view, mergeFileChanges(readFileChangeList(changes.value), pending.live)) }
+        : { notice: describeOutcome(changes, "Session state") })
+    } finally {
+      if (fileChangeRead === pending) fileChangeRead = undefined
     }
   }
 
@@ -2218,6 +2229,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return isCurrentConnection(owner) && state.activeDeviceID === deviceID && state.transport.kind === "open" &&
         selectionToken === selectedAtStart + 1 && state.activeSessionID === sessionID && selectionFailedToken !== selectionToken
         ? "selected" : "unavailable"
+    },
+    watchFileChanges: (enabled) => {
+      if (fileChangesWatching === enabled) return
+      fileChangesWatching = enabled
+      const sessionID = state.activeSessionID
+      if (enabled && sessionID !== undefined && transport !== undefined && state.view?.id === sessionID)
+        void loadFileChanges(transport, sessionID, selectionToken)
     },
     watchTeam: (enabled) => {
       if (teamWatching === enabled) return

@@ -112,6 +112,7 @@ describe("recorded file changes", () => {
         : "default" })
     try {
       await connect(test)
+      test.store.watchFileChanges(true)
       await test.store.selectSession("ses_a")
       await test.runUntil(() => test.store.state().view?.capturedChanges?.data.length === 1)
       expect(test.store.state().view?.capturedChanges).toMatchObject({ mode: "transcript", placementMessageID: "msg_reply", data: [{ path: "src/child.ts", additions: 1 }] })
@@ -183,6 +184,7 @@ describe("recorded file changes", () => {
         : "default" })
     try {
       await connect(test)
+      test.store.watchFileChanges(true)
       await test.store.selectSession("ses_a")
       await test.runUntil(() => test.store.state().view?.fileChanges.length === 1)
       await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.capturedChanges.list"))
@@ -198,7 +200,37 @@ describe("recorded file changes", () => {
       expect(test.relay.requests.filter((request) => request.operation === "session.capturedChanges.list")).toHaveLength(1)
     } finally { await test.stop() }
   })
-  test("reads the session's ledger on selection and keeps each path's patch", async () => {
+  test("reads the Activity ledger only while Activity is open", async () => {
+    const test = await harness({
+      handler: (request) =>
+        request.operation === "session.fileChange.list"
+          ? { ok: true, value: { data: [patch("src/remote/store.ts", "@@ -1 +1 @@\n-before\n+after", 1, 1)] } }
+          : "default",
+    })
+    const ledgerReads = () => test.relay.requests.filter((request) => request.operation === "session.fileChange.list").map((request) => request.sessionID)
+    try {
+      await connect(test)
+      await test.store.selectSession("ses_a")
+      await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.form.list"))
+      await test.flush()
+      expect(ledgerReads()).toEqual([])
+      expect(test.store.state().view?.fileChanges).toEqual([])
+
+      test.store.watchFileChanges(true)
+      await test.runUntil(() => (test.store.state().view?.fileChanges.length ?? 0) === 1)
+      expect(ledgerReads()).toEqual(["ses_a"])
+
+      test.store.watchFileChanges(false)
+      await test.store.selectSession("ses_a")
+      await test.runUntil(() => test.relay.requests.filter((request) => request.operation === "session.form.list").length === 2)
+      await test.flush()
+      expect(ledgerReads()).toEqual(["ses_a"])
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("reads the session's ledger while Activity is open and keeps each path's patch", async () => {
     const test = await harness({
       handler: (request) =>
         request.operation === "session.fileChange.list"
@@ -215,6 +247,7 @@ describe("recorded file changes", () => {
     })
     try {
       await connect(test)
+      test.store.watchFileChanges(true)
       await test.store.selectSession("ses_a")
       await test.runUntil(() => (test.store.state().view?.fileChanges.length ?? 0) === 2)
       expect(test.store.state().view?.fileChanges).toEqual([
@@ -245,6 +278,7 @@ describe("recorded file changes", () => {
     })
     try {
       await connect(test)
+      test.store.watchFileChanges(true)
       // The selection resolves its snapshot and then waits on the gated ledger read.
       void test.store.selectSession("ses_a")
       await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.fileChange.list"))
@@ -282,6 +316,7 @@ describe("recorded file changes", () => {
     })
     try {
       await connect(test)
+      test.store.watchFileChanges(true)
       void test.store.selectSession("ses_a")
       await test.runUntil(() =>
         test.relay.requests.some(
@@ -310,6 +345,7 @@ describe("recorded file changes", () => {
     })
     try {
       await connect(test)
+      test.store.watchFileChanges(true)
       await test.store.selectSession("ses_a")
       test.relay.pushEvent("ses_a", {
         id: "evt_live",
@@ -336,6 +372,7 @@ describe("recorded file changes", () => {
     })
     try {
       await connect(test)
+      test.store.watchFileChanges(true)
       const selecting = test.store.selectSession("ses_a")
       await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.fileChange.list"))
       await test.flush()
@@ -368,6 +405,7 @@ describe("recorded file changes", () => {
     })
     try {
       await connect(test)
+      test.store.watchFileChanges(true)
       await test.store.selectSession("ses_a")
       await test.runUntil(() => test.store.state().view?.fileChanges[0]?.patch === "first")
 

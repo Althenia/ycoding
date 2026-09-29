@@ -277,6 +277,8 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   })
   createEffect(() => remote.store.watchTeam(view() === "/remote" && state().activeSessionID !== undefined))
   onCleanup(() => remote.store.watchTeam(false))
+  createEffect(() => remote.store.watchFileChanges(view() === "/remote/activity"))
+  onCleanup(() => remote.store.watchFileChanges(false))
   createEffect(() => {
     const team = state().team
     if (!teamOpen() || team?.status !== "ready") { loadedControlsRoot = undefined; return }
