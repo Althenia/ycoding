@@ -83,7 +83,7 @@ Verify the account's logging settings before relying on persistence or retention
 
 ### Privacy rules for logging
 
-- Never log, copy, or retain the Google client secret, the `GOOGLE_ALLOWED_EMAILS` value, `yc_session` or `yc_oauth` cookie tokens, enrollment codes, challenge nonces, device access or refresh credentials, the VAPID private key, push subscription endpoints or keys, or D1 export contents.
+- Never log, copy into diagnostic artifacts, or retain the Google client secret, the `GOOGLE_ALLOWED_EMAILS` value, `ADMIN_API_KEY`, invite tokens, access keys, `yc_session` or `yc_oauth` cookie tokens, enrollment codes, challenge nonces, device access or refresh credentials, the VAPID private key, push subscription endpoints or keys, or D1 export contents. The one-time invite URL and access-key response are handed only to the intended recipient; that recipient may use the explicit Copy action to store the key safely.
 - Do not add request-body logging to `/api/auth/*` or `/api/devices/*`.
 - Real-time log events can contain `cookie` and `authorization` request headers and full query strings. Treat raw tail output as sensitive: do not paste it into Git, an issue, a chat, or a CI artifact. Keep only the method, an allowlisted route path without query strings, and outcome; omit headers and credentials from every excerpt.
 
