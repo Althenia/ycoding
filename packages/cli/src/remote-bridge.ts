@@ -45,7 +45,7 @@ export type ConnectionInput = {
   readonly accessToken: string
   /** Every successful (re)open emits a Session-list invalidation. */
   readonly onOpen: () => void
-  readonly onClose: (code?: number) => void
+  readonly onClose: (code?: number, reason?: string) => void
 }
 
 export type BridgeCredentials = { readonly accessToken: string; readonly accessExpiresAt: number }
@@ -78,7 +78,8 @@ const defaults = {
 export type BridgeState = "idle" | "live" | "terminal" | "closed"
 
 const terminalCloseCodes: readonly number[] = [RemoteCloseCode.unauthorized, RemoteCloseCode.forbidden]
-const maxPendingEvents = 1_024
+const maxPendingEvents = 4_096
+const agentFrameIntervalMs = 25
 
 type PendingEvent = {
   readonly event: unknown
@@ -116,6 +117,8 @@ export class RemoteAgent {
   private eventDraining = false
   private eventRetryAttempt = 0
   private terminalReason?: string
+  private sendQueue: Promise<void> = Promise.resolve()
+  private nextSendAt = 0
 
   constructor(private readonly options: RemoteBridgeOptions) {
     this.now = options.now ?? Date.now
@@ -176,6 +179,8 @@ export class RemoteAgent {
       accessToken: credentials.accessToken,
       onOpen: () => {
         if (this.connection !== connection) return
+        this.sendQueue = Promise.resolve()
+        this.nextSendAt = 0
         this.subscriptions.clear()
         this.uploads.clear()
         this.uploads = createAttachmentUploads()
@@ -190,7 +195,7 @@ export class RemoteAgent {
         void this.sendStatus()
         this.syncEventStream()
       },
-      onClose: (code) => { if (this.connection === connection) this.onConnectionClosed(code) },
+      onClose: (code, reason) => { if (this.connection === connection) this.onConnectionClosed(code, reason) },
     })
     this.connection = connection
     connection.onMessage((frame) => { if (this.connection === connection) this.onFrame(frame) })
@@ -254,14 +259,25 @@ export class RemoteAgent {
   }
 
   private async send(frame: string, connection = this.connection) {
-    if (connection === undefined || this.connection !== connection || this.state !== "live") return
-    try {
-      await connection.send(frame)
-    } catch {
-      // A dropped relay connection makes the outcome indeterminate; the client
-      // owns that decision and the agent never replays the request.
-      this.diagnostic("the relay connection dropped before the frame was delivered")
-    }
+    if (connection === undefined || this.connection !== connection || this.state !== "live") return false
+    const sent = this.sendQueue.then(async () => {
+      if (this.connection !== connection || this.state !== "live") return false
+      const delay = this.nextSendAt - this.now()
+      if (delay > 0) await new Promise<void>((resolve) => setTimeout(resolve, delay))
+      if (this.connection !== connection || this.state !== "live") return false
+      try {
+        await connection.send(frame)
+        this.nextSendAt = this.now() + agentFrameIntervalMs
+        return true
+      } catch {
+        // A dropped relay connection makes the outcome indeterminate; the client
+        // owns that decision and the agent never replays the request.
+        this.diagnostic("the relay connection dropped before the frame was delivered")
+        return false
+      }
+    })
+    this.sendQueue = sent.then(() => undefined)
+    return sent
   }
 
   private async advertise() {
@@ -297,8 +313,7 @@ export class RemoteAgent {
       if (generation === this.attentionGeneration) this.attentionStatus = status.attention
       const frame = serializeStatus({ type: "status", ...status })
       if (frame !== this.lastStatus) {
-        await this.send(frame, connection)
-        this.lastStatus = frame
+        if (await this.send(frame, connection)) this.lastStatus = frame
       }
     } catch (error) {
       this.diagnostic(`could not read remote Session status: ${describe(error)}`)
@@ -459,11 +474,11 @@ export class RemoteAgent {
     }, this.refreshIntervalMs)
   }
 
-  private onConnectionClosed(code: number | undefined) {
+  private onConnectionClosed(code: number | undefined, reason?: string) {
     if (this.state !== "live") return
     const reconnect = code === undefined || !terminalCloseCodes.includes(code) ||
       this.now() - this.lastAuthAttempt >= this.authRetryWindowMs
-    this.diagnostic(`relay connection closed (code ${code ?? "unreported"}); ${reconnect ? "reconnecting" : "not reconnecting"}`)
+    this.diagnostic(`relay connection closed (code ${code ?? "unreported"}${reason ? `, reason: ${reason}` : ""}); ${reconnect ? "reconnecting" : "not reconnecting"}`)
     this.subscriptions.clear()
     this.uploads.clear()
     this.abortRequests()
@@ -569,7 +584,7 @@ function createRelayConnection(input: ConnectionInput): RelayConnection {
     url: input.url,
     headers: { authorization: `Bearer ${input.accessToken}` },
     onOpen: input.onOpen,
-    onClose: ({ code }) => input.onClose(code),
+    onClose: ({ code, reason }) => input.onClose(code, reason),
   })
 }
 

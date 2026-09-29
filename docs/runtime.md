@@ -70,6 +70,14 @@ A drain discovers the session's Location when execution starts. There is no clus
 
 ### Remote relay agent
 
+The connector sends outbound relay frames at least 25 ms apart, leaving headroom
+under the relay's 500-message-per-10-second policy for control traffic. Up to
+4,096 live events can wait for authorization and delivery during a stream burst;
+larger bursts close and reconnect for snapshot/history reconciliation. Status
+reads are independent of the live event queue, and a failed status send does not
+mark that status as delivered. The connector logs relay close codes and reasons
+for diagnosing policy closures.
+
 The local server process owns the machine's outbound agent connection to the configured relay: the managed background service keeps it while it is enabled, even with no TUI open, and a `--standalone` private server owns it for that server's lifetime. The TUI's Remote connection toggle and `ycoding remote connect` or `disconnect` switch it through the server's authenticated `GET` and `PUT /api/remote`; only one server may hold the machine's PID lock at a time. The agent dials out over WSS and never listens. An authenticated browser may connect only to a device owned by its account. Session-scoped calls use a Location read from the backend's global Session inventory, never from remote input, and execution authority stays in the local `ycoding` process; the relay and browser own no repository, shell, tool, model, or Session execution.
 
 Google sign-in remains restricted to the operator's allowlisted accounts. A separate recipient opens a single-use `/remote/invite#<token>` link, accepts it explicitly, and receives one access key shown once. That key signs the same independent account in on other devices. The browser removes the fragment immediately and sends the token only in the redemption request body; each successful invite or key sign-in sets a 30-day session cookie and revokes an existing browser session presented with that request. An administrator uses a secret bearer key to create, list, or delete invites without a web admin screen. Deleting an invite closes every enrolled device connection and deletes its account and browser sessions, so renewed access requires a new invite and a new account. The relay still verifies account and device ownership for every operation.

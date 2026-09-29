@@ -316,6 +316,12 @@ Relay rules:
   relay connection closes or opens, then forwards an event only when the union of
   current snapshots contains that Session. Subscribe and unsubscribe operations
   validate backend Session access but do not mutate an independent local refcount.
+- The agent serializes all outbound frames at least 25 ms apart, leaving room
+  under the relay's 500-message-per-10-second window for heartbeats and control
+  traffic. A burst of up to 4,096 live events waits in the agent's bounded
+  authorization queue; if that bound is exceeded, the agent reconnects for
+  client snapshot and history reconciliation. Status changes are sent separately
+  from that event queue and a failed status send remains eligible for the next read.
 - In-flight requests per client are capped; a client disconnect drops its pending
   requests, and the client must treat those outcomes as unknown.
 

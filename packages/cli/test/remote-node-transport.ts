@@ -23,10 +23,15 @@ const { WebSocketServer } = (await import("ws")) as unknown as {
 
 const server = new WebSocketServer({ host: "127.0.0.1", port: 0 })
 const seen: Array<string | undefined> = []
+let settleClose: (value: { code?: number; reason?: string }) => void = () => {}
+const closed = new Promise<{ code?: number; reason?: string }>((resolve) => { settleClose = resolve })
 
 server.on("connection", (...args: unknown[]) => {
   const request = args[1] as UpgradeRequest | undefined
   seen.push(request?.headers.authorization)
+  const socket = args[0]
+  if (typeof socket === "object" && socket !== null && "close" in socket && typeof socket.close === "function")
+    socket.close(1008, "Agent message rate exceeded")
 })
 
 await new Promise<void>((resolve) => server.once("listening", () => resolve()))
@@ -37,13 +42,15 @@ const transport = new CloudflareRemoteTransport({
   url: `ws://127.0.0.1:${address.port}/ws/v3/agent`,
   headers: { authorization: "Bearer node-device-token" },
   heartbeatIntervalMs: 10_000,
+  onClose: settleClose,
 })
 
 let failure: string | undefined
 try {
   await transport.connect()
-  await new Promise((resolve) => setTimeout(resolve, 50))
+  const close = await closed
   if (seen[0] !== "Bearer node-device-token") failure = `upgrade header was ${JSON.stringify(seen[0])}`
+  if (close.code !== 1008 || close.reason !== "Agent message rate exceeded") failure = "Node transport omitted the relay policy close reason"
 } catch (error) {
   failure = error instanceof Error ? error.message : String(error)
 } finally {

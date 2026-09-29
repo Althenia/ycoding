@@ -6,7 +6,7 @@ export interface RemoteTransport {
   readonly disconnect: (code?: number, reason?: string) => Promise<void>
 }
 
-type SocketEvent = { readonly data?: unknown; readonly code?: number }
+type SocketEvent = { readonly data?: unknown; readonly code?: number; readonly reason?: string }
 type SocketListener = (event: SocketEvent) => void
 const CONNECTING = 0
 const OPEN = 1
@@ -36,7 +36,7 @@ type Options = {
   /** Called on every successful (re)open, before any frame is sent. */
   readonly onOpen?: () => void
   /** Called when an established connection drops and a reconnect is scheduled. */
-  readonly onClose?: (info: { readonly code?: number }) => void
+  readonly onClose?: (info: { readonly code?: number; readonly reason?: string }) => void
 }
 
 export class CloudflareRemoteTransport implements RemoteTransport {
@@ -136,7 +136,7 @@ export class CloudflareRemoteTransport implements RemoteTransport {
       if (this.socket !== socket) return
       this.socket = undefined
       this.clearHeartbeat()
-      this.options.onClose?.({ code: event.code })
+      this.options.onClose?.({ code: event.code, reason: event.reason })
       this.scheduleReconnect()
     }
     const errored = () => socket.close(1011, "Remote transport error")
@@ -205,7 +205,7 @@ function bunSocketFactory(url: string, options: RemoteSocketOptions): RemoteSock
     },
     addEventListener(type, listener) {
       const wrapped = (event: Event) =>
-        listener(event instanceof MessageEvent ? { data: event.data } : event instanceof CloseEvent ? { code: event.code } : {})
+        listener(event instanceof MessageEvent ? { data: event.data } : event instanceof CloseEvent ? { code: event.code, reason: event.reason } : {})
       listeners.set(listener, wrapped)
       socket.addEventListener(type, wrapped)
     },
@@ -267,7 +267,7 @@ class NodeRemoteSocket implements RemoteSocket {
 
 function nodeSocketEvent(type: string, args: readonly unknown[]): SocketEvent {
   if (type === "message") return { data: typeof args[0] === "string" ? args[0] : String(args[0]) }
-  if (type === "close") return { code: typeof args[0] === "number" ? args[0] : undefined }
+  if (type === "close") return { code: typeof args[0] === "number" ? args[0] : undefined, reason: typeof args[1] === "string" ? args[1] : args[1] instanceof Buffer ? args[1].toString() : undefined }
   return {}
 }
 

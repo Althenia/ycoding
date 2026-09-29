@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { CloudflareRemoteTransport } from "../src/remote-transport"
 
-type Listener = (event: { data?: string; code?: number }) => void
+type Listener = (event: { data?: string; code?: number; reason?: string }) => void
 
 class FakeSocket {
   static readonly OPEN = 1
@@ -30,7 +30,7 @@ class FakeSocket {
     this.closeCode = code
     this.closeReason = reason
     this.readyState = 3
-    this.emit("close", { code })
+    this.emit("close", { code, reason })
   }
 
   open() {
@@ -42,7 +42,7 @@ class FakeSocket {
     this.emit("message", { data: JSON.stringify(value) })
   }
 
-  private emit(type: string, event: { data?: string; code?: number }) {
+  private emit(type: string, event: { data?: string; code?: number; reason?: string }) {
     for (const listener of this.listeners.get(type) ?? []) listener(event)
   }
 }
@@ -112,7 +112,7 @@ describe("CloudflareRemoteTransport", () => {
     const sockets: FakeSocket[] = []
     const factoryCalls: Array<{ url: string; headers?: Record<string, string> }> = []
     const opens: number[] = []
-    const closes: number[] = []
+    const closes: { code?: number; reason?: string }[] = []
     const transport = new CloudflareRemoteTransport({
       url: "wss://ycoding-cloud.example/ws/v3/agent",
       headers: { authorization: "Bearer access-token" },
@@ -125,7 +125,7 @@ describe("CloudflareRemoteTransport", () => {
       heartbeatIntervalMs: 10_000,
       reconnectInitialDelayMs: 5,
       onOpen: () => opens.push(sockets.length),
-      onClose: () => closes.push(sockets.length),
+      onClose: (info) => closes.push(info),
     })
 
     const connected = transport.connect()
@@ -136,11 +136,11 @@ describe("CloudflareRemoteTransport", () => {
     ])
     expect(opens).toEqual([1])
 
-    sockets[0].close(1006)
+    sockets[0].close(1008, "Agent message rate exceeded")
     await waitFor(() => sockets.length === 2)
     sockets[1].open()
     expect(opens).toEqual([1, 2])
-    expect(closes).toEqual([1])
+    expect(closes).toEqual([{ code: 1008, reason: "Agent message rate exceeded" }])
     expect(factoryCalls[1]).toEqual({
       url: "wss://ycoding-cloud.example/ws/v3/agent",
       headers: { authorization: "Bearer access-token" },
@@ -149,7 +149,7 @@ describe("CloudflareRemoteTransport", () => {
     await transport.disconnect(1009, "Remote frame exceeded the size bound")
     expect(sockets[1].closeCode).toBe(1009)
     expect(sockets[1].closeReason).toBe("Remote frame exceeded the size bound")
-    expect(closes).toEqual([1])
+    expect(closes).toEqual([{ code: 1008, reason: "Agent message rate exceeded" }])
   })
 
   test("carries the bearer upgrade header over a real socket", async () => {

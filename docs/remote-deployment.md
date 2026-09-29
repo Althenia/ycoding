@@ -80,6 +80,14 @@ Platform log surfaces:
 - Workers Logs persists invocation and custom logs when the Worker's `observability` setting is enabled. `wrangler.jsonc` does not set `observability`, so persistence follows the account default for this Worker. The provider caps retention at 7 days on Workers Paid and 3 days on Workers Free. With no custom `console` calls, only invocation logs can appear.
 
 Verify the account's logging settings before relying on persistence or retention.
+The local connector diagnostic records the relay close code and reason. A `1008`
+with `Agent message rate exceeded` means more than 500 agent frames arrived in
+ten seconds; after upgrading the connector, verify a busy Session runs and stops
+without another such close. Confirm the browser remains subscribed, then run a
+Session to completion and separately create one unresolved human approval: each
+should yield one fixed-copy push per subscribed device when the browser is closed.
+Check only aggregate subscription/failure counts and locally observed notification
+delivery; a successful push-service response is not proof of device display.
 
 ### Privacy rules for logging
 

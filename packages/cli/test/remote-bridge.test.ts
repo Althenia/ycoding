@@ -73,6 +73,7 @@ type ConnectionRecord = {
 
 function harness(options: {
   sessions?: readonly AllowlistSession[]
+  failStatusOnce?: boolean
   results?: Partial<Record<keyof LocalServer, unknown>>
   credentials?: () => Promise<BridgeCredentials>
   reloadSessions?: () => Promise<readonly AllowlistSession[]>
@@ -92,6 +93,7 @@ function harness(options: {
   const terminal: string[] = []
   let clock = 1_000
   let tokens = 0
+  let failStatus = options.failStatusOnce ?? false
   const bridge = new RemoteAgent({
     relayURL: "https://relay.example",
     local,
@@ -112,6 +114,10 @@ function harness(options: {
         connect: async () => input.onOpen(),
         send: async (value: string) => {
           if (state.disconnected) throw new Error("Relay connection is closed")
+          if (failStatus && value.includes('"type":"status"')) {
+            failStatus = false
+            throw new Error("Status frame rejected")
+          }
           record.sent.push(value)
         },
         onMessage: (next) => {
@@ -170,6 +176,27 @@ function requestFrame(operation: string, sessionID?: string, input?: Record<stri
 }
 
 describe("remote bridge", () => {
+  test("a failed status send remains eligible for the next execution event", async () => {
+    const test = harness({ failStatusOnce: true })
+    await test.bridge.connect()
+    try {
+      await waitFor(() => test.diagnostics.some((message) => message.includes("frame was delivered")) ? true : undefined)
+      await waitFor(() => test.streams[0])
+      test.streams[0].stream.onEvent({ type: "session.execution.started.1", data: { sessionID: "ses_1" } })
+      await waitFor(() => sentFrames(test.records[0]).some((frame) => frame.type === "status") ? true : undefined)
+      expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status")).toEqual([
+        { type: "status", running: [], attention: [] },
+      ])
+    } finally { await test.bridge.close() }
+  })
+  test("reports the relay's policy close reason without hiding its cause", async () => {
+    const test = harness({})
+    await test.bridge.connect()
+    try {
+      test.records[0].input.onClose(RemoteCloseCode.policyViolation, "Agent message rate exceeded")
+      expect(test.diagnostics).toContain("relay connection closed (code 1008, reason: Agent message rate exceeded); reconnecting")
+    } finally { await test.bridge.close() }
+  })
   test("relay cancellation aborts the local indexed message read", async () => {
     let signal: AbortSignal | undefined
     let aborted = false
@@ -302,7 +329,7 @@ describe("remote bridge", () => {
     expect(sessionsFrame(records[0])).toEqual({ type: "sessions" })
 
     records[0].deliver(requestFrame("session.messages", "ses_9"))
-    await Bun.sleep(5)
+    await waitFor(() => sentFrames(records[0]).some((frame) => frame.type === "response") ? true : undefined)
     const refused = sentFrames(records[0]).filter((frame) => frame.type === "response")[0]
     expect(refused).toMatchObject({ ok: false, error: { code: "session_not_allowed" } })
     expect(calls.some((call) => call.method === "messages")).toBe(false)
@@ -324,7 +351,7 @@ describe("remote bridge", () => {
     records[0].sent.length = 0
 
     records[0].deliver(requestFrame("session.messages", "ses_1"))
-    await Bun.sleep(5)
+    await waitFor(() => sentFrames(records[0]).some((frame) => frame.type === "response" && frame.ok && frame.chunk?.last) ? true : undefined, 5_000)
 
     const responses = sentFrames(records[0]).filter((frame) => frame.type === "response")
     expect(responses.length).toBeGreaterThan(1)
@@ -358,7 +385,7 @@ describe("remote bridge", () => {
     expect(streams[0].stopped).toBe(false)
 
     streams[0].stream.onEvent({ type: "message.updated", data: { sessionID: "ses_2", text: "two" } })
-    await Bun.sleep(5)
+    await waitFor(() => sentFrames(connection).some((frame) => frame.type === "event") ? true : undefined)
     expect(sentFrames(connection).filter((frame) => frame.type === "event")).toHaveLength(1)
 
     connection.deliver({ type: "subscriptions", clientID: "client-2", sessionIDs: [] })
@@ -391,7 +418,7 @@ describe("remote bridge", () => {
     stream.onEvent({ type: "form.cancelled", data: { id: "frm_2", sessionID: "ses_1" } })
     stream.onEvent({ type: "server.connected", data: {} })
     stream.onEvent({ type: "session.created", data: { sessionID: "ses_1" } })
-    await Bun.sleep(5)
+    await waitFor(() => sentFrames(connection).filter((frame) => frame.type === "event").length === 5 ? true : undefined, 2_000)
 
     const events = sentFrames(connection).filter((frame) => frame.type === "event")
     expect(events).toEqual([
@@ -426,7 +453,7 @@ describe("remote bridge", () => {
 
     connection.sent.length = 0
     streams[0].stream.onEvent({ type: "message.updated", data: { sessionID: "ses_1" } })
-    await Bun.sleep(5)
+    await waitFor(() => sentFrames(connection).some((frame) => frame.type === "event") ? true : undefined)
     expect(sentFrames(connection).filter((frame) => frame.type === "event")).toHaveLength(1)
 
     connection.sent.length = 0
@@ -438,7 +465,7 @@ describe("remote bridge", () => {
 
     connection.deliver({ type: "subscriptions", clientID: "client-1", sessionIDs: ["ses_1"] })
     streams[0].stream.onEvent({ type: "message.updated", data: { sessionID: "ses_1" } })
-    await Bun.sleep(5)
+    await waitFor(() => sentFrames(connection).some((frame) => frame.type === "event") ? true : undefined)
     expect(sentFrames(connection).filter((frame) => frame.type === "event")).toHaveLength(1)
     await bridge.close()
   })
@@ -516,7 +543,7 @@ describe("remote bridge", () => {
     const before = records.length
 
     streams[0].stream.onEvent({ id: "evt_big", type: "session.tool.progress", durable: { aggregateID: "ses_1", seq: 7, version: 2 }, data: { sessionID: "ses_1", assistantMessageID: "msg_large", text: "x".repeat(300_000) } })
-    await Bun.sleep(10)
+    await waitFor(() => sentFrames(records[0]).some((frame) => frame.type === "event") ? true : undefined)
 
     expect(sentFrames(records[0]).filter((frame) => frame.type === "event")).toMatchObject([{ type: "event", sessionID: "ses_1", event: { id: "evt_big", type: "session.remote.oversized", durable: { aggregateID: "ses_1", seq: 7, version: 2 }, data: { sessionID: "ses_1", messageID: "msg_large", truncated: true } } }])
     const replacement = sentFrames(records[0]).find((frame) => frame.type === "event")
@@ -574,12 +601,15 @@ describe("remote bridge", () => {
     expect(connection.sent.filter((frame) => frame.includes('"type":"sessions"'))).toHaveLength(0)
     title = "Renamed"
     await bridge.republish()
+    await waitFor(() => connection.sent.filter((frame) => frame.includes('"type":"sessions"')).length === 1 ? true : undefined)
     expect(connection.sent.filter((frame) => frame.includes('"type":"sessions"'))).toHaveLength(1)
     pinned = 2
     await bridge.republish()
+    await waitFor(() => connection.sent.filter((frame) => frame.includes('"type":"sessions"')).length === 2 ? true : undefined)
     expect(connection.sent.filter((frame) => frame.includes('"type":"sessions"'))).toHaveLength(2)
     directory = "/work/moved"
     await bridge.republish()
+    await waitFor(() => connection.sent.filter((frame) => frame.includes('"type":"sessions"')).length === 3 ? true : undefined)
     expect(connection.sent.filter((frame) => frame.includes('"type":"sessions"'))).toHaveLength(3)
     await bridge.close()
   })
@@ -666,7 +696,7 @@ describe("remote bridge", () => {
     await bridge.connect()
     const connection = records[0]
     connection.deliver(requestFrame("session.prompt", "ses_1", { text: "hello", id: "msg_1" }))
-    await Bun.sleep(5)
+    await waitFor(() => sentFrames(connection).some((frame) => frame.type === "response") ? true : undefined)
 
     const response = sentFrames(connection).find((frame) => frame.type === "response")
     expect(response).toMatchObject({ ok: false, error: { code: "outcome_unknown" } })
