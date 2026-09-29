@@ -82,11 +82,13 @@ for (const width of [390, 1440]) for (const theme of ["light", "dark"] as const)
       expect(accepted.note).toContain("It is shown only once")
       expect(accepted.copy).toBe(true)
       expect(accepted.overflow).toBe(false)
-      await page.evaluate(`([...document.querySelectorAll('button')].find(button => button.textContent === 'Continue'))?.click()`)
-      expect(await page.evaluate<string>(`(async () => {
-        for (let i = 0; i < 50 && location.pathname !== '/remote/'; i++) await new Promise(resolve => setTimeout(resolve, 50));
-        return location.pathname;
-      })()`)).toBe("/remote/")
+      await page.evaluate(`setTimeout(() => ([...document.querySelectorAll('button')].find(button => button.textContent === 'Continue'))?.click(), 0)`)
+      let continued = false
+      for (let attempt = 0; attempt < 50 && !continued; attempt += 1) {
+        try { continued = await page.evaluate<string>(`location.pathname`) === "/remote/" } catch {}
+        if (!continued) await Bun.sleep(50)
+      }
+      expect(continued).toBe(true)
 
       await page.navigate(`${origin}/remote/invite`)
       expect(await page.evaluate<string | undefined>(`document.querySelector('[role="alert"]')?.textContent`)).toContain("already used or is no longer valid")

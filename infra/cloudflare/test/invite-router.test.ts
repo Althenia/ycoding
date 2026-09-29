@@ -197,14 +197,20 @@ test("a new invite or access-key cookie revokes an existing browser session and 
     const invite = await (await h.admin("POST", "/api/admin/invites", {})).json()
     const accepted = await h.redeem(invite.url.split("#")[1], { cookie: `yc_session=${previous.token}` })
     expect(accepted.status).toBe(201)
+    const firstCookie = accepted.headers.get("set-cookie")?.split(";")[0] ?? ""
+    const invited = await (await h.call("GET", "/api/me", undefined, { cookie: firstCookie })).json()
+    expect(invited.user.id).not.toBe(previous.userID)
     expect((await h.call("GET", "/api/me", undefined, { cookie: `yc_session=${previous.token}` })).status).toBe(401)
     expect(h.closed).toEqual([`${previous.userID}:dev_prior:/_ycoding/revoke-session`])
-    const firstCookie = accepted.headers.get("set-cookie")?.split(";")[0] ?? ""
     const key = (await accepted.json()).accessKey
     const next = await h.signIn(key, { cookie: firstCookie })
     expect(next.status).toBe(204)
     expect((await h.call("GET", "/api/me", undefined, { cookie: firstCookie })).status).toBe(401)
     expect((await h.call("GET", "/api/me", undefined, { cookie: next.headers.get("set-cookie")?.split(";")[0] ?? "" })).status).toBe(200)
+    const operator = await h.service.signIn({ provider: "google", subject: "operator" })
+    expect(operator.userID).toBe(previous.userID)
+    expect((await h.admin("DELETE", `/api/admin/invites/${invite.id}`)).status).toBe(204)
+    expect((await h.call("GET", "/api/me", undefined, { cookie: `yc_session=${operator.token}` })).status).toBe(200)
   } finally { h.sqlite.close() }
 })
 
