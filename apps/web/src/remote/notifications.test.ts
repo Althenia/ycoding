@@ -8,6 +8,7 @@ import {
   type NotificationPreferences,
 } from "./preferences"
 import {
+  NOTICE_WINDOW,
   NOTIFICATION_TEXT,
   createDesktopNotifier,
   createNotificationDelivery,
@@ -124,8 +125,8 @@ describe("notificationCategory", () => {
   })
   test("maps each live event the workspace receives to one category", () => {
     expect(notificationCategory({ type: "session.execution.succeeded", data: {} })).toBeUndefined()
-    expect(notificationCategory({ type: "session.execution.failed", data: { error: { code: "x", message: "y" } } })).toBe("approval-requested")
-    expect(notificationCategory({ type: "session.step.failed", data: { assistantMessageID: "msg_1" } })).toBe("approval-requested")
+    expect(notificationCategory({ type: "session.execution.failed", data: { error: { code: "x", message: "y" } } })).toBeUndefined()
+    expect(notificationCategory({ type: "session.step.failed", data: { assistantMessageID: "msg_1" } })).toBeUndefined()
     expect(notificationCategory({ type: "permission.v2.asked", data: { id: "per_1" } })).toBeUndefined()
     expect(notificationCategory({ type: "form.created", data: { form: { id: "frm_1", sessionID: "ses_a" } } })).toBeUndefined()
     expect(notificationCategory({ type: "guardrail.asked", data: { id: "grq_1", hardReview: true } })).toBeUndefined()
@@ -172,15 +173,14 @@ test("an event for another Session never borrows the selected Session title", ()
 })
 
 describe("createNotificationDelivery", () => {
-  test("fills retained notices for one Session without changing IDs, read state, or desktop copy", () => {
+  test("fills retained notices for one Session without changing IDs or desktop copy", () => {
     const test = deliveryWith({})
     test.delivery.deliver("agent-completed", { sessionID: "ses_a" })
     test.delivery.deliver("approval-requested", { sessionID: "ses_a" })
     test.delivery.deliver("approval-requested", { sessionID: "ses_b" })
-    test.delivery.markRead()
-    const before = test.delivery.entries().map((entry) => [entry.id, entry.read, entry.category])
+    const before = test.delivery.entries().map((entry) => [entry.id, entry.category])
     expect(test.delivery.setSessionTitle("ses_a", "Named work")).toBe(true)
-    expect(test.delivery.entries().map((entry) => [entry.id, entry.read, entry.category])).toEqual(before)
+    expect(test.delivery.entries().map((entry) => [entry.id, entry.category])).toEqual(before)
     expect(test.delivery.entries().map((entry) => entry.sessionTitle)).toEqual([undefined, "Named work", "Named work"])
     expect(test.delivery.setSessionTitle("ses_a", "Different title")).toBe(false)
     expect(test.recorder.alerts.every((alert) => !alert.body.includes("Named work"))).toBe(true)
@@ -189,18 +189,23 @@ describe("createNotificationDelivery", () => {
   test("raises one in-app notice and one desktop alert for one event", () => {
     const test = deliveryWith({})
     test.delivery.deliver("agent-completed")
-    expect(test.delivery.entries()).toMatchObject([{ category: "agent-completed", ...NOTIFICATION_TEXT["agent-completed"], at: 1_001, read: false }])
+    expect(test.delivery.entries()).toMatchObject([{ category: "agent-completed", ...NOTIFICATION_TEXT["agent-completed"], at: 1_001, synced: false, live: true }])
     expect(test.recorder.alerts).toHaveLength(1)
     expect(test.recorder.alerts[0]?.title).toBe(NOTIFICATION_TEXT["agent-completed"].title)
     expect(test.recorder.alerts[0]?.body).toBe(NOTIFICATION_TEXT["agent-completed"].body)
     expect(test.recorder.alerts[0]?.tag.length).toBeGreaterThan(0)
   })
 
-  test("Machine offline uses one fixed in-app notice and System alert while the workspace is open", () => {
+  test("each confirmed machine outage raises one fixed notice and System alert tagged by its device and close time", () => {
     const test = deliveryWith({})
-    test.delivery.deliver("machine-offline")
-    expect(test.delivery.entries()).toMatchObject([{ category: "machine-offline", ...NOTIFICATION_TEXT["machine-offline"] }])
-    expect(test.recorder.alerts).toEqual([{ ...NOTIFICATION_TEXT["machine-offline"], tag: "ycoding-remote-machine-offline" }])
+    test.delivery.offline("dev_1", 1_000)
+    test.delivery.offline("dev_1", 1_000)
+    expect(test.delivery.entries()).toMatchObject([{ category: "machine-offline", ...NOTIFICATION_TEXT["machine-offline"], at: 1_000 }])
+    expect(test.recorder.alerts).toEqual([{ ...NOTIFICATION_TEXT["machine-offline"], tag: "ycoding-dev_1-offline-1000" }])
+    test.delivery.offline("dev_1", 9_000)
+    test.delivery.offline("dev_2", 1_000)
+    expect(test.recorder.alerts.map((alert) => alert.tag)).toEqual(["ycoding-dev_1-offline-1000", "ycoding-dev_1-offline-9000", "ycoding-dev_2-offline-1000"])
+    expect(test.delivery.entries()).toHaveLength(3)
   })
 
   test("honors the stored preference of each channel separately", () => {
@@ -232,7 +237,7 @@ describe("createNotificationDelivery", () => {
 
   test("never copies event payload content into an alert", () => {
     const test = deliveryWith({})
-    const payload = { type: "session.step.failed", data: { error: { code: "secret_code", message: "leaked-token-abc" } } }
+    const payload = { type: "guardrail.decided", data: { decision: "deny", error: { code: "secret_code", message: "leaked-token-abc" } } }
     const category = notificationCategory(payload)
     expect(category).toBe("approval-requested")
     if (category === undefined) return
@@ -244,32 +249,141 @@ describe("createNotificationDelivery", () => {
     expect(test.delivery.entries()[0]?.body).not.toContain("leaked-token-abc")
   })
 
-  test("keeps newest notices with session context, limits to 50, and marks or clears them", () => {
+  test("keeps the newest local notices with session context up to the local limit", () => {
     const test = deliveryWith({})
     for (const category of NOTIFICATION_CATEGORIES) test.delivery.deliver(category.id)
     expect(test.delivery.entries()).toHaveLength(NOTIFICATION_CATEGORIES.length)
 
     for (let index = 0; index < 52; index += 1) test.delivery.deliver("approval-requested", { sessionID: `ses_${index}`, sessionTitle: `Session ${index}` })
     expect(test.delivery.entries()).toHaveLength(50)
-    expect(test.delivery.entries()[0]).toMatchObject({ category: "approval-requested", sessionID: "ses_51", sessionTitle: "Session 51", read: false })
+    expect(test.delivery.entries()[0]).toMatchObject({ category: "approval-requested", sessionID: "ses_51", sessionTitle: "Session 51" })
     expect(test.delivery.entries().at(-1)?.sessionID).toBe("ses_2")
-    test.delivery.markRead()
-    expect(test.delivery.entries().every((entry) => entry.read)).toBe(true)
-    test.delivery.clear()
-    expect(test.delivery.entries()).toEqual([])
     expect(test.recorder.alerts.at(-1)?.body).toBe(NOTIFICATION_TEXT["approval-requested"].body)
   })
 
-  test("dismisses one notice without touching the others", () => {
+  test("removes notices by id without touching the others", () => {
     const test = deliveryWith({})
     test.delivery.deliver("approval-requested")
     test.delivery.deliver("agent-completed")
+    test.delivery.offline("dev_1", 1_000)
     const ids = test.delivery.entries().map((entry) => entry.id)
-    expect(ids).toHaveLength(2)
-    test.delivery.dismiss(ids[1]!)
-    expect(test.delivery.entries().map((entry) => entry.id)).toEqual([ids[0]!])
-    test.delivery.dismiss("unknown")
-    expect(test.delivery.entries().map((entry) => entry.id)).toEqual([ids[0]!])
+    expect(ids).toHaveLength(3)
+    test.delivery.remove([ids[1]!, "unknown"])
+    expect(test.delivery.entries().map((entry) => entry.id)).toEqual([ids[0]!, ids[2]!])
+    test.delivery.remove([])
+    expect(test.delivery.entries().map((entry) => entry.id)).toEqual([ids[0]!, ids[2]!])
+  })
+
+  test("raises a synced live notice with the relay id and time, an alert, and the live mark", () => {
+    const test = deliveryWith({})
+    test.delivery.receive({ id: "ntc_7", category: "approval-requested", at: 555, sessionID: "ses_a", sessionTitle: "Named" }, "dev_1")
+    expect(test.delivery.entries()).toEqual([{ id: "ntc_7", category: "approval-requested", ...NOTIFICATION_TEXT["approval-requested"], at: 555, sessionID: "ses_a", sessionTitle: "Named", synced: true, live: true }])
+    expect(test.recorder.alerts).toEqual([{ ...NOTIFICATION_TEXT["approval-requested"], tag: "ycoding-dev_1-ntc_7", sessionID: "ses_a" }])
+  })
+
+  test("each synced notice raises its own alert so a repeat in the same Session is not silently replaced", () => {
+    const test = deliveryWith({})
+    test.delivery.receive({ id: "ntc_8", category: "agent-completed", at: 1, sessionID: "ses_a" }, "dev_1")
+    test.delivery.receive({ id: "ntc_9", category: "agent-completed", at: 2, sessionID: "ses_a" }, "dev_1")
+    expect(test.recorder.alerts.map((alert) => alert.tag)).toEqual(["ycoding-dev_1-ntc_8", "ycoding-dev_1-ntc_9"])
+  })
+
+  test("a synced live notice honors each channel preference like a local one", () => {
+    const inAppMuted = deliveryWith({ preferences: () => mute("agent-completed", "in-app") })
+    inAppMuted.delivery.receive({ id: "ntc_1", category: "agent-completed", at: 1, sessionID: "ses_a" }, "dev_1")
+    expect(inAppMuted.delivery.entries()).toEqual([])
+    expect(inAppMuted.recorder.alerts).toHaveLength(1)
+    const desktopMuted = deliveryWith({ preferences: () => mute("agent-completed", "desktop") })
+    desktopMuted.delivery.receive({ id: "ntc_1", category: "agent-completed", at: 1, sessionID: "ses_a" }, "dev_1")
+    expect(desktopMuted.delivery.entries()).toHaveLength(1)
+    expect(desktopMuted.recorder.alerts).toEqual([])
+  })
+
+  test("replacing the synced list keeps local entries, orders newest first, and raises no alert or live mark", () => {
+    const test = deliveryWith({})
+    test.delivery.offline("dev_1", 1_000)
+    test.delivery.receive({ id: "ntc_5", category: "agent-completed", at: 10, sessionID: "ses_gone" }, "dev_1")
+    const alerts = test.recorder.alerts.length
+    test.delivery.replaceSynced([
+      { id: "ntc_3", category: "approval-requested", at: 200, sessionID: "ses_c" },
+      { id: "ntc_2", category: "approval-requested", at: 200, sessionID: "ses_b", sessionTitle: "Beta" },
+      { id: "ntc_1", category: "agent-completed", at: 100, sessionID: "ses_a" },
+    ])
+    expect(test.recorder.alerts).toHaveLength(alerts)
+    expect(test.delivery.entries().map((entry) => [entry.id, entry.synced, entry.live])).toEqual([
+      [expect.stringMatching(/^offline_/), false, true], ["ntc_3", true, false], ["ntc_2", true, false], ["ntc_1", true, false],
+    ])
+    expect(test.delivery.entries().find((entry) => entry.id === "ntc_2")?.sessionTitle).toBe("Beta")
+    expect(test.delivery.syncedLoaded()).toBe(3)
+    expect(test.delivery.oldestSynced()).toBe("ntc_1")
+    test.delivery.replaceSynced([])
+    expect(test.delivery.entries().map((entry) => entry.category)).toEqual(["machine-offline"])
+    expect(test.delivery.syncedLoaded()).toBe(0)
+    expect(test.delivery.oldestSynced()).toBeUndefined()
+  })
+
+  test("appending an older page is silent, skips notices already held, and keeps the newest-first order", () => {
+    const test = deliveryWith({})
+    test.delivery.replaceSynced([
+      { id: "ntc_9", category: "agent-completed", at: 90, sessionID: "ses_a" },
+      { id: "ntc_8", category: "agent-completed", at: 80, sessionID: "ses_b" },
+    ])
+    const alerts = test.recorder.alerts.length
+    test.delivery.appendSynced([
+      { id: "ntc_8", category: "agent-completed", at: 80, sessionID: "ses_b" },
+      { id: "ntc_7", category: "approval-requested", at: 70, sessionID: "ses_c" },
+    ])
+    expect(test.delivery.entries().map((entry) => entry.id)).toEqual(["ntc_9", "ntc_8", "ntc_7"])
+    expect(test.delivery.entries().every((entry) => !entry.live)).toBe(true)
+    expect(test.recorder.alerts).toHaveLength(alerts)
+    expect(test.delivery.oldestSynced()).toBe("ntc_7")
+  })
+
+  test("a live notice already held from a page neither repeats its alert nor its row", () => {
+    const test = deliveryWith({})
+    test.delivery.replaceSynced([{ id: "ntc_4", category: "agent-completed", at: 40, sessionID: "ses_a" }])
+    test.delivery.receive({ id: "ntc_4", category: "agent-completed", at: 40, sessionID: "ses_a" }, "dev_1")
+    expect(test.delivery.entries()).toHaveLength(1)
+    expect(test.recorder.alerts).toEqual([])
+  })
+
+  test("a page honors the in-app preference by counting hidden notices as loaded, not listed", () => {
+    const test = deliveryWith({ preferences: () => mute("agent-completed", "in-app") })
+    test.delivery.replaceSynced([
+      { id: "ntc_2", category: "approval-requested", at: 2, sessionID: "ses_b" },
+      { id: "ntc_1", category: "agent-completed", at: 1, sessionID: "ses_a" },
+    ])
+    expect(test.delivery.entries().map((entry) => entry.id)).toEqual(["ntc_2"])
+    expect(test.delivery.syncedLoaded()).toBe(2)
+    expect(test.delivery.syncedHidden()).toBe(1)
+    expect(test.delivery.oldestSynced()).toBe("ntc_1")
+    test.delivery.receive({ id: "ntc_3", category: "agent-completed", at: 3, sessionID: "ses_c" }, "dev_1")
+    expect(test.delivery.syncedHidden()).toBe(2)
+    expect(test.recorder.alerts).toHaveLength(1)
+    test.delivery.remove(["ntc_1", "ntc_3"])
+    expect(test.delivery.syncedHidden()).toBe(0)
+  })
+
+  test("the loaded synced window is bounded to the newest entries and local notices stay outside it", () => {
+    const test = deliveryWith({})
+    test.delivery.offline("dev_1", 1_000)
+    const older = Array.from({ length: NOTICE_WINDOW }, (_, index) => ({ id: `ntc_${index + 1}`, category: "agent-completed" as const, at: index + 1, sessionID: "ses_a" }))
+    test.delivery.replaceSynced([...older].reverse())
+    expect(test.delivery.syncedLoaded()).toBe(NOTICE_WINDOW)
+    test.delivery.receive({ id: `ntc_${NOTICE_WINDOW + 1}`, category: "approval-requested", at: NOTICE_WINDOW + 1, sessionID: "ses_b" }, "dev_1")
+    expect(test.delivery.syncedLoaded()).toBe(NOTICE_WINDOW)
+    expect(test.delivery.oldestSynced()).toBe("ntc_2")
+    expect(test.delivery.entries().some((entry) => entry.id === "ntc_1")).toBe(false)
+    expect(test.delivery.entries().some((entry) => !entry.synced)).toBe(true)
+  })
+
+  test("clearing the synced list keeps local notices", () => {
+    const test = deliveryWith({})
+    test.delivery.offline("dev_1", 1_000)
+    test.delivery.replaceSynced([{ id: "ntc_1", category: "agent-completed", at: 1, sessionID: "ses_a" }])
+    test.delivery.clearSynced()
+    expect(test.delivery.entries().map((entry) => entry.category)).toEqual(["machine-offline"])
+    expect(test.delivery.syncedLoaded()).toBe(0)
   })
 
   test("releases the desktop notifier and its notices on dispose", () => {
@@ -283,13 +397,11 @@ describe("createNotificationDelivery", () => {
   test("keeps a machine-offline notice while disposing unrelated connection notices", () => {
     const test = deliveryWith({})
     test.delivery.deliver("approval-requested")
-    test.delivery.deliver("machine-offline")
-    const id = test.delivery.entries()[0]!.id
+    test.delivery.offline("dev_1", 1_000)
+    const id = test.delivery.entries().find((entry) => entry.category === "machine-offline")!.id
     test.delivery.dispose(true)
     expect(test.delivery.entries().map((entry) => entry.id)).toEqual([id])
-    test.delivery.markRead()
-    expect(test.delivery.entries()[0]?.read).toBe(true)
-    test.delivery.dismiss(id)
+    test.delivery.remove([id])
     expect(test.delivery.entries()).toEqual([])
   })
 
@@ -400,9 +512,9 @@ describe("createDesktopNotifier", () => {
       const notifier = createDesktopNotifier(async () => worker.registration)
       notifier.show({ title: "first", body: "same Session", tag: "ycoding-ses_a-error", sessionID: "ses_a" })
       notifier.show({ title: "second", body: "same Session", tag: "ycoding-ses_a-error", sessionID: "ses_a" })
-      notifier.show({ title: "other", body: "no Session", tag: "ycoding-remote-machine-offline" })
+      notifier.show({ title: "other", body: "no Session", tag: "ycoding-dev_1-offline-1000" })
       await Bun.sleep(0)
-      expect([...worker.open.keys()].sort()).toEqual(["ycoding-remote-machine-offline", "ycoding-ses_a-error", "ycoding-ses_z-agent-completed"])
+      expect([...worker.open.keys()].sort()).toEqual(["ycoding-dev_1-offline-1000", "ycoding-ses_a-error", "ycoding-ses_z-agent-completed"])
       notifier.dispose()
       await Bun.sleep(0)
       expect([...worker.open.keys()]).toEqual(["ycoding-ses_z-agent-completed"])
@@ -413,12 +525,12 @@ describe("createDesktopNotifier", () => {
     await withFakeNotificationAsync("granted", async () => {
       const worker = fakeWorkerRegistration()
       const notifier = createDesktopNotifier(async () => worker.registration)
-      notifier.show({ title: "machine", body: "offline", tag: "ycoding-remote-machine-offline" })
+      notifier.show({ title: "machine", body: "offline", tag: "ycoding-dev_1-offline-1000" })
       notifier.show({ title: "step", body: "failed", tag: "ycoding-ses_a-error", sessionID: "ses_a" })
       await Bun.sleep(0)
       notifier.dispose(true)
       await Bun.sleep(0)
-      expect([...worker.open.keys()]).toEqual(["ycoding-remote-machine-offline"])
+      expect([...worker.open.keys()]).toEqual(["ycoding-dev_1-offline-1000"])
       notifier.dispose()
       await Bun.sleep(0)
       expect([...worker.open.keys()]).toEqual([])

@@ -117,7 +117,7 @@ describe("remote workspace session creation", () => {
       await h.store.sendPrompt({ text: "Continue on the selected repository", delivery: "steer" })
       expect(h.relay.requests.find((request) => request.operation === "session.prompt")?.sessionID).toBe(created.id)
     } finally { await h.stop() }
-  })
+  }, pacedFlowTimeoutMs)
 
   test("keeps drafts and uncertain creation when the account reports the selected machine offline", async () => {
     const delayed = Promise.withResolvers<RelayHandlerOutcome>()

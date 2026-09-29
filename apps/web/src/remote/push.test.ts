@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test"
-import { enablePush, disablePush, syncPushState, pushSupport, pushStatusView, type PushPlatform } from "./push"
+import type { PushCategories, PushSubscriptionInput } from "@ycoding-ai/remote"
+import { enablePush, disablePush, savePushCategories, sendPushTest, syncPushState, pushSupport, pushStatusView, type PushPlatform } from "./push"
+
+const allOn: PushCategories = { "agent-completed": true, "approval-requested": true, "machine-offline": true }
+const quiet: PushCategories = { "agent-completed": false, "approval-requested": true, "machine-offline": false }
 
 type FixtureSubscription = { endpoint: string; getKey: (name: string) => ArrayBuffer | null; unsubscribe: () => Promise<boolean>;
   options?: { applicationServerKey: ArrayBuffer | null } }
@@ -19,6 +23,7 @@ function existingSubscription(h: ReturnType<typeof fixture>, key: Uint8Array<Arr
 function fixture() {
   const calls: string[] = []
   const registered: string[] = []
+  const inputs: PushSubscriptionInput[] = []
   const removed: string[] = []
   let permission: NotificationPermission = "default"
   let subscription: FixtureSubscription | null = null
@@ -39,10 +44,11 @@ function fixture() {
   }
   const http = {
     key: async () => ({ ok: true as const, value: { publicKey: "BA" + "A".repeat(85) } }),
-    subscribe: async (input: { readonly endpoint: string }) => { calls.push("register"); registered.push(input.endpoint); return { ok: true as const, value: undefined } },
+    subscribe: async (input: PushSubscriptionInput) => { calls.push("register"); registered.push(input.endpoint); inputs.push(input); return { ok: true as const, value: undefined } },
+    test: async (endpoint: string) => { calls.push(`test ${endpoint}`); return { ok: true as const, value: { outcome: "accepted" as const, status: 201 } } },
     remove: async (endpoint: string) => { calls.push("remove"); removed.push(endpoint); return { ok: true as const, value: undefined } },
   }
-  return { platform, http, calls, registered, removed, setPermission: (value: NotificationPermission) => { permission = value },
+  return { platform, http, calls, registered, removed, inputs, setPermission: (value: NotificationPermission) => { permission = value },
     setSubscription: (value: FixtureSubscription | null) => { subscription = value } }
 }
 
@@ -53,11 +59,11 @@ test("push support distinguishes secure installed capability and permission deni
   test.setPermission("denied")
   expect(pushSupport(test.platform)).toBe("blocked")
   test.setPermission("default")
-  expect(await syncPushState(test.platform, test.http)).toBe("off")
+  expect(await syncPushState(test.platform, test.http, () => allOn)).toBe("off")
   const unavailable = { ...test.http, key: async () => ({ ok: false as const, status: 503, kind: "http" as const, message: "Web Push is unavailable" }) }
-  expect(await syncPushState(test.platform, unavailable)).toBe("unavailable")
+  expect(await syncPushState(test.platform, unavailable, () => allOn)).toBe("unavailable")
   const unauthenticated = { ...test.http, key: async () => ({ ok: false as const, status: 401, kind: "http" as const, message: "Sign in" }) }
-  expect(await syncPushState(test.platform, unauthenticated)).toBe("error")
+  expect(await syncPushState(test.platform, unauthenticated, () => allOn)).toBe("error")
 })
 
 test("push Settings labels every capability and permission state without claiming delivery while blocked", () => {
@@ -65,26 +71,26 @@ test("push Settings labels every capability and permission state without claimin
   expect(pushStatusView("unavailable")).toMatchObject({ label: "Unavailable", disabled: true, pressed: false })
   expect(pushStatusView("blocked")).toMatchObject({ label: "Blocked", disabled: true, pressed: false })
   expect(pushStatusView("off")).toMatchObject({ label: "Turn on", disabled: false, pressed: false })
-  expect(pushStatusView("off").detail).toBe("Enable work-finished and needs-attention alerts when the installed app is closed.")
+  expect(pushStatusView("off").detail).toBe("Turn on to receive the System alerts chosen above on this device when YCoding is closed.")
   expect(pushStatusView("needs-setup")).toMatchObject({ label: "Re-enable", disabled: false, pressed: false })
   expect(pushStatusView("on")).toMatchObject({ label: "Turn off", disabled: false, pressed: true })
-  expect(pushStatusView("on").detail).toBe("Push is registered on this device for work-finished and needs-attention alerts.")
+  expect(pushStatusView("on").detail).toBe("Push is registered on this device for the System alerts chosen above.")
 })
 
 test("a granted device with a revoked browser subscription shows push off and offers re-enable", async () => {
   const h = fixture()
   h.setPermission("granted")
-  expect(await syncPushState(h.platform, h.http)).toBe("needs-setup")
-  expect(pushStatusView(await syncPushState(h.platform, h.http)).detail).toContain("no active subscription")
-  expect(await enablePush(h.platform, h.http)).toEqual({ status: "on" })
+  expect(await syncPushState(h.platform, h.http, () => allOn)).toBe("needs-setup")
+  expect(pushStatusView(await syncPushState(h.platform, h.http, () => allOn)).detail).toContain("no active subscription")
+  expect(await enablePush(h.platform, h.http, () => allOn)).toEqual({ status: "on" })
   expect(h.calls).toEqual(["permission", "subscribe", "register"])
 })
 
 test("push enable requests permission on click, registers only after subscribe, and disable removes before unsubscribe", async () => {
   const test = fixture()
-  expect(await enablePush(test.platform, test.http)).toEqual({ status: "on" })
+  expect(await enablePush(test.platform, test.http, () => allOn)).toEqual({ status: "on" })
   expect(test.calls).toEqual(["permission", "subscribe", "register"])
-  expect(await syncPushState(test.platform, test.http)).toBe("on")
+  expect(await syncPushState(test.platform, test.http, () => allOn)).toBe("on")
   expect(await disablePush(test.platform, test.http)).toEqual({ status: "off" })
   expect(test.calls).toEqual(["permission", "subscribe", "register", "register", "remove", "unsubscribe"])
 })
@@ -93,7 +99,7 @@ test("sync re-registers this device's existing subscription with the relay on ev
   const h = fixture()
   h.setPermission("granted")
   h.setSubscription(existingSubscription(h, serverKey()))
-  expect(await syncPushState(h.platform, h.http)).toBe("on")
+  expect(await syncPushState(h.platform, h.http, () => allOn)).toBe("on")
   expect(h.calls).toEqual(["register"])
   expect(h.registered).toEqual(["https://fcm.googleapis.com/send/existing"])
 })
@@ -104,7 +110,7 @@ test("sync replaces a subscription made for a rotated server key before register
   const rotated = serverKey()
   rotated[1] = 9
   h.setSubscription(existingSubscription(h, rotated))
-  expect(await syncPushState(h.platform, h.http)).toBe("on")
+  expect(await syncPushState(h.platform, h.http, () => allOn)).toBe("on")
   expect(h.calls).toEqual(["unsubscribe-existing", "subscribe", "register", "remove"])
   expect(h.registered).toEqual(["https://fcm.googleapis.com/send/a"])
   expect(h.removed).toEqual(["https://fcm.googleapis.com/send/existing"])
@@ -115,20 +121,103 @@ test("sync reports a relay rejection instead of claiming push is on", async () =
   h.setPermission("granted")
   h.setSubscription(existingSubscription(h, serverKey()))
   const failing = { ...h.http, subscribe: async () => ({ ok: false as const, status: 500, kind: "http" as const, message: "Failed" }) }
-  expect(await syncPushState(h.platform, failing)).toBe("error")
+  expect(await syncPushState(h.platform, failing, () => allOn)).toBe("error")
 })
 
 test("sync leaves an ungranted or unsubscribed device untouched", async () => {
   const h = fixture()
-  expect(await syncPushState(h.platform, h.http)).toBe("off")
+  expect(await syncPushState(h.platform, h.http, () => allOn)).toBe("off")
   h.setPermission("granted")
-  expect(await syncPushState(h.platform, h.http)).toBe("needs-setup")
+  expect(await syncPushState(h.platform, h.http, () => allOn)).toBe("needs-setup")
   expect(h.calls).toEqual([])
 })
 
 test("push registration failure rolls back a newly created browser subscription", async () => {
   const test = fixture()
   const failing = { ...test.http, subscribe: async () => ({ ok: false as const, status: 500, kind: "http" as const, message: "Failed" }) }
-  expect(await enablePush(test.platform, failing)).toEqual({ status: "error", message: "Failed" })
+  expect(await enablePush(test.platform, failing, () => allOn)).toEqual({ status: "error", message: "Failed" })
   expect(test.calls).toEqual(["permission", "subscribe", "unsubscribe"])
+})
+
+test("enabling and every workspace load register this device with its own System choices", async () => {
+  const h = fixture()
+  expect(await enablePush(h.platform, h.http, () => quiet)).toEqual({ status: "on" })
+  expect(await syncPushState(h.platform, h.http, () => quiet)).toBe("on")
+  expect(h.inputs.map((input) => "categories" in input ? input.categories : undefined)).toEqual([quiet, quiet])
+})
+
+test("changing a System choice updates this device's subscription and never claims a failed update was saved", async () => {
+  const h = fixture()
+  expect(await savePushCategories(h.platform, h.http, () => quiet)).toEqual({ status: "off" })
+  expect(h.inputs).toEqual([])
+  h.setPermission("granted")
+  h.setSubscription(existingSubscription(h, serverKey()))
+  expect(await savePushCategories(h.platform, h.http, () => quiet)).toEqual({ status: "on" })
+  expect(h.inputs).toEqual([{ endpoint: "https://fcm.googleapis.com/send/existing", keys: { p256dh: expect.any(String), auth: expect.any(String) }, categories: quiet }])
+  const failing = { ...h.http, subscribe: async () => ({ ok: false as const, status: 503, kind: "http" as const, message: "Web Push is unavailable" }) }
+  expect(await savePushCategories(h.platform, failing, () => allOn)).toEqual({ status: "error",
+    message: "Saved on this device only. Closed-app alerts still use the previous choice: Web Push is unavailable" })
+})
+
+test("a test alert reports the push service answer for this device only and says it does not prove display", async () => {
+  const h = fixture()
+  expect(await sendPushTest(h.platform, h.http)).toEqual({ status: "off", message: "This device has no push subscription. Turn on push first." })
+  h.setPermission("granted")
+  h.setSubscription(existingSubscription(h, serverKey()))
+  expect(await sendPushTest(h.platform, h.http)).toEqual({ status: "on",
+    message: "The push service accepted a test alert (HTTP 201). If none appears, check this device's notification settings for this browser or app." })
+  expect(h.calls).toEqual(["test https://fcm.googleapis.com/send/existing"])
+  for (const [answer, expected] of [
+    [{ ok: true as const, value: { outcome: "rejected" as const, status: 403 } }, { status: "error", message: "The push service refused the test alert (HTTP 403)." }],
+    [{ ok: true as const, value: { outcome: "unreachable" as const } }, { status: "on", message: "The relay could not reach the push service. Try again later." }],
+    [{ ok: false as const, status: 404, kind: "http" as const, message: "This device has no registered push subscription" }, { status: "needs-setup", message: "This device has no registered push subscription" }],
+    [{ ok: false as const, status: 429, kind: "http" as const, message: "Wait a minute before sending another test alert" }, { status: "on", message: "Wait a minute before sending another test alert" }],
+  ] as const) expect(await sendPushTest(h.platform, { ...h.http, test: async () => answer })).toEqual(expected)
+  const expired = { ok: true as const, value: { outcome: "expired" as const, status: 410 } }
+  expect(await sendPushTest(h.platform, { ...h.http, test: async () => expired })).toEqual({ status: "needs-setup",
+    message: "The push service reports this subscription expired. Use Re-enable to register this device again." })
+  expect(h.calls.at(-1)).toBe("unsubscribe-existing")
+})
+
+test("enabling reads this device's System choices when it writes them, after a slow permission prompt and key read", async () => {
+  const h = fixture()
+  const permission = Promise.withResolvers<NotificationPermission>()
+  const key = Promise.withResolvers<{ ok: true; value: { publicKey: string } }>()
+  let choices = allOn
+  const enabling = enablePush({ ...h.platform, requestPermission: () => permission.promise }, { ...h.http, key: () => key.promise }, () => choices)
+  choices = quiet
+  permission.resolve("granted")
+  h.setPermission("granted")
+  await Bun.sleep(0)
+  choices = { ...quiet, "machine-offline": true }
+  key.resolve({ ok: true, value: { publicKey: "BA" + "A".repeat(85) } })
+  expect(await enabling).toEqual({ status: "on" })
+  expect(h.inputs.map((input) => "categories" in input ? input.categories : undefined)).toEqual([{ ...quiet, "machine-offline": true }])
+})
+
+test("registrations from this page reach the relay one at a time, in call order, each with the choices current when it is sent", async () => {
+  const h = fixture()
+  h.setPermission("granted")
+  h.setSubscription(existingSubscription(h, serverKey()))
+  const gates: { resolve: () => void }[] = []
+  const sent: PushCategories[] = []
+  const http = { ...h.http, subscribe: async (input: PushSubscriptionInput) => {
+    if ("categories" in input) sent.push(input.categories)
+    const gate = Promise.withResolvers<void>()
+    gates.push(gate)
+    await gate.promise
+    return { ok: true as const, value: undefined }
+  } }
+  let choices = quiet
+  const first = savePushCategories(h.platform, http, () => choices)
+  const second = savePushCategories(h.platform, http, () => choices)
+  await Bun.sleep(0)
+  expect(sent).toEqual([quiet])
+  choices = allOn
+  gates[0]?.resolve()
+  await first
+  await Bun.sleep(0)
+  expect(sent).toEqual([quiet, allOn])
+  gates[1]?.resolve()
+  expect(await second).toEqual({ status: "on" })
 })

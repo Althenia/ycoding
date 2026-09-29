@@ -19,6 +19,7 @@ test("a connector that never answers todo.list does not hold Session hydration o
         messages: [], watermark: { type: "log.synced", aggregateID: "ses_a", seq: 0 },
       } }
       if (operation === "session.todo.list") return pending.promise
+      if (operation === "notice.subscribe") return { status: "ok" as const, value: { notices: [], total: 0, unavailable: false } }
       if (operation === "session.autonomy.get") return { status: "ok" as const, value: { data: { mode: "normal", yolo: 0 } } }
       return { status: "ok" as const, value: { data: [] } }
     },

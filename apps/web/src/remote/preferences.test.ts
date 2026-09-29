@@ -6,6 +6,7 @@ import {
   NOTIFICATION_STORAGE_KEY,
   describeNotificationPermission,
   normalizeNotificationPreferences,
+  pushCategoriesFor,
   readNotificationPreferences,
   toggleNotificationChannel,
   writeNotificationPreferences,
@@ -30,7 +31,7 @@ describe("notification categories", () => {
     expect(NOTIFICATION_CATEGORIES).toEqual([
       { id: "agent-completed", label: "Work finished", detail: "Get notified when a Session and everything it started, including subagents, shells and goals, has finished. Useful for long-running work." },
       { id: "approval-requested", label: "Needs your attention", detail: "Get notified when a Session needs your decision, a guardrail blocks an action, or a run fails." },
-      { id: "machine-offline", label: "Machine offline", detail: "Get notified when the selected paired machine stops reporting while YCoding is open." },
+      { id: "machine-offline", label: "Machine offline", detail: "Get notified when a paired machine stops reporting." },
     ])
     expect(NOTIFICATION_CHANNELS).toEqual([{ id: "in-app", label: "In app" }, { id: "desktop", label: "System" }])
   })
@@ -147,4 +148,9 @@ describe("describeNotificationPermission", () => {
     expect(describeNotificationPermission(undefined)).toBe("System alerts are not available in this browser.")
     expect(describeNotificationPermission("unknown-state")).toBe("System alerts are not available in this browser.")
   })
+})
+
+test("push to this device follows only each category's System switch", () => {
+  const preferences = toggleNotificationChannel(toggleNotificationChannel(DEFAULT_NOTIFICATION_PREFERENCES, "agent-completed", "desktop"), "machine-offline", "in-app")
+  expect(pushCategoriesFor(preferences)).toEqual({ "agent-completed": false, "approval-requested": true, "machine-offline": true })
 })

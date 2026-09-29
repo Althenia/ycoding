@@ -1,24 +1,35 @@
+import { Database } from "bun:sqlite"
 import { describe, expect, test } from "bun:test"
-import { RemoteLimits, RemoteProtocolVersion, type RemoteStatus } from "../../../packages/remote/src/index"
-import { createRelay, type RelayConnection, type RelayDeps } from "../src/relay/core"
+import { RemoteLimits, RemoteProtocolVersion, parseNoticePage, type RemoteNotice, type RemoteStatus } from "../../../packages/remote/src/index"
+import { createRelay, type OfflineCheck, type RelayConnection, type RelayDeps } from "../src/relay/core"
+import { createNoticeStore, type NoticeStore } from "../src/relay/notice-store"
 
 type Sent = { readonly connectionID: string; readonly message: string }
 type Closed = { readonly connectionID: string; readonly code: number; readonly reason: string }
 type Authority = { ok: true } | { ok: false; reason: string }
 
-function harness(options: { readonly sessions?: readonly string[]; readonly authorityTtlMs?: number; readonly statusStore?: { value?: RemoteStatus } } = {}) {
+function harness(options: { readonly sessions?: readonly string[]; readonly authorityTtlMs?: number; readonly statusStore?: { value?: RemoteStatus }; readonly database?: Database; readonly noticeStore?: (store: NoticeStore) => NoticeStore; readonly withoutPush?: boolean; readonly offlineStore?: { value?: OfflineCheck } } = {}) {
   let now = 1_000_000
   let idSequence = 0
   const sent: Sent[] = []
   const closed: Closed[] = []
-  const pushed: { accountID: string; category: string; sessionID: string; deviceID: string }[] = []
+  const pushed: ({ accountID: string } & Record<string, string>)[] = []
+  const offlineStore = options.offlineStore ?? {}
   const storedSubscriptions = new Map<string, readonly string[]>()
   const storedPending = new Map<string, readonly { relayID: string; clientID: string }[]>()
   const statusStore = options.statusStore ?? {}
+  const database = options.database ?? new Database(":memory:")
+  const baseNotices = createNoticeStore({ exec: (query, ...bindings) => {
+    const rows = database.prepare(query).all(...(bindings as never[]))
+    return { toArray: () => rows }
+  } })
+  const notices = options.noticeStore?.(baseNotices) ?? baseNotices
+  const storedNoticeSubscriptions = new Map<string, boolean>()
   let advertisement: readonly string[] = options.sessions ?? ["ses_a"]
   let clientAuthority: Authority = { ok: true }
   let agentAuthority: Authority = { ok: true }
   let authorityReads = 0
+  let readAgentAuthority: () => Promise<Authority> = async () => agentAuthority
   let readClientAuthority: (call: number) => Promise<Authority> = async () => clientAuthority
 
   const deps: RelayDeps = {
@@ -30,13 +41,17 @@ function harness(options: { readonly sessions?: readonly string[]; readonly auth
     savePending: (connectionID, values) => storedPending.set(connectionID, values),
     loadStatus: async () => statusStore.value,
     saveStatus: async (status) => { statusStore.value = status },
+    loadOfflineCheck: async () => offlineStore.value,
+    saveOfflineCheck: async (check) => { offlineStore.value = check },
+    notices,
+    saveNoticeSubscription: (connectionID, subscribed) => storedNoticeSubscriptions.set(connectionID, subscribed),
     authorizeClientCommand: async () => {
       authorityReads += 1
       return readClientAuthority(authorityReads)
     },
-    authorizeAgentCommand: async () => agentAuthority,
+    authorizeAgentCommand: () => readAgentAuthority(),
     authorityTtlMs: options.authorityTtlMs ?? 0,
-    notifyPush: (accountID, event) => { pushed.push({ accountID, ...event }) },
+    ...(options.withoutPush ? {} : { notifyPush: (accountID: string, event: Record<string, string>) => { pushed.push({ accountID, ...event }) } }),
   }
 
   const relay = createRelay(deps)
@@ -48,6 +63,16 @@ function harness(options: { readonly sessions?: readonly string[]; readonly auth
     storedSubscriptions,
     storedPending,
     storedStatus: () => statusStore.value,
+    storedOffline: () => offlineStore.value,
+    database,
+    storedNotices: () => (database.query("SELECT seq, category, session_id, created_at FROM notice ORDER BY seq").all() as { seq: number; category: RemoteNotice["category"]; session_id: string; created_at: number }[])
+      .map((row) => ({ id: `ntc_${row.seq}`, category: row.category, sessionID: row.session_id, createdAt: row.created_at })),
+    storedNoticeSubscriptions,
+    noticeFramesTo: (connectionID: string) =>
+      sent
+        .filter((entry) => entry.connectionID === connectionID)
+        .map((entry) => JSON.parse(entry.message) as Record<string, unknown>)
+        .filter((message) => typeof message.type === "string" && message.type.startsWith("notice.")),
     advance: (milliseconds: number) => {
       now += milliseconds
     },
@@ -59,6 +84,9 @@ function harness(options: { readonly sessions?: readonly string[]; readonly auth
       readClientAuthority = read
     },
     authorityReads: () => authorityReads,
+    setAgentAuthorityRead: (read: () => Promise<Authority>) => {
+      readAgentAuthority = read
+    },
     setAgentAuthority: (value: Authority) => {
       agentAuthority = value
     },
@@ -79,7 +107,7 @@ function harness(options: { readonly sessions?: readonly string[]; readonly auth
   }
 }
 
-function client(connectionID: string, browserSessionID = "sess-1"): RelayConnection {
+function client(connectionID: string, browserSessionID = "sess-1", noticesSubscribed = false): RelayConnection {
   return {
     connectionID,
     role: "client",
@@ -88,6 +116,7 @@ function client(connectionID: string, browserSessionID = "sess-1"): RelayConnect
     browserSessionID,
     credentialExpiresAt: 10_000_000,
     subscriptions: [],
+    noticesSubscribed,
     pending: [],
   }
 }
@@ -101,6 +130,7 @@ function agent(connectionID: string): RelayConnection {
     browserSessionID: "dev_1",
     credentialExpiresAt: 10_000_000,
     subscriptions: [],
+    noticesSubscribed: false,
     pending: [],
   }
 }
@@ -149,8 +179,8 @@ describe("relay core: role separation", () => {
     expect(h.pushed).toEqual([])
     await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: ["ses_b"] }))
     expect(h.pushed).toEqual([
-      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_b", deviceID: "dev_1" },
-      { accountID: "usr_1", category: "agent-completed", sessionID: "ses_a", deviceID: "dev_1" },
+      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_b", deviceID: "dev_1", noticeID: "ntc_1" },
+      { accountID: "usr_1", category: "agent-completed", sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_2" },
     ])
     await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: ["ses_b"] }))
     expect(h.pushed).toHaveLength(2)
@@ -202,16 +232,16 @@ describe("relay core: role separation", () => {
     await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: ["ses_a"], attention: [] }))
     expect(h.pushed).toEqual([])
     expect(h.storedStatus()).toEqual({ type: "status", running: ["ses_a"], attention: [] })
-    h.relay.detach("agent-1")
+    await h.relay.agentClosed(agent("agent-1"))
     await h.relay.attach(agent("agent-2"))
     await h.relay.handleAgentMessage("agent-2", JSON.stringify({ type: "status", running: ["ses_a"], attention: [] }))
     expect(h.pushed).toEqual([])
-    h.relay.detach("agent-2")
+    await h.relay.agentClosed(agent("agent-2"))
     await h.relay.attach(agent("agent-3"))
     await h.relay.handleAgentMessage("agent-3", JSON.stringify({ type: "status", running: [], attention: ["ses_b"] }))
     expect(h.pushed).toEqual([
-      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_b", deviceID: "dev_1" },
-      { accountID: "usr_1", category: "agent-completed", sessionID: "ses_a", deviceID: "dev_1" },
+      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_b", deviceID: "dev_1", noticeID: "ntc_1" },
+      { accountID: "usr_1", category: "agent-completed", sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_2" },
     ])
   })
 
@@ -224,7 +254,7 @@ describe("relay core: role separation", () => {
     const restored = harness({ statusStore })
     await restored.relay.attach(agent("agent-2"))
     await restored.relay.handleAgentMessage("agent-2", JSON.stringify({ type: "status", running: [], attention: [] }))
-    expect(restored.pushed).toEqual([{ accountID: "usr_1", category: "agent-completed", sessionID: "ses_a", deviceID: "dev_1" }])
+    expect(restored.pushed).toEqual([{ accountID: "usr_1", category: "agent-completed", sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_1" }])
   })
 
   test("validates and broadcasts complete status to each device client and a late joiner", async () => {
@@ -666,7 +696,7 @@ describe("relay core: disconnects, revocation, and expiry", () => {
     const h = harness()
     await attachBoth(h)
     await h.relay.handleClientMessage("client-1", request("1", "session.prompt", "ses_a", { id: "msg_1" }))
-    h.relay.detach("agent-1")
+    await h.relay.agentClosed(agent("agent-1"))
     expect(h.messagesTo("client-1")).toEqual([
       {
         type: "response",
@@ -972,5 +1002,527 @@ describe("relay core: per-connection frame order and authority windows", () => {
 describe("relay core: protocol metadata", () => {
   test("reports the contract revision it speaks", () => {
     expect(RemoteProtocolVersion).toBe(3)
+  })
+})
+
+describe("relay core: notice log", () => {
+  type Harness = ReturnType<typeof harness>
+  const status = (h: Harness, running: string[], attention: string[], outstanding?: string[]) =>
+    h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running, attention, ...(outstanding === undefined ? {} : { outstanding }) }))
+  const subscribe = (h: Harness, connectionID: string) =>
+    h.relay.handleClientMessage(connectionID, request(`sub_${connectionID}`, "notice.subscribe"))
+  const list = (h: Harness, connectionID: string, before: string, id = `list_${before}`) =>
+    h.relay.handleClientMessage(connectionID, request(id, "notice.list", undefined, { before }))
+  const readIDs = (h: Harness, connectionID: string, ids: readonly string[], id = "read") =>
+    h.relay.handleClientMessage(connectionID, request(id, "notice.read", undefined, { ids }))
+  const responseTo = (h: Harness, connectionID: string, id: string) =>
+    h.messagesTo(connectionID).find((message) => message.type === "response" && message.id === id)
+  const pageOf = (h: Harness, connectionID: string, id: string) => {
+    const reply = responseTo(h, connectionID, id) as { ok: true; value: unknown }
+    const parsed = parseNoticePage(reply.value)
+    if (!parsed.ok) throw new Error("response is not a notice page")
+    return parsed.value
+  }
+  const added = (h: Harness, connectionID: string) =>
+    h.noticeFramesTo(connectionID).filter((frame) => frame.type === "notice.added").flatMap((frame) => frame.notices as RemoteNotice[])
+  const attention = (count: number, prefix = "ses_n") => Array.from({ length: count }, (_, index) => `${prefix}${index}`)
+
+  test("records each derived transition as one stored notice and broadcasts it, with the new total, to subscribed clients only", async () => {
+    const h = harness({ withoutPush: true })
+    await attachBoth(h)
+    await h.relay.attach(client("client-2"))
+    await subscribe(h, "client-1")
+    h.reset()
+    await status(h, ["ses_a"], [])
+    expect(h.storedNotices()).toEqual([])
+    await status(h, [], ["ses_b"])
+    expect(h.storedNotices()).toEqual([
+      { id: "ntc_1", category: "approval-requested", sessionID: "ses_b", createdAt: h.at() },
+      { id: "ntc_2", category: "agent-completed", sessionID: "ses_a", createdAt: h.at() },
+    ])
+    expect(h.noticeFramesTo("client-1")).toEqual([{ type: "notice.added", notices: h.storedNotices(), total: 2 }])
+    expect(h.noticeFramesTo("client-2")).toEqual([])
+    await status(h, [], ["ses_b"])
+    expect(h.storedNotices()).toHaveLength(2)
+  })
+
+  test("subscribing answers with the newest page and total, persists the opt-in, and needs no agent", async () => {
+    const h = harness()
+    await attachBoth(h)
+    await status(h, ["ses_a"], [])
+    await status(h, [], [])
+    await h.relay.agentClosed(agent("agent-1"))
+    h.reset()
+    await subscribe(h, "client-1")
+    expect(pageOf(h, "client-1", "sub_client-1")).toEqual({ notices: [...h.storedNotices()].reverse(), total: 1, unavailable: false })
+    expect(h.noticeFramesTo("client-1")).toEqual([])
+    expect(h.storedNoticeSubscriptions.get("client-1")).toBe(true)
+    expect(h.messagesTo("agent-1")).toEqual([])
+    expect(h.closed).toEqual([])
+  })
+
+  test("pages older notices by cursor until none remain", async () => {
+    const h = harness({ withoutPush: true })
+    await attachBoth(h)
+    await status(h, ["ses_a"], [])
+    await status(h, [], attention(120))
+    await subscribe(h, "client-1")
+    const seen = pageOf(h, "client-1", "sub_client-1")
+    expect(seen.notices).toHaveLength(RemoteLimits.noticePageSize)
+    expect(seen.total).toBe(121)
+    const ids = seen.notices.map((notice) => notice.id)
+    let cursor = seen.next
+    while (cursor !== undefined) {
+      await list(h, "client-1", cursor)
+      const page = pageOf(h, "client-1", `list_${cursor}`)
+      expect(page.total).toBe(121)
+      ids.push(...page.notices.map((notice) => notice.id))
+      cursor = page.next
+    }
+    expect(ids).toHaveLength(121)
+    expect(new Set(ids).size).toBe(121)
+    expect(ids[0]).toBe("ntc_121")
+    expect(ids.at(-1)).toBe("ntc_1")
+  })
+
+  test("retains every notice through a burst beyond the push window and beyond a hundred stored", async () => {
+    const h = harness()
+    await attachBoth(h)
+    await subscribe(h, "client-1")
+    await status(h, [], [])
+    h.reset()
+    await status(h, [], attention(300))
+    expect(h.pushed).toHaveLength(20)
+    expect(h.storedNotices()).toHaveLength(300)
+    const frames = h.noticeFramesTo("client-1")
+    expect(frames.map((frame) => (frame.notices as RemoteNotice[]).length)).toEqual([100, 100, 100])
+    expect(frames.every((frame) => frame.total === 300)).toBe(true)
+    for (let index = 0; index < 5; index += 1) {
+      h.advance(61_000)
+      await status(h, [], attention(1, `ses_w${index}_`))
+      await status(h, [], [])
+    }
+    expect(h.storedNotices().length).toBeGreaterThanOrEqual(300)
+    expect(h.pushed.length).toBeGreaterThan(20)
+  })
+
+  test("push stays limited to twenty a minute while every transition is recorded", async () => {
+    const h = harness()
+    await attachBoth(h)
+    await status(h, [], [])
+    for (let index = 0; index < 30; index += 1) await status(h, [], attention(index + 1))
+    expect(h.pushed).toHaveLength(20)
+    expect(h.storedNotices()).toHaveLength(30)
+    h.advance(60_001)
+    await status(h, [], attention(31))
+    expect(h.pushed).toHaveLength(21)
+    expect(h.storedNotices()).toHaveLength(31)
+  })
+
+  test("a client that never subscribes receives no notice frame from attach, additions, reads, or clears", async () => {
+    const h = harness()
+    await attachBoth(h)
+    await h.relay.attach(client("client-2"))
+    await subscribe(h, "client-2")
+    await status(h, ["ses_a"], [])
+    await status(h, [], ["ses_b"])
+    await readIDs(h, "client-2", ["ntc_1"])
+    await h.relay.handleClientMessage("client-2", request("all", "notice.readAll"))
+    expect(h.noticeFramesTo("client-2").map((frame) => frame.type)).toEqual(["notice.added", "notice.removed", "notice.cleared"])
+    expect(h.noticeFramesTo("client-1")).toEqual([])
+    await h.relay.attach(client("client-3"))
+    expect(h.noticeFramesTo("client-3")).toEqual([])
+  })
+
+  test("a read removes exactly the existing notices for every subscribed client and is idempotent", async () => {
+    const h = harness()
+    await attachBoth(h)
+    await h.relay.attach(client("client-2", "sess-2"))
+    await status(h, ["ses_a", "ses_c"], [])
+    await status(h, [], ["ses_b"])
+    await subscribe(h, "client-1")
+    await subscribe(h, "client-2")
+    h.reset()
+    await readIDs(h, "client-1", ["ntc_2", "ntc_99"], "read_1")
+    expect(h.storedNotices().map((notice) => notice.id)).toEqual(["ntc_1", "ntc_3"])
+    expect(h.noticeFramesTo("client-1")).toEqual([{ type: "notice.removed", ids: ["ntc_2"], total: 2 }])
+    expect(h.noticeFramesTo("client-2")).toEqual([{ type: "notice.removed", ids: ["ntc_2"], total: 2 }])
+    expect(responseTo(h, "client-1", "read_1")).toEqual({ type: "response", id: "read_1", ok: true, value: null })
+    h.reset()
+    await readIDs(h, "client-2", ["ntc_2"], "read_2")
+    expect(h.noticeFramesTo("client-1")).toEqual([])
+    expect(h.noticeFramesTo("client-2")).toEqual([])
+    expect(responseTo(h, "client-2", "read_2")).toMatchObject({ ok: true })
+    expect(h.messagesTo("agent-1")).toEqual([])
+  })
+
+  test("read all clears the log for every subscribed client with one frame however many notices exist", async () => {
+    const h = harness({ withoutPush: true })
+    await attachBoth(h)
+    await h.relay.attach(client("client-2", "sess-2"))
+    await status(h, [], [])
+    await status(h, [], attention(400))
+    await subscribe(h, "client-1")
+    await subscribe(h, "client-2")
+    h.reset()
+    await h.relay.handleClientMessage("client-2", request("all", "notice.readAll"))
+    expect(h.storedNotices()).toEqual([])
+    expect(h.noticeFramesTo("client-1")).toEqual([{ type: "notice.cleared" }])
+    expect(h.noticeFramesTo("client-2")).toEqual([{ type: "notice.cleared" }])
+    expect(responseTo(h, "client-2", "all")).toEqual({ type: "response", id: "all", ok: true, value: null })
+    await h.relay.handleClientMessage("client-1", request("again", "notice.readAll"))
+    expect(responseTo(h, "client-1", "again")).toMatchObject({ ok: true })
+    await status(h, [], ["ses_fresh"])
+    expect(h.storedNotices().map((notice) => notice.id)).toEqual(["ntc_401"])
+  })
+
+  test("a client whose authority lapsed cannot subscribe, list, or read, and is closed", async () => {
+    const h = harness()
+    await attachBoth(h)
+    await status(h, ["ses_a"], [])
+    await status(h, [], [])
+    const before = h.storedNotices()
+    h.setClientAuthority({ ok: false, reason: "revoked_session" })
+    h.reset()
+    await subscribe(h, "client-1")
+    expect(h.noticeFramesTo("client-1")).toEqual([])
+    expect(responseTo(h, "client-1", "sub_client-1")).toMatchObject({ ok: false, error: { code: "unauthorized" } })
+    expect(h.closed).toEqual([{ connectionID: "client-1", code: 4401, reason: "Session is no longer authorized" }])
+    expect(h.storedNoticeSubscriptions.get("client-1")).toBeUndefined()
+    h.setClientAuthority({ ok: true })
+    await h.relay.attach(client("client-2", "sess-2"))
+    h.setClientAuthority({ ok: false, reason: "not_owner" })
+    await h.relay.handleClientMessage("client-2", request("read", "notice.readAll"))
+    await list(h, "client-2", "ntc_9", "listed")
+    expect(h.storedNotices()).toEqual(before)
+    expect(responseTo(h, "client-2", "read")).toMatchObject({ ok: false, error: { code: "forbidden" } })
+    expect(responseTo(h, "client-2", "listed")).toBeUndefined()
+  })
+
+  test("a restored subscribed client keeps receiving additions without a replayed list", async () => {
+    const h = harness()
+    await h.relay.attach(agent("agent-1"))
+    await status(h, ["ses_a"], [])
+    await status(h, [], [])
+    h.reset()
+    await h.relay.restore([client("client-1", "sess-1", true), client("client-2")])
+    expect(h.noticeFramesTo("client-1")).toEqual([])
+    expect(h.noticeFramesTo("client-2")).toEqual([])
+    await status(h, [], ["ses_b"])
+    expect(added(h, "client-1").map((notice) => notice.sessionID)).toEqual(["ses_b"])
+    expect(h.noticeFramesTo("client-2")).toEqual([])
+  })
+
+  test("a storage failure keeps stored notices, tells subscribed clients once, and marks later pages unavailable until read all", async () => {
+    let failing = false
+    const h = harness({ noticeStore: (store) => ({ ...store, append: (events) => {
+      if (failing) throw new Error("database or disk is full: SQLITE_FULL")
+      return store.append(events)
+    } }) })
+    await attachBoth(h)
+    await h.relay.attach(client("client-2", "sess-2"))
+    await subscribe(h, "client-1")
+    await status(h, ["ses_a", "ses_b"], [])
+    await status(h, ["ses_a"], [])
+    expect(h.storedNotices()).toHaveLength(1)
+    failing = true
+    h.reset()
+    await status(h, [], ["ses_c"])
+    await status(h, [], [])
+    expect(h.storedNotices()).toHaveLength(1)
+    expect(h.noticeFramesTo("client-1")).toEqual([{ type: "notice.unavailable" }])
+    expect(h.pushed.length).toBeGreaterThan(0)
+    await subscribe(h, "client-2")
+    expect(pageOf(h, "client-2", "sub_client-2")).toMatchObject({ total: 1, unavailable: true })
+    failing = false
+    await status(h, [], ["ses_d"])
+    expect(h.storedNotices()).toHaveLength(2)
+    await list(h, "client-2", "ntc_9", "later")
+    expect(pageOf(h, "client-2", "later").unavailable).toBe(true)
+    await readIDs(h, "client-2", ["ntc_1"])
+    await list(h, "client-2", "ntc_9", "after_read")
+    expect(pageOf(h, "client-2", "after_read").unavailable).toBe(true)
+    h.reset()
+    await h.relay.handleClientMessage("client-2", request("all", "notice.readAll"))
+    expect(h.noticeFramesTo("client-1")).toEqual([{ type: "notice.cleared" }])
+    await subscribe(h, "client-2")
+    expect(pageOf(h, "client-2", "sub_client-2")).toEqual({ notices: [], total: 0, unavailable: false })
+  })
+
+  test("a storage failure remains visible after the relay is rebuilt over its stored notices", async () => {
+    const database = new Database(":memory:")
+    const previous = harness({ database, noticeStore: (store) => ({ ...store, append: () => { throw new Error("SQLITE_FULL") } }) })
+    await attachBoth(previous)
+    await status(previous, ["ses_a"], [])
+    await status(previous, [], [])
+    const restored = harness({ database })
+    await attachBoth(restored)
+    await subscribe(restored, "client-1")
+    expect(pageOf(restored, "client-1", "sub_client-1")).toMatchObject({ unavailable: true })
+  })
+
+  test("a full store that also rejects its failure marker still warns connected readers without clearing unread rows", async () => {
+    const h = harness({ noticeStore: (store) => ({ ...store,
+      append: (events) => {
+        if (events.some((event) => event.sessionID === "ses_fail")) throw new Error("SQLITE_FULL")
+        return store.append(events)
+      },
+      markUnavailable: () => { throw new Error("SQLITE_FULL") },
+    }) })
+    await attachBoth(h)
+    await subscribe(h, "client-1")
+    await status(h, ["ses_keep"], [])
+    await status(h, [], [])
+    h.reset()
+    await status(h, [], ["ses_fail"])
+    expect(h.noticeFramesTo("client-1")).toEqual([{ type: "notice.unavailable" }])
+    await subscribe(h, "client-1")
+    expect(pageOf(h, "client-1", "sub_client-1")).toMatchObject({ total: 1, unavailable: true })
+    expect(h.storedNotices().map((notice) => notice.sessionID)).toEqual(["ses_keep"])
+  })
+
+  test("a failing read of the store answers internal_error, leaves the opt-in unset, and never claims a page", async () => {
+    const h = harness({ noticeStore: (store) => ({ ...store, page: () => { throw new Error("storage unavailable") } }) })
+    await attachBoth(h)
+    await subscribe(h, "client-1")
+    expect(responseTo(h, "client-1", "sub_client-1")).toEqual({
+      type: "response", id: "sub_client-1", ok: false, error: { code: "internal_error", message: "Notification storage is unavailable" },
+    })
+    expect(h.storedNoticeSubscriptions.get("client-1")).toBeUndefined()
+    await list(h, "client-1", "ntc_5", "listed")
+    expect(responseTo(h, "client-1", "listed")).toMatchObject({ ok: false, error: { code: "internal_error" } })
+    expect(h.closed).toEqual([])
+  })
+
+  test("read and clear failures answer internal_error without removing or announcing anything", async () => {
+    const h = harness({ noticeStore: (store) => ({ ...store,
+      remove: () => { throw new Error("storage unavailable") },
+      clear: () => { throw new Error("storage unavailable") } }) })
+    await attachBoth(h)
+    await h.relay.attach(client("client-2", "sess-2"))
+    await status(h, ["ses_a"], [])
+    await status(h, [], [])
+    await subscribe(h, "client-2")
+    h.reset()
+    await readIDs(h, "client-1", ["ntc_1"], "read")
+    await h.relay.handleClientMessage("client-1", request("all", "notice.readAll"))
+    expect(responseTo(h, "client-1", "read")).toMatchObject({ ok: false, error: { code: "internal_error" } })
+    expect(responseTo(h, "client-1", "all")).toMatchObject({ ok: false, error: { code: "internal_error" } })
+    expect(h.noticeFramesTo("client-2")).toEqual([])
+    expect(h.storedNotices()).toHaveLength(1)
+  })
+
+  test("a subscribe page read while other clients mutate the log reflects one consistent state", async () => {
+    const h = harness({ withoutPush: true })
+    await attachBoth(h)
+    await h.relay.attach(client("client-2", "sess-2"))
+    await status(h, [], [])
+    await status(h, [], attention(3))
+    const gate = deferred()
+    let gated = true
+    h.setClientAuthorityRead(async () => {
+      if (gated) {
+        gated = false
+        await gate.promise
+      }
+      return { ok: true }
+    })
+    const pending = subscribe(h, "client-1")
+    await status(h, [], [...attention(3), "ses_late"])
+    await readIDs(h, "client-2", ["ntc_1"])
+    await h.relay.handleClientMessage("client-2", request("all", "notice.readAll"))
+    await status(h, [], [])
+    await status(h, [], ["ses_after"])
+    gate.resolve()
+    await pending
+    const page = pageOf(h, "client-1", "sub_client-1")
+    expect(page.notices.map((notice) => notice.sessionID)).toEqual(["ses_after"])
+    expect(page.total).toBe(1)
+    expect(h.noticeFramesTo("client-1")).toEqual([])
+    await status(h, [], [])
+    await status(h, [], ["ses_next"])
+    expect(added(h, "client-1").map((notice) => notice.sessionID)).toEqual(["ses_next"])
+    expect(h.noticeFramesTo("client-1").at(-1)).toMatchObject({ total: 2 })
+  })
+
+  test("an in-flight page read on one client cannot see a removal or clear that ran before it and is followed by the frames that ran after it", async () => {
+    const h = harness({ withoutPush: true })
+    await attachBoth(h)
+    await h.relay.attach(client("client-2", "sess-2"))
+    await status(h, [], [])
+    await status(h, [], attention(60))
+    await subscribe(h, "client-1")
+    const first = pageOf(h, "client-1", "sub_client-1")
+    h.reset()
+    const gate = deferred()
+    let gated = true
+    h.setClientAuthorityRead(async () => {
+      if (gated) {
+        gated = false
+        await gate.promise
+      }
+      return { ok: true }
+    })
+    const pending = list(h, "client-1", first.next ?? "", "older")
+    await readIDs(h, "client-2", ["ntc_5", "ntc_6"])
+    gate.resolve()
+    await pending
+    const page = pageOf(h, "client-1", "older")
+    expect(page.notices.map((notice) => notice.id)).not.toContain("ntc_5")
+    expect(page.notices.map((notice) => notice.id)).not.toContain("ntc_6")
+    expect(page.total).toBe(58)
+    const order = h.messagesTo("client-1").map((message) => (message.type === "response" ? "response" : message.type))
+    expect(order).toEqual(["notice.removed", "response"])
+    await h.relay.handleClientMessage("client-2", request("all", "notice.readAll"))
+    expect(h.messagesTo("client-1").at(-1)).toEqual({ type: "notice.cleared" })
+  })
+})
+
+describe("relay core: machine offline confirmation", () => {
+  const offline = (offlineAt: number) => ({ accountID: "usr_1", category: "machine-offline", deviceID: "dev_1", offlineAt })
+
+  test("an agent absent for the whole confirmation window raises one Machine offline push; a browser leaving raises none", async () => {
+    const h = harness()
+    await attachBoth(h)
+    h.relay.detach("client-1")
+    h.advance(RemoteLimits.agentOfflineConfirmMs)
+    await h.relay.confirmOffline()
+    expect(h.pushed).toEqual([])
+    const closedAt = h.at()
+    await h.relay.agentClosed(agent("agent-1"))
+    expect(h.relay.nextDeadline()).toBe(closedAt + RemoteLimits.agentOfflineConfirmMs)
+    h.advance(RemoteLimits.agentOfflineConfirmMs - 1)
+    await h.relay.confirmOffline()
+    expect(h.pushed).toEqual([])
+    h.advance(1)
+    await h.relay.confirmOffline()
+    expect(h.pushed).toEqual([offline(closedAt)])
+    expect(h.storedOffline()).toBeUndefined()
+    h.advance(RemoteLimits.agentOfflineConfirmMs)
+    await h.relay.confirmOffline()
+    expect(h.pushed).toEqual([offline(closedAt)])
+  })
+
+  test("each confirmed outage reaches notice-subscribed browsers and the push with the same persisted close time", async () => {
+    const h = harness()
+    await h.relay.attach(agent("agent-1"))
+    await h.relay.attach(client("client-1", "sess-1", true))
+    await h.relay.attach(client("client-2", "sess-2"))
+    const firstClose = h.at()
+    await h.relay.agentClosed(agent("agent-1"))
+    h.advance(RemoteLimits.agentOfflineConfirmMs)
+    await h.relay.confirmOffline()
+    await h.relay.attach(agent("agent-2"))
+    h.advance(1_000)
+    const secondClose = h.at()
+    await h.relay.agentClosed(agent("agent-2"))
+    h.advance(RemoteLimits.agentOfflineConfirmMs)
+    await h.relay.confirmOffline()
+    expect(h.pushed).toEqual([offline(firstClose), offline(secondClose)])
+    expect(h.noticeFramesTo("client-1")).toEqual([{ type: "notice.offline", at: firstClose }, { type: "notice.offline", at: secondClose }])
+    expect(h.noticeFramesTo("client-2")).toEqual([])
+  })
+
+  test("a reconnect inside the window, like a routine credential rotation, cancels the pending alert", async () => {
+    const h = harness()
+    await h.relay.attach(agent("agent-1"))
+    await h.relay.agentClosed(agent("agent-1"))
+    h.advance(5_000)
+    await h.relay.attach(agent("agent-2"))
+    expect(h.storedOffline()).toBeUndefined()
+    h.advance(RemoteLimits.agentOfflineConfirmMs)
+    await h.relay.confirmOffline()
+    expect(h.pushed).toEqual([])
+  })
+
+  test("a replaced agent's late close never counts as the machine going offline", async () => {
+    const h = harness()
+    await h.relay.attach(agent("agent-1"))
+    await h.relay.attach(agent("agent-2"))
+    await h.relay.agentClosed(agent("agent-1"))
+    expect(h.storedOffline()).toBeUndefined()
+    h.advance(RemoteLimits.agentOfflineConfirmMs)
+    await h.relay.confirmOffline()
+    expect(h.pushed).toEqual([])
+  })
+
+  test("the pending check survives hibernation, and a close delivered after a wake still counts", async () => {
+    const offlineStore: { value?: OfflineCheck } = {}
+    const first = harness({ offlineStore })
+    await first.relay.attach(agent("agent-1"))
+    const closedAt = first.at()
+    await first.relay.agentClosed(agent("agent-1"))
+    const woken = harness({ offlineStore })
+    await woken.relay.restore([])
+    expect(woken.relay.nextDeadline()).toBe(closedAt + RemoteLimits.agentOfflineConfirmMs)
+    woken.advance(RemoteLimits.agentOfflineConfirmMs)
+    await woken.relay.confirmOffline()
+    expect(woken.pushed).toEqual([offline(closedAt)])
+
+    const later = harness({ offlineStore })
+    await later.relay.restore([])
+    await later.relay.agentClosed(agent("agent-9"))
+    later.advance(RemoteLimits.agentOfflineConfirmMs)
+    await later.relay.confirmOffline()
+    expect(later.pushed).toEqual([offline(closedAt)])
+  })
+
+  test("a revoked device never reports offline even after its agent socket closes", async () => {
+    const h = harness()
+    await h.relay.attach(agent("agent-1"))
+    h.relay.closeDevice()
+    await h.relay.agentClosed(agent("agent-1"))
+    h.setAgentAuthority({ ok: false, reason: "revoked_device" })
+    h.advance(RemoteLimits.agentOfflineConfirmMs)
+    await h.relay.confirmOffline()
+    expect(h.pushed).toEqual([])
+    expect(h.storedOffline()).toBeUndefined()
+  })
+
+  test("a failed authority read keeps the pending check, so the alarm retry still alerts exactly once", async () => {
+    const h = harness()
+    await h.relay.attach(agent("agent-1"))
+    const closedAt = h.at()
+    await h.relay.agentClosed(agent("agent-1"))
+    let reads = 0
+    h.setAgentAuthorityRead(async () => {
+      reads += 1
+      if (reads === 1) throw new Error("D1 unavailable")
+      return { ok: true }
+    })
+    h.advance(RemoteLimits.agentOfflineConfirmMs)
+    await expect(h.relay.confirmOffline()).rejects.toThrow("D1 unavailable")
+    expect(h.storedOffline()).toMatchObject({ deviceID: "dev_1", closedAt })
+    expect(h.relay.nextDeadline()).toBe(closedAt + RemoteLimits.agentOfflineConfirmMs)
+    await h.relay.confirmOffline()
+    await h.relay.confirmOffline()
+    expect(h.pushed).toEqual([offline(closedAt)])
+    expect(h.storedOffline()).toBeUndefined()
+  })
+
+  test("an agent that attaches while the authority read is pending cancels the alert, and overlapping confirmations alert once", async () => {
+    const h = harness()
+    await h.relay.attach(agent("agent-1"))
+    await h.relay.agentClosed(agent("agent-1"))
+    h.advance(RemoteLimits.agentOfflineConfirmMs)
+    const gate = Promise.withResolvers<Authority>()
+    h.setAgentAuthorityRead(() => gate.promise)
+    const pending = h.relay.confirmOffline()
+    h.setAgentAuthorityRead(async () => ({ ok: true }))
+    await h.relay.attach(agent("agent-2"))
+    gate.resolve({ ok: true })
+    await pending
+    expect(h.pushed).toEqual([])
+    expect(h.storedOffline()).toBeUndefined()
+
+    const closedAt = h.at()
+    await h.relay.agentClosed(agent("agent-2"))
+    h.advance(RemoteLimits.agentOfflineConfirmMs)
+    const slow = Promise.withResolvers<Authority>()
+    h.setAgentAuthorityRead(() => slow.promise)
+    const overlapping = [h.relay.confirmOffline(), h.relay.confirmOffline()]
+    slow.resolve({ ok: true })
+    await Promise.all(overlapping)
+    expect(h.pushed).toEqual([offline(closedAt)])
   })
 })

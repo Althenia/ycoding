@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import type { RemoteNoticeFrame } from "@ycoding-ai/remote"
 import { canReplyToRequest, sessionStatusLabel, visibleTranscriptMessages } from "../src/remote/projection"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore, readSessionInfo, type RemoteStore } from "../src/remote/store"
@@ -92,6 +93,7 @@ type FakeSocket = {
   readonly sessions: (sessionIDs: readonly string[]) => void
   readonly event: (sessionID: string, event: unknown) => void
   readonly statusFrame: (running: readonly string[], attention: readonly string[]) => void
+  readonly notices: (frame: RemoteNoticeFrame) => void
   readonly reconnect: () => void
   readonly unsubscribes: string[]
 }
@@ -126,6 +128,7 @@ async function fakeConnectionHarness() {
         sessions: (_sessionIDs) => handlers.onSessions?.(),
         event: (sessionID, event) => handlers.onEvent?.(sessionID, event),
         statusFrame: (running, attention) => handlers.onSessionStatus?.({ running, attention }),
+        notices: (frame) => handlers.onNotices?.(frame),
         reconnect: () => handlers.onReconnect?.(),
         unsubscribes: [],
       }
@@ -150,6 +153,7 @@ async function fakeConnectionHarness() {
               },
             }
           }
+          if (operation === "notice.subscribe") return { status: "ok", value: { notices: [], total: 0, unavailable: false } }
           if (operation === "session.list") return { status: "ok", value: { data: [] } }
           if (operation === "session.active") return { status: "ok", value: { data: {} } }
           return { status: "ok", value: { data: {} } }
@@ -448,7 +452,7 @@ describe("remote store integration", () => {
       expect(test.store.state().sessionFilter).toBe("all")
       expect(test.store.state().sessions.map((session) => session.id)).toEqual(["ses_a"])
       test.store.searchSessions("no match", "idle")
-      await test.runUntil(() => test.store.state().sessionListStatus === "ready" && test.store.state().sessionQuery === "no match")
+      await test.runUntil(() => test.store.state().sessionListStatus === "ready" && test.store.state().sessionQuery === "no match", 700)
       void test.store.selectSession("ses_b")
       await test.runUntil(() => test.store.state().selectedWorkspaceID === "wsp_other" && test.store.state().sessionListStatus === "ready", 500)
       expect(test.store.state().sessionQuery).toBe("")
@@ -854,7 +858,7 @@ describe("remote store integration", () => {
     } finally { await test.stop() }
   })
 
-  test("notifies once per selected machine offline transition reported by the open relay", async () => {
+  test("a read that finds no agent shows the machine offline silently; each relay-confirmed outage alerts once", async () => {
     let agent = "present"
     const test = await harness({ handler: () =>
       agent === "gone" ? { ok: false, code: "agent_unavailable", message: "No local agent is connected" } : "default" })
@@ -865,21 +869,27 @@ describe("remote store integration", () => {
       agent = "gone"
       test.relay.pushSessions([])
       await test.runUntil(() => test.store.state().connection.kind === "offline")
-      expect(notices()).toHaveLength(1)
-      const firstID = notices()[0]!.id
+      expect(notices()).toEqual([])
+      test.relay.pushNotices({ type: "notice.offline", at: 5_000 })
+      await test.runUntil(() => notices().length === 1)
+      expect(notices()).toMatchObject([{ id: "offline_dev_1_5000", at: 5_000, synced: false, live: true }])
+      test.relay.pushNotices({ type: "notice.offline", at: 5_000 })
       test.relay.pushSessions([])
       await test.runUntil(() => test.store.state().sessionListStatus === "error")
-      expect(notices().map((entry) => entry.id)).toEqual([firstID])
+      expect(notices().map((entry) => entry.id)).toEqual(["offline_dev_1_5000"])
       test.relay.dropConnections(1012, "Relay restarted")
       await test.runUntil(() => test.relay.connections >= 2 && test.store.state().connection.kind === "offline")
-      expect(notices().map((entry) => entry.id)).toEqual([firstID])
+      expect(notices().map((entry) => entry.id)).toEqual(["offline_dev_1_5000"])
       agent = "present"
       test.relay.pushSessions([])
       await test.runUntil(() => test.store.state().connection.kind === "connected")
       agent = "gone"
       test.relay.pushSessions([])
-      await test.runUntil(() => test.store.state().connection.kind === "offline" && notices().length === 2)
-      expect(notices()).toHaveLength(2)
+      await test.runUntil(() => test.store.state().connection.kind === "offline")
+      expect(notices()).toHaveLength(1)
+      test.relay.pushNotices({ type: "notice.offline", at: 9_000 })
+      await test.runUntil(() => notices().length === 2)
+      expect(notices().map((entry) => entry.id)).toEqual(["offline_dev_1_9000", "offline_dev_1_5000"])
     } finally { await test.stop() }
   })
 
@@ -894,14 +904,15 @@ describe("remote store integration", () => {
       agent = "gone"
       test.relay.pushSessions([])
       await test.runUntil(() => test.store.state().connection.kind === "offline")
-      expect(notices()).toHaveLength(1)
+      test.relay.pushNotices({ type: "notice.offline", at: 5_000 })
+      await test.runUntil(() => notices().length === 1)
       const id = notices()[0]!.id
       test.relay.setMe({ user: { id: "user_1" }, session: { expiresAt: 4_102_444_800_000 },
         devices: [{ id: "dev_1", name: "Studio Mac", createdAt: 1, status: "active", online: false }] })
       await test.store.load()
       expect(notices().map((entry) => entry.id)).toEqual([id])
-      test.store.markNotificationsRead()
-      expect(notices()[0]?.read).toBe(true)
+      await test.store.readNotification(id)
+      expect(notices()).toEqual([])
     } finally { await test.stop() }
   })
 
@@ -1014,11 +1025,9 @@ describe("remote store integration", () => {
       expect(test.store.state().connection).toEqual({ kind: "offline", deviceName: "Studio Mac" })
       expect(test.store.state().activeDeviceID).toBe("dev_1")
       expect(test.store.state().sessions.map((session) => session.id)).toEqual(["ses_a", "ses_b"])
-      const offlineNotices = test.store.state().notifications.filter((entry) => entry.category === "machine-offline")
-      expect(offlineNotices).toHaveLength(1)
+      expect(test.store.state().notifications.filter((entry) => entry.category === "machine-offline")).toEqual([])
       await test.store.load()
-      expect(test.store.state().notifications.filter((entry) => entry.category === "machine-offline").map((entry) => entry.id))
-        .toEqual(offlineNotices.map((entry) => entry.id))
+      expect(test.store.state().notifications.filter((entry) => entry.category === "machine-offline")).toEqual([])
       test.store.searchSessions("no match")
       expect(test.store.state().sessions.map((session) => session.id)).toEqual(["ses_a", "ses_b"])
     } finally {
@@ -1625,6 +1634,8 @@ describe("remote store integration", () => {
       await test.flush()
       expect(alertCategories()).toEqual([])
       test.sockets[0]?.statusFrame([], [])
+      expect(alertCategories()).toEqual([])
+      test.sockets[0]?.notices({ type: "notice.added", notices: [{ id: "ntc_1", category: "agent-completed", sessionID: "ses_a", createdAt: 1 }], total: 1 })
       expect(alertCategories()).toEqual(["agent-completed"])
 
       // The device switch replaces the socket, so the alerts it raised end with it.
@@ -1637,6 +1648,8 @@ describe("remote store integration", () => {
       await test.flush()
       expect(alertCategories()).toEqual([])
       test.sockets[1]?.statusFrame([], [])
+      expect(alertCategories()).toEqual([])
+      test.sockets[1]?.notices({ type: "notice.added", notices: [{ id: "ntc_2", category: "agent-completed", sessionID: "ses_a", createdAt: 2 }], total: 1 })
       expect(alertCategories()).toEqual(["agent-completed"])
 
       // A late 4401 from the replaced socket must not sign the browser out or end

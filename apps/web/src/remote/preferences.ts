@@ -1,3 +1,4 @@
+import type { PushCategories } from "@ycoding-ai/remote"
 import { browserStorage, readStored, writeStored, type StorageLike } from "../lib/storage"
 import type { CatalogView } from "./catalog"
 import type { ModelRefView } from "./projection"
@@ -28,7 +29,7 @@ export const NOTIFICATION_STORAGE_KEY = "ycoding.notifications"
 export const NOTIFICATION_CATEGORIES = [
   { id: "agent-completed", label: "Work finished", detail: "Get notified when a Session and everything it started, including subagents, shells and goals, has finished. Useful for long-running work." },
   { id: "approval-requested", label: "Needs your attention", detail: "Get notified when a Session needs your decision, a guardrail blocks an action, or a run fails." },
-  { id: "machine-offline", label: "Machine offline", detail: "Get notified when the selected paired machine stops reporting while YCoding is open." },
+  { id: "machine-offline", label: "Machine offline", detail: "Get notified when a paired machine stops reporting." },
 ] as const
 
 export type NotificationCategory = (typeof NOTIFICATION_CATEGORIES)[number]["id"]
@@ -82,6 +83,14 @@ export function toggleNotificationChannel(
   return {
     ...preferences,
     [category]: { ...preferences[category], [channel]: !preferences[category][channel] },
+  }
+}
+
+export function pushCategoriesFor(preferences: NotificationPreferences): PushCategories {
+  return {
+    "agent-completed": preferences["agent-completed"].desktop,
+    "approval-requested": preferences["approval-requested"].desktop,
+    "machine-offline": preferences["machine-offline"].desktop,
   }
 }
 

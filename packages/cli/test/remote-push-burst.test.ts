@@ -1,5 +1,7 @@
+import { Database } from "bun:sqlite"
 import { expect, test } from "bun:test"
 import { createRelay } from "../../../infra/cloudflare/src/relay/core"
+import { createNoticeStore } from "../../../infra/cloudflare/src/relay/notice-store"
 import { sendPushToOwner } from "../../../infra/cloudflare/src/push/send"
 import { base64UrlEncode } from "../../../infra/cloudflare/src/auth/crypto"
 import { RemoteAgent, type ConnectionInput } from "../src/remote-bridge"
@@ -25,7 +27,8 @@ test("a fast 2355-delta provider stream with several subscribers preserves the s
   const privateKey = (await crypto.subtle.exportKey("jwk", vapid.privateKey)).d ?? ""
   const subscription = { endpoint: "https://fcm.googleapis.com/fcm/send/burst-test", accountID: "usr_1",
     keys: { p256dh: base64UrlEncode(new Uint8Array(await crypto.subtle.exportKey("raw", receiver.publicKey))),
-      auth: base64UrlEncode(crypto.getRandomValues(new Uint8Array(16))) }, createdAt: 1, failures: 0 }
+      auth: base64UrlEncode(crypto.getRandomValues(new Uint8Array(16))) },
+    categories: { "agent-completed": true, "approval-requested": true, "machine-offline": true }, createdAt: 1, failures: 0 }
   const clientEvents = [0, 0, 0]
   let stream: LocalEventStream | undefined
   let running = true
@@ -34,6 +37,7 @@ test("a fast 2355-delta provider stream with several subscribers preserves the s
   let status: { type: "status"; running: string[]; attention: string[]; outstanding?: string[] } | undefined
   let input: ConnectionInput | undefined
   let connected = false
+  const database = new Database(":memory:")
   const relay = createRelay({
     now: Date.now,
     newID: () => crypto.randomUUID(),
@@ -49,7 +53,11 @@ test("a fast 2355-delta provider stream with several subscribers preserves the s
       input?.onClose(code, reason)
     },
     saveSubscriptions: () => {}, savePending: () => {},
+    notices: createNoticeStore({ exec: (query, ...bindings) => ({ toArray: () => database.prepare(query).all(...(bindings as never[])) }) }),
+    saveNoticeSubscription: () => {},
     loadStatus: async () => status,
+    loadOfflineCheck: async () => undefined,
+    saveOfflineCheck: async () => {},
     saveStatus: async (value) => { status = { type: "status", running: [...value.running], attention: [...value.attention],
       ...(value.outstanding === undefined ? {} : { outstanding: [...value.outstanding] }) } },
     authorizeClientCommand: async () => ({ ok: true }),
@@ -58,7 +66,8 @@ test("a fast 2355-delta provider stream with several subscribers preserves the s
     notifyPush: (accountID, event) => {
       pushes.push(event.category)
       pushSends.push(sendPushToOwner({
-        store: { list: async () => [subscription], upsert: async () => {}, remove: async () => {}, recordFailure: async () => {} },
+        store: { list: async () => [subscription], upsert: async () => {}, renew: async () => false, remove: async () => {},
+          claimTest: async () => ({ status: "missing" }), recordFailure: async () => {} },
         accountID, event, publicKey, privateKey, subject: "mailto:push@example.invalid", now: Date.now,
         fetch: Object.assign(async (url: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {
           pushRequests.push(new Request(url, init))
@@ -83,7 +92,7 @@ test("a fast 2355-delta provider stream with several subscribers preserves the s
       input = value
       return {
         connect: async () => {
-          await relay.attach({ connectionID: "agent", role: "agent", ownerID: "usr_1", deviceID: "dev_1", browserSessionID: "dev_1", credentialExpiresAt: Date.now() + 300_000, subscriptions: [], pending: [] })
+          await relay.attach({ connectionID: "agent", role: "agent", ownerID: "usr_1", deviceID: "dev_1", browserSessionID: "dev_1", credentialExpiresAt: Date.now() + 300_000, subscriptions: [], noticesSubscribed: false, pending: [] })
           connected = true
           value.onOpen()
         },
@@ -100,7 +109,7 @@ test("a fast 2355-delta provider stream with several subscribers preserves the s
     await bridge.connect()
     await until(() => status?.running.includes(sessionID) === true && stream !== undefined)
     for (let index = 0; index < clientEvents.length; index++)
-      await relay.attach({ connectionID: `client-${index}`, role: "client", ownerID: "usr_1", deviceID: "dev_1", browserSessionID: `bs_${index}`, credentialExpiresAt: Date.now() + 300_000, subscriptions: [sessionID], pending: [] })
+      await relay.attach({ connectionID: `client-${index}`, role: "client", ownerID: "usr_1", deviceID: "dev_1", browserSessionID: `bs_${index}`, credentialExpiresAt: Date.now() + 300_000, subscriptions: [sessionID], noticesSubscribed: false, pending: [] })
     const deltas = 2_355
     for (let index = 0; index < deltas; index++)
       stream?.onEvent({ type: "message.part.updated", data: { sessionID, index, text: "x" } })

@@ -1,16 +1,17 @@
 import { describe, expect, test } from "bun:test"
-import { enqueueToasts, groupNotifications, notificationAge, newlyAddedNotifications } from "./notifications"
+import { NOTICE_WINDOW } from "../notifications"
+import { enqueueToasts, groupNotifications, noticeCenterView, notificationAge, newlyAddedNotifications } from "./notifications"
 import type { RemoteNotificationView } from "../notifications"
 
 const today = new Date(2026, 8, 27, 12).getTime()
-const notice = (id: string, at: number, read = false): RemoteNotificationView => ({
-  id, at, read, category: "approval-requested", title: "YCoding — needs your attention", body: "A session is waiting for you.",
+const notice = (id: string, at: number, live = true): RemoteNotificationView => ({
+  id, at, synced: true, live, category: "approval-requested", title: "YCoding — needs your attention", body: "A session is waiting for you.",
   sessionID: "ses_a", sessionTitle: "Alpha",
 })
 
 describe("notification presentation", () => {
-  test("groups ordered entries by calendar day without changing read state or identity", () => {
-    const entries = [notice("today", today), notice("yesterday", new Date(2026, 8, 26, 23).getTime(), true), notice("older", new Date(2026, 8, 20).getTime())]
+  test("groups ordered entries by calendar day without changing identity", () => {
+    const entries = [notice("today", today), notice("yesterday", new Date(2026, 8, 26, 23).getTime()), notice("older", new Date(2026, 8, 20).getTime())]
     const groups = groupNotifications(entries, today)
     expect(groups.map((group) => group.label).slice(0, 2)).toEqual(["Today", "Yesterday"])
     expect(groups.map((group) => group.items.map((item) => item.id))).toEqual([["today"], ["yesterday"], ["older"]])
@@ -20,10 +21,9 @@ describe("notification presentation", () => {
   test("keeps notice IDs and day groups stable across re-reads and minute updates", () => {
     const entries = [notice("first", today - 3 * 60_000), notice("second", today - 8 * 60_000)]
     const before = groupNotifications(entries, today)
-    const after = groupNotifications(entries.map((entry) => ({ ...entry, read: true })), today + 60_000)
+    const after = groupNotifications(entries, today + 60_000)
     expect(after.map((group) => group.label)).toEqual(before.map((group) => group.label))
     expect(after.flatMap((group) => group.items.map((entry) => entry.id))).toEqual(["first", "second"])
-    expect(after[0]?.items.every((entry) => entry.read)).toBe(true)
   })
 
   test("uses short relative labels before calendar dates and clamps future timestamps", () => {
@@ -41,6 +41,33 @@ describe("notification presentation", () => {
     expect(newlyAddedNotifications(seen, added).map((item) => item.id)).toEqual(["four", "three", "two", "one"])
     expect(enqueueToasts([notice("prior", today)], added.slice(0, 4)).map((item) => item.id)).toEqual(["four", "three", "two"])
     expect(enqueueToasts(added.slice(0, 3), [added[0]!]).map((item) => item.id)).toEqual(["four", "three", "two"])
+  })
+
+  test("an entry restored from a relay snapshot never enters the toast queue", () => {
+    const seen = new Set<string>()
+    const entries = [notice("live", today), notice("snapshot", today - 1, false)]
+    expect(newlyAddedNotifications(seen, entries).map((item) => item.id)).toEqual(["live"])
+  })
+
+  test("counts every stored unread notice even when its in-app category is muted", () => {
+    const sync = { status: "ready", total: 7, loaded: 3, hidden: 1, loadingMore: false, message: undefined } as const
+    const local = { ...notice("local", today), synced: false }
+    expect(noticeCenterView(sync, [notice("a", today), local])).toMatchObject({ unread: 8, badge: "8", label: "Notifications, 8 unread", failed: false })
+    expect(noticeCenterView({ ...sync, total: 12 }, [])).toMatchObject({ unread: 12, badge: "9+" })
+    expect(noticeCenterView({ ...sync, total: 0, loaded: 0, hidden: 0 }, [])).toMatchObject({ unread: 0, badge: "", label: "Notifications" })
+  })
+
+  test("offers Load more while older relay notices remain and the window has room, then states the cap", () => {
+    const sync = { status: "ready", total: 90, loaded: 50, hidden: 0, loadingMore: false, message: undefined } as const
+    expect(noticeCenterView(sync, [])).toMatchObject({ hasMore: true, capped: false, remaining: 40 })
+    expect(noticeCenterView({ ...sync, loaded: 90 }, [])).toMatchObject({ hasMore: false, capped: false, remaining: 0 })
+    expect(noticeCenterView({ ...sync, total: NOTICE_WINDOW + 5, loaded: NOTICE_WINDOW }, [])).toMatchObject({ hasMore: false, capped: true, remaining: 5 })
+  })
+
+  test("a sync error is never displayed as synced: the badge, label, and failure flag all say so", () => {
+    const sync = { status: "error", total: 0, loaded: 0, hidden: 0, loadingMore: false, message: "Notifications: unavailable" } as const
+    expect(noticeCenterView(sync, [])).toMatchObject({ failed: true, badge: "!", label: "Notifications, sync unavailable" })
+    expect(noticeCenterView({ ...sync, total: 2, loaded: 2 }, [])).toMatchObject({ failed: true, badge: "!", label: "Notifications, 2 unread, sync unavailable" })
   })
 
   test("reduces notification motion through the global reduced-motion rule", async () => {

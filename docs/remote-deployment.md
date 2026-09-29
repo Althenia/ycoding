@@ -36,7 +36,7 @@ curl -fsS 'https://ycoding.althenia.app/api/admin/invites' -H "Authorization: Be
 curl -fsS -X DELETE 'https://ycoding.althenia.app/api/admin/invites/<invite-id>' -H "Authorization: Bearer $YCODING_ADMIN_API_KEY"
 ```
 
-Web Push uses one VAPID key pair. Generate it locally with `bun infra/cloudflare/script/vapid-keys.ts`, keep the private value private, and set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` (an operator-owned `mailto:` or `https:` URI) as Worker secrets. While any of them is missing or invalid, `GET /api/push/key` answers `503`, browsers report push as unavailable, and the relay sends no pushes. Rotating the pair invalidates existing browser subscriptions until each browser subscribes again. Apply `0002_push.sql` with the migration procedure below before deploying a Worker that stores subscriptions; the release workflow builds and deploys but does not apply D1 migrations.
+Web Push uses one VAPID key pair. Generate it locally with `bun infra/cloudflare/script/vapid-keys.ts`, keep the private value private, and set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` (an operator-owned `mailto:` or `https:` URI) as Worker secrets. While any of them is missing or invalid, `GET /api/push/key` answers `503`, browsers report push as unavailable, and the relay sends no pushes. Rotating the pair invalidates existing browser subscriptions until each browser subscribes again. Apply `0002_push.sql` and `0004_push_categories.sql` with the migration procedure below before deploying a Worker that stores subscriptions; the release workflow builds and deploys but does not apply D1 migrations. `0004_push_categories.sql` adds each subscription's System categories and last test-alert time; it keeps every existing row and enables all three categories on it until that browser next registers its own choices.
 
 Commands below run from the repository root and target the committed configuration with `--config infra/cloudflare/wrangler.jsonc`. Wrangler is pinned to 4.133.0; `bunx wrangler` resolves that local version.
 
@@ -60,7 +60,7 @@ Authenticated `GET /api/devices` and `GET /api/me` return each retained device w
 | `device_credential`              | Hashed access and refresh credentials with expiry and revocation markers.                                      |
 | `enrollment`, `device_challenge` | Short-lived, single-use enrollment and challenge rows.                                                         |
 | `oauth_transaction`              | Google OIDC transaction state, nonce, code verifier, and redirect target.                                      |
-| `push_subscription`              | Web Push endpoint, owning account, the browser's P-256 and auth keys, creation time, and a failure count.      |
+| `push_subscription`              | Web Push endpoint, owning account, the browser's P-256 and auth keys, creation time, a failure count, the three System category choices, and the last test-alert time. |
 | `invite`                         | Invite ID, optional label, dates, user ID after redemption, and SHA-256 hashes of the invite token and access key; neither secret is stored. |
 
 Single-use rows contain plaintext values required by the protocol: `oauth_transaction.nonce` and `code_verifier` (10-minute lifetime) and `device_challenge.nonce` (2-minute lifetime). The OAuth nonce travels in the Google authorization redirect; the verifier stays server-side. The device challenge nonce is returned to the enrolling agent. Do not log these values.

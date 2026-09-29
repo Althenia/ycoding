@@ -1,3 +1,4 @@
+import { noticeSequence } from "@ycoding-ai/remote"
 import { readNotificationPreferences, type NotificationCategory, type NotificationPreferences } from "./preferences"
 
 export type RemoteNotificationView = {
@@ -8,7 +9,19 @@ export type RemoteNotificationView = {
   readonly at: number
   readonly sessionID?: string
   readonly sessionTitle?: string
-  readonly read: boolean
+  readonly synced: boolean
+  readonly live: boolean
+}
+
+export const NOTICE_WINDOW = 200
+const LOCAL_LIMIT = 50
+
+export type SyncedNotice = {
+  readonly id: string
+  readonly category: NotificationCategory
+  readonly at: number
+  readonly sessionID: string
+  readonly sessionTitle?: string
 }
 
 /**
@@ -31,9 +44,6 @@ export function notificationCategory(payload: unknown): NotificationCategory | u
   const type = stringField(payload.type)
   if (type === undefined) return undefined
   switch (type) {
-    case "session.execution.failed":
-    case "session.step.failed":
-      return "approval-requested"
     case "guardrail.decided":
       return isBlockingDecision(payload.data.decision) ? "approval-requested" : undefined
     default:
@@ -71,7 +81,7 @@ export function createDesktopNotifier(registration: () => Promise<DesktopRegistr
       })).catch(() => undefined)
     },
     dispose: (retainMachineOffline = false) => {
-      const tags = new Set([...raised].filter((tag) => !retainMachineOffline || tag !== "ycoding-remote-machine-offline"))
+      const tags = new Set([...raised].filter((tag) => !retainMachineOffline || !/-offline-\d+$/.test(tag)))
       for (const tag of tags) raised.delete(tag)
       if (tags.size === 0) return
       void registration().then((worker) => worker?.getNotifications()).then((open) => {
@@ -97,11 +107,17 @@ export type NotificationDeliveryOptions = {
 
 export type NotificationDelivery = {
   readonly deliver: (category: NotificationCategory, context?: { readonly sessionID?: string; readonly sessionTitle?: string }) => void
+  readonly receive: (notice: SyncedNotice, deviceID: string) => void
+  readonly offline: (deviceID: string, at: number) => void
+  readonly replaceSynced: (notices: readonly SyncedNotice[]) => void
+  readonly appendSynced: (notices: readonly SyncedNotice[]) => void
   readonly entries: () => readonly RemoteNotificationView[]
+  readonly syncedLoaded: () => number
+  readonly syncedHidden: () => number
+  readonly oldestSynced: () => string | undefined
   readonly setSessionTitle: (sessionID: string, title: string) => boolean
-  readonly dismiss: (id: string) => void
-  readonly markRead: () => void
-  readonly clear: () => void
+  readonly remove: (ids: readonly string[]) => void
+  readonly clearSynced: () => void
   readonly dispose: (retainMachineOffline?: boolean) => void
 }
 
@@ -110,38 +126,89 @@ export function createNotificationDelivery(options: NotificationDeliveryOptions 
   const desktop = options.desktop ?? createDesktopNotifier()
   const now = options.now ?? (() => Date.now())
   let entries: readonly RemoteNotificationView[] = []
+  let hidden = new Set<string>()
   let nextID = 0
+
+  const alert = (category: NotificationCategory, sessionID?: string, tag = sessionID === undefined ? `ycoding-remote-${category}` : `ycoding-${sessionID}-${category}`) => {
+    if (!preferences()[category].desktop) return
+    desktop.show({ ...NOTIFICATION_TEXT[category], tag, ...(sessionID === undefined ? {} : { sessionID }) })
+  }
+  const view = (notice: { readonly id: string; readonly category: NotificationCategory; readonly at: number; readonly sessionID?: string; readonly sessionTitle?: string }, synced: boolean, live: boolean): RemoteNotificationView => ({
+    id: notice.id, category: notice.category, ...NOTIFICATION_TEXT[notice.category], at: notice.at, synced, live,
+    ...(notice.sessionID === undefined ? {} : { sessionID: notice.sessionID }),
+    ...(notice.sessionTitle === undefined ? {} : { sessionTitle: notice.sessionTitle }),
+  })
+  const listed = (category: NotificationCategory) => preferences()[category]["in-app"]
+  const sequence = (id: string) => noticeSequence(id) ?? 0
+  const newestFirst = (left: RemoteNotificationView, right: RemoteNotificationView) =>
+    right.at - left.at || (left.synced && right.synced ? sequence(right.id) - sequence(left.id) : 0)
+  const known = (id: string) => hidden.has(id) || entries.some((entry) => entry.id === id)
+  const bounded = (next: readonly RemoteNotificationView[]) => {
+    const ordered = [...next].sort(newestFirst)
+    const local = ordered.filter((entry) => !entry.synced).slice(0, LOCAL_LIMIT)
+    const synced = [...ordered.filter((entry) => entry.synced).map((entry) => entry.id), ...hidden].sort((left, right) => sequence(right) - sequence(left))
+    const kept = new Set(synced.slice(0, NOTICE_WINDOW))
+    hidden = new Set([...hidden].filter((id) => kept.has(id)))
+    entries = [...local, ...ordered.filter((entry) => entry.synced && kept.has(entry.id))].sort(newestFirst)
+  }
+  const admit = (notice: SyncedNotice, live: boolean) => {
+    if (known(notice.id)) return undefined
+    if (!listed(notice.category)) {
+      hidden.add(notice.id)
+      return undefined
+    }
+    return view(notice, true, live)
+  }
 
   return {
     deliver: (category, context) => {
-      const preference = preferences()[category]
-      if (preference.desktop) desktop.show({ ...NOTIFICATION_TEXT[category],
-        ...(context?.sessionID === undefined
-          ? { tag: `ycoding-remote-${category}` }
-          : { tag: `ycoding-${context.sessionID}-${category}`, sessionID: context.sessionID }) })
-      if (!preference["in-app"]) return
-      const text = NOTIFICATION_TEXT[category]
-      entries = [
-        { id: `notice_${++nextID}`, category, title: text.title, body: text.body, at: now(), read: false,
-          ...(context?.sessionID === undefined ? {} : { sessionID: context.sessionID }),
-          ...(context?.sessionTitle === undefined ? {} : { sessionTitle: context.sessionTitle }) },
-        ...entries,
-      ].slice(0, 50)
+      alert(category, context?.sessionID)
+      if (listed(category)) bounded([...entries, view({ id: `notice_${++nextID}`, category, at: now(), ...context }, false, true)])
+    },
+    offline: (deviceID, at) => {
+      const id = `offline_${deviceID}_${at}`
+      if (known(id)) return
+      alert("machine-offline", undefined, `ycoding-${deviceID}-offline-${at}`)
+      if (listed("machine-offline")) bounded([...entries, view({ id, category: "machine-offline", at }, false, true)])
+    },
+    receive: (notice, deviceID) => {
+      if (known(notice.id)) return
+      alert(notice.category, notice.sessionID, `ycoding-${deviceID}-${notice.id}`)
+      const entry = admit(notice, true)
+      bounded(entry === undefined ? entries : [...entries, entry])
+    },
+    replaceSynced: (notices) => {
+      hidden = new Set()
+      entries = entries.filter((entry) => !entry.synced)
+      const admitted = notices.flatMap((notice) => admit(notice, false) ?? [])
+      bounded([...entries, ...admitted])
+    },
+    appendSynced: (notices) => {
+      const admitted = notices.flatMap((notice) => admit(notice, false) ?? [])
+      bounded([...entries, ...admitted])
     },
     entries: () => entries,
+    syncedLoaded: () => entries.filter((entry) => entry.synced).length + hidden.size,
+    syncedHidden: () => hidden.size,
+    oldestSynced: () => [...entries.filter((entry) => entry.synced).map((entry) => entry.id), ...hidden]
+      .reduce<string | undefined>((oldest, id) => (oldest === undefined || sequence(id) < sequence(oldest) ? id : oldest), undefined),
     setSessionTitle: (sessionID, title) => {
       if (!entries.some((entry) => entry.sessionID === sessionID && entry.sessionTitle === undefined)) return false
       entries = entries.map((entry) => entry.sessionID === sessionID && entry.sessionTitle === undefined ? { ...entry, sessionTitle: title } : entry)
       return true
     },
-    dismiss: (id) => {
-      entries = entries.filter((entry) => entry.id !== id)
+    remove: (ids) => {
+      entries = entries.filter((entry) => !ids.includes(entry.id))
+      hidden = new Set([...hidden].filter((id) => !ids.includes(id)))
     },
-    markRead: () => { entries = entries.map((entry) => entry.read ? entry : { ...entry, read: true }) },
-    clear: () => { entries = [] },
+    clearSynced: () => {
+      entries = entries.filter((entry) => !entry.synced)
+      hidden = new Set()
+    },
     dispose: (retainMachineOffline = false) => {
       desktop.dispose(retainMachineOffline)
       entries = retainMachineOffline ? entries.filter((entry) => entry.category === "machine-offline") : []
+      hidden = new Set()
     },
   }
 }

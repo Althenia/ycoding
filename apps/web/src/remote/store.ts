@@ -1,4 +1,4 @@
-import { RemoteLimits, isWellFormedBase64, type CreateEnrollmentResponse, type RemoteDeviceInfo, type RemoteFamilyActivity, type RemoteOperation, type RemoteWorkspaceInfo } from "@ycoding-ai/remote"
+import { RemoteLimits, isWellFormedBase64, noticeSequence, type CreateEnrollmentResponse, type RemoteDeviceInfo, type RemoteFamilyActivity, parseNoticePage, type RemoteNotice, type RemoteNoticeFrame, type RemoteNoticePage, type RemoteOperation, type RemoteWorkspaceInfo } from "@ycoding-ai/remote"
 import { catalogKey, readCatalog, readFileFind, type AgentAttachmentInput, type CatalogTarget, type CatalogView, type FileAttachmentInput, type FileFindResult } from "./catalog"
 import { signInURL, type RemoteHttp, type RemoteHttpResult, type SignInProvider } from "./http"
 import {
@@ -220,7 +220,17 @@ export type RemoteStoreState = {
   readonly upload?: { readonly sessionID: string; readonly name: string; readonly percent: number }
   readonly uploadError?: string
   readonly notifications: readonly RemoteNotificationView[]
+  readonly noticeSync: NoticeSyncState
   readonly unhandledEvents: number
+}
+
+export type NoticeSyncState = {
+  readonly status: "idle" | "loading" | "ready" | "error"
+  readonly total: number
+  readonly loaded: number
+  readonly hidden: number
+  readonly loadingMore: boolean
+  readonly message: string | undefined
 }
 
 export type RemoteStoreOptions = {
@@ -287,9 +297,10 @@ export type RemoteStore = {
   readonly retryMutation: (id: string) => Promise<void>
   readonly dismissMutation: (id: string) => void
   readonly dismissMutationToast: (id: string) => void
-  readonly dismissNotification: (id: string) => void
-  readonly markNotificationsRead: () => void
-  readonly clearNotifications: () => void
+  readonly readNotification: (id: string) => Promise<void>
+  readonly readAllNotifications: () => Promise<void>
+  readonly loadMoreNotifications: () => Promise<void>
+  readonly reloadNotifications: () => Promise<void>
   readonly interrupt: () => Promise<void>
   readonly replyPermission: (id: string, reply: "once" | "always" | "reject") => Promise<void>
   readonly replyGuardrail: (id: string, reply: "once" | "always" | "reject") => Promise<void>
@@ -307,6 +318,9 @@ const sessionPageSize = 25
 const carouselLimit = 10
 const retainedSessionPages = 3
 const historyPageSize = 100
+const noticeTitleReads = 8
+const noticeUnavailableMessage = "Some notifications could not be saved. Stored unread notifications remain available."
+const noticeUnreadableMessage = "Notifications could not be read from the relay."
 
 /** One shell-output request reads at most the local default page; the device bounds it again. */
 const shellOutputPageLimit = 65_536
@@ -345,6 +359,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   const deviceName = options.deviceName ?? ((deviceID: string) => deviceID)
   const delivery = options.notificationDelivery ?? createNotificationDelivery()
   const notificationTitles = new Map<string, string | undefined>()
+  const activeNoticeTitleReads = new Set<string>()
+  let noticeFault = false
 
   let state: RemoteStoreState = {
     connection: { kind: "loading" },
@@ -370,6 +386,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     mutationToasts: [],
     teamCues: [],
     notifications: [],
+    noticeSync: { status: "idle", total: 0, loaded: 0, hidden: 0, loadingMore: false, message: undefined },
     transport: { kind: "idle" },
     unhandledEvents: 0,
   }
@@ -418,8 +435,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   const fileTokens = new Map<string, number>()
   let statusFrameRevision = 0
   let statusBaseline = false
-  let reconnectStatus: { readonly owner: RemoteTransport; readonly status: NonNullable<RemoteStoreState["sessionStatus"]> } | undefined
-  let reconnectingSameDevice = false
   let statusReloading = false
   let statusReloadLocal = false
   let carouselRefreshPending = false
@@ -506,35 +521,158 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
 
   const endAlerts = (retainMachineOffline = false) => {
     delivery.dispose(retainMachineOffline)
+    noticeFault = false
     if (!retainMachineOffline) notificationTitles.clear()
-    setState({ notifications: delivery.entries() })
+    activeNoticeTitleReads.clear()
+    setState({ notifications: delivery.entries(), noticeSync: { ...state.noticeSync, status: "idle", total: 0, loaded: 0, hidden: 0, loadingMore: false, message: undefined } })
   }
 
   const notifySession = (category: NotificationCategory, sessionID: string) => {
-    const title = notificationSessionTitle(state, sessionID) ?? notificationTitles.get(sessionID) ??
-      delivery.entries().find((entry) => entry.sessionID === sessionID)?.sessionTitle
+    delivery.deliver(category, { sessionID, ...titleOf(sessionID) })
+    resolveNoticeTitles()
+  }
+
+  const titleOf = (sessionID: string) => {
+    const title = notificationSessionTitle(state, sessionID) ?? notificationTitles.get(sessionID)
     if (title !== undefined) notificationTitles.set(sessionID, title)
-    delivery.deliver(category, { sessionID, ...(title === undefined ? {} : { sessionTitle: title }) })
-    if (title !== undefined || notificationTitles.has(sessionID) || !delivery.entries().some((entry) => entry.sessionID === sessionID && entry.sessionTitle === undefined)) return
+    return title === undefined ? {} : { sessionTitle: title }
+  }
+
+  const resolveNoticeTitles = () => {
     const owner = transport
+    const unresolved = [...new Set(delivery.entries().flatMap((entry) =>
+      entry.sessionID === undefined || entry.sessionTitle !== undefined ? [] : [entry.sessionID]))]
+    const resident = unresolved.filter((sessionID) => {
+      const title = titleOf(sessionID).sessionTitle
+      return title !== undefined && delivery.setSessionTitle(sessionID, title)
+    })
+    if (resident.length > 0) setState({ notifications: delivery.entries() })
     if (owner === undefined || !isCurrentConnection(owner)) return
-    notificationTitles.set(sessionID, undefined)
-    void owner.request("session.get", { sessionID, timeoutMs: 5_000 }).then((outcome) => {
-      if (!isCurrentConnection(owner) || outcome.status !== "ok") return
-      const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
-      const resolved = readSessionInfo(data)
-      if (resolved?.id !== sessionID) return
-      notificationTitles.set(sessionID, resolved.title)
-      if (delivery.setSessionTitle(sessionID, resolved.title)) setState({ notifications: delivery.entries() })
-    }, () => undefined)
+    for (const sessionID of unresolved.filter((id) => !resident.includes(id) && !notificationTitles.has(id)).slice(0, Math.max(0, noticeTitleReads - activeNoticeTitleReads.size))) {
+      notificationTitles.set(sessionID, undefined)
+      activeNoticeTitleReads.add(sessionID)
+      void owner.request("session.get", { sessionID, timeoutMs: 5_000 }).then((outcome) => {
+        if (!isCurrentConnection(owner)) return
+        activeNoticeTitleReads.delete(sessionID)
+        if (outcome.status !== "ok") { resolveNoticeTitles(); return }
+        const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
+        const resolved = readSessionInfo(data)
+        if (resolved?.id === sessionID) {
+          notificationTitles.set(sessionID, resolved.title)
+          if (delivery.setSessionTitle(sessionID, resolved.title)) setState({ notifications: delivery.entries() })
+        }
+        resolveNoticeTitles()
+      }, () => {
+        if (!isCurrentConnection(owner)) return
+        activeNoticeTitleReads.delete(sessionID)
+        resolveNoticeTitles()
+      })
+    }
+  }
+
+  const publishNotices = (patch: Partial<NoticeSyncState> = {}) => {
+    setState({ notifications: delivery.entries(),
+      noticeSync: { ...state.noticeSync, loaded: delivery.syncedLoaded(), hidden: delivery.syncedHidden(), ...patch } })
+  }
+
+  const failNoticeSync = (message: string) => {
+    publishNotices({ status: "error", loadingMore: false, message })
+    setState({ notice: message })
+  }
+
+  const withTitle = (notice: RemoteNotice) => ({ id: notice.id, category: notice.category, at: notice.createdAt, sessionID: notice.sessionID, ...titleOf(notice.sessionID) })
+
+  const readNoticePage = (outcome: RemoteRequestOutcome): { readonly page: RemoteNoticePage } | { readonly message: string } | { readonly lost: true } => {
+    if (outcome.status === "unknown" || (outcome.status === "unavailable" && outcome.reason === "not-connected")) return { lost: true }
+    if (outcome.status !== "ok") return { message: describeOutcome(outcome, "Notifications") }
+    const parsed = parseNoticePage(outcome.value)
+    return parsed.ok ? { page: parsed.value } : { message: noticeUnreadableMessage }
+  }
+
+  const noticeStatus = () => noticeFault ? "error" : "ready"
+
+  const applyNotices = (owner: RemoteTransport, frame: RemoteNoticeFrame) => {
+    if (!isCurrentConnection(owner)) return
+    if (frame.type === "notice.unavailable") {
+      noticeFault = true
+      failNoticeSync(noticeUnavailableMessage)
+      return
+    }
+    if (frame.type === "notice.offline") {
+      if (state.activeDeviceID === undefined) return
+      offlineDeviceID = state.activeDeviceID
+      delivery.offline(state.activeDeviceID, frame.at)
+      setState({ notifications: delivery.entries() })
+      return
+    }
+    if (frame.type === "notice.cleared") {
+      delivery.clearSynced()
+      noticeFault = false
+      publishNotices({ total: 0, status: state.noticeSync.status === "loading" ? "loading" : "ready", message: undefined })
+      return
+    }
+    const deviceID = state.activeDeviceID
+    if (frame.type === "notice.removed") delivery.remove(frame.ids)
+    else if (deviceID !== undefined) for (const notice of frame.notices) delivery.receive(withTitle(notice), deviceID)
+    publishNotices({ total: frame.total })
+    if (frame.type === "notice.added") resolveNoticeTitles()
+  }
+
+  const loadNotices = async (owner: RemoteTransport) => {
+    publishNotices({ status: "loading", loadingMore: false, message: undefined })
+    const outcome = await owner.request("notice.subscribe")
+    if (!isCurrentConnection(owner)) return
+    const read = readNoticePage(outcome)
+    if ("lost" in read) {
+      publishNotices({ status: "idle", loadingMore: false })
+      return
+    }
+    if ("message" in read) {
+      failNoticeSync(read.message)
+      return
+    }
+    noticeFault = read.page.unavailable
+    delivery.replaceSynced(read.page.notices.map(withTitle))
+    if (noticeFault) setState({ notice: noticeUnavailableMessage })
+    publishNotices({ total: read.page.total, status: noticeStatus(), message: noticeFault ? noticeUnavailableMessage : undefined })
+    resolveNoticeTitles()
+  }
+
+  const loadMoreNotices = async () => {
+    const owner = transport
+    const before = delivery.oldestSynced()
+    if (owner === undefined || before === undefined || state.noticeSync.loadingMore || state.noticeSync.status === "loading") return
+    publishNotices({ loadingMore: true })
+    const outcome = await owner.request("notice.list", { input: { before } })
+    if (!isCurrentConnection(owner)) return
+    const read = readNoticePage(outcome)
+    if ("lost" in read) {
+      publishNotices({ loadingMore: false })
+      return
+    }
+    if ("message" in read) {
+      failNoticeSync(read.message)
+      return
+    }
+    if (delivery.oldestSynced() !== before) {
+      publishNotices({ loadingMore: false })
+      return
+    }
+    noticeFault = read.page.unavailable || noticeFault
+    delivery.appendSynced(read.page.notices.map(withTitle))
+    publishNotices({ total: read.page.total, loadingMore: false, status: noticeStatus(), message: noticeFault ? noticeUnavailableMessage : undefined })
+    resolveNoticeTitles()
+  }
+
+  const readNotices = async (operation: "notice.read" | "notice.readAll", input?: { readonly ids: readonly string[] }) => {
+    const owner = transport
+    if (owner === undefined) return
+    const outcome = await owner.request(operation, input === undefined ? {} : { input })
+    if (outcome.status !== "ok" && isCurrentConnection(owner)) setState({ notice: describeOutcome(outcome, "Notifications") })
   }
 
   const reportMachineOffline = () => {
-    if (state.activeDeviceID === undefined || offlineDeviceID === state.activeDeviceID ||
-      !state.devices.some((device) => device.id === state.activeDeviceID && device.status === "active")) return
-    offlineDeviceID = state.activeDeviceID
-    delivery.deliver("machine-offline")
-    setState({ notifications: delivery.entries() })
+    if (state.activeDeviceID !== undefined) offlineDeviceID = state.activeDeviceID
   }
 
   /**
@@ -920,10 +1058,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       ? [...usageExhausted] : []
     const priorUsage = state.usage
     if (status.kind === "closed" || status.kind === "reconnecting") cancelUpload("Attachment upload lost its machine connection. Files were not sent.")
-    if (status.kind === "reconnecting") reconnectingSameDevice = true
     if (status.kind === "open") {
-      reconnectStatus = reconnectingSameDevice && state.sessionStatus !== undefined ? { owner, status: state.sessionStatus } : undefined
-      reconnectingSameDevice = false
       cancelStatusReload?.()
       cancelStatusReload = undefined
       statusReloadLocal = false
@@ -1003,6 +1138,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
     setState({ transport: status, connection: connectionFor(status, state.activeDeviceID), notifications: delivery.entries(),
       ...(status.kind === "closed" ? { lastRelayDrop: { code: status.code, reason: status.reason } } : {}) })
+    if (status.kind === "open") void loadNotices(owner)
     if (status.kind === "open" && state.activeSessionID !== undefined) void readSessionStatus(owner)
     if (status.kind === "open" && recoveredUsage.length > 0) retryUsage(owner)
   }
@@ -1499,22 +1635,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     statusFrameRevision += 1
     const status = { running: new Set(frame.running), attention: new Set(frame.attention), outstanding: new Set(frame.outstanding ?? []), failed: new Set(frame.failed ?? []) }
     const previous = state.sessionStatus
-    const comparison = reconnectStatus?.owner === owner ? reconnectStatus.status : previous
     const runningChanged = previous === undefined || previous.running.size !== status.running.size ||
       [...status.running].some((id) => !previous.running.has(id))
     const changed = previous === undefined || previous.running.size !== status.running.size || previous.attention.size !== status.attention.size ||
       previous.outstanding.size !== status.outstanding.size || [...status.outstanding].some((id) => !previous.outstanding.has(id)) ||
       [...status.running].some((id) => !previous.running.has(id)) || [...status.attention].some((id) => !previous.attention.has(id))
-    if ((statusBaseline || reconnectStatus?.owner === owner) && comparison !== undefined) {
-      for (const id of status.attention) if (!comparison.attention.has(id)) notifySession("approval-requested", id)
-      const busy = new Set([...status.running, ...status.outstanding])
-      for (const id of new Set([...comparison.running, ...comparison.outstanding]))
-        if (!busy.has(id) && !status.attention.has(id)) notifySession("agent-completed", id)
-    }
-    reconnectStatus = undefined
     statusBaseline = true
     publishSessionStatus(status)
-    setState({ notifications: delivery.entries() })
     if (runningChanged) {
       carouselRevision += 1
       carouselRefreshPending = true
@@ -2033,8 +2160,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     statusReloadLocal = false
     carouselRefreshPending = false
     carouselRevision += 1
-    reconnectStatus = undefined
-    reconnectingSameDevice = false
     const active = transport
     transport = undefined
     lastStatusKind = "idle"
@@ -2136,7 +2261,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const selected = devices.find((device) => device.id === state.activeDeviceID)
       if (selected?.status === "active" && !selected.online) {
         const alreadyOffline = offlineDeviceID === selected.id || state.connection.kind === "offline"
-        const wentOffline = !alreadyOffline && state.devices.some((device) => device.id === selected.id && device.status === "active" && device.online)
         // The disconnect clears the list, so the selected device's last list is restored read-only.
         const sessions = state.sessions
         const sessionGroups = state.sessionGroups
@@ -2146,7 +2270,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         setState({ owner: { id: me.value.user.id, expiresAt: me.value.session.expiresAt }, devices })
         disconnectDevice(alreadyOffline)
         offlineDeviceID = selected.id
-        if (wentOffline) delivery.deliver("machine-offline")
         setState({
           activeDeviceID: selected.id,
           sessions,
@@ -2231,8 +2354,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       statusReloadLocal = false
       carouselRefreshPending = false
       carouselRevision += 1
-      reconnectStatus = undefined
-      reconnectingSameDevice = false
       lastStatusReload = -Infinity
       lastCarouselReload = -Infinity
       // The new socket starts with no subscriptions, no alerts, and no list of its own.
@@ -2254,6 +2375,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const created = options.createTransport(deviceID, {
         onStatus: (status) => handleStatus(created, status),
         onSessionStatus: (status) => applyStatusFrame(created, status),
+        onNotices: (frame) => applyNotices(created, frame),
         onSessions: () => {
           if (!isCurrentConnection(created)) return
           scheduleCapturedRefresh()
@@ -2699,17 +2821,25 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     dismissMutationToast: (id) => {
       setState({ mutationToasts: (state.mutationToasts ?? []).filter((entry) => entry.id !== id) })
     },
-    dismissNotification: (id) => {
-      delivery.dismiss(id)
-      setState({ notifications: delivery.entries() })
+    readNotification: async (id) => {
+      const entry = delivery.entries().find((item) => item.id === id)
+      if (entry !== undefined && !entry.synced) {
+        delivery.remove([id])
+        publishNotices()
+        return
+      }
+      if (entry === undefined && noticeSequence(id) === undefined) return
+      await readNotices("notice.read", { ids: [id] })
     },
-    markNotificationsRead: () => {
-      delivery.markRead()
-      setState({ notifications: delivery.entries() })
+    readAllNotifications: async () => {
+      delivery.remove(delivery.entries().filter((entry) => !entry.synced).map((entry) => entry.id))
+      publishNotices()
+      await readNotices("notice.readAll")
     },
-    clearNotifications: () => {
-      delivery.clear()
-      setState({ notifications: delivery.entries() })
+    loadMoreNotifications: loadMoreNotices,
+    reloadNotifications: async () => {
+      const owner = transport
+      if (owner !== undefined) await loadNotices(owner)
     },
     interrupt: async () => {
       const sessionID = state.activeSessionID

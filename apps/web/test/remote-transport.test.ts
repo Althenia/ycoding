@@ -55,6 +55,39 @@ describe("remote transport integration", () => {
     }
   })
 
+  test("delivers relay notice frames to the handler and settles a notice request", async () => {
+    const notice = { id: "ntc_1", category: "agent-completed", sessionID: "ses_a", createdAt: 5 } as const
+    const relay = await startRelayDouble({ noticePage: { notices: [notice], total: 1, unavailable: false } })
+    const frames: unknown[] = []
+    const transport = createRemoteTransport({ url: relay.wsURL("dev_1"), handlers: { onNotices: (frame) => frames.push(frame) }, resetDelayMs: 10 })
+    try {
+      transport.connect()
+      await waitFor(() => transport.status().kind === "open")
+      expect(await transport.request("notice.subscribe")).toEqual({ status: "ok", value: { notices: [notice], total: 1, unavailable: false } })
+      expect(await transport.request("notice.list", { input: { before: "ntc_1" } })).toMatchObject({ status: "ok", value: { total: 1 } })
+      expect(await transport.request("notice.read", { input: { ids: ["ntc_1"] } })).toEqual({ status: "ok", value: null })
+      expect(await transport.request("notice.readAll")).toEqual({ status: "ok", value: null })
+      expect(relay.noticeRequests.map((request) => [request.operation, request.input])).toEqual([
+        ["notice.subscribe", undefined], ["notice.list", { before: "ntc_1" }], ["notice.read", { ids: ["ntc_1"] }], ["notice.readAll", undefined],
+      ])
+      relay.pushNotices({ type: "notice.added", notices: [{ ...notice, id: "ntc_2" }], total: 2 })
+      relay.pushNotices({ type: "notice.removed", ids: ["ntc_1"], total: 1 })
+      relay.pushNotices({ type: "notice.cleared" })
+      relay.pushNotices({ type: "notice.unavailable" })
+      await waitFor(() => frames.length === 4)
+      expect(frames).toEqual([
+        { type: "notice.added", notices: [{ ...notice, id: "ntc_2" }], total: 2 },
+        { type: "notice.removed", ids: ["ntc_1"], total: 1 },
+        { type: "notice.cleared" },
+        { type: "notice.unavailable" },
+      ])
+      expect(transport.status().kind).toBe("open")
+    } finally {
+      transport.close()
+      await relay.stop()
+    }
+  })
+
   test("assembles an out-of-order chunked response into one value", async () => {
     const relay = await startRelayDouble({
       handler: (request) => {

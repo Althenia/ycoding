@@ -23,7 +23,7 @@ import type {
   RemoteTransportHandlers,
   RemoteTransportStatus,
 } from "../src/remote/transport"
-import type { RemoteDeviceInfo, RemoteOperation } from "@ycoding-ai/remote"
+import { RemoteLimits, noticePageValue, noticeSequence, type RemoteDeviceInfo, type RemoteNotice, type RemoteNoticeOperation, type RemoteOperation } from "@ycoding-ai/remote"
 import { remoteScenario } from "./remote-scenarios"
 import "../src/styles/tokens.css"
 import "../src/styles/base.css"
@@ -593,11 +593,30 @@ function createFixtureStore(): Fixture {
     return { status: "failed", error: { code: "unknown_operation", message: "unsupported operation" } }
   }
 
+  let fixtureNotices: readonly RemoteNotice[] = []
+  let previousStatus = { running: new Set(statusRunning), attention: new Set<string>() }
+  let noticeSerial = 0
+
   const outcome = (
-    operation: RemoteOperation,
+    operation: RemoteOperation | RemoteNoticeOperation,
     input?: Readonly<Record<string, unknown>>,
     targetSessionID = sessionID,
   ): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
+    if (operation === "notice.subscribe" || operation === "notice.list") {
+      const before = operation === "notice.list" && typeof input?.before === "string" ? noticeSequence(input.before) ?? Infinity : Infinity
+      const older = [...fixtureNotices].reverse().filter((notice) => (noticeSequence(notice.id) ?? 0) < before)
+      const notices = older.slice(0, RemoteLimits.noticePageSize)
+      const last = notices.at(-1)
+      return { status: "ok", value: noticePageValue({ notices, ...(older.length > notices.length && last !== undefined ? { next: last.id } : {}), total: fixtureNotices.length, unavailable: false }) }
+    }
+    if (operation === "notice.read" || operation === "notice.readAll") {
+      const ids = operation === "notice.readAll" ? fixtureNotices.map((notice) => notice.id) : Array.isArray(input?.ids) ? input.ids.filter((id): id is string => typeof id === "string") : []
+      const removed = fixtureNotices.filter((notice) => ids.includes(notice.id)).map((notice) => notice.id)
+      fixtureNotices = fixtureNotices.filter((notice) => !ids.includes(notice.id))
+      if (operation === "notice.readAll") handlers?.onNotices?.({ type: "notice.cleared" })
+      else if (removed.length > 0) handlers?.onNotices?.({ type: "notice.removed", ids: removed, total: fixtureNotices.length })
+      return { status: "ok", value: null }
+    }
     operationCounts.set(operation, (operationCounts.get(operation) ?? 0) + 1)
     if (connectionMode === "offline") return { status: "failed", error: { code: "agent_unavailable", message: "No local agent is connected" } }
     if (accountParams.get("teamControls") === "unsupported" && ["session.team.economics", "session.team.shell.list", "session.team.shell.kill", "session.side-chat.list", "session.side-chat.create", "session.subagent.cancel", "session.subagent.answer"].includes(operation))
@@ -905,7 +924,16 @@ function createFixtureStore(): Fixture {
 
   const status = (running: readonly string[], attention: readonly string[], failed?: readonly string[]) => {
     statusRunning = new Set(running)
+    const next = { running: new Set(running), attention: new Set(attention) }
+    const added = [
+      ...attention.filter((id) => !previousStatus.attention.has(id)).map((sessionID) => ({ category: "approval-requested" as const, sessionID })),
+      ...[...previousStatus.running].filter((id) => !next.running.has(id) && !next.attention.has(id)).map((sessionID) => ({ category: "agent-completed" as const, sessionID })),
+    ].map((notice) => ({ ...notice, id: `ntc_${++noticeSerial}`, createdAt: Date.now() }))
+    previousStatus = next
     handlers?.onSessionStatus?.({ running, attention, ...(failed === undefined ? {} : { failed }) })
+    if (added.length === 0) return
+    fixtureNotices = [...fixtureNotices, ...added]
+    handlers?.onNotices?.({ type: "notice.added", notices: added, total: fixtureNotices.length })
   }
 
   return {

@@ -63,7 +63,7 @@ describe("remote responsive state behavior", () => {
         expect(layout.details).toEqual([
           "Get notified when a Session and everything it started, including subagents, shells and goals, has finished. Useful for long-running work.",
           "Get notified when a Session needs your decision, a guardrail blocks an action, or a run fails.",
-          "Get notified when the selected paired machine stops reporting while YCoding is open.",
+          "Get notified when a paired machine stops reporting.",
         ])
         expect(layout.lines, JSON.stringify(layout)).toEqual([1, 1, 1])
         expect(layout.offsets.every((offset) => offset <= 1), JSON.stringify(layout)).toBe(true)

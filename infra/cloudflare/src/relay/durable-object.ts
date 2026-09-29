@@ -14,6 +14,7 @@ import { createAuthService } from "../auth/service"
 import type { WorkerEnv } from "../env"
 import { createD1PushStore } from "../push/d1-store"
 import { sendPushToOwner } from "../push/send"
+import { createNoticeStore } from "./notice-store"
 import { createRelay, type RelayAuthority, type RelayConnection } from "./core"
 
 type Attachment = {
@@ -24,6 +25,7 @@ type Attachment = {
   readonly browserSessionID: string
   readonly credentialExpiresAt: number
   readonly subscriptions: readonly string[]
+  readonly noticesSubscribed: boolean
   readonly pending: readonly { readonly relayID: string; readonly clientID: string }[]
 }
 
@@ -47,6 +49,7 @@ type MessageStream = {
 export class DeviceRelay extends DurableObject<WorkerEnv> {
   readonly #service = createAuthService(createD1AuthStore(this.env.DB))
   readonly #messageStreams = new Map<string, MessageStream>()
+  readonly #notices = createNoticeStore(this.ctx.storage.sql)
   readonly #relay = createRelay({
     now: () => Date.now(),
     newID: () => randomToken(9),
@@ -64,6 +67,14 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     savePending: (connectionID, pending) => this.#patchAttachment(connectionID, (attachment) => ({ ...attachment, pending })),
     loadStatus: () => this.ctx.storage.get("lastStatus"),
     saveStatus: (status) => this.ctx.storage.put("lastStatus", status),
+    loadOfflineCheck: () => this.ctx.storage.get("offlineCheck"),
+    saveOfflineCheck: async (check) => {
+      if (check === undefined) await this.ctx.storage.delete("offlineCheck")
+      else await this.ctx.storage.put("offlineCheck", check)
+    },
+    notices: this.#notices,
+    saveNoticeSubscription: (connectionID, noticesSubscribed) =>
+      this.#patchAttachment(connectionID, (attachment) => ({ ...attachment, noticesSubscribed })),
     authorizeClientCommand: async (sessionID, deviceID) =>
       toAuthority(await this.#service.authorizeClientCommand(sessionID, deviceID)),
     authorizeAgentCommand: async (deviceID) => toAuthority(await this.#service.authorizeAgentCommand(deviceID)),
@@ -106,6 +117,7 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
       ...trusted,
       connectionID: crypto.randomUUID(),
       subscriptions: [],
+      noticesSubscribed: false,
       pending: [],
     }
     pair[1].serializeAttachment(attachment)
@@ -136,7 +148,8 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     const attachment = readAttachment(socket)
     if (!attachment) return
     this.#attached.delete(attachment.connectionID)
-    this.#relay.detach(attachment.connectionID)
+    if (attachment.role === "agent") await this.#relay.agentClosed(toConnection(attachment))
+    else this.#relay.detach(attachment.connectionID)
     await this.#armAlarm()
   }
 
@@ -147,6 +160,7 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
   override async alarm(): Promise<void> {
     await this.#restoreConnections()
     this.#relay.sweep()
+    await this.#relay.confirmOffline()
     await this.#armAlarm()
   }
 
@@ -158,6 +172,7 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     if (url.pathname === "/_ycoding/close-device") {
       this.#relay.closeDevice()
       await this.ctx.storage.delete("lastStatus")
+      this.#notices.clear()
     }
     if (url.pathname === "/_ycoding/presence")
       return new Response(JSON.stringify({ online: this.#relay.agentConnected() }), {
@@ -199,7 +214,7 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     request.signal.addEventListener("abort", abort, { once: true })
     try {
       await this.#relay.attach({ connectionID, role: "client", ownerID, deviceID, browserSessionID,
-        credentialExpiresAt: expiresAt, subscriptions: [], pending: [] })
+        credentialExpiresAt: expiresAt, subscriptions: [], noticesSubscribed: false, pending: [] })
       if (!this.#messageStreams.has(connectionID)) return ready
       await this.#relay.handleClientMessage(connectionID, JSON.stringify({ type: "request", id: "stream", sessionID,
         operation: message ? "session.message.stream" : "session.attachment.read", input: message ? { messageID: item } : { digest: item } }))
@@ -279,7 +294,7 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
   }
 }
 
-function trustedConnection(request: Request): Omit<Attachment, "connectionID" | "subscriptions" | "pending"> | undefined {
+function trustedConnection(request: Request): Omit<Attachment, "connectionID" | "subscriptions" | "noticesSubscribed" | "pending"> | undefined {
   const role = request.headers.get("x-ycoding-role")
   const ownerID = request.headers.get("x-ycoding-owner")
   const deviceID = request.headers.get("x-ycoding-device")
@@ -302,6 +317,7 @@ function toConnection(attachment: Attachment): RelayConnection {
     browserSessionID: attachment.browserSessionID,
     credentialExpiresAt: attachment.credentialExpiresAt,
     subscriptions: attachment.subscriptions,
+    noticesSubscribed: attachment.noticesSubscribed,
     pending: attachment.pending,
   }
 }
@@ -322,6 +338,7 @@ function readAttachment(socket: WebSocket): Attachment | undefined {
     browserSessionID: record.browserSessionID,
     credentialExpiresAt: record.credentialExpiresAt,
     subscriptions: Array.isArray(record.subscriptions) ? record.subscriptions.filter(isString) : [],
+    noticesSubscribed: record.noticesSubscribed === true,
     pending: Array.isArray(record.pending) ? record.pending.filter(isPending) : [],
   }
 }

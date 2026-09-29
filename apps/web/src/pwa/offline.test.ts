@@ -152,7 +152,8 @@ describe("service worker source", () => {
     const changeHandler = source.split('scope.addEventListener("pushsubscriptionchange"')[1]?.split("function isRecord")[0] ?? ""
     expect(changeHandler).toContain('fetch("/api/push/key", { credentials: "same-origin" })')
     expect(changeHandler).toContain('fetch("/api/push/subscriptions", { method: "POST", credentials: "same-origin"')
-    expect(changeHandler).toContain('fetch("/api/push/subscriptions", { method: "DELETE", credentials: "same-origin"')
+    expect(changeHandler).toContain("replaces }")
+    expect(changeHandler).not.toContain('method: "DELETE"')
     expect(source.replace(changeHandler, "")).not.toContain("/api")
     expect(source).not.toContain("/auth")
     expect(source).not.toContain("/ws/")

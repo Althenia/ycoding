@@ -1,4 +1,4 @@
-import type { CreateEnrollmentResponse, MeResponse, RemoteDeviceInfo, PushKeyResponse, PushSubscriptionInput } from "@ycoding-ai/remote"
+import { parsePushTestResponse, type CreateEnrollmentResponse, type MeResponse, type RemoteDeviceInfo, type PushKeyResponse, type PushRegistration, type PushTestResponse } from "@ycoding-ai/remote"
 
 export type RemoteHttpFailureReason = "http" | "unexpected-body" | "network"
 
@@ -105,31 +105,37 @@ export function createRemoteHttp(options: RemoteHttpOptions = {}): RemoteHttp {
 export function createPushHttp(options: RemoteHttpOptions = {}) {
   const base = options.baseURL ?? ""
   const send = options.fetch ?? globalThis.fetch
-  const request = async (method: "GET" | "POST" | "DELETE", body?: unknown): Promise<RemoteHttpResult<unknown>> => {
+  const request = async (method: "GET" | "POST" | "DELETE", path: string, body?: unknown): Promise<RemoteHttpResult<unknown>> => {
     try {
-      const response = await send(`${base}${method === "GET" ? "/api/push/key" : "/api/push/subscriptions"}`,
+      const response = await send(`${base}${path}`,
         { method, credentials: "same-origin", ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }) })
       if (!response.ok) return failure(response.status, await errorMessage(response), "http")
-      return { ok: true, value: method === "GET" ? await readJson(response) : undefined }
+      return { ok: true, value: path === "/api/push/subscriptions" ? undefined : await readJson(response) }
     } catch (cause) {
       return failure(0, cause instanceof Error ? cause.message : "The request could not be sent", "network")
     }
   }
   return {
     key: async (): Promise<RemoteHttpResult<PushKeyResponse>> => {
-      const result = await request("GET")
+      const result = await request("GET", "/api/push/key")
       if (!result.ok) return result
       if (!isRecord(result.value) || typeof result.value.publicKey !== "string" || result.value.publicKey.length === 0)
         return failure(200, "The response was not an API document", "unexpected-body")
       return { ok: true, value: { publicKey: result.value.publicKey } }
     },
-    subscribe: async (input: PushSubscriptionInput): Promise<RemoteHttpResult<void>> => {
-      const result = await request("POST", input)
+    subscribe: async (input: PushRegistration): Promise<RemoteHttpResult<void>> => {
+      const result = await request("POST", "/api/push/subscriptions", input)
       return result.ok ? { ok: true, value: undefined } : result
     },
     remove: async (endpoint: string): Promise<RemoteHttpResult<void>> => {
-      const result = await request("DELETE", { endpoint })
+      const result = await request("DELETE", "/api/push/subscriptions", { endpoint })
       return result.ok ? { ok: true, value: undefined } : result
+    },
+    test: async (endpoint: string): Promise<RemoteHttpResult<PushTestResponse>> => {
+      const result = await request("POST", "/api/push/test", { endpoint })
+      if (!result.ok) return result
+      const parsed = parsePushTestResponse(result.value)
+      return parsed.ok ? parsed : failure(200, "The response was not an API document", "unexpected-body")
     },
   }
 }

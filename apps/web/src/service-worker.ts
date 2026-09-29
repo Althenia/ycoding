@@ -57,13 +57,8 @@ scope.addEventListener("fetch", (event: FetchEvent) => {
 scope.addEventListener("push", (event: { data?: { json: () => unknown }; waitUntil: (promise: Promise<unknown>) => void }) => {
   event.waitUntil((async () => {
     const payload = await Promise.resolve().then(() => event.data?.json()).catch(() => undefined)
-    const valid = isPushPayload(payload)
-    await scope.registration.showNotification(!valid ? "YCoding — update" : payload.category === "approval-requested" ? "YCoding — needs your attention" : "YCoding — work finished", {
-      body: !valid ? "Open YCoding to check your work." : payload.category === "approval-requested" ? "A session is waiting for you." : "A session finished all its work.",
-      tag: valid ? `ycoding-${payload.sessionID}-${payload.category}` : "ycoding-update",
-      ...(valid ? { data: { sessionID: payload.sessionID } } : {}),
-      icon: "/icons/icon-256.png", badge: "/icons/icon-256.png",
-    })
+    const alert = pushAlert(payload)
+    await scope.registration.showNotification(alert.title, { ...alert.options, icon: "/icons/icon-256.png", badge: "/icons/icon-256.png" })
   })())
 })
 
@@ -95,23 +90,20 @@ scope.addEventListener("notificationclick", (event: { notification: { data?: unk
 scope.addEventListener("pushsubscriptionchange", (event: { newSubscription?: { endpoint: string; getKey: (name: "p256dh" | "auth") => ArrayBuffer | null };
   oldSubscription?: { endpoint: string }; waitUntil: (promise: Promise<unknown>) => void }) => {
   event.waitUntil((async () => {
+    const replaces = event.oldSubscription?.endpoint
+    if (replaces === undefined) return
     try {
-      const response = await fetch("/api/push/key", { credentials: "same-origin" })
-      if (!response.ok) return
-      const value: unknown = await response.json()
-      if (!isRecord(value) || typeof value.publicKey !== "string") return
-      const applicationServerKey = decodeKey(value.publicKey)
-      if (!applicationServerKey) return
-      const subscription = event.newSubscription ?? await scope.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey })
-      const p256dh = subscription.getKey("p256dh")
-      const auth = subscription.getKey("auth")
-      if (!p256dh || !auth) return
-      const registered = await fetch("/api/push/subscriptions", { method: "POST", credentials: "same-origin",
+      const key: unknown = event.newSubscription ? undefined
+        : await fetch("/api/push/key", { credentials: "same-origin" }).then((response) => response.ok ? response.json() : undefined)
+      const applicationServerKey = isRecord(key) && typeof key.publicKey === "string" ? decodeKey(key.publicKey) : undefined
+      const subscription = event.newSubscription ??
+        (applicationServerKey ? await scope.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey }) : undefined)
+      const p256dh = subscription?.getKey("p256dh")
+      const auth = subscription?.getKey("auth")
+      if (!subscription || !p256dh || !auth) return
+      await fetch("/api/push/subscriptions", { method: "POST", credentials: "same-origin",
         headers: { "content-type": "application/json" }, body: JSON.stringify({ endpoint: subscription.endpoint,
-          keys: { p256dh: encodeKey(new Uint8Array(p256dh)), auth: encodeKey(new Uint8Array(auth)) } }) })
-      if (registered.ok && event.oldSubscription && event.oldSubscription.endpoint !== subscription.endpoint)
-        await fetch("/api/push/subscriptions", { method: "DELETE", credentials: "same-origin",
-          headers: { "content-type": "application/json" }, body: JSON.stringify({ endpoint: event.oldSubscription.endpoint }) })
+          keys: { p256dh: encodeKey(new Uint8Array(p256dh)), auth: encodeKey(new Uint8Array(auth)) }, replaces }) })
     } catch { return }
   })())
 })
@@ -124,9 +116,29 @@ function isSessionID(value: unknown): value is string {
   return typeof value === "string" && value.length <= 128 && /^ses[A-Za-z0-9_-]+$/.test(value)
 }
 
-function isPushPayload(value: unknown): value is { category: "approval-requested" | "agent-completed"; sessionID: string; deviceID: string } {
-  return isRecord(value) && (value.category === "approval-requested" || value.category === "agent-completed") &&
-    isSessionID(value.sessionID) && typeof value.deviceID === "string"
+function pushAlert(value: unknown): { readonly title: string; readonly options: Record<string, unknown> } {
+  if (isRecord(value) && value.category === "test" && Object.keys(value).length === 1)
+    return { title: "YCoding — test alert", options: { body: "Push alerts reach this device." } }
+  if (isRecord(value) && value.category === "machine-offline" && isDeviceID(value.deviceID) &&
+    typeof value.offlineAt === "number" && Number.isSafeInteger(value.offlineAt) && value.offlineAt > 0)
+    return { title: "YCoding — machine offline", options: { body: "The connected machine stopped reporting.", tag: `ycoding-${value.deviceID}-offline-${value.offlineAt}` } }
+  if (!isRecord(value) || (value.category !== "approval-requested" && value.category !== "agent-completed") || !isSessionID(value.sessionID) ||
+    !isDeviceID(value.deviceID) || (value.noticeID !== undefined && !isNoticeID(value.noticeID)))
+    return { title: "YCoding — update", options: { body: "Open YCoding to check your work.", tag: "ycoding-update" } }
+  const attention = value.category === "approval-requested"
+  return { title: attention ? "YCoding — needs your attention" : "YCoding — work finished", options: {
+    body: attention ? "A session is waiting for you." : "A session finished all its work.",
+    tag: value.noticeID === undefined ? `ycoding-${value.sessionID}-${value.category}` : `ycoding-${value.deviceID}-${value.noticeID}`,
+    data: { sessionID: value.sessionID },
+  } }
+}
+
+function isDeviceID(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value)
+}
+
+function isNoticeID(value: unknown): value is string {
+  return typeof value === "string" && /^ntc_[1-9][0-9]{0,14}$/.test(value)
 }
 
 function decodeKey(value: string): Uint8Array<ArrayBuffer> | undefined {

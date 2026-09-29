@@ -15,19 +15,27 @@
 import {
   RemoteCloseCode,
   RemoteLimits,
+  isNoticeRequest,
   isSessionID,
+  noticePageValue,
+  noticeSequence,
   parseAgentMessage,
   parseClientMessage,
   serializeError,
+  serializeNoticeFrame,
   serializeRequest,
+  serializeResponse,
   serializeCancel,
   serializeSessions,
   serializeSubscriptions,
   type RemoteErrorCode,
+  type RemoteNotice,
+  type RemoteNoticeRequest,
   type RemoteOperation,
   type RemoteResponse,
   type RemoteStatus,
 } from "../../../../packages/remote/src/index"
+import type { NoticeStore } from "./notice-store"
 import type { PushEvent } from "../push/send"
 export type RelayConnection = {
   readonly connectionID: string
@@ -37,8 +45,11 @@ export type RelayConnection = {
   readonly browserSessionID: string
   readonly credentialExpiresAt: number
   readonly subscriptions: readonly string[]
+  readonly noticesSubscribed: boolean
   readonly pending: readonly { readonly relayID: string; readonly clientID: string }[]
 }
+
+export type OfflineCheck = { readonly ownerID: string; readonly deviceID: string; readonly closedAt: number }
 
 export type RelayAuthority = { readonly ok: true } | { readonly ok: false; readonly reason: string }
 
@@ -51,6 +62,10 @@ export type RelayDeps = {
   readonly savePending: (connectionID: string, pending: readonly { relayID: string; clientID: string }[]) => void
   readonly loadStatus: () => Promise<RemoteStatus | undefined>
   readonly saveStatus: (status: RemoteStatus) => Promise<void>
+  readonly loadOfflineCheck: () => Promise<OfflineCheck | undefined>
+  readonly saveOfflineCheck: (check: OfflineCheck | undefined) => Promise<void>
+  readonly notices: NoticeStore
+  readonly saveNoticeSubscription: (connectionID: string, subscribed: boolean) => void
   readonly authorizeClientCommand: (sessionID: string, deviceID: string) => Promise<RelayAuthority>
   readonly authorizeAgentCommand: (deviceID: string) => Promise<RelayAuthority>
   /**
@@ -70,6 +85,7 @@ type ClientState = {
   readonly browserSessionID: string
   readonly credentialExpiresAt: number
   subscriptions: string[]
+  noticesSubscribed: boolean
   windowStart: number
   windowCount: number
   authorityCheckedAt: number
@@ -109,6 +125,7 @@ function closeReasonFor(reason: string): string {
 const sessionUnauthorizedMessage = "Session is no longer authorized"
 const deviceUnauthorizedMessage = "Device is no longer authorized"
 const forbiddenMessage = "Connection is not permitted"
+const noticeStorageMessage = "Notification storage is unavailable"
 const invalidFrameMessage = "Frame is not valid for this connection"
 const sizeMessage = "Frame exceeds the size bound"
 const policyMessage = "Agent violated the relay policy"
@@ -119,6 +136,9 @@ export function createRelay(deps: RelayDeps) {
   let previousStatus: RemoteStatus | undefined
   let pushWindowStart = deps.now()
   let pushWindowCount = 0
+  let noticeFault = deps.notices.unavailable()
+  let offlineCheck: OfflineCheck | undefined
+  let offlineLoaded = false
   const pending = new Map<string, PendingRequest>()
   let agent: AgentState | undefined
 
@@ -145,6 +165,49 @@ export function createRelay(deps: RelayDeps) {
       if (frameQueues.get(connectionID) === drained) frameQueues.delete(connectionID)
     })
     return current
+  }
+
+  const sendToNoticeClients = (frame: string) => {
+    for (const client of clients.values()) if (client.noticesSubscribed) deps.send(client.connectionID, frame)
+  }
+
+  const recordNotices = (events: readonly { readonly category: RemoteNotice["category"]; readonly sessionID: string }[]): readonly RemoteNotice[] => {
+    if (events.length === 0) return []
+    try {
+      const recorded = deps.notices.append(events.map((event) => ({ category: event.category, sessionID: event.sessionID, createdAt: deps.now() })))
+      for (let start = 0; start < recorded.notices.length; start += RemoteLimits.maxNoticeBatch)
+        sendToNoticeClients(serializeNoticeFrame({ type: "notice.added", notices: recorded.notices.slice(start, start + RemoteLimits.maxNoticeBatch), total: recorded.total }))
+      return recorded.notices
+    } catch {
+      if (noticeFault) return []
+      noticeFault = true
+      try { deps.notices.markUnavailable() } catch { console.warn("Notification sync failure marker could not be stored") }
+      sendToNoticeClients(serializeNoticeFrame({ type: "notice.unavailable" }))
+      return []
+    }
+  }
+
+  const admitPushes = (ownerID: string, events: readonly PushEvent[]) => {
+    if (deps.now() - pushWindowStart >= 60_000) { pushWindowStart = deps.now(); pushWindowCount = 0 }
+    const admitted = events.slice(0, Math.max(0, 20 - pushWindowCount))
+    pushWindowCount += admitted.length
+    for (const event of admitted) {
+      try { deps.notifyPush?.(ownerID, event) } catch {}
+    }
+  }
+
+  const readOfflineCheck = async () => {
+    if (!offlineLoaded) {
+      offlineCheck = await deps.loadOfflineCheck()
+      offlineLoaded = true
+    }
+    return offlineCheck
+  }
+
+  const writeOfflineCheck = async (check: OfflineCheck | undefined) => {
+    offlineCheck = check
+    offlineLoaded = true
+    await deps.saveOfflineCheck(check)
   }
 
   const dropPendingForConnection = (connectionID: string) => {
@@ -252,6 +315,7 @@ export function createRelay(deps: RelayDeps) {
     agentConnected: () => agent !== undefined,
 
     async restore(connections: readonly RelayConnection[]) {
+      await readOfflineCheck()
       for (const connection of connections.toSorted((a, b) => Number(b.role === "agent") - Number(a.role === "agent")))
         await relay.attach(connection)
     },
@@ -259,6 +323,7 @@ export function createRelay(deps: RelayDeps) {
     nextDeadline: () => {
       const deadlines = Array.from(clients.values()).map((client) => client.credentialExpiresAt)
       if (agent) deadlines.push(agent.credentialExpiresAt)
+      if (offlineCheck) deadlines.push(offlineCheck.closedAt + RemoteLimits.agentOfflineConfirmMs)
       return deadlines.length === 0 ? undefined : Math.min(...deadlines)
     },
 
@@ -289,6 +354,7 @@ export function createRelay(deps: RelayDeps) {
           windowCount: 0,
         }
         latestStatus = undefined
+        if (await readOfflineCheck() !== undefined && agent?.connectionID === connection.connectionID) await writeOfflineCheck(undefined)
         const storedStatus = await deps.loadStatus()
         if (agent?.connectionID !== connection.connectionID) return
         previousStatus = storedStatus
@@ -336,6 +402,7 @@ export function createRelay(deps: RelayDeps) {
         browserSessionID: connection.browserSessionID,
         credentialExpiresAt: connection.credentialExpiresAt,
         subscriptions,
+        noticesSubscribed: connection.noticesSubscribed,
         windowStart: deps.now(),
         windowCount: 0,
         authorityCheckedAt: deps.now(),
@@ -351,12 +418,32 @@ export function createRelay(deps: RelayDeps) {
       }
     },
 
-    detach(connectionID: string) {
-      if (agent?.connectionID === connectionID) {
+    async agentClosed(connection: RelayConnection) {
+      const current = agent?.connectionID === connection.connectionID
+      if (current) {
         agent = undefined
         failAllPending("outcome_unknown", outcomeUnknownMessage)
+      }
+      if (agent !== undefined || await readOfflineCheck() !== undefined) return
+      await writeOfflineCheck({ ownerID: connection.ownerID, deviceID: connection.deviceID, closedAt: deps.now() })
+    },
+
+    async confirmOffline() {
+      const check = await readOfflineCheck()
+      if (check === undefined || deps.now() < check.closedAt + RemoteLimits.agentOfflineConfirmMs) return
+      if (agent !== undefined) {
+        await writeOfflineCheck(undefined)
         return
       }
+      const authority = await deps.authorizeAgentCommand(check.deviceID)
+      if (offlineCheck !== check || relay.agentConnected()) return
+      await writeOfflineCheck(undefined)
+      if (!authority.ok) return
+      sendToNoticeClients(serializeNoticeFrame({ type: "notice.offline", at: check.closedAt }))
+      admitPushes(check.ownerID, [{ category: "machine-offline", deviceID: check.deviceID, offlineAt: check.closedAt }])
+    },
+
+    detach(connectionID: string) {
       if (clients.has(connectionID)) {
         sendSubscriptionSnapshot(connectionID, [])
         clients.delete(connectionID)
@@ -395,6 +482,10 @@ export function createRelay(deps: RelayDeps) {
         return
       }
       if (message.type === "pong") return
+      if (isNoticeRequest(message)) {
+        await admitNoticeRequest(client, message)
+        return
+      }
       await admitRequest(client, message)
     },
 
@@ -435,22 +526,21 @@ export function createRelay(deps: RelayDeps) {
         latestStatus = raw
         for (const client of clients.values()) deps.send(client.connectionID, raw)
         previousStatus = message
-        if (before !== undefined && deps.notifyPush !== undefined) {
+        if (before !== undefined) {
           const oldAttention = new Set(before.attention)
           const busy = new Set([...message.running, ...(message.outstanding ?? [])])
           const attention = new Set(message.attention)
-          const events: PushEvent[] = [
-            ...message.attention.filter((sessionID) => !oldAttention.has(sessionID)).map((sessionID) => ({ category: "approval-requested" as const, sessionID, deviceID: current.deviceID })),
+          const events = [
+            ...message.attention.filter((sessionID) => !oldAttention.has(sessionID)).map((sessionID) => ({ category: "approval-requested" as const, sessionID })),
             ...[...new Set([...before.running, ...(before.outstanding ?? [])])]
               .filter((sessionID) => !busy.has(sessionID) && !attention.has(sessionID))
-              .map((sessionID) => ({ category: "agent-completed" as const, sessionID, deviceID: current.deviceID })),
+              .map((sessionID) => ({ category: "agent-completed" as const, sessionID })),
           ]
-          if (deps.now() - pushWindowStart >= 60_000) { pushWindowStart = deps.now(); pushWindowCount = 0 }
-          for (const event of events) {
-            if (pushWindowCount >= 20) break
-            pushWindowCount++
-            try { deps.notifyPush(current.ownerID, event) } catch {}
-          }
+          const recorded = recordNotices(events)
+          admitPushes(current.ownerID, events.map((event, index) => {
+            const notice = recorded[index]
+            return { ...event, deviceID: current.deviceID, ...(notice === undefined ? {} : { noticeID: notice.id }) }
+          }))
         }
         return
       }
@@ -482,6 +572,7 @@ export function createRelay(deps: RelayDeps) {
     },
 
     closeDevice() {
+      noticeFault = false
       detachAgent(RemoteCloseCode.unauthorized, deviceUnauthorizedMessage)
       for (const client of Array.from(clients.values()))
         removeClient(client.connectionID, RemoteCloseCode.unauthorized, deviceUnauthorizedMessage)
@@ -517,13 +608,7 @@ export function createRelay(deps: RelayDeps) {
 
     const authority = await checkClientAuthority(client)
     if (!authority.ok) {
-      const unauthorized = authority.reason === "revoked_session" || authority.reason === "expired_session"
-      respond(client.connectionID, request.id, unauthorized ? "unauthorized" : "forbidden", unauthorized ? sessionUnauthorizedMessage : forbiddenMessage)
-      removeClient(
-        client.connectionID,
-        unauthorized ? RemoteCloseCode.unauthorized : RemoteCloseCode.forbidden,
-        unauthorized ? sessionUnauthorizedMessage : forbiddenMessage,
-      )
+      rejectClient(client, request.id, authority.reason)
       return
     }
 
@@ -543,6 +628,54 @@ export function createRelay(deps: RelayDeps) {
       return
     }
     forwardsRequest(client.connectionID, request)
+  }
+
+  async function admitNoticeRequest(client: ClientState, request: RemoteNoticeRequest) {
+    const authority = await checkClientAuthority(client)
+    if (!authority.ok) {
+      rejectClient(client, request.id, authority.reason)
+      return
+    }
+    if (clients.get(client.connectionID) !== client) return
+    try {
+      const value = answerNotice(client, request)
+      deps.send(client.connectionID, serializeResponse({ type: "response", id: request.id, ok: true, value }))
+    } catch {
+      respond(client.connectionID, request.id, "internal_error", noticeStorageMessage)
+    }
+  }
+
+  function answerNotice(client: ClientState, request: RemoteNoticeRequest) {
+    if (request.operation === "notice.subscribe") {
+      const page = deps.notices.page()
+      client.noticesSubscribed = true
+      deps.saveNoticeSubscription(client.connectionID, true)
+      return noticePageValue({ ...page, unavailable: noticeFault })
+    }
+    if (request.operation === "notice.list") {
+      const before = request.input !== undefined && "before" in request.input ? noticeSequence(request.input.before) : undefined
+      return noticePageValue({ ...deps.notices.page(before), unavailable: noticeFault })
+    }
+    if (request.operation === "notice.readAll") {
+      deps.notices.clear()
+      noticeFault = false
+      sendToNoticeClients(serializeNoticeFrame({ type: "notice.cleared" }))
+      return null
+    }
+    const sequences = request.input !== undefined && "ids" in request.input ? request.input.ids.flatMap((id) => noticeSequence(id) ?? []) : []
+    const removed = deps.notices.remove(sequences)
+    if (removed.ids.length > 0) sendToNoticeClients(serializeNoticeFrame({ type: "notice.removed", ids: removed.ids, total: removed.total }))
+    return null
+  }
+
+  function rejectClient(client: ClientState, requestID: string, reason: string) {
+    const unauthorized = reason === "revoked_session" || reason === "expired_session"
+    respond(client.connectionID, requestID, unauthorized ? "unauthorized" : "forbidden", unauthorized ? sessionUnauthorizedMessage : forbiddenMessage)
+    removeClient(
+      client.connectionID,
+      unauthorized ? RemoteCloseCode.unauthorized : RemoteCloseCode.forbidden,
+      unauthorized ? sessionUnauthorizedMessage : forbiddenMessage,
+    )
   }
 
   /** Re-validates a client at most once per `authorityTtlMs`. Callers decide the close. */

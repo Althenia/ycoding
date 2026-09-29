@@ -1,9 +1,11 @@
 import {
   RemoteCloseCode,
   RemoteLimits,
-  parseAgentMessage,
   parseChunkedValue,
+  parseRelayToClientMessage,
   type RemoteError,
+  type RemoteNoticeFrame,
+  type RemoteNoticeOperation,
   type RemoteOperation,
   type RemoteRelayToClient,
 } from "@ycoding-ai/remote"
@@ -26,6 +28,7 @@ export type RemoteTransportHandlers = {
   readonly onSessions?: () => void
   readonly onSessionStatus?: (status: { readonly running: readonly string[]; readonly attention: readonly string[]; readonly outstanding?: readonly string[]; readonly failed?: readonly string[] }) => void
   readonly onEvent?: (sessionID: string, event: unknown) => void
+  readonly onNotices?: (frame: RemoteNoticeFrame) => void
   /** Called after a successful reconnect so read-only state can be reloaded. */
   readonly onReconnect?: () => void
 }
@@ -40,7 +43,7 @@ export type RemoteTransportRequest = {
 export type RemoteTransport = {
   readonly connect: () => void
   readonly close: (code?: number, reason?: string) => void
-  readonly request: (operation: RemoteOperation, request?: RemoteTransportRequest) => Promise<RemoteRequestOutcome>
+  readonly request: (operation: RemoteOperation | RemoteNoticeOperation, request?: RemoteTransportRequest) => Promise<RemoteRequestOutcome>
   readonly status: () => RemoteTransportStatus
 }
 
@@ -201,7 +204,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
 
   const handleFrame = (raw: string) => {
     if (raw.length === 0) return
-    const parsed = parseAgentMessage(raw)
+    const parsed = parseRelayToClientMessage(raw)
     if (!parsed.ok) {
       handlers.onStatus?.({ kind: "closed", code: parsed.error.code === "message_too_large" ? 1009 : 1003, reason: parsed.error.message, retryable: true })
       return
@@ -222,6 +225,10 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
     }
     if (frame.type === "event") {
       handlers.onEvent?.(frame.sessionID, frame.event)
+      return
+    }
+    if (frame.type === "notice.added" || frame.type === "notice.removed" || frame.type === "notice.cleared" || frame.type === "notice.unavailable" || frame.type === "notice.offline") {
+      handlers.onNotices?.(frame)
       return
     }
     settle(frame)

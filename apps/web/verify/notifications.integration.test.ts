@@ -22,11 +22,11 @@ beforeAll(async () => {
 })
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
-async function open(width: number, theme: "light" | "dark", initial = "seeded") {
+async function open(width: number, theme: "light" | "dark", initial = "seeded", extra = "") {
   if (!browser) throw new Error("Browser not started")
   const page = await browser.openPage()
   await page.setViewport(width, 844)
-  await page.navigate(`http://127.0.0.1:${port}/verify/notifications-fixture.html?theme=${theme}&initial=${initial}`)
+  await page.navigate(`http://127.0.0.1:${port}/verify/notifications-fixture.html?theme=${theme}&initial=${initial}${extra}`)
   for (let attempt = 0; attempt < 60; attempt += 1) {
     if (await page.evaluate<boolean>(`document.querySelector('.yc-notification-center__trigger') !== null`)) return page
     await Bun.sleep(50)
@@ -104,7 +104,7 @@ describe("notification center and live toasts", () => {
             label: document.querySelector('.yc-notification-panel__new')?.textContent ?? '', rect: [rect.left, rect.top, rect.width, rect.height],
             added: window.addedNoticeRows.size, removed: window.removedNoticeRows.size };
         })()`
-        const before = await page.evaluate<{ rect: readonly number[] }>(sample)
+        const before = await page.evaluate<{ rect: readonly number[]; badge: string }>(sample)
         await page.evaluate(`window.remoteStatus([], [])`)
         const status = await page.evaluate<{ retained: boolean; panelSame: boolean; activeRows: number; rect: readonly number[]; added: number; removed: number }>(sample)
         await page.evaluate(`window.advanceNoticeMinutes(1)`)
@@ -112,23 +112,20 @@ describe("notification center and live toasts", () => {
         await page.evaluate(`window.remoteStatus(['ses_new'], []); window.remoteStatus([], [])`)
         await page.evaluate(`Promise.allSettled([...document.querySelectorAll('.yc-notification')].flatMap(node => node.getAnimations()).map(animation => animation.finished))`)
         const newNotice = await page.evaluate<{ retained: boolean; panelSame: boolean; activeRows: number; rect: readonly number[]; badge: string; added: number; removed: number }>(sample)
-        await page.evaluate(`document.querySelector('.yc-notification-panel__action:first-of-type').click()`)
-        const read = await page.evaluate<{ retained: boolean; panelSame: boolean; activeRows: number; rect: readonly number[]; badge: string; added: number; removed: number }>(sample)
         const snapshotReads = await page.evaluate<number>(`window.remoteOperationReport().operations['session.snapshot'] ?? 0`)
         await page.evaluate(`[...document.querySelectorAll('.fixture__controls button')].find(button => button.textContent?.includes('Simulate disconnect and reconnect')).click()`)
         for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.remote-connection-label')?.textContent?.trim() === 'Connected' && document.querySelector('.status-strip') === null`); attempt += 1) await Bun.sleep(50)
         const reconnect = await page.evaluate<{ retained: boolean; panelSame: boolean; activeRows: number; rect: readonly number[]; added: number; removed: number }>(sample)
-        expect(initial).toEqual({ added: 4, removed: 0, ages: ["3m", "4m", "6m", "8m"], label: "4 new", unread: 0 })
-        for (const update of [status, tick, newNotice, read, reconnect]) {
+        expect(initial).toEqual({ added: 4, removed: 0, ages: ["3m", "4m", "6m", "8m"], label: "4 new", unread: 4 })
+        for (const update of [status, tick, newNotice, reconnect]) {
           expect(update.retained).toBe(true)
           expect(update.panelSame).toBe(true)
           expect(update.activeRows).toBe(0)
         }
         expect(status.rect).toEqual(before.rect)
         expect(tick.rect).toEqual(before.rect)
-        expect(newNotice.badge).toBe("1")
-        expect(read.badge).toBe("")
-        expect(read.rect).toEqual(newNotice.rect)
+        expect(before.badge).toBe("4")
+        expect(newNotice.badge).toBe("5")
         expect(reconnect.rect).toEqual(newNotice.rect)
         expect(reconnect.added).toBe(5)
         expect(reconnect.removed).toBe(0)
@@ -166,7 +163,7 @@ describe("notification center and live toasts", () => {
           const item = panel.querySelector('.yc-notification');
           return { count: panel.querySelectorAll('.yc-notification').length, today: panel.textContent.includes('Today'), newLabel: panel.querySelector('.yc-notification-panel__new')?.textContent ?? '', unread: panel.querySelectorAll('.yc-notification__unread:not([aria-hidden="true"])').length, overflow: document.documentElement.scrollWidth > innerWidth, left: rect.left, right: rect.right, radius: getComputedStyle(panel).borderTopLeftRadius, motion: getComputedStyle(panel).animationName, theme: document.documentElement.dataset.theme, bodyWidth: item.querySelector('.yc-notification__open').getBoundingClientRect().width, tonesMatch: [...panel.querySelectorAll('.yc-notification')].every(row => getComputedStyle(row.querySelector('strong')).color === getComputedStyle(row.querySelector('.yc-notification__icon')).color) };
         })()`)
-        expect(result).toMatchObject({ count: 2, today: true, newLabel: "2 new", unread: 0, overflow: false, radius: "20px", theme, tonesMatch: true })
+        expect(result).toMatchObject({ count: 2, today: true, newLabel: "2 new", unread: 2, overflow: false, radius: "20px", theme, tonesMatch: true })
         expect(result.left).toBeGreaterThanOrEqual(0)
         expect(result.right).toBeLessThanOrEqual(width)
         expect(result.motion).not.toBe("none")
@@ -185,7 +182,6 @@ describe("notification center and live toasts", () => {
         await page.evaluate(`Promise.all([...document.querySelector('.yc-notification-panel').getAnimations()].map(animation => animation.finished))`)
         expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel') === null`)).toBe(true)
         await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
-        await page.evaluate(`document.querySelector('.yc-notification-panel__action:last-child').click()`)
         expect(await page.evaluate<string>(`document.querySelector('.yc-notification-panel__empty strong')?.textContent ?? ''`)).toBe("You're all caught up")
         await page.pressEscape()
         expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.yc-notification-center__trigger') && document.querySelector('.yc-notification-panel')?.inert === true`)).toBe(true)
@@ -194,6 +190,52 @@ describe("notification center and live toasts", () => {
       } finally { await page.close() }
     }
   }, 30_000)
+
+  test("opening the center keeps every notice until the Read all icon or a deliberate dismiss removes it", async () => {
+    for (const [width, theme] of [[390, "light"], [1440, "dark"]] as const) {
+      const page = await open(width, theme)
+      try {
+        await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
+        const opened = await page.evaluate<{ rows: number; badge: string; actions: number; label: string; icon: boolean }>(`(() => {
+          const action = document.querySelector('.yc-notification-panel__action');
+          return { rows: document.querySelectorAll('.yc-notification').length, badge: document.querySelector('.yc-notification-center__badge')?.textContent ?? '',
+            actions: document.querySelectorAll('.yc-notification-panel__action').length, label: action?.getAttribute('aria-label') ?? '', icon: action?.querySelector('svg') !== null };
+        })()`)
+        expect(opened).toEqual({ rows: 2, badge: "2", actions: 1, label: "Read all", icon: true })
+        await page.evaluate(`document.querySelector('.yc-notification-panel__action').click()`)
+        expect(await page.evaluate<{ rows: number; badge: boolean; empty: string }>(`({ rows: document.querySelectorAll('.yc-notification').length, badge: document.querySelector('.yc-notification-center__badge') !== null, empty: document.querySelector('.yc-notification-panel__empty strong')?.textContent ?? '' })`))
+          .toEqual({ rows: 0, badge: false, empty: "You're all caught up" })
+      } finally { await page.close() }
+    }
+  }, 15_000)
+
+  test("opening a live notice from its toast reads that notice rather than only closing the toast", async () => {
+    const page = await open(390, "light", "empty")
+    try {
+      await page.evaluate(`window.remoteNotify('agent-completed', 'ses_alpha')`)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`)).toBe(1)
+      await page.evaluate(`document.querySelector('.yc-toast__open').click()`)
+      expect(await page.evaluate<string[]>(`window.remoteOpened()`)).toEqual(["ses_alpha"])
+      await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification').length`)).toBe(0)
+    } finally { await page.close() }
+  }, 15_000)
+
+  test("a relay sync error is announced on the bell and in the panel with a Retry action", async () => {
+    for (const [width, theme] of [[390, "light"], [1440, "dark"]] as const) {
+      const page = await open(width, theme, "seeded", "&sync=error")
+      try {
+        const bell = await page.evaluate<{ label: string; badge: string }>(`({ label: document.querySelector('.yc-notification-center__trigger').getAttribute('aria-label'), badge: document.querySelector('.yc-notification-center__badge--error')?.textContent ?? '' })`)
+        expect(bell).toEqual({ label: "Notifications, 2 unread, sync unavailable", badge: "!" })
+        await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
+        const panel = await page.evaluate<{ role: string | null; text: string; retry: string; overflow: boolean }>(`(() => {
+          const error = document.querySelector('.yc-notification-panel__error');
+          return { role: error?.getAttribute('role') ?? null, text: error?.querySelector('span')?.textContent ?? '', retry: error?.querySelector('button')?.textContent ?? '', overflow: document.documentElement.scrollWidth > innerWidth };
+        })()`)
+        expect(panel).toEqual({ role: "alert", text: "Some notifications could not be saved. Stored unread notifications remain available.", retry: "Retry", overflow: false })
+      } finally { await page.close() }
+    }
+  }, 15_000)
 
   test("notification center enters and exits over frames, then releases its inert closing layer", async () => {
     for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"] as const) for (const reduce of [false, true]) {
@@ -269,7 +311,7 @@ describe("notification center and live toasts", () => {
       expect(await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`)).toBe(0)
       expect(await page.evaluate<string[]>(`window.remoteOpened()`)).toEqual(["ses_alpha"])
       await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification').length`)).toBe(1)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification').length`)).toBe(0)
       await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click(); ['ses_alpha','ses_beta','ses_alpha','ses_beta'].forEach(id => window.remoteNotify('approval-requested', id))`)
       for (let attempt = 0; attempt < 30 && await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`) !== 3; attempt += 1) await Bun.sleep(30)
       expect(await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`)).toBe(3)
@@ -280,7 +322,7 @@ describe("notification center and live toasts", () => {
       await Bun.sleep(6_300)
       expect(await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`)).toBe(0)
       await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification').length`)).toBe(5)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification').length`)).toBe(4)
     } finally { await page.close() }
   }, 15_000)
 

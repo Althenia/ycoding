@@ -1,3 +1,5 @@
+import { RemoteLimits } from "@ycoding-ai/remote"
+
 export interface RemoteTransport {
   readonly connect: () => Promise<void>
   /** Sends one already-serialized envelope frame; the transport never re-encodes it. */
@@ -168,7 +170,7 @@ export class CloudflareRemoteTransport implements RemoteTransport {
       }
       this.awaitingPong = true
       socket.send('{"type":"ping"}')
-    }, this.options.heartbeatIntervalMs ?? 20_000)
+    }, this.options.heartbeatIntervalMs ?? RemoteLimits.agentHeartbeatIntervalMs)
   }
 
   private clearHeartbeat() {

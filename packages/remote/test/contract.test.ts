@@ -13,18 +13,35 @@ import {
   parseChunkedValue,
   parsePublicKey,
   parsePushSubscription,
-  parsePushRemoval,
+  parsePushEndpoint,
+  parsePushTestResponse,
   parseRelayToAgentMessage,
+  noticePageValue,
+  noticeSequence,
+  parseNoticePage,
+  parseRelayToClientMessage,
   remoteError,
   remoteOperations,
   remoteSessionOperations,
   requireSession,
+  isNoticeRequest,
   serializeEvent,
+  serializeNoticeFrame,
   serializeRequest,
   serializeResponse,
   serializeSessions,
+  type RemoteNoticeFrame,
   type RemoteOperation,
 } from "../src/index"
+
+test("notice cursors identify one positive safe integer without aliases", () => {
+  expect(noticeSequence("ntc_1")).toBe(1)
+  expect(noticeSequence("ntc_999999999999999")).toBe(999999999999999)
+  for (const id of ["ntc_0", "ntc_01", "ntc_9007199254740993", "ntc_1.0", "ntc_-1"])
+    expect(noticeSequence(id)).toBeUndefined()
+  for (const id of ["ntc_0", "ntc_01", "ntc_9007199254740993"])
+    expect(parseClientMessage(JSON.stringify({ type: "request", id: "req", operation: "notice.read", input: { ids: [id] } })).ok).toBe(false)
+})
 
 test("scoped attachment chunks stay within the client frame and require ordered upload fields", () => {
   const input = { uploadID: "4ab94d33-6e6b-41a3-a638-f0a6596854a9", index: 0, last: false, data: "AAAA" }
@@ -115,9 +132,20 @@ test("relay-only cancel frames cannot be forged by a browser", () => {
 })
 
 test("push subscription input admits only bounded known push services and key shapes", () => {
-  const input = { endpoint: "https://fcm.googleapis.com/fcm/send/abc", keys: { p256dh: "BA" + "A".repeat(85), auth: "A".repeat(22) } }
+  const categories = { "agent-completed": true, "approval-requested": false, "machine-offline": true }
+  const input = { endpoint: "https://fcm.googleapis.com/fcm/send/abc", keys: { p256dh: "BA" + "A".repeat(85), auth: "A".repeat(22) }, categories }
   expect(parsePushSubscription(input)).toMatchObject({ ok: true, value: input })
-  expect(parsePushRemoval({ endpoint: input.endpoint })).toMatchObject({ ok: true, value: { endpoint: input.endpoint } })
+  expect(parsePushEndpoint({ endpoint: input.endpoint })).toMatchObject({ ok: true, value: { endpoint: input.endpoint } })
+  const renewal = { endpoint: "https://web.push.apple.com/renewed", keys: input.keys, replaces: input.endpoint }
+  expect(parsePushSubscription(renewal)).toEqual({ ok: true, value: renewal })
+  for (const invalid of [
+    { endpoint: input.endpoint, keys: input.keys },
+    { ...input, replaces: input.endpoint },
+    { ...renewal, replaces: "https://evil.example/old" },
+    { ...input, categories: { "agent-completed": true, "approval-requested": true } },
+    { ...input, categories: { ...categories, "machine-offline": "yes" } },
+    { ...input, categories: { ...categories, test: true } },
+  ]) expect(parsePushSubscription(invalid).ok).toBe(false)
   for (const endpoint of ["https://updates.push.services.mozilla.com/wpush/abc", "https://web.push.apple.com/Q", "https://foo.push.apple.com/Q", "https://foo.notify.windows.com/WNS"])
     expect(parsePushSubscription({ ...input, endpoint }).ok).toBe(true)
   for (const endpoint of ["http://fcm.googleapis.com/send", "https://fcm.googleapis.com.evil.example/send",
@@ -128,6 +156,14 @@ test("push subscription input admits only bounded known push services and key sh
     { ...input, keys: { ...input.keys, p256dh: "short" } },
     { ...input, extra: "untrusted" },
   ]) expect(parsePushSubscription(invalid).ok).toBe(false)
+})
+
+test("push test responses report only the push service outcome and its HTTP status", () => {
+  for (const value of [{ outcome: "accepted", status: 201 }, { outcome: "rejected", status: 403 }, { outcome: "expired", status: 410 }, { outcome: "unreachable" }] as const)
+    expect(parsePushTestResponse(value)).toEqual({ ok: true, value })
+  for (const value of [{ outcome: "delivered", status: 201 }, { outcome: "accepted" }, { outcome: "unreachable", status: 0 },
+    { outcome: "accepted", status: 201, endpoint: "https://fcm.googleapis.com/fcm/send/abc" }, { outcome: "rejected", status: 99 }])
+    expect(parsePushTestResponse(value).ok).toBe(false)
 })
 
 test("usage operations are global and validate refresh and bounded ReportInput", () => {
@@ -642,5 +678,133 @@ describe("device authentication shapes", () => {
       code: "session_not_allowed",
       message: "Session is not served by the connected agent",
     })
+  })
+})
+
+describe("notice log contract", () => {
+  const notice = { id: "ntc_1", category: "approval-requested", sessionID: "ses_a", createdAt: 1_700_000_000_000 } as const
+  const request = (operation: string, input?: unknown, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ type: "request", id: "req_1", operation, ...(input === undefined ? {} : { input }), ...extra })
+
+  test("admits the relay-local notice operations with bounded strict input", () => {
+    expect(parseClientMessage(request("notice.subscribe"))).toEqual({ ok: true, value: { type: "request", id: "req_1", operation: "notice.subscribe" } })
+    expect(parseClientMessage(request("notice.readAll"))).toEqual({ ok: true, value: { type: "request", id: "req_1", operation: "notice.readAll" } })
+    expect(parseClientMessage(request("notice.list", { before: "ntc_51" }))).toEqual({
+      ok: true, value: { type: "request", id: "req_1", operation: "notice.list", input: { before: "ntc_51" } },
+    })
+    expect(parseClientMessage(request("notice.read", { ids: ["ntc_1", "ntc_2"] }))).toEqual({
+      ok: true, value: { type: "request", id: "req_1", operation: "notice.read", input: { ids: ["ntc_1", "ntc_2"] } },
+    })
+    expect(isNoticeRequest({ type: "request", id: "r", operation: "notice.read", input: { ids: ["ntc_1"] } })).toBe(true)
+    expect(isNoticeRequest({ type: "request", id: "r", operation: "session.list" })).toBe(false)
+    expect(isNoticeRequest({ type: "ping" })).toBe(false)
+    const ids = (count: number) => Array.from({ length: count }, (_, index) => `ntc_${index + 1}`)
+    expect(parseClientMessage(request("notice.read", { ids: ids(RemoteLimits.maxNoticeBatch) })).ok).toBe(true)
+    for (const frame of [
+      request("notice.subscribe", {}),
+      request("notice.readAll", { ids: [] }),
+      request("notice.subscribe", undefined, { sessionID: "ses_a" }),
+      request("notice.list"),
+      request("notice.list", {}),
+      request("notice.list", { before: "ses_1" }),
+      request("notice.list", { before: "ntc_1", extra: true }),
+      request("notice.list", { before: "ntc_1234567890123456" }),
+      request("notice.read"),
+      request("notice.read", { ids: [] }),
+      request("notice.read", { ids: ids(RemoteLimits.maxNoticeBatch + 1) }),
+      request("notice.read", { ids: ["ntc_1", "ntc_1"] }),
+      request("notice.read", { ids: ["../x"] }),
+      request("notice.read", { ids: ["ntc_x"] }),
+      request("notice.read", { ids: [1] }),
+      request("notice.read", { ids: ["ntc_1"], extra: true }),
+    ]) expect(parseClientMessage(frame).ok).toBe(false)
+  })
+
+  test("keeps notice operations off the agent surface and out of the forwarded operation set", () => {
+    expect(parseRelayToAgentMessage(request("notice.subscribe")).ok).toBe(false)
+    expect(parseRelayToAgentMessage(request("notice.readAll")).ok).toBe(false)
+    expect(remoteOperations.some((operation) => operation.startsWith("notice."))).toBe(false)
+  })
+
+  test("parses relay frames for a browser and refuses to let an agent originate them", () => {
+    const frames: RemoteNoticeFrame[] = [
+      { type: "notice.added", notices: [notice, { ...notice, id: "ntc_2", category: "agent-completed" }], total: 9 },
+      { type: "notice.removed", ids: ["ntc_1", "ntc_2"], total: 0 },
+      { type: "notice.cleared" },
+      { type: "notice.unavailable" },
+      { type: "notice.offline", at: 1_790_000_000_000 },
+    ]
+    for (const frame of frames) {
+      expect(parseRelayToClientMessage(JSON.stringify(frame))).toEqual({ ok: true, value: frame })
+      expect(serializeNoticeFrame(frame)).toBe(JSON.stringify(frame))
+      expect(parseAgentMessage(JSON.stringify(frame)).ok).toBe(false)
+      expect(parseClientMessage(JSON.stringify(frame)).ok).toBe(false)
+    }
+    expect(parseRelayToClientMessage('{"type":"status","running":["ses_a"],"attention":[]}')).toEqual({
+      ok: true, value: { type: "status", running: ["ses_a"], attention: [] },
+    })
+    expect(parseRelayToClientMessage('{"type":"response","id":"r","ok":true,"value":null}')).toEqual({
+      ok: true, value: { type: "response", id: "r", ok: true, value: null },
+    })
+    expect(parseRelayToClientMessage('{"type":"ping"}')).toEqual({ ok: true, value: { type: "ping" } })
+  })
+
+  test("rejects malformed or oversized notice frames", () => {
+    const many = Array.from({ length: RemoteLimits.maxNoticeBatch + 1 }, (_, index) => ({ ...notice, id: `ntc_${index}` }))
+    for (const frame of [
+      { type: "notice.snapshot", notices: [], total: 0 },
+      { type: "notice.added", notices: [] , total: 0 },
+      { type: "notice.added", notices: [notice] },
+      { type: "notice.added", notices: [notice], total: -1 },
+      { type: "notice.added", notices: [notice], total: 1.5 },
+      { type: "notice.added", notices: [{ ...notice, category: "machine-offline" }], total: 1 },
+      { type: "notice.added", notices: [{ ...notice, sessionID: "not-a-session" }], total: 1 },
+      { type: "notice.added", notices: [{ ...notice, createdAt: -1 }], total: 1 },
+      { type: "notice.added", notices: [{ ...notice, createdAt: 1.5 }], total: 1 },
+      { type: "notice.added", notices: [{ ...notice, id: "../x" }], total: 1 },
+      { type: "notice.added", notices: [{ ...notice, title: "secret" }], total: 1 },
+      { type: "notice.added", notices: [notice, notice], total: 2 },
+      { type: "notice.added", notices: many, total: many.length },
+      { type: "notice.added", notices: [notice], total: 1, extra: true },
+      { type: "notice.removed", ids: [], total: 0 },
+      { type: "notice.removed", ids: ["ntc_1"] },
+      { type: "notice.removed", ids: ["ntc_1", "ntc_1"], total: 0 },
+      { type: "notice.removed", ids: many.map((entry) => entry.id), total: 0 },
+      { type: "notice.removed", ids: [7], total: 0 },
+      { type: "notice.cleared", total: 0 },
+      { type: "notice.unavailable", reason: "storage_full" },
+      { type: "notice.offline" },
+      { type: "notice.offline", at: 0 },
+      { type: "notice.offline", at: 1.5 },
+      { type: "notice.offline", at: "1790000000000" },
+      { type: "notice.offline", at: 1, deviceID: "dev_1" },
+    ]) expect(parseRelayToClientMessage(JSON.stringify(frame)).ok).toBe(false)
+    expect(parseRelayToClientMessage("not json").ok).toBe(false)
+    expect(parseRelayToClientMessage("x".repeat(RemoteLimits.maxAgentMessageChars + 1))).toMatchObject({ ok: false, error: { code: "message_too_large" } })
+  })
+
+  test("validates the page a subscribe or list response carries", () => {
+    const page = { notices: [notice, { ...notice, id: "ntc_2" }], next: "ntc_1", total: 7, unavailable: false }
+    expect(parseNoticePage(page)).toEqual({ ok: true, value: page })
+    expect(parseNoticePage(JSON.parse(JSON.stringify(noticePageValue(page))))).toEqual({ ok: true, value: page })
+    expect(parseNoticePage({ notices: [], total: 0, unavailable: true })).toEqual({ ok: true, value: { notices: [], total: 0, unavailable: true } })
+    const full = Array.from({ length: RemoteLimits.noticePageSize + 1 }, (_, index) => ({ ...notice, id: `ntc_${index}` }))
+    for (const bad of [
+      null, [], "page", {},
+      { notices: [], total: 0 },
+      { notices: [], total: -1, unavailable: false },
+      { notices: [], total: 0, unavailable: "no" },
+      { notices: [], next: "ses_1", total: 0, unavailable: false },
+      { notices: [notice, notice], total: 2, unavailable: false },
+      { notices: full, total: full.length, unavailable: false },
+      { notices: [{ ...notice, title: "secret" }], total: 1, unavailable: false },
+      { notices: [], total: 0, unavailable: false, extra: 1 },
+    ]) expect(parseNoticePage(bad).ok).toBe(false)
+  })
+
+  test("derives the ordering sequence from a notice id only when it is well formed", () => {
+    expect(noticeSequence("ntc_42")).toBe(42)
+    expect(noticeSequence("ntc_999999999999999")).toBe(999_999_999_999_999)
+    for (const id of ["ntc_", "ntc_x", "ntc_1234567890123456", "ses_1", "ntc_-1", "ntc_1.5"]) expect(noticeSequence(id)).toBeUndefined()
   })
 })

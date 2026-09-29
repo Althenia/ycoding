@@ -18,34 +18,18 @@ async function setup(handler?: (request: { operation: string; input?: Readonly<R
 }
 
 describe("remote data", () => {
-  test("the bell waits for all family work and gives attention precedence over finished", async () => {
-    const test = await setup()
-    try {
-      await test.store.load()
-      await waitFor(() => test.store.state().sessionStatus !== undefined)
-      test.relay.pushStatus(["ses_a"], [])
-      await waitFor(() => test.store.state().sessionStatus?.running.has("ses_a") === true)
-      test.relay.pushStatus([], [], ["ses_a"])
-      await waitFor(() => test.store.state().sessionStatus?.running.size === 0)
-      expect(test.store.state().notifications).toEqual([])
-      test.relay.pushStatus([], ["ses_a"])
-      await waitFor(() => test.store.state().sessionStatus?.attention.has("ses_a") === true)
-      expect(test.store.state().notifications.map((notice) => notice.category)).toEqual(["approval-requested"])
-      test.relay.pushStatus(["ses_a"], [])
-      await waitFor(() => test.store.state().sessionStatus?.running.has("ses_a") === true)
-      test.relay.pushStatus([], [])
-      await waitFor(() => test.store.state().notifications.length === 2)
-      expect(test.store.state().notifications.map((notice) => notice.category)).toEqual(["agent-completed", "approval-requested"])
-    } finally { await test.stop() }
-  })
   test("a failure-only root is failed rather than waiting, still raises one Needs your attention notice, and a pending request restores its dot", async () => {
     const test = await setup()
     const rows = () => test.store.state().sessions.map((row) => [row.id, row.attention, row.failed])
     try {
       await test.store.load()
-      await waitFor(() => test.store.state().sessionStatus !== undefined && test.store.state().sessions.length === 2)
+      await waitFor(() => test.store.state().sessionStatus !== undefined && test.store.state().sessions.length === 2 && test.store.state().noticeSync.status === "ready")
       test.relay.pushStatus([], ["ses_a", "ses_b"], undefined, ["ses_a"])
-      await waitFor(() => test.store.state().sessionStatus?.failed.has("ses_a") === true)
+      test.relay.pushNotices({ type: "notice.added", total: 2, notices: [
+        { id: "ntc_1", category: "approval-requested", sessionID: "ses_a", createdAt: 1 },
+        { id: "ntc_2", category: "approval-requested", sessionID: "ses_b", createdAt: 2 },
+      ] })
+      await waitFor(() => test.store.state().sessionStatus?.failed.has("ses_a") === true && test.store.state().notifications.length === 2)
       expect(rows()).toEqual([["ses_a", false, true], ["ses_b", true, false]])
       expect(test.store.state().notifications).toHaveLength(2)
       expect(test.store.state().notifications.map((notice) => [notice.category, notice.sessionID])).toEqual(expect.arrayContaining([["approval-requested", "ses_a"], ["approval-requested", "ses_b"]]))
@@ -62,30 +46,6 @@ describe("remote data", () => {
       await test.store.load()
       await waitFor(() => test.store.state().sessionStatus?.failed.has("ses_a") === true && test.store.state().sessions.length === 2)
       expect(test.store.state().sessions.map((row) => [row.id, row.attention, row.failed])).toEqual([["ses_a", false, true], ["ses_b", false, false]])
-    } finally { await test.stop() }
-  })
-  test("the first status after a same-device reconnect reports decisions gained and work stopped while away", async () => {
-    const test = await setup()
-    const transitions = () => test.store.state().notifications.filter((entry) => entry.category === "approval-requested" || entry.category === "agent-completed")
-      .map((entry) => [entry.category, entry.sessionID])
-    try {
-      await test.store.load()
-      await waitFor(() => test.store.state().sessionStatus !== undefined)
-      test.relay.pushStatus(["ses_a"], [])
-      await waitFor(() => test.store.state().sessionStatus?.running.has("ses_a") === true)
-      expect(transitions()).toEqual([])
-      const firstConnection = test.relay.connections
-      test.relay.dropConnections(1012, "Reconnect")
-      await waitFor(() => test.relay.connections > firstConnection && test.store.state().transport.kind === "open")
-      test.relay.pushStatus([], ["ses_b"])
-      await waitFor(() => test.store.state().sessionStatus?.attention.has("ses_b") === true)
-      expect(transitions()).toEqual([["agent-completed", "ses_a"], ["approval-requested", "ses_b"]])
-      const secondConnection = test.relay.connections
-      test.relay.dropConnections(1012, "Reconnect")
-      await waitFor(() => test.relay.connections > secondConnection && test.store.state().transport.kind === "open")
-      test.relay.pushStatus([], ["ses_b"])
-      await Bun.sleep(20)
-      expect(transitions()).toEqual([["agent-completed", "ses_a"], ["approval-requested", "ses_b"]])
     } finally { await test.stop() }
   })
   test("loads running roots across workspaces with names before recent rows", async () => {
@@ -268,7 +228,7 @@ describe("remote data", () => {
       expect(test.relay.requests.filter((request) => request.operation === "session.command").map((request) => request.input?.id)).toEqual([mutation.input.id, mutation.input.id])
     } finally { await test.stop() }
   })
-  test("a frame arriving before the status read is the silent baseline and cannot be overwritten by that read", async () => {
+  test("a frame arriving before the status read cannot be overwritten by that read", async () => {
     let release: (() => void) | undefined
     const gate = new Promise<void>((resolve) => { release = resolve })
     const test = await setup(async (request) => {
@@ -281,13 +241,12 @@ describe("remote data", () => {
       await waitFor(() => test.relay.requests.some((request) => request.operation === "session.status"))
       test.relay.pushStatus(["ses_b"], ["ses_a"])
       await waitFor(() => test.store.state().sessionStatus?.running.has("ses_b") === true)
-      expect(test.store.state().notifications).toEqual([])
       release?.()
       await Bun.sleep(15)
       expect(test.store.state().sessionStatus?.attention.has("ses_a")).toBe(true)
       test.relay.pushStatus([], ["ses_a"])
-      await waitFor(() => test.store.state().notifications.some((notice) => notice.category === "agent-completed"))
-      expect(test.store.state().notifications[0]).toMatchObject({ category: "agent-completed", sessionID: "ses_b" })
+      await waitFor(() => test.store.state().sessionStatus?.running.size === 0)
+      expect(test.store.state().sessionStatus?.attention.has("ses_a")).toBe(true)
     } finally { release?.(); await test.stop() }
   })
   test("follows durable active-session agent and model changes in the selected list row", async () => {
@@ -302,20 +261,6 @@ describe("remote data", () => {
         durable: { aggregateID: "ses_a", seq: 2, version: 1 } })
       await waitFor(() => test.store.state().selectedSessionInfo?.model?.id === "gpt-6")
       expect(test.store.state().selectedSessionInfo).toMatchObject({ agent: "reviewer", model: { providerID: "openai", id: "gpt-6" } })
-    } finally { await test.stop() }
-  })
-  test("the first status frame after a baseline read alerts on new attention and stopped work", async () => {
-    const test = await setup((request) => request.operation === "session.status"
-      ? { ok: true, value: { running: ["ses_b"], attention: [] } } : "default")
-    try {
-      await test.store.load()
-      await waitFor(() => test.store.state().sessionStatus?.running.has("ses_b") === true)
-      expect(test.store.state().notifications).toEqual([])
-      test.relay.pushStatus([], ["ses_a"])
-      await waitFor(() => test.store.state().sessionStatus?.attention.has("ses_a") === true)
-      expect(test.store.state().notifications.map((notice) => [notice.category, notice.sessionID, notice.sessionTitle])).toEqual([
-        ["agent-completed", "ses_b", "Beta session"], ["approval-requested", "ses_a", "Alpha session"],
-      ])
     } finally { await test.stop() }
   })
   test("coalesces missing attention roots into one first-page reload during a status burst", async () => {
@@ -519,7 +464,7 @@ describe("remote data", () => {
       expect(test.store.state().catalogs).toEqual({})
     } finally { await test.stop() }
   })
-  test("status frames replace family sets, reorder roots, and alert only on live transitions", async () => {
+  test("status frames replace family sets and reorder roots without raising a local notice", async () => {
     const test = await setup()
     try {
       await test.store.load()
@@ -528,20 +473,13 @@ describe("remote data", () => {
       test.relay.pushStatus(["ses_b"], ["ses_a"])
       await waitFor(() => test.store.state().sessionStatus?.attention.has("ses_a") === true)
       expect(test.store.state().sessions.map((row) => row.id)).toEqual(["ses_b", "ses_a"])
-      expect(test.store.state().notifications.map((notice) => [notice.category, notice.sessionID])).toEqual([["approval-requested", "ses_a"]])
+      expect(test.store.state().notifications).toEqual([])
 
       test.relay.pushStatus(["ses_a"], ["ses_b"])
       await waitFor(() => test.store.state().sessionStatus?.running.has("ses_a") === true)
       expect(test.store.state().sessions.map((row) => [row.id, row.running, row.attention])).toEqual([
         ["ses_a", true, false], ["ses_b", false, true],
       ])
-      expect(test.store.state().notifications.map((notice) => [notice.category, notice.sessionID, notice.read])).toEqual([
-        ["approval-requested", "ses_b", false], ["approval-requested", "ses_a", false],
-      ])
-      expect(test.store.state().notifications[0]?.body).toBe("A session is waiting for you.")
-      test.store.markNotificationsRead()
-      expect(test.store.state().notifications.every((notice) => notice.read)).toBe(true)
-      test.store.clearNotifications()
       expect(test.store.state().notifications).toEqual([])
     } finally { await test.stop() }
   })

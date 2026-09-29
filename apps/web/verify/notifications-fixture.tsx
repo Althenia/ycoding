@@ -10,8 +10,8 @@ import "../src/styles/base.css"
 const parameters = new URLSearchParams(location.search)
 document.documentElement.dataset.theme = parameters.get("theme") === "dark" ? "dark" : "light"
 
-const baseline = (id: string, category: RemoteNotificationView["category"], at: number, sessionID: string, titled = true): RemoteNotificationView => ({
-  id, category, at, sessionID, ...(titled ? { sessionTitle: sessionID === "ses_alpha" ? "Alpha Session" : "Beta Session" } : {}), read: false,
+const baseline = (id: string, category: RemoteNotificationView["category"], at: number, sessionID: string, titled = true, live = false): RemoteNotificationView => ({
+  id, category, at, sessionID, ...(titled ? { sessionTitle: sessionID === "ses_alpha" ? "Alpha Session" : "Beta Session" } : {}), synced: true, live,
   title: "YCoding notice", body: "An action needs attention.",
 })
 const initial = parameters.get("initial") === "empty" ? [] : [
@@ -19,12 +19,15 @@ const initial = parameters.get("initial") === "empty" ? [] : [
   baseline("notice_initial_1", "agent-completed", Date.now() - 120_000, "ses_alpha"),
 ]
 const base = createRemoteStore({ http: createRemoteHttp(), createTransport: () => { throw new Error("Fixture does not connect") } })
-let state: RemoteStoreState = { ...base.state(), notifications: initial }
+const syncState = (notifications: readonly RemoteNotificationView[]): RemoteStoreState["noticeSync"] =>
+  ({ status: parameters.get("sync") === "error" ? "error" : "ready", total: notifications.length, loaded: notifications.length, hidden: 0, loadingMore: false,
+    message: parameters.get("sync") === "error" ? "Some notifications could not be saved. Stored unread notifications remain available." : undefined })
+let state: RemoteStoreState = { ...base.state(), notifications: initial, noticeSync: syncState(initial) }
 let serial = 0
 const opened: string[] = []
 const subscribers = new Set<() => void>()
 const publish = (notifications: readonly RemoteNotificationView[]) => {
-  state = { ...state, notifications }
+  state = { ...state, notifications, noticeSync: syncState(notifications) }
   for (const subscriber of subscribers) subscriber()
 }
 const store: RemoteStore = {
@@ -32,13 +35,14 @@ const store: RemoteStore = {
   state: () => state,
   subscribe: (listener) => { subscribers.add(listener); return () => subscribers.delete(listener) },
   load: async () => {},
-  markNotificationsRead: () => publish(state.notifications.map((entry) => ({ ...entry, read: true }))),
-  clearNotifications: () => publish([]),
-  dismissNotification: (id) => publish(state.notifications.filter((entry) => entry.id !== id)),
+  readNotification: async (id) => { publish(state.notifications.filter((entry) => entry.id !== id)) },
+  readAllNotifications: async () => { publish([]) },
+  loadMoreNotifications: async () => {},
+  reloadNotifications: async () => {},
 }
 Object.assign(window, {
   remoteNotify: (category: RemoteNotificationView["category"] = "approval-requested", sessionID = "ses_alpha", titled = true) => {
-    const entry = baseline(`notice_live_${++serial}`, category, Date.now(), sessionID, titled)
+    const entry = baseline(`notice_live_${++serial}`, category, Date.now(), sessionID, titled, true)
     publish([entry, ...state.notifications].slice(0, 50))
   },
   remoteResolveTitle: (sessionID: string, title: string) => publish(state.notifications.map((entry) => entry.sessionID === sessionID ? { ...entry, sessionTitle: title } : entry)),

@@ -65,6 +65,10 @@ async function harness(count: number) {
     savePending: () => {},
     loadStatus: async () => storedStatus,
     saveStatus: async (status) => { storedStatus = status },
+    loadOfflineCheck: async () => undefined,
+    saveOfflineCheck: async () => undefined,
+    notices: { append: () => ({ notices: [], total: 0 }), page: () => ({ notices: [], total: 0 }), remove: () => ({ ids: [], total: 0 }), clear: () => {}, unavailable: () => false, markUnavailable: () => {} },
+    saveNoticeSubscription: () => {},
     authorizeClientCommand: async () => ({ ok: true }),
     authorizeAgentCommand: async () => ({ ok: true }),
     authorityTtlMs: 5_000,
@@ -75,6 +79,7 @@ async function harness(count: number) {
     browserSessionID: "browser_test",
     credentialExpiresAt: Date.now() + 120_000,
     subscriptions: [],
+    noticesSubscribed: false,
     pending: [],
   }
   await relay.attach({ ...connection, connectionID: "agent", role: "agent" })

@@ -61,6 +61,20 @@ test("service worker shows one notification per push including malformed and foc
     await emit("push", { data: { json: () => ({ category: "agent-completed", sessionID: "ses_1", deviceID: "dev_1" }) } })
     expect(shown[4]).toMatchObject({ title: "YCoding — work finished", options: { body: "A session finished all its work.", tag: "ycoding-ses_1-agent-completed" } })
     expect(shown[3]).toMatchObject({ title: "YCoding — needs your attention", options: { body: "A session is waiting for you." } })
+    await emit("push", { data: { json: () => ({ category: "agent-completed", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_3" }) } })
+    await emit("push", { data: { json: () => ({ category: "agent-completed", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_4" }) } })
+    expect(shown.slice(5).map((entry) => entry.options.tag)).toEqual(["ycoding-dev_1-ntc_3", "ycoding-dev_1-ntc_4"])
+    await emit("push", { data: { json: () => ({ category: "machine-offline", deviceID: "dev_1", offlineAt: 1_790_000_000_000 }) } })
+    expect(shown[7]).toEqual({ title: "YCoding — machine offline", options: { body: "The connected machine stopped reporting.",
+      tag: "ycoding-dev_1-offline-1790000000000", icon: "/icons/icon-256.png", badge: "/icons/icon-256.png" } })
+    await emit("push", { data: { json: () => ({ category: "machine-offline", deviceID: "dev_2", offlineAt: 1_790_000_000_000 }) } })
+    await emit("push", { data: { json: () => ({ category: "machine-offline", deviceID: "dev_1", offlineAt: 1_790_000_060_000 }) } })
+    expect(shown.splice(8, 2).map((entry) => entry.options.tag)).toEqual(["ycoding-dev_2-offline-1790000000000", "ycoding-dev_1-offline-1790000060000"])
+    await emit("push", { data: { json: () => ({ category: "test" }) } })
+    expect(shown[8]).toEqual({ title: "YCoding — test alert", options: { body: "Push alerts reach this device.", icon: "/icons/icon-256.png", badge: "/icons/icon-256.png" } })
+    await emit("push", { data: { json: () => ({ category: "agent-completed", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_0" }) } })
+    await emit("push", { data: { json: () => ({ category: "machine-offline", deviceID: "dev_1" }) } })
+    expect(shown.slice(9).map((entry) => entry.title)).toEqual(["YCoding — update", "YCoding — update"])
     await emit("notificationclick", { notification: { data: { sessionID: "ses_1" }, close: () => undefined } })
     expect(opened).toBe("/remote#session=ses_1")
     windowClients.push(windowClient)
@@ -78,12 +92,17 @@ test("service worker shows one notification per push including malformed and foc
     expect(posted).toEqual([])
     expect(opened).toBe("/remote#session=ses_1")
     await emit("pushsubscriptionchange", {})
+    expect(calls).toEqual([])
+    await emit("pushsubscriptionchange", { oldSubscription: { endpoint: "https://fcm.googleapis.com/send/original" } })
     expect(calls.map((call) => [call.method, new URL(call.url).pathname])).toEqual([["GET", "/api/push/key"], ["POST", "/api/push/subscriptions"]])
+    expect(await calls[1]?.json()).toEqual({ endpoint: "https://fcm.googleapis.com/send/replacement",
+      keys: { p256dh: expect.any(String), auth: expect.any(String) }, replaces: "https://fcm.googleapis.com/send/original" })
     await emit("pushsubscriptionchange", { oldSubscription: { endpoint: "https://fcm.googleapis.com/send/replacement" },
       newSubscription: { endpoint: "https://fcm.googleapis.com/send/replacement2",
         getKey: (name: string) => new Uint8Array(name === "p256dh" ? 65 : 16).buffer } })
-    expect(calls.slice(2).map((call) => call.method)).toEqual(["GET", "POST", "DELETE"])
-    expect(await calls[4]?.json()).toEqual({ endpoint: "https://fcm.googleapis.com/send/replacement" })
+    expect(calls.slice(2).map((call) => [call.method, new URL(call.url).pathname])).toEqual([["POST", "/api/push/subscriptions"]])
+    expect(await calls[2]?.json()).toEqual({ endpoint: "https://fcm.googleapis.com/send/replacement2",
+      keys: { p256dh: expect.any(String), auth: expect.any(String) }, replaces: "https://fcm.googleapis.com/send/replacement" })
   } finally {
     for (const [key, value] of Object.entries(previous)) Reflect.set(globalThis, key, value)
   }

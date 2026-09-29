@@ -369,9 +369,20 @@ try {
   const pushAuth = crypto.getRandomValues(new Uint8Array(16))
   const pushReceiver = new Uint8Array(await crypto.subtle.exportKey("raw", receiver.publicKey))
   const endpoint = "https://fcm.googleapis.com/fcm/send/flow-local-only"
-  const registeredPush = await pushHttp.subscribe({ endpoint, keys: {
-    p256dh: base64UrlEncode(pushReceiver), auth: base64UrlEncode(pushAuth),
-  } })
+  const pushKeys = { p256dh: base64UrlEncode(pushReceiver), auth: base64UrlEncode(pushAuth) }
+  const registeredPush = await pushHttp.subscribe({ endpoint, keys: pushKeys,
+    categories: { "agent-completed": true, "approval-requested": true, "machine-offline": true } })
+  const decryptPush = async (request: { readonly body: Uint8Array }): Promise<Record<string, unknown>> => {
+    const sender = request.body.slice(21, 86)
+    const publicSender = await crypto.subtle.importKey("raw", sender, { name: "ECDH", namedCurve: "P-256" }, false, [])
+    const shared = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: publicSender }, receiver.privateKey, 256))
+    const { cek, nonce } = await deriveWebPushKeys(shared, pushAuth, pushReceiver, sender, request.body.slice(0, 16))
+    const key = await crypto.subtle.importKey("raw", cek, "AES-GCM", false, ["decrypt"])
+    const clear = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce }, key, request.body.slice(86)))
+    const payload: unknown = JSON.parse(new TextDecoder().decode(clear.slice(0, -1)))
+    if (!isRecord(payload)) throw new Error("the push payload was not an object")
+    return payload
+  }
   expect(registeredPush.ok, `the authenticated push subscription was not stored in local D1: ${JSON.stringify(registeredPush)}`)
   checks.push("push key and subscription reached the real Worker and local D1")
 
@@ -1193,29 +1204,24 @@ try {
     store.state().sessionStatus?.running.has(guardSessionID) === false &&
     store.state().sessionStatus?.outstanding.has(guardSessionID) === false ? true : undefined, 30_000,
   "the completed Session did not publish its finished status and push")
-  const pushPayloads = await Promise.all(pushRequests.slice(pushesBeforeFinish).map(async (request) => {
-    const sender = request.body.slice(21, 86)
-    const publicSender = await crypto.subtle.importKey("raw", sender, { name: "ECDH", namedCurve: "P-256" }, false, [])
-    const shared = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: publicSender }, receiver.privateKey, 256))
-    const { cek, nonce } = await deriveWebPushKeys(shared, pushAuth, pushReceiver, sender, request.body.slice(0, 16))
-    const key = await crypto.subtle.importKey("raw", cek, "AES-GCM", false, ["decrypt"])
-    const clear = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce }, key, request.body.slice(86)))
-    return { method: request.method, ttl: request.ttl, payload: JSON.parse(new TextDecoder().decode(clear.slice(0, -1))) }
-  }))
-  expect(pushPayloads.some((item) => item.method === "POST" && item.ttl === "600" &&
-    item.payload.category === "agent-completed" && item.payload.sessionID === guardSessionID),
-  "the hibernatable Durable Object did not complete the finished Session's encrypted push POST")
+  const pushPayloads = await Promise.all(pushRequests.slice(pushesBeforeFinish).map(async (request) =>
+    ({ method: request.method, ttl: request.ttl, payload: await decryptPush(request) })))
+  const finishedPush = pushPayloads.find((item) => item.method === "POST" && item.ttl === "600" &&
+    item.payload.category === "agent-completed" && item.payload.sessionID === guardSessionID &&
+    item.payload.deviceID === enrolled.deviceID && typeof item.payload.noticeID === "string")
+  expect(finishedPush !== undefined, "the hibernatable Durable Object did not complete the finished Session's encrypted push POST with its notice id")
+  const finishedTag = `ycoding-${enrolled.deviceID}-${String(finishedPush?.payload.noticeID)}`
   if (chrome) {
     if (process.argv.includes("--page-alert")) {
       await waitFor(async () => {
         const tags = await chrome.pageAlerts()
-        return Array.isArray(tags) && tags.includes(`ycoding-${guardSessionID}-agent-completed`) ? true : undefined
+        return Array.isArray(tags) && tags.includes(finishedTag) ? true : undefined
       }, 30_000, "the open workspace did not invoke the page-level service worker notification on completion")
       checks.push("an open Chrome workspace invoked the page-level desktop notifier on a real family completion")
     } else {
       const notifications = await waitFor(async () => {
         const shown = await chrome.notifications()
-        return Array.isArray(shown) && shown.some((item) => isRecord(item) && item.title === "YCoding — work finished" && item.tag === `ycoding-${guardSessionID}-agent-completed`) ? shown : undefined
+        return Array.isArray(shown) && shown.some((item) => isRecord(item) && item.title === "YCoding — work finished" && item.tag === finishedTag) ? shown : undefined
       }, 90_000, "headed Chrome did not show a decrypted Web Push notification from FCM")
       expect(notifications.length > 0, "headed Chrome received no notification")
       checks.push("headed Chrome received the FCM push through the built service worker and showed the finished-work notification")
@@ -1430,7 +1436,47 @@ try {
   const absentMessage = await browserFetch(`${workerOrigin}/api/remote/devices/${enrolled.deviceID}/sessions/${sessionID}/messages/msg_not_found`)
   expect(absentMessage.status === 404, `an unknown indexed message returned ${absentMessage.status}`)
   if (!agent) throw new Error("the local connector was not running")
+  const offlineOnly = { "agent-completed": false, "approval-requested": false, "machine-offline": true }
+  expect((await pushHttp.subscribe({ endpoint, keys: pushKeys, categories: offlineOnly })).ok, "the push subscription could not store this device's System choices")
+  const pushesBeforeTest = pushRequests.length
+  const tested = await pushHttp.test(endpoint)
+  expect(tested.ok && tested.value.outcome === "accepted" && tested.value.status === 201, `the test alert was not accepted: ${JSON.stringify(tested)}`)
+  const testRequests = pushRequests.slice(pushesBeforeTest)
+  expect(testRequests.length === 1 && JSON.stringify(await decryptPush(testRequests[0] as { body: Uint8Array })) === JSON.stringify({ category: "test" }),
+    "the test alert did not reach exactly the registered subscription with a test payload")
+  const limitedTest = await pushHttp.test(endpoint)
+  expect(!limitedTest.ok && limitedTest.status === 429, `a second test alert inside the window was not refused: ${JSON.stringify(limitedTest)}`)
+  checks.push("a same-origin test alert reached only this device's stored subscription through the real Worker and reported push-service acceptance")
+
+  const offlinePushes = async (from: number) => (await Promise.all(pushRequests.slice(from).map(decryptPush)))
+    .filter((payload) => payload.category === "machine-offline")
+  const pushesBeforeRestart = pushRequests.length
   await agent.close()
+  agent = new RemoteAgent({ relayURL: workerOrigin, local, credentials, refreshIntervalMs: 3_600_000,
+    onDiagnostic: (message) => diagnostics.push(message), onTerminal: (message) => diagnostics.push(`terminal: ${message}`) })
+  await agent.connect()
+  await waitFor(() => (agent?.currentState === "live" ? true : undefined), 20_000, "the reconnecting agent never went live")
+  await Bun.sleep(RemoteLimits.agentOfflineConfirmMs + 5_000)
+  const pageOffline = () => store.state().notifications.filter((entry) => entry.category === "machine-offline")
+  expect((await offlinePushes(pushesBeforeRestart)).length === 0 && pageOffline().length === 0,
+    `a reconnect inside the confirmation window raised a Machine offline alert: ${JSON.stringify(pageOffline())}`)
+  checks.push("an agent that reconnected inside the confirmation window raised no Machine offline push after the durable alarm")
+
+  const pushesBeforeOffline = pushRequests.length
+  await agent.close()
+  const offlinePayloads = await waitFor(async () => {
+    const found = await offlinePushes(pushesBeforeOffline)
+    return found.length > 0 ? found : undefined
+  }, RemoteLimits.agentOfflineConfirmMs + 30_000, "an agent that stayed away did not raise a Machine offline push")
+  const offlineAt = offlinePayloads[0]?.offlineAt
+  expect(offlinePayloads.length === 1 && typeof offlineAt === "number" &&
+    JSON.stringify(offlinePayloads[0]) === JSON.stringify({ category: "machine-offline", deviceID: enrolled.deviceID, offlineAt }),
+    `the Machine offline push was not one device-only payload: ${JSON.stringify(offlinePayloads)}`)
+  await waitFor(() => pageOffline().length === 1 ? true : undefined, 10_000, "the open workspace did not raise the confirmed Machine offline alert")
+  expect(pageOffline()[0]?.id === `offline_${enrolled.deviceID}_${offlineAt}` && pageOffline()[0]?.at === offlineAt,
+    `the open workspace alert did not carry the push's outage identity: ${JSON.stringify(pageOffline())}`)
+  expect((await pushHttp.remove(endpoint)).ok, "the authenticated push subscription was not removed")
+  checks.push("an agent that stayed away past the confirmation window raised one Machine offline push and one open-workspace alert with the same outage identity from the durable Durable Object alarm")
   await waitFor(async () => (await browserFetch(`${workerOrigin}/api/remote/devices/${enrolled.deviceID}/sessions/${sessionID}/messages/${imageMessage.id}`)).status === 503 ? true : undefined,
     20_000, "the offline agent did not return 503 for a message stream")
   checks.push("authenticated HTTP streams return 404 for missing messages and 503 when the local agent is offline")

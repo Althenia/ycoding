@@ -36,6 +36,7 @@ function remoteState(patch: Partial<RemoteStoreState> = {}): RemoteStoreState {
     transport: { kind: "open" },
     mutations: [],
     notifications: [],
+    noticeSync: { status: "idle", total: 0, loaded: 0, hidden: 0, loadingMore: false, message: undefined },
     unhandledEvents: 0,
     teamCues: [],
     ...patch,

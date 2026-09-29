@@ -3,9 +3,9 @@ import { Icon, type IconName } from "../../ui/icon"
 import { useRemote } from "../context"
 import { createPushHttp } from "../http"
 import { browserPushPlatform, syncPushState } from "../push"
-import type { RemoteNotificationView } from "../notifications"
-import type { MutationToast } from "../store"
-import type { NotificationCategory } from "../preferences"
+import { NOTICE_WINDOW, type RemoteNotificationView } from "../notifications"
+import type { MutationToast, NoticeSyncState } from "../store"
+import { pushCategoriesFor, readNotificationPreferences, type NotificationCategory } from "../preferences"
 import { Toast, maxToasts } from "./toast"
 import "./notifications.css"
 
@@ -38,12 +38,27 @@ export function groupNotifications(entries: readonly RemoteNotificationView[], n
 }
 
 export function newlyAddedNotifications(seen: ReadonlySet<string>, entries: readonly RemoteNotificationView[]) {
-  return entries.filter((entry) => !seen.has(entry.id))
+  return entries.filter((entry) => entry.live && !seen.has(entry.id))
 }
 
 export function enqueueToasts(current: readonly RemoteNotificationView[], added: readonly RemoteNotificationView[]) {
   const IDs = new Set(added.map((entry) => entry.id))
   return [...added, ...current.filter((entry) => !IDs.has(entry.id))].slice(0, maxToasts)
+}
+
+export function noticeCenterView(sync: NoticeSyncState, entries: readonly RemoteNotificationView[]) {
+  const unread = sync.total + entries.filter((entry) => !entry.synced).length
+  const failed = sync.status === "error"
+  const older = sync.total > sync.loaded
+  return {
+    unread,
+    failed,
+    hasMore: older && sync.loaded < NOTICE_WINDOW,
+    capped: older && sync.loaded >= NOTICE_WINDOW,
+    remaining: Math.max(0, sync.total - sync.loaded),
+    badge: failed ? "!" : unread > 9 ? "9+" : unread > 0 ? String(unread) : "",
+    label: `Notifications${unread ? `, ${unread} unread` : ""}${failed ? ", sync unavailable" : ""}`,
+  }
 }
 
 export function NotificationCenter(props: { readonly onOpenSession: (sessionID: string) => void }): JSX.Element {
@@ -54,10 +69,15 @@ export function NotificationCenter(props: { readonly onOpenSession: (sessionID: 
   const [clock, setClock] = createSignal(Date.now())
   onMount(() => {
     if (typeof Notification === "undefined" || Notification.permission !== "granted") return
-    void syncPushState(browserPushPlatform(), createPushHttp())
+    void syncPushState(browserPushPlatform(), createPushHttp(), () => pushCategoriesFor(readNotificationPreferences()))
   })
   const notifications = () => remote.state().notifications
-  const unread = () => notifications().filter((entry) => !entry.read).length
+  const sync = () => remote.state().noticeSync
+  const view = createMemo(() => noticeCenterView(sync(), notifications()))
+  const unread = () => view().unread
+  const failed = () => view().failed
+  const hasMore = () => view().hasMore
+  const capped = () => view().capped
   const groups = createMemo(() => groupNotifications(notifications(), clock()))
   let root: HTMLDivElement | undefined
   let trigger: HTMLButtonElement | undefined
@@ -75,7 +95,6 @@ export function NotificationCenter(props: { readonly onOpenSession: (sessionID: 
     setNewCount(unread())
     setClock(Date.now())
     setOpen(true)
-    remote.store.markNotificationsRead()
   }
   const pointer = (event: PointerEvent) => {
     if (open() && event.target instanceof Node && !root?.contains(event.target)) close(false)
@@ -100,7 +119,7 @@ export function NotificationCenter(props: { readonly onOpenSession: (sessionID: 
   const dismiss = (id: string, event: MouseEvent) => {
     const focused = document.activeElement === event.currentTarget
     const index = notifications().findIndex((entry) => entry.id === id)
-    remote.store.dismissNotification(id)
+    void remote.store.readNotification(id)
     if (focused) queueMicrotask(() => {
       const controls = root?.querySelectorAll<HTMLButtonElement>(".yc-notification__dismiss")
       controls?.[Math.min(index, controls.length - 1)]?.focus()
@@ -109,9 +128,9 @@ export function NotificationCenter(props: { readonly onOpenSession: (sessionID: 
   }
   return (
     <div class="yc-notification-center" ref={root}>
-      <button ref={trigger} type="button" class="yc-notification-center__trigger" aria-label={unread() ? `Notifications, ${unread()} unread` : "Notifications"} aria-expanded={open()} aria-controls="yc-notification-panel" onClick={toggle}>
+      <button ref={trigger} type="button" class="yc-notification-center__trigger" aria-label={view().label} aria-expanded={open()} aria-controls="yc-notification-panel" onClick={toggle}>
         <Icon name="bell" size={20} />
-        <Show when={unread() > 0}><span class="yc-notification-center__badge" aria-hidden="true">{unread() > 9 ? "9+" : unread()}</span></Show>
+        <Show when={failed() || unread() > 0}><span class="yc-notification-center__badge" classList={{ "yc-notification-center__badge--error": failed() }} aria-hidden="true">{view().badge}</span></Show>
       </button>
       <Show when={open() || leaving()}>
         <section id="yc-notification-panel" class="yc-notification-panel" classList={{ "yc-notification-panel--leaving": leaving() }} role="region" aria-label="Notifications" aria-hidden={leaving() ? "true" : undefined} inert={leaving()} onAnimationEnd={finish} onAnimationCancel={finish}>
@@ -119,13 +138,22 @@ export function NotificationCenter(props: { readonly onOpenSession: (sessionID: 
             <h2>Notifications</h2>
             <Show when={newCount() > 0}><span class="yc-notification-panel__new">{newCount()} new</span></Show>
             <span class="yc-notification-panel__spacer" />
-            <Show when={notifications().length > 0}>
-              <button type="button" class="yc-notification-panel__action" disabled={unread() === 0} onClick={() => remote.store.markNotificationsRead()}>Mark all read</button>
-              <button type="button" class="yc-notification-panel__action" onClick={() => { remote.store.clearNotifications(); trigger?.focus() }}>Clear all</button>
+            <Show when={unread() > 0}>
+              <button type="button" class="yc-notification-panel__action" aria-label="Read all" title="Read all" onClick={() => { void remote.store.readAllNotifications(); trigger?.focus() }}><Icon name="check-all" size={16} /></button>
             </Show>
           </header>
-          <Show when={notifications().length > 0} fallback={<div class="yc-notification-panel__empty"><Icon name="check" size={22} /><strong>You're all caught up</strong><span>New activity will appear here.</span></div>}>
-            <div class="yc-notification-panel__scroll">
+          <Show when={failed()}>
+            <div class="yc-notification-panel__error" role="alert">
+              <span>{sync().message}</span>
+              <button type="button" class="yc-notification-panel__retry" onClick={() => void remote.store.reloadNotifications()}>Retry</button>
+            </div>
+          </Show>
+          <div class="yc-notification-panel__scroll">
+            <Show when={notifications().length > 0} fallback={<div class="yc-notification-panel__empty">
+              <Icon name={sync().status === "ready" && sync().total === 0 ? "check" : "bell"} size={22} />
+              <strong>{failed() ? "Notification sync unavailable" : sync().status === "loading" ? "Loading notifications" : sync().total > 0 ? "Notices hidden by settings" : "You're all caught up"}</strong>
+              <span>{sync().total > 0 ? "Load older notices or change In app settings." : failed() ? "Retry to check stored notices." : "New activity will appear here."}</span>
+            </div>}>
               <For each={groups().map((group) => group.label)}>{(label) => {
                 const entries = () => groups().find((group) => group.label === label)?.items ?? []
                 return <section class="yc-notification-group" aria-label={label}>
@@ -133,12 +161,13 @@ export function NotificationCenter(props: { readonly onOpenSession: (sessionID: 
                   <ul><For each={entries().map((entry) => entry.id)}>{(id) => {
                     const entry = () => entries().find((item) => item.id === id)
                     return <Show when={entry()}>{(item) => (
-                      <li class={`yc-notification yc-notification--${item().category}${item().read ? " yc-notification--read" : ""}`}>
-                        <span class="yc-notification__unread" aria-hidden={item().read} aria-label={item().read ? undefined : "Unread"} />
+                      <li class={`yc-notification yc-notification--${item().category}`}>
+                        <span class="yc-notification__unread" aria-label="Unread" />
                         <span class="yc-notification__icon" aria-hidden="true"><Icon name={kinds[item().category].icon} size={16} /></span>
                         <button type="button" class="yc-notification__open" disabled={!item().sessionID} onClick={() => {
                           const sessionID = item().sessionID
                           if (!sessionID) return
+                          void remote.store.readNotification(id)
                           close(false)
                           props.onOpenSession(sessionID)
                         }}>
@@ -152,9 +181,12 @@ export function NotificationCenter(props: { readonly onOpenSession: (sessionID: 
                   }}</For></ul>
                 </section>
               }}</For>
-            </div>
-            <p class="yc-notification-panel__foot"><Icon name="check" size={14} /> You're all caught up</p>
-          </Show>
+            </Show>
+            <Show when={hasMore()}>
+              <button type="button" class="yc-notification-panel__more" disabled={sync().loadingMore} onClick={() => void remote.store.loadMoreNotifications()}>{sync().loadingMore ? "Loading" : `Load more (${view().remaining})`}</button>
+            </Show>
+            <Show when={capped()}><p class="yc-notification-panel__foot">Showing the newest {sync().loaded} of {sync().total}. Read notifications to see older ones.</p></Show>
+          </div>
         </section>
       </Show>
     </div>
@@ -162,11 +194,12 @@ export function NotificationCenter(props: { readonly onOpenSession: (sessionID: 
 }
 
 function NoticeToast(props: { readonly notification: () => RemoteNotificationView; readonly onOpenSession: (id: string) => void; readonly onDismiss: (id: string) => void }): JSX.Element {
+  const remote = useRemote()
   return (
     <Toast class={`yc-toast--${props.notification().category}`} onDismiss={() => props.onDismiss(props.notification().id)}>{(dismiss) => <>
       <span class="yc-toast__icon" aria-hidden="true"><Icon name={kinds[props.notification().category].icon} size={18} /></span>
       <div class="yc-toast__body"><strong>{kinds[props.notification().category].label}</strong><span>{props.notification().sessionTitle ?? props.notification().body}</span></div>
-      <Show when={props.notification().sessionID}><button type="button" class="yc-toast__open" onClick={() => { const sessionID = props.notification().sessionID; if (sessionID) props.onOpenSession(sessionID); dismiss() }}>Open</button></Show>
+      <Show when={props.notification().sessionID}><button type="button" class="yc-toast__open" onClick={() => { const sessionID = props.notification().sessionID; if (sessionID) { void remote.store.readNotification(props.notification().id); props.onOpenSession(sessionID) } dismiss() }}>Open</button></Show>
       <button type="button" class="yc-toast__close" aria-label={`Dismiss ${kinds[props.notification().category].label} toast`} onClick={dismiss}><Icon name="close" size={14} /></button>
     </>}</Toast>
   )

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { parseClientMessage, type RemoteRequest } from "@ycoding-ai/remote"
+import { isNoticeRequest, parseClientMessage, type RemoteRequest } from "@ycoding-ai/remote"
 import { launchBrowser } from "./cdp"
 
 const port = 4196
@@ -59,7 +59,7 @@ for (const [decision, reply] of [
             invalidFrames.push(frame.error.code)
             return
           }
-          if (frame.value.type !== "request") return
+          if (frame.value.type !== "request" || isNoticeRequest(frame.value)) return
           const received = frame.value
           requests.push(received)
           acknowledge = () => socket.send(JSON.stringify({ type: "response", id: received.id, ok: true, value: null }))

@@ -15,6 +15,7 @@ export type IconName =
   | "search"
   | "copy"
   | "check"
+  | "check-all"
   | "chevron-right"
   | "chevron-down"
   | "chat"
@@ -63,6 +64,7 @@ const paths: Record<IconName, readonly string[]> = {
   search: ["M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z", "M16.5 16.5L21 21"],
   copy: ["M9 9h11v11H9z", "M5 15V4h11"],
   check: ["M5 12.5l4.5 4.5L19 7"],
+  "check-all": ["M2 12.5l4.5 4.5L15 8", "M11 16.5l1 1L22 8"],
   "chevron-right": ["M9 6l6 6-6 6"],
   "chevron-down": ["M6 9l6 6 6-6"],
   chat: ["M4 5h16v11H9l-5 4z"],

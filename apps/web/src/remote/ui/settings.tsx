@@ -8,7 +8,7 @@ import { useTheme } from "../../theme/theme-store"
 import type { ThemePreference } from "../../theme/theme"
 import { useRemote } from "../context"
 import { createPushHttp, createRemoteHttp } from "../http"
-import { browserPushPlatform, disablePush, enablePush, pushStatusView, syncPushState, type PushPlatform, type PushStatus } from "../push"
+import { browserPushPlatform, disablePush, enablePush, pushStatusView, savePushCategories, sendPushTest, syncPushState, type PushPlatform, type PushStatus } from "../push"
 import type { OfficeSettingsStore, WorkspacePresentation } from "../office/storage"
 import type { OfficePreferences } from "../office/types"
 import {
@@ -24,6 +24,8 @@ import {
   NOTIFICATION_CHANNELS,
   describeNotificationPermission,
   readNotificationPreferences,
+  NOTIFICATION_STORAGE_KEY,
+  pushCategoriesFor,
   toggleNotificationChannel,
   writeNotificationPreferences,
   type NotificationCategory,
@@ -544,30 +546,55 @@ export function NotificationSettings(): JSX.Element {
   let pushPlatform: PushPlatform | undefined
   let active = true
 
+  const storedCategories = () => pushCategoriesFor(readNotificationPreferences())
+  const refresh = (event: StorageEvent) => {
+    if (event.key === NOTIFICATION_STORAGE_KEY || event.key === null) setPreferences(readNotificationPreferences())
+  }
+
   onMount(() => {
     pushPlatform = browserPushPlatform()
-    void syncPushState(pushPlatform, pushHttp).then((status) => {
+    window.addEventListener("storage", refresh)
+    void syncPushState(pushPlatform, pushHttp, storedCategories).then((status) => {
       if (!active) return
       setPushStatus(status)
       setPushBusy(false)
     })
   })
-  onCleanup(() => { active = false })
+  onCleanup(() => {
+    active = false
+    window.removeEventListener("storage", refresh)
+  })
 
   const togglePush = async () => {
     if (!pushPlatform || pushBusy()) return
     setPushBusy(true)
-    const result = pushStatus() === "on" ? await disablePush(pushPlatform, pushHttp) : await enablePush(pushPlatform, pushHttp)
+    const result = pushStatus() === "on" ? await disablePush(pushPlatform, pushHttp) : await enablePush(pushPlatform, pushHttp, storedCategories)
     if (!active) return
     setPushStatus(result.status)
     setPushError(result.message ?? "")
     setPushBusy(false)
   }
 
-  const update = (category: NotificationCategory, channel: NotificationChannel) => {
-    const next = toggleNotificationChannel(preferences(), category, channel)
-    setPreferences(next)
+  const testPush = async () => {
+    if (!pushPlatform || pushBusy()) return
+    setPushBusy(true)
+    const result = await sendPushTest(pushPlatform, pushHttp)
+    if (!active) return
+    setPushStatus(result.status)
+    setPushError(result.message)
+    setPushBusy(false)
+  }
+
+  const update = async (category: NotificationCategory, channel: NotificationChannel) => {
+    const next = toggleNotificationChannel(readNotificationPreferences(), category, channel)
     writeNotificationPreferences(globalThis.localStorage, next)
+    setPreferences(next)
+    const platform = pushPlatform
+    if (channel !== "desktop" || !platform || (pushStatus() !== "on" && !pushBusy())) return
+    const result = await savePushCategories(platform, pushHttp, storedCategories)
+    if (!active || result.status === "off") return
+    setPushStatus(result.status)
+    setPushError(result.message ?? "")
   }
 
   return (
@@ -575,7 +602,7 @@ export function NotificationSettings(): JSX.Element {
       id="notification-settings"
       category="Notifications"
       title="Notifications"
-      hint="Categories control in-app notices and System alerts while YCoding is open. Machine offline alerts require YCoding to be open. Push to this device can alert an installed app after it closes for Work finished and Needs your attention. If its subscription is missing, use Re-enable to restore alerts. Reopening a session never replays a past alert."
+      hint="Categories control in-app notices and System alerts. With Push to this device on, each System switch also decides which alerts reach this device while YCoding is closed. If its subscription is missing, use Re-enable to restore alerts. Reopening a session never replays a past alert."
     >
       <div class="table-scroll">
         <table class="notification-table" aria-labelledby="notification-settings">
@@ -601,7 +628,7 @@ export function NotificationSettings(): JSX.Element {
                             type="checkbox"
                             aria-label={`${category.label} via ${channel.label}`}
                             checked={preferences()[category.id][channel.id]}
-                            onChange={() => update(category.id, channel.id)}
+                            onChange={() => void update(category.id, channel.id)}
                           />
                           <span class="visually-hidden">{channel.label}</span>
                         </label>
@@ -622,6 +649,10 @@ export function NotificationSettings(): JSX.Element {
               aria-label="Push to this device" aria-describedby="push-device-status"
               aria-pressed={pushView().pressed} disabled={pushBusy() || pushView().disabled}
               onClick={() => void togglePush()}>{pushBusy() ? "Checking…" : pushView().label}</button>
+            <Show when={pushStatus() === "on"}>
+              <button type="button" class="button button--secondary button--small" aria-describedby="push-device-status"
+                disabled={pushBusy()} onClick={() => void testPush()}>Send test alert</button>
+            </Show>
             <span id="push-device-status" class="field__hint" role="status" aria-live="polite">{pushError() || pushView().detail}</span>
           </span>
         </div>

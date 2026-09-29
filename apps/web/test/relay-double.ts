@@ -1,12 +1,18 @@
 import {
   RemoteLimits,
   RemoteWebSocketPath,
+  isNoticeRequest,
   parseClientMessage,
   serializeEvent,
+  noticePageValue,
+  serializeNoticeFrame,
   serializeResponse,
   serializeSessions,
   serializeStatus,
   type RemoteErrorCode,
+  type RemoteNoticeFrame,
+  type RemoteNoticePage,
+  type RemoteNoticeRequest,
   type RemoteRequest,
 } from "@ycoding-ai/remote"
 
@@ -34,6 +40,9 @@ export type RelayDoubleOptions = {
   readonly devicesRaw?: unknown
   readonly enrollmentStatus?: number
   readonly handler?: RelayRequestHandler
+  readonly noticeError?: { readonly code: RemoteErrorCode; readonly message: string }
+  readonly noticePage?: RemoteNoticePage
+  readonly noticeHandler?: (request: RemoteNoticeRequest) => unknown | Promise<unknown>
   readonly advertisedSessions?: readonly string[]
   readonly messages?: Record<string, readonly unknown[]>
   readonly watermark?: number
@@ -54,6 +63,7 @@ export type RelayDouble = {
   readonly httpURL: string
   readonly wsURL: (deviceID: string) => string
   readonly requests: RemoteRequest[]
+  readonly noticeRequests: RemoteNoticeRequest[]
   readonly pongs: number
   readonly connections: number
   readonly closeEvents: readonly { readonly code: number; readonly reason: string }[]
@@ -61,6 +71,9 @@ export type RelayDouble = {
   setMe: (value: unknown, status?: number) => void
   pushEvent: (sessionID: string, event: unknown) => void
   pushSessions: (sessionIDs: readonly string[]) => void
+  pushNotices: (frame: RemoteNoticeFrame) => void
+  setNoticePage: (page: RemoteNoticePage) => void
+  setNoticeError: (error: { readonly code: RemoteErrorCode; readonly message: string } | undefined) => void
   pushStatus: (running: readonly string[], attention: readonly string[], outstanding?: readonly string[], failed?: readonly string[]) => void
   dropConnections: (code: number, reason: string) => void
   stop: () => Promise<void>
@@ -86,6 +99,9 @@ const defaultMe = {
 
 export async function startRelayDouble(options: RelayDoubleOptions = {}): Promise<RelayDouble> {
   const requests: RemoteRequest[] = []
+  const noticeRequests: RemoteNoticeRequest[] = []
+  let noticePage: RemoteNoticePage = options.noticePage ?? { notices: [], total: 0, unavailable: false }
+  let noticeError = options.noticeError
   let pongs = 0
   let connections = 0
   const closeEvents: { code: number; reason: string }[] = []
@@ -286,6 +302,20 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
           socket.send(JSON.stringify({ type: "pong" }))
           return
         }
+        if (isNoticeRequest(parsed.value)) {
+          const noticeRequest = parsed.value
+          noticeRequests.push(noticeRequest)
+          if (noticeError !== undefined) {
+            socket.send(serializeResponse({ type: "response", id: noticeRequest.id, ok: false, error: noticeError }))
+            return
+          }
+          const answered = options.noticeHandler?.(noticeRequest)
+          const reply = (value: unknown) => socket.send(serializeResponse({ type: "response", id: noticeRequest.id, ok: true, value }))
+          const fallback = () => (noticeRequest.operation === "notice.subscribe" || noticeRequest.operation === "notice.list" ? noticePageValue(noticePage) : null)
+          if (answered instanceof Promise) void answered.then((value) => reply(value === undefined ? fallback() : value))
+          else reply(answered === undefined ? fallback() : answered)
+          return
+        }
         requests.push(parsed.value)
         const id = parsed.value.id
         const respond = (result: ConcreteResult) => {
@@ -324,6 +354,7 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
     httpURL: `http://127.0.0.1:${server.port}`,
     wsURL: (deviceID: string) => `ws://127.0.0.1:${server.port}${RemoteWebSocketPath.client}?device=${encodeURIComponent(deviceID)}`,
     requests,
+    noticeRequests,
     get pongs() {
       return pongs
     },
@@ -345,6 +376,15 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
     },
     pushSessions: (_sessionIDs) => {
       for (const socket of sockets) socket.send(serializeSessions({ type: "sessions" }))
+    },
+    setNoticePage: (page) => {
+      noticePage = page
+    },
+    setNoticeError: (error) => {
+      noticeError = error
+    },
+    pushNotices: (frame) => {
+      for (const socket of sockets) socket.send(serializeNoticeFrame(frame))
     },
     pushStatus: (running, attention, outstanding, failed) => {
       for (const socket of sockets) socket.send(serializeStatus({ type: "status", running, attention,

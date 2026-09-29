@@ -251,7 +251,7 @@ describe("remote navigation", () => {
         expect(report.titles).toEqual(["Work finished", "Needs your attention"])
         expect(report.details).toContain("Stream remote output safely")
         expect(report.details).toContain("Archived: release notes")
-        expect(report.badge).toBe(false)
+        expect(report.badge).toBe(true)
         expect(report.expanded).toBe("true")
         expect(report.inViewport).toBe(true)
         await capture(page, `notifications-${width}-dark`)

@@ -26,8 +26,9 @@ vocabulary changes the contract for all three at once.
 | `GET` | `/api/me` | browser session | not required | Owner, session expiry, and device list (read-only, no `Set-Cookie`) |
 | `GET` | `/api/devices` | browser session | not required | `{ devices: RemoteDeviceInfo[] }` (pinned `DevicesResponse`) |
 | `GET` | `/api/push/key` | browser session | not required | `{ publicKey }`; `503` if VAPID is unavailable |
-| `POST` | `/api/push/subscriptions` | browser session | same-origin required | Upsert `{ endpoint, keys: { p256dh, auth } }` for this account |
+| `POST` | `/api/push/subscriptions` | browser session | same-origin required | Upsert `{ endpoint, keys: { p256dh, auth }, categories }` for this account, or renew `{ endpoint, keys, replaces }`; `404` if `replaces` is not this account's subscription |
 | `DELETE` | `/api/push/subscriptions` | browser session | same-origin required | Remove `{ endpoint }` for this account |
+| `POST` | `/api/push/test` | browser session | same-origin required | Send one test alert to this account's stored `{ endpoint }`; `{ outcome, status? }`, `404` unknown, `429` within 60 s |
 | `POST` | `/api/devices/enrollments` | browser session | same-origin required | Mint a one-use enrollment code |
 | `POST` | `/api/devices/enroll` | enrollment code | none (native agent) | Register a device public key |
 | `POST` | `/api/devices/challenge` | none (rate limited) | none (native agent) | Mint a one-use device challenge |
@@ -266,6 +267,12 @@ One JSON object per WebSocket frame, discriminated by `type`.
 | `event` | agent → relay → clients | `{ type:"event", sessionID, event }` |
 | `sessions` | agent → relay → clients | `{ type:"sessions" }` |
 | `status` | agent → relay → clients | `{ type:"status", running:[rootSessionID,...], attention:[rootSessionID,...], outstanding?:[rootSessionID,...], failed?:[rootSessionID,...] }` |
+| `request` (`notice.subscribe`, `notice.list`, `notice.read`, `notice.readAll`) | client → relay | `{ type:"request", id, operation, input? }`; answered by the relay itself, never forwarded to the agent |
+| `notice.added` | relay → subscribed clients | `{ type:"notice.added", notices:[Notice,...], total }` (1–100 entries) |
+| `notice.removed` | relay → subscribed clients | `{ type:"notice.removed", ids:[noticeID,...], total }` |
+| `notice.cleared` | relay → subscribed clients | `{ type:"notice.cleared" }` |
+| `notice.unavailable` | relay → subscribed clients | `{ type:"notice.unavailable" }` |
+| `notice.offline` | relay → subscribed clients | `{ type:"notice.offline", at }` (confirmed machine outage; `at` is the agent's close time) |
 | `subscriptions` | relay → agent | `{ type:"subscriptions", clientID, sessionIDs:[...] }` |
 | `ping` | either direction | `{ type:"ping" }` |
 | `pong` | either direction | `{ type:"pong" }` |
@@ -343,21 +350,110 @@ nonstandard ports, and fragments are rejected. `p256dh` is an uncompressed
 65-byte P-256 public point and `auth` is 16 bytes, both unpadded base64url.
 An account retains at most ten subscriptions; a new one evicts the oldest.
 The relay stores only endpoint, browser encryption keys, account owner,
-created time, and consecutive failures. It deletes a 404/410 endpoint or one
-that reaches five other failed deliveries.
+created time, consecutive failures, the last test-alert time, and the
+subscription's System categories. It deletes a 404/410 endpoint or one that
+reaches five other failed deliveries.
+
+`categories` is `{ "agent-completed", "approval-requested", "machine-offline" }`,
+each a boolean and all three required. Each subscription receives only the
+categories it enabled; the browser sends its System switches when it enables
+push, on every workspace load, and whenever a System switch changes, and reports
+a failed update as unsaved. Subscriptions stored before categories existed have
+all three enabled. A renewal `{ endpoint, keys, replaces }` comes from the
+service worker when the browser replaces a subscription: the relay copies the
+replaced subscription's categories to the new endpoint and deletes the replaced
+row atomically; when the replaced row is gone it answers `404` and stores
+nothing, so the next workspace load registers the active subscription with that
+browser's own choices. Exactly one of `categories` or `replaces` is present. A
+browser that replaces its subscription without reporting the replaced one sends
+no renewal; that browser receives no closed-app push until YCoding next loads in
+it and registers the active subscription, and the relay deletes the unreported
+old endpoint once its push service answers `404` or `410`.
+
+`POST /api/push/test` accepts `{ endpoint }` only for a subscription this account
+already stored and sends one push with plaintext `{ category: "test" }`, TTL 60,
+high urgency, and no Topic. It admits one test per subscription per 60 seconds.
+The answer is `{ outcome: "accepted" | "rejected" | "expired", status }` with the
+push service's HTTP status, or `{ outcome: "unreachable" }` when no response
+arrived. `expired` (404/410) deletes the subscription. Acceptance means the push
+service took the message, not that the device displayed it.
 
 The first `status` frame after agent connect or Durable Object restore is a
 silent push baseline. Later newly attentive roots emit `approval-requested`;
 roots leaving the union of `running` and `outstanding` emit `agent-completed`
-only if they are not attentive. Attention wins over completion. The web bell
-applies the same transition rule. The push plaintext has
-only `{ category, sessionID, deviceID }`, encrypted using RFC 8291
+only if they are not attentive. Attention wins over completion. The same
+transitions are recorded as device notices (section 3.2a) before the push is sent.
+The push plaintext has only `{ category, sessionID, deviceID, noticeID? }`;
+`noticeID` names the stored notice and is absent only when notice storage failed.
+Browsers tag a notice alert `ycoding-<deviceID>-<noticeID>`, so the page alert
+and the push for one notice replace each other while each new notice alerts on
+its own. Machine offline uses `{ category: "machine-offline", deviceID, offlineAt }`
+and the tag `ycoding-<deviceID>-offline-<offlineAt>`, where `offlineAt` is the close
+time stored in the confirmed offline check. Every plaintext is encrypted using RFC 8291
 `aes128gcm` and authenticated using RFC 8292 ES256 VAPID. The JWT audience is
 the endpoint origin and expires within twelve hours. Approval uses TTL 3600
-and high urgency; stopped-work uses TTL 600 and normal urgency. A Topic of at
-most 32 base64url characters derived from Session ID and category collapses
-repeats. The relay drops pushes beyond twenty events per device per minute and
-never waits for delivery before forwarding status frames.
+and high urgency; stopped-work uses TTL 600 and normal urgency; machine offline
+uses TTL 3600 and normal urgency. A Topic of at most 32 base64url characters
+derived from the Session ID (device ID for machine offline) and category
+collapses repeats that the push service has not delivered yet.
+
+When the authoritative agent connection for a device closes for any reason, the
+relay stores one pending offline check in the device's Durable Object storage
+and sets its alarm `RemoteLimits.agentOfflineConfirmMs` (40 s, two agent
+heartbeat intervals) later. Any agent connection that attaches for that device
+before then deletes the check, so credential rotation, frame-bound recycling,
+and a short network drop raise nothing whatever close code the agent used. A
+browser closing, a replaced agent's late close, and a reconnect snapshot never
+create a check. When the alarm finds the check due and no agent attached, it
+reads the device's authority while keeping the check, so a failed read leaves
+the check for the alarm's retry. It then deletes the check unless an agent
+attached or another confirmation settled it during the read, and, if the device
+is still active, sends `notice.offline` with the check's close time to every
+notice-subscribed browser of that device and one `machine-offline` push to each
+subscription that enabled it. Open browsers raise their Machine offline alert
+only from that frame, with the same tag as the push, so the page alert and the
+push for one outage show one banner while a later outage alerts again. The check
+survives hibernation, and a close delivered after a wake still counts.
+
+The relay drops pushes beyond twenty events per device per minute, machine
+offline included, and never waits for delivery before forwarding status frames. Notice storage is
+independent of this push limit.
+
+### 3.2a Device notices
+
+The relay keeps one unread notice log per device and shares it with every browser
+of that device's owner. A `Notice` is `{ id, category, sessionID, createdAt }` with
+`category` `approval-requested` or `agent-completed`, a positive monotonic
+`ntc_<sequence>` id, and `createdAt` in epoch milliseconds. The log holds ids,
+categories, Session IDs, and times only; browsers resolve titles themselves.
+Each notice occupies a row in the device's SQLite-backed Durable Object storage.
+No age limit, count limit, or push-rate limit removes or suppresses stored notices.
+Deleting the device deletes its log.
+
+- A connection receives no notice frame until it sends `notice.subscribe`; the
+  relay answers with the newest page `{ notices, next?, total, unavailable }`
+  (at most 50 notices, newest first) and persists the opt-in on the connection,
+  so a wake from hibernation still delivers additions and removals. The page is
+  a read, never a new event: clients must not alert on it. `notice.list` requires
+  `{ before: "ntc_<sequence>" }` and returns the next older page with the same
+  shape; `next` is present only when an older page exists. The browser retains
+  at most 200 synced rows and loads older pages on request.
+- `notice.read` (`input: { ids }`, 1–100 unique ids) and `notice.readAll` (no
+  `input`) remove notices. A read is idempotent: unknown or already removed ids are
+  ignored, and the relay broadcasts `notice.removed` only for ids it removed.
+  `notice.readAll` clears all rows in one operation and broadcasts `notice.cleared`.
+  Nothing else removes a stored notice.
+- Push delivery is separately limited to 20 transitions per device per minute.
+  If a write fails, the relay broadcasts `notice.unavailable` and later page
+  replies carry `unavailable: true`; existing rows remain readable and can be
+  dismissed or cleared with `notice.readAll`. The browser shows a sync error
+  rather than claiming all transitions were saved.
+- Notice requests need the client's own authority (a live, unrevoked browser
+  session for the device's owner) but no connected agent; a failed authority check
+  closes the connection like any other request.
+- Notice requests count toward the client request rate and are bounded by the
+  client frame size; malformed notice frames or inputs are rejected by the strict
+  parser before they reach the log.
 
 Frames from one connection are processed strictly in arrival order. A frame that
 awaits an authority check cannot let a later frame from the same peer overtake it,
@@ -750,6 +846,11 @@ disconnected; the command may or may not have executed.
 D1 stores authentication and device metadata only: `user`, `identity`,
 `browser_session`, `oauth_transaction`, `device`, `enrollment`, `device_challenge`,
 `device_credential`. Migration: `infra/cloudflare/migrations/0001_auth.sql`.
+
+The device's Durable Object stores its last status frame and its notice log
+(section 3.2a); both are deleted when the device is revoked. It also stores at
+most one pending machine-offline check (section 3.2), deleted when an agent
+attaches or the check's alarm settles it.
 
 D1 never stores transcripts, message projections, streaming deltas, tool output,
 session contents, or file contents. Session data stays on the user's machine and

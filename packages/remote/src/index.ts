@@ -202,6 +202,8 @@ export const RemoteLimits = {
   maxFamilyMembers: 16,
   maxCompactionHistory: 100,
   maxSubscriptionsPerClient: 64,
+  maxNoticeBatch: 100,
+  noticePageSize: 50,
   maxRequestIDChars: 64,
   maxSessionIDChars: 128,
   maxErrorCodeChars: 64,
@@ -214,6 +216,9 @@ export const RemoteLimits = {
   maxChunksPerResponse: 64,
   /** Consecutive out-of-policy agent frames tolerated before the agent is closed. */
   maxAgentViolations: 8,
+  agentHeartbeatIntervalMs: 20_000,
+  agentOfflineConfirmMs: 2 * 20_000,
+  pushTestIntervalMs: 60_000,
 } as const
 
 export function isWellFormedBase64(value: string): boolean {
@@ -310,12 +315,40 @@ export type RemoteSubscriptions = {
 export type RemoteHeartbeat = { readonly type: "ping" } | { readonly type: "pong" }
 export type RemoteCancel = { readonly type: "cancel"; readonly id: string }
 
+export const remoteNoticeOperations = ["notice.subscribe", "notice.list", "notice.read", "notice.readAll"] as const
+export type RemoteNoticeOperation = (typeof remoteNoticeOperations)[number]
+export type RemoteNoticeCategory = "approval-requested" | "agent-completed"
+export type RemoteNotice = {
+  readonly id: string
+  readonly category: RemoteNoticeCategory
+  readonly sessionID: string
+  readonly createdAt: number
+}
+export type RemoteNoticeRequest = {
+  readonly type: "request"
+  readonly id: string
+  readonly operation: RemoteNoticeOperation
+  readonly input?: { readonly ids: readonly string[] } | { readonly before: string }
+}
+export type RemoteNoticePage = {
+  readonly notices: readonly RemoteNotice[]
+  readonly next?: string
+  readonly total: number
+  readonly unavailable: boolean
+}
+export type RemoteNoticeFrame =
+  | { readonly type: "notice.added"; readonly notices: readonly RemoteNotice[]; readonly total: number }
+  | { readonly type: "notice.removed"; readonly ids: readonly string[]; readonly total: number }
+  | { readonly type: "notice.cleared" }
+  | { readonly type: "notice.unavailable" }
+  | { readonly type: "notice.offline"; readonly at: number }
+
 /** Frames accepted from a browser connection. */
-export type RemoteClientMessage = RemoteRequest | RemoteHeartbeat
+export type RemoteClientMessage = RemoteRequest | RemoteNoticeRequest | RemoteHeartbeat
 /** Frames accepted from a local agent connection. */
 export type RemoteAgentMessage = RemoteResponse | RemoteEvent | RemoteSessions | RemoteStatus | RemoteHeartbeat
 /** Frames the relay sends to a browser connection. */
-export type RemoteRelayToClient = RemoteResponse | RemoteEvent | RemoteSessions | RemoteStatus | RemoteHeartbeat
+export type RemoteRelayToClient = RemoteResponse | RemoteEvent | RemoteSessions | RemoteStatus | RemoteHeartbeat | RemoteNoticeFrame
 /** Frames the relay sends to a local agent connection. */
 export type RemoteRelayToAgent = RemoteRequest | RemoteSubscriptions | RemoteHeartbeat | RemoteCancel
 
@@ -364,6 +397,30 @@ export function serializeSubscriptions(subscriptions: RemoteSubscriptions): stri
   return JSON.stringify({ ...subscriptions, sessionIDs: [...subscriptions.sessionIDs] })
 }
 
+export function serializeNoticeFrame(frame: RemoteNoticeFrame): string {
+  if (frame.type === "notice.removed") return JSON.stringify({ type: frame.type, ids: [...frame.ids], total: frame.total })
+  if (frame.type === "notice.added") return JSON.stringify({ type: frame.type, notices: frame.notices.map(noticeWire), total: frame.total })
+  if (frame.type === "notice.offline") return JSON.stringify({ type: frame.type, at: frame.at })
+  return JSON.stringify({ type: frame.type })
+}
+
+export function noticePageValue(page: RemoteNoticePage) {
+  return { notices: page.notices.map(noticeWire), ...(page.next === undefined ? {} : { next: page.next }), total: page.total, unavailable: page.unavailable }
+}
+
+export function noticeSequence(id: string): number | undefined {
+  return noticeIDPattern.test(id) ? Number(id.slice(4)) : undefined
+}
+
+export function parseNoticePage(value: unknown): ParseResult<RemoteNoticePage> {
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== "notices" && key !== "next" && key !== "total" && key !== "unavailable")) return invalid()
+  if (!Array.isArray(value.notices) || value.notices.length > RemoteLimits.noticePageSize || !isCount(value.total) || typeof value.unavailable !== "boolean") return invalid()
+  const notices = parseNotices(value.notices)
+  if (!notices.ok) return notices
+  if (value.next !== undefined && (typeof value.next !== "string" || noticeSequence(value.next) === undefined)) return invalid()
+  return { ok: true, value: { notices: notices.value, ...(value.next === undefined ? {} : { next: value.next }), total: value.total, unavailable: value.unavailable } }
+}
+
 export function serializeError(id: string, code: RemoteErrorCode, message: string): string {
   return JSON.stringify({ type: "response", id, ok: false, error: { code, message } })
 }
@@ -382,6 +439,19 @@ export function parseAgentMessage(raw: string): ParseResult<RemoteAgentMessage> 
   const frame = decodeJson(raw)
   if (!frame.ok) return frame
   return parseAgentFrame(frame.value)
+}
+
+export function parseRelayToClientMessage(raw: string): ParseResult<RemoteRelayToClient> {
+  if (raw.length > RemoteLimits.maxAgentMessageChars)
+    return fail("message_too_large", "Message exceeds the agent frame bound")
+  const frame = decodeJson(raw)
+  if (!frame.ok) return frame
+  if (isRecord(frame.value) && typeof frame.value.type === "string" && frame.value.type.startsWith("notice.")) return parseNoticeFrame(frame.value)
+  return parseAgentFrame(frame.value)
+}
+
+export function isNoticeRequest(message: RemoteClientMessage): message is RemoteNoticeRequest {
+  return message.type === "request" && (remoteNoticeOperations as readonly string[]).includes(message.operation)
 }
 
 /** Strict parser for the relay control surface received by the local agent. */
@@ -408,6 +478,7 @@ function parseClientFrame(frame: unknown): ParseResult<RemoteClientMessage> {
   if (!isRecord(frame)) return invalid()
   if (frame.type === "ping" || frame.type === "pong") return withOnlyKeys(frame, ["type"], { type: frame.type })
   if (frame.type !== "request") return invalid()
+  if (typeof frame.operation === "string" && (remoteNoticeOperations as readonly string[]).includes(frame.operation)) return parseNoticeRequest(frame)
   return parseRequest(frame)
 }
 
@@ -620,6 +691,85 @@ function parseStatus(frame: Record<string, unknown>): ParseResult<RemoteStatus> 
     ...(frame.failed === undefined ? {} : { failed: frame.failed }) } }
 }
 
+const noticeIDPattern = /^ntc_[1-9][0-9]{0,14}$/
+
+function noticeWire(notice: RemoteNotice) {
+  return { id: notice.id, category: notice.category, sessionID: notice.sessionID, createdAt: notice.createdAt }
+}
+
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+}
+
+function parseNoticeRequest(frame: Record<string, unknown>): ParseResult<RemoteNoticeRequest> {
+  const id = requireID(frame.id)
+  if (!id.ok) return id
+  const failRequest = { ok: false, error: { code: "invalid_message", message: "Input does not match the remote operation" }, id: id.value } as const
+  const keys = withOnlyKeys(frame, ["type", "id", "operation", "input"], frame.type)
+  if (!keys.ok) return keys
+  const operation = frame.operation as RemoteNoticeOperation
+  if (operation === "notice.subscribe" || operation === "notice.readAll")
+    return frame.input === undefined ? { ok: true, value: { type: "request", id: id.value, operation } } : failRequest
+  if (!isRecord(frame.input)) return failRequest
+  if (operation === "notice.list") {
+    if (Object.keys(frame.input).some((key) => key !== "before") || typeof frame.input.before !== "string" || noticeSequence(frame.input.before) === undefined) return failRequest
+    return { ok: true, value: { type: "request", id: id.value, operation, input: { before: frame.input.before } } }
+  }
+  if (Object.keys(frame.input).some((key) => key !== "ids")) return failRequest
+  const ids = parseNoticeIDs(frame.input.ids)
+  return ids.ok ? { ok: true, value: { type: "request", id: id.value, operation, input: { ids: ids.value } } } : failRequest
+}
+
+function parseNoticeFrame(frame: Record<string, unknown>): ParseResult<RemoteNoticeFrame> {
+  if (frame.type === "notice.cleared" || frame.type === "notice.unavailable") {
+    const keys = withOnlyKeys(frame, ["type"], frame.type)
+    return keys.ok ? { ok: true, value: { type: frame.type } } : keys
+  }
+  if (frame.type === "notice.offline") {
+    const keys = withOnlyKeys(frame, ["type", "at"], frame.type)
+    return keys.ok && isCount(frame.at) && frame.at > 0 ? { ok: true, value: { type: "notice.offline", at: frame.at } } : invalid()
+  }
+  if (frame.type === "notice.removed") {
+    const keys = withOnlyKeys(frame, ["type", "ids", "total"], frame.type)
+    if (!keys.ok) return keys
+    const ids = parseNoticeIDs(frame.ids)
+    return ids.ok && isCount(frame.total) ? { ok: true, value: { type: "notice.removed", ids: ids.value, total: frame.total } } : invalid()
+  }
+  if (frame.type !== "notice.added") return invalid()
+  const keys = withOnlyKeys(frame, ["type", "notices", "total"], frame.type)
+  if (!keys.ok) return keys
+  if (!Array.isArray(frame.notices) || frame.notices.length === 0 || frame.notices.length > RemoteLimits.maxNoticeBatch || !isCount(frame.total)) return invalid()
+  const notices = parseNotices(frame.notices)
+  return notices.ok ? { ok: true, value: { type: "notice.added", notices: notices.value, total: frame.total } } : notices
+}
+
+function parseNotices(values: readonly unknown[]): ParseResult<readonly RemoteNotice[]> {
+  const notices: RemoteNotice[] = []
+  for (const value of values) {
+    const notice = parseNotice(value)
+    if (!notice.ok || notices.some((entry) => entry.id === notice.value.id)) return invalid()
+    notices.push(notice.value)
+  }
+  return { ok: true, value: notices }
+}
+
+function parseNotice(value: unknown): ParseResult<RemoteNotice> {
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== "id" && key !== "category" && key !== "sessionID" && key !== "createdAt")) return invalid()
+  if (typeof value.id !== "string" || noticeSequence(value.id) === undefined) return invalid()
+  if ((value.category !== "approval-requested" && value.category !== "agent-completed") || !isSessionID(value.sessionID) || !isCount(value.createdAt)) return invalid()
+  return { ok: true, value: { id: value.id, category: value.category, sessionID: value.sessionID, createdAt: value.createdAt } }
+}
+
+function parseNoticeIDs(value: unknown): ParseResult<readonly string[]> {
+  if (!Array.isArray(value) || value.length === 0 || value.length > RemoteLimits.maxNoticeBatch) return invalid()
+  const ids: string[] = []
+  for (const entry of value) {
+    if (typeof entry !== "string" || noticeSequence(entry) === undefined || ids.includes(entry)) return invalid()
+    ids.push(entry)
+  }
+  return { ok: true, value: ids }
+}
+
 function parseSubscriptions(frame: Record<string, unknown>): ParseResult<RemoteSubscriptions> {
   const keys = withOnlyKeys(frame, ["type", "clientID", "sessionIDs"], frame.type)
   if (!keys.ok) return keys
@@ -778,14 +928,20 @@ export type DeviceTokenResponse = {
 
 export type ApiErrorResponse = { readonly error: RemoteError }
 
-export type PushSubscriptionInput = {
-  readonly endpoint: string
-  readonly keys: { readonly p256dh: string; readonly auth: string }
-}
+export const pushCategories = ["agent-completed", "approval-requested", "machine-offline"] as const
+export type PushCategory = (typeof pushCategories)[number]
+export type PushCategories = { readonly [Category in PushCategory]: boolean }
+export type PushKeys = { readonly p256dh: string; readonly auth: string }
+export type PushRegistration = { readonly endpoint: string; readonly keys: PushKeys; readonly categories: PushCategories }
+export type PushRenewal = { readonly endpoint: string; readonly keys: PushKeys; readonly replaces: string }
+export type PushSubscriptionInput = PushRegistration | PushRenewal
 
-export type PushRemovalInput = { readonly endpoint: string }
+export type PushEndpointInput = { readonly endpoint: string }
 
 export type PushKeyResponse = { readonly publicKey: string }
+
+export type PushTestOutcome = "accepted" | "rejected" | "expired" | "unreachable"
+export type PushTestResponse = { readonly outcome: PushTestOutcome; readonly status?: number }
 
 export type RemoteUsageTokens = { readonly input: number; readonly output: number; readonly reasoning: number;
   readonly cache: { readonly read: number; readonly write: number } }
@@ -817,15 +973,33 @@ export type RemoteUsageReportValue = { readonly data: { readonly group: RemoteUs
 
 export function parsePushSubscription(value: unknown): ParseResult<PushSubscriptionInput> {
   if (!isRecord(value) || !isRecord(value.keys)) return invalidBody()
-  if (!withOnlyKeys(value, ["endpoint", "keys"], value).ok ||
+  const renewal = "replaces" in value
+  if (!withOnlyKeys(value, ["endpoint", "keys", renewal ? "replaces" : "categories"], value).ok ||
     !withOnlyKeys(value.keys, ["p256dh", "auth"], value.keys).ok) return invalidBody()
   if (!isPushEndpoint(value.endpoint) || !isPushKey(value.keys.p256dh, 65, 87, 4) || !isPushKey(value.keys.auth, 16, 22)) return invalidBody()
-  return { ok: true, value: { endpoint: value.endpoint, keys: { p256dh: value.keys.p256dh, auth: value.keys.auth } } }
+  const keys = { p256dh: value.keys.p256dh, auth: value.keys.auth }
+  if (renewal) return isPushEndpoint(value.replaces) ? { ok: true, value: { endpoint: value.endpoint, keys, replaces: value.replaces } } : invalidBody()
+  const categories = value.categories
+  if (!isRecord(categories) || Object.keys(categories).length !== pushCategories.length ||
+    !pushCategories.every((category) => typeof categories[category] === "boolean")) return invalidBody()
+  return { ok: true, value: { endpoint: value.endpoint, keys, categories: {
+    "agent-completed": categories["agent-completed"] === true,
+    "approval-requested": categories["approval-requested"] === true,
+    "machine-offline": categories["machine-offline"] === true,
+  } } }
 }
 
-export function parsePushRemoval(value: unknown): ParseResult<PushRemovalInput> {
+export function parsePushEndpoint(value: unknown): ParseResult<PushEndpointInput> {
   if (!isRecord(value) || !withOnlyKeys(value, ["endpoint"], value).ok || !isPushEndpoint(value.endpoint)) return invalidBody()
   return { ok: true, value: { endpoint: value.endpoint } }
+}
+
+export function parsePushTestResponse(value: unknown): ParseResult<PushTestResponse> {
+  if (!isRecord(value) || !withOnlyKeys(value, ["outcome", "status"], value).ok) return invalid()
+  if (value.outcome === "unreachable") return value.status === undefined ? { ok: true, value: { outcome: "unreachable" } } : invalid()
+  if ((value.outcome !== "accepted" && value.outcome !== "rejected" && value.outcome !== "expired") ||
+    typeof value.status !== "number" || !Number.isInteger(value.status) || value.status < 100 || value.status > 599) return invalid()
+  return { ok: true, value: { outcome: value.outcome, status: value.status } }
 }
 
 function isPushEndpoint(value: unknown): value is string {

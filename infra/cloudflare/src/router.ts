@@ -16,7 +16,7 @@ import {
   parseDeviceTokenRequest,
   parseEnrollRequest,
   parsePushSubscription,
-  parsePushRemoval,
+  parsePushEndpoint,
   type ChallengeResponse,
   type CreateEnrollmentResponse,
   type DeviceTokenResponse,
@@ -24,7 +24,9 @@ import {
   type EnrollResponse,
   type MeResponse,
   type PushKeyResponse,
+  type PushTestResponse,
 } from "../../../packages/remote/src/index"
+import { sendTestPush } from "./push/send"
 import type { PushStore } from "./push/store"
 import type { AuthRejection, AuthService } from "./auth/service"
 import { browserSessionTtlMs, oauthTransactionTtlMs } from "./auth/service"
@@ -166,6 +168,10 @@ export function createRouter(deps: RouterDeps) {
       if (request.method === "POST") return subscribePush(deps, request, now())
       if (request.method === "DELETE") return unsubscribePush(deps, request)
       return methodNotAllowed()
+    }
+    if (url.pathname === "/api/push/test") {
+      if (request.method !== "POST") return methodNotAllowed()
+      return testPush(deps, request, now())
     }
     if (url.pathname === "/api/devices/enrollments") {
       if (request.method !== "POST") return methodNotAllowed()
@@ -458,8 +464,30 @@ async function subscribePush(deps: RouterDeps, request: Request, now: number): P
   } catch {
     return apiError(400, "invalid_message", "Push subscription key is invalid")
   }
-  await deps.push.store.upsert(authenticated.session.userID, parsed.value, now)
+  if ("categories" in parsed.value) {
+    await deps.push.store.upsert(authenticated.session.userID, parsed.value, now)
+    return jsonResponse({ subscribed: true })
+  }
+  if (!await deps.push.store.renew(authenticated.session.userID, parsed.value, now))
+    return apiError(404, "not_found", "The replaced push subscription is not registered")
   return jsonResponse({ subscribed: true })
+}
+
+async function testPush(deps: RouterDeps, request: Request, now: number): Promise<Response> {
+  const guarded = requireMutationGuard(request)
+  if (guarded) return guarded
+  const authenticated = await requireSession(deps, request)
+  if (!authenticated.ok) return authenticated.response
+  if (!pushAvailable(deps.push)) return apiError(503, "internal_error", "Web Push is unavailable")
+  const parsed = parsePushEndpoint(await readJsonBody(request))
+  if (!parsed.ok) return apiError(400, parsed.error.code, parsed.error.message)
+  const claim = await deps.push.store.claimTest(authenticated.session.userID, parsed.value.endpoint, now)
+  if (claim.status === "missing") return apiError(404, "not_found", "This device has no registered push subscription")
+  if (claim.status === "limited") return apiError(429, "rate_limited", "Wait a minute before sending another test alert")
+  const send = deps.fetch
+  const body: PushTestResponse = await sendTestPush({ store: deps.push.store, subscription: claim.subscription, publicKey: deps.push.publicKey,
+    privateKey: deps.push.privateKey, subject: deps.push.subject, now: () => now, fetch: (input, init) => send(input, init) })
+  return jsonResponse(body)
 }
 
 async function unsubscribePush(deps: RouterDeps, request: Request): Promise<Response> {
@@ -467,7 +495,7 @@ async function unsubscribePush(deps: RouterDeps, request: Request): Promise<Resp
   if (guarded) return guarded
   const authenticated = await requireSession(deps, request)
   if (!authenticated.ok) return authenticated.response
-  const parsed = parsePushRemoval(await readJsonBody(request))
+  const parsed = parsePushEndpoint(await readJsonBody(request))
   if (!parsed.ok) return apiError(400, parsed.error.code, parsed.error.message)
   if (deps.push) await deps.push.store.remove(authenticated.session.userID, parsed.value.endpoint)
   return jsonResponse({ removed: true })
