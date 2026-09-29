@@ -30,6 +30,7 @@ export async function renderScreen(input: {
   kittyKeyboard?: boolean
   /** Frame is stable once this appears; avoids asserting a half-painted screen. */
   settle: string
+  config?: Record<string, unknown>
   remote?: { get: () => Promise<RemoteStatus>; set: (enabled: boolean) => Promise<RemoteStatus> }
   state?: string
 }) {
@@ -63,7 +64,7 @@ export async function renderScreen(input: {
   const task = Effect.runPromise(
     run({
       server: { endpoint: { url: server.url.toString() } },
-      config: { get: async () => ({}), update: async () => ({}) },
+      config: { get: async () => input.config ?? {}, update: async () => ({}) },
       packages: { resolve: async () => undefined },
       args: input.args ?? {},
       log: () => {},

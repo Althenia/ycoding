@@ -136,6 +136,7 @@ import { sessionSkillContent } from "../../util/session-skills"
 import { Header, headerModelRef, pendingVariantSelection, sessionRetryHeaderState, type SessionHeaderOperationalState, type SessionHeaderState } from "./header"
 import { railPlacement, railWidth } from "./rail"
 import { InlineDiff, inlineDiffGroups, parseInlineDiff, type InlineDiffFile, type InlineDiffGroup } from "./inline-diff"
+import { diffViewForWidth } from "../../util/diff-view"
 import { parseInlineCommandResult, type InlineCommandResult } from "./inline-command"
 import {
   SessionActivityRow,
@@ -3353,6 +3354,7 @@ function FileChangeRow(props: { file: InlineDiffGroup }) {
           files={props.file.files}
           heading={false}
           wrapMode={ctx.diffWrapMode()}
+          view={diffViewForWidth(ctx.config.diffs?.view, ctx.width - 17)}
         />
       </Show>
     </>

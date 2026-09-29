@@ -491,9 +491,12 @@ test("collapses file edit results into a summary block that expands to the diff 
     const expanded = transcriptLines(screen.lines())
     const removed = expanded.find((line) => line.includes("- Old cache note")) ?? ""
     const added = expanded.find((line) => line.includes("+ Current cache note")) ?? ""
-    expect(removed.search(/\d/)).toBe(5)
+    expect(removed).toBe(added)
     expect(removed.indexOf("- Old cache note")).toBe(12)
-    expect(added.indexOf("+ Current cache note")).toBe(12)
+    expect(added.indexOf("+ Current cache note")).toBeGreaterThan(12)
+    expect(removed.slice(0, 12)).toMatch(/\b8\b/)
+    expect(removed.slice(12 + "- Old cache note".length, added.indexOf("+ Current cache note"))).toMatch(/\b8\b/)
+    expect(removed).not.toContain("│")
   } finally {
     await screen.dispose()
   }

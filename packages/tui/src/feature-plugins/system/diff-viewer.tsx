@@ -19,6 +19,7 @@ import { Panel, PanelGroup, Separator } from "./diff-viewer-ui"
 import { useDialog } from "../../ui/dialog"
 import { DialogSelect } from "../../ui/dialog-select"
 import { getScrollAcceleration } from "../../util/scroll"
+import { diffViewForWidth, MIN_SPLIT_WIDTH } from "../../util/diff-view"
 import { useConfig } from "../../config"
 import {
   allExpandedFileTreeDirectories,
@@ -38,7 +39,6 @@ import {
 } from "./diff-viewer-file-tree-utils"
 
 const ROUTE = "diff"
-const MIN_SPLIT_WIDTH = 100
 const FILE_TREE_WIDTH = 32
 const PLAIN_TEXT_FILETYPE = "ycoding-plain-text"
 const VCS_DIFF_CONTEXT_LINES = 12
@@ -123,11 +123,7 @@ function DiffViewer(props: { context: Plugin.Context }) {
   const patchPaneWidth = createMemo(() => dimensions().width - (showFileTree() ? 33 : 0) - 4)
   const patchLeftBorder = createMemo<BorderSides[]>(() => (showFileTree() ? ["left"] : []))
   const splitAvailable = createMemo(() => patchPaneWidth() >= MIN_SPLIT_WIDTH)
-  const defaultView = createMemo(() => {
-    if (config.data.diffs?.view === "unified") return "unified"
-    if (config.data.diffs?.view === "split") return "split"
-    return splitAvailable() ? "split" : "unified"
-  })
+  const defaultView = createMemo(() => diffViewForWidth(config.data.diffs?.view, patchPaneWidth()))
   const [viewOverride, setViewOverride] = createSignal<DiffView | undefined>(storedView(config.data.diffs?.view))
   const view = createMemo(() => (splitAvailable() ? (viewOverride() ?? defaultView()) : "unified"))
   const fileTree = createMemo(() => buildFileTree(files()))

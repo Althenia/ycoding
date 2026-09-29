@@ -276,6 +276,44 @@ test("renders durable captured changes after transcript compaction", async () =>
   }
 }, 60_000)
 
+for (const { name, width, config, split } of [
+  { name: "wide auto", width: 189, config: undefined, split: true },
+  { name: "wide split preference", width: 189, config: { diffs: { view: "split" } }, split: true },
+  { name: "narrow auto", width: 90, config: undefined, split: false },
+  { name: "narrow split preference", width: 90, config: { diffs: { view: "split" } }, split: false },
+  { name: "wide unified preference", width: 189, config: { diffs: { view: "unified" } }, split: false },
+]) test(`renders an expanded captured file with ${name} layout`, async () => {
+  const screen = await renderScreen({
+    width, height: 80, config, args: { sessionID },
+    route: routeFor(compactedTranscript, { fileChanges: [sixPathFiles[0]!] }),
+    settle: "Captured changes 1 file",
+  })
+  try {
+    const header = screen.lines().findIndex((line) => line.includes("Captured changes 1 file"))
+    expect(header).toBeGreaterThan(-1)
+    await screen.mouse.click(12, header)
+    await waitForFrame(screen.frame, "src/parent.ts")
+    const file = screen.lines().findIndex((line) => line.includes("src/parent.ts"))
+    await screen.mouse.click(12, file)
+    await waitForFrame(screen.frame, "export const value = 'new'")
+    const oldRow = screen.lines().find((line) => line.includes("export const value = 'old'"))
+    expect(oldRow).toBeDefined()
+    if (split) {
+      expect(oldRow).toContain("export const value = 'new'")
+      const oldColumn = oldRow!.indexOf("export const value = 'old'")
+      const newColumn = oldRow!.indexOf("export const value = 'new'")
+      expect(oldColumn).toBeLessThan(newColumn)
+      expect(oldRow!.slice(0, oldColumn)).toMatch(/\b1\b/)
+      expect(oldRow!.slice(oldColumn + 26, newColumn)).toMatch(/\b1\b/)
+    } else {
+      expect(oldRow).not.toContain("export const value = 'new'")
+      expect(screen.lines().find((line) => line.includes("export const value = 'new'"))).toMatch(/\b1\b/)
+    }
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
 test("keeps the durable recovery empty when compaction recorded no changes", async () => {
   let fileChangeRequested = false
   const screen = await renderScreen({

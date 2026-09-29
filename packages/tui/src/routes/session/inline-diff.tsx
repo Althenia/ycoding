@@ -3,6 +3,7 @@ import { TextAttributes } from "@opentui/core"
 import { parsePatch } from "diff"
 import { createMemo, For, Show } from "solid-js"
 import { useTheme } from "../../context/theme"
+import { filetype } from "../../util/filetype"
 
 type InlineDiffLine = { kind: "added" | "removed" | "context"; line: string; lineNum: string }
 
@@ -112,9 +113,9 @@ export function inlineDiffGroups(files: InlineDiffFile[]): InlineDiffGroup[] {
   })
 }
 
-export function InlineDiff(props: InlineDiffGroup & { wrapMode?: "word" | "none"; heading?: boolean }) {
-  const { themeV2 } = useTheme()
-
+export function InlineDiff(props: InlineDiffGroup & { wrapMode?: "word" | "none"; heading?: boolean; view?: "split" | "unified" }) {
+  const { themeV2, syntax } = useTheme()
+  const patches = createMemo(() => props.files.filter((file) => parseInlineDiff(file.diff)?.patch))
   const hunkLines = createMemo(() => props.files.flatMap((file) => inlineDiffSummary(file).lines))
 
   return (
@@ -170,50 +171,79 @@ export function InlineDiff(props: InlineDiffGroup & { wrapMode?: "word" | "none"
           </box>
           <box height={1} flexShrink={0} border={["top"]} borderColor={themeV2.border.default} />
         </Show>
-        <box flexDirection="column" paddingTop={1} paddingBottom={1} flexShrink={0}>
-          <For each={hunkLines()}>
-            {(item) => {
-              const rowBg =
-                item.kind === "added"
-                  ? themeV2.diff.background.added
-                  : item.kind === "removed"
-                    ? themeV2.diff.background.removed
-                    : undefined
-              const gutterBg =
-                item.kind === "added"
-                  ? themeV2.diff.lineNumber.background.added
-                  : item.kind === "removed"
-                    ? themeV2.diff.lineNumber.background.removed
-                    : themeV2.diff.background.context
-              return (
-                <box flexShrink={0} backgroundColor={rowBg}>
-                  <text
-                    wrapMode={props.wrapMode ?? "none"}
-                    truncate={props.wrapMode !== "word"}
-                    fg={
-                      item.kind === "added"
-                        ? themeV2.diff.text.added
-                        : item.kind === "removed"
-                          ? themeV2.diff.text.removed
-                          : themeV2.diff.text.context
-                    }
-                  >
-                    {" "}
-                    <span
-                      style={{
-                        fg: themeV2.diff.lineNumber.text,
-                        bg: gutterBg,
-                      }}
-                    >
-                      {item.lineNum.slice(0, 6)}
-                    </span>
-                    {"  "}
-                    {item.kind === "context" ? item.line : `${item.kind === "added" ? "+" : "-"} ${item.line.trimStart()}`}
-                  </text>
-                </box>
-              )
-            }}
-          </For>
+        <box flexDirection="column" paddingTop={1} paddingBottom={1} flexShrink={0} paddingLeft={props.view === "split" ? 5 : 0}>
+          <Show
+            when={props.view === "split"}
+            fallback={
+              <For each={hunkLines()}>
+                {(item) => {
+                  const rowBg =
+                    item.kind === "added"
+                      ? themeV2.diff.background.added
+                      : item.kind === "removed"
+                        ? themeV2.diff.background.removed
+                        : undefined
+                  const gutterBg =
+                    item.kind === "added"
+                      ? themeV2.diff.lineNumber.background.added
+                      : item.kind === "removed"
+                        ? themeV2.diff.lineNumber.background.removed
+                        : themeV2.diff.background.context
+                  return (
+                    <box flexShrink={0} backgroundColor={rowBg}>
+                      <text
+                        wrapMode={props.wrapMode ?? "none"}
+                        truncate={props.wrapMode !== "word"}
+                        fg={
+                          item.kind === "added"
+                            ? themeV2.diff.text.added
+                            : item.kind === "removed"
+                              ? themeV2.diff.text.removed
+                              : themeV2.diff.text.context
+                        }
+                      >
+                        {" "}
+                        <span
+                          style={{
+                            fg: themeV2.diff.lineNumber.text,
+                            bg: gutterBg,
+                          }}
+                        >
+                          {item.lineNum.slice(0, 6)}
+                        </span>
+                        {"  "}
+                        {item.kind === "context" ? item.line : `${item.kind === "added" ? "+" : "-"} ${item.line.trimStart()}`}
+                      </text>
+                    </box>
+                  )
+                }}
+              </For>
+            }
+          >
+            <For each={patches()}>
+              {(file) => (
+                <diff
+                  diff={file.diff}
+                  view="split"
+                  filetype={filetype(props.path)}
+                  syntaxStyle={syntax()}
+                  showLineNumbers={true}
+                  width="100%"
+                  wrapMode={props.wrapMode ?? "none"}
+                  fg={themeV2.text.default}
+                  addedBg={themeV2.diff.background.added}
+                  removedBg={themeV2.diff.background.removed}
+                  contextBg={themeV2.diff.background.context}
+                  addedSignColor={themeV2.diff.highlight.added}
+                  removedSignColor={themeV2.diff.highlight.removed}
+                  lineNumberFg={themeV2.diff.lineNumber.text}
+                  lineNumberBg={themeV2.diff.background.context}
+                  addedLineNumberBg={themeV2.diff.lineNumber.background.added}
+                  removedLineNumberBg={themeV2.diff.lineNumber.background.removed}
+                />
+              )}
+            </For>
+          </Show>
         </box>
       </box>
     </box>

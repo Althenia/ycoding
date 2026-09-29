@@ -1261,17 +1261,20 @@ test("collapses file edit results before expanding the board diff grid", async (
     const expanded = screen.lines()
     const expandedRowOf = (text: string) =>
       expanded.findIndex((line) => line.includes(text) && line.indexOf(text) < railStart)
-
-    const removed = transcriptSlice(expanded[expandedRowOf("- Old cache note")] ?? "", DESIGN_VIEWPORT.width)
-    const added = transcriptSlice(expanded[expandedRowOf("+ Current cache note")] ?? "", DESIGN_VIEWPORT.width)
-
-    // Board 13: line number column 5, diff content column 13, no surrounding frame.
-    expect(removed.search(/\d/)).toBe(5)
-    expect(removed.indexOf("- Old cache note")).toBe(12)
-    expect(added.indexOf("+ Current cache note")).toBe(12)
-    expect(removed).not.toContain("│")
-    expect(added).not.toContain("│")
-    expect(screen.colorOf("+ Current cache note")).not.toEqual(screen.colorOf("- Old cache note"))
+    const split = transcriptSlice(expanded[expandedRowOf("- Old cache note")] ?? "", DESIGN_VIEWPORT.width)
+    const oldColumn = split.indexOf("- Old cache note")
+    const newColumn = split.indexOf("+ Current cache note")
+    expect(oldColumn).toBe(12)
+    expect(newColumn).toBeGreaterThan(oldColumn)
+    expect(split.slice(0, oldColumn)).toMatch(/\b8\b/)
+    expect(split.slice(oldColumn + "- Old cache note".length, newColumn)).toMatch(/\b8\b/)
+    expect(split).not.toContain("│")
+    const changeSpans = screen.spans().lines.flatMap((line) => line.spans)
+    const removedBackground = changeSpans.find((span) => span.text.includes("Old cache note"))?.bg.toInts()
+    const addedBackground = changeSpans.find((span) => span.text.includes("Current cache note"))?.bg.toInts()
+    expect(removedBackground).toBeDefined()
+    expect(addedBackground).toBeDefined()
+    expect(addedBackground).not.toEqual(removedBackground)
     expect(screen.frame()).not.toContain("const fresh = usage.cacheRead")
 
     // The in-progress row is identified by its marker rather than a label, so the assertion holds
@@ -1281,6 +1284,40 @@ test("collapses file edit results before expanding the board diff grid", async (
     expect(running.indexOf("..")).toBe(3)
     expect(SPINNER_FRAMES.some((frame) => running.slice(0, 10).includes(frame))).toBe(true)
     expect(transcriptSlice(running, DESIGN_VIEWPORT.width).trimEnd()).toMatch(/\d+[smhdw]$/)
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("keeps the board diff grid in unified transcript view", async () => {
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    config: { diffs: { view: "unified" } },
+    args: { sessionID },
+    route: routeFor(editTranscript),
+    settle: "docs/runtime.md",
+  })
+  try {
+    const railStart = DESIGN_VIEWPORT.width - railWidth(DESIGN_VIEWPORT.width)
+    const lines = screen.lines()
+    const rowOf = (text: string) => lines.findIndex((line) => line.includes(text) && line.indexOf(text) < railStart)
+    expect((lines[rowOf("Edited 2 files")] ?? "").indexOf("Edited 2 files")).toBe(10)
+    expect((lines[rowOf("docs/runtime.md")] ?? "").indexOf("docs/runtime.md")).toBe(12)
+    await screen.mouse.click(12, rowOf("docs/runtime.md"))
+    await waitForFrame(() => {
+      screen.scrollbox()?.scrollTo(screen.scrollbox()!.scrollHeight)
+      return screen.frame()
+    }, "+ Current cache note")
+    const expanded = screen.lines()
+    const removed = transcriptSlice(expanded.find((line) => line.includes("- Old cache note")) ?? "", DESIGN_VIEWPORT.width)
+    const added = transcriptSlice(expanded.find((line) => line.includes("+ Current cache note")) ?? "", DESIGN_VIEWPORT.width)
+    expect(removed.search(/\d/)).toBe(5)
+    expect(removed.indexOf("- Old cache note")).toBe(12)
+    expect(added.indexOf("+ Current cache note")).toBe(12)
+    expect(removed).not.toContain("+ Current cache note")
+    expect(removed).not.toContain("│")
+    expect(added).not.toContain("│")
+    expect(screen.colorOf("+ Current cache note")).not.toEqual(screen.colorOf("- Old cache note"))
   } finally {
     await screen.dispose()
   }
