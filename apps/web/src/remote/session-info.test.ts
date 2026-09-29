@@ -32,4 +32,9 @@ describe("remote Session location metadata", () => {
       })
     }
   })
+
+  test("reads activity separately from list update time", () => {
+    expect(readSessionInfo({ id: "ses_api", title: "API", time: { updated: 42, active: 30 } })).toMatchObject({ updatedAt: 42, activeAt: 30 })
+    expect(readSessionInfo({ id: "ses_api", title: "API", time: { updated: 42 } })?.activeAt).toBeUndefined()
+  })
 })

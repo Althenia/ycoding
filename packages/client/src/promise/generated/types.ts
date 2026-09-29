@@ -2582,7 +2582,7 @@ export type SessionInfo = {
   permissionCeiling?: PermissionV2Ruleset
   cost: MoneyUSD
   tokens: TokenUsageInfo
-  time: { created: number; updated: number; archived?: number; pinned?: number }
+  time: { created: number; updated: number; active?: number; archived?: number; pinned?: number }
   title: string
   location: LocationRef
   subpath?: string

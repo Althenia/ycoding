@@ -47,7 +47,7 @@ export function RunningSessions(props: {
       <ul class="running-sessions__list" ref={track} onScroll={measure} onWheel={() => { target = undefined }} onTouchStart={() => { target = undefined }}>
         <For each={props.sessions}>
           {(session, index) => {
-            const lastActive = session.updatedAt > 0 ? new Date(session.updatedAt) : undefined
+            const lastActive = session.activeAt !== undefined ? new Date(session.activeAt) : undefined
             return <li role="group" aria-label={`${index() + 1} of ${props.sessions.length}`}>
             <button type="button" class="running-sessions__item"
               aria-label={`Open ${session.title} in ${session.workspaceName}`}

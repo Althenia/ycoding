@@ -471,6 +471,7 @@ uses current backend activity: a root Session is running while any Session in
 its family runs, and a child Session by its own activity; archived Sessions are
 not idle. Omitted status
 includes all states. `order` accepts `"asc"`, `"desc"` (default), `"pinned"`, or `"active"`.
+Session list/get data carries the optional `time.active` of the latest terminal Step or execution event. The connector forwards the event's `created` millisecond time to the browser for live activity display; list ordering and cursors continue to use `time.updated`.
 Pinned order lists pins by ascending pin time, then unpinned Sessions by descending
 update time and ID. Its opaque cursors include the pin sort key and support both
 directions. Active order places running root families first, then pins by

@@ -109,6 +109,8 @@ describe("contract hygiene", () => {
     })
     expect(session).not.toHaveProperty("daybreak")
     expect(Schema.encodeSync(Session.Info)(session)).not.toHaveProperty("daybreak")
+    expect(Schema.encodeSync(Session.Info)(session).time).not.toHaveProperty("active")
+    expect(Schema.encodeSync(Session.Info)({ ...session, time: { ...session.time, active: session.time.created } }).time.active).toBe(0)
     expect(Schema.encodeSync(Session.Info)({ ...session, daybreak: "daybreak_red" })).toHaveProperty(
       "daybreak",
       "daybreak_red",

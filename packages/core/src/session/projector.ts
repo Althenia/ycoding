@@ -446,6 +446,11 @@ function run(db: DatabaseService, event: MessageEvent) {
       appendMessage,
     }
     yield* SessionMessageUpdater.update(adapter, event)
+    if (event.type === SessionEvent.Step.Ended.type || event.type === SessionEvent.Step.Failed.type ||
+      event.type === SessionEvent.Execution.Succeeded.type || event.type === SessionEvent.Execution.Failed.type ||
+      event.type === SessionEvent.Execution.Interrupted.type)
+      yield* db.update(SessionTable).set({ time_active: sql`coalesce(max(${SessionTable.time_active}, ${DateTime.toEpochMillis(event.created)}), ${DateTime.toEpochMillis(event.created)})`, time_updated: sql`${SessionTable.time_updated}` })
+        .where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie)
   })
 }
 

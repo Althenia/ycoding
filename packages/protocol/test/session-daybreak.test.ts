@@ -41,6 +41,8 @@ test("session daybreak set registers the frozen endpoint contract", () => {
   expect(success.ast).toEqual(Schema.Struct({ data: Session.Info }).ast)
   const decodeSuccess = Schema.decodeUnknownSync(Schema.Struct({ data: Session.Info }))
   expect(decodeSuccess({ data: session }).data.id).toBe(Session.ID.make("ses_daybreak"))
+  expect(decodeSuccess({ data: session }).data.time.active).toBeUndefined()
+  expect(Schema.encodeSync(Schema.Struct({ data: Session.Info }))(decodeSuccess({ data: { ...session, time: { ...session.time, active: 42 } } })).data.time.active).toBe(42)
   expect(decodeSuccess({ data: { ...session, daybreak: "daybreak_red" } }).data.daybreak).toBe("daybreak_red")
   expect(() => decodeSuccess({ data: { ...session, daybreak: "daybreak_green" } })).toThrow()
   expect(() => decodeSuccess({ data: {} })).toThrow()

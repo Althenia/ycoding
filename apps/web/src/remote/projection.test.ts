@@ -137,6 +137,18 @@ test("tracks live execution and part timings for the transcript and status bar",
   expect(view.executionStarted).toBeUndefined()
 })
 
+test("terminal step and run events use durable creation time for activity, not local receipt time", () => {
+  let view = createSessionView("ses_a")
+  for (const type of ["session.step.ended", "session.step.failed", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"]) {
+    const created = (view.activeAt ?? 0) + 100
+    view = applySessionEvent(view, { type, created, data: { sessionID: "ses_a", assistantMessageID: "msg_a" } }, created + 900)
+    expect(view.activeAt).toBe(created)
+  }
+  view = apply(view, "session.renamed", { title: "New title" }, 9_000)
+  expect(view.activeAt).toBe(500)
+  expect(applySessionEvent(view, { type: "session.execution.succeeded", created: 400, data: { sessionID: "ses_a" } }, 10_000).activeAt).toBe(500)
+})
+
 test("live diagnostics replace selected-Session speed and context, then clear on compaction or unreported values", () => {
   const selected = { id: "gpt-6", providerID: "openai", variant: "high" }
   const first = { model: selected, tokens: 12, durationNs: 2_000_000, tokensPerSecond: 6_000 }

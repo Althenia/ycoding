@@ -98,7 +98,7 @@ export function ContextBreakdownContent(props: {
     ["Assistant Messages", props.messages.filter((message) => message.type === "assistant").length.toLocaleString()],
     ["Total Cost", new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(props.usage ? props.usage.cost ?? 0 : props.session?.cost ?? 0)],
     ["Session Created", props.session ? Locale.datetime(props.session.time.created) : "—"],
-    ["Last Activity", props.session ? Locale.datetime(props.session.time.updated) : "—"],
+    ["Last Activity", props.session?.time.active === undefined ? "—" : Locale.datetime(props.session.time.active)],
   ] as const)
   const hues = ["blue", "purple", "green", "orange", "red", "cyan", "yellow"] as const
   const color = (index: number) => themeV2.hue[hues[index]][500]

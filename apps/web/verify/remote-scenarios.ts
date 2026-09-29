@@ -11,7 +11,7 @@ type WireSession = {
   readonly location?: { readonly directory: string }
   readonly agent?: string
   readonly model?: { readonly providerID: string; readonly id: string }
-  readonly time: { readonly created: number; readonly updated: number; readonly archived?: number }
+  readonly time: { readonly created: number; readonly updated: number; readonly active?: number; readonly archived?: number }
   readonly running?: boolean
 }
 
@@ -53,6 +53,7 @@ const now = Date.now()
 const time = (secondsAgo: number, archived = false) => ({
   created: now - 3_600_000,
   updated: now - secondsAgo * 1_000,
+  active: now - secondsAgo * 1_000,
   ...(archived ? { archived: now - secondsAgo * 1_000 } : {}),
 })
 

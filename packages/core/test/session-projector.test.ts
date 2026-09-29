@@ -61,6 +61,34 @@ const assistantRow = (
 }
 
 describe("SessionProjector", () => {
+  it.effect("records each terminal step and run event time without changing list update time", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).run()
+      yield* db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, directory: "/project", title: "test", time_updated: 7 }).run()
+      const events = yield* EventV2.Service
+      const messageID = SessionMessage.ID.make("msg_activity")
+      yield* events.publish(SessionEvent.Step.Started, { sessionID, assistantMessageID: messageID, agent: build, model })
+      const cases = [
+        [SessionEvent.Step.Ended, { sessionID, assistantMessageID: messageID, finish: "stop", cost: Money.USD.make(0), tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }],
+        [SessionEvent.Step.Failed, { sessionID, assistantMessageID: messageID, error: { type: "provider.invalid-output", message: "bad output" } }],
+        [SessionEvent.Execution.Succeeded, { sessionID }],
+        [SessionEvent.Execution.Failed, { sessionID, error: { type: "provider.invalid-output", message: "bad output" } }],
+        [SessionEvent.Execution.Interrupted, { sessionID, reason: "shutdown" }],
+      ] as const
+      for (const [eventType, data] of cases) {
+        const published = yield* events.publish(eventType, data)
+        const storedEvent = yield* db.select().from(EventTable).where(eq(EventTable.id, published.id)).get()
+        expect(storedEvent?.type).toBe(`${eventType.type}.1`)
+        expect(storedEvent?.created).toBe(DateTime.toEpochMillis(published.created))
+        const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get()
+        expect(row?.time_active).toBe(DateTime.toEpochMillis(published.created))
+        expect(row?.time_updated).toBe(7)
+        expect(row && fromRow(row).time.active).toEqual(published.created)
+      }
+    }),
+  )
+
   it.effect("projects a completed current compaction as a restart-stable transcript marker", () =>
     Effect.gen(function* () {
       const db = (yield* Database.Service).db

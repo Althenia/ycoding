@@ -90,6 +90,7 @@ Anti-references: web dashboards, cards with shadows, rounded pills, icon fonts, 
 - Keep terminal composition in whole cells and adapt to available columns rather than borrowing pixel-oriented web layout (`docs/runtime.md`, `src/routes/session/`).
 - Treat the canonical transcript as durable history and the resident transcript as a bounded rendering projection; an absent row must not reserve space (`AGENTS.md`, `test/cli/tui/transcript-history.test.tsx`, `test/session-transcript-boundary.test.tsx`).
 - Preserve text and keyboard operation when color, width, or history residency limits presentation (`test/file-change-summary.test.tsx`, `test/session-transcript-boundary.test.tsx`).
+- Show the context breakdown's Last Activity from terminal Session activity, or `—` before any terminal Step or run (`test/cli/tui/context-breakdown.test.tsx`).
 
 ## Rules
 

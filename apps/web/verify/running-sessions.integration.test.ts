@@ -67,6 +67,19 @@ describe("running Sessions across workspaces", () => {
     } finally { await page.close() }
   })
 
+  test("renders missing activity without falling back to update time, then shows a terminal run time", async () => {
+    const page = await browser!.openPage()
+    try {
+      await page.navigate(`http://127.0.0.1:${port}/verify/running-sessions-fixture.html?mixed=1&missing=1`)
+      for (let attempt = 0; attempt < 40 && await page.evaluate<number>(`document.querySelectorAll('.running-sessions__item').length`) !== 2; attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<string>(`document.querySelectorAll('.running-sessions__status')[1]?.textContent?.trim()`)).toBe("Last active not reported")
+      const finished = 1_700_000_000_000
+      await page.evaluate(`window.runningFinish(${finished})`)
+      expect(await page.evaluate<string>(`document.querySelectorAll('.running-sessions__status')[0]?.querySelector('time')?.getAttribute('datetime')`)).toBe(new Date(finished).toISOString())
+      expect(await page.evaluate<string>(`document.querySelectorAll('.running-sessions__status')[1]?.textContent?.trim()`)).toBe("Last active not reported")
+    } finally { await page.close() }
+  })
+
   test("snaps fixed cards with visible pagination only when the row overflows", async () => {
     const page = await browser!.openPage()
     try {

@@ -10,7 +10,7 @@ import { Footer } from "../../../src/routes/session/footer"
 const session = {
   title: "Demo session", model: { providerID: "openai", id: "gpt" },
   tokens: { input: 7, output: 3, reasoning: 1, cache: { read: 2, write: 4 } },
-  time: { created: 1000, updated: 2000 }, cost: 0,
+  time: { created: 1000, updated: 120_000, active: 180_000 }, cost: 0,
 } satisfies Pick<SessionInfo, "title" | "model" | "tokens" | "cost" | "time">
 const breakdown = { system: 10, tools: 10, user: 1, assistant: 976, reasoning: 1, toolCalls: 1, other: 1 }
 const diagnostics = {
@@ -29,7 +29,7 @@ test("allocates a full bar proportionally and keeps tiny nonzero categories visi
   expect(contextBarCells({ ...breakdown, assistant: 0 }, 12)[3]).toBe(0)
 })
 
-async function render(width: number, value?: SessionCacheDiagnostics, usage?: Parameters<typeof ContextBreakdownContent>[0]["usage"], cost = 0, height = 55) {
+async function render(width: number, value?: SessionCacheDiagnostics, usage?: Parameters<typeof ContextBreakdownContent>[0]["usage"], cost = 0, height = 55, active: number | null = 180_000) {
   const config = createTuiResolvedConfig()
   const [{ ConfigProvider }, { ThemeProvider }, { Keymap }] = await Promise.all([
     import("../../../src/config"), import("../../../src/context/theme"), import("../../../src/context/keymap"),
@@ -37,7 +37,7 @@ async function render(width: number, value?: SessionCacheDiagnostics, usage?: Pa
   const app = await testRender(() => (
     <TestTuiContexts><ConfigProvider config={config}><ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
       <Keymap.Provider config={config}>
-        <ContextBreakdownContent session={{ ...session, cost }} diagnostics={value} messages={[
+        <ContextBreakdownContent session={{ ...session, cost, time: { ...session.time, ...(active === null ? { active: undefined } : { active }) } }} diagnostics={value} messages={[
           { type: "user" }, { type: "assistant" }, { type: "user" },
         ]} usage={usage} onBack={() => {}} />
       </Keymap.Provider>
@@ -55,6 +55,7 @@ test("renders session stats, percentages, tokens and total in a two-column grid"
     for (const label of ["Session", "Messages", "Provider", "Model", "Context Limit", "Total Tokens", "Usage %", "Input Tokens", "Output Tokens", "Reasoning Tokens", "Cache Tokens read/write", "User Messages", "Assistant Messages", "Total Cost", "Session Created", "Last Activity", "Category", "Tokens", "Total"])
       expect(frame).toContain(label)
     expect(frame).toContain("Demo session")
+    expect(frame).toContain("Last Activity            12:03 AM · 1/1/1970")
     expect(frame).toContain("$0.00")
     expect(frame).toContain("97.6%")
     expect(frame).toContain("1,000")
@@ -89,6 +90,11 @@ test("stacks stats at narrow width and still shows missing breakdown guidance", 
     expect(frame).toMatch(/Cache Tokens read\/write\s+2 \/ 4\b/)
     expect(frame.split("\n").some((line) => line.includes("Session") && line.includes("Messages"))).toBe(false)
   } finally { app.renderer.destroy() }
+})
+
+test("shows a dash when terminal Session activity is absent despite a record update", async () => {
+  const app = await render(120, undefined, undefined, 0, 55, null)
+  try { expect(app.captureCharFrame()).toMatch(/Last Activity\s+—/) } finally { app.renderer.destroy() }
 })
 
 test("keeps the complete token table inside a narrow terminal", async () => {

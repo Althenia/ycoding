@@ -8,6 +8,10 @@ import { join } from "node:path"
 import { RemoteAgent, type ConnectionInput, type RelayConnection } from "../src/remote-bridge"
 import { createLocalServer } from "../src/remote-local"
 import { createSession, password, startServer, type IsolatedServer } from "./remote-harness"
+import { createRemoteStore, readSessionInfo } from "../../../apps/web/src/remote/store"
+import { readSessionInfoList } from "../../../apps/web/src/remote/projection"
+import type { RemoteHttp } from "../../../apps/web/src/remote/http"
+import type { RemoteTransport, RemoteTransportHandlers } from "../../../apps/web/src/remote/transport"
 
 // End-to-end verification of the relay bridge against a real isolated YCoding
 // server: real SessionStore, real Protocol routes, real SSE event feed, and the
@@ -22,18 +26,21 @@ type Relay = {
   readonly events: () => readonly { readonly sessionID: string; readonly event: unknown }[]
   readonly deliver: (frame: unknown) => void
   readonly createConnection: (input: ConnectionInput) => RelayConnection
+  readonly onSent: (listener: (frame: SentValue) => void) => void
 }
 
 function createRelay(): Relay {
   const values: SentValue[] = []
   let handler: ((frame: unknown) => void) | undefined
   let connection: ConnectionInput | undefined
+  let listener: ((frame: SentValue) => void) | undefined
   return {
     input: () => {
       if (connection === undefined) throw new Error("the bridge has not connected")
       return connection
     },
     sent: () => values,
+    onSent: (next) => { listener = next },
     responses: () => values.filter((value) => value.type === "response") as unknown as readonly RemoteResponse[],
     events: () =>
       values.filter((value) => value.type === "event") as unknown as readonly {
@@ -49,6 +56,7 @@ function createRelay(): Relay {
           const parsed = parseAgentMessage(value)
           if (!parsed.ok) throw new Error(`bridge sent an invalid frame: ${parsed.error.code}`)
           values.push(parsed.value as unknown as SentValue)
+          listener?.(parsed.value as unknown as SentValue)
         },
         onMessage: (next) => {
           handler = next
@@ -280,6 +288,95 @@ const goalRequest = "keep the remote bridge honest"
 // The synthesized goal text comes from the loopback stand-in, not from the request,
 // so a projected goal text is proof that the model boundary ran.
 const synthesizedGoal = "Keep the remote bridge honest across reconnects and restarts."
+
+test("a real finished run reaches the web activity store without changing Session list order", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ycoding-active-flow-"))
+  const server = await startServer(directory, { provider: { text: "Finished the task." } })
+  const relay = createRelay()
+  const bridge = new RemoteAgent({
+    relayURL: "https://relay.example",
+    local: createLocalServer({ url: server.base, auth: { type: "basic", username: "ycoding", password } }),
+    credentials: async () => ({ accessToken: "integration-token", accessExpiresAt: Date.now() + 600_000 }),
+    createConnection: relay.createConnection,
+    refreshIntervalMs: 3_600_000,
+  })
+  const http: RemoteHttp = {
+    me: async () => ({ ok: true, value: { user: { id: "usr_test" }, session: { expiresAt: Date.now() + 600_000 }, devices: [{ id: "dev_test", name: "Test", createdAt: 1, status: "active", online: true }] } }),
+    devices: async () => ({ ok: true, value: [{ id: "dev_test", name: "Test", createdAt: 1, status: "active", online: true }] }),
+    createEnrollment: async () => ({ ok: false, status: 403, kind: "http", message: "Not available" }),
+    revokeDevice: async () => ({ ok: false, status: 403, kind: "http", message: "Not available" }),
+    removeRevokedDevices: async () => ({ ok: false, status: 403, kind: "http", message: "Not available" }),
+    logout: async () => ({ ok: true, value: undefined }),
+  }
+  let nextID = 0
+  let eventHandlers: RemoteTransportHandlers | undefined
+  const store = createRemoteStore({ http, createTransport: (_deviceID, handlers: RemoteTransportHandlers): RemoteTransport => {
+    eventHandlers = handlers
+    return {
+      connect: () => queueMicrotask(() => { handlers.onStatus?.({ kind: "open" }); handlers.onSessions?.() }),
+      close: () => handlers.onStatus?.({ kind: "idle" }),
+      status: () => ({ kind: "open" }),
+      request: async (operation, options) => {
+        const id = `req_active_${++nextID}`
+        relay.deliver(request(id, operation, options?.sessionID, options?.input ? { ...options.input } : undefined))
+        const response = await answer(relay, id)
+        if (response.ok && operation === "session.subscribe" && options?.sessionID)
+          relay.deliver({ type: "subscriptions", clientID: "client-active", sessionIDs: [options.sessionID] })
+        return response.ok ? { status: "ok", value: response.value } : { status: "failed", error: response.error }
+      },
+    }
+  } })
+  relay.onSent((frame) => {
+    if (frame.type === "event" && typeof frame.sessionID === "string")
+      eventHandlers?.onEvent?.(frame.sessionID, frame.event)
+    if (frame.type === "status" && Array.isArray(frame.running) && Array.isArray(frame.attention))
+      eventHandlers?.onSessionStatus?.({ running: frame.running.filter((id: unknown): id is string => typeof id === "string"), attention: frame.attention.filter((id: unknown): id is string => typeof id === "string") })
+  })
+  try {
+    if (!server.provider) throw new Error("Missing isolated provider")
+    const olderID = "ses_active_older"
+    const newerID = "ses_active_newer"
+    await createSession(server, olderID, directory, { providerID: server.provider.providerID, id: server.provider.modelID })
+    await Bun.sleep(5)
+    await createSession(server, newerID, directory)
+    await bridge.connect()
+    await store.load()
+    await waitFor(() => store.state().carouselSessions?.find((row) => row.id === olderID))
+    await store.selectSession(olderID)
+    const warmup = await server.request(`/api/session/${olderID}/prompt`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "First task" }) })
+    expect(warmup.status, await warmup.clone().text()).toBe(200)
+    await waitFor(() => relay.events().find((frame) => frame.sessionID === olderID && typeof frame.event === "object" && frame.event !== null && Reflect.get(frame.event, "type") === "session.execution.succeeded"), 30_000)
+    await waitFor(() => relay.events().find((frame) => frame.sessionID === olderID && typeof frame.event === "object" && frame.event !== null && Reflect.get(frame.event, "type") === "session.renamed"), 30_000)
+    relay.deliver(request("active_verify", "session.get", olderID))
+    valueOf(await answer(relay, "active_verify"))
+    relay.deliver(request("active_list_before", "session.list", undefined, { order: "desc" }))
+    const beforePage = readSessionInfoList(valueOf(await answer(relay, "active_list_before"))).map((row) => readSessionInfo(row))
+    expect(beforePage.map((row) => row?.id).toSorted()).toEqual([olderID, newerID].toSorted())
+    expect(beforePage.find((row) => row?.id === olderID)?.activeAt).toBeDefined()
+    const prompted = await server.request(`/api/session/${olderID}/prompt`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "Complete the second task" }) })
+    expect(prompted.status, await prompted.clone().text()).toBe(200)
+    const finished = await waitFor(() => relay.events().filter((frame) => frame.sessionID === olderID &&
+      typeof frame.event === "object" && frame.event !== null && Reflect.get(frame.event, "type") === "session.execution.succeeded").length >= 2
+      ? relay.events().filter((frame) => frame.sessionID === olderID && typeof frame.event === "object" && frame.event !== null && Reflect.get(frame.event, "type") === "session.execution.succeeded").at(-1) : undefined, 30_000)
+    const terminal = finished.event
+    if (typeof terminal !== "object" || terminal === null) throw new Error("Missing terminal event")
+    const active = await waitFor(() => {
+      const row = store.state().carouselSessions?.find((item) => item.id === olderID)
+      return row?.activeAt === Reflect.get(terminal, "created") && row?.running === false ? row.activeAt : undefined
+    }, 30_000)
+    const actual = await server.request(`/api/session/${olderID}`)
+    expect(actual.status).toBe(200)
+    const body: unknown = await actual.json()
+    const session = readSessionInfo(typeof body === "object" && body !== null ? Reflect.get(body, "data") : undefined)
+    expect(session?.activeAt).toBe(active)
+    relay.deliver(request("active_verify_after", "session.get", olderID))
+    valueOf(await answer(relay, "active_verify_after"))
+    relay.deliver(request("active_list_after", "session.list", undefined, { order: "desc" }))
+    const afterPage = readSessionInfoList(valueOf(await answer(relay, "active_list_after"))).map((row) => readSessionInfo(row))
+    expect(afterPage.map((row) => [row?.id, row?.updatedAt])).toEqual(beforePage.map((row) => [row?.id, row?.updatedAt]))
+    expect(afterPage.find((row) => row?.id === olderID)?.activeAt).toBe(active)
+  } finally { store.dispose(); await bridge.close(); await server.close(); await rm(directory, { recursive: true, force: true }) }
+}, 60_000)
 
 test("bridges authorized session operations against an isolated server", async () => {
   const directory = await mkdtemp(join(tmpdir(), "ycoding-remote-bridge-"))

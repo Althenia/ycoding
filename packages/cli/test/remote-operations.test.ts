@@ -267,6 +267,16 @@ function sessionInfo(id: string, table: { updated: number; title?: string; direc
   } as unknown as SessionInfo
 }
 
+test("connector list forwards activity separately from the update ordering key", async () => {
+  const older = { ...sessionInfo("ses_older", { updated: 100 }), time: { created: 100, updated: 100, active: 90 } }
+  const newer = sessionInfo("ses_newer", { updated: 200 })
+  const test = await harness({ sessions: [older, newer] })
+  const page = valueOf(await executeRemoteOperation({ request: request("session.list", { order: "desc" }),
+    local: test.local, sessions: test.registry, subscriptions: test.subscriptions })) as { data: SessionInfo[] }
+  expect(page.data.map((row) => row.id)).toEqual([newer.id, older.id])
+  expect(page.data.find((row) => row.id === older.id)?.time).toMatchObject({ updated: 100, active: 90 })
+})
+
 function formInfo(id: string, sessionID: string) {
   return {
     id,

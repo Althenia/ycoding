@@ -2,6 +2,8 @@
 
 Protocol owns public operations, Schema owns public shapes and durable events, and Core owns execution and persistence behavior. See [runtime behavior](../../docs/runtime.md) for the maintained product overview.
 
+`Session.Info.time.updated` is the Session record update and list order/cursor key. Optional `Session.Info.time.active` is the millisecond creation time of the latest terminal `session.step.ended.1`, `session.step.failed.1`, `session.execution.succeeded.1`, `session.execution.failed.1`, or `session.execution.interrupted.1` event. Terminal projection updates `time.active` without changing `time.updated`; existing records are backfilled from those events and remain without activity when none exists. The remote connector forwards this optional field in Session list/get data and forwards the original event creation time on live events.
+
 ## Archive Is Reversible
 
 `Session.Info.time.archived` is optional and records the latest archive event time. `POST /api/session/:sessionID/archive` archives one existing Session; `DELETE /api/session/:sessionID/archive` unarchives it. Both operations are idempotent, return `204 No Content`, use Session Location middleware, and reject unknown Sessions with `SessionNotFoundError`.

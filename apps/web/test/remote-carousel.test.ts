@@ -53,6 +53,32 @@ test("carousel limits twelve running roots to the ten most recently active", asy
   } finally { store.dispose(); await relay.stop() }
 }, 15_000)
 
+test("finished selected run advances carousel activity without changing list order time", async () => {
+  const older = { ...root("older", 100), time: { created: 100, updated: 100, active: 20 } }
+  const newer = { ...root("newer", 200), time: { created: 200, updated: 200 } }
+  const relay = await startRelayDouble({ handler: (request) => {
+    if (request.operation === "session.status") return { ok: true, value: { running: [older.id], attention: [] } }
+    if (request.operation === "session.list" && request.input?.status === "running") return { ok: true, value: { data: [older] } }
+    if (request.operation === "session.list" && request.input?.status === "idle") return { ok: true, value: { data: [newer] } }
+    return "default"
+  } })
+  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }),
+    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }) })
+  try {
+    await store.load()
+    await waitFor(() => store.state().carouselSessions?.length === 2)
+    expect(store.state().carouselSessions?.map((row) => row.activeAt)).toEqual([20, undefined])
+    await store.selectSession(older.id)
+    await waitFor(() => store.state().activeSessionID === older.id)
+    relay.pushEvent(older.id, { type: "session.step.ended", created: 350, data: { sessionID: older.id, assistantMessageID: "msg_run" } })
+    relay.pushEvent(older.id, { type: "session.execution.succeeded", created: 350, data: { sessionID: older.id } })
+    await waitFor(() => store.state().carouselSessions?.[0]?.activeAt === 350)
+    expect(store.state().carouselSessions?.map((row) => row.updatedAt)).toEqual([100, 200])
+    expect(store.state().carouselSessions?.[0]?.running).toBe(false)
+    expect(store.state().carouselSessions?.[1]?.activeAt).toBeUndefined()
+  } finally { store.dispose(); await relay.stop() }
+}, 15_000)
+
 test("carousel shows recent idle roots without a running family and refreshes after an inventory change", async () => {
   const pinned = root("pinned_old", 10, 1)
   const recent = root("recent", 100)

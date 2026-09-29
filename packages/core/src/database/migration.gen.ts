@@ -22,5 +22,6 @@ export const migrations = (
     import("./migration/20260922051821_long_spitfire"),
     import("./migration/20260924030327_prompt-cache-request-timing"),
     import("./migration/20260926113528_session-pin"),
+    import("./migration/20260929044715_session-active"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

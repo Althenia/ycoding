@@ -343,6 +343,7 @@ export type SessionView = {
   readonly activity: readonly ActivityItem[]
   readonly unhandledEvents: number
   readonly updatedAt?: number
+  readonly activeAt?: number
   /** Highest durable sequence applied for this session; the snapshot watermark seeds it. */
   readonly watermark?: number
   /** Server process epoch the current projection came from. */
@@ -765,6 +766,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
   if (!event) return bump(view)
   if (ignoredEventTypes.includes(event.type)) return view
   const data = event.data
+  const activeAt = event.created === undefined ? view.activeAt : Math.max(view.activeAt ?? event.created, event.created)
   switch (event.type) {
     case "session.created": {
       const created = readModelRef(data.model)
@@ -797,11 +799,11 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
     case "session.execution.started":
       return { ...view, status: "running", executionStarted: now, retry: undefined, updatedAt: now }
     case "session.execution.succeeded":
-      return { ...view, status: "idle", executionStarted: undefined, retry: undefined, updatedAt: now }
+      return { ...view, status: "idle", executionStarted: undefined, retry: undefined, updatedAt: now, activeAt }
     case "session.execution.failed":
-      return { ...view, status: "failed", executionStarted: undefined, lastError: readError(data.error), updatedAt: now }
+      return { ...view, status: "failed", executionStarted: undefined, lastError: readError(data.error), updatedAt: now, activeAt }
     case "session.execution.interrupted":
-      return { ...view, status: "interrupted", executionStarted: undefined, retry: undefined, updatedAt: now }
+      return { ...view, status: "interrupted", executionStarted: undefined, retry: undefined, updatedAt: now, activeAt }
     case "session.status":
       return applyStatus(view, data, now)
     case "session.idle":
@@ -840,13 +842,13 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         }
       })
     case "session.step.ended":
-      return withAssistant(view, data, now, (message) => ({ ...message, completed: now, retry: undefined }))
+      return { ...withAssistant(view, data, now, (message) => ({ ...message, completed: now, retry: undefined })), activeAt }
     case "session.step.failed":
-      return withAssistant(view, data, now, (message) => ({
+      return { ...withAssistant(view, data, now, (message) => ({
         ...message,
         completed: now,
         error: readError(data.error)?.message ?? "The step failed",
-      }))
+      })), activeAt }
     case "session.text.started":
       return withTextPart(view, data, now, (part) => part)
     case "session.text.delta":

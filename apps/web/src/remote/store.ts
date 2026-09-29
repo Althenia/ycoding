@@ -102,6 +102,7 @@ export type SessionInfoView = {
   readonly model?: ModelRefView
   readonly modelLabel?: string
   readonly updatedAt: number
+  readonly activeAt?: number
   readonly archived: boolean
   readonly pinnedAt?: number
   /** Absent when the connection cannot report active sessions. */
@@ -562,6 +563,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     let teamCues = state.teamCues
     let refreshTeam = false
     let gap = false
+    const activity = new Map<string, { readonly at: number; readonly ended: boolean }>()
     const oversizedIDs = new Set<string>()
     for (const item of batch) {
       if (!view || item.sessionID !== view.id) continue
@@ -619,6 +621,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (category !== undefined) notifySession(category, item.sessionID)
       const at = now()
       const next = applySessionEvent(view, item.event, at)
+      const ended = type === "session.execution.succeeded" || type === "session.execution.failed" || type === "session.execution.interrupted"
+      if (next.activeAt !== undefined && (next.activeAt !== view.activeAt || ended))
+        activity.set(item.sessionID, { at: next.activeAt, ended })
       if (typeof item.event === "object" && item.event !== null && Reflect.get(item.event, "type") === "session.compaction.ended") recordCovered(view, next)
       unhandled += next.unhandledEvents - view.unhandledEvents
       view = sequence.seq === undefined ? next : { ...next, watermark: sequence.seq }
@@ -649,6 +654,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     state = {
       ...state,
       view,
+      carouselSessions: state.carouselSessions?.map((row) => {
+        const terminal = activity.get(row.id)
+        return terminal === undefined ? row : { ...row, activeAt: terminal.at, ...(terminal.ended ? { running: false } : {}) }
+      }),
       selectedSessionInfo: view !== undefined && state.selectedSessionInfo?.id === view.id
         ? { ...state.selectedSessionInfo, agent: view.agent ?? state.selectedSessionInfo.agent,
           model: view.model ?? state.selectedSessionInfo.model, modelLabel: modelLabel(view.model ?? state.selectedSessionInfo.model) ?? state.selectedSessionInfo.modelLabel }
@@ -2977,6 +2986,7 @@ export function readSessionInfo(value: unknown, options: { readonly running?: bo
     ...(typeof record.agent === "string" ? { agent: record.agent } : {}),
     ...(model === undefined ? {} : { model, modelLabel: modelLabel(model) }),
     updatedAt: typeof time.updated === "number" ? time.updated : 0,
+    ...(typeof time.active === "number" && Number.isFinite(time.active) ? { activeAt: time.active } : {}),
     archived: typeof time.archived === "number",
     ...(typeof time.pinned === "number" ? { pinnedAt: time.pinned } : {}),
     ...(options.running === undefined ? {} : { running: options.running }),

@@ -50,6 +50,7 @@ export const Info = Schema.Struct({
   time: Schema.Struct({
     created: DateTimeUtcFromMillis,
     updated: DateTimeUtcFromMillis,
+    active: DateTimeUtcFromMillis.pipe(optional),
     archived: DateTimeUtcFromMillis.pipe(optional),
     pinned: DateTimeUtcFromMillis.pipe(optional),
   }),
