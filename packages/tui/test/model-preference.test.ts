@@ -19,7 +19,7 @@ test("repairs known model preferences and preserves unrelated fields", () => {
   })
 })
 
-test("normalizes none and default variant sentinels to the base model", () => {
+test("preserves a named none variant and normalizes default to the base model", () => {
   expect(
     decodeModelPreference({
       recent: [],
@@ -30,7 +30,7 @@ test("normalizes none and default variant sentinels to the base model", () => {
         "local/tiel": "fast",
       },
     }).variant,
-  ).toEqual({ "local/tiel": "fast" })
+  ).toEqual({ "local/qwopus": "none", "local/tiel": "fast" })
 })
 
 test("atomically serializes patches and variant updates", async () => {

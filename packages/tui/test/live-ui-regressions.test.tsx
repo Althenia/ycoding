@@ -72,7 +72,7 @@ test("keeps the prompt input visible with Prompt, Shell, and Subagents selected"
     await waitFor(capture.frame, "No subagents")
     expect(capture.frame()).toContain("Message YCoding")
 
-    capture.input.pressKey("ARROW_LEFT")
+    capture.input.pressKey("ARROW_RIGHT")
     await waitFor(capture.frame, "No shell commands")
     expect(capture.frame()).toContain("Message YCoding")
   } finally {
