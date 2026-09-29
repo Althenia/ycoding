@@ -89,6 +89,26 @@ describe("built PWA shell in Chrome", () => {
     }
   }, 30_000)
 
+  test("locks page zoom only when launched as the installed app", async () => {
+    for (const installed of [false, true]) {
+      const page = await browser!.openPage()
+      try {
+        await page.setMobileViewport(390, 844)
+        if (installed) await page.injectOnNewDocument(`Object.defineProperty(Navigator.prototype, 'standalone', { configurable: true, get: () => true })`)
+        await page.navigate(`${origin}/remote`)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`(document.getElementById('app')?.childElementCount ?? 0) > 0`); attempt += 1) await Bun.sleep(50)
+        const zoom = await page.evaluate<{ readonly touchAction: string; readonly viewport: string }>(`({ touchAction: getComputedStyle(document.documentElement).touchAction, viewport: document.querySelector('meta[name="viewport"]')?.getAttribute('content') ?? '' })`)
+        await page.pinch(195, 420, 2)
+        await Bun.sleep(200)
+        const zoomed = await page.evaluate<boolean>(`visualViewport.scale > 1.05`)
+        expect({ ...zoom, zoomed }).toEqual(installed
+          ? { touchAction: "pan-x pan-y", viewport: "width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1", zoomed: false }
+          : { touchAction: "auto", viewport: "width=device-width, initial-scale=1, viewport-fit=cover", zoomed: true })
+        await page.evaluate(`Promise.all([navigator.serviceWorker.getRegistrations().then(registrations => Promise.all(registrations.map(registration => registration.unregister()))), caches.keys().then(names => Promise.all(names.map(name => caches.delete(name))))])`)
+      } finally { await page.close() }
+    }
+  }, 30_000)
+
   test("resolves explicit light and system preferences before first paint", async () => {
     for (const [width, height] of [[320, 568], [390, 844], [430, 932], [768, 1024], [1024, 1366], [1280, 800], [1440, 900], [1920, 1080]] as const) {
       for (const [preference, scheme, expected] of [["light", "dark", "light"], ["system", "dark", "dark"], ["system", "light", "light"]] as const) {

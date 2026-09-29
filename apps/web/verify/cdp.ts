@@ -78,6 +78,11 @@ export async function launchBrowser(executable: string, width: number, height: n
         async setViewport(nextWidth: number, nextHeight: number) {
           await call("Emulation.setDeviceMetricsOverride", { width: nextWidth, height: nextHeight, deviceScaleFactor: 1, mobile: false })
         },
+        async setMobileViewport(nextWidth: number, nextHeight: number) {
+          await call("Emulation.setDeviceMetricsOverride", { width: nextWidth, height: nextHeight, deviceScaleFactor: 3, mobile: true })
+          await call("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 })
+        },
+        pinch: (x: number, y: number, scaleFactor: number) => call("Input.synthesizePinchGesture", { x, y, scaleFactor, relativeSpeed: 800, gestureSourceType: "touch" }),
         setColorScheme: (scheme: "light" | "dark") => call("Emulation.setEmulatedMedia", {
           features: [{ name: "prefers-color-scheme", value: scheme }],
         }),

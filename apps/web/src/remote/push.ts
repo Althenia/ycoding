@@ -1,4 +1,5 @@
 import type { PushSubscriptionInput } from "@ycoding-ai/remote"
+import { isInstalledApp } from "../pwa/installed"
 import { createPushHttp } from "./http"
 
 export type PushStatus = "unsupported" | "unavailable" | "blocked" | "off" | "needs-setup" | "on" | "error"
@@ -32,9 +33,8 @@ export type PushPlatform = {
 
 export function browserPushPlatform(): PushPlatform {
   const iOS = /iPhone|iPad|iPod/.test(navigator.userAgent)
-  const standalone = window.matchMedia("(display-mode: standalone)").matches || Reflect.get(navigator, "standalone") === true
   return { secure: window.isSecureContext, supported: "serviceWorker" in navigator && "PushManager" in window && "Notification" in window,
-    installed: !iOS || standalone,
+    installed: !iOS || isInstalledApp(),
     permission: () => Notification.permission,
     requestPermission: () => Notification.requestPermission(),
     registration: () => navigator.serviceWorker.ready,
