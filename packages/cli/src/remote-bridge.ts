@@ -336,8 +336,10 @@ export class RemoteAgent {
       if (generation === this.attentionGeneration) this.attentionStatus = status.requestAttention
       const attention = [...new Set([...status.requestAttention, ...this.failedRoots])].sort()
       if (attention.length > RemoteLimits.maxStatusSessions) throw new Error("Session status exceeds the bounded root count")
+      const failed = [...this.failedRoots].filter((root) => !status.requestAttention.includes(root)).sort()
       const frame = serializeStatus({ type: "status", running: status.running, attention,
-        ...(status.outstanding === undefined ? {} : { outstanding: status.outstanding }) })
+        ...(status.outstanding === undefined ? {} : { outstanding: status.outstanding }),
+        ...(failed.length === 0 ? {} : { failed }) })
       if (frame !== this.lastStatus) {
         if (await this.send(frame, connection)) this.lastStatus = frame
       }

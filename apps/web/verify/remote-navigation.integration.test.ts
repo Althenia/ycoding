@@ -142,6 +142,49 @@ describe("remote navigation", () => {
     }
   }, 180_000)
 
+  test("shows a failure-only Session as Failed and keeps the waiting dot for a pending decision", async () => {
+    const page = await requireBrowser().openPage()
+    const findRow = `[...document.querySelectorAll('.sessions-table__row')].find((candidate) => candidate.querySelector('.sessions-table__name')?.textContent.trim() === 'Stream remote output safely')`
+    const report = `(() => {
+      const visible = (element) => element instanceof HTMLElement && getComputedStyle(element).display !== "none" && element.getBoundingClientRect().width > 0
+      const row = ${findRow}
+      return {
+        chips: [...row.querySelectorAll('.sessions-table__status .chip')].map((chip) => chip.textContent.trim()),
+        rowDot: row.querySelector('.attention-dot') !== null,
+        navDot: visible(document.querySelector('.remote-nav a[href="/remote/sessions"] .attention-dot')),
+        navLabel: document.querySelector('.remote-nav a[href="/remote/sessions"]')?.getAttribute('aria-label') ?? null,
+        overflow: document.documentElement.scrollWidth > innerWidth,
+      }
+    })()`
+    try {
+      for (const theme of themes) {
+        for (const [width, height] of viewports) {
+          await page.setViewport(width, height)
+          await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&noSelection=1&theme=${theme}`)
+          await until(page, `window.remoteStatus && document.querySelectorAll(".sessions-table__name").length > 0`)
+          await page.evaluate(`window.remoteStatus([], ["ses_fixture"], ["ses_fixture"])`)
+          await until(page, `(${findRow})?.querySelector('.sessions-table__status .chip')?.textContent.trim() === 'Failed'`)
+          const failed = await page.evaluate<{ chips: readonly string[]; rowDot: boolean; navDot: boolean; navLabel: string | null; overflow: boolean }>(report)
+          expect(failed.chips).toEqual(["Failed"])
+          expect(failed.rowDot).toBe(false)
+          expect(failed.navDot).toBe(false)
+          expect(failed.navLabel).toBeNull()
+          expect(failed.overflow).toBe(false)
+          await capture(page, `failed-session-${width}-${theme}`)
+          await page.evaluate(`window.remoteStatus([], ["ses_fixture"])`)
+          await until(page, `(${findRow})?.querySelector('.sessions-table__status .chip')?.textContent.trim() === 'Waiting for you'`)
+          const waiting = await page.evaluate<{ chips: readonly string[]; rowDot: boolean; navDot: boolean; navLabel: string | null }>(report)
+          expect(waiting.chips).toEqual(["Waiting for you"])
+          expect(waiting.rowDot).toBe(true)
+          expect(waiting.navDot).toBe(width >= 768)
+          expect(waiting.navLabel).toBe("Sessions, a session is waiting for your decision")
+        }
+      }
+    } finally {
+      await page.close()
+    }
+  }, 180_000)
+
   test("collects live Session alerts in the notification center and opens their Session", async () => {
     const page = await requireBrowser().openPage()
     try {

@@ -226,6 +226,27 @@ describe("remote bridge", () => {
     } finally { await test.bridge.close() }
   })
 
+  test("a failure-only family is in attention and failed, a family with a pending request too is in attention only, and the next execution clears both", async () => {
+    let requests: unknown[] = []
+    const test = harness({ sessions: [entry, second], results: {
+      outstandingSessions: () => ({ data: [], failed: ["ses_1", "ses_2"] }),
+      activeSessions: () => ({ ses_2: { type: "running" } }),
+      permissionRequests: () => requests,
+    } })
+    await test.bridge.connect()
+    try {
+      await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status"))
+      expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status").at(-1)).toEqual({ type: "status", running: ["ses_2"], attention: ["ses_1", "ses_2"], failed: ["ses_1", "ses_2"] })
+      requests = [{ id: "per_1", sessionID: "ses_2" }]
+      test.streams[0].stream.onEvent({ type: "permission.v2.asked", data: { sessionID: "ses_2" } })
+      await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status" && frame.failed?.join() === "ses_1"))
+      expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status").at(-1)).toEqual({ type: "status", running: ["ses_2"], attention: ["ses_1", "ses_2"], failed: ["ses_1"] })
+      test.streams[0].stream.onEvent({ type: "session.execution.started.1", data: { sessionID: "ses_1" } })
+      test.streams[0].stream.onEvent({ type: "session.execution.started.1", data: { sessionID: "ses_2" } })
+      await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status" && frame.failed === undefined && frame.attention.join() === "ses_2"))
+    } finally { await test.bridge.close() }
+  })
+
   test("a shell or subagent change republishes the one outstanding family set", async () => {
     let outstanding: string[] = []
     const test = harness({ results: { outstandingSessions: () => ({ data: outstanding, failed: [] }) } })

@@ -521,7 +521,15 @@ describe("remote operations", () => {
     expect(parseAgentMessage(JSON.stringify({ ...status, outstanding: ["ses_c"] }))).toEqual({
       ok: true, value: { ...status, outstanding: ["ses_c"] },
     })
+    expect(parseAgentMessage(JSON.stringify({ ...status, attention: ["ses_b", "ses_c"], failed: ["ses_c"] }))).toEqual({
+      ok: true, value: { ...status, attention: ["ses_b", "ses_c"], failed: ["ses_c"] },
+    })
     for (const frame of [
+      { type: "status", running: [], attention: ["ses_b"], failed: ["ses_c"] },
+      { type: "status", running: [], attention: ["ses_b"], failed: ["ses_b", "ses_b"] },
+      { type: "status", running: [], attention: ["ses_b"], failed: ["not-session"] },
+      { type: "status", running: [], attention: ["ses_b"], failed: "ses_b" },
+      { type: "status", running: [], attention: Array.from({ length: 500 }, (_, index) => `ses_${index}`), failed: Array.from({ length: 501 }, (_, index) => `ses_${index}`) },
       { type: "status", running: ["ses_a", "ses_a"], attention: [] },
       { type: "status", running: ["ses_a"], attention: ["not-session"] },
       { type: "status", running: [], attention: [], secret: "x" },

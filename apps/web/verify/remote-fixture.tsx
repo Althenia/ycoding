@@ -500,7 +500,7 @@ type Fixture = {
   readonly teamCancelled: () => void
   readonly teamPrompt: (id: string) => Promise<string>
   readonly createdSideChatID: () => string | undefined
-  readonly status: (running: readonly string[], attention: readonly string[]) => void
+  readonly status: (running: readonly string[], attention: readonly string[], failed?: readonly string[]) => void
   readonly invalidateSessions: () => void
   readonly missTerminal: () => void
   readonly formRequests: () => readonly { readonly operation: string; readonly input: Readonly<Record<string, unknown>> | undefined }[]
@@ -900,9 +900,9 @@ function createFixtureStore(): Fixture {
     }, 400)
   }
 
-  const status = (running: readonly string[], attention: readonly string[]) => {
+  const status = (running: readonly string[], attention: readonly string[], failed?: readonly string[]) => {
     statusRunning = new Set(running)
-    handlers?.onSessionStatus?.({ running, attention })
+    handlers?.onSessionStatus?.({ running, attention, ...(failed === undefined ? {} : { failed }) })
   }
 
   return {

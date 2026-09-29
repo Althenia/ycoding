@@ -265,7 +265,7 @@ One JSON object per WebSocket frame, discriminated by `type`.
 | `response` | agent → relay → client | `{ type:"response", id, ok:true, value, chunk? }` or `{ type:"response", id, ok:false, error:{ code, message } }` |
 | `event` | agent → relay → clients | `{ type:"event", sessionID, event }` |
 | `sessions` | agent → relay → clients | `{ type:"sessions" }` |
-| `status` | agent → relay → clients | `{ type:"status", running:[rootSessionID,...], attention:[rootSessionID,...], outstanding?:[rootSessionID,...] }` |
+| `status` | agent → relay → clients | `{ type:"status", running:[rootSessionID,...], attention:[rootSessionID,...], outstanding?:[rootSessionID,...], failed?:[rootSessionID,...] }` |
 | `subscriptions` | relay → agent | `{ type:"subscriptions", clientID, sessionIDs:[...] }` |
 | `ping` | either direction | `{ type:"ping" }` |
 | `pong` | either direction | `{ type:"pong" }` |
@@ -295,6 +295,9 @@ Relay rules:
   subagent tasks or undelivered parent notices, and active goals, excluding roots
   already in `running`. Attention includes pending human requests and the latest
   failed execution in a family until any member starts another execution.
+  Optional `failed` lists the attention roots whose only reason is that failed
+  execution, so every `failed` ID is also in `attention`; a root with a pending
+  human request is never in `failed`. An absent `failed` means none.
   Each list contains unique Session IDs and at
   most 500 entries. The agent sends it on connection and coalesces changed
   execution/request/work state to at most one later frame per 250 ms. The relay

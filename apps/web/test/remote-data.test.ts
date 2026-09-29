@@ -38,6 +38,32 @@ describe("remote data", () => {
       expect(test.store.state().notifications.map((notice) => notice.category)).toEqual(["agent-completed", "approval-requested"])
     } finally { await test.stop() }
   })
+  test("a failure-only root is failed rather than waiting, still raises one Needs your attention notice, and a pending request restores its dot", async () => {
+    const test = await setup()
+    const rows = () => test.store.state().sessions.map((row) => [row.id, row.attention, row.failed])
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessionStatus !== undefined && test.store.state().sessions.length === 2)
+      test.relay.pushStatus([], ["ses_a", "ses_b"], undefined, ["ses_a"])
+      await waitFor(() => test.store.state().sessionStatus?.failed.has("ses_a") === true)
+      expect(rows()).toEqual([["ses_a", false, true], ["ses_b", true, false]])
+      expect(test.store.state().notifications).toHaveLength(2)
+      expect(test.store.state().notifications.map((notice) => [notice.category, notice.sessionID])).toEqual(expect.arrayContaining([["approval-requested", "ses_a"], ["approval-requested", "ses_b"]]))
+      test.relay.pushStatus([], ["ses_a", "ses_b"])
+      await waitFor(() => test.store.state().sessionStatus?.failed.size === 0)
+      expect(rows()).toEqual([["ses_a", true, false], ["ses_b", true, false]])
+      expect(test.store.state().notifications).toHaveLength(2)
+    } finally { await test.stop() }
+  })
+  test("the initial session.status read carries the failed subset into the Session rows", async () => {
+    const test = await setup((request) => request.operation === "session.status"
+      ? { ok: true, value: { running: [], attention: ["ses_a"], failed: ["ses_a"] } } : "default")
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessionStatus?.failed.has("ses_a") === true && test.store.state().sessions.length === 2)
+      expect(test.store.state().sessions.map((row) => [row.id, row.attention, row.failed])).toEqual([["ses_a", false, true], ["ses_b", false, false]])
+    } finally { await test.stop() }
+  })
   test("the first status after a same-device reconnect reports decisions gained and work stopped while away", async () => {
     const test = await setup()
     const transitions = () => test.store.state().notifications.filter((entry) => entry.category === "approval-requested" || entry.category === "agent-completed")

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { AssistantPart, PendingRequestView, SessionView } from "../projection"
-import { readSessionInfo, type SessionInfoView } from "../store"
+import { parseSessionStatus, readSessionInfo, type SessionInfoView } from "../store"
 import { sessionStateChips } from "../view-model"
 import { partKey, toolPartExpanded } from "./conversation"
 import { notificationAge } from "./notifications"
@@ -343,6 +343,29 @@ describe("waiting for a decision", () => {
     const chips = sessionChips(session({ running: true, attention: true }), undefined)
     expect(chips.map((chip) => chip.label)).toEqual(["Waiting for you", "Running"])
     expect(chips[0]?.tone).toBe("attention")
+  })
+
+  test("shows a failure-only Session as Failed without a waiting dot or chip until it runs again", () => {
+    const failed = session({ attention: false, failed: true })
+    expect(sessionNeedsAttention(failed, undefined)).toBe(false)
+    const chips = sessionChips(failed, undefined)
+    expect(chips.map((chip) => chip.label)).toEqual(["Failed"])
+    expect(chips[0]?.tone).toBe("neutral")
+    expect(sessionChips(session({ attention: false, failed: false, running: true }), undefined).map((chip) => chip.label)).toEqual(["Running"])
+  })
+
+  test("keeps the waiting dot and chip for a Session that also has a pending request", () => {
+    const waiting = session({ attention: true, failed: false })
+    expect(sessionNeedsAttention(waiting, undefined)).toBe(true)
+    expect(sessionChips(waiting, undefined).map((chip) => chip.label)).toEqual(["Waiting for you"])
+  })
+
+  test("reads the failed subset of a session.status body and treats it as absent when omitted", () => {
+    const body = { running: [], attention: ["ses_a", "ses_b"], failed: ["ses_b"] }
+    expect(parseSessionStatus(body)?.failed).toEqual(new Set(["ses_b"]))
+    expect(parseSessionStatus({ data: body })?.failed).toEqual(new Set(["ses_b"]))
+    expect(parseSessionStatus({ running: [], attention: [] })?.failed).toEqual(new Set())
+    expect(parseSessionStatus({ ...body, failed: ["nope"] })).toBeUndefined()
   })
 
   test("flags a loaded Session with an open question as needing attention", () => {

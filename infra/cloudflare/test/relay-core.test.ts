@@ -162,6 +162,20 @@ describe("relay core: role separation", () => {
     expect(h.pushed).toHaveLength(21)
   })
 
+  test("a status frame with failed roots is stored and broadcast unchanged and a newly failed root still pushes approval-requested", async () => {
+    const h = harness()
+    await attachBoth(h)
+    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: [] }))
+    const frame = { type: "status", running: [], attention: ["ses_b", "ses_c"], failed: ["ses_c"] }
+    await h.relay.handleAgentMessage("agent-1", JSON.stringify(frame))
+    expect(h.messagesTo("client-1").at(-1)).toEqual(frame)
+    expect(h.storedStatus()).toEqual(frame)
+    expect(h.pushed).toEqual([
+      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_b", deviceID: "dev_1" },
+      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_c", deviceID: "dev_1" },
+    ])
+  })
+
   test("a family finishes only after all outstanding work clears, and attention wins at idle", async () => {
     const h = harness()
     await attachBoth(h)

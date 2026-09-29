@@ -303,7 +303,7 @@ export type RemoteResponse = RemoteSucceededResponse | RemoteFailedResponse
 export type RemoteEvent = { readonly type: "event"; readonly sessionID: string; readonly event: unknown }
 /** Bounded invalidation: clients page the authoritative backend list after receipt. */
 export type RemoteSessions = { readonly type: "sessions" }
-export type RemoteStatus = { readonly type: "status"; readonly running: readonly string[]; readonly attention: readonly string[]; readonly outstanding?: readonly string[] }
+export type RemoteStatus = { readonly type: "status"; readonly running: readonly string[]; readonly attention: readonly string[]; readonly outstanding?: readonly string[]; readonly failed?: readonly string[] }
 export type RemoteSubscriptions = {
   readonly type: "subscriptions"
   readonly clientID: string
@@ -605,7 +605,7 @@ function parseSessions(frame: Record<string, unknown>): ParseResult<RemoteSessio
 }
 
 function parseStatus(frame: Record<string, unknown>): ParseResult<RemoteStatus> {
-  const keys = withOnlyKeys(frame, ["type", "running", "attention", "outstanding"], frame.type)
+  const keys = withOnlyKeys(frame, ["type", "running", "attention", "outstanding", "failed"], frame.type)
   if (!keys.ok) return keys
   if (!Array.isArray(frame.running) || !Array.isArray(frame.attention) ||
     frame.running.length > RemoteLimits.maxStatusSessions || frame.attention.length > RemoteLimits.maxStatusSessions ||
@@ -613,8 +613,13 @@ function parseStatus(frame: Record<string, unknown>): ParseResult<RemoteStatus> 
     new Set(frame.running).size !== frame.running.length || new Set(frame.attention).size !== frame.attention.length ||
     (frame.outstanding !== undefined && (!Array.isArray(frame.outstanding) || frame.outstanding.length > RemoteLimits.maxStatusSessions ||
       !frame.outstanding.every(isSessionID) || new Set(frame.outstanding).size !== frame.outstanding.length))) return invalid()
+  const attention = frame.attention
+  if (frame.failed !== undefined && (!Array.isArray(frame.failed) || frame.failed.length > RemoteLimits.maxStatusSessions ||
+    !frame.failed.every(isSessionID) || new Set(frame.failed).size !== frame.failed.length ||
+    !frame.failed.every((id) => attention.includes(id)))) return invalid()
   return { ok: true, value: { type: "status", running: frame.running, attention: frame.attention,
-    ...(frame.outstanding === undefined ? {} : { outstanding: frame.outstanding }) } }
+    ...(frame.outstanding === undefined ? {} : { outstanding: frame.outstanding }),
+    ...(frame.failed === undefined ? {} : { failed: frame.failed }) } }
 }
 
 function parseSubscriptions(frame: Record<string, unknown>): ParseResult<RemoteSubscriptions> {

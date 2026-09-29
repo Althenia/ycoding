@@ -102,7 +102,7 @@ export type RemoteDevice = {
 }
 
 export type RemoteAutonomyMode = "normal" | "yolo" | "goal"
-export type RemoteSessionStatus = "running" | "idle" | "blocked" | "archived"
+export type RemoteSessionStatus = "running" | "idle" | "blocked" | "archived" | "failed"
 
 export type RemoteSessionSummary = {
   readonly id: string
@@ -294,11 +294,16 @@ export function summarizeConnection(state: RemoteConnectionState): ConnectionSum
   return { label: "Not available", detail: describeUnavailableReason(state.reason), tone: "attention" }
 }
 
+export function hasWaitingSession(status: { readonly attention: ReadonlySet<string>; readonly failed: ReadonlySet<string> } | undefined): boolean {
+  return status !== undefined && [...status.attention].some((id) => !status.failed.has(id))
+}
+
 export function sessionStateChips(session: RemoteSessionSummary): readonly SessionChip[] {
   const chips: SessionChip[] = []
   if (session.status === "running") chips.push({ label: "Running", tone: "success" })
   if (session.status === "blocked") chips.push({ label: "Waiting for approval", tone: "attention" })
   if (session.status === "archived") chips.push({ label: "Archived", tone: "neutral" })
+  if (session.status === "failed") chips.push({ label: "Failed", tone: "neutral" })
   if (session.pinned) chips.push({ label: "Pinned", tone: "neutral" })
 
   if (session.autonomy === "goal") chips.push({ label: "Goal", tone: "neutral" })

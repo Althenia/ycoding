@@ -111,6 +111,7 @@ export type SessionInfoView = {
   /** Absent when the connection cannot report active sessions. */
   readonly running?: boolean
   readonly attention?: boolean
+  readonly failed?: boolean
 }
 
 export type TeamTaskView = {
@@ -190,7 +191,7 @@ export type RemoteStoreState = {
   readonly sessions: readonly SessionInfoView[]
   readonly carouselSessions?: readonly (SessionInfoView & { readonly workspaceName: string })[]
   readonly carouselStatus?: "idle" | "loading" | "ready" | "error"
-  readonly sessionStatus?: { readonly running: ReadonlySet<string>; readonly attention: ReadonlySet<string>; readonly outstanding: ReadonlySet<string> }
+  readonly sessionStatus?: { readonly running: ReadonlySet<string>; readonly attention: ReadonlySet<string>; readonly outstanding: ReadonlySet<string>; readonly failed: ReadonlySet<string> }
   readonly catalogs: Readonly<Record<string, CatalogView>>
   readonly usage: UsageState
   readonly sessionGroups: readonly RemoteWorkspaceInfo[]
@@ -1486,10 +1487,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     return [root, ...rows]
   }
 
+  const rowStatus = (status: NonNullable<RemoteStoreState["sessionStatus"]>, id: string) => ({
+    running: status.running.has(id), attention: status.attention.has(id) && !status.failed.has(id), failed: status.failed.has(id),
+  })
+
   const publishSessionStatus = (status: NonNullable<RemoteStoreState["sessionStatus"]>) => {
-    const rows = sessionPages.map((page) => ({ ...page, rows: page.rows.map((row) => ({ ...row,
-      running: status.running.has(row.id), attention: status.attention.has(row.id),
-    })) }))
+    const rows = sessionPages.map((page) => ({ ...page, rows: page.rows.map((row) => ({ ...row, ...rowStatus(status, row.id) })) }))
     sessionPages = rows
     setState({ sessionStatus: status, sessions: withOpenRoot(sortSessions(rows.flatMap((page) => page.rows))),
       ...(state.view === undefined ? {} : { view: reconcileSessionStatus(state.view, status,
@@ -1515,11 +1518,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     void reloadStatusFirstPage(owner)
   }
 
-  const applyStatusFrame = (owner: RemoteTransport, frame: { readonly running: readonly string[]; readonly attention: readonly string[]; readonly outstanding?: readonly string[] }) => {
+  const applyStatusFrame = (owner: RemoteTransport, frame: { readonly running: readonly string[]; readonly attention: readonly string[]; readonly outstanding?: readonly string[]; readonly failed?: readonly string[] }) => {
     if (!isCurrentConnection(owner)) return
     retryUsage(owner)
     statusFrameRevision += 1
-    const status = { running: new Set(frame.running), attention: new Set(frame.attention), outstanding: new Set(frame.outstanding ?? []) }
+    const status = { running: new Set(frame.running), attention: new Set(frame.attention), outstanding: new Set(frame.outstanding ?? []), failed: new Set(frame.failed ?? []) }
     const previous = state.sessionStatus
     const comparison = reconnectStatus?.owner === owner ? reconnectStatus.status : previous
     const runningChanged = previous === undefined || previous.running.size !== status.running.size ||
@@ -1627,7 +1630,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const rows = readSessionInfoList(listed.value).flatMap((entry) => {
       const id = typeof entry === "object" && entry !== null ? (entry as { id?: unknown }).id : undefined
       const info = readSessionInfo(entry,
-        state.sessionStatus === undefined || typeof id !== "string" ? {} : { running: state.sessionStatus.running.has(id), attention: state.sessionStatus.attention.has(id) })
+        state.sessionStatus === undefined || typeof id !== "string" ? {} : rowStatus(state.sessionStatus, id))
       return info ? [info] : []
     })
     const value = typeof listed.value === "object" && listed.value !== null ? listed.value : undefined
@@ -3066,7 +3069,7 @@ export function notificationSessionTitle(state: {
     (state.selectedSessionInfo?.id === sessionID ? state.selectedSessionInfo.title : undefined)
 }
 
-export function readSessionInfo(value: unknown, options: { readonly running?: boolean; readonly attention?: boolean } = {}): SessionInfoView | undefined {
+export function readSessionInfo(value: unknown, options: { readonly running?: boolean; readonly attention?: boolean; readonly failed?: boolean } = {}): SessionInfoView | undefined {
   if (typeof value !== "object" || value === null) return undefined
   const record = value as Record<string, unknown>
   const id = typeof record.id === "string" && record.id.length > 0 ? record.id : undefined
@@ -3091,6 +3094,7 @@ export function readSessionInfo(value: unknown, options: { readonly running?: bo
     ...(typeof time.pinned === "number" ? { pinnedAt: time.pinned } : {}),
     ...(options.running === undefined ? {} : { running: options.running }),
     ...(options.attention === undefined ? {} : { attention: options.attention }),
+    ...(options.failed === undefined ? {} : { failed: options.failed }),
   }
 }
 
@@ -3176,10 +3180,12 @@ export function parseSessionStatus(payload: unknown): RemoteStoreState["sessionS
   const running = Reflect.get(body, "running")
   const attention = Reflect.get(body, "attention")
   const outstanding = Reflect.get(body, "outstanding")
+  const failed = Reflect.get(body, "failed")
   if (!Array.isArray(running) || !running.every((id) => typeof id === "string" && id.startsWith("ses_")) ||
     !Array.isArray(attention) || !attention.every((id) => typeof id === "string" && id.startsWith("ses_")) ||
-    (outstanding !== undefined && (!Array.isArray(outstanding) || !outstanding.every((id) => typeof id === "string" && id.startsWith("ses_"))))) return undefined
-  return { running: new Set(running), attention: new Set(attention), outstanding: new Set(outstanding ?? []) }
+    (outstanding !== undefined && (!Array.isArray(outstanding) || !outstanding.every((id) => typeof id === "string" && id.startsWith("ses_")))) ||
+    (failed !== undefined && (!Array.isArray(failed) || !failed.every((id) => typeof id === "string" && id.startsWith("ses_"))))) return undefined
+  return { running: new Set(running), attention: new Set(attention), outstanding: new Set(outstanding ?? []), failed: new Set(failed ?? []) }
 }
 
 export function readAutonomyFromResponse(value: unknown): SessionAutonomyView | undefined {

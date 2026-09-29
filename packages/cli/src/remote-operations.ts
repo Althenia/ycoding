@@ -585,8 +585,10 @@ async function run(input: OperationInput) {
   }
   if (validated.kind === "status") {
     const status = await sessionStatus(input.local, input.sessions.snapshot())
+    const failed = status.failed.filter((id) => !status.requestAttention.includes(id)).sort()
     return { running: status.running, attention: status.attention,
-      ...(status.outstanding === undefined ? {} : { outstanding: status.outstanding }) }
+      ...(status.outstanding === undefined ? {} : { outstanding: status.outstanding }),
+      ...(failed.length === 0 ? {} : { failed }) }
   }
   if (validated.kind === "usage.providers") return { data: (await input.local.providerUsageList(validated.refresh)).data }
   if (validated.kind === "usage.summary") return { data: await input.local.usageSummary() }

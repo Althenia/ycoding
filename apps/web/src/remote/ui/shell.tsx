@@ -24,6 +24,7 @@ import {
   cachedSessionsView,
   connectionBanner,
   deviceAvailabilityView,
+  hasWaitingSession,
   remoteEntryView,
   sessionAvailabilityView,
   sessionProjectLabel,
@@ -896,7 +897,7 @@ function useNavigationAttention() {
   const remote = useRemote()
   return () => ({
     conversation: (remote.state().view?.requests.length ?? 0) > 0,
-    sessions: (remote.state().sessionStatus?.attention.size ?? 0) > 0,
+    sessions: hasWaitingSession(remote.state().sessionStatus),
   })
 }
 
@@ -1886,6 +1887,7 @@ function sessionStatus(
   if (session.archived) return "archived"
   if (session.running === true) return "running"
   if (active !== undefined && active.status === "running") return "running"
+  if (session.failed === true) return "failed"
   return "idle"
 }
 

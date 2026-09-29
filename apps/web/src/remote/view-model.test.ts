@@ -14,6 +14,7 @@ import {
   remoteEntryView,
   enrollmentInstructions,
   sessionAvailabilityView,
+  hasWaitingSession,
   sessionStateChips,
   shellOutputPaging,
   sessionProjectLabel,
@@ -152,6 +153,20 @@ describe("sessionStateChips", () => {
     const chips = sessionStateChips(session({ guardrailsEnforced: false, status: "blocked" }))
     expect(chips.find((chip) => chip.label === "Guardrails auto")?.tone).toBe("attention")
     expect(chips.find((chip) => chip.label === "Waiting for approval")?.tone).toBe("attention")
+  })
+
+  test("leads a failed Session with a neutral Failed chip", () => {
+    const chips = sessionStateChips(session({ status: "failed", autonomy: "goal" }))
+    expect(chips[0]).toEqual({ label: "Failed", tone: "neutral" })
+    expect(chips.map((chip) => chip.label)).toEqual(["Failed", "Goal", "Guardrails enforced"])
+  })
+
+  test("only attention roots outside the failed set make the Sessions navigation wait", () => {
+    const status = (attention: readonly string[], failed: readonly string[]) => ({ attention: new Set(attention), failed: new Set(failed) })
+    expect(hasWaitingSession(undefined)).toBe(false)
+    expect(hasWaitingSession(status([], []))).toBe(false)
+    expect(hasWaitingSession(status(["ses_a", "ses_b"], ["ses_a", "ses_b"]))).toBe(false)
+    expect(hasWaitingSession(status(["ses_a", "ses_b"], ["ses_a"]))).toBe(true)
   })
 
   test("omits unknown fields instead of inventing values", () => {

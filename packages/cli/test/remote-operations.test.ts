@@ -770,6 +770,21 @@ describe("operation mapping", () => {
     expect(valueOf(outcome)).toEqual({ running: ["ses_root"], attention: ["ses_other", "ses_root"] })
   })
 
+  test("status reports failure-only roots as the failed subset of attention", async () => {
+    const directory = process.cwd()
+    const sessions = [sessionInfo("ses_failed", { updated: 1, directory }), sessionInfo("ses_both", { updated: 2, directory }),
+      sessionInfo("ses_child", { updated: 3, parentID: "ses_failed", directory })]
+    const { local, registry, subscriptions } = await harness({ sessions, results: {
+      activeSessions: { ses_both: { type: "running" } },
+      permissionRequests: async () => [{ id: "per_1", sessionID: "ses_both" }],
+      formRequests: async () => [],
+      outstandingSessions: { data: [], failed: ["ses_child", "ses_both"] },
+      guardrailRequestList: async () => [],
+    } })
+    const outcome = await executeRemoteOperation({ request: request("session.status"), local, sessions: registry, subscriptions })
+    expect(valueOf(outcome)).toEqual({ running: ["ses_both"], attention: ["ses_both", "ses_failed"], failed: ["ses_failed"] })
+  })
+
   test("catalog and file finder read only the verified Location and project workspace", async () => {
     const directory = process.cwd()
     const session = sessionInfo("ses_1", { updated: 1, directory })
