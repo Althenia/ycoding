@@ -173,7 +173,7 @@
 :root[data-theme="light"] .mini-picker__trigger,
 :root[data-theme="light"] .model-control__trigger { border-color:var(--yc-border-strong); }
 :root[data-theme="light"] .new-session-composer__refresh,
-:root[data-theme="light"] .composer__attach { border:1px solid var(--yc-border-strong); }
+:root[data-theme="light"] .composer__attach { border:var(--yc-border-width) solid var(--yc-border-strong); }
 @keyframes mini-float { from { opacity:0; transform:translateY(6px) scale(.96); } to { opacity:1; transform:translateY(0) scale(1); } }
 @keyframes mini-sheet-enter { from { opacity:0; transform:translateY(20px) scale(.98); } to { opacity:1; transform:translateY(0) scale(1); } }
 @keyframes mini-float-out { to { opacity:0; transform:translateY(6px) scale(.96); } }
