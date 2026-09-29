@@ -8,6 +8,8 @@ const jobs = [
   { source: "ycoding-mark.svg", target: "ycoding-mark-256.png", size: 256 },
   { source: "ycoding-mark.svg", target: "ycoding-mark-512.png", size: 512 },
   { source: "ycoding-icon.svg", target: "ycoding-icon-256.png", size: 256 },
+  { source: "ycoding-icon.svg", target: "ycoding-icon-192.png", size: 192 },
+  { source: "ycoding-icon.svg", target: "../../apps/web/public/icons/icon-192.png", size: 192 },
   { source: "ycoding-icon.svg", target: "ycoding-icon-512.png", size: 512 },
   { source: "ycoding-icon-maskable.svg", target: "ycoding-icon-maskable-512.png", size: 512 },
 ] as const

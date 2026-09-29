@@ -73,6 +73,7 @@ test("generated YCoding PNG assets have exact dimensions", async () => {
     ["ycoding-mark-256.png", 256],
     ["ycoding-mark-512.png", 512],
     ["ycoding-icon-256.png", 256],
+    ["ycoding-icon-192.png", 192],
     ["ycoding-icon-512.png", 512],
     ["ycoding-icon-maskable-512.png", 512],
   ] as const) {

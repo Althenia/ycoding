@@ -46,6 +46,7 @@ import { NewSessionButton, NewSessionComposer } from "./new-session"
 import { UsagePage } from "./usage"
 import {
   AccountSettings,
+  AppSettings,
   AppearanceSettings,
   DeviceSettings,
   MachineSettings,
@@ -73,7 +74,7 @@ const sessionRailKey = "ycoding.remote.desktopRailCollapsed"
 
 export type RemoteView = (typeof views)[number]
 
-const settingsSupport = "Machine, account, devices, appearance, office view, and notifications for this workspace."
+const settingsSupport = "Machine, account, devices, app, appearance, office view, and notifications for this workspace."
 
 export function RemoteShell(props: { readonly path: () => string }): JSX.Element {
   const remote = useRemote()
@@ -1725,6 +1726,7 @@ function SettingsPage(props: { readonly office: OfficeSettingsStore }): JSX.Elem
           <MachineSettings />
           <AccountSettings />
           <DeviceSettings />
+          <AppSettings />
           <AppearanceSettings />
           <OfficeSettings office={props.office} />
           <NotificationSettings />

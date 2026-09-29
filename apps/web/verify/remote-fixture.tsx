@@ -12,6 +12,7 @@ import { onMount } from "solid-js"
 import { RouterProvider } from "../src/router/router"
 import { ThemeProvider } from "../src/theme/theme-store"
 import { App } from "../src/app"
+import { pwaInstall } from "../src/pwa/install"
 import { createRemoteStore, type RemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
 import { OFFICE_PREFERENCES_KEY, WORKSPACE_PRESENTATION_KEY } from "../src/remote/office/storage"
@@ -1120,6 +1121,7 @@ if (accountParams.has("inspectOffice")) {
     Object.assign(window, { __officeGame: this, __officeMounts: (typeof mounts === "number" ? mounts : 0) + 1 })
   })
 }
+pwaInstall.start()
 render(
   () => (
     <RouterProvider>

@@ -1,5 +1,5 @@
 export const CACHE_PREFIX = "ycoding-web-shell-"
-export const CACHE_NAME = "ycoding-web-shell-v2"
+export const CACHE_NAME = "ycoding-web-shell-v3"
 export const OFFLINE_FALLBACK_URL = "/offline.html"
 
 /**
@@ -13,6 +13,7 @@ export const PRECACHE_URLS = [
   OFFLINE_FALLBACK_URL,
   "/robots.txt",
   "/brand/ycoding-mark.svg",
+  "/icons/icon-192.png",
   "/icons/icon-256.png",
   "/icons/icon-512.png",
 ] as const

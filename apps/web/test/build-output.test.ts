@@ -75,7 +75,7 @@ describe("built web output", () => {
     const response = await fetch(`${serverOrigin}/sw.js`)
     expect(response.status).toBe(200)
     const source = await response.text()
-    expect(source).toContain("ycoding-web-shell-v2")
+    expect(source).toContain("ycoding-web-shell-v3")
     expect(source).not.toContain("ycoding-web-shell-v1")
     // The blocked-path policy ships with the worker, so it skips API, auth, and socket traffic.
     expect(source).toContain('"/api"')

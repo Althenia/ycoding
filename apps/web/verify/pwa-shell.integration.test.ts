@@ -307,7 +307,7 @@ describe("built PWA shell in Chrome", () => {
         }
         return caches.keys();
       })()`)
-      expect(names).toContain("ycoding-web-shell-v2")
+      expect(names).toContain(CACHE_NAME)
       expect(names).not.toContain("ycoding-web-shell-v1")
       expect(names).toContain("unrelated-local-cache")
     } finally {
@@ -396,14 +396,11 @@ describe("built PWA shell in Chrome", () => {
     }
   }, 30_000)
 
-  test("upgrades a v1 worker to v2 and keeps the shell usable through an immediate outage", async () => {
+  test("upgrades the existing shell cache for the install manifest and keeps offline navigation", async () => {
     const worker = await Bun.file(new URL("../dist/sw.js", import.meta.url)).text()
     expect(worker).toContain(CACHE_NAME)
-    const previousSource = process.env.YCODING_WEB_V1_WORKER
-    const previousWorker = previousSource === undefined
-      ? worker.replaceAll(CACHE_NAME, "ycoding-web-shell-v1")
-      : await Bun.file(previousSource).text()
-    expect(previousWorker).toContain("ycoding-web-shell-v1")
+    const previousWorker = worker.replaceAll(CACHE_NAME, "ycoding-web-shell-v2")
+    expect(previousWorker).toContain("ycoding-web-shell-v2")
     expect(previousWorker).not.toBe(worker)
     let publishedWorker = previousWorker
     const updateServer = previewWithWorker(() => new Response(publishedWorker, {
@@ -422,7 +419,7 @@ describe("built PWA shell in Chrome", () => {
         }
         await caches.open('unrelated-local-cache');
         return { controlled: Boolean(navigator.serviceWorker.controller), names: await caches.keys() };
-      })()`)).toEqual({ controlled: true, names: ["ycoding-web-shell-v1", "unrelated-local-cache"] })
+      })()`)).toEqual({ controlled: true, names: ["ycoding-web-shell-v2", "unrelated-local-cache"] })
 
       publishedWorker = worker
       expect(await page.evaluate<{ readonly switched: boolean; readonly active: boolean; readonly names: readonly string[] }>(`(async () => {
@@ -431,7 +428,7 @@ describe("built PWA shell in Chrome", () => {
         await registration.update();
         for (let attempt = 0; attempt < 60; attempt++) {
           if (navigator.serviceWorker.controller !== previous && registration.active?.state === 'activated' &&
-            !(await caches.keys()).includes('ycoding-web-shell-v1')) break;
+            !(await caches.keys()).includes('ycoding-web-shell-v2')) break;
           await new Promise(resolve => setTimeout(resolve, 50));
         }
         return {

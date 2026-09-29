@@ -12,8 +12,8 @@ import {
 const origin = "https://ycoding.althenia.app"
 
 describe("precache list", () => {
-  test("replaces the cached shell when publishing the redesigned offline page", () => {
-    expect(CACHE_NAME).toBe("ycoding-web-shell-v2")
+  test("refreshes cached manifest and app icons for installation", () => {
+    expect(CACHE_NAME).toBe("ycoding-web-shell-v3")
   })
   test("contains only same-origin static shell paths", () => {
     expect(PRECACHE_URLS.length).toBeGreaterThan(0)
@@ -29,6 +29,7 @@ describe("precache list", () => {
     expect(PRECACHE_URLS).toContain("/")
     expect(PRECACHE_URLS).toContain(OFFLINE_FALLBACK_URL)
     expect(PRECACHE_URLS).toContain("/manifest.webmanifest")
+    expect(PRECACHE_URLS).toContain("/icons/icon-192.png")
   })
 })
 

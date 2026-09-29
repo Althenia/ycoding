@@ -1925,6 +1925,10 @@ body:has(.app) {
   padding-block-end: 0;
 }
 
+.overlay--pwa-install .overlay__body {
+  padding: var(--yc-space-4);
+}
+
 .settings__head {
   display: grid;
   gap: 2px;

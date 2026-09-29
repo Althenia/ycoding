@@ -2,6 +2,8 @@ import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
 import { CustomSelect } from "../../ui/custom-select"
 import { Modal } from "../../ui/modal"
+import { pwaInstall } from "../../pwa/install"
+import { InstallPWAButton } from "../../pwa/install-button"
 import { useTheme } from "../../theme/theme-store"
 import type { ThemePreference } from "../../theme/theme"
 import { useRemote } from "../context"
@@ -49,6 +51,21 @@ export function MachineSettings(): JSX.Element {
       options={state().devices.filter((device) => device.status === "active" && device.online).map((device) => ({ value: device.id, label: device.name, badge: "Online" }))}
       onChange={(deviceID) => remote.store.connect(deviceID)}
       footer={devicePickerNote(state().devices)} />
+  </Section>
+}
+
+export function AppSettings(): JSX.Element {
+  return <Section id="app-settings" category="App" title="App" hint="Install the remote workspace for a separate app window.">
+    <div class="defs__row">
+      <span class="defs__key">Mode</span>
+      <span class="defs__value" role="status">{pwaInstall.isInstalled() ? "Installed app" : "Browser"}</span>
+    </div>
+    <Show when={pwaInstall.canInstall()}>
+      <div class="defs__row">
+        <span class="defs__key">Install</span>
+        <span class="defs__value"><InstallPWAButton /></span>
+      </div>
+    </Show>
   </Section>
 }
 
