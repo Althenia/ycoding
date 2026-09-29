@@ -36,6 +36,9 @@ A plan, deleted package, or stale generated file does not override current code.
 | [`ycoding-migration.md`](./ycoding-migration.md)                         | Canonical YCoding identifiers and external-provider exceptions.                                                                              |
 | [`releases/`](./releases/)                                               | Shared TUI and web release notes (`v<version>.md`); the file matching the tag ships as the TUI GitHub Release notes and asset.               |
 | [`../specs/v2/README.md`](../specs/v2/README.md)                         | Detailed cross-module contracts and accepted decisions.                                                                                      |
+| [`../DESIGN.md`](../DESIGN.md)                                           | Brand identity, repository-wide design principles, binding UI rules, verification, and maintenance. |
+| [`../apps/web/DESIGN.md`](../apps/web/DESIGN.md)                         | Web design system: tokens checked against `tokens.css`, components, layout, motion, and web rules. |
+| [`../packages/tui/DESIGN.md`](../packages/tui/DESIGN.md)                 | Terminal design system: theme roles checked against the default theme, layout, components, and TUI rules. |
 | [`../AGENTS.md`](../AGENTS.md)                                           | Mandatory contributor and coding-agent invariants.                                                                                           |
 
 ## Documentation placement

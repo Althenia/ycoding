@@ -31,6 +31,12 @@ Treat user-supplied paths, symbols, line numbers, root causes, and behavior clai
 
 Do not present an assumption, planned command, or unrun test as a result. Preserve unrelated user changes in the working tree.
 
+## Design rules
+
+- Before any visual change to the web app, the TUI, or brand assets, read the nearest `DESIGN.md` and its `extends` chain: root [`DESIGN.md`](./DESIGN.md), then [`apps/web/DESIGN.md`](./apps/web/DESIGN.md) or [`packages/tui/DESIGN.md`](./packages/tui/DESIGN.md). Their approved rules bind every agent and model; code that disagrees is a defect or a recorded exception, never a new rule.
+- Map every visible element to a documented token or component. Add or change the rule first, then update code, tests, and the owning `DESIGN.md` in the same change. Never leave a user-agent or library default view or behavior unowned; forced-colors system rendering is the standing accessibility exception.
+- `apps/web/src/styles/design-md.test.ts` (in `bun run test:web`) and `packages/tui/test/design-md.test.ts` (in the TUI test script) fail when documented token values drift from `apps/web/src/styles/tokens.css` or the default `ycoding` theme. Run them with the affected package tests.
+
 ## Documentation requirements
 
 Update documentation in the same change when behavior changes.
@@ -42,6 +48,7 @@ Update documentation in the same change when behavior changes.
 - Agent, command, skill, plugin, hook, tool, theme, instruction, or repository-resource discovery: update `docs/repository-resources.md`.
 - Public API or schema: update the relevant `specs/v2` contract and regenerate clients/OpenAPI through the owning command.
 - Contributor invariants or required verification: update this file or the relevant package `AGENTS.md`.
+- Visual design, brand, marks, tokens, components, motion, or UI rules on any surface: update the owning `DESIGN.md` in the chain in the same change.
 
 - Write product documentation as specifications of current behavior, configuration, interfaces, constraints, and examples.
 - Describe the current contract directly; omit change-history narration such as “no longer uses,” “previously,” or “has been removed.” Keep migration instructions and release history in their dedicated documents.

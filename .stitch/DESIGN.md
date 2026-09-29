@@ -2,7 +2,7 @@
 
 ## Authority and scope
 
-The implemented design system is `apps/web/src/styles/tokens.css` and `apps/web/src/styles/base.css`; surface composition lives in `apps/web/src/styles/site.css`, `apps/web/src/styles/docs.css`, and `apps/web/src/styles/remote.css`. The component and route owners are `apps/web/src/ui` and `apps/web/src/remote/ui`. Product copy and public links come from `apps/web/src/content` and the corresponding live route, not a generated specimen.
+`apps/web/DESIGN.md` and its brand-root `DESIGN.md` are the binding web rules; `apps/web/src/styles/tokens.css` owns rendered values. This file only adds Stitch-to-repository mapping guidance. Surface composition lives in `apps/web/src/styles/base.css`, `apps/web/src/styles/site.css`, `apps/web/src/styles/docs.css`, and `apps/web/src/styles/remote.css`. Component and route owners are `apps/web/src/ui` and `apps/web/src/remote/ui`; product copy and public links come from `apps/web/src/content` and the live route, not a generated specimen.
 
 Use this guidance for the YCoding remote-workspace and public-site screens in Stitch project `16683752543265506864`. The project screens supply the requested layout and interaction direction; the repository supplies semantic tokens, product content, runtime contracts, and accessibility requirements. Map the selected Stitch “Terminal Slate” compositions into the existing SolidJS components rather than importing generated HTML, fonts, or a competing palette.
 

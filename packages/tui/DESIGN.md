@@ -2,6 +2,8 @@
 version: alpha
 name: YCoding TUI
 description: Keyboard-first terminal UI for an AI coding agent. Everything is a monospace character grid rendered by OpenTUI.
+surface: terminal
+extends: ../../DESIGN.md
 colors:
   primary: "#79B8FF"
   background: "#15181D"
@@ -83,6 +85,27 @@ The feel is calm, dense and keyboard-first: a dark neutral canvas, one blue inte
 
 Anti-references: web dashboards, cards with shadows, rounded pills, icon fonts, avatars, charts with smooth curves, modals with images.
 
+## Principles
+
+- Keep terminal composition in whole cells and adapt to available columns rather than borrowing pixel-oriented web layout (`docs/runtime.md`, `src/routes/session/`).
+- Treat the canonical transcript as durable history and the resident transcript as a bounded rendering projection; an absent row must not reserve space (`AGENTS.md`, `test/cli/tui/transcript-history.test.tsx`, `test/session-transcript-boundary.test.tsx`).
+- Preserve text and keyboard operation when color, width, or history residency limits presentation (`test/file-change-summary.test.tsx`, `test/session-transcript-boundary.test.tsx`).
+
+## Rules
+
+Each rule describes current TUI behavior and names its enforcing test or review boundary.
+
+| ID | Status | Binding statement | Enforcing check |
+| --- | --- | --- | --- |
+| T1 | approved | The TUI MUST fetch a Session's complete projected transcript in one canonical ascending-order request and retain it while that Session is resident. | `test/cli/tui/transcript-history.test.tsx` |
+| T2 | approved | Every message-backed transcript row MUST verify that its message or assistant part is resident before mounting; an unresolved row MUST consume zero terminal lines and MUST NOT initialize child components that require Session context. | `test/session-transcript-boundary.test.tsx` |
+| T3 | approved | Expanded captured-change diffs MUST use split columns when `diffs.view` is `split` or `auto` and the diff area is at least 100 columns; narrower areas and `unified` MUST use one column. | `test/file-change-summary.test.tsx` |
+| T4 | approved | The resident subagent summary MUST refresh after reconnect and reject a response started before disconnect. | `test/subagent-summary-reconnect.test.tsx` |
+| T5 | approved | Transcript timeline selection MUST follow option identity rather than list index when new events reorder options. | review-only (`AGENTS.md`, `docs/runtime.md`) |
+| T6 | approved | Documented `colors` MUST equal the resolved default `ycoding` theme for every mapped role, in both directions; a documented color without an honest theme counterpart MUST be a recorded exception. | `test/design-md.test.ts` |
+
+T1 and T2 separate complete durable projection from resident row rendering. T3 applies to the captured-change diff, not every inline tool diff; the tested `diffs.view` cases and threshold are specified in `docs/runtime.md`.
+
 ## Colors
 
 The default "ycoding" dark theme (users can switch among ~30 themes, so designs must rely on roles, not exact hues):
@@ -126,6 +149,14 @@ Everything is rectangular, aligned to character cells. No rounded corners. Borde
 - **Inline empty/error state**: 2–3 lines of text inside the list area (bold coloured heading + subdued explanation + recovery hint). Never a separate illustration.
 - **Command palette**: centred dialog listing commands grouped by category with shortcut footers; screens are opened from here.
 
+## Verification
+
+T1: `bun test test/cli/tui/transcript-history.test.tsx` from `packages/tui`. T2: `bun test test/session-transcript-boundary.test.tsx`. T3: `bun test test/file-change-summary.test.tsx`. T4: `bun test test/subagent-summary-reconnect.test.tsx`. T6: `bun test test/design-md.test.ts`. T5 remains review-only against the timeline selection contract in `AGENTS.md` and `docs/runtime.md`. Theme color drift and scratch-copy mutation probes run in `bun test test/design-md.test.ts`; lint this file, `../../DESIGN.md`, and `../../apps/web/DESIGN.md` with `python3 ~/.agents/skills/daedalus/scripts/design_md.py lint <file>`. `git diff --check` verifies whitespace only.
+
+## Maintenance
+
+Read `../../DESIGN.md` and this surface file before TUI presentation changes. Update binding rules and implementation checks in the same change when behavior changes; do not promote the typography specimen into renderer-owned font settings. Keep documented theme colors aligned with the resolved default `ycoding` dark theme through `test/design-md.test.ts`. Record any documented value with no honest theme counterpart as a scoped pending exception; never map it to a merely similar color.
+
 ## Do's and Don'ts
 
 - Do design on an explicit grid (e.g. 120×36 and 80×24) and make every element a whole number of cells.
@@ -136,3 +167,9 @@ Everything is rectangular, aligned to character cells. No rounded corners. Borde
 - Don't rely on hover, tooltips, drag-and-drop, or right-click menus.
 - Don't use colour as the only signal; pair it with a glyph or word.
 - Don't add buttons as boxes; actions are keyboard hints in the footer.
+
+## Exceptions
+
+| Rule | Scope | Reason | Approval | Review date |
+| --- | --- | --- | --- | --- |
+| T6 | `colors.backdrop` | The documented translucent black backdrop has no corresponding token in the resolved `ycoding` theme; the opaque `background.surface.overlay` is not an honest substitute. | pending | 2026-10-29 |
