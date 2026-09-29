@@ -22,6 +22,18 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.7.13",
+    date: "2026-09-29",
+    title: "Invite links with access keys, matching file-change counts, and honest generation speeds",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Join a remote workspace from a single-use invite link, then sign in on your other devices with the access key it gives you." },
+      { tag: "Changed", text: "Show slim, brand-styled scrollbars in desktop browsers, and keep room for them so remote content no longer shifts when one appears." },
+      { tag: "Fixed", text: "Match Edited files counts to the changes you expand in remote Conversation and the TUI, include completed subagent edits, and fill the full Conversation width." },
+      { tag: "Fixed", text: "Hide generation speeds measured from a single burst instead of showing impossible values such as 30,000 tok/s." },
+    ],
+  },
+  {
     version: "0.7.12",
     date: "2026-09-29",
     title: "File changes in remote Conversation, side-by-side diffs, and goals that decide for you",

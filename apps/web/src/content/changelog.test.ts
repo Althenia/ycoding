@@ -6,6 +6,21 @@ const TAGS = ["Added", "Changed", "Fixed"] as const
 describe("release entries", () => {
   test("includes the latest TUI release at the top of the public changelog", () => {
     expect(RELEASES[0]).toEqual({
+      version: "0.7.13",
+      date: "2026-09-29",
+      title: "Invite links with access keys, matching file-change counts, and honest generation speeds",
+      tags: ["Added", "Changed", "Fixed"],
+      changes: [
+        { tag: "Added", text: "Join a remote workspace from a single-use invite link, then sign in on your other devices with the access key it gives you." },
+        { tag: "Changed", text: "Show slim, brand-styled scrollbars in desktop browsers, and keep room for them so remote content no longer shifts when one appears." },
+        { tag: "Fixed", text: "Match Edited files counts to the changes you expand in remote Conversation and the TUI, include completed subagent edits, and fill the full Conversation width." },
+        { tag: "Fixed", text: "Hide generation speeds measured from a single burst instead of showing impossible values such as 30,000 tok/s." },
+      ],
+    })
+  })
+
+  test("retains the 0.7.12 release content", () => {
+    expect(RELEASES.find((item) => item.version === "0.7.12")).toEqual({
       version: "0.7.12",
       date: "2026-09-29",
       title: "File changes in remote Conversation, side-by-side diffs, and goals that decide for you",
@@ -267,7 +282,7 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 10)).toEqual(["0.7.12", "0.7.11", "0.7.10", "0.7.9", "0.7.8", "0.7.7", "0.7.6", "0.7.5", "0.7.4", "0.7.3"])
+    expect(versions.slice(0, 10)).toEqual(["0.7.13", "0.7.12", "0.7.11", "0.7.10", "0.7.9", "0.7.8", "0.7.7", "0.7.6", "0.7.5", "0.7.4"])
     expect(new Set(versions).size).toBe(versions.length)
     const sorted = [...versions].sort((a, b) => compare(b, a))
     expect(versions).toEqual(sorted)
