@@ -163,6 +163,38 @@ describe("remote responsive state behavior", () => {
     } finally { await page.close() }
   }, 30_000)
 
+  test("returns device-removal focus to the clicked control without a focused click", async () => {
+    const page = await fixture("scenario=devices-enrollment-390&deviceCleanup=two", 390, "Legacy-MacBook")
+    try {
+      for (const label of ["Remove Legacy-MacBook", "Remove all revoked devices"] as const) {
+        await page.evaluate(`(() => {
+          const trigger = document.querySelector('button[aria-label="${label}"]');
+          document.querySelector('.skip-link').focus();
+          const focus = trigger.focus;
+          trigger.focus = () => {};
+          trigger.click();
+          trigger.focus = focus;
+        })()`)
+        expect(await page.evaluate<boolean>(`document.querySelector('dialog[open]')?.getAttribute('aria-label') === ${JSON.stringify(label === "Remove Legacy-MacBook" ? "Remove revoked device" : "Remove all revoked devices")}`)).toBe(true)
+        await page.pressEscape()
+        expect(await page.evaluate<boolean>(`document.activeElement?.getAttribute('aria-label') === ${JSON.stringify(label)}`)).toBe(true)
+      }
+    } finally { await page.close() }
+  }, 15_000)
+
+  test("returns focus to the remote Sessions and Activity openers after unfocused clicks", async () => {
+    for (const [width, trigger, label] of [[390, ".app-header__menu", "Sessions"], [1440, "button[aria-label='Open activity']", "Activity"]] as const) {
+      const page = await scenario("conversation-workspace", width, "Studio Mac")
+      try {
+        await page.evaluate(`document.querySelector('.skip-link')?.focus(); document.querySelector(${JSON.stringify(trigger)})?.click()`)
+        expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="${label}"][open]') !== null`)).toBe(true)
+        await page.pressEscape()
+        const state = await page.evaluate<{ readonly open: boolean; readonly focused: boolean; readonly active: string }>(`({ open: document.querySelector('dialog[aria-label="${label}"][open]') !== null, focused: document.activeElement === document.querySelector(${JSON.stringify(trigger)}), active: document.activeElement?.outerHTML.slice(0, 120) ?? '' })`)
+        expect(state, `${label}: ${JSON.stringify(state)}`).toMatchObject({ open: false, focused: true })
+      } finally { await page.close() }
+    }
+  }, 15_000)
+
   test("exposes one remote main landmark and the active narrow navigation destination", async () => {
     const page = await scenario("conversation-workspace", 390, "Token expiry refactor")
     try {

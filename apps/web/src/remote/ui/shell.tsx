@@ -83,6 +83,8 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const [navClosing, setNavClosing] = createSignal(false)
   const [navGeneration, setNavGeneration] = createSignal(1)
   let closeSessionsSheet: (() => void) | undefined
+  let navTrigger: HTMLButtonElement | undefined
+  let activityTrigger: HTMLButtonElement | undefined
   const closeNav = () => {
     if (!navOpen()) return
     if (closeSessionsSheet) closeSessionsSheet()
@@ -222,11 +224,12 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const navExpanded = () => tabletRailToggle() ? !railCollapsed() : navOpen() && !navClosing()
   const navLabel = () => tabletRailToggle() ? railCollapsed() ? "Show sessions sidebar" : "Hide sessions sidebar" : "Open sessions"
   const canCreateSession = () => state().connection.kind === "connected" && state().transport.kind === "open"
-  const openSessionsNavigation = () => {
+  const openSessionsNavigation = (trigger: HTMLButtonElement) => {
     if (tabletRailToggle()) {
       toggleRail()
       return
     }
+    navTrigger = trigger
     if (navClosing()) {
       setNavGeneration((generation) => generation + 1)
       setNavClosing(false)
@@ -342,7 +345,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
           navControls={tabletRailToggle() ? "session-rail" : undefined}
           activityOpen={activityOpen()}
           onOpenNav={openSessionsNavigation}
-          onOpenActivity={() => setActivityOpen(true)}
+          onOpenActivity={(trigger) => { activityTrigger = trigger; setActivityOpen(true) }}
           onOpenSession={openSession}
           view={view()}
         />
@@ -443,7 +446,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
         <Show when={(phoneLayout() ? teamOpen() : teamVisible()) && view() === "/remote" && state().team !== undefined && selected()}>
           <aside ref={teamLayer} class={`${phoneLayout() ? "team-control__phone" : "team-control__panel"}${teamEntering() ? " team-control--entering" : ""}${!teamOpen() ? " team-control--exiting" : ""}`} aria-label="Team controls" aria-hidden={!teamOpen() || teamClosing() ? "true" : undefined} inert={!teamOpen() || teamClosing()}
             onClick={(event) => { if (phoneLayout() && event.target === teamLayer?.querySelector("dialog.team-view__sheet")) closeTeam() }}>
-            {phoneLayout() ? <Show when={teamGeneration()} keyed>{(generation) => <Modal class="overlay--sheet team-view__sheet" label="Team" header={<TeamHeading data={() => state().team!} />} returnFocus={teamTrigger} requestClose={(close) => { closeTeamSheet = close }}
+            {phoneLayout() ? <Show when={teamGeneration()} keyed>{(generation) => <Modal class="overlay--sheet team-view__sheet" label="Team" header={<TeamHeading data={() => state().team!} />} returnFocus={teamTrigger!} requestClose={(close) => { closeTeamSheet = close }}
               onDismiss={() => setTeamClosing(true)} onClose={() => {
                 if (teamGeneration() !== generation) return
                 closeTeamSheet = undefined
@@ -458,7 +461,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
         <NotificationToasts onOpenSession={openSession} />
 
         <Show when={navOpen() ? navGeneration() : undefined} keyed>
-          {(generation) => <Modal class="overlay--slideover overlay--sessions-sheet" label="Sessions" requestClose={(close) => { closeSessionsSheet = close }} onDismiss={() => setNavClosing(true)} onClose={() => {
+          {(generation) => <Modal class="overlay--slideover overlay--sessions-sheet" label="Sessions" returnFocus={navTrigger!} requestClose={(close) => { closeSessionsSheet = close }} onDismiss={() => setNavClosing(true)} onClose={() => {
             if (navGeneration() !== generation) return
             closeSessionsSheet = undefined
             setNavClosing(false)
@@ -474,7 +477,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
         </Show>
 
         <Show when={activityOpen()}>
-          <Modal class="overlay--slideover" label="Activity" onClose={() => setActivityOpen(false)}>
+          <Modal class="overlay--slideover" label="Activity" returnFocus={activityTrigger!} onClose={() => setActivityOpen(false)}>
             <ActivityPanel onNavigate={() => setActivityOpen(false)} />
           </Modal>
         </Show>
@@ -806,8 +809,8 @@ function RemoteHeader(props: {
   readonly navLabel: string
   readonly navControls?: string
   readonly activityOpen: boolean
-  readonly onOpenNav: () => void
-  readonly onOpenActivity: () => void
+  readonly onOpenNav: (trigger: HTMLButtonElement) => void
+  readonly onOpenActivity: (trigger: HTMLButtonElement) => void
   readonly onOpenSession: (sessionID: string) => void
   readonly view: RemoteView
 }): JSX.Element {
@@ -824,7 +827,7 @@ function RemoteHeader(props: {
           aria-label={props.navLabel}
           aria-expanded={props.navExpanded}
           aria-controls={props.navControls}
-          onClick={props.onOpenNav}
+          onClick={(event) => props.onOpenNav(event.currentTarget)}
         >
           <Icon name="menu" />
         </button>
@@ -867,7 +870,7 @@ function RemoteHeader(props: {
             class="button button--ghost button--icon"
             aria-label="Open activity"
             aria-expanded={props.activityOpen}
-            onClick={props.onOpenActivity}
+            onClick={(event) => props.onOpenActivity(event.currentTarget)}
           >
             <Icon name="activity" />
           </button>

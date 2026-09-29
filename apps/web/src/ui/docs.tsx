@@ -288,7 +288,7 @@ export function DocsSearch(props: { readonly onNavigate?: () => void }): JSX.Ele
         <kbd>/</kbd>
       </button>
       <Show when={open()}>
-        <Modal class="overlay--dialog overlay--docs-search" label="Search docs" returnFocus={trigger} onClose={closeSearch}>
+        <Modal class="overlay--dialog overlay--docs-search" label="Search docs" returnFocus={trigger!} onClose={closeSearch}>
           <div class="pane docs-search-pane">
             <label class="field" for="docs-search-field">
               <span class="visually-hidden">Search documentation</span>
@@ -359,6 +359,7 @@ export function DocsShell(props: {
   readonly class?: "docs--article" | "docs--changelog" | "docs--index"
 }): JSX.Element {
   const [navOpen, setNavOpen] = createSignal(false)
+  let navTrigger: HTMLButtonElement | undefined
   // A surface without sections has nothing to put on this page, so it renders no
   // rail instead of an empty one.
   const showToc = () => props.class !== "docs--index" && props.page.sections.length > 0
@@ -390,6 +391,7 @@ export function DocsShell(props: {
       <div class="docs-bar">
         <div class="container docs-bar__inner">
           <button
+            ref={navTrigger}
             type="button"
             class="docs-bar__nav-toggle"
             aria-label={props.navLabel}
@@ -433,7 +435,7 @@ export function DocsShell(props: {
         </Show>
       </div>
       <Show when={navOpen()}>
-        <Modal class="overlay--sheet overlay--docs-nav" label={props.navLabel} onClose={() => setNavOpen(false)}>
+        <Modal class="overlay--sheet overlay--docs-nav" label={props.navLabel} returnFocus={navTrigger!} onClose={() => setNavOpen(false)}>
           <div class="pane">
             <Show when={props.rail} fallback={<DocsNav onNavigate={() => setNavOpen(false)} />}>
               {props.rail}

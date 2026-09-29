@@ -253,7 +253,7 @@ export function CustomSelect(props: {
               {options()}
             </div>
           }>
-            <Modal class={`overlay--sheet custom-select__dialog${props.surfaceClass ? ` ${props.surfaceClass}` : ""}`} label={props.sheetTitle ?? props.label} requestClose={(close) => closeModal = close} onDismiss={() => { setClosing(true); setOpen(false); trigger?.focus() }} onClose={() => setClosing(false)}>
+            <Modal class={`overlay--sheet custom-select__dialog${props.surfaceClass ? ` ${props.surfaceClass}` : ""}`} label={props.sheetTitle ?? props.label} returnFocus={trigger!} requestClose={(close) => closeModal = close} onDismiss={() => { setClosing(true); setOpen(false) }} onClose={() => setClosing(false)}>
               <p class="custom-select__subtitle">{props.sheetSubtitle ?? "Available options"}</p>
               {options()}
               <div class="custom-select__confirm-footer"><button

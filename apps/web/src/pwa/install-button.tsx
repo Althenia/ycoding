@@ -18,7 +18,7 @@ export function InstallPWAButton() {
     </Show>
     <Show when={error()}><span class="settings__hint" role="alert">Installation couldn't start. Try the browser's install menu.</span></Show>
     <Show when={open() && !pwaInstall.isInstalled()}>
-      <Modal class="overlay--pwa-install" label="Install YCoding" returnFocus={trigger} onClose={() => setOpen(false)}>
+      <Modal class="overlay--pwa-install" label="Install YCoding" returnFocus={trigger!} onClose={() => setOpen(false)}>
         <ol class="steps">
           <Show when={pwaInstall.installMethod() === "ios-manual"}>
             <li class="steps__item"><span class="steps__text">Tap the Share button in Safari.</span></li>

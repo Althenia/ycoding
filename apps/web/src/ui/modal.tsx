@@ -21,7 +21,7 @@ export function Modal(props: {
   readonly class?: string
   readonly label: string
   readonly header?: JSX.Element
-  readonly returnFocus?: HTMLElement
+  readonly returnFocus: HTMLElement
   readonly onClose: () => void
   readonly onDismiss?: () => void
   readonly requestClose?: (close: () => void) => void
@@ -29,14 +29,13 @@ export function Modal(props: {
 }) {
   const [closing, setClosing] = createSignal(false)
   let element: HTMLDialogElement | undefined
-  let returnFocus: HTMLElement | null = null
   let timer: ReturnType<typeof setTimeout> | undefined
   const close = () => {
     if (closing()) return
     setClosing(true)
     if (element?.open) element.close()
     props.onDismiss?.()
-    returnFocus?.focus()
+    props.returnFocus.focus()
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       props.onClose()
       return
@@ -44,7 +43,6 @@ export function Modal(props: {
     timer = setTimeout(props.onClose, parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--yc-dur-base")))
   }
   onMount(() => {
-    returnFocus = props.returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null)
     element?.showModal()
     props.requestClose?.(close)
   })

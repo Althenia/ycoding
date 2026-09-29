@@ -179,7 +179,7 @@ export function DeviceSettings(): JSX.Element {
   const http = createRemoteHttp()
   const [enrollment, setEnrollment] = createSignal<EnrollmentInstructions | undefined>(undefined)
   const [error, setError] = createSignal<string | undefined>(undefined)
-  const [removal, setRemoval] = createSignal<{ readonly id?: string; readonly name: string }>()
+  const [removal, setRemoval] = createSignal<{ readonly id?: string; readonly name: string; readonly trigger: HTMLButtonElement }>()
   const [removing, setRemoving] = createSignal(false)
   const [removalError, setRemovalError] = createSignal<string>()
   const state = () => remote.state()
@@ -253,7 +253,7 @@ export function DeviceSettings(): JSX.Element {
                 <Show when={device.status === "revoked"}>
                   <span class="device__action" role="cell">
                     <button type="button" class="button button--secondary button--small" aria-label={`Remove ${device.name}`}
-                      disabled={removing()} onClick={(event) => { event.currentTarget.focus(); setRemovalError(undefined); setRemoval({ id: device.id, name: device.name }) }}>
+                      disabled={removing()} onClick={(event) => { setRemovalError(undefined); setRemoval({ id: device.id, name: device.name, trigger: event.currentTarget }) }}>
                       Remove
                     </button>
                   </span>
@@ -266,7 +266,7 @@ export function DeviceSettings(): JSX.Element {
       <Show when={state().devices.some((device) => device.status === "revoked")}>
         <div class="device-cleanup-actions">
           <button type="button" class="button button--secondary button--small" aria-label="Remove all revoked devices"
-            disabled={removing()} onClick={(event) => { event.currentTarget.focus(); setRemovalError(undefined); setRemoval({ name: "all revoked devices" }) }}>
+            disabled={removing()} onClick={(event) => { setRemovalError(undefined); setRemoval({ name: "all revoked devices", trigger: event.currentTarget }) }}>
             Remove all revoked devices
           </button>
         </div>
@@ -276,7 +276,7 @@ export function DeviceSettings(): JSX.Element {
         {(selected) => {
           let close: (() => void) | undefined
           return <Modal label={selected.id === undefined ? "Remove all revoked devices" : "Remove revoked device"}
-            onClose={() => setRemoval(undefined)} requestClose={(handoff) => { close = handoff }}>
+            returnFocus={selected.trigger} onClose={() => setRemoval(undefined)} requestClose={(handoff) => { close = handoff }}>
             <p>{selected.id === undefined
               ? "Remove all revoked machines from this account? Enrolled machines stay registered."
               : `Remove ${selected.name} from this account? This cannot be undone.`}</p>

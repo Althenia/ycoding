@@ -55,6 +55,7 @@ export function OfflineBanner(): JSX.Element {
 
 export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.Element {
   const [open, setOpen] = createSignal(false)
+  let menuTrigger: HTMLButtonElement | undefined
   const router = useRouter()
   createEffect(() => {
     router.path()
@@ -121,6 +122,7 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
               </Link>
             </span>
             <button
+              ref={menuTrigger}
               type="button"
               class="button button--ghost button--icon app-header__menu"
               aria-label="Navigation"
@@ -138,6 +140,7 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
         <Modal
           class="overlay--sheet overlay--primary-nav"
           label="Navigation"
+          returnFocus={menuTrigger!}
           header={
             <Link href="/" class="primary-nav__brand" onClick={() => setOpen(false)}>
               <BrandMark compact />

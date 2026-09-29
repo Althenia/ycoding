@@ -1213,6 +1213,20 @@ describe("public routes and design-system behavior", () => {
     expect(await page.evaluate<{ readonly path: string; readonly dialogs: number }>(`({ path: location.pathname, dialogs: document.querySelectorAll("dialog[open]").length })`)).toEqual({ path: "/docs/quickstart", dialogs: 0 })
     await page.close()
   }, 10_000)
+
+  test("returns focus to each public menu opener after an unfocused click", async () => {
+    const page = await requireBrowser().openPage()
+    try {
+      await page.setViewport(390, 844)
+      await page.navigate(url("/docs"))
+      for (const [trigger, dialog] of [[".app-header__menu", ".overlay--primary-nav"], [".docs-bar__nav-toggle", ".overlay--docs-nav"]] as const) {
+        await page.evaluate(`document.querySelector('.skip-link')?.focus(); document.querySelector('${trigger}')?.click()`)
+        expect(await page.evaluate<boolean>(`document.querySelector('${dialog}[open]') !== null`)).toBe(true)
+        await page.pressEscape()
+        expect(await page.evaluate<boolean>(`document.querySelector('${dialog}[open]') === null && document.activeElement === document.querySelector('${trigger}')`)).toBe(true)
+      }
+    } finally { await page.close() }
+  }, 10_000)
 })
 
 function requireBrowser() {

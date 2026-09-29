@@ -49,6 +49,7 @@ Object.assign(window, {
 })
 const root = document.getElementById("app")
 if (!root) throw new Error("Missing Team fixture root")
+let teamTrigger: HTMLButtonElement | undefined
 const teamContent = (sheet: boolean) => <TeamView data={panel} currentSessionID={selectedID()} now={() => 37_021_000} sheet={sheet} onClose={() => setOpen(false)}
   onOpen={select} onCancel={async (id) => {
     events.push(`cancel:${id}`)
@@ -61,7 +62,7 @@ const teamContent = (sheet: boolean) => <TeamView data={panel} currentSessionID=
   onOpenSideChat={select} onCreateSideChat={async () => { events.push("new:sidechat"); setSideChats((items) => [...items, { id: "ses_btw_new", title: "New side chat", updatedAt: 6_000 }]); return { status: "ok", sessionID: "ses_btw_new" } }}
   onLoadOlderSideChats={async () => { events.push("older:sidechats"); setSideChats((items) => [...items, { id: "ses_btw_old", title: "Older side chat", updatedAt: 1_000 }]); setSideNext(undefined) }} />
 render(() => <main class="team-fixture">
-  <button type="button" id="team-open" onClick={() => setOpen(true)}>Team</button>
+  <button ref={teamTrigger} type="button" id="team-open" onClick={() => setOpen(true)}>Team</button>
   <Show when={isManagedSubagent({ parentID: selectedID() === "ses_root" ? undefined : "ses_root", agent: selectedID() === "ses_btw" ? "btw" : "omoikane" })}
     fallback={<textarea aria-label={selectedID() === "ses_btw" ? "Message BTW" : "Message main session"} />}>
     <SubagentBar parentTitle="Main session" agent="omoikane" description="Review test coverage" status="running"
@@ -73,6 +74,6 @@ render(() => <main class="team-fixture">
       onAnswer={(questionID, text) => answer(selectedID(), questionID, text)} />
   </Show>
   <Show when={open()}>{matchMedia("(max-width: 767px)").matches
-    ? <Modal class="overlay--sheet team-view__sheet" label="Team" header={<TeamHeading data={panel} />} onClose={() => setOpen(false)}>{teamContent(true)}</Modal>
+    ? <Modal class="overlay--sheet team-view__sheet" label="Team" header={<TeamHeading data={panel} />} returnFocus={teamTrigger!} onClose={() => setOpen(false)}>{teamContent(true)}</Modal>
     : teamContent(false)}</Show>
 </main>, root)
