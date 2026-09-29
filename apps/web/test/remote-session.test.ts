@@ -2448,7 +2448,7 @@ describe("remote store integration", () => {
     }
   })
 
-  test("reconciles an unknown goal outcome from authoritative autonomy without resending", async () => {
+  test("shows the goal an unknown outcome left active without claiming the request succeeded", async () => {
     let goal = false
     const test = await harness({ handler: (request) => {
       if (request.operation === "session.goal.set") { goal = true; return { ok: false, code: "outcome_unknown", message: "Request timed out" } }
@@ -2462,11 +2462,12 @@ describe("remote store integration", () => {
       await test.store.selectSession("ses_a")
       expect(await test.store.setGoal("Ship the workspace")).toBe(true)
       await waitFor(() => test.store.state().view?.autonomy?.goal?.status === "active")
+      await waitFor(() => test.store.state().drafts.ses_a === "/goal Ship the workspace")
       expect(test.relay.requests.filter((request) => request.operation === "session.goal.set")).toHaveLength(1)
       expect(test.relay.requests.filter((request) => request.operation === "session.autonomy.get").length).toBeGreaterThanOrEqual(2)
-      expect(test.store.state().mutations.some((mutation) => mutation.kind === "goal")).toBe(false)
-      expect(test.store.state().mutationToasts?.find((toast) => toast.label === "Set goal")).toMatchObject({ state: "sent" })
-      expect(test.store.state().drafts.ses_a).toBeUndefined()
+      expect(test.store.state().mutations.find((mutation) => mutation.kind === "goal")).toMatchObject({ state: "unknown" })
+      expect(test.store.state().mutationToasts?.find((toast) => toast.label === "Set goal")).toMatchObject({ state: "unknown" })
+      expect(test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal" && toast.state === "sent")).toBe(false)
     } finally { await test.stop() }
   })
 
@@ -2498,7 +2499,7 @@ describe("remote store integration", () => {
       expect(await test.store.setGoal("Inspect the migration")).toBe(true)
       await waitFor(() => test.store.state().drafts.ses_a === "/goal Inspect the migration")
       expect(test.store.state().view?.autonomy?.goal).toBeUndefined()
-      expect(test.store.state().mutations.find((mutation) => mutation.kind === "goal")).toMatchObject({ state: "unknown", detail: "The goal was not confirmed by the current Session state. Check again before retrying." })
+      expect(test.store.state().mutations.find((mutation) => mutation.kind === "goal")).toMatchObject({ state: "unknown", detail: "The goal request was not confirmed. Check the Session goal before retrying." })
       expect(test.store.state().mutationToasts?.at(-1)).toMatchObject({ label: "Set goal", state: "unknown" })
       expect(test.relay.requests.filter((request) => request.operation === "session.goal.set")).toHaveLength(1)
     } finally { await test.stop() }
@@ -2587,7 +2588,27 @@ describe("remote store integration", () => {
     } finally { typing.resolve(); await typed.stop() }
   })
 
-  test("confirms an uncertain goal when the stream admits its starting steer", async () => {
+  test("keeps whitespace the user typed while a failed goal was calculating", async () => {
+    const calculation = Promise.withResolvers<void>()
+    const test = await harness({ handler: async (request) => {
+      if (request.operation !== "session.goal.set") return "default"
+      await calculation.promise
+      return { ok: false, code: "internal_error", message: "Goal calculation failed" }
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      expect(await test.store.setGoal("Inspect the migration")).toBe(true)
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.goal.set"))
+      test.store.setDraft("ses_a", "  ")
+      calculation.resolve()
+      await waitFor(() => test.store.state().mutations.some((mutation) => mutation.operation === "session.goal.set" && mutation.state === "failed"))
+      expect(test.store.state().drafts.ses_a).toBe("  ")
+    } finally { calculation.resolve(); await test.stop() }
+  })
+
+  test("shows the goal the stream admits without attributing it to an uncertain request", async () => {
     let goal = false
     const test = await harness({ handler: (request) => {
       if (request.operation === "session.goal.set") return { ok: false, code: "outcome_unknown", message: "Request timed out" }
@@ -2602,9 +2623,9 @@ describe("remote store integration", () => {
       await waitFor(() => test.store.state().mutations.some((mutation) => mutation.kind === "goal" && mutation.state === "unknown"))
       goal = true
       test.relay.pushEvent("ses_a", goalSteerAdmitted)
-      await test.runUntil(() => !test.store.state().mutations.some((mutation) => mutation.kind === "goal"))
-      expect(test.store.state().view?.autonomy?.goal?.status).toBe("active")
-      expect(test.store.state().mutationToasts?.find((toast) => toast.label === "Set goal")).toMatchObject({ state: "sent" })
+      await test.runUntil(() => test.store.state().view?.autonomy?.goal?.status === "active")
+      expect(test.store.state().mutations.find((mutation) => mutation.kind === "goal")).toMatchObject({ state: "unknown" })
+      expect(test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal" && toast.state === "sent")).toBe(false)
       expect(test.relay.requests.filter((request) => request.operation === "session.goal.set")).toHaveLength(1)
     } finally { await test.stop() }
   })
@@ -2622,7 +2643,7 @@ describe("remote store integration", () => {
       await waitFor(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
       void test.store.setGoal("First objective")
-      await waitFor(() => test.store.state().mutations.some((mutation) => mutation.kind === "goal" && mutation.state === "unknown"))
+      await waitFor(() => test.store.state().drafts.ses_a === "/goal First objective")
       expect(await test.store.setGoal("Second objective")).toBe(true)
       await waitFor(() => test.store.state().view?.autonomy?.goal?.text === "Second objective")
       expect(test.store.state().mutations).toEqual([])
@@ -2630,7 +2651,7 @@ describe("remote store integration", () => {
     } finally { await test.stop() }
   })
 
-  test("confirms a goal whose response was lost with the connection from the autonomy read after reconnect", async () => {
+  test("keeps a goal whose response was lost with the connection unknown when the reconnect read shows a goal", async () => {
     let goal = false
     const test = await harness({ handler: (request) => {
       if (request.operation === "session.goal.set") { goal = true; return "silent" }
@@ -2645,8 +2666,230 @@ describe("remote store integration", () => {
       await waitFor(() => test.relay.requests.some((request) => request.operation === "session.goal.set"))
       test.relay.dropConnections(1006, "")
       await test.runUntil(() => test.store.state().transport.kind === "open" && test.store.state().view?.autonomy?.goal?.status === "active")
-      await test.runUntil(() => !test.store.state().mutations.some((mutation) => mutation.kind === "goal"))
+      expect(test.store.state().mutations.find((mutation) => mutation.kind === "goal")).toMatchObject({ state: "unknown" })
+      expect(test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal" && toast.state === "sent")).toBe(false)
       expect(test.relay.requests.filter((request) => request.operation === "session.goal.set")).toHaveLength(1)
+    } finally { await test.stop() }
+  })
+
+  test("a goal active before the Session autonomy loaded does not confirm the request", async () => {
+    const autonomy = Promise.withResolvers<void>()
+    const calculation = Promise.withResolvers<void>()
+    const test = await harness({ handler: async (request) => {
+      if (request.operation === "session.autonomy.get") {
+        await autonomy.promise
+        return { ok: true, value: { data: activeGoal("Existing objective") } }
+      }
+      if (request.operation !== "session.goal.set") return "default"
+      await calculation.promise
+      return { ok: true, value: { data: activeGoal("Replacement objective") } }
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      void test.store.selectSession("ses_a")
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.autonomy.get"))
+      expect(test.store.state().view?.autonomy).toBeUndefined()
+      expect(await test.store.setGoal("Replacement objective")).toBe(true)
+      autonomy.resolve()
+      await waitFor(() => test.store.state().view?.autonomy?.goal?.text === "Existing objective")
+      expect(test.store.state().mutations).toMatchObject([{ kind: "goal", state: "sending" }])
+      expect(test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal")).toBe(false)
+      calculation.resolve()
+      await waitFor(() => test.store.state().view?.autonomy?.goal?.text === "Replacement objective")
+      expect(test.store.state().mutations).toEqual([])
+      expect(test.store.state().mutationToasts?.at(-1)).toMatchObject({ label: "Set goal", state: "sent" })
+    } finally { autonomy.resolve(); calculation.resolve(); await test.stop() }
+  })
+
+  test("a goal another writer starts while a request is open shows as active but is not reported as its success", async () => {
+    const calculation = Promise.withResolvers<void>()
+    let other = false
+    const test = await harness({ handler: async (request) => {
+      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: other ? activeGoal("Other writer objective") : { mode: "normal", yolo: 0 } } }
+      if (request.operation !== "session.goal.set") return "default"
+      await calculation.promise
+      return { ok: true, value: { data: activeGoal("Requested objective") } }
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      expect(await test.store.setGoal("Requested objective")).toBe(true)
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.goal.set"))
+      other = true
+      test.relay.pushEvent("ses_a", goalSteerAdmitted)
+      await test.runUntil(() => test.store.state().view?.autonomy?.goal?.text === "Other writer objective")
+      expect(test.store.state().mutations).toMatchObject([{ kind: "goal", state: "sending" }])
+      expect(test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal")).toBe(false)
+      expect(await test.store.setGoal("Second objective")).toBe(false)
+      expect(test.store.state().notice).toBe("A goal is already being set for this Session.")
+      calculation.resolve()
+      await waitFor(() => test.store.state().view?.autonomy?.goal?.text === "Requested objective")
+      expect(test.store.state().mutations).toEqual([])
+      expect(test.store.state().mutationToasts?.filter((toast) => toast.label === "Set goal")).toMatchObject([{ state: "sent" }])
+    } finally { calculation.resolve(); await test.stop() }
+  })
+
+  test("keeps a recovered goal draft and the unknown outcome when another writer's goal appears", async () => {
+    let other = false
+    const test = await harness({ handler: (request) => {
+      if (request.operation === "session.goal.set") return { ok: false, code: "outcome_unknown", message: "Request timed out" }
+      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: other ? activeGoal("Other writer objective") : { mode: "normal", yolo: 0 } } }
+      return "default"
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      void test.store.setGoal("Inspect the migration")
+      await waitFor(() => test.store.state().drafts.ses_a === "/goal Inspect the migration")
+      other = true
+      test.relay.pushEvent("ses_a", goalSteerAdmitted)
+      await test.runUntil(() => test.store.state().view?.autonomy?.goal?.text === "Other writer objective")
+      expect(test.store.state().mutations.find((mutation) => mutation.kind === "goal")).toMatchObject({ state: "unknown" })
+      expect(test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal" && toast.state === "sent")).toBe(false)
+      expect(test.store.state().drafts.ses_a).toBe("/goal Inspect the migration")
+    } finally { await test.stop() }
+  })
+
+  test("reports a replacement goal whose text equals the goal it replaced from its own response", async () => {
+    const test = await harness({ handler: (request) => {
+      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: activeGoal("Ship the workspace") } }
+      if (request.operation === "session.goal.set") return { ok: true, value: { data: activeGoal("Ship the workspace") } }
+      return "default"
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().view?.autonomy?.goal?.text === "Ship the workspace")
+      expect(await test.store.setGoal("  Ship   the workspace ")).toBe(true)
+      await waitFor(() => test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal") === true)
+      expect(test.store.state().mutations).toEqual([])
+      expect(test.store.state().mutationToasts?.at(-1)).toMatchObject({ label: "Set goal", state: "sent" })
+    } finally { await test.stop() }
+  })
+
+  test("keeps a replacement goal unknown when its response is lost and the active goal has the replaced text", async () => {
+    const test = await harness({ handler: (request) => {
+      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: activeGoal("Ship the workspace") } }
+      if (request.operation === "session.goal.set") return { ok: false, code: "outcome_unknown", message: "Request timed out" }
+      return "default"
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().view?.autonomy?.goal?.text === "Ship the workspace")
+      expect(await test.store.setGoal("Ship the workspace")).toBe(true)
+      await waitFor(() => test.store.state().drafts.ses_a === "/goal Ship the workspace")
+      expect(test.store.state().mutations.find((mutation) => mutation.kind === "goal")).toMatchObject({ state: "unknown" })
+      expect(test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal" && toast.state === "sent")).toBe(false)
+    } finally { await test.stop() }
+  })
+
+  test("refuses a second goal while the autonomy read of an unknown outcome is open", async () => {
+    const read = Promise.withResolvers<void>()
+    let reads = 0
+    const test = await harness({ handler: async (request) => {
+      if (request.operation === "session.goal.set") return { ok: false, code: "outcome_unknown", message: "Request timed out" }
+      if (request.operation !== "session.autonomy.get") return "default"
+      reads += 1
+      if (reads > 1) await read.promise
+      return { ok: true, value: { data: { mode: "normal", yolo: 0 } } }
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      void test.store.setGoal("First objective")
+      await waitFor(() => test.store.state().mutations.some((mutation) => mutation.kind === "goal" && mutation.state === "unknown"))
+      expect(await test.store.setGoal("Second objective")).toBe(false)
+      expect(test.store.state().notice).toBe("A goal is already being set for this Session.")
+      read.resolve()
+      await waitFor(() => test.store.state().drafts.ses_a === "/goal First objective")
+      expect(test.relay.requests.filter((request) => request.operation === "session.goal.set")).toHaveLength(1)
+    } finally { read.resolve(); await test.stop() }
+  })
+
+  for (const [name, leave] of [
+    ["switches to another machine", (store: Harness["store"]) => store.connect("dev_2")],
+    ["disconnects", (store: Harness["store"]) => store.disconnect()],
+  ] as const) test(`leaves no goal request, draft, or toast behind when the workspace ${name} during a goal request`, async () => {
+    const calculation = Promise.withResolvers<void>()
+    const test = await harness({ handler: async (request) => {
+      if (request.operation !== "session.goal.set") return "default"
+      await calculation.promise
+      return { ok: true, value: { data: activeGoal("Ship the workspace") } }
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      expect(await test.store.setGoal("Ship the workspace")).toBe(true)
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.goal.set"))
+      leave(test.store)
+      await test.runUntil(() => name === "disconnects" || test.store.state().transport.kind === "open")
+      await Bun.sleep(50)
+      expect(test.store.state().drafts.ses_a).toBeUndefined()
+      expect(test.store.state().mutations.some((mutation) => mutation.kind === "goal")).toBe(false)
+      expect(test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal")).toBeFalsy()
+      test.store.connect("dev_1")
+      await test.runUntil(() => test.store.state().transport.kind === "open" && test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      expect(await test.store.setGoal("Ship the workspace")).toBe(true)
+    } finally { calculation.resolve(); await test.stop() }
+  })
+
+  test("a same-machine connection replacement lets its new goal proceed without the old goal settling into it", async () => {
+    const second = Promise.withResolvers<void>()
+    let goals = 0
+    const test = await harness({ handler: async (request) => {
+      if (request.operation !== "session.goal.set") return "default"
+      goals += 1
+      if (goals === 1) return "silent"
+      await second.promise
+      return { ok: true, value: { data: activeGoal("New connection objective") } }
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      expect(await test.store.setGoal("Old connection objective")).toBe(true)
+      await waitFor(() => goals === 1)
+      test.store.connect("dev_1")
+      await test.runUntil(() => test.store.state().transport.kind === "open" && test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      expect(await test.store.setGoal("New connection objective")).toBe(true)
+      await waitFor(() => goals === 2)
+      expect(test.store.state().drafts.ses_a).toBeUndefined()
+      expect(test.store.state().mutations.filter((mutation) => mutation.operation === "session.goal.set")).toMatchObject([
+        { input: { goal: "New connection objective" }, state: "sending" },
+      ])
+      expect(test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal")).toBe(false)
+      expect(await test.store.setGoal("Third objective")).toBe(false)
+      expect(goals).toBe(2)
+      second.resolve()
+      await waitFor(() => test.store.state().view?.autonomy?.goal?.text === "New connection objective")
+      expect(test.store.state().mutations.some((mutation) => mutation.operation === "session.goal.set")).toBe(false)
+      expect(test.store.state().mutationToasts?.filter((toast) => toast.label === "Set goal")).toMatchObject([{ state: "sent" }])
+    } finally { second.resolve(); await test.stop() }
+  })
+
+  test("disposal drops an in-flight goal without restoring its draft or outcome", async () => {
+    const test = await harness({ handler: (request) => request.operation === "session.goal.set" ? "silent" : "default" })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      expect(await test.store.setGoal("Old objective")).toBe(true)
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.goal.set"))
+      test.store.dispose()
+      await Bun.sleep(0)
+      expect(test.store.state().drafts.ses_a).toBeUndefined()
+      expect(test.store.state().mutations.some((mutation) => mutation.operation === "session.goal.set")).toBe(false)
+      expect(test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal")).toBe(false)
     } finally { await test.stop() }
   })
 

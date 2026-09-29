@@ -378,10 +378,6 @@ export function readTeamCue(payload: unknown): TeamCue | undefined {
   return { id: `${id}:${revision}:${childID}`, kind: "reported", childID, outcome }
 }
 
-/**
- * The durable fact that a goal is active: Core admits this synthetic steer only after
- * the goal state is applied, and no dedicated autonomy event exists.
- */
 export function isGoalSteerAdmission(payload: unknown): boolean {
   if (!isRecord(payload) || payload.type !== "session.input.admitted" || !isRecord(payload.data) || !isRecord(payload.data.input)) return false
   const input = payload.data.input

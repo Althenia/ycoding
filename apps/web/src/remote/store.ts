@@ -167,8 +167,6 @@ export type PendingMutation = {
   readonly operation: RemoteOperation
   readonly input: Readonly<Record<string, unknown>>
   readonly created?: number
-  /** Text of the goal a goal request replaces, so only a different active goal confirms it. */
-  readonly replaces?: string
 }
 
 export type MutationToast = { readonly id: string; readonly label: string; readonly state: "sent" | "failed" | "unknown"; readonly detail?: string; readonly sessionID: string }
@@ -394,6 +392,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
   let activeUpload: AbortController | undefined
   let selectionToken = 0
+  const goalsInFlight = new Set<string>()
   let selectionReadyToken: number | undefined
   let selectionFailedToken: number | undefined
   let teamWatching = false
@@ -695,9 +694,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (batch.some((item) => typeof item.event === "object" && item.event !== null && Reflect.get(item.event, "type") === "session.compaction.started") &&
       state.activeSessionID !== undefined) void loadCompactionHistory(state.activeSessionID, selectionToken)
     if (gap) void resyncSelected()
-    // The admitted goal steer proves a goal is active; read it so an in-flight or uncertain goal request settles from the stream.
     if (transport !== undefined && state.activeSessionID !== undefined && batch.some((item) => item.sessionID === state.activeSessionID && isGoalSteerAdmission(item.event)) &&
-      goalRequests(state.activeSessionID).some((mutation) => mutation.state !== "failed")) void confirmGoal(transport, state.activeSessionID, selectionToken)
+      goalRequests(state.activeSessionID).some((mutation) => mutation.state !== "failed")) void refreshAutonomy(transport, state.activeSessionID, selectionToken)
     oversizedIDs.forEach((id) => {
       oversizedReads.get(id)?.abort()
       oversizedReads.delete(id)
@@ -973,6 +971,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           shells: [], shellStatus: "loading", shellTruncated: false, sideChats: [], sideChatStatus: "loading", sideChatLoading: false, economicsUnsupported: false } }) })
     }
     if (rejected && status.kind === "closed") {
+      goalsInFlight.clear()
       clearImageSources()
       clearCatalogs()
       clearUsage()
@@ -1001,6 +1000,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         team: undefined, familyActivity: undefined,
         teamCues: [],
         drafts: {},
+        mutations: state.mutations.filter((mutation) => mutation.operation !== "session.goal.set"),
+        mutationToasts: (state.mutationToasts ?? []).filter((toast) => !state.mutations.some((mutation) => mutation.operation === "session.goal.set" && mutation.id === toast.id)),
         workspaces: [],
         workspaceStatus: "idle",
         workspaceError: undefined,
@@ -1201,7 +1202,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
             : { notice: describeOutcome(failure, "Session state") }
           : { notice }),
       })
-      if (autonomy.status === "ok") settleGoal(sessionID)
     } finally {
       requestReads.delete(requestsDuringRead)
     }
@@ -2051,6 +2051,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
 
   const disconnectDevice = (retainMachineOffline = false) => {
+    goalsInFlight.clear()
     if (!retainMachineOffline) offlineDeviceID = undefined
     clearImageSources()
     cancelFamilyRefresh?.()
@@ -2093,6 +2094,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       sessionHasNext: false,
       sessionHasPrevious: false,
       drafts: {},
+      mutations: state.mutations.filter((mutation) => mutation.operation !== "session.goal.set"),
       mutationToasts: [],
       workspaces: [],
       workspaceStatus: "idle",
@@ -2232,6 +2234,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return result
     },
     connect: (deviceID) => {
+      goalsInFlight.clear()
       capturedUnsupported = false
       cancelCapturedRefresh?.()
       cancelCapturedRefresh = undefined
@@ -2270,6 +2273,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       sessionsToken += 1
       workspacesToken += 1
       setState({ activeDeviceID: deviceID, transport: { kind: "idle" }, sessions: [], carouselSessions: [], carouselStatus: "loading", sessionStatus: undefined, advertised: [], activeSessionID: undefined, view: undefined, notice: undefined, drafts,
+        mutations: state.mutations.filter((mutation) => mutation.operation !== "session.goal.set"),
         mutationToasts: [],
         lastRelayDrop: state.activeDeviceID === deviceID ? state.lastRelayDrop : undefined,
         team: undefined, familyActivity: undefined, teamCues: [], todos: undefined,
@@ -2865,11 +2869,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     setGoal: async (text) => {
       const sessionID = state.activeSessionID
       if (sessionID === undefined) return false
-      if (goalRequests(sessionID).some((mutation) => mutation.state === "sending")) {
+      if (goalsInFlight.has(sessionID)) {
         setState({ notice: "A goal is already being set for this Session." })
         return false
       }
-      void applyGoal(sessionID, text)
+      goalsInFlight.add(sessionID)
+      void applyGoal(sessionID, text).finally(() => goalsInFlight.delete(sessionID))
       return true
     },
     stopGoal: async () => {
@@ -2895,6 +2900,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       setState({ view: { ...view, autonomy } })
     },
     dispose: () => {
+      goalsInFlight.clear()
       clearImageSources()
       oversizedReads.forEach((controller) => controller.abort())
       oversizedReads.clear()
@@ -2920,6 +2926,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       transport = undefined
       subscribedSessionID = undefined
       setState({ drafts: {}, workspaces: [], workspaceStatus: "idle", workspaceError: undefined, sessionCreation: undefined,
+        mutations: state.mutations.filter((mutation) => mutation.operation !== "session.goal.set"),
+        mutationToasts: (state.mutationToasts ?? []).filter((toast) => !state.mutations.some((mutation) => mutation.operation === "session.goal.set" && mutation.id === toast.id)),
         team: undefined, familyActivity: undefined, teamCues: [] })
       endAlerts()
       listeners.clear()
@@ -2958,28 +2966,16 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   const goalRequests = (sessionID: string) => state.mutations.filter((mutation) =>
     mutation.kind === "goal" && mutation.operation === "session.goal.set" && mutation.sessionID === sessionID)
 
-  // The request's response can be lost, so an active goal that differs from the one the
-  // request replaced is the proof that it took effect, whichever read or event shows it.
-  const settleGoal = (sessionID: string) => {
-    const goal = state.view?.id === sessionID ? state.view.autonomy?.goal : undefined
-    if (goal?.status !== "active") return
-    const confirmed = goalRequests(sessionID).filter((mutation) => mutation.state !== "failed" && mutation.replaces !== goal.text)
-    if (confirmed.length === 0) return
-    setState({ mutations: state.mutations.filter((mutation) => !confirmed.includes(mutation)),
-      mutationToasts: [...(state.mutationToasts ?? []).filter((toast) => !confirmed.some((mutation) => mutation.id === toast.id)),
-        ...confirmed.map((mutation) => ({ id: mutation.id, label: mutation.label, state: "sent" as const, sessionID }))].slice(-3) })
-  }
-
-  const confirmGoal = async (owner: RemoteTransport, sessionID: string, token: number) => {
+  const refreshAutonomy = async (owner: RemoteTransport, sessionID: string, token: number) => {
     const read = await owner.request("session.autonomy.get", { sessionID })
     if (token !== selectionToken || state.activeSessionID !== sessionID || !isCurrentConnection(owner) || read.status !== "ok") return
     applyAutonomyResponse(read, sessionID)
-    settleGoal(sessionID)
   }
 
   const applyGoal = async (sessionID: string, text: string) => {
     const token = selectionToken
-    const previous = state.view?.autonomy?.goal
+    const owner = transport
+    const deviceID = state.activeDeviceID
     const id = `goal_${now()}`
     setState({ mutations: state.mutations.filter((mutation) => !goalRequests(sessionID).includes(mutation)) })
     const outcome = await request(
@@ -2991,20 +2987,20 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         sessionID,
         operation: "session.goal.set",
         input: { goal: text },
-        ...(previous?.status === "active" ? { replaces: previous.text } : {}),
       },
       { sessionID },
     )
+    if (owner !== transport || state.activeDeviceID !== deviceID) return
     applyAutonomyResponse(outcome, sessionID)
     if (outcome.status === "unknown" || outcome.status === "failed" && outcome.error.code === "outcome_unknown") {
-      const owner = transport
       if (outcome.status === "failed") finishMutation(id, "unknown", outcome.error.message)
-      if (owner !== undefined) await confirmGoal(owner, sessionID, token)
+      if (owner !== undefined) await refreshAutonomy(owner, sessionID, token)
       if (owner !== undefined && token === selectionToken && state.activeSessionID === sessionID && isCurrentConnection(owner) && state.mutations.some((mutation) => mutation.id === id))
-        finishMutation(id, "unknown", "The goal was not confirmed by the current Session state. Check again before retrying.")
+        finishMutation(id, "unknown", "The goal request was not confirmed. Check the Session goal before retrying.")
     }
-    // The composer already released the text, so an unconfirmed goal returns to an empty draft for editing and resending.
-    if (outcome.status === "ok" || !state.mutations.some((mutation) => mutation.id === id) || (state.drafts[sessionID] ?? "").trim() !== "") return
+    if (owner !== transport || state.activeDeviceID !== deviceID) return
+    const unconfirmed = outcome.status !== "ok" && state.mutations.some((mutation) => mutation.id === id)
+    if (!unconfirmed || (state.drafts[sessionID] ?? "") !== "") return
     setState({ drafts: { ...state.drafts, [sessionID]: `/goal ${text}` } })
   }
 

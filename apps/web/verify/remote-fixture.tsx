@@ -67,7 +67,6 @@ const formDelayMs = Number(accountParams.get("formDelay") ?? 0)
 /** `?formOutcome=unknown` leaves the native Form mutation unresolved without replay. */
 const formOutcome = accountParams.get("formOutcome")
 const promptOutcome = accountParams.get("promptOutcome")
-/** `?goalGate=1` holds `session.goal.set` until `window.remoteReleaseGoal("ok" | "failed" | "unknown")` settles it. */
 const goalGate = accountParams.get("goalGate") === "1"
 let releaseGoal: ((result: "ok" | "failed" | "unknown") => void) | undefined
 ;(window as typeof window & { remoteReleaseGoal?: (result: "ok" | "failed" | "unknown") => void }).remoteReleaseGoal = (result) => releaseGoal?.(result)
