@@ -33,6 +33,7 @@ export const RELEASES: readonly ReleaseEntry[] = [
       { tag: "Changed", text: "Reduce notification settings to Work finished, Needs your attention, and Machine offline, with Work finished waiting for subagents, background shells, and goals to finish." },
       { tag: "Changed", text: "Redesign Office as one open floor with a block per agent, show Edited files once a Session stops, show Last active on Running and recent cards, and fade the Workspaces list while more are below." },
       { tag: "Changed", text: "Have built-in agents commit only when a task, phase, or complete piece of functionality is finished, and cache the app's fingerprinted assets for a year." },
+      { tag: "Changed", text: "Restart an idle background server after ycoding update, and leave a busy one running until you run ycoding service restart." },
       { tag: "Fixed", text: "Let remote goal setup finish with a Setting goal status, keep Retrying limited to the retrying assistant step, and retry failed machine status reads so running state and Work finished alerts stay current." },
       { tag: "Fixed", text: "Keep the machine connected during busy Sessions instead of closing on the relay's message rate limit." },
       { tag: "Fixed", text: "Return keyboard focus to the opening button when any dialog or sheet closes." },

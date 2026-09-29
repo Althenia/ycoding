@@ -36,7 +36,7 @@ ycoding
 
 **Windows (x64):** download the ZIP from [GitHub Releases](https://github.com/Althenia/ycoding/releases/latest), extract `ycoding.exe`, and run it in your terminal.
 
-Update installer-supported binaries with `ycoding update`; replace development builds and Windows binaries manually.
+Update installer-supported binaries with `ycoding update`, which also restarts an idle background server onto the new version; if Sessions have running work, run `ycoding service restart` once they finish. Replace development builds and Windows binaries manually.
 
 Upgrading an existing installation? Back up session data and review the [SQLite upgrade notes](./docs/configuration.md#automatic-sqlite-space-reclamation): the first startup may rebuild the database and require extra disk space.
 

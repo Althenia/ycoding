@@ -1,6 +1,10 @@
+import { Service } from "@ycoding-ai/client/effect/service"
+import { YCoding } from "@ycoding-ai/client/promise"
 import { InstallationLocal, InstallationVersion } from "@ycoding-ai/core/installation/version"
-import { Effect, Option } from "effect"
+import { Effect, Option, Result } from "effect"
 import { Runtime } from "../../framework/runtime"
+import { ServerConnection } from "../../services/server-connection"
+import { ServiceConfig } from "../../services/service-config"
 import { UpdateCommand } from "../update"
 
 export default Runtime.handler(UpdateCommand, (input) =>
@@ -14,7 +18,7 @@ export default Runtime.handler(UpdateCommand, (input) =>
       const version = requested ?? (await latestRelease())
       if (version === InstallationVersion) {
         process.stdout.write(`ycoding ${InstallationVersion} is already up to date\n`)
-        return
+        return undefined
       }
       process.stdout.write(`Updating ycoding from ${InstallationVersion} to ${version}...\n`)
       const progress = UpdateProgress.terminal({
@@ -30,9 +34,60 @@ export default Runtime.handler(UpdateCommand, (input) =>
         onProgress: progress.report,
       }).finally(progress.end)
       process.stdout.write(`Updated ycoding to ${version}\n`)
+      return version
     } catch (error) {
       process.exitCode = 1
-      process.stderr.write(`ycoding update failed: ${error instanceof Error ? error.message : String(error)}\n`)
+      process.stderr.write(`ycoding update failed: ${message(error)}\n`)
+      return undefined
     }
-  }),
+  }).pipe(Effect.flatMap((installed) => (installed === undefined ? Effect.void : restartIdleServer(installed)))),
 )
+
+const restartCommand = "`ycoding service restart`"
+
+function restartIdleServer(installed: string) {
+  return Effect.gen(function* () {
+    const options = yield* ServiceConfig.options()
+    const endpoint = yield* Service.discover({ ...options, version: undefined })
+    if (endpoint === undefined) {
+      process.stdout.write("No background server is running; nothing to restart\n")
+      return
+    }
+    const outstanding = yield* Effect.tryPromise({
+      try: () =>
+        YCoding.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) }).session.outstanding(undefined, {
+          signal: AbortSignal.timeout(5_000),
+        }),
+      catch: (cause) => cause,
+    }).pipe(Effect.result)
+    if (Result.isFailure(outstanding)) {
+      process.stderr.write(
+        `Could not check the background server for running work (${message(outstanding.failure)}), so it was not restarted. Run ${restartCommand} to apply the update.\n`,
+      )
+      return
+    }
+    const running = outstanding.success.data.length
+    if (running > 0) {
+      process.stdout.write(
+        `${running} ${running === 1 ? "Session has" : "Sessions have"} running work, so the background server was not restarted. Run ${restartCommand} to apply the update once they finish.\n`,
+      )
+      return
+    }
+    process.stdout.write("Restarting the background server...\n")
+    yield* ServerConnection.managedService(options).restart()
+    process.stdout.write("Restarted the background server\n")
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.sync(() => {
+        process.exitCode = 1
+        process.stderr.write(
+          `ycoding ${installed} is installed, but the background server could not be restarted: ${message(error)}\nRun ${restartCommand} to apply the update.\n`,
+        )
+      }),
+    ),
+  )
+}
+
+function message(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}

@@ -49,7 +49,7 @@ export const resolve = Effect.fn("cli.server-connection.resolve")(function* (arg
   } satisfies Resolved
 })
 
-function managedService(options: EnsureOptions) {
+export function managedService(options: EnsureOptions) {
   const reconnectOptions = { ...options, version: undefined }
   return {
     reconnect: () => Service.ensure(reconnectOptions),

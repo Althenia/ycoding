@@ -200,7 +200,7 @@ export const gettingStartedPages: readonly DocPage[] = [
           },
           {
             kind: "paragraph",
-            text: "Expected result: YCoding prints `Updated ycoding to <version>` after a successful replacement, or reports that the installed version is already up to date. If the command says self-update is unavailable, the executable is a local development build; install a release build instead. If checksum validation or download fails, the installed executable is left in place; check network access and retry the explicit update command.",
+            text: "Expected result: YCoding prints `Updated ycoding to <version>` after a successful replacement, or reports that the installed version is already up to date. After a replacement it restarts a running background server that has no Session work outstanding and prints `Restarted the background server`; with no server running it says there is nothing to restart, and with Sessions that have running work it leaves the server running and tells you to run `ycoding service restart` once they finish. If the restart fails, the update stays installed and the command reports the failure and exits with status 1. If the command says self-update is unavailable, the executable is a local development build; install a release build instead. If checksum validation or download fails, the installed executable is left in place; check network access and retry the explicit update command.",
           },
           {
             kind: "table",

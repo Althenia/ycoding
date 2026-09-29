@@ -344,7 +344,7 @@ The TUI derives tool activity state and duration from each durable tool's `time.
 
 The TUI restores active Session status from a snapshot on connection. Execution events received while that snapshot is loading take precedence for their Sessions. A response from an earlier connection cannot replace the current connection's status.
 
-Managed-server shutdown marks only process-local active Sessions as suspended before the owned drains stop. Managed-server startup never replays suspended provider work or resumes a Session automatically. Post-crash continuation recovery requires an explicit durable design before it may retry a provider request; retained suspension markers therefore do not themselves admit or execute work.
+Managed-server shutdown marks only process-local active Sessions as suspended before the owned drains stop. Managed-server startup never replays suspended provider work or resumes a Session automatically. Post-crash continuation recovery requires an explicit durable design before it may retry a provider request; retained suspension markers therefore do not themselves admit or execute work. `ycoding update` restarts the managed server only after `GET /api/session/outstanding` reports no outstanding Session work, so its restart does not suspend executing Sessions.
 
 ## Autonomy
 

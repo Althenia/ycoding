@@ -298,7 +298,7 @@ export const usePages: readonly DocPage[] = [
             kind: "table",
             head: ["Command", "Arguments / options", "Purpose"],
             rows: [
-              ["ycoding update", "Optional --version <version>", "Install the latest release or a specific published version."],
+              ["ycoding update", "Optional --version <version>", "Install the latest release or a specific published version, then restart an idle background server onto it."],
               ["ycoding service status", "None", "Show background service status."],
               ["ycoding service restart", "None", "Restart the background service."],
               ["ycoding remote enroll <enrollmentID>", "Optional --name <name>, --relay <origin>, --replace", "Enroll this machine; the one-use code is read at a prompt, never from argv."],
@@ -309,7 +309,7 @@ export const usePages: readonly DocPage[] = [
             ],
           },
           { kind: "code", language: "sh", label: "Update to the latest published release", code: "ycoding update" },
-          { kind: "callout", tone: "warning", title: "Updating installs a release", text: "The updater replaces an installed release after validating its published archive. Local development builds cannot self-update; rebuild them from the repository." },
+          { kind: "callout", tone: "warning", title: "Updating installs a release", text: "The updater replaces an installed release after validating its published archive, then restarts a running background server that has no Session work outstanding. A server with running work keeps running; run `ycoding service restart` once that work finishes to apply the update. Local development builds cannot self-update; rebuild them from the repository." },
         ],
       },
       {
