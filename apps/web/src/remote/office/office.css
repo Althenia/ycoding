@@ -1,5 +1,5 @@
 .app--office .workspace__scroll { overflow:hidden; }
-.app--office .workspace__scroll > .remote-conversation-view { block-size:100%; min-block-size:0; }
+.app--office .workspace__scroll > .route-panel:has(> .office-workspace) { block-size:100%; min-block-size:0; }
 .office-workspace { display:grid; grid-template-rows:minmax(0,1fr); block-size:100%; min-inline-size:0; min-block-size:0; }
 .office-workspace__stage { display:grid; grid-template-rows:auto minmax(220px,1fr) auto; gap:var(--yc-space-3); min-inline-size:0; min-block-size:0; }
 .office-workspace__canvas { grid-row:2; min-inline-size:0; min-block-size:0; block-size:100%; }

@@ -134,13 +134,14 @@ test("tablet and desktop Office fill the shell below header and status with no p
     await page.navigate(url("tool", "&shell=1&team=multi&freeCamera=1"))
     await waitFor(page, "window.__officeGame?.scene.getScene('office').latestFrames.length===3")
     const geometry = await page.evaluate<{ readonly scroll: number; readonly viewport: number; readonly panelBottom: number; readonly stageBottom: number; readonly scrollBottom: number; readonly hostBottom: number; readonly canvasHeight: number }>(`(() => {const box=(selector)=>document.querySelector(selector).getBoundingClientRect();return {
-      scroll:document.documentElement.scrollHeight,viewport:innerHeight,panelBottom:box('.remote-conversation-view').bottom,
+      scroll:document.documentElement.scrollHeight,viewport:innerHeight,panelBottom:box('.route-panel').bottom,
       stageBottom:box('.office-workspace').bottom,scrollBottom:box('.workspace__scroll').bottom,hostBottom:box('.office-canvas-host').bottom,
       canvasHeight:box('.office-canvas-host').height}})()`)
     expect(geometry.scroll).toBeLessThanOrEqual(geometry.viewport + 1)
     expect(geometry.stageBottom).toBeCloseTo(geometry.scrollBottom - 32, 0)
     expect(geometry.panelBottom).toBeCloseTo(geometry.stageBottom, 0)
     expect(geometry.canvasHeight).toBeGreaterThan(200)
+    expect(geometry.canvasHeight).toBeGreaterThan((geometry.scrollBottom - 96) * 0.4)
     if (width >= 1024) expect(Math.abs(geometry.hostBottom - geometry.stageBottom)).toBeLessThanOrEqual(1)
   }
   await page.close()

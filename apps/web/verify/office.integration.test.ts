@@ -293,6 +293,7 @@ describe("remote Office presentation", () => {
         }
         const layout = await page.evaluate<{
           readonly overflow: boolean
+          readonly verticalOverflow: boolean
           readonly stage: number
           readonly main: number
           readonly side: boolean
@@ -305,6 +306,7 @@ describe("remote Office presentation", () => {
           const rosterRect=roster.getBoundingClientRect()
           return {
             overflow: document.documentElement.scrollWidth > innerWidth,
+            verticalOverflow: document.documentElement.scrollHeight > innerHeight + 1,
             stage:stage.height,main:document.querySelector('.workspace__scroll').getBoundingClientRect().height,
             side:rosterRect.left >= stage.right-1,
             independentlyScrollable:getComputedStyle(roster).overflowY==='auto',
@@ -313,6 +315,7 @@ describe("remote Office presentation", () => {
           }
         })()`)
         expect(layout.overflow).toBe(false)
+        expect(layout.verticalOverflow).toBe(false)
         expect(await officeHidesComposerAndInspector(page)).toBe(true)
         expect(layout.stage).toBeGreaterThanOrEqual(width >= 1024 ? 300 : 220)
         expect(layout.stage).toBeGreaterThan(layout.main * 0.45)
@@ -368,8 +371,8 @@ describe("remote Office presentation", () => {
       const childRow = `document.querySelector('.office-roster__row[data-session-id="ses_child"]')`
       expect(await until(page, `${childRow}?.querySelector('.office-roster__name')?.textContent.includes('· general') ?? false`)).toBe(true)
       expect(await page.evaluate<string>(`${childRow}.querySelector('.office-roster__status').textContent`)).toBe("Running bun test")
-      expect(await until(page, `${childRow}?.querySelector('.office-roster__room')?.textContent === 'QA lab'`, 150)).toBe(true)
-      expect(await until(page, `document.querySelector('.office-roster__row[data-session-id="ses_fixture"] .office-roster__room')?.textContent === 'Developer room'`)).toBe(true)
+      expect(await until(page, `${childRow}?.querySelector('.office-roster__room')?.textContent === 'Agent block'`, 150)).toBe(true)
+      expect(await until(page, `document.querySelector('.office-roster__row[data-session-id="ses_fixture"] .office-roster__room')?.textContent === 'Agent block'`)).toBe(true)
       expect(await page.evaluate<number>(`document.querySelectorAll('.office-roster__row').length`)).toBe(2)
       expect(await page.evaluate<string>(`document.querySelector('.office-roster [role="status"]').textContent`)).toBe("")
 

@@ -67,7 +67,7 @@ function Fixture() {
     return <div class="app app--office" style={{ display: "grid", "grid-template-rows": "60px 36px minmax(0, 1fr)", height: "100dvh", overflow: "hidden" }}>
       <header style={{ "background-color": "var(--yc-surface)", padding: "12px" }}>Office workspace header</header>
       <div style={{ "background-color": "var(--yc-surface-sunken)", padding: "4px 12px" }}>Connected</div>
-      <div class="workspace__main"><div class="workspace__scroll"><div class="remote-conversation-view route-panel">
+      <div class="workspace__main"><div class="workspace__scroll"><div class="route-panel">
         <OfficeWorkspace snapshot={snapshot()} preferences={preferences()} renderKey="shell" requestCount={0} onSelectSession={setSelected} onNormalView={() => setNormal(true)} onShowRequests={() => setNormal(true)} onLoadMoreTeam={() => {}} />
       </div></div></div>
     </div>
