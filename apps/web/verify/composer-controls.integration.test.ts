@@ -225,8 +225,8 @@ test("status stays inside a fixed-height composer and pending picks survive unre
     }
     await page.evaluate(`window.composerSetStatus('goal')`)
     await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__goal-trigger')?.click()`)
-    expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .session-status__goal-popover')?.textContent`)).toContain("Finish task")
-    await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__goal-popover button')?.click()`)
+    expect(await page.evaluate<string>(`document.querySelector('.session-status__goal-popover')?.textContent`)).toContain("Finish task")
+    await page.evaluate(`document.querySelector('.session-status__goal-popover button')?.click()`)
     expect(await page.evaluate<string>(`window.composerRequests().at(-1)?.operation`)).toBe("session.goal.stop")
   } finally { await page.close() }
 }, 30_000)
@@ -282,9 +282,11 @@ test("Goal is visibly off after completion and other terminal states while its c
       await wait(page, `document.querySelector('.mini-composer__mount .session-status__goal-trigger') !== null`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; window.composerSetGoalStatus('active')`)
       await Bun.sleep(600)
-      const measure = () => page.evaluate<{ name: string | null; color: string; background: string; yoloBackground: string; width: number; height: number; left: number }>(`(() => { const button=document.querySelector('.mini-composer__mount .session-status__goal-trigger'), yolo=document.querySelector('.mini-composer__mount .session-status__yolo-trigger'), style=getComputedStyle(button), rect=button.getBoundingClientRect(); return { name:button.getAttribute('aria-label'), color:style.color, background:style.backgroundColor, yoloBackground:getComputedStyle(yolo).backgroundColor, width:rect.width, height:rect.height, left:rect.left } })()`)
+      const measure = () => page.evaluate<{ name: string | null; color: string; background: string; yoloBackground: string; count: boolean; asymmetry: number; height: number; left: number }>(`(() => { const button=document.querySelector('.mini-composer__mount .session-status__goal-trigger'), yolo=document.querySelector('.mini-composer__mount .session-status__yolo-trigger'), style=getComputedStyle(button), rect=button.getBoundingClientRect(), walker=document.createTreeWalker(button, NodeFilter.SHOW_TEXT), glyphs=[]; for (let node=walker.nextNode(); node; node=walker.nextNode()) { if (!node.textContent.trim() || getComputedStyle(node.parentElement).visibility === 'hidden') continue; const range=document.createRange(); range.selectNodeContents(node); glyphs.push(range.getBoundingClientRect()) } const left=Math.min(...glyphs.map(box => box.left)), right=Math.max(...glyphs.map(box => box.right)); return { name:button.getAttribute('aria-label'), color:style.color, background:style.backgroundColor, yoloBackground:getComputedStyle(yolo).backgroundColor, count:button.querySelector('.session-status__goal-count') !== null, asymmetry:Math.abs((left - rect.left) - (rect.right - right)), height:rect.height, left:rect.left } })()`)
       const active = await measure()
       expect(active.name).toBe("Goal active")
+      expect(active.count).toBe(true)
+      expect(active.asymmetry).toBeLessThanOrEqual(1)
       expect(active.background).toBe(active.yoloBackground)
       await Bun.write(new URL(`../../../.cache/tmp/composer-goal-active-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
       for (const status of ["completed", "stopped", "exhausted", null] as const) {
@@ -293,7 +295,8 @@ test("Goal is visibly off after completion and other terminal states while its c
         expect(off.name).toBe("Goal off")
         expect(off.background).not.toBe(off.yoloBackground)
         expect(off.color).not.toBe(active.color)
-        expect(Math.abs(off.width - active.width)).toBeLessThanOrEqual(1)
+        expect(off.count).toBe(false)
+        expect(off.asymmetry).toBeLessThanOrEqual(1)
         expect(Math.abs(off.height - active.height)).toBeLessThanOrEqual(1)
         expect(Math.abs(off.left - active.left)).toBeLessThanOrEqual(1)
         if (status !== "completed") continue

@@ -196,9 +196,28 @@ describe("remote shell layout", () => {
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`window.remoteMutationReport().some(item => item.operation === 'session.goal.stop')`); attempt += 1) await Bun.sleep(50)
       expect(await page.evaluate<unknown>(`window.remoteMutationReport().find(item => item.operation === 'session.goal.stop')`)).toEqual({ operation: "session.goal.stop", input: { goal: null } })
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.session-status__goal-trigger')?.getAttribute('aria-label') === 'Goal off'`); attempt += 1) await Bun.sleep(50)
-      expect(await page.evaluate<{ readonly goal: string | null; readonly countVisible: boolean; readonly yolo: string }>(`({ goal: document.querySelector('.session-status__goal-trigger')?.getAttribute('aria-label') ?? null, countVisible:getComputedStyle(document.querySelector('.session-status__goal-count')).visibility !== 'hidden', yolo: document.querySelector('.session-status__yolo-full')?.textContent ?? '' })`)).toEqual({ goal: "Goal off", countVisible: false, yolo: "YOLO 3" })
+      expect(await page.evaluate<{ readonly goal: string | null; readonly count: boolean; readonly yolo: string }>(`({ goal: document.querySelector('.session-status__goal-trigger')?.getAttribute('aria-label') ?? null, count: document.querySelector('.session-status__goal-count') !== null, yolo: document.querySelector('.session-status__yolo-full')?.textContent ?? '' })`)).toEqual({ goal: "Goal off", count: false, yolo: "YOLO 3" })
+      expect(await page.evaluate<number>(labelAsymmetry(".workspace__main .session-status__goal-trigger"))).toBeLessThanOrEqual(1)
     } finally { await page.close() }
   }, 15_000)
+
+  test("anchors the autonomy and Goal panels to their pills in the resident composer", async () => {
+    for (const [width, height] of [[1440, 900], [1024, 768], [390, 844]] as const) for (const kind of ["yolo", "goal"] as const) {
+      const page = await fixture("view=chat", width, "Stream remote output safely", undefined, height)
+      try {
+        const trigger = `.workspace__main .session-status__${kind}-trigger`
+        await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`)
+        if (kind === "goal") expect(await page.evaluate<number>(labelAsymmetry(trigger))).toBeLessThanOrEqual(1)
+        await page.evaluate(`document.querySelector('${trigger}')?.click()`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.session-status__popover') !== null`); attempt += 1) await Bun.sleep(50)
+        await page.evaluate(`Promise.all([...document.querySelector('.session-status__popover').getAnimations()].map(animation => animation.finished))`)
+        const placement = await page.evaluate<{ readonly gap: number; readonly overlap: boolean; readonly inside: boolean }>(`(() => { const pill = document.querySelector('${trigger}').getBoundingClientRect(), panel = document.querySelector('.session-status__popover').getBoundingClientRect(); return { gap: Math.max(pill.top - panel.bottom, panel.top - pill.bottom), overlap: panel.left < pill.right && panel.right > pill.left, inside: panel.left >= 0 && panel.top >= 0 && panel.right <= innerWidth && panel.bottom <= innerHeight, pill: [pill.left, pill.top, pill.right, pill.bottom].map(Math.round), panel: [panel.left, panel.top, panel.right, panel.bottom].map(Math.round), viewport: [innerWidth, innerHeight] } })()`)
+        expect({ width, kind, ...placement }).toMatchObject({ width, kind, overlap: true, inside: true })
+        expect(placement.gap).toBeGreaterThanOrEqual(4)
+        expect(placement.gap).toBeLessThanOrEqual(16)
+      } finally { await page.close() }
+    }
+  }, 30_000)
 
   test("shows one screen loading placeholder only while the first account and connection read is pending", async () => {
     for (const [width, height] of [[1440, 900], [820, 1180], [390, 844]] as const) {
@@ -291,6 +310,22 @@ describe("remote shell layout", () => {
       expect(positions.running).toBeLessThan(positions.heading)
       expect(positions.running).toBeLessThan(positions.toolbar)
     } finally { await page.close() }
+  }, 30_000)
+
+  test("shows the loaded Session count beside the workspace title and gives search the full width", async () => {
+    for (const [width, height] of [[1440, 900], [820, 1180], [390, 844]] as const) {
+      const page = await browser!.openPage()
+      try {
+        await page.setViewport(width, height)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions`)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`Boolean(document.querySelector('.sessions-page__title') && document.querySelector('.sessions-page__content input[type="search"]'))`); attempt += 1) await Bun.sleep(50)
+        const layout = await page.evaluate<{ readonly count: string; readonly beside: boolean; readonly search: number; readonly content: number; readonly overflow: boolean }>(`(() => { const title = document.querySelector('.sessions-page__title').getBoundingClientRect(), chip = document.querySelector('.sessions-page__toolbar .sessions-page__count'), count = chip?.getBoundingClientRect(); return { count: chip?.textContent?.trim() ?? '', beside: count !== undefined && count.left >= title.right && count.top < title.bottom && count.bottom > title.top, search: document.querySelector('.sessions-page__content input[type="search"]').getBoundingClientRect().width, content: document.querySelector('.sessions-page__content').getBoundingClientRect().width, overflow: document.documentElement.scrollWidth > innerWidth } })()`)
+        expect(layout.count).toMatch(/^\d+ sessions? loaded$/)
+        expect(layout.beside).toBe(true)
+        expect(layout.content - layout.search).toBeLessThanOrEqual(1)
+        expect(layout.overflow).toBe(false)
+      } finally { await page.close() }
+    }
   }, 30_000)
 
   test("keeps the no-selection Sessions overlay full width and the main empty content centered", async () => {
@@ -448,7 +483,7 @@ describe("remote shell layout", () => {
     }
   }, 30_000)
 
-  test("collapses and restores the selected Session rail from its header across desktop and tablet sizes", async () => {
+  test("collapses the selected Session rail to a narrow expand rail and restores it there across desktop and tablet sizes", async () => {
     for (const [width, height] of [[1024, 768], [1180, 820], [1280, 800], [1440, 900], [1920, 1080], [820, 1180]] as const) for (const theme of ["light", "dark"] as const) {
       const page = await browser!.openPage()
       try {
@@ -462,26 +497,30 @@ describe("remote shell layout", () => {
         expect(initial.rail).toBeGreaterThan(200)
         expect(initial.overflow).toBe(false)
         expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail button[aria-label="Hide sessions sidebar"]')?.getBoundingClientRect().width >= 44`)).toBe(true)
+        expect(await page.evaluate<boolean>(`document.querySelector('.app-header__rail-toggle') === null`)).toBe(true)
         expect(initial.transition).not.toBe("0s")
+        const settle = () => page.evaluate(`Promise.all(document.querySelector('.workspace').getAnimations().map(animation => animation.finished))`)
         await page.evaluate(`document.querySelector('.workspace__rail button[aria-label="Hide sessions sidebar"]')?.click()`)
-        for (let attempt = 0; attempt < 30 && (await geometry()).rail > 1; attempt += 1) await Bun.sleep(20)
+        await settle()
         const collapsed = await geometry()
-        expect(collapsed.rail).toBeLessThanOrEqual(1)
-        expect(collapsed.main).toBeGreaterThanOrEqual(initial.main + initial.rail - 2)
+        expect(collapsed.rail).toBeGreaterThanOrEqual(44)
+        expect(collapsed.rail).toBeLessThanOrEqual(72)
+        expect(collapsed.main).toBeGreaterThanOrEqual(initial.main + initial.rail - collapsed.rail - 2)
         expect(collapsed.overflow).toBe(false)
-        expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail')?.inert === true && document.querySelector('.workspace__rail')?.getAttribute('aria-hidden') === 'true'`)).toBe(true)
-        expect(await page.evaluate<boolean>(`document.querySelector('.app-header button[aria-label="Show sessions sidebar"][aria-expanded="false"]')?.getBoundingClientRect().width >= 44`)).toBe(true)
+        const narrowRail = () => page.evaluate<{ readonly panelHidden: boolean; readonly railInteractive: boolean; readonly expandInside: boolean; readonly focused: boolean }>(`(() => { const rail = document.querySelector('.workspace__rail'), box = rail.getBoundingClientRect(), expand = rail.querySelector('button[aria-label="Show sessions sidebar"][aria-expanded="false"]'), button = expand?.getBoundingClientRect(); return { panelHidden: rail.querySelector('.pane')?.getClientRects().length === 0, railInteractive: !rail.inert && rail.getAttribute('aria-hidden') !== 'true', expandInside: button !== undefined && button.width >= 44 && button.height >= 44 && button.left >= box.left && button.right <= box.right && button.top >= box.top, focused: document.activeElement === expand } })()`)
+        expect(await narrowRail()).toEqual({ panelHidden: true, railInteractive: true, expandInside: true, focused: true })
         await Bun.write(new URL(`../../../.cache/tmp/rail-collapsed-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
         await page.navigate(address)
         for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb') !== null`); attempt += 1) await Bun.sleep(50)
-        expect((await geometry()).rail).toBeLessThanOrEqual(1)
-        await page.evaluate(`document.querySelector('.app-header button[aria-label="Show sessions sidebar"]')?.click()`)
-        for (let attempt = 0; attempt < 30 && Math.abs((await geometry()).rail - initial.rail) > 1; attempt += 1) await Bun.sleep(20)
+        expect((await geometry()).rail).toBeLessThanOrEqual(72)
+        expect(await narrowRail()).toMatchObject({ panelHidden: true, railInteractive: true, expandInside: true })
+        await page.evaluate(`document.querySelector('.workspace__rail button[aria-label="Show sessions sidebar"]')?.click()`)
+        await settle()
         const restored = await geometry()
         expect(restored.rail).toBeGreaterThan(200)
         expect(Math.abs(restored.main - initial.main)).toBeLessThanOrEqual(2)
         expect(restored.overflow).toBe(false)
-        expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail')?.inert === false && document.querySelector('.workspace__rail')?.getAttribute('aria-hidden') !== 'true'`)).toBe(true)
+        expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail button[aria-label="Show sessions sidebar"]') === null && document.activeElement === document.querySelector('.workspace__rail button[aria-label="Hide sessions sidebar"]')`)).toBe(true)
         await Bun.write(new URL(`../../../.cache/tmp/rail-restored-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
         await page.setReducedMotion(true)
         expect((await geometry()).transition).toBe("0s")
@@ -1168,6 +1207,10 @@ describe("remote shell layout", () => {
     }
   }, 60_000)
 })
+
+function labelAsymmetry(selector: string) {
+  return `(() => { const pill = document.querySelector(${JSON.stringify(selector)}), walker = document.createTreeWalker(pill, NodeFilter.SHOW_TEXT), boxes = []; for (let node = walker.nextNode(); node; node = walker.nextNode()) { if (!node.textContent.trim() || getComputedStyle(node.parentElement).visibility === 'hidden') continue; const range = document.createRange(); range.selectNodeContents(node); boxes.push(range.getBoundingClientRect()) } const box = pill.getBoundingClientRect(), left = Math.min(...boxes.map(glyphs => glyphs.left)), right = Math.max(...boxes.map(glyphs => glyphs.right)); return Math.abs((left - box.left) - (box.right - right)) })()`
+}
 
 async function fixture(query: string, width: number, expected: string, theme?: "dark" | "light", height = 1366) {
   const page = await requireBrowser().openPage()

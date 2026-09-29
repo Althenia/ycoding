@@ -27,32 +27,32 @@ afterAll(async () => {
 })
 
 describe("tablet remote navigation", () => {
-  test("collapses the desktop Sessions rail, expands it, and remembers the choice after reload", async () => {
+  test("collapses the desktop Sessions rail to a narrow expand rail, expands it there, and remembers the choice after reload", async () => {
     const page = await requireBrowser().openPage()
     try {
       await page.setViewport(1440, 900)
       const url = `http://127.0.0.1:${port}/verify/remote.html?scenario=conversation-workspace-1440`
       await page.navigate(url)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('#session-rail') !== null`); attempt += 1) await Bun.sleep(50)
-      const toggle = `.app-header button[aria-controls="session-rail"]`
-      expect(await page.evaluate<{ readonly label: string | null; readonly expanded: string | null }>(`(() => { const button = document.querySelector(${JSON.stringify(toggle)}); return { label: button?.getAttribute('aria-label') ?? null, expanded: button?.getAttribute('aria-expanded') ?? null }; })()`)).toEqual({ label: "Hide sessions sidebar", expanded: "true" })
-      expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(toggle)})?.getBoundingClientRect().width >= 44 && document.querySelector(${JSON.stringify(toggle)})?.getBoundingClientRect().height >= 44`)).toBe(true)
-      await page.evaluate(`document.querySelector(${JSON.stringify(toggle)})?.click()`)
-      expect(await page.evaluate<boolean>(`document.querySelector('#session-rail').inert && document.querySelector('#session-rail').getAttribute('aria-hidden') === 'true'`)).toBe(true)
-      for (let attempt = 0; attempt < 30 && !await page.evaluate<boolean>(`document.querySelector('#session-rail').getBoundingClientRect().width <= 1`); attempt += 1) await Bun.sleep(20)
-      expect(await page.evaluate<boolean>(`document.querySelector('#session-rail').getBoundingClientRect().width <= 1 && document.querySelector('.workspace__main').getBoundingClientRect().width > innerWidth * .85`)).toBe(true)
-      await page.evaluate(`document.querySelector(${JSON.stringify(toggle)}).focus()`)
+      const collapse = `#session-rail .pane button[aria-controls="session-rail"]`
+      const expand = `#session-rail > button[aria-controls="session-rail"]`
+      expect(await page.evaluate<boolean>(`document.querySelector('.app-header button[aria-controls="session-rail"]') === null`)).toBe(true)
+      expect(await page.evaluate<{ readonly label: string | null; readonly expanded: string | null }>(`(() => { const button = document.querySelector(${JSON.stringify(collapse)}); return { label: button?.getAttribute('aria-label') ?? null, expanded: button?.getAttribute('aria-expanded') ?? null }; })()`)).toEqual({ label: "Hide sessions sidebar", expanded: "true" })
+      expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(collapse)})?.getBoundingClientRect().width >= 44 && document.querySelector(${JSON.stringify(collapse)})?.getBoundingClientRect().height >= 44`)).toBe(true)
+      await page.evaluate(`document.querySelector(${JSON.stringify(collapse)})?.click()`)
+      for (let attempt = 0; attempt < 30 && !await page.evaluate<boolean>(`document.querySelector('#session-rail').getBoundingClientRect().width <= 72`); attempt += 1) await Bun.sleep(20)
+      expect(await page.evaluate<boolean>(`document.querySelector('#session-rail').getBoundingClientRect().width <= 72 && document.querySelector('#session-rail .pane').getClientRects().length === 0 && document.querySelector('.workspace__main').getBoundingClientRect().width > innerWidth * .85`)).toBe(true)
+      expect(await page.evaluate<{ readonly label: string | null; readonly expanded: string | null; readonly focused: boolean }>(`(() => { const button = document.querySelector(${JSON.stringify(expand)}); return { label: button?.getAttribute('aria-label') ?? null, expanded: button?.getAttribute('aria-expanded') ?? null, focused: button !== null && document.activeElement === button }; })()`)).toEqual({ label: "Show sessions sidebar", expanded: "false", focused: true })
       for (let index = 0; index < 12; index += 1) {
         await page.pressKey("Tab", "Tab", 9)
-        expect(await page.evaluate<boolean>(`document.querySelector('#session-rail').contains(document.activeElement)`)).toBe(false)
+        expect(await page.evaluate<boolean>(`document.querySelector('#session-rail .pane').contains(document.activeElement)`)).toBe(false)
       }
-      expect(await page.evaluate<string>(`document.querySelector(${JSON.stringify(toggle)})?.getAttribute('aria-label') ?? ''`)).toBe("Show sessions sidebar")
       await page.navigate(url)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('#session-rail') !== null`); attempt += 1) await Bun.sleep(50)
-      expect(await page.evaluate<boolean>(`document.querySelector('#session-rail').inert && document.querySelector('#session-rail').getAttribute('aria-hidden') === 'true' && document.querySelector('#session-rail').getBoundingClientRect().width <= 1 && document.querySelector(${JSON.stringify(toggle)})?.getAttribute('aria-expanded') === 'false'`)).toBe(true)
-      await page.evaluate(`document.querySelector(${JSON.stringify(toggle)})?.click()`)
+      expect(await page.evaluate<boolean>(`document.querySelector('#session-rail').getBoundingClientRect().width <= 72 && document.querySelector('#session-rail .pane').getClientRects().length === 0 && document.querySelector(${JSON.stringify(expand)})?.getAttribute('aria-expanded') === 'false'`)).toBe(true)
+      await page.evaluate(`document.querySelector(${JSON.stringify(expand)})?.click()`)
       for (let attempt = 0; attempt < 30 && !await page.evaluate<boolean>(`document.querySelector('#session-rail').getBoundingClientRect().width >= 220`); attempt += 1) await Bun.sleep(20)
-      expect(await page.evaluate<boolean>(`!document.querySelector('#session-rail').inert && document.querySelector('#session-rail').getAttribute('aria-hidden') === null && document.querySelector('#session-rail').getBoundingClientRect().width >= 220 && document.querySelector(${JSON.stringify(toggle)})?.getAttribute('aria-expanded') === 'true'`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.querySelector('#session-rail').getBoundingClientRect().width >= 220 && document.querySelector(${JSON.stringify(expand)}) === null && document.activeElement === document.querySelector(${JSON.stringify(collapse)})`)).toBe(true)
     } finally { await page.close() }
   }, 30_000)
 
@@ -126,9 +126,8 @@ describe("tablet remote navigation", () => {
       }
       expect(await page.evaluate<string>(`document.querySelector(".app-header__menu")?.getAttribute("aria-label") ?? ""`)).toBe("Hide sessions sidebar")
       await page.evaluate(`document.querySelector(".app-header__menu")?.click()`)
-      expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail').inert && document.querySelector('.workspace__rail').getAttribute('aria-hidden') === 'true'`)).toBe(true)
-      for (let attempt = 0; attempt < 30 && !await page.evaluate<boolean>(`document.querySelector('.workspace__rail').getBoundingClientRect().width <= 1`); attempt += 1) await Bun.sleep(20)
-      expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail').getBoundingClientRect().width <= 1 && document.querySelector('.workspace__main').getBoundingClientRect().width > innerWidth * .85`)).toBe(true)
+      for (let attempt = 0; attempt < 30 && !await page.evaluate<boolean>(`document.querySelector('.workspace__rail').getBoundingClientRect().width <= 72`); attempt += 1) await Bun.sleep(20)
+      expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail').getBoundingClientRect().width <= 72 && document.querySelector('.workspace__rail .pane').getClientRects().length === 0 && document.querySelector('.workspace__rail > button[aria-label="Show sessions sidebar"]') !== null && document.querySelector('.workspace__main').getBoundingClientRect().width > innerWidth * .85`)).toBe(true)
       expect(await page.evaluate<string>(`document.querySelector(".conversation-breadcrumb strong")?.textContent?.trim() ?? ""`)).toBe("Token expiry refactor")
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
 

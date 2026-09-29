@@ -96,6 +96,16 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
       return !collapsed
     })
   }
+  let rail: HTMLElement | undefined
+  let railExpand: HTMLButtonElement | undefined
+  const collapseRail = () => {
+    toggleRail()
+    queueMicrotask(() => railExpand?.focus())
+  }
+  const expandRail = () => {
+    toggleRail()
+    queueMicrotask(() => rail?.querySelector<HTMLButtonElement>(".pane .session-panel__collapse")?.focus())
+  }
   const [activityOpen, setActivityOpen] = createSignal(false)
   const [teamOpen, setTeamOpen] = createSignal(false)
   const [teamVisible, setTeamVisible] = createSignal(false)
@@ -324,9 +334,6 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
           navExpanded={navExpanded()}
           navLabel={navLabel()}
           navControls={tabletRailToggle() ? "session-rail" : undefined}
-          desktopRailVisible={view() === "/remote" && selected()}
-          railCollapsed={railCollapsed()}
-          onToggleRail={toggleRail}
           activityOpen={activityOpen()}
           onOpenNav={openSessionsNavigation}
           onOpenActivity={() => setActivityOpen(true)}
@@ -338,8 +345,11 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
 
         <div class="workspace">
           <Show when={composition().showSessionRail}>
-            <aside id="session-rail" class="workspace__rail" aria-label="Sessions" aria-hidden={railCollapsed() ? "true" : undefined} inert={railCollapsed()}>
-              <SessionPanel canCreateSession={canCreateSession()} onNewSession={openNewSession} onSelectSession={openSession} onCollapse={toggleRail} />
+            <aside ref={rail} id="session-rail" class="workspace__rail" aria-label="Sessions">
+              <SessionPanel canCreateSession={canCreateSession()} onNewSession={openNewSession} onSelectSession={openSession} onCollapse={collapseRail} />
+              <Show when={railCollapsed()}>
+                <button ref={railExpand} type="button" class="session-panel__collapse workspace__rail-expand" aria-label="Show sessions sidebar" aria-expanded="false" aria-controls="session-rail" onClick={expandRail}><Icon name="panel-left" /></button>
+              </Show>
             </aside>
           </Show>
 
@@ -764,9 +774,6 @@ function RemoteHeader(props: {
   readonly navExpanded: boolean
   readonly navLabel: string
   readonly navControls?: string
-  readonly desktopRailVisible: boolean
-  readonly railCollapsed: boolean
-  readonly onToggleRail: () => void
   readonly activityOpen: boolean
   readonly onOpenNav: () => void
   readonly onOpenActivity: () => void
@@ -816,13 +823,6 @@ function RemoteHeader(props: {
           <Link href="/remote/usage" class={`remote-nav__link${props.view === "/remote/usage" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/usage" ? "page" : undefined}>Usage</Link>
           <Link href="/remote/settings" class={`remote-nav__link${props.view === "/remote/settings" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/settings" ? "page" : undefined}>Settings</Link>
         </nav>
-        <Show when={props.desktopRailVisible}>
-          <button type="button" class="button button--ghost button--icon app-header__rail-toggle"
-            aria-label={props.railCollapsed ? "Show sessions sidebar" : "Hide sessions sidebar"}
-            aria-expanded={!props.railCollapsed} aria-controls="session-rail" onClick={props.onToggleRail}>
-            <Icon name="panel-left" />
-          </button>
-        </Show>
         <div class="remote-device">
           <span class="remote-connection">
             <span class={`status-dot status-dot--${connection().tone}`} aria-hidden="true" />
@@ -1442,7 +1442,10 @@ function SessionsPage(props: {
           <WorkspaceNav />
           <section class="pane sessions-page__content" aria-labelledby="sessions-page-title">
             <div class="sessions-page__toolbar">
-              <h2 id="sessions-page-title" class="sessions-page__title">{workspaceTitle()}</h2>
+              <div class="sessions-page__heading">
+                <h2 id="sessions-page-title" class="sessions-page__title">{workspaceTitle()}</h2>
+                <span class="chip sessions-page__count">{advertisedCount(sessions().length)} loaded</span>
+              </div>
               <NewSessionButton disabled={!props.canCreateSession} onClick={props.onNewSession} />
             </div>
             <div class="sessions-page__workspace-select">
@@ -1461,7 +1464,6 @@ function SessionsPage(props: {
                   onInput={(event) => remote.store.searchSessions(event.currentTarget.value)}
                 />
               </label>
-              <span class="chip">{advertisedCount(sessions().length)} loaded</span>
             </div>
             <div class="session-filters" role="group" aria-label="Session status">
               <For each={["all", "running", "idle"] as const}>
