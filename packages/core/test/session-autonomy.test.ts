@@ -76,6 +76,19 @@ it.effect("renders terminal goals as visible Session-state reminders", () =>
   }),
 )
 
+it.effect("reminds an active goal's agent to decide on the user's behalf until the goal is satisfied", () =>
+  Effect.sync(() => {
+    const reminder = goalReminder({
+      mode: "normal",
+      yolo: 0,
+      goal: { text: "Finish the bounded task", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 3 },
+    })
+    expect(reminder?.split("\n")).toContain(
+      "Make open decisions on the user's behalf: choose the safest reasonable option that serves the goal and continue; do not ask the user or wait for their confirmation until the goal is satisfied. Required human reviews still go to the user.",
+    )
+  }),
+)
+
 it.effect("persists modes in the current autonomy column", () =>
   Effect.gen(function* () {
     const service = yield* setup

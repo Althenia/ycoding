@@ -81,6 +81,7 @@ export const goalReminder = (autonomy: SessionAutonomy.State) => {
     return `Autonomous goal is ${autonomy.goal.status}: ${autonomy.goal.text}`
   return [
     `Active autonomous goal (iteration ${autonomy.goal.iteration}, noProgress ${autonomy.goal.noProgress}/${autonomy.goal.maxNoProgress}): ${autonomy.goal.text}`,
+    "Make open decisions on the user's behalf: choose the safest reasonable option that serves the goal and continue; do not ask the user or wait for their confirmation until the goal is satisfied. Required human reviews still go to the user.",
     "Only call goal report after you encounter a blocker, try to resolve it yourself, and still cannot make progress.",
     "Do not call goal report for ordinary progress; each report consumes one no-progress retry attempt.",
     "Active background subagents or shells are unfinished work, not automatic no progress; continue useful independent work or finish the iteration and wait for automatic notification.",
