@@ -22,6 +22,19 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.7.12",
+    date: "2026-09-29",
+    title: "File changes in remote Conversation, side-by-side diffs, and goals that decide for you",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "See an Edited files card in remote Conversation and expand a file for its latest change side by side, and read captured TUI changes side by side on wide terminals." },
+      { tag: "Added", text: "Set a goal with /goal, change autonomy with /yolo, and load a slash skill from the remote composer, as in the TUI." },
+      { tag: "Changed", text: "Let goal mode make open decisions on your behalf until the goal is satisfied, while reviews that require a human still come to you." },
+      { tag: "Changed", text: "Collapse the Sessions sidebar to a narrow strip that reopens it, show the loaded count beside the workspace title, keep the installed app from zooming, and give the app icon a small margin." },
+      { tag: "Fixed", text: "Open the Autonomy level and Goal panels next to their controls, show the Goal control without empty space, and reject remote agent mentions the TUI would not offer." },
+    ],
+  },
+  {
     version: "0.7.11",
     date: "2026-09-28",
     title: "Speed and context in the remote composer, visible image attachments, and steadier remote views",

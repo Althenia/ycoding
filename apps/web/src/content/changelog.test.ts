@@ -6,6 +6,22 @@ const TAGS = ["Added", "Changed", "Fixed"] as const
 describe("release entries", () => {
   test("includes the latest TUI release at the top of the public changelog", () => {
     expect(RELEASES[0]).toEqual({
+      version: "0.7.12",
+      date: "2026-09-29",
+      title: "File changes in remote Conversation, side-by-side diffs, and goals that decide for you",
+      tags: ["Added", "Changed", "Fixed"],
+      changes: [
+        { tag: "Added", text: "See an Edited files card in remote Conversation and expand a file for its latest change side by side, and read captured TUI changes side by side on wide terminals." },
+        { tag: "Added", text: "Set a goal with /goal, change autonomy with /yolo, and load a slash skill from the remote composer, as in the TUI." },
+        { tag: "Changed", text: "Let goal mode make open decisions on your behalf until the goal is satisfied, while reviews that require a human still come to you." },
+        { tag: "Changed", text: "Collapse the Sessions sidebar to a narrow strip that reopens it, show the loaded count beside the workspace title, keep the installed app from zooming, and give the app icon a small margin." },
+        { tag: "Fixed", text: "Open the Autonomy level and Goal panels next to their controls, show the Goal control without empty space, and reject remote agent mentions the TUI would not offer." },
+      ],
+    })
+  })
+
+  test("retains the 0.7.11 release content", () => {
+    expect(RELEASES.find((item) => item.version === "0.7.11")).toEqual({
       version: "0.7.11",
       date: "2026-09-28",
       title: "Speed and context in the remote composer, visible image attachments, and steadier remote views",
@@ -250,7 +266,7 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 10)).toEqual(["0.7.11", "0.7.10", "0.7.9", "0.7.8", "0.7.7", "0.7.6", "0.7.5", "0.7.4", "0.7.3", "0.7.2"])
+    expect(versions.slice(0, 10)).toEqual(["0.7.12", "0.7.11", "0.7.10", "0.7.9", "0.7.8", "0.7.7", "0.7.6", "0.7.5", "0.7.4", "0.7.3"])
     expect(new Set(versions).size).toBe(versions.length)
     const sorted = [...versions].sort((a, b) => compare(b, a))
     expect(versions).toEqual(sorted)
