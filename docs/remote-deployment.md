@@ -16,9 +16,23 @@ The relay wire contract is specified in [`packages/remote/CONTRACT.md`](../packa
 | D1 binding     | `DB` → database `ycoding-prod-db` (`database_id` `3384fc56-42d6-40a1-af04-5a75bd391132`)                                               |
 | Static assets  | `ASSETS` from `apps/web/dist`, `not_found_handling: single-page-application`                                                           |
 | Cron trigger   | `17 * * * *`, the bounded cleanup sweep                                                                                                |
-| Secrets        | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_ALLOWED_EMAILS`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`, set with `wrangler secret put` and never stored in the repository |
+| Secrets        | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_ALLOWED_EMAILS`, `ADMIN_API_KEY`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`, set with `wrangler secret put` and never stored in the repository |
 
 `GOOGLE_ALLOWED_EMAILS` fails closed: a missing or empty value denies every Google sign-in, and the value is never returned to a client or logged.
+
+Generate a separate operator key locally with `openssl rand -base64 48` and store it in `YCODING_ADMIN_API_KEY` outside the repository. Set `ADMIN_API_KEY` as a Worker secret; a missing value or one shorter than 32 characters makes every `/api/admin/*` route return `404`. Never place the key in a URL, source file, shell history, logs, or a public page. The admin API uses `Authorization: Bearer $YCODING_ADMIN_API_KEY` and never a browser cookie.
+
+```sh
+printf '%s' "$YCODING_ADMIN_API_KEY" | bunx wrangler secret put ADMIN_API_KEY --config infra/cloudflare/wrangler.jsonc
+```
+
+After applying `0003_invite.sql` through the procedure below, create an invite with a label, inspect its non-secret metadata, and delete it by ID when access must end. Creation returns a one-use URL with the secret only in its fragment; hand it directly to the recipient and do not retain the response. Deletion closes the account's device sockets and removes the account.
+
+```sh
+curl -fsS -X POST 'https://ycoding.althenia.app/api/admin/invites' -H "Authorization: Bearer $YCODING_ADMIN_API_KEY" -H 'Content-Type: application/json' -d '{"label":"Recipient"}'
+curl -fsS 'https://ycoding.althenia.app/api/admin/invites' -H "Authorization: Bearer $YCODING_ADMIN_API_KEY"
+curl -fsS -X DELETE 'https://ycoding.althenia.app/api/admin/invites/<invite-id>' -H "Authorization: Bearer $YCODING_ADMIN_API_KEY"
+```
 
 Web Push uses one VAPID key pair. Generate it locally with `bun infra/cloudflare/script/vapid-keys.ts`, keep the private value private, and set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` (an operator-owned `mailto:` or `https:` URI) as Worker secrets. While any of them is missing or invalid, `GET /api/push/key` answers `503`, browsers report push as unavailable, and the relay sends no pushes. Rotating the pair invalidates existing browser subscriptions until each browser subscribes again. Apply `0002_push.sql` with the migration procedure below before deploying a Worker that stores subscriptions; the release workflow builds and deploys but does not apply D1 migrations.
 
@@ -45,10 +59,11 @@ Authenticated `GET /api/devices` and `GET /api/me` return each retained device w
 | `enrollment`, `device_challenge` | Short-lived, single-use enrollment and challenge rows.                                                         |
 | `oauth_transaction`              | Google OIDC transaction state, nonce, code verifier, and redirect target.                                      |
 | `push_subscription`              | Web Push endpoint, owning account, the browser's P-256 and auth keys, creation time, and a failure count.      |
+| `invite`                         | Invite ID, optional label, dates, user ID after redemption, and SHA-256 hashes of the invite token and access key; neither secret is stored. |
 
 Single-use rows contain plaintext values required by the protocol: `oauth_transaction.nonce` and `code_verifier` (10-minute lifetime) and `device_challenge.nonce` (2-minute lifetime). The OAuth nonce travels in the Google authorization redirect; the verifier stays server-side. The device challenge nonce is returned to the enrolling agent. Do not log these values.
 
-The bounded sweep deletes expired rows from `oauth_transaction`, `device_challenge`, `enrollment`, `browser_session`, and `device_credential` seven days after expiry, at most 500 rows per table per pass. It runs hourly by cron and at most once per hour per isolate during request handling. `user`, `identity`, and `device` rows have no deletion path: revoking a device revokes its credentials and closes its sockets but does not remove the stored identity, and there is no in-product account-deletion operation. An account keeps at most 10 push subscriptions; subscribing again evicts the oldest. A subscription is deleted when the browser unsubscribes, when its push service answers `404` or `410`, after five other consecutive delivery failures, or with its account. No other retention period is promised.
+The bounded sweep deletes expired rows from `oauth_transaction`, `device_challenge`, `enrollment`, `browser_session`, and `device_credential` seven days after expiry, at most 500 rows per table per pass. It runs hourly by cron and at most once per hour per isolate during request handling. Invites never expire and are not swept. Google accounts have no deletion path here; revoking a device closes its sockets but retains its account identity. Deleting an invite removes its invited account, associated OAuth transactions, browser sessions, identity, devices, credentials, enrollments, and push subscriptions. An account keeps at most 10 push subscriptions; subscribing again evicts the oldest. A subscription is deleted when the browser unsubscribes, when its push service answers `404` or `410`, after five other consecutive delivery failures, or with its account. No other retention period is promised.
 
 No user-facing privacy policy is published from this repository. The durable data-handling contract is the header of [`0001_auth.sql`](../infra/cloudflare/migrations/0001_auth.sql) and the comments in [`env.ts`](../infra/cloudflare/src/env.ts); a public privacy notice is a web-lane product artifact.
 
@@ -98,7 +113,7 @@ No other retention or backup guarantee exists. The Time Travel window and the Wo
 
 ### Ordered change procedure
 
-1. Confirm the operator session and review the pending migration: `bunx wrangler whoami`, then read the new file under `infra/cloudflare/migrations/`. Obtain explicit approval before any production schema change.
+1. Confirm the operator session and review the pending migration: `bunx wrangler whoami`, then read `infra/cloudflare/migrations/0003_invite.sql` and any other pending file. Obtain explicit approval before any production schema change.
 2. Record the pre-change recovery point:
 
    ```sh

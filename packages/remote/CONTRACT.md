@@ -16,6 +16,11 @@ vocabulary changes the contract for all three at once.
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/auth/google/start` | none | not required (navigation) | Begin Google OIDC; sets the one-use transaction cookie and redirects |
 | `GET` | `/api/auth/google/callback` | transaction cookie | not required (provider redirect) | Complete OIDC; sets the browser session cookie |
+| `POST` | `/api/auth/invite` | one-use invite token | same-origin required | Redeem once; return one access key and set the browser session cookie |
+| `POST` | `/api/auth/key` | access key | same-origin required | Sign the invited owner in with a 30-day browser session cookie |
+| `POST` | `/api/admin/invites` | admin bearer | not required | Create an invite and return its fragment-only URL once |
+| `GET` | `/api/admin/invites` | admin bearer | not required | List invite metadata without secrets |
+| `DELETE` | `/api/admin/invites/:id` | admin bearer | not required | Close devices and delete the invite and its account |
 | `POST` | `/api/auth/session/refresh` | browser session | same-origin required | Rotate the browser session cookie once past half life |
 | `POST` | `/api/auth/logout` | browser session | same-origin required | Revoke the browser session and close its relay sockets |
 | `GET` | `/api/me` | browser session | not required | Owner, session expiry, and device list (read-only, no `Set-Cookie`) |
@@ -75,6 +80,7 @@ JavaScript cannot set it):
 - Read-only `GET /api/*` routes **never** require `Origin` and never mutate state.
 - Mutating cookie-authenticated routes (`POST /api/auth/session/refresh`,
   `POST /api/auth/logout`, `POST /api/devices/enrollments`,
+  `POST /api/auth/invite`, `POST /api/auth/key`,
   `POST /api/devices/:deviceID/revoke`, `DELETE /api/devices/:deviceID`,
   `DELETE /api/devices/revoked`) require a present, exactly matching
   `Origin` (`https://<host>` for `https`, `http://<host>` on localhost
@@ -137,9 +143,42 @@ cookies: browser session rotation is only `POST /api/auth/session/refresh`.
 Cookie attributes: `HttpOnly; Secure; SameSite=Lax; Path=/` (`yc_session`) and
 `HttpOnly; Secure; SameSite=Lax; Path=/api/auth` (`yc_oauth`). Cookies carry
 bearer-equivalent authority; never log or echo them. No credential appears in a
-URL: the agent token travels in `Authorization: Bearer`, the browser credential in
+URL sent to the server. A one-use invite token is carried only in the fragment
+of `/remote/invite#<token>`; the page removes the fragment from browser history
+before redemption. Fragments are never transmitted in HTTP requests or Referer.
+The agent token travels in `Authorization: Bearer`, the browser credential in
 a cookie, and the `?device=` query carries an opaque device identifier that is
 always re-checked for ownership.
+
+### 2.1a Invite and access-key sign-in
+
+An operator whose `ADMIN_API_KEY` has at least 32 characters authenticates to
+`/api/admin/*` with a timing-safely checked bearer value. Missing configuration
+returns `404`; missing or wrong credentials return `401`, and failed attempts are
+rate-limited per client address. Admin routes use no cookies or CORS. Creation
+accepts an optional trimmed 1–64-character label and returns `{ id, url, label,
+createdAt }` once. Listing returns newest-first `{ invites: [{ id, label,
+createdAt, redeemedAt }] }` without secrets; pending `redeemedAt` is `null`.
+
+The invite token is 32 random bytes encoded as base64url. The recipient opens
+`/remote/invite#<token>` and presses **Accept invite** to redeem; loading the
+page never redeems. The Worker atomically creates a separate owner, consumes the
+token, stores a hash of the 20-byte access key, and creates a 30-day browser
+session. It returns the grouped access key exactly once; unknown, used, or
+deleted invites return a generic `404`. The owner can sign in from another
+device with the 32-character Crockford base32 key, formatted as eight groups of
+four. Input is uppercased, whitespace and hyphens are removed, and `O` maps to
+`0` while `I` and `L` map to `1`; malformed or deleted keys return `401`.
+Both browser routes require same-origin requests, are rate-limited per client
+address, and revoke a presented prior browser session before setting the new
+cookie. Every response uses `Cache-Control: no-store`. Only SHA-256 hashes of
+invite tokens, access keys, and browser session tokens are stored.
+
+Deleting an invite closes every client and agent socket on its owner's devices,
+then atomically removes the invite and user. User deletion cascades to browser
+sessions, identity, devices, device credentials, enrollments, and push
+subscriptions; associated OAuth transactions are removed as well. Access is
+invalid everywhere afterward. Another invite creates a new independent owner.
 
 ### 2.2 Device enrollment (one use)
 

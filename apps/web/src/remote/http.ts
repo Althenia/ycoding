@@ -27,7 +27,35 @@ export type RemoteHttpOptions = {
 }
 
 /** The OAuth providers the relay accepts, in the order the sign-in screen offers them. */
-export const SIGN_IN_PROVIDERS = [{ id: "google", label: "Continue with Google" }] as const
+export const SIGN_IN_PROVIDERS = [{ id: "google", label: "Sign in with Google" }] as const
+
+export function createInviteHttp(options: RemoteHttpOptions = {}) {
+  const base = options.baseURL ?? ""
+  const send = options.fetch ?? globalThis.fetch
+  const request = async (path: string, body: unknown): Promise<RemoteHttpResult<unknown>> => {
+    try {
+      const response = await send(`${base}${path}`, { method: "POST", credentials: "same-origin",
+        headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+      if (!response.ok) return failure(response.status, await errorMessage(response), "http")
+      return { ok: true, value: response.status === 204 ? undefined : await readJson(response) }
+    } catch (cause) {
+      return failure(0, cause instanceof Error ? cause.message : "The request could not be sent", "network")
+    }
+  }
+  return {
+    async redeem(token: string): Promise<RemoteHttpResult<{ readonly accessKey: string }>> {
+      const result = await request("/api/auth/invite", { token })
+      if (!result.ok) return result
+      if (!isRecord(result.value) || typeof result.value.accessKey !== "string")
+        return failure(201, "The response was not an API document", "unexpected-body")
+      return { ok: true, value: { accessKey: result.value.accessKey } }
+    },
+    async signIn(accessKey: string): Promise<RemoteHttpResult<void>> {
+      const result = await request("/api/auth/key", { accessKey })
+      return result.ok ? { ok: true, value: undefined } : result
+    },
+  }
+}
 
 export type SignInProvider = (typeof SIGN_IN_PROVIDERS)[number]["id"]
 

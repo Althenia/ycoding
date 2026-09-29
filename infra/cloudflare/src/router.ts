@@ -33,6 +33,7 @@ import { isIdentityAllowed } from "./auth/allowlist"
 import { base64UrlDecode } from "./auth/crypto"
 import { authorizationUrl, exchangeCode, verifyIdToken } from "./auth/google"
 import { createJwksCache, type JwksCache } from "./auth/jwks"
+import type { createInviteService } from "./invite/service"
 import {
   apiError,
   clearCookie,
@@ -62,6 +63,8 @@ export type RouterDeps = {
   readonly endpoints: GoogleEndpoints
   /** Server-only sign-in allowlist. Empty denies every Google account. */
   readonly allowedEmails: ReadonlySet<string>
+  readonly adminKey?: string
+  readonly invite?: ReturnType<typeof createInviteService>
   readonly fetch: typeof fetch
   readonly rateLimit?: (key: string) => boolean
   readonly now?: () => number
@@ -117,6 +120,13 @@ export function createRouter(deps: RouterDeps) {
       await deps.service.cleanup().catch(() => undefined)
     }
     if (url.pathname === "/health") return health(deps)
+
+    if (url.pathname.startsWith("/api/admin/")) return adminInviteRoute(deps, request, url, rateLimit)
+    if (url.pathname === "/api/auth/invite" || url.pathname === "/api/auth/key") {
+      if (request.method !== "POST") return methodNotAllowed()
+      if (!rateLimit(`invite-auth:${clientAddress(request)}`)) return apiError(429, "rate_limited", "Too many attempts")
+      return signInWithInvite(deps, request, url.pathname === "/api/auth/invite")
+    }
 
     if (url.pathname === "/api/auth/google/start") {
       if (request.method !== "GET") return methodNotAllowed()
@@ -223,6 +233,80 @@ export function createRouter(deps: RouterDeps) {
       return apiError(500, "internal_error", "Relay request failed")
     }
   }
+}
+
+async function adminInviteRoute(deps: RouterDeps, request: Request, url: URL, rateLimit: (key: string) => boolean): Promise<Response> {
+  if (!deps.adminKey || deps.adminKey.length < 32 || !deps.invite) return apiError(404, "not_found", "Not found")
+  const supplied = request.headers.get("authorization")
+  const expectedHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(deps.adminKey))
+  const actualHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(supplied?.startsWith("Bearer ") ? supplied.slice(7) : ""))
+  if (!crypto.subtle.timingSafeEqual(expectedHash, actualHash)) {
+    if (!rateLimit(`admin:${clientAddress(request)}`)) return apiError(429, "rate_limited", "Too many attempts")
+    return apiError(401, "unauthorized", "Admin authentication failed")
+  }
+  if (url.pathname === "/api/admin/invites") {
+    if (request.method === "GET") {
+      const invites = await deps.invite.list()
+      return jsonResponse({ invites: invites.map((row) => ({ id: row.id, label: row.label, createdAt: row.createdAt, redeemedAt: row.redeemedAt })) })
+    }
+    if (request.method !== "POST") return methodNotAllowed()
+    const value = await readJsonBody(request)
+    if (!isRecord(value) || Object.keys(value).some((key) => key !== "label") || ("label" in value &&
+      (typeof value.label !== "string" || value.label.trim().length < 1 || value.label.trim().length > 64)))
+      return apiError(400, "invalid_message", "Invalid invite label")
+    return jsonResponse(await deps.invite.create(typeof value.label === "string" ? value.label.trim() : null, url.origin), { status: 201 })
+  }
+  const id = /^\/api\/admin\/invites\/(inv_[A-Za-z0-9_-]+)$/.exec(url.pathname)?.[1]
+  if (!id) return apiError(404, "not_found", "Not found")
+  if (request.method !== "DELETE") return methodNotAllowed()
+  const invite = await deps.invite.find(id)
+  if (!invite) return apiError(404, "not_found", "Not found")
+  if (invite.userID !== null) {
+    const devices = await deps.service.listDevices(invite.userID)
+    for (const device of devices) {
+      const response = await deps.relay.getByName(`${invite.userID}:${device.id}`).fetch(new Request("https://relay.internal/_ycoding/close-device", {
+        method: "POST", headers: { "x-ycoding-internal": "1" },
+      }))
+      if (!response.ok) return apiError(503, "internal_error", "Device could not be closed")
+      await response.text()
+    }
+  }
+  if (!await deps.invite.delete(id, invite.userID)) return apiError(404, "not_found", "Not found")
+  return withSecurityHeaders(new Response(null, { status: 204, headers: { "cache-control": "no-store" } }))
+}
+
+async function signInWithInvite(deps: RouterDeps, request: Request, redeem: boolean): Promise<Response> {
+  const guarded = requireMutationGuard(request)
+  if (guarded) return guarded
+  if (!deps.invite) return apiError(503, "internal_error", "Invite sign-in is unavailable")
+  const body = await readJsonBody(request)
+  if (!isRecord(body)) return apiError(redeem ? 404 : 401, redeem ? "not_found" : "unauthorized", redeem ? "Invite is not available" : "Access key is not valid")
+  if (redeem) {
+    const token = body.token
+    if (typeof token !== "string" || base64UrlDecode(token)?.length !== 32) return apiError(404, "not_found", "Invite is not available")
+    const created = await deps.invite.redeem(token)
+    if (!created) return apiError(404, "not_found", "Invite is not available")
+    await replaceBrowserSession(deps, request)
+    return jsonResponse({ accessKey: created.accessKey }, { status: 201, cookies: [setCookie(sessionCookieName, created.cookieToken,
+      { maxAgeSeconds: browserSessionTtlMs / 1000, path: "/" })] })
+  }
+  const token = await deps.invite.signIn(body.accessKey)
+  if (!token) return apiError(401, "unauthorized", "Access key is not valid")
+  await replaceBrowserSession(deps, request)
+  return withSecurityHeaders(new Response(null, { status: 204, headers: { "cache-control": "no-store", "set-cookie": setCookie(sessionCookieName, token,
+    { maxAgeSeconds: browserSessionTtlMs / 1000, path: "/" }) } }))
+}
+
+async function replaceBrowserSession(deps: RouterDeps, request: Request): Promise<void> {
+  const oldToken = readCookie(request.headers.get("cookie"), sessionCookieName)
+  if (!oldToken) return
+  const previous = await deps.service.resolveBrowserSession(oldToken)
+  await deps.service.signOut(oldToken)
+  if (previous.ok) await revokeRelaySessions(deps, previous.value.userID, previous.value.sessionID)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
 async function health(deps: RouterDeps): Promise<Response> {

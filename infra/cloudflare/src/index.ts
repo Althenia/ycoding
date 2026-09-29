@@ -21,6 +21,8 @@ import type { WorkerEnv } from "./env"
 import { DeviceRelay } from "./relay/durable-object"
 import { boundedCleanupInterval, createRouter } from "./router"
 import { createD1PushStore } from "./push/d1-store"
+import { createD1InviteStore } from "./invite/d1-store"
+import { createInviteService } from "./invite/service"
 
 export { DeviceRelay }
 
@@ -33,6 +35,8 @@ export default {
       relay: env.DEVICE_RELAY,
       endpoints: googleEndpoints(env),
       allowedEmails: parseAllowedEmails(env),
+      adminKey: env.ADMIN_API_KEY,
+      invite: createInviteService(createD1InviteStore(env.DB)),
       cleanupEveryMs: boundedCleanupInterval(env.CLEANUP_INTERVAL_MS),
       // Bind to a local: workerd rejects calling the global fetch as a member reference.
       fetch: (input, init) => globalThis.fetch(input, init),

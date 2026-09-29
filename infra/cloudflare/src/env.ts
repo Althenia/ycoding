@@ -12,6 +12,7 @@ export type WorkerEnv = {
    * client and never logged.
    */
   readonly GOOGLE_ALLOWED_EMAILS?: string
+  readonly ADMIN_API_KEY?: string
   /** Optional sweep cadence override, clamped to a bounded range. */
   readonly CLEANUP_INTERVAL_MS?: string
   /** Test-only overrides; production uses the Google endpoints. */

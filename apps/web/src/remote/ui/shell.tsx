@@ -9,6 +9,8 @@ import { CustomSelect } from "../../ui/custom-select"
 import { BrandMark, ThemeToggle } from "../../ui/site"
 import { useRemote } from "../context"
 import { SIGN_IN_PROVIDERS } from "../http"
+import { createInviteHttp } from "../http"
+import { normalizeAccessKey } from "../invite"
 import {
   modelLabel,
   type ActivityItem,
@@ -524,6 +526,24 @@ function readLastSessions(raw: string) {
  */
 function SignInScreen(): JSX.Element {
   const remote = useRemote()
+  const [accessKey, setAccessKey] = createSignal("")
+  const [keyBusy, setKeyBusy] = createSignal(false)
+  const [keyError, setKeyError] = createSignal("")
+  const signInWithKey = async (event: SubmitEvent) => {
+    event.preventDefault()
+    if (keyBusy()) return
+    setKeyBusy(true)
+    setKeyError("")
+    const result = await createInviteHttp().signIn(normalizeAccessKey(accessKey()) ?? accessKey())
+    setKeyBusy(false)
+    if (result.ok) {
+      setAccessKey("")
+      await remote.store.load()
+      return
+    }
+    setKeyError(result.status === 401 ? "That access key isn't valid." : result.status === 429 ? "Too many attempts. Try again later."
+      : "Sign-in could not connect. Try again.")
+  }
   return (
     <main id="remote-main" class="sign-in">
       <div class="sign-in__panel">
@@ -561,6 +581,13 @@ function SignInScreen(): JSX.Element {
             )}
           </For>
         </div>
+        <form class="field" onSubmit={(event) => void signInWithKey(event)}>
+          <label class="field__label" for="remote-access-key">Access key</label>
+          <input id="remote-access-key" class="input" value={accessKey()} onInput={(event) => setAccessKey(event.currentTarget.value)}
+            autocomplete="off" spellcheck={false} autocapitalize="characters" aria-invalid={keyError() ? "true" : undefined} />
+          <Show when={keyError()}><p class="field__error" role="alert">{keyError()}</p></Show>
+          <button type="submit" class="button button--secondary sign-in__provider" disabled={keyBusy()}>{keyBusy() ? "Signing in…" : "Sign in"}</button>
+        </form>
         <p class="sign-in__note">
           <Link href="/docs/usage/remote" class="text-link">How remote access works</Link>
         </p>

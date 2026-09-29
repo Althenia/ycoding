@@ -8,6 +8,7 @@ import { ChangelogPage } from "./ui/changelog"
 import { RemoteProvider } from "./remote/context"
 import type { RemoteStore } from "./remote/store"
 import { RemoteShell } from "./remote/ui/shell"
+import { InvitePage } from "./remote/ui/invite"
 
 const routes = [
   { path: "/", render: (_params: Readonly<Record<string, string>>) => <LandingPage /> },
@@ -73,11 +74,15 @@ export function App(props: { readonly createRemoteStore?: () => RemoteStore }): 
         </MarketingLayout>
       }
     >
-      <RemoteProvider createStore={props.createRemoteStore}>
-        <Show when={remoteRoutes.some((route) => route === router.path())} fallback={<NotFoundPage />}>
-          <RemoteShell path={() => router.path()} />
-        </Show>
-      </RemoteProvider>
+      <Show when={router.path() === "/remote/invite"} fallback={
+        <RemoteProvider createStore={props.createRemoteStore}>
+          <Show when={remoteRoutes.some((route) => route === router.path())} fallback={<NotFoundPage />}>
+            <RemoteShell path={() => router.path()} />
+          </Show>
+        </RemoteProvider>
+      }>
+        <InvitePage />
+      </Show>
     </Show>
   )
 }

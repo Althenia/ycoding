@@ -150,7 +150,10 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     await this.#restoreConnections()
     if (url.pathname === "/_ycoding/stream-message" || url.pathname === "/_ycoding/stream-attachment")
       return this.#streamContent(request, url.pathname === "/_ycoding/stream-message")
-    if (url.pathname === "/_ycoding/close-device") this.#relay.closeDevice()
+    if (url.pathname === "/_ycoding/close-device") {
+      this.#relay.closeDevice()
+      await this.ctx.storage.delete("lastStatus")
+    }
     if (url.pathname === "/_ycoding/presence")
       return new Response(JSON.stringify({ online: this.#relay.agentConnected() }), {
         headers: { "content-type": "application/json", "cache-control": "no-store" },
