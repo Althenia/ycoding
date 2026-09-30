@@ -167,7 +167,7 @@ describe("Mini CLI host", () => {
     await input.preferences.saveVariant(model, "high")
     expect(await input.preferences.resolveVariant(model)).toBe("high")
 
-    await input.preferences.saveVariant(model, "default")
+    await input.preferences.saveVariant(model, undefined)
     expect(await input.preferences.resolveVariant(model)).toBeUndefined()
 
     await Bun.write(file, "{")
