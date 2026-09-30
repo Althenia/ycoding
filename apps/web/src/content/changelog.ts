@@ -22,6 +22,27 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.8.0",
+    date: "2026-10-01",
+    title: "Multiplexed remote delivery and windowed transcripts",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Carry control frames, per-Session event batches, and large reads on one relay connection so one Session's stream or long read never blocks another; cancel reads you leave and let the visible Session win while a tab is in the background." },
+      { tag: "Added", text: "Mount only the transcript and Session rows near the reader, keep the visible row in place when paging older history, and keep focus on the focused row through scrolling." },
+      { tag: "Added", text: "Report each window's Space placement in desktop.list and name the exact cause of an off-Space staging failure." },
+      { tag: "Changed", text: "Build the web app on TanStack Router, Store, Query, Virtual, and Pacer with the same URLs; discard connection-scoped reads when the connection ends and pace scroll, resize, and composer work." },
+      { tag: "Changed", text: "Choose reasoning effort on a fluid pill slider whose fill follows the pointer live and snaps to the nearest offered effort, with reduced motion removing the animation." },
+      { tag: "Changed", text: "Show a filled accent bolt while the paired fast model is active and a muted outline bolt otherwise." },
+      { tag: "Changed", text: "Settle /compact from the compaction job's durable completion or failure instead of a request timeout, so a long compaction shows no timeout warning while it runs." },
+      { tag: "Changed", text: "Offer only a model's own effort variants everywhere, report models without variants as having none, and reject an effort the model does not offer." },
+      { tag: "Changed", text: "Reload every open remote tab or installed web app after deployment; the relay protocol adds frames the previous client does not accept." },
+      { tag: "Fixed", text: "Switch to a model without effort variants without blocking the composer with a saved-effort warning." },
+      { tag: "Fixed", text: "Show the phone image lightbox as a fixed-height sheet with the caption and close controls at the top and the image fitting within it." },
+      { tag: "Fixed", text: "Keep a loaded tool image mounted when the first text of its assistant message arrives." },
+      { tag: "Fixed", text: "Keep computer-use desktop revisions stable across decorative Accessibility frame drift so a mutation issued a few seconds after its inspect is accepted." },
+    ],
+  },
+  {
     version: "0.7.18",
     date: "2026-09-30",
     title: "Stable model choices, recoverable changes, and Keep Awake",
