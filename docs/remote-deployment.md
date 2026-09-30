@@ -157,21 +157,23 @@ No other retention or backup guarantee exists. The Time Travel window and the Wo
 
 ### Ordered change procedure
 
-1. Confirm the operator session and review the pending migration: `bunx wrangler whoami`, then read `infra/cloudflare/migrations/0003_invite.sql` and any other pending file. Obtain explicit approval before any production schema change.
+1. Confirm the operator session with `bunx wrangler whoami` and identify the production database binding in `infra/cloudflare/wrangler.jsonc`.
 2. Record the pre-change recovery point:
 
    ```sh
-   bunx wrangler d1 info ycoding-prod-db --config infra/cloudflare/wrangler.jsonc
-   bunx wrangler d1 time-travel info ycoding-prod-db --config infra/cloudflare/wrangler.jsonc
+   bunx wrangler d1 info ycoding-prod-db --config infra/cloudflare/wrangler.jsonc --json
+   bunx wrangler d1 time-travel info ycoding-prod-db --config infra/cloudflare/wrangler.jsonc --json
    ```
 
-   Confirm the database reports `version: production` and save the returned bookmark. The bookmark is a recovery coordinate, not a credential.
+   Confirm the returned database `uuid` and `name` match the production `DB` binding in `infra/cloudflare/wrangler.jsonc`. Use `--remote` for migration commands and save the returned Time Travel `bookmark`. The bookmark is a recovery coordinate, not a credential.
 
 3. List unapplied migrations (read-only):
 
    ```sh
    bunx wrangler d1 migrations list ycoding-prod-db --config infra/cloudflare/wrangler.jsonc --remote
    ```
+
+   Review every listed file under `infra/cloudflare/migrations/` and obtain explicit approval for the complete pending set. Stop if it differs from the reviewed set.
 
 4. Optional durable copy, only with explicit approval and only for a stated reason: `bunx wrangler d1 export ycoding-prod-db --config infra/cloudflare/wrangler.jsonc --remote --output <path outside the repository>`. Use `--no-data` for a schema-only file. Never write an export inside the checkout: `.gitignore` covers `.wrangler/` and `.dev.vars*`, not export files. Never commit, log, or attach an export.
 5. Apply the migration to production, after approval:
