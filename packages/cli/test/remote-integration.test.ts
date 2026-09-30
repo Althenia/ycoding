@@ -542,7 +542,7 @@ test("bridges authorized session operations against an isolated server", async (
     expect(listed.data.map((session) => session.id).sort()).toEqual([hiddenSessionID, sessionID].sort())
     const idleWork = await server.request("/api/session/outstanding?failures=true")
     expect(idleWork.status, await idleWork.clone().text()).toBe(200)
-    expect(await idleWork.json()).toEqual({ data: [], failed: [] })
+    expect(await idleWork.json()).toEqual({ data: [], running: [], failed: [] })
 
     relay.deliver(request("snapshot_1", "session.snapshot", sessionID))
     const snapshot = valueOf(await answer(relay, "snapshot_1")) as {
@@ -604,9 +604,10 @@ test("bridges authorized session operations against an isolated server", async (
     }
     expect(activeGoal.data.goal?.status).toBe("active")
     expect(activeGoal.data.goal?.text).toBe(synthesizedGoal)
+    await waitFor(() => provider.requests().length > 2 ? true : undefined)
     const activeWork = await server.request("/api/session/outstanding?failures=true")
     expect(activeWork.status, await activeWork.clone().text()).toBe(200)
-    expect(await activeWork.json()).toMatchObject({ data: expect.arrayContaining([sessionID]), failed: [] })
+    expect(await activeWork.json()).toEqual({ data: [sessionID], running: [sessionID], failed: [] })
 
     // Activation admits one synthetic goal continuation; that admission is the
     // intended effect and is asserted directly rather than as absence.

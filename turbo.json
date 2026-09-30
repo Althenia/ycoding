@@ -3,7 +3,30 @@
   "globalEnv": ["CI", "YCODING_DISABLE_SHARE"],
   "globalPassThroughEnv": ["CI", "YCODING_DISABLE_SHARE"],
   "tasks": {
-    "typecheck": {},
+    "typecheck": {
+      "dependsOn": ["^typecheck-inputs"]
+    },
+    "typecheck-inputs": {
+      "dependsOn": ["^typecheck-inputs"]
+    },
+    "@ycoding-ai/cli#typecheck": {
+      "dependsOn": ["^typecheck-inputs"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/infra/cloudflare/src/**",
+        "$TURBO_ROOT$/infra/cloudflare/test/**",
+        "$TURBO_ROOT$/infra/cloudflare/worker-configuration.d.ts"
+      ]
+    },
+    "@ycoding-ai/web#typecheck": {
+      "dependsOn": ["^typecheck-inputs"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/infra/cloudflare/src/**",
+        "$TURBO_ROOT$/infra/cloudflare/test/**",
+        "$TURBO_ROOT$/infra/cloudflare/worker-configuration.d.ts"
+      ]
+    },
     "build": {
       "dependsOn": [],
       "outputs": ["dist/**"]

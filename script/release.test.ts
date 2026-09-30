@@ -357,6 +357,14 @@ test("remote integration gate runs the composed real flow after the web build in
   )
 })
 
+test("release types verification checks cache invalidation before typechecking", () => {
+  const step = workflow.split("      - name: Check workspace and types")[1]?.split("\n      - name:")[0] ?? ""
+  const check = "bun test --cwd script ./typecheck-cache.integration.test.ts"
+  expect(step).toContain("if: matrix.suite == 'types'")
+  expect(step).toContain(check)
+  expect(step.indexOf(check)).toBeLessThan(step.indexOf("bun run typecheck"))
+})
+
 test("source verification legs start in parallel with the native builds", () => {
   const verify = workflow.split("\n  verify-source:")[1]?.split("\n  build:")[0] ?? ""
   const build = workflow.split("\n  build:")[1]?.split("\n  isolated-browser-acceptance:")[0] ?? ""

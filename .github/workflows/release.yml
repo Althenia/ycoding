@@ -90,6 +90,7 @@ jobs:
         run: |
           bun run check:ycoding-workspace
           bun run check:ycoding-brand
+          bun test --cwd script ./typecheck-cache.integration.test.ts
           bun run typecheck
           bun run lint:effect-patterns
 

@@ -26,7 +26,7 @@ test("a fast 2355-delta provider stream preserves explicit completion push witho
   const vapid = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"])
   const publicKey = base64UrlEncode(new Uint8Array(await crypto.subtle.exportKey("raw", vapid.publicKey)))
   const privateKey = (await crypto.subtle.exportKey("jwk", vapid.privateKey)).d ?? ""
-  const subscription = { endpoint: "https://fcm.googleapis.com/fcm/send/burst-test", accountID: "usr_1",
+  const subscription = { endpoint: "https://fcm.googleapis.com/fcm/send/burst-test", accountID: "usr_1", browserSessionID: "bs_0",
     keys: { p256dh: base64UrlEncode(new Uint8Array(await crypto.subtle.exportKey("raw", receiver.publicKey))),
       auth: base64UrlEncode(crypto.getRandomValues(new Uint8Array(16))) },
     categories: { "agent-completed": true, "approval-requested": true, "machine-offline": true }, createdAt: 1, failures: 0 }
@@ -68,7 +68,7 @@ test("a fast 2355-delta provider stream preserves explicit completion push witho
     notifyPush: (accountID, event) => {
       pushes.push(event.category)
       const sent = sendPushToOwner({
-        store: { list: async () => [subscription], upsert: async () => {}, renew: async () => false, remove: async () => {},
+        store: { list: async () => [subscription], upsert: async () => true, renew: async () => "missing", remove: async () => {},
           claimTest: async () => ({ status: "missing" }), recordFailure: async () => {} },
         accountID, event, publicKey, privateKey, subject: "mailto:push@example.invalid", now: Date.now,
         fetch: Object.assign(async (url: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {

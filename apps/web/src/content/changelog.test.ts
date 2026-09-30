@@ -6,7 +6,7 @@ const TAGS = ["Added", "Changed", "Fixed"] as const
 describe("release entries", () => {
   test("includes the latest TUI release at the top of the public changelog", () => {
     expect(RELEASES[0]).toEqual({
-      version: "0.7.17",
+      version: "0.7.18",
       date: "2026-09-30",
       title: "Stable model choices, recoverable changes, and Keep Awake",
       tags: ["Added", "Changed", "Fixed"],
@@ -380,7 +380,7 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 12)).toEqual(["0.7.17", "0.7.16", "0.7.15", "0.7.14", "0.7.13", "0.7.12", "0.7.11", "0.7.10", "0.7.9", "0.7.8", "0.7.7", "0.7.6"])
+    expect(versions.slice(0, 12)).toEqual(["0.7.18", "0.7.16", "0.7.15", "0.7.14", "0.7.13", "0.7.12", "0.7.11", "0.7.10", "0.7.9", "0.7.8", "0.7.7", "0.7.6"])
     expect(new Set(versions).size).toBe(versions.length)
     const sorted = [...versions].sort((a, b) => compare(b, a))
     expect(versions).toEqual(sorted)
