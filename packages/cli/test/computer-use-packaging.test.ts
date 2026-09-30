@@ -61,6 +61,31 @@ describe("macOS computer helper packaging", () => {
     120_000,
   )
 
+  macTest(
+    "lists every desktop window with a Space placement consistent with its visibility",
+    async () => {
+      const bin = await mkdtemp(path.join(os.tmpdir(), "ycoding-computer-placement-"))
+      try {
+        await buildComputerHelper({ platform: "darwin", arch: process.arch === "x64" ? "x64" : "arm64" }, bin)
+        const request = path.join(bin, "request.json")
+        const response = path.join(bin, "response.json")
+        await Bun.write(request, JSON.stringify({ action: "desktop.list", owner: { sessionID: "ses_placement", callID: "call_placement" } }))
+        const run = Bun.spawnSync([path.join(bin, "YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use"), request, response])
+        expect(run.exitCode).toBe(0)
+        const listed = await Bun.file(response).json()
+        expect(listed).toMatchObject({ status: "ok", action: "desktop.list" })
+        const windows = listed.apps.flatMap((app: { windows: ReadonlyArray<{ on_screen: boolean; placement: string }> }) => app.windows)
+        for (const window of windows) {
+          expect(["current_space", "other_space", "full_screen", "unplaced"]).toContain(window.placement)
+          if (window.on_screen) expect(["current_space", "full_screen"]).toContain(window.placement)
+        }
+      } finally {
+        await rm(bin, { recursive: true, force: true })
+      }
+    },
+    120_000,
+  )
+
   test("filters unsupported targets without planning a native helper", () => {
     expect(computerHelperBuild({ platform: "linux", arch: "x64" }, "/tmp/bin")).toBeUndefined()
     expect(computerHelperBuild({ platform: "win32", arch: "arm64" }, "/tmp/bin")).toBeUndefined()

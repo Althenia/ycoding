@@ -4,7 +4,7 @@ import { PhotonImage } from "@silvia-odwyer/photon-node"
 import { Schema } from "effect"
 
 const target = { platform: "macos" as const, application: "desktop" as const, bundleID: "com.example.electron", pid: 4321, windowID: 73 }
-const window = { window_id: 73, title: "Fixture", bounds: { x: 100, y: 200, width: 800, height: 500 }, on_screen: false }
+const window = { window_id: 73, title: "Fixture", bounds: { x: 100, y: 200, width: 800, height: 500 }, on_screen: false, placement: "other_space" as const }
 const sentinel = Buffer.from("dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX")
 const fused = (flags: string) => Buffer.concat([Buffer.from("binary"), sentinel, Buffer.from([1, flags.length]), Buffer.from(flags)])
 const parseCommand = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.Number, method: Schema.String.pipe(Schema.optional),

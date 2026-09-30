@@ -16,11 +16,15 @@ export interface Status {
   readonly capabilities: ReadonlyArray<Capability>
 }
 
+export const WindowPlacement = Schema.Literals(["current_space", "other_space", "full_screen", "unplaced", "unknown"])
+export type WindowPlacement = typeof WindowPlacement.Type
+
 export interface WindowInfo {
   readonly window_id: number
   readonly title: string
   readonly bounds: { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
   readonly on_screen: boolean
+  readonly placement: WindowPlacement
 }
 
 export interface AppInfo {
@@ -105,6 +109,10 @@ export class NativeError extends Schema.TaggedErrorClass<NativeError>()("Compute
     "focus_restore_failed",
     "inspector_close_failed",
     "quit_pending",
+    "window_off_space",
+    "window_full_screen",
+    "window_minimized",
+    "app_hidden",
   ]),
   message: Schema.String,
   outcome: Schema.Literals(["not_started", "unknown"]).pipe(Schema.optional),

@@ -24,7 +24,7 @@ const sessionID = SessionV2.ID.make("ses_computer_tool")
 
 const computer = Layer.mock(Computer.Service, {
   status: Effect.succeed({ platform: "macos", state: "supported" as const, capabilities: [] }),
-  list: () => { calls.push("native:desktop.list"); return Effect.succeed({ status: "ok" as const, action: "desktop.list" as const, revision: "rev-list", apps: [] }) },
+  list: () => { calls.push("native:desktop.list"); return Effect.succeed({ status: "ok" as const, action: "desktop.list" as const, revision: "rev-list", apps: [{ bundle_id: "com.example.fixture", pid: 451, name: "Fixture", is_active: false, is_hidden: false, windows: [{ window_id: 73, title: "Fixture", bounds: { x: 0, y: 0, width: 800, height: 500 }, on_screen: false, placement: "full_screen" as const }] }] }) },
   launch: () => { calls.push("native:desktop.launch"); return Effect.succeed({ status: "ok" as const, action: "desktop.launch" as const, revision: "rev-launch", pid: 451, windows: [] }) },
   quit: () => { calls.push("native:desktop.quit"); return Effect.succeed({ status: "ok" as const, action: "desktop.quit" as const, revision: "", exited: false }) },
   inspect: (input) => {
@@ -282,7 +282,8 @@ describe("computer tool policy ordering", () => {
       calls.length = 0
       const registry = yield* ToolRegistry.Service
       yield* waitForTool(registry, "computer")
-      yield* settleTool(registry, call({ action: "desktop.list", platform: "macos" }, "list"))
+      const listed = yield* settleTool(registry, call({ action: "desktop.list", platform: "macos" }, "list"))
+      expect(listed.output?.content).toEqual([{ type: "text", text: JSON.stringify({ type: "result", action: "desktop.list", revision: "rev-list", apps: [{ bundle_id: "com.example.fixture", pid: 451, name: "Fixture", is_active: false, is_hidden: false, windows: [{ window_id: 73, title: "Fixture", bounds: { x: 0, y: 0, width: 800, height: 500 }, on_screen: false, placement: "full_screen" }] }] }) }])
       expect(calls).toEqual(["permission:computer:macos.desktop/list", "guardrail:computer:macos.desktop/list:true", "native:desktop.list", "guardrail:release"])
       calls.length = 0
       yield* settleTool(registry, call({ action: "desktop.launch", platform: "macos", bundle_id: "com.example.fixture" }, "launch"))

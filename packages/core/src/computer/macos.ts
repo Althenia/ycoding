@@ -7,7 +7,7 @@ import { watch } from "node:fs"
 import { Effect, Schema } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { AppProcess } from "../process"
-import { NativeError, type Capability, type ComputerFrame, type NativeSuccess } from "./types"
+import { NativeError, WindowPlacement, type Capability, type ComputerFrame, type NativeSuccess } from "./types"
 
 export interface ItermTarget {
   readonly platform: "macos"
@@ -97,7 +97,7 @@ export type Request =
     }
   | { readonly action: "finder.inspect"; readonly owner: Owner; readonly target: FinderTarget }
   | { readonly action: "desktop.inspect" | "desktop.capture"; readonly owner: Owner; readonly target: DesktopTarget }
-  | { readonly action: "desktop.stage"; readonly owner: Owner; readonly target: DesktopTarget; readonly expectedRevision: string; readonly display: ComputerFrame }
+  | { readonly action: "desktop.stage"; readonly owner: Owner; readonly target: DesktopTarget; readonly expectedRevision: string; readonly displayID: number }
   | { readonly action: "desktop.unstage"; readonly owner: Owner; readonly target: DesktopTarget; readonly originalFrame: ComputerFrame }
   | {
       readonly action: "desktop.click" | "desktop.drag" | "desktop.type" | "desktop.scroll" | "desktop.key"
@@ -215,7 +215,7 @@ export const listRequest = (owner: Owner): Request => ({ action: "desktop.list",
 export const launchRequest = (owner: Owner, bundleID: string, remoteDebugging?: boolean): Request => ({ action: "desktop.launch", owner, bundleID, remoteDebugging })
 export const quitRequest = (owner: Owner, bundleID: string, pid: number): Request => ({ action: "desktop.quit", owner, bundleID, pid })
 export const displayHoldRequest = (owner: Owner, controlDirectory: string, ownerPID: number): Request => ({ action: "display.hold", owner, controlDirectory, ownerPID })
-export const stageRequest = (owner: Owner, target: DesktopTarget, expectedRevision: string, display: ComputerFrame): Request => ({ action: "desktop.stage", owner, target, expectedRevision, display })
+export const stageRequest = (owner: Owner, target: DesktopTarget, expectedRevision: string, displayID: number): Request => ({ action: "desktop.stage", owner, target, expectedRevision, displayID })
 export const unstageRequest = (owner: Owner, target: DesktopTarget, originalFrame: ComputerFrame): Request => ({ action: "desktop.unstage", owner, target, originalFrame })
 
 export function actionRequest(
@@ -312,11 +312,11 @@ const Response = Schema.Union([
     apps: Schema.Array(Schema.Struct({ bundle_id: Schema.String, pid: Schema.Int, name: Schema.String,
       is_active: Schema.Boolean, is_hidden: Schema.Boolean,
       windows: Schema.Array(Schema.Struct({ window_id: Schema.Int, title: Schema.String,
-        bounds: Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }), on_screen: Schema.Boolean })),
+        bounds: Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }), on_screen: Schema.Boolean, placement: WindowPlacement })),
     })).pipe(Schema.optional),
     pid: Schema.Int.pipe(Schema.optional),
     windows: Schema.Array(Schema.Struct({ window_id: Schema.Int, title: Schema.String,
-      bounds: Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }), on_screen: Schema.Boolean })).pipe(Schema.optional),
+      bounds: Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }), on_screen: Schema.Boolean, placement: WindowPlacement })).pipe(Schema.optional),
     exited: Schema.Boolean.pipe(Schema.optional),
     browserWindows: Schema.Array(Schema.Struct({ window_id: Schema.String, index: Schema.Int, revision: Schema.String,
       tabs: Schema.Array(Schema.Struct({ index: Schema.Int, title: Schema.String, url: Schema.String, active: Schema.Boolean })) })).pipe(Schema.optional),

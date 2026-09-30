@@ -78,6 +78,7 @@ private struct WindowInfo: Encodable {
     let title: String
     let bounds: Bounds
     let on_screen: Bool
+    let placement: String
 }
 
 private struct Bounds: Codable {
@@ -102,7 +103,7 @@ private struct Request: Decodable {
     let target: Target?
     let controlDirectory: String?
     let ownerPID: Int32?
-    let display: Bounds?
+    let displayID: UInt32?
     let originalFrame: Bounds?
     let url: String?
     let script: String?
@@ -200,6 +201,11 @@ private enum HelperError: Error {
     case quitPending
     case agentDisplayUnavailable
     case windowNotMovable
+    case windowOffSpace
+    case windowFullScreen
+    case windowMinimized
+    case appHidden
+    case stageNotVisible
 
     var response: Response {
         switch self {
@@ -230,9 +236,19 @@ private enum HelperError: Error {
         case .backgroundUnavailable:
             return failure("background_unavailable", "Target-only background input is unavailable; use an Accessibility element route")
         case .agentDisplayUnavailable:
-            return failure("background_unavailable", "The private agent display could not be created")
+            return failure("background_unavailable", "The private agent display is unavailable")
         case .windowNotMovable:
-            return failure("background_unavailable", "The window exposes no movable Accessibility window; a full-screen window must leave full screen before staging")
+            return failure("background_unavailable", "The window exposes no movable Accessibility window, so it cannot be staged")
+        case .windowOffSpace:
+            return failure("window_off_space", "The window is on another Space and macOS exposes no Accessibility element for it, so this action cannot reach it. YCoding never switches Spaces; ask the user to switch to that Space, or use capture or coordinate input")
+        case .windowFullScreen:
+            return failure("window_full_screen", "The window is full screen and macOS exposes no movable or reachable Accessibility element for it, so this action cannot reach it. YCoding never leaves full screen or switches Spaces; ask the user to leave full screen or switch to its Space")
+        case .windowMinimized:
+            return failure("window_minimized", "The window is minimized; ask the user to restore it from the Dock, then retry")
+        case .appHidden:
+            return failure("app_hidden", "The application is hidden; ask the user to unhide it with Command-H or its Dock icon, then retry")
+        case .stageNotVisible:
+            return failure("background_unavailable", "The window did not appear on the agent display after it was moved; its original frame was restored")
         case .focusRestoreFailed:
             return failure("focus_restore_failed", "Original foreground focus could not be restored after background input; inspect before any further mutation", outcome: "unknown")
         case .quitPending:
@@ -272,6 +288,7 @@ private func gracefulQuit(bundleID: String, pid: Int32) throws -> Bool {
 
 private func windowInfos() -> [Int32: [WindowInfo]] {
     let infos = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+    let spaces = SpaceMap()
     var byPID: [Int32: [WindowInfo]] = [:]
     for info in infos {
         guard let pid = info[kCGWindowOwnerPID as String] as? Int32,
@@ -283,9 +300,43 @@ private func windowInfos() -> [Int32: [WindowInfo]] {
         byPID[pid, default: []].append(WindowInfo(window_id: id,
             title: String((info[kCGWindowName as String] as? String ?? "").prefix(200)),
             bounds: Bounds(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height),
-            on_screen: (info[kCGWindowIsOnscreen as String] as? Bool) == true))
+            on_screen: (info[kCGWindowIsOnscreen as String] as? Bool) == true,
+            placement: spaces.placement(of: id)))
     }
     return byPID
+}
+
+private struct SpaceMap {
+    typealias Connection = @convention(c) () -> Int32
+    typealias SpacesForWindows = @convention(c) (Int32, Int32, CFArray) -> Unmanaged<CFArray>?
+    typealias ManagedDisplays = @convention(c) (Int32) -> Unmanaged<CFArray>?
+    private static let allSpacesMask: Int32 = 7
+    private static let fullScreenType = 4
+
+    let connection: Int32
+    let spacesForWindows: SpacesForWindows?
+    let current: Set<UInt64>
+    let fullScreen: Set<UInt64>
+
+    init() {
+        let library = BackgroundPost.library
+        func symbol<T>(_ name: String, as _: T.Type) -> T? { library.flatMap { dlsym($0, name) }.map { unsafeBitCast($0, to: T.self) } }
+        connection = symbol("SLSMainConnectionID", as: Connection.self)?() ?? 0
+        spacesForWindows = symbol("SLSCopySpacesForWindows", as: SpacesForWindows.self)
+        let displays = symbol("SLSCopyManagedDisplaySpaces", as: ManagedDisplays.self)?(connection)?.takeRetainedValue() as? [[String: Any]] ?? []
+        current = Set(displays.compactMap { ($0["Current Space"] as? [String: Any])?["ManagedSpaceID"] as? UInt64 })
+        fullScreen = Set(displays.flatMap { $0["Spaces"] as? [[String: Any]] ?? [] }.compactMap {
+            ($0["type"] as? Int) == Self.fullScreenType ? $0["ManagedSpaceID"] as? UInt64 : nil
+        })
+    }
+
+    func placement(of window: UInt32) -> String {
+        guard let spacesForWindows, !current.isEmpty,
+              let spaces = spacesForWindows(connection, Self.allSpacesMask, [window] as CFArray)?.takeRetainedValue() as? [UInt64] else { return "unknown" }
+        if spaces.isEmpty { return "unplaced" }
+        if spaces.contains(where: { fullScreen.contains($0) }) { return "full_screen" }
+        return spaces.contains(where: { current.contains($0) }) ? "current_space" : "other_space"
+    }
 }
 
 private func runningApps() -> [AppInfo] {
@@ -695,6 +746,16 @@ private struct DesktopWindow {
     let element: AXUIElement?
     let bounds: CGRect
     let title: String
+    let onScreen: Bool
+    let placement: String
+    let appHidden: Bool
+}
+
+private func unreachableWindowError(_ window: DesktopWindow) -> HelperError? {
+    if window.appHidden { return .appHidden }
+    if window.placement == "full_screen" && !window.onScreen { return .windowFullScreen }
+    if window.placement == "other_space" { return .windowOffSpace }
+    return nil
 }
 
 private func desktopWindow(_ target: DesktopTarget) throws -> DesktopWindow {
@@ -722,7 +783,8 @@ private func desktopWindow(_ target: DesktopTarget) throws -> DesktopWindow {
     let matches = listed.isEmpty && !onscreen ? offSpaceWindows(target) : listed
     guard matches.count <= 1 else { throw HelperError.targetNotFound }
     if let match = matches.first { AXUIElementSetMessagingTimeout(match, 5) }
-    return DesktopWindow(element: matches.first, bounds: bounds, title: String((info[kCGWindowName as String] as? String ?? "").prefix(200)))
+    return DesktopWindow(element: matches.first, bounds: bounds, title: String((info[kCGWindowName as String] as? String ?? "").prefix(200)),
+                         onScreen: onscreen, placement: SpaceMap().placement(of: CGWindowID(target.windowID)), appHidden: app.isHidden)
 }
 
 // Electron builds its web-content Accessibility tree only after a client sets AXManualAccessibility. Its getter
@@ -856,28 +918,47 @@ private func setWindowSize(_ element: AXUIElement, _ size: CGSize) throws {
           AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, attributeValue) == .success else { throw HelperError.unknownOutcome }
 }
 
+private func moveWindow(_ element: AXUIElement, to frame: CGRect) throws {
+    try setWindowPosition(element, frame.origin)
+    try setWindowSize(element, frame.size)
+    let settled = try axFrame(element).origin
+    if abs(settled.x - frame.minX) > 1 || abs(settled.y - frame.minY) > 1 {
+        try setWindowPosition(element, frame.origin)
+    }
+}
+
+private func appearsOn(_ display: CGRect, _ target: DesktopTarget) -> Bool {
+    let deadline = Date().addingTimeInterval(0.75)
+    repeat {
+        if let window = try? desktopWindow(target), window.onScreen, display.contains(CGPoint(x: window.bounds.midX, y: window.bounds.midY)) { return true }
+        Thread.sleep(forTimeInterval: 0.05)
+    } while Date() < deadline
+    return false
+}
+
 private func stageDesktop(_ request: Request, target: DesktopTarget) throws -> Response {
-    guard let expected = request.expectedRevision, let display = request.display,
-          display.width > 0, display.height > 0 else { throw HelperError.invalidRequest }
-    let displayBounds = CGRect(x: display.x, y: display.y, width: display.width, height: display.height)
-    guard displayBounds.width > 0, displayBounds.height > 0 else { throw HelperError.agentDisplayUnavailable }
+    guard let expected = request.expectedRevision, let displayID = request.displayID, displayID > 0 else { throw HelperError.invalidRequest }
+    let displayBounds = CGDisplayBounds(displayID)
+    guard CGDisplayIsActive(displayID) != 0, displayBounds.width > 0, displayBounds.height > 0 else { throw HelperError.agentDisplayUnavailable }
     let (window, revision, _) = try desktopSnapshot(target)
     guard revision == expected else { throw HelperError.staleRevision }
-    guard let element = window.element else { throw HelperError.windowNotMovable }
+    if window.appHidden { throw HelperError.appHidden }
+    guard let element = window.element else { throw unreachableWindowError(window) ?? HelperError.windowNotMovable }
+    if boolAttribute(element, kAXMinimizedAttribute) { throw HelperError.windowMinimized }
+    if window.placement == "full_screen" || boolAttribute(element, "AXFullScreen") { throw HelperError.windowFullScreen }
     let original = try axFrame(element)
     try requireSettable(element, kAXPositionAttribute)
     try requireSettable(element, kAXSizeAttribute)
     let margin = 16.0
-    let origin = CGPoint(x: displayBounds.minX + margin, y: displayBounds.minY + margin)
     let size = CGSize(
         width: min(original.width, max(1, displayBounds.width - margin * 2)),
         height: min(original.height, max(1, displayBounds.height - margin * 2)),
     )
-    try setWindowPosition(element, origin)
-    try setWindowSize(element, size)
-    let settledPosition = try axFrame(element).origin
-    if abs(settledPosition.x - origin.x) > 1 || abs(settledPosition.y - origin.y) > 1 {
-        try setWindowPosition(element, origin)
+    try moveWindow(element, to: CGRect(origin: CGPoint(x: displayBounds.minX + margin, y: displayBounds.minY + margin), size: size))
+    guard appearsOn(displayBounds, target) else {
+        do { try moveWindow(element, to: original) }
+        catch { throw HelperError.unknownOutcome }
+        throw HelperError.stageNotVisible
     }
     let settled: String
     do { settled = try settledRevision { try desktopSnapshot(target).1 } }
@@ -893,13 +974,7 @@ private func unstageDesktop(_ request: Request, target: DesktopTarget) throws ->
     guard let element = window.element else { throw HelperError.targetNotFound }
     try requireSettable(element, kAXPositionAttribute)
     try requireSettable(element, kAXSizeAttribute)
-    let origin = CGPoint(x: original.x, y: original.y)
-    try setWindowPosition(element, origin)
-    try setWindowSize(element, CGSize(width: original.width, height: original.height))
-    let restoredPosition = try axFrame(element).origin
-    if abs(restoredPosition.x - origin.x) > 1 || abs(restoredPosition.y - origin.y) > 1 {
-        try setWindowPosition(element, origin)
-    }
+    try moveWindow(element, to: CGRect(x: original.x, y: original.y, width: original.width, height: original.height))
     let settled: String
     do { settled = try settledRevision { try desktopSnapshot(target).1 } }
     catch { throw HelperError.unknownOutcome }
@@ -1050,6 +1125,15 @@ private func pointerEvent(_ type: CGEventType, _ button: CGMouseButton, _ point:
     post(target.pid, event)
 }
 
+// An off-screen press satisfies Chromium's user-activation gate without hitting page content.
+private func primeUserActivation(_ target: DesktopTarget) throws {
+    let offscreen = CGPoint(x: -1, y: -1)
+    try pointerEvent(.leftMouseDown, .left, offscreen, target, click: 1, phase: 1)
+    Thread.sleep(forTimeInterval: 0.001)
+    try pointerEvent(.leftMouseUp, .left, offscreen, target, click: 1, phase: 2)
+    Thread.sleep(forTimeInterval: 0.1)
+}
+
 private func coordinateClick(_ request: Request, _ target: DesktopTarget, _ window: DesktopWindow) throws {
     guard let x = request.x, let y = request.y,
           request.button == nil || request.button == "left" || request.button == "right",
@@ -1062,14 +1146,7 @@ private func coordinateClick(_ request: Request, _ target: DesktopTarget, _ wind
         try pointerEvent(.mouseMoved, button, point, target, click: 0, phase: 2)
         Thread.sleep(forTimeInterval: 0.015)
         do {
-            if !right {
-                // An off-screen press satisfies Chromium's user-activation gate without hitting page content.
-                let offscreen = CGPoint(x: -1, y: -1)
-                try pointerEvent(.leftMouseDown, .left, offscreen, target, click: 1, phase: 1)
-                Thread.sleep(forTimeInterval: 0.001)
-                try pointerEvent(.leftMouseUp, .left, offscreen, target, click: 1, phase: 2)
-                Thread.sleep(forTimeInterval: 0.1)
-            }
+            if !right { try primeUserActivation(target) }
             let clicks = request.count ?? 1
             for count in 1...clicks {
                 try pointerEvent(right ? .rightMouseDown : .leftMouseDown, button, point, target, click: count)
@@ -1087,6 +1164,9 @@ private func coordinateDrag(_ request: Request, _ target: DesktopTarget, _ windo
     let end = try windowPoint(toX, toY, bounds: window.bounds)
     guard BackgroundPost.post != nil, BackgroundPost.setLocation != nil, BackgroundPost.setField != nil else { throw HelperError.backgroundUnavailable }
     try withBackgroundFocus(target) {
+        try pointerEvent(.mouseMoved, .left, start, target, click: 0, phase: 2)
+        Thread.sleep(forTimeInterval: 0.015)
+        do { try primeUserActivation(target) } catch { throw HelperError.unknownOutcome }
         try pointerEvent(.leftMouseDown, .left, start, target)
         do {
             for step in 1...5 {
@@ -1251,7 +1331,7 @@ private func handle(_ request: Request) async throws -> Response {
         guard revision == expected else { throw HelperError.staleRevision }
         let imageBefore = await windowFingerprint(target)
         if let path = request.element, request.action != "desktop.drag" {
-            guard let root = window.element else { throw HelperError.targetNotFound }
+            guard let root = window.element else { throw unreachableWindowError(window) ?? HelperError.targetNotFound }
             let element = try desktopElement(root, path: path)
             switch request.action {
             case "desktop.click", "desktop.key":
@@ -1379,6 +1459,31 @@ private func writeResponse(_ response: Response, to destination: URL) -> Bool {
     }
 }
 
+private let requestedSize = CGSize(width: 1920, height: 1200)
+
+private func waitForDisplayBounds(_ id: CGDirectDisplayID, size: CGSize? = nil, timeout: TimeInterval) -> CGRect {
+    let deadline = Date().addingTimeInterval(timeout)
+    var bounds = CGDisplayBounds(id)
+    while (bounds.width <= 0 || bounds.height <= 0 || (size != nil && bounds.size != size)) && Date() < deadline {
+        _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
+        bounds = CGDisplayBounds(id)
+    }
+    return bounds
+}
+
+private func configureDisplayMode(_ id: CGDirectDisplayID, size: CGSize) {
+    let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
+    guard let modes = CGDisplayCopyAllDisplayModes(id, options) as? [CGDisplayMode],
+          let mode = modes.first(where: { CGFloat($0.width) == size.width && CGFloat($0.height) == size.height }) else { return }
+    var configuration: CGDisplayConfigRef?
+    guard CGBeginDisplayConfiguration(&configuration) == .success, let configuration else { return }
+    guard CGConfigureDisplayWithDisplayMode(configuration, id, mode, nil) == .success else {
+        _ = CGCancelDisplayConfiguration(configuration)
+        return
+    }
+    _ = CGCompleteDisplayConfiguration(configuration, .forSession)
+}
+
 private func holdAgentDisplay(_ request: Request, responseURL: URL) throws {
     guard !request.owner.sessionID.isEmpty, !request.owner.callID.isEmpty,
           let controlDirectory = request.controlDirectory, (controlDirectory as NSString).isAbsolutePath,
@@ -1389,22 +1494,22 @@ private func holdAgentDisplay(_ request: Request, responseURL: URL) throws {
     let descriptor = CGVirtualDisplayDescriptor()
     descriptor.queue = DispatchQueue.main
     descriptor.name = "YCoding Agent Display"
-    descriptor.maxPixelsWide = 1920
-    descriptor.maxPixelsHigh = 1200
+    descriptor.maxPixelsWide = UInt32(requestedSize.width)
+    descriptor.maxPixelsHigh = UInt32(requestedSize.height)
     descriptor.sizeInMillimeters = CGSize(width: 300, height: 190)
     descriptor.productID = 0x1234
     descriptor.vendorID = 0x3456
     descriptor.serialNum = 0x0001
     guard let display = CGVirtualDisplay(descriptor: descriptor) else { throw HelperError.agentDisplayUnavailable }
     let settings = CGVirtualDisplaySettings()
-    settings.modes = [CGVirtualDisplayMode(width: 1920, height: 1200, refreshRate: 60)]
+    settings.modes = [CGVirtualDisplayMode(width: UInt32(requestedSize.width), height: UInt32(requestedSize.height), refreshRate: 60)]
     settings.hiDPI = 0
     guard display.apply(settings) else { throw HelperError.agentDisplayUnavailable }
-    let deadline = Date().addingTimeInterval(5)
-    var bounds = CGDisplayBounds(display.displayID)
-    while (bounds.width <= 0 || bounds.height <= 0) && Date() < deadline {
-        _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
-        bounds = CGDisplayBounds(display.displayID)
+    _ = waitForDisplayBounds(display.displayID, timeout: 5)
+    var bounds = waitForDisplayBounds(display.displayID, size: requestedSize, timeout: 1.5)
+    if bounds.size != requestedSize {
+        configureDisplayMode(display.displayID, size: requestedSize)
+        bounds = waitForDisplayBounds(display.displayID, size: requestedSize, timeout: 2)
     }
     guard display.displayID > 0, bounds.width > 0, bounds.height > 0 else { throw HelperError.agentDisplayUnavailable }
     let info = AgentDisplay(id: display.displayID, x: bounds.minX, y: bounds.minY, width: bounds.width, height: bounds.height)

@@ -73,7 +73,7 @@ describe("scoped desktop control", () => {
       const response = request.action === "desktop.list"
         ? { status: "ok", action: request.action, revision: "", apps: [{ bundle_id: desktop.bundleID, pid: desktop.pid,
           name: "Fixture", is_active: false, is_hidden: false, windows: [{ window_id: desktop.windowID, title: "Fixture",
-            bounds: { x: 0, y: 0, width: 800, height: 500 }, on_screen: false }] }] }
+            bounds: { x: 0, y: 0, width: 800, height: 500 }, on_screen: false, placement: "other_space" }] }] }
         : { status: "ok", action: request.action, revision: "native-revision" }
       await writeFile(responseFile, JSON.stringify(response))
       return { command: "fixture", exitCode: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), stdoutTruncated: false, stderrTruncated: false }
@@ -113,7 +113,7 @@ describe("scoped desktop control", () => {
   })
   test("decodes native app/window and capture metadata and treats invalid launch response as uncertain", async () => {
     await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
-      const windows = [{ window_id: 73, title: "Fixture", bounds: { x: 10, y: 20, width: 300, height: 200 }, on_screen: false }]
+      const windows = [{ window_id: 73, title: "Fixture", bounds: { x: 10, y: 20, width: 300, height: 200 }, on_screen: false, placement: "other_space" as const }]
       const locations = yield* makeLocationComputers((request) => Effect.succeed({ status: "ok" as const,
         action: request.action, revision: "rev-native",
         ...(request.action === "desktop.list" ? { apps: [{ bundle_id: "com.example.fixture", pid: 451, name: "Fixture", is_active: false, is_hidden: false, windows }] } : {}),
@@ -126,6 +126,20 @@ describe("scoped desktop control", () => {
       const launched = yield* locations.first.launch({ sessionID: owner, callID: "launch-response", bundleID: "com.example.fixture" }).pipe(Effect.exit)
       expect(Exit.isFailure(launched)).toBe(true)
       if (Exit.isFailure(launched)) expect(Cause.squash(launched.cause)).toMatchObject({ code: "unknown_outcome", outcome: "unknown" })
+      yield* locations.close
+    })))
+  })
+  test.each(["window_off_space", "window_full_screen", "window_minimized", "app_hidden"] as const)("reports the %s window state as a not-started failure", async (code) => {
+    await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+      const locations = yield* makeLocationComputers(
+        (request) => Effect.succeed({ status: "ok" as const, action: request.action, revision: "rev-native" }),
+        Stream.never,
+        undefined,
+        (action) => action === "desktop.inspect" ? { status: "error", code, message: "window state", outcome: "not_started" } : false,
+      )
+      const failed = yield* locations.first.inspect({ sessionID: owner, callID: `state-${code}`, target: desktop }).pipe(Effect.exit)
+      expect(Exit.isFailure(failed)).toBe(true)
+      if (Exit.isFailure(failed)) expect(Cause.squash(failed.cause)).toMatchObject({ code, outcome: "not_started" })
       yield* locations.close
     })))
   })
@@ -458,10 +472,7 @@ describe("native computer target ownership", () => {
     await Effect.runPromise(computer.stage({ sessionID: owner, callID: "stage-73", target: desktop, expectedRevision: "rev-73" }))
     await Effect.runPromise(computer.stage({ sessionID: owner, callID: "stage-74", target: secondWindow, expectedRevision: "rev-74" }))
     expect(requests.filter((request) => request.action === "display.hold")).toHaveLength(1)
-    expect(requests.filter((request) => request.action === "desktop.stage").map((request) => request.action === "desktop.stage" ? request.display : undefined)).toEqual([
-      { x: -1280, y: 0, width: 1280, height: 800 },
-      { x: -1280, y: 0, width: 1280, height: 800 },
-    ])
+    expect(requests.filter((request) => request.action === "desktop.stage").map((request) => request.action === "desktop.stage" ? request.displayID : undefined)).toEqual([91, 91])
     expect(await Effect.runPromise(computer.unstage({ sessionID: owner, callID: "unstage-73", target: desktop }))).toMatchObject({ revision: "unstaged-73" })
     const controlDirectory = requests.find((request) => request.action === "display.hold")?.controlDirectory
     expect(controlDirectory).toBeString()
@@ -1012,7 +1023,7 @@ const fixtureRequest = Schema.Struct({
   script: Schema.String.pipe(Schema.optional),
   controlDirectory: Schema.String.pipe(Schema.optional),
   ownerPID: Schema.Int.pipe(Schema.optional),
-  display: Schema.Unknown.pipe(Schema.optional),
+  displayID: Schema.Int.pipe(Schema.optional),
   originalFrame: Schema.Unknown.pipe(Schema.optional),
 })
 const decodeFixtureRequest = Schema.decodeUnknownSync(Schema.fromJsonString(fixtureRequest))
@@ -1026,7 +1037,7 @@ function makeLocationComputers(
   onLaunch?: (args: ReadonlyArray<string>, signal?: AbortSignal) => void,
   invalidResponse?: (action: typeof fixtureRequest.Type.action) => boolean | {
     readonly status: "error"
-    readonly code: "focus_restore_failed" | "quit_pending" | "background_unavailable" | "stale_revision" | "unknown_outcome" | "target_not_found"
+    readonly code: "focus_restore_failed" | "quit_pending" | "background_unavailable" | "stale_revision" | "unknown_outcome" | "target_not_found" | "window_off_space" | "window_full_screen" | "window_minimized" | "app_hidden"
     readonly message: string
     readonly outcome: "unknown" | "not_started"
   },

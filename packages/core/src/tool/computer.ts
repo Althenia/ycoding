@@ -6,6 +6,7 @@ import { ToolFailure } from "@ycoding-ai/ai"
 import { Effect, Schema } from "effect"
 import { Computer } from "../computer"
 import { MacOSComputer } from "../computer/macos"
+import { WindowPlacement } from "../computer/types"
 import { LocationMutation } from "../location-mutation"
 import { PermissionV2 } from "../permission"
 import { SessionGuardrail } from "../session/guardrail"
@@ -174,13 +175,13 @@ export const Output = Schema.Union([
     apps: Schema.Array(Schema.Struct({ bundle_id: Schema.String, pid: Schema.Int, name: Schema.String,
       is_active: Schema.Boolean, is_hidden: Schema.Boolean,
       windows: Schema.Array(Schema.Struct({ window_id: Schema.Int, title: Schema.String,
-        bounds: Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }), on_screen: Schema.Boolean })),
+        bounds: Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }), on_screen: Schema.Boolean, placement: WindowPlacement })),
     })).pipe(Schema.optional),
     pid: Schema.Int.pipe(Schema.optional),
     exited: Schema.Boolean.pipe(Schema.optional),
     windows: Schema.Union([
       Schema.Array(Schema.Struct({ window_id: Schema.String, index: Schema.Int, revision: Schema.String, tabs: Schema.Array(Schema.Struct({ index: Schema.Int, title: Schema.String, url: Schema.String, active: Schema.Boolean })) })),
-      Schema.Array(Schema.Struct({ window_id: Schema.Int, title: Schema.String, bounds: Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }), on_screen: Schema.Boolean })),
+      Schema.Array(Schema.Struct({ window_id: Schema.Int, title: Schema.String, bounds: Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }), on_screen: Schema.Boolean, placement: WindowPlacement })),
     ]).pipe(Schema.optional),
     tab_index: Schema.Int.pipe(Schema.optional),
     value: Schema.String.check(Schema.makeFilter((value) => new TextEncoder().encode(value).byteLength <= 16_384, { expected: "evaluated value no larger than 16384 UTF-8 bytes" })).pipe(Schema.optional),
@@ -233,7 +234,7 @@ export const Plugin = {
           name,
           Tool.make({
             description:
-              "macOS desktop: list once for exact bundle_id/pid/window_id; never guess. Launch if absent. Quit only when asked; unsaved-work prompts belong to the app. Inspect first; prefer AX paths off-Space. Safari off-Space page capture can be blank while AX reads/links work; command shortcuts and menu items may be ignored. Capture only if AX is insufficient; frames and pixels share one window-local space. Off-Space Electron capture/pixel/type automatically use a PID-owned bridge when available. Use launch remote_debugging:true only when explicitly requested for a fuse-off Electron app; it gracefully quits/relaunches and leaves a localhost debug port open. Chain returned settled revisions. On effect unchanged do not repeat; use AX or report no effect. On stale_revision inspect once and retry once; on unknown_outcome, focus_restore_failed, or inspector_close_failed inspect before mutation, never replay blindly. Native raw input briefly shifts key focus then restores it; concurrent user keystrokes may reach the target. No window raising, Space switch, hardware cursor warp, or clipboard. iTerm and Finder need explicit targets. Safari/Chrome tabs: webbrowser.tabs first, then pass window_id, 1-based tab_index, and that window's revision; navigate/new_tab URLs must be absolute http(s); JavaScript runs only through webbrowser.eval (and Safari back/forward/reload), which needs the browser's Allow JavaScript from Apple Events setting. Stage a window on a private agent display for off-Space Chromium/Electron/WebKit pixel input and capture; unstage it when done.",
+              "macOS desktop: list once for exact bundle_id/pid/window_id and Space placement; never guess. Launch if absent. Quit only when asked; unsaved-work prompts belong to the app. Inspect first; prefer AX paths off-Space. Safari off-Space page capture can be blank while AX reads/links work; command shortcuts and menu items may be ignored. Capture only if AX is insufficient; frames and pixels share one window-local space. Off-Space Electron capture/pixel/type automatically use a PID-owned bridge when available. Use launch remote_debugging:true only when explicitly requested for a fuse-off Electron app; it gracefully quits/relaunches and leaves a localhost debug port open. Chain returned settled revisions. On effect unchanged do not repeat; use AX or report no effect. On stale_revision inspect once and retry once; on unknown_outcome, focus_restore_failed, or inspector_close_failed inspect before mutation, never replay blindly. Native raw input briefly shifts key focus then restores it; concurrent user keystrokes may reach the target. No window raising, Space switch, hardware cursor warp, or clipboard. iTerm and Finder need explicit targets. Safari/Chrome tabs: webbrowser.tabs first, then pass window_id, 1-based tab_index, and that window's revision; navigate/new_tab URLs must be absolute http(s); JavaScript runs only through webbrowser.eval (and Safari back/forward/reload), which needs the browser's Allow JavaScript from Apple Events setting. Stage a window on a private agent display for off-Space Chromium/Electron/WebKit pixel input and capture; unstage it when done.",
             input: Input,
             output: Output,
             toModelOutput: ({ output }) =>

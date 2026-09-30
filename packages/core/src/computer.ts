@@ -394,12 +394,7 @@ function makeCoordinator(invoke: InvokeNative, platform: NodeJS.Platform): Coord
           (signal) => Effect.gen(function* () {
             const owner = displayOwners.get(locationToken) ?? (yield* startDisplayOwner(locationToken, input, signal))
             if (signal.aborted) return yield* new OwnershipError({ message: "Computer call was cancelled; inspect the target again" })
-            return MacOSComputer.stageRequest({ sessionID: input.sessionID, callID: input.callID }, input.target, input.expectedRevision, {
-              x: owner.display.x,
-              y: owner.display.y,
-              width: owner.display.width,
-              height: owner.display.height,
-            })
+            return MacOSComputer.stageRequest({ sessionID: input.sessionID, callID: input.callID }, input.target, input.expectedRevision, owner.display.id)
           }),
           input.expectedRevision,
           (result) => {
