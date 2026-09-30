@@ -258,9 +258,11 @@ function AssistantParts(props: { readonly parts: () => readonly AssistantPart[] 
   const keys = createMemo(() => groups().map((group) => group.key))
   const group = (key: string) => groups().find((entry) => entry.key === key)!
   return (
-    <For each={keys()}>
-      {(key) => <PartView parts={() => group(key).parts} />}
-    </For>
+    <div class="transcript-message__parts">
+      <For each={keys()}>
+        {(key) => <PartView parts={() => group(key).parts} />}
+      </For>
+    </div>
   )
 }
 
