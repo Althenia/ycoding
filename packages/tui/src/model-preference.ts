@@ -29,14 +29,9 @@ function variants(value: unknown) {
   return Object.fromEntries(
     Object.entries(value).flatMap(([key, item]) => {
       if (key.length === 0 || typeof item !== "string" || item.length === 0) return []
-      const variant = normalizeModelVariant(item)
-      return variant === undefined ? [] : ([[key, variant]] as const)
+      return [[key, item] as const]
     }),
   )
-}
-
-export function normalizeModelVariant(value: string | undefined) {
-  return value === "default" ? undefined : value
 }
 
 export function modelPreferenceKey(model: ModelPreferenceModel) {
@@ -44,13 +39,11 @@ export function modelPreferenceKey(model: ModelPreferenceModel) {
 }
 
 export function cycleModelVariant(current: string | undefined, variants: string[]) {
-  const named = variants.filter((variant) => normalizeModelVariant(variant) !== undefined)
-  if (named.length === 0) return undefined
-  const value = normalizeModelVariant(current)
-  if (value === undefined) return named[0]
-  const index = named.indexOf(value)
-  if (index === -1 || index === named.length - 1) return undefined
-  return named[index + 1]
+  if (variants.length === 0) return undefined
+  if (current === undefined) return variants[0]
+  const index = variants.indexOf(current)
+  if (index === -1 || index === variants.length - 1) return undefined
+  return variants[index + 1]
 }
 
 export function decodeModelPreference(value: unknown): ModelPreferenceDocument {
@@ -112,11 +105,10 @@ export function createModelPreferenceRepository(filePath: string) {
     },
     saveVariant(model: ModelPreferenceModel, value: string | undefined) {
       const key = modelPreferenceKey(model)
-      const next = normalizeModelVariant(value)
       return update((current) => {
         const variant = { ...current.variant }
-        if (next === undefined) delete variant[key]
-        if (next !== undefined) variant[key] = next
+        if (value === undefined) delete variant[key]
+        if (value !== undefined) variant[key] = value
         return { variant }
       })
     },

@@ -244,7 +244,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           workspaceID: session.location.workspaceID,
           providerID: resolved.ref.providerID,
           modelID: resolved.ref.id,
-          variant: resolved.ref.variant ?? "default",
+          variant: resolved.ref.variant,
           policyRevision: CACHE_POLICY_REVISION,
           permissions,
           system: contextEvent.system,

@@ -455,7 +455,7 @@ const layer = Layer.effect(
                 existing.agent === prepared.target.id &&
                 existing.model.providerID === prepared.resolved.ref.providerID &&
                 existing.model.id === prepared.resolved.ref.id &&
-                (existing.model.variant ?? "default") === (prepared.resolved.ref.variant ?? "default") &&
+                existing.model.variant === prepared.resolved.ref.variant &&
                 existing.prompt_digest === promptDigest &&
                 existing.background === input.background &&
                 existing.delivery === "steer"

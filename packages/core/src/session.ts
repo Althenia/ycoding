@@ -589,7 +589,7 @@ const layer = Layer.effect(
     const sameModel = (current: ModelV2.Ref | undefined, target: ModelV2.Ref) =>
       current?.providerID === target.providerID &&
       current.id === target.id &&
-      (current.variant ?? "default") === (target.variant ?? "default")
+      current.variant === target.variant
     const compactionPolicy = Effect.fnUntraced(function* (session: SessionSchema.Info) {
       return yield* Config.Service.pipe(
         Effect.provide(locations.get(session.location)),

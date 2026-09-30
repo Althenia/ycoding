@@ -112,7 +112,7 @@ test("creates a distinct BTW child per command, seeds history, and admits with t
     api,
     parentID: "ses_main",
     messages: history,
-    model: { providerID: "anthropic", id: "claude-sonnet", variant: "default" },
+    model: { providerID: "anthropic", id: "claude-sonnet" },
     text: "Anything else?",
   })
 
@@ -123,7 +123,7 @@ test("creates a distinct BTW child per command, seeds history, and admits with t
   expect(created.map((child) => child.id)).toEqual(["ses_btw_1", "ses_btw_2"])
   expect(creates.map((input) => input.model)).toEqual([
     { providerID: "openai", id: "gpt-5.6", variant: "high" },
-    { providerID: "anthropic", id: "claude-sonnet", variant: "default" },
+    { providerID: "anthropic", id: "claude-sonnet" },
   ])
   expect(synthetic[0]).toMatchObject({
     sessionID: "ses_btw_1",

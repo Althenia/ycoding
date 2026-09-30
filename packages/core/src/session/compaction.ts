@@ -124,7 +124,7 @@ const make = (dependencies: Dependencies): Interface => {
       workspaceID: input.session.location.workspaceID,
       providerID: modelRef.providerID,
       modelID: modelRef.id,
-      variant: modelRef.variant ?? "default",
+      variant: modelRef.variant,
       policyRevision: CACHE_POLICY_REVISION,
       permissions: [],
       system: baseRequest.system,

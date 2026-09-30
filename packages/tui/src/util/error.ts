@@ -112,7 +112,7 @@ function modelRefText(value: unknown): string | undefined {
   const providerID = typeof value.providerID === "string" ? value.providerID : undefined
   const id = typeof value.id === "string" ? value.id : undefined
   if (!providerID || !id) return undefined
-  const variant = typeof value.variant === "string" && value.variant !== "default" ? `#${value.variant}` : ""
+  const variant = typeof value.variant === "string" ? `#${value.variant}` : ""
   return `${providerID}/${id}${variant}`
 }
 

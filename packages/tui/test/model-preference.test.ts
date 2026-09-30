@@ -9,7 +9,7 @@ test("repairs known model preferences and preserves unrelated fields", () => {
       unrelated: { keep: true },
       recent: [{ providerID: "openai", modelID: "gpt-5", ignored: true }, null],
       favorite: "malformed",
-      variant: { "openai/gpt-5": "high", default: "default", invalid: 42 },
+      variant: { "openai/gpt-5": "high", empty: "", invalid: 42 },
     }),
   ).toEqual({
     unrelated: { keep: true },
@@ -19,7 +19,7 @@ test("repairs known model preferences and preserves unrelated fields", () => {
   })
 })
 
-test("preserves a named none variant and normalizes default to the base model", () => {
+test("preserves named none and default variants as ordinary ids", () => {
   expect(
     decodeModelPreference({
       recent: [],
@@ -30,7 +30,7 @@ test("preserves a named none variant and normalizes default to the base model", 
         "local/tiel": "fast",
       },
     }).variant,
-  ).toEqual({ "local/qwopus": "none", "local/tiel": "fast" })
+  ).toEqual({ "local/qwopus": "none", "local/ornith": "default", "local/tiel": "fast" })
 })
 
 test("atomically serializes patches and variant updates", async () => {
@@ -53,7 +53,7 @@ test("atomically serializes patches and variant updates", async () => {
     variant: { "openai/org/gpt-5": "high", "anthropic/claude/sonnet": "low" },
   })
 
-  await repository.saveVariant(openai, "default")
+  await repository.saveVariant(openai, undefined)
   expect(await repository.resolveVariant(openai)).toBeUndefined()
   expect((await Bun.file(file).json()).variant).toEqual({ "anthropic/claude/sonnet": "low" })
 })

@@ -67,7 +67,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
             workspaceID: selection.session.location.workspaceID,
             providerID: selected.ref.providerID,
             modelID: selected.ref.id,
-            variant: selected.ref.variant ?? "default",
+            variant: selected.ref.variant,
             policyRevision: CACHE_POLICY_REVISION,
             permissions,
             system: contextEvent.system,

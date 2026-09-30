@@ -10,7 +10,6 @@ import { useTheme } from "../../context/theme"
 import { getGlyph } from "../../ui/glyph"
 import { Locale } from "../../util/locale"
 import { formatDuration } from "../../util/format"
-import { normalizeModelVariant } from "../../model-preference"
 import { BrandMark } from "../../component/logo"
 import { DOT_TRAIL_FRAMES, Spinner } from "../../component/spinner"
 
@@ -103,7 +102,6 @@ export function headerSegments(input: SessionHeaderIdentity & { width: number })
   // provider identity and drops whole at the same band as the branch rather than being shortened.
   const profile = input.width >= 100 ? input.profile : undefined
   const model = input.width >= 120 ? input.model : shortModel(input.model)
-  const variant = normalizeModelVariant(input.variant)
   const ordered: Array<[SessionHeaderSegmentKey, string | undefined]> = [
     ["path", path],
     ["branch", branch],
@@ -113,7 +111,7 @@ export function headerSegments(input: SessionHeaderIdentity & { width: number })
     ["daybreak", model && input.daybreak
       ? `Daybreak ${input.daybreak.program === "daybreak_blue" ? "Blue" : "Red"}${input.daybreak.active ? "" : " (inactive)"}`
       : undefined],
-    ["variant", variant],
+    ["variant", input.variant],
   ]
   return ordered.flatMap(([key, label]) => (label ? [{ key, label }] : []))
 }
@@ -123,10 +121,8 @@ export function pendingModelVariant(
   pending: Pick<SessionHeaderIdentity, "pendingModel" | "pendingVariant">,
 ) {
   if (!pending.pendingModel) return
-  const currentVariant = normalizeModelVariant(current.variant)
-  const pendingVariant = normalizeModelVariant(pending.pendingVariant)
-  if (current.model === pending.pendingModel && currentVariant === pendingVariant) return
-  return `→ ${pending.pendingModel}${pendingVariant ? ` · ${pendingVariant}` : ""}`
+  if (current.model === pending.pendingModel && current.variant === pending.pendingVariant) return
+  return `→ ${pending.pendingModel}${pending.pendingVariant ? ` · ${pending.pendingVariant}` : ""}`
 }
 
 export function pendingVariantSelection(pending: { variant?: string } | undefined, current: string | undefined) {
@@ -364,16 +360,13 @@ export function Header(
 }
 
 function resolveIdentity(props: SessionHeaderIdentity): ResolvedSessionHeaderIdentity {
-  if (props.agent && props.model && props.variant) return { ...props, variant: normalizeModelVariant(props.variant) }
+  if (props.agent && props.model && props.variant) return props
   const route = useRoute().data
   const data = useData()
-  if (route.type === "home") {
-    return { ...props, variant: normalizeModelVariant(props.variant) }
-  }
-  if (route.type !== "session") return { ...props, variant: normalizeModelVariant(props.variant) }
+  if (route.type !== "session") return props
   const session = data.session.get(route.sessionID)
   const sessionModel = session?.model
-  if (!session || !sessionModel) return { ...props, variant: normalizeModelVariant(props.variant) }
+  if (!session || !sessionModel) return props
   const model = data.location
     .model
     .list(session.location)
@@ -387,7 +380,7 @@ function resolveIdentity(props: SessionHeaderIdentity): ResolvedSessionHeaderIde
     ...props,
     agent: props.agent ?? (session.agent ? Locale.titlecase(session.agent) : undefined),
     model: props.model ?? modelLabel,
-    variant: normalizeModelVariant(props.variant ?? sessionModel.variant),
+    variant: props.variant ?? sessionModel.variant,
     runningShells: data.shell.list(session.location).filter((shell) => shell.status === "running").length,
   }
 }

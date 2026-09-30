@@ -147,7 +147,6 @@ const assembleCacheRequest = (
       directory: "/repo",
       providerID: catalog.providerID,
       modelID: catalog.id,
-      variant: "default",
       policyRevision: CACHE_POLICY_REVISION,
       permissions: [],
       system: cacheSystem,
@@ -435,7 +434,7 @@ describe("SessionRunnerModel", () => {
     }),
   );
 
-  it.effect("treats none Session variant as the base model", () =>
+  it.effect("rejects a none Session variant the model does not offer like any other variant", () =>
     Effect.gen(function* () {
       const catalog = model(ProviderV2.aisdk("@ai-sdk/openai"), {
         settings: { baseURL: "https://openai.example/v1" },
@@ -463,12 +462,10 @@ describe("SessionRunnerModel", () => {
         location: { directory: AbsolutePath.make("/project") },
       });
 
-      const resolved = yield* SessionRunnerModel.resolve(session, catalog);
-      // "none" normalizes to the base model: no variant is selected and the
-      // request uses the provider's default route, not an unavailable variant.
-      expect(resolved).toMatchObject({
-        id: "api-test-model",
-        route: { id: "openai-responses" },
+      const failure = yield* SessionRunnerModel.resolve(session, catalog).pipe(Effect.flip);
+      expect(failure).toMatchObject({
+        _tag: "SessionRunnerModel.VariantUnavailableError",
+        variant: "none",
       });
     }),
   );
@@ -492,7 +489,7 @@ describe("SessionRunnerModel", () => {
       const selected = yield* SessionRunnerModel.withVariant(catalog, ModelV2.VariantID.make("none"));
       const resolved = yield* SessionRunnerModel.fromCatalogModel(selected);
       const prepared = yield* LLMClient.prepare<OpenAIResponsesBody>(LLM.request({ model: resolved, prompt: "Hello" }));
-      const namespace = (variant = "default") => SessionRunnerCache.promptCacheNamespace({
+      const namespace = (variant?: string) => SessionRunnerCache.promptCacheNamespace({
         projectID: "project",
         directory: "/repo",
         providerID: catalog.providerID,
@@ -1118,7 +1115,6 @@ describe("SessionRunnerModel", () => {
         providerID: "test-provider",
         modelID: "test-model",
         apiModelID: resolved.id,
-        variant: "default",
         policyRevision: CACHE_POLICY_REVISION,
         permissions: [],
         system: [],
@@ -1162,7 +1158,6 @@ describe("SessionRunnerModel", () => {
         providerID: "test-provider",
         modelID: "test-model",
         apiModelID: resolved.id,
-        variant: "default",
         policyRevision: CACHE_POLICY_REVISION,
         permissions: [],
         system: [],
@@ -1311,7 +1306,6 @@ describe("SessionRunnerModel", () => {
         providerID: "openai",
         modelID: "gpt-5.6-luna",
         apiModelID: resolved.id,
-        variant: "default",
         policyRevision: CACHE_POLICY_REVISION,
         permissions: [],
         system: [],

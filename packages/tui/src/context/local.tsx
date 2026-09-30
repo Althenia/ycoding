@@ -15,7 +15,6 @@ import {
   createModelPreferenceRepository,
   cycleModelVariant,
   modelPreferenceKey,
-  normalizeModelVariant,
   type ModelPreference,
   type ModelPreferenceModel,
 } from "../model-preference"
@@ -249,7 +248,7 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
         if (pending) return pending
         const saved = sessionID ? data.session.get(sessionID)?.model : undefined
         if (saved)
-          return { providerID: saved.providerID, modelID: saved.id, variant: normalizeModelVariant(saved.variant) }
+          return { providerID: saved.providerID, modelID: saved.id, variant: saved.variant }
         const configured = agent.current()?.model
         const value = sessionID
           ? getFirstValidModel(
@@ -258,7 +257,7 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
             )
           : currentModel()
         if (!value) return undefined
-        return { ...value, variant: normalizeModelVariant(modelStore.variant[modelPreferenceKey(value)]) }
+        return { ...value, variant: modelStore.variant[modelPreferenceKey(value)] }
       }
       const selectedModel = () => {
         const value = selection()
@@ -298,7 +297,7 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
             return
           }
           const explicit = "variant" in input
-          const requested = normalizeModelVariant(input.variant)
+          const requested = input.variant
           if (explicit && requested !== undefined && !info.variants.some((item) => item.id === requested)) {
             toast.show({
               message: `Variant ${requested} is not available for ${target.providerID}/${target.modelID}`,
@@ -342,7 +341,7 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
           const pending = pendingTargets()[sessionID]
           if (!pending) return
           if (pending.providerID !== model.providerID || pending.modelID !== model.id) return
-          if (normalizeModelVariant(pending.variant) !== normalizeModelVariant(model.variant)) return
+          if (pending.variant !== model.variant) return
           setModelStore("recent", recentModels(pending, modelStore.recent))
           save()
           clearPendingTarget(sessionID)

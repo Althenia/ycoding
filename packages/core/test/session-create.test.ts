@@ -824,22 +824,33 @@ describe("SessionV2.create", () => {
     }),
   )
 
-  it.effect("treats an omitted variant as the default variant", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const model = ModelV2.Ref.make({ id: ModelV2.ID.make("sonnet"), providerID: ProviderV2.ID.anthropic })
-      const created = yield* session.create({ location, model })
+  it.effect("treats a variant named default as an ordinary variant", () =>
+    withTmp((directory) =>
+      Effect.gen(function* () {
+        const session = yield* SessionV2.Service
+        const base = ModelV2.Ref.make({ id: ModelV2.ID.make("sonnet"), providerID: ProviderV2.ID.anthropic })
+        const created = yield* session.create({
+          location: Location.Ref.make({ directory: AbsolutePath.make(directory) }),
+          model: base,
+        })
+        yield* Catalog.Service.use((catalog) =>
+          catalog.transform((editor) => {
+            editor.provider.update(base.providerID, (provider) => {
+              provider.package = ProviderV2.aisdk("@ai-sdk/anthropic")
+            })
+            editor.model.update(base.providerID, base.id, (entry) => {
+              entry.limit = { context: 128_000, output: 16_384 }
+              entry.variants = [{ id: ModelV2.VariantID.make("default") }]
+            })
+          }),
+        ).pipe(Effect.provide(LocationServiceMap.Service.get(created.location)))
 
-      yield* session.switchModel({
-        sessionID: created.id,
-        model: ModelV2.Ref.make({ ...model, variant: ModelV2.VariantID.make("default") }),
-      })
+        const selected = ModelV2.Ref.make({ ...base, variant: ModelV2.VariantID.make("default") })
+        expect(yield* session.switchModel({ sessionID: created.id, model: selected })).toEqual({ status: "switched" })
 
-      const { db } = yield* Database.Service
-      expect(
-        yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all().pipe(Effect.orDie),
-      ).toHaveLength(1)
-    }),
+        expect((yield* session.get(created.id)).model).toEqual(selected)
+      }),
+    ),
   )
 
   it.effect("rejects a model switch for a missing Session", () =>

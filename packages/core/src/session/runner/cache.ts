@@ -16,7 +16,7 @@ export interface PromptCacheNamespaceInput {
   readonly workspaceID?: string
   readonly providerID: string
   readonly modelID: string
-  readonly variant: string
+  readonly variant?: string
   readonly policyRevision: string
   readonly permissions: PermissionV2.Ruleset
   readonly system: LLMRequest["system"]

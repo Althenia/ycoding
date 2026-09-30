@@ -36,7 +36,6 @@ import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, type JSX } from "@opentui/solid"
 import { errorMessage } from "../../util/error"
-import { normalizeModelVariant } from "../../model-preference"
 import { useDialog } from "../../ui/dialog"
 import { DialogIntegration } from "../dialog-integration"
 import { DialogModel } from "../dialog-model"
@@ -1945,7 +1944,7 @@ export function Prompt(props: PromptProps) {
         submission.payload.modelSelectionPending &&
         (session?.model?.providerID !== submission.payload.model.providerID ||
           session?.model?.id !== submission.payload.model.id ||
-          normalizeModelVariant(session?.model?.variant) !== normalizeModelVariant(submission.payload.model.variant))
+          session?.model?.variant !== submission.payload.model.variant)
       if (session?.revert) {
         updateOperation(currentOperation.id, "Committing revert…")
         const error = await client.api.session.revert.commit({ sessionID }, requestOptions(currentOperation)).then(
@@ -2397,7 +2396,7 @@ export function Prompt(props: PromptProps) {
         if (
           current?.providerID !== model.providerID ||
           current?.id !== model.id ||
-          normalizeModelVariant(current?.variant) !== normalizeModelVariant(model.variant)
+          current?.variant !== model.variant
         ) {
           try {
             await client.api.session.switchModel({ sessionID, model })

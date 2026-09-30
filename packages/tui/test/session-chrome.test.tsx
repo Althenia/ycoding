@@ -217,18 +217,15 @@ test("uses the last assistant message model only when the session model is absen
   expect(headerModelRef(undefined, previousMessage)).toEqual(previousMessage)
 })
 
-test("never displays the default variant sentinel", () => {
-  expect(headerSegments({ width: 160, model: "openai/GPT-5.6 Terra", variant: "default" }).map((segment) => segment.key)).toEqual([
-    "model",
-  ])
+test("displays no variant segment for an absent variant", () => {
   expect(headerSegments({ width: 160, model: "openai/GPT-5.6 Terra", variant: undefined }).map((segment) => segment.key)).toEqual([
     "model",
   ])
   expect(
-    pendingModelVariant({ model: "openai/GPT-5.6 Terra", variant: "default" }, { pendingModel: "openai/GPT-5.6 Terra", pendingVariant: "xhigh" }),
+    pendingModelVariant({ model: "openai/GPT-5.6 Terra", variant: undefined }, { pendingModel: "openai/GPT-5.6 Terra", pendingVariant: "xhigh" }),
   ).toBe("→ openai/GPT-5.6 Terra · xhigh")
   expect(
-    pendingModelVariant({ model: "openai/GPT-5.6 Terra", variant: undefined }, { pendingModel: "openai/GPT-5.6 Terra", pendingVariant: "default" }),
+    pendingModelVariant({ model: "openai/GPT-5.6 Terra", variant: undefined }, { pendingModel: "openai/GPT-5.6 Terra", pendingVariant: undefined }),
   ).toBeUndefined()
 })
 

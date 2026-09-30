@@ -24,7 +24,6 @@ const providers: RunProvider[] = [
 describe("run variant shared", () => {
   test("prefers cli then session then saved variants", () => {
     expect(resolveVariant("max", "high", "low", ["low", "high"])).toBe("max")
-    expect(resolveVariant("default", "high", "low", ["low", "high"])).toBeUndefined()
     expect(resolveVariant(undefined, "high", "low", ["low", "high"])).toBe("high")
     expect(resolveVariant(undefined, "missing", "low", ["low", "high"])).toBe("low")
   })
@@ -44,22 +43,22 @@ describe("run variant shared", () => {
     expect(resolveVariant("max", undefined, undefined, [])).toBe("max")
   })
 
-  test("cycles through variants and back to default", () => {
+  test("cycles through variants and back to no variant", () => {
     expect(cycleVariant(undefined, ["low", "high"])).toBe("low")
-    expect(cycleVariant("default", ["low", "high"])).toBe("low")
     expect(cycleVariant("low", ["low", "high"])).toBe("high")
     expect(cycleVariant("high", ["low", "high"])).toBeUndefined()
     expect(cycleVariant(undefined, [])).toBeUndefined()
   })
 
-  test("cycles through an offered none variant and keeps default as the base model", () => {
+  test("cycles through an offered none variant and treats a catalog variant named default as an ordinary id", () => {
     expect(cycleVariant(undefined, ["none", "low", "high"])).toBe("none")
     expect(cycleVariant("none", ["none", "low", "high"])).toBe("low")
     expect(cycleVariant("low", ["none", "low", "high"])).toBe("high")
     expect(cycleVariant("high", ["none", "low", "high"])).toBeUndefined()
-    expect(cycleVariant(undefined, ["default", "low", "high"])).toBe("low")
+    expect(cycleVariant(undefined, ["default", "low", "high"])).toBe("default")
+    expect(cycleVariant("default", ["default", "low", "high"])).toBe("low")
     expect(resolveVariant("none", undefined, undefined, ["none", "low", "high"])).toBe("none")
-    expect(resolveVariant("default", "none", "low", ["none", "low", "high"])).toBeUndefined()
+    expect(resolveVariant(undefined, "default", "low", ["default", "low"])).toBe("default")
     expect(decodeModelPreference({ variant: { "openai/gpt-6-luna": "none" } }).variant).toEqual({
       "openai/gpt-6-luna": "none",
     })

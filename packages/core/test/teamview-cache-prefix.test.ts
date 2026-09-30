@@ -10,7 +10,6 @@ const input = {
   providerID: "github-copilot",
   modelID: "gpt-5.6",
   apiModelID: "gpt-5.6",
-  variant: "default",
   policyRevision: CACHE_POLICY_REVISION,
   permissions: [{ action: "read", resource: "**", effect: "allow" }] satisfies PermissionV2.Ruleset,
   system: [],

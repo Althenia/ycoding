@@ -190,27 +190,17 @@ const providerOptions = (
   return undefined;
 };
 
-const normalizeVariant = (
-  variantID: ModelV2.VariantID | undefined,
-  model?: ModelV2.Info,
-) => {
-  if (variantID === "default") return undefined;
-  if (variantID === "none" && !model?.variants?.some((item) => item.id === "none")) return undefined;
-  return variantID;
-};
-
 export const withVariant = (
   model: ModelV2.Info,
   variantID: ModelV2.VariantID | undefined,
 ): Effect.Effect<ModelV2.Info, VariantUnavailableError> => {
-  const id = normalizeVariant(variantID, model);
-  const variant = model.variants?.find((item) => item.id === id);
-  if (!variant && id !== undefined)
+  const variant = model.variants?.find((item) => item.id === variantID);
+  if (!variant && variantID !== undefined)
     return Effect.fail(
       new VariantUnavailableError({
         providerID: model.providerID,
         modelID: model.id,
-        variant: id,
+        variant: variantID,
       }),
     );
   return Effect.succeed(
@@ -576,7 +566,7 @@ const layer = Layer.effect(
           },
           connection,
         );
-        const variant = normalizeVariant(session.model?.variant, selected);
+        const variant = session.model?.variant;
         return {
           model,
           ref: ModelV2.Ref.make({

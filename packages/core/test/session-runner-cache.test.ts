@@ -17,7 +17,6 @@ const base = {
   providerID: "openai",
   modelID: "gpt-5.6",
   apiModelID: "gpt-5.6",
-  variant: "default",
   policyRevision: CACHE_POLICY_REVISION,
   permissions: [{ action: "read", resource: "**", effect: "allow" }] satisfies PermissionV2.Ruleset,
   system: [SystemPart.make("System after hook")],
@@ -48,7 +47,7 @@ const namespaceWithSchema = (inputSchema: Readonly<Record<string, unknown>>) =>
 
 test("pins the canonical prompt-cache namespace digest", () => {
   expect(SessionRunnerCache.promptCacheNamespace(base)).toBe(
-    "33b8a467597e0b90e8e0480631e32f6fe9fdc146d1419dedd0365ec95b7bb343",
+    "87f7196969720e74e3d2ad02a0926e06bff1037aeb1d47dc516638a7fed3a6e0",
   )
 })
 
@@ -56,7 +55,7 @@ test("keeps ordinary keys stable while isolating compaction cache scope", () => 
   const normal = SessionRunnerCache.promptCacheNamespace(base)
   const compaction = SessionRunnerCache.promptCacheNamespace({ ...base, scope: "compaction" })
 
-  expect(normal).toBe("33b8a467597e0b90e8e0480631e32f6fe9fdc146d1419dedd0365ec95b7bb343")
+  expect(normal).toBe("87f7196969720e74e3d2ad02a0926e06bff1037aeb1d47dc516638a7fed3a6e0")
   expect(compaction).not.toBe(normal)
 })
 
@@ -160,7 +159,7 @@ test("canonicalizes unordered tool discovery and schema keys in the provider req
 
 test("uses deterministic code-point ordering for integer-like and non-BMP keys", () => {
   expect(namespaceWithSchema({ "10": "ten", "2": "two", "\u{10000}": "astral", "\u{e000}": "bmp" })).toBe(
-    "d161839876dda2ab02f6520544e01e811634103578ced22879cdb63107d91bd2",
+    "d86ed155497d942455d1f71c087324e0cabd58b5f5ea387713a01e5270818b31",
   )
 })
 

@@ -1096,7 +1096,7 @@ describe("SessionRunnerCache prompt cache namespace identity", () => {
     directory: "/project",
     providerID: "openai",
     modelID: "gpt-5.6",
-    variant: "default",
+    variant: undefined,
     policyRevision: "revision",
     permissions: [],
     system: [],
@@ -1119,6 +1119,11 @@ describe("SessionRunnerCache prompt cache namespace identity", () => {
   })
   test("stays stable for the same model identity", () => {
     expect(SessionRunnerCache.promptCacheNamespace(base)).toBe(SessionRunnerCache.promptCacheNamespace(base))
+  })
+  test("hashes an absent variant as absent, never as a named variant", () => {
+    expect(SessionRunnerCache.promptCacheNamespace(base)).not.toBe(
+      SessionRunnerCache.promptCacheNamespace({ ...base, variant: "default" }),
+    )
   })
 })
 

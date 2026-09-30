@@ -112,7 +112,7 @@ const make = (dependencies: Dependencies) => {
       workspaceID: input.session.location.workspaceID,
       providerID: resolved.ref.providerID,
       modelID: resolved.ref.id,
-      variant: resolved.ref.variant ?? "default",
+      variant: resolved.ref.variant,
       policyRevision: CACHE_POLICY_REVISION,
       permissions: agent.permissions,
       system: baseRequest.system,

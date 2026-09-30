@@ -838,7 +838,6 @@ it.effect("uses bounded checkpoint TOON requests without asking the model to aut
               directory: "/project",
               providerID: model.provider,
               modelID: model.id,
-              variant: "default",
               policyRevision: CACHE_POLICY_REVISION,
               permissions: [],
               system: request.system,

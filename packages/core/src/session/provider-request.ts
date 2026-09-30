@@ -230,7 +230,7 @@ function defaultInvalidation(
   if (previous.source === "compaction" || compactedSincePrevious) return "compaction-reset"
   if (previous.model && (previous.model.providerID !== input.model.providerID || previous.model.id !== input.model.id))
     return "model-switched"
-  if (previous.model && (previous.model.variant ?? "default") !== (input.model.variant ?? "default"))
+  if (previous.model && previous.model.variant !== input.model.variant)
     return "model-variant-switched"
   if (previous.promptCacheKey === input.promptCacheKey) return "provider-not-reported"
   if (previous.systemDigest !== input.systemDigest) return "system-prefix-changed"

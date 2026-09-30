@@ -8,7 +8,7 @@
 // variant and the persisted file.
 import { createSession, sessionVariant, type RunSession, type SessionMessages } from "./session.shared"
 import type { RunInput, RunProvider } from "./types"
-import { cycleModelVariant, normalizeModelVariant } from "../model-preference"
+import { cycleModelVariant } from "../model-preference"
 
 export function modelInfo(providers: RunProvider[] | undefined, model: NonNullable<RunInput["model"]>) {
   const provider = providers?.find((item) => item.id === model.providerID)
@@ -40,10 +40,9 @@ export function pickVariant(model: RunInput["model"], input: RunSession | Sessio
 // value cannot be validated and is kept. An empty array means the catalog
 // resolved the model and it offers no variants, so any stored value is dropped.
 function fitVariant(value: string | undefined, variants: string[] | undefined): string | undefined {
-  const normalized = normalizeModelVariant(value)
-  if (normalized === undefined) return undefined
-  if (variants === undefined) return normalized
-  return variants.includes(normalized) ? normalized : undefined
+  if (value === undefined) return undefined
+  if (variants === undefined) return value
+  return variants.includes(value) ? value : undefined
 }
 
 // Picks the active variant. CLI flag wins, then valid session history, then the
@@ -56,7 +55,7 @@ export function resolveVariant(
   variants: string[] | undefined,
 ): string | undefined {
   if (input !== undefined) {
-    return normalizeModelVariant(input)
+    return input
   }
 
   return fitVariant(session, variants) ?? fitVariant(saved, variants)

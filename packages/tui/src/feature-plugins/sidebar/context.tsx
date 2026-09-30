@@ -97,7 +97,7 @@ export function SidebarCacheContent(props: {
     if (!latest) return undefined
     const selected = props.selectedModel?.()
     if (selected && (selected.providerID !== latest.model.providerID || selected.id !== latest.model.id ||
-      (selected.variant ?? "default") !== (latest.model.variant ?? "default"))) return undefined
+      selected.variant !== latest.model.variant)) return undefined
     const rate = latest.tokensPerSecond >= 1
       ? Math.round(latest.tokensPerSecond).toLocaleString("en-US") : latest.tokensPerSecond.toPrecision(2)
     const label = Locale.truncateWidth(`${rate} tok/s`, Math.max(1, rowWidth() - "Speed".length - 1))

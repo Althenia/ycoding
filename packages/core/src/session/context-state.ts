@@ -125,7 +125,7 @@ export function selectEntries<Entry extends { readonly seq?: number; readonly me
     const summary = yield* modelSummary(db, state)
     const remote = yield* modelRemote(db, state)
     const matchingRemote = remote && model &&
-      remote.provider === model.providerID && remote.modelID === model.id && (remote.variant ?? "default") === (model.variant ?? "default")
+      remote.provider === model.providerID && remote.modelID === model.id && remote.variant === model.variant
       ? remote : undefined
     const retained = matchingRemote && new Set(matchingRemote.retained.map((item) => item.messageID))
     const active = summary
