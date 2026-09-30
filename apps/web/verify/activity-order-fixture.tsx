@@ -1,11 +1,10 @@
 import { render } from "solid-js/web"
-import { RouterProvider, useRouter } from "../src/router/router"
+import { RouterProvider } from "@tanstack/solid-router"
+import { createAppRouter } from "../src/app"
 import { ThemeProvider } from "../src/theme/theme-store"
-import { RemoteProvider } from "../src/remote/context"
 import type { RemoteHttp } from "../src/remote/http"
 import { createRemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
-import { RemoteShell } from "../src/remote/ui/shell"
 import "../src/styles/tokens.css"
 import "../src/styles/base.css"
 import "../src/styles/remote.css"
@@ -23,11 +22,8 @@ const http: RemoteHttp = {
 }
 const store = createRemoteStore({ http, createTransport: (_id, handlers) => createRemoteTransport({ url: relay.href, handlers }), batchMs: 1 })
 Object.assign(window, { activityStore: store })
-function Fixture() {
-  const router = useRouter()
-  router.navigate("/remote/sessions", { replace: true })
-  Object.assign(window, { activityOpen: (id: string) => router.navigate(`/remote#session=${id}`) })
-  return <RemoteShell path={router.path} />
-}
-render(() => <RouterProvider><ThemeProvider><RemoteProvider createStore={() => store}><Fixture /></RemoteProvider></ThemeProvider></RouterProvider>, document.getElementById("root")!)
+window.history.replaceState(null, "", "/remote/sessions")
+const router = createAppRouter({ createRemoteStore: () => store })
+Object.assign(window, { activityOpen: (id: string) => router.navigate({ to: "/remote", hash: `session=${id}` }) })
+render(() => <ThemeProvider><RouterProvider router={router} /></ThemeProvider>, document.getElementById("root")!)
 await store.load()

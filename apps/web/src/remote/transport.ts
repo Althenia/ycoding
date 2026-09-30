@@ -7,6 +7,7 @@ import {
   type RemoteNoticeFrame,
   type RemoteNoticeOperation,
   type RemoteOperation,
+  type RemotePriorityHint,
   type RemoteRelayToClient,
 } from "@ycoding-ai/remote"
 
@@ -14,12 +15,12 @@ export type RemoteRequestOutcome =
   | { readonly status: "ok"; readonly value: unknown }
   | { readonly status: "failed"; readonly error: RemoteError }
   | { readonly status: "unknown"; readonly error: RemoteError }
-  | { readonly status: "unavailable"; readonly reason: "not-connected" | "in-flight-limit" | "request-limit" }
+  | { readonly status: "unavailable"; readonly reason: "not-connected" | "in-flight-limit" | "request-limit" | "cancelled" }
 
 export type RemoteTransportStatus =
   | { readonly kind: "idle" }
   | { readonly kind: "connecting"; readonly attempt: number }
-  | { readonly kind: "open" }
+  | { readonly kind: "open"; readonly rttMs?: number }
   | { readonly kind: "reconnecting"; readonly attempt: number; readonly delayMs: number }
   | { readonly kind: "closed"; readonly code: number; readonly reason: string; readonly retryable: boolean }
 
@@ -27,7 +28,7 @@ export type RemoteTransportHandlers = {
   readonly onStatus?: (status: RemoteTransportStatus) => void
   readonly onSessions?: () => void
   readonly onSessionStatus?: (status: { readonly running: readonly string[]; readonly attention: readonly string[]; readonly outstanding?: readonly string[]; readonly failed?: readonly string[] }) => void
-  readonly onEvent?: (sessionID: string, event: unknown) => void
+  readonly onEvents?: (sessionID: string, events: readonly unknown[]) => void
   readonly onNotices?: (frame: RemoteNoticeFrame) => void
   /** Called after a successful reconnect so read-only state can be reloaded. */
   readonly onReconnect?: () => void
@@ -38,6 +39,8 @@ export type RemoteTransportRequest = {
   readonly input?: Readonly<Record<string, unknown>>
   /** Overrides the default outcome timeout. Zero waits indefinitely. */
   readonly timeoutMs?: number
+  /** Aborting settles the request as cancelled and asks the relay to drop it. */
+  readonly signal?: AbortSignal
 }
 
 export type RemoteTransport = {
@@ -45,6 +48,7 @@ export type RemoteTransport = {
   readonly close: (code?: number, reason?: string) => void
   readonly request: (operation: RemoteOperation | RemoteNoticeOperation, request?: RemoteTransportRequest) => Promise<RemoteRequestOutcome>
   readonly status: () => RemoteTransportStatus
+  readonly setPriority: (mode: RemotePriorityHint["mode"]) => void
 }
 
 export type RemoteTransportOptions = {
@@ -61,6 +65,7 @@ export type RemoteTransportOptions = {
   readonly requestTimeoutMs?: number
   readonly maxInFlight?: number
   readonly random?: () => number
+  readonly now?: () => number
 }
 
 const defaultTimeoutMs = 30_000
@@ -77,6 +82,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
   const createSocket = options.createSocket ?? ((url: string) => new WebSocket(url))
   const schedule = options.schedule ?? defaultSchedule
   const random = options.random ?? Math.random
+  const now = options.now ?? (() => performance.now())
   const resetDelayMs = options.resetDelayMs ?? 500
   const maxDelayMs = options.maxDelayMs ?? 15_000
   const pingIntervalMs = options.pingIntervalMs ?? 30_000
@@ -98,7 +104,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
   let listening = false
   let removeSocketListeners: (() => void) | undefined
   let cancelOutbound: (() => void) | undefined
-  const outbound: { readonly frame: unknown; readonly onSend?: () => void }[] = []
+  const outbound: { readonly frame: unknown; readonly requestID?: string; readonly onSend?: () => void }[] = []
   const sentAt: number[] = []
 
   const pending = new Map<
@@ -106,6 +112,10 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
     { readonly resolve: (outcome: RemoteRequestOutcome) => void; cancel: () => void; sent: boolean; chunks?: Map<number, string> }
   >()
   let nextID = 0
+  let wantedPriority: RemotePriorityHint["mode"] = visibility?.hidden ? "background" : "interactive"
+  let sentPriority: RemotePriorityHint["mode"] = "interactive"
+  let pingSentAt: number | undefined
+  let roundTripMs: number | undefined
 
   const publish = (status: RemoteTransportStatus) => {
     current = status
@@ -131,10 +141,19 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
   }
 
   const stopListening = () => {
+    visibility?.removeEventListener("visibilitychange", followVisibility)
     visibility?.removeEventListener("visibilitychange", resume)
     network?.removeEventListener("online", resume)
     listening = false
   }
+
+  const setPriority = (mode: RemotePriorityHint["mode"]) => {
+    wantedPriority = mode
+    if (mode === sentPriority) return
+    if (send({ type: "priority", mode })) sentPriority = mode
+  }
+
+  const followVisibility = () => setPriority(visibility?.hidden ? "background" : "interactive")
 
   const resume = () => {
     if (closedByUs) return
@@ -157,6 +176,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
     probing = true
     const id = probeID
     send({ type: "ping" }, () => {
+      pingSentAt = now()
       if (socket !== owner || id !== probeID || !probing || visibility?.hidden) return
       timer = schedule(() => {
         if (socket !== owner || id !== probeID || !probing || visibility?.hidden) return
@@ -196,6 +216,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
     if (socket !== undefined && socket.readyState <= 1) return
     closedByUs = false
     if (!listening) {
+      visibility?.addEventListener("visibilitychange", followVisibility)
       visibility?.addEventListener("visibilitychange", resume)
       network?.addEventListener("online", resume)
       listening = true
@@ -218,13 +239,23 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
       connectedOnce = true
       attempt = 0
       sentAt.length = 0
+      pingSentAt = undefined
+      roundTripMs = undefined
+      sentPriority = "interactive"
       publish({ kind: "open" })
+      setPriority(wantedPriority)
       if (reconnected) handlers.onReconnect?.()
       resetLiveness(next)
     }
     const received = (message: MessageEvent) => {
       if (socket !== next || closedByUs) return
       resetLiveness(next)
+      if (pingSentAt !== undefined && current.kind === "open") {
+        const sample = now() - pingSentAt
+        pingSentAt = undefined
+        roundTripMs = roundTripMs === undefined ? sample : 0.3 * sample + 0.7 * roundTripMs
+        publish({ kind: "open", rttMs: Math.round(roundTripMs) })
+      }
       handleFrame(typeof message.data === "string" ? message.data : "")
     }
     const errored = () => {
@@ -250,19 +281,19 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
     cancelOutbound?.()
     cancelOutbound = undefined
     if (socket === undefined || socket.readyState !== 1) return
-    while (outbound.length > 0 && clientFrameDelay(sentAt, performance.now()) === 0) {
+    while (outbound.length > 0 && clientFrameDelay(sentAt, now()) === 0) {
       const entry = outbound.shift()!
       entry.onSend?.()
       socket.send(JSON.stringify(entry.frame))
-      sentAt.push(performance.now())
+      sentAt.push(now())
     }
     if (outbound.length > 0)
-      cancelOutbound = schedule(flushOutbound, clientFrameDelay(sentAt, performance.now()))
+      cancelOutbound = schedule(flushOutbound, clientFrameDelay(sentAt, now()))
   }
 
-  const send = (frame: unknown, onSend?: () => void): boolean => {
+  const send = (frame: unknown, onSend?: () => void, requestID?: string): boolean => {
     if (socket === undefined || socket.readyState !== 1) return false
-    outbound.push({ frame, onSend })
+    outbound.push({ frame, requestID, onSend })
     flushOutbound()
     return true
   }
@@ -289,7 +320,11 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
       return
     }
     if (frame.type === "event") {
-      handlers.onEvent?.(frame.sessionID, frame.event)
+      handlers.onEvents?.(frame.sessionID, [frame.event])
+      return
+    }
+    if (frame.type === "events") {
+      handlers.onEvents?.(frame.sessionID, frame.events)
       return
     }
     if (frame.type === "notice.added" || frame.type === "notice.removed" || frame.type === "notice.cleared" || frame.type === "notice.unavailable" || frame.type === "notice.offline" || frame.type === "notice.present") {
@@ -344,6 +379,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
   }
 
   const request: RemoteTransport["request"] = (operation, input = {}) => {
+    if (input.signal?.aborted) return Promise.resolve({ status: "unavailable", reason: "cancelled" })
     if (socket === undefined || socket.readyState !== 1) {
       return Promise.resolve({ status: "unavailable", reason: "not-connected" })
     }
@@ -352,9 +388,22 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
     }
     nextID += 1
     const id = `req_${nextID}_${Math.floor(random() * 1_000_000).toString(36)}`
-    return new Promise<RemoteRequestOutcome>((resolve) => {
+    return new Promise<RemoteRequestOutcome>((settled) => {
       const timeout = input.timeoutMs ?? requestTimeoutMs
+      const resolve = (outcome: RemoteRequestOutcome) => {
+        input.signal?.removeEventListener("abort", abort)
+        settled(outcome)
+      }
       const entry = { resolve, cancel: () => {}, sent: false }
+      const abort = () => {
+        if (!pending.delete(id)) return
+        entry.cancel()
+        const queued = outbound.findIndex((item) => item.requestID === id)
+        if (queued >= 0) outbound.splice(queued, 1)
+        if (entry.sent) send({ type: "cancel", id })
+        resolve({ status: "unavailable", reason: "cancelled" })
+      }
+      input.signal?.addEventListener("abort", abort, { once: true })
       pending.set(id, entry)
       const sent = send(
         {
@@ -375,6 +424,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
               })
             }, timeout)
         },
+        id,
       )
       if (sent) return
       pending.delete(id)
@@ -404,6 +454,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
     },
     request,
     status: () => current,
+    setPriority,
   }
 }
 

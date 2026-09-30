@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { SITEMAP_PATHS } from "../src/seo/sitemap"
+import { PUBLIC_ROUTE_PATTERNS, REMOTE_ROUTE_PATHS } from "../src/routes"
 import { REMOTE_SCENARIOS } from "./remote-scenarios"
 import { launchBrowser } from "./cdp"
 
@@ -30,11 +31,10 @@ afterAll(async () => {
 
 describe("web design contract inventory", () => {
   test("covers every current public route and named router entry", async () => {
-    const routeSource = await Bun.file(new URL("../src/app.tsx", import.meta.url)).text()
-    const routerPaths = [...routeSource.matchAll(/path:\s*"([^"]+)"/g)].map((match) => match[1]!)
+    const routerPaths = [...PUBLIC_ROUTE_PATTERNS]
     const missing = missingRoutePatterns(SITEMAP_PATHS, routerPaths)
     expect(missing).toEqual([])
-    expect(routerPaths.filter((path) => !path.startsWith("/remote") && !path.endsWith("/*slug") && !SITEMAP_PATHS.includes(path))).toEqual([])
+    expect(routerPaths.filter((path) => !path.endsWith("/*slug") && !SITEMAP_PATHS.includes(path))).toEqual([])
     expect(SITEMAP_PATHS.length).toBeGreaterThan(0)
 
     const page = await requireBrowser().openPage()
@@ -67,13 +67,7 @@ describe("web design contract inventory", () => {
   })
 
   test("renders every live remote fixture state within its route and viewport", async () => {
-    const routeSource = await Bun.file(new URL("../src/app.tsx", import.meta.url)).text()
-    const routerPaths = [...routeSource.matchAll(/path:\s*"([^"]+)"/g)].map((match) => match[1]!)
-    const remoteRouteList = routeSource.match(/const remoteRoutes = \[([^\]]*)\] as const/)?.[1]
-    expect(remoteRouteList).toBeDefined()
-    expect(routeSource).toContain("remoteRoutes.some((route) => route === router.path())")
-    const listedRoutes = [...(remoteRouteList ?? "").matchAll(/"(\/remote(?:\/[^"]*)?)"/g)].map((match) => match[1]!)
-    const remoteRoutes = [...new Set([...routerPaths, ...listedRoutes].filter((path) => path.startsWith("/remote")))]
+    const remoteRoutes: readonly string[] = REMOTE_ROUTE_PATHS
     const fixtureViews = new Set(REMOTE_SCENARIOS.map((scenario) => fixturePath(scenario.view)))
     expect([...fixtureViews].filter((path) => !remoteRoutes.includes(path))).toEqual([])
     expect(remoteRoutes.filter((path) => !fixtureViews.has(path))).toEqual([])

@@ -1,12 +1,15 @@
 import { render } from "solid-js/web"
 import { createSignal, For, Show } from "solid-js"
+import { useStore } from "@tanstack/solid-store"
 import { RemoteProvider } from "../src/remote/context"
 import { Composer } from "../src/remote/ui/composer"
 import { MessageRow } from "../src/remote/ui/conversation"
 import { NewSessionComposer } from "../src/remote/ui/new-session"
 import { ToastLayer } from "../src/remote/ui/notifications"
 import { catalogKey, type CatalogView } from "../src/remote/catalog"
-import type { RemoteStore, RemoteStoreState } from "../src/remote/store"
+import { createRemoteHttp } from "../src/remote/http"
+import { remoteKeys, type RemoteLink } from "../src/remote/queries"
+import { createRemoteStore, type RemoteStore, type RemoteStoreState } from "../src/remote/store"
 import { applySessionEvent, createSessionView } from "../src/remote/projection"
 import "../src/styles/tokens.css"
 import "../src/styles/base.css"
@@ -40,21 +43,33 @@ const requests: { operation: string; input: unknown }[] = []
 let resolveCompact: ((accepted: boolean) => void) | undefined
 const workspace = { id: "work_one", projectID: "project_hash", directory: "/workspace/ycoding", name: "YCoding" }
 const other = { id: "work_two", projectID: "other_hash", directory: "/workspace/other", name: "Other repository" }
-const [state, setState] = createSignal<RemoteStoreState>({
-  connection: { kind: "connected", deviceName: "Fixture" }, transport: { kind: "open" }, workspaceStatus: "ready", workspaces: [workspace, other],
+const base = createRemoteStore({ http: createRemoteHttp(), createTransport: () => { throw new Error("Composer fixture does not connect") } })
+const seed: RemoteStoreState = {
+  ...base.state(),
+  connection: { kind: "connected", deviceName: "Fixture" }, transport: { kind: "open" }, activeDeviceID: "dev_fixture",
   selectedSessionInfo: { id: "ses_fixture", title: "Fixture", agent: "gsd", model: new URLSearchParams(location.search).get("model") === "spectrum" ? { providerID: "openai", id: "effort-spectrum", variant: "medium" } : { providerID: "openai", id: new URLSearchParams(location.search).get("model") === "fast" ? "gpt-6-sol-fast" : "gpt-6-sol", variant: "high" }, updatedAt: 1, archived: false },
   activeSessionID: "ses_fixture", drafts: {}, mutations: [], mutationToasts: [], catalogs: { [catalogKey({ sessionID: "ses_fixture" })]: catalog, [catalogKey({ workspaceID: "work_one" })]: catalog, [catalogKey({ workspaceID: "work_two" })]: catalog },
   view: { ...createSessionView("ses_fixture"), autonomy: { mode: "normal", yolo: 0 } },
   devices: [], advertised: [], sessions: [], sessionGroups: [], sessionQuery: "", sessionFilter: "all", sessionListStatus: "ready", sessionPageLoading: false, sessionHasNext: false, sessionHasPrevious: false,
   teamCues: [], notifications: [], noticeSync: { status: "ready", total: 0, loaded: 0, hidden: 0, loadingMore: false, message: undefined }, unhandledEvents: 0,
-  usage: { providers: { status: "idle" }, summary: { status: "idle" }, reports: {} },
-  keepAwake: { read: "idle" },
-})
-const listeners = new Set<() => void>()
-const update = (next: RemoteStoreState) => { setState(next); listeners.forEach((listener) => listener()) }
+}
+base.container.setState(() => seed)
+const state = () => base.container.state
+const update = (next: RemoteStoreState) => base.container.setState(() => next)
+let workspaceGate: Promise<void> | undefined
+let releaseWorkspaces: (() => void) | undefined
+const link: RemoteLink = {
+  request: async (_scope, operation) => {
+    if (operation !== "workspace.list") return { status: "unavailable", reason: "not-connected" }
+    await workspaceGate
+    return { status: "ok", value: { data: [workspace, other] } }
+  },
+  recoveries: () => 0,
+  recovered: async () => false,
+}
 const store: RemoteStore = {
-  state, subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener) },
-  load: async () => {}, dispose: () => {}, loadCatalog: async () => {}, loadWorkspaces: async () => {}, loadUsage: async () => {}, loadUsageReport: async () => {},
+  ...base, link,
+  load: async () => {}, dispose: () => {}, loadCatalog: async () => {},
   findFiles: async (_target, query) => {
     if (query === "slow") {
       await new Promise((resolve) => setTimeout(resolve, 400))
@@ -72,7 +87,6 @@ const store: RemoteStore = {
     return new URLSearchParams(location.search).get("compactGate") === "1"
       ? new Promise<boolean>((resolve) => { resolveCompact = resolve }) : true
   },
-  loadKeepAwake: async () => {}, setKeepAwake: async () => false,
   cancelUpload: () => { requests.push({ operation: "upload.cancel", input: {} }); update({ ...state(), upload: undefined, uploadError: "Attachment upload cancelled. Files were not sent." }) },
   interrupt: async () => { requests.push({ operation: "session.interrupt", input: {} }) },
   createSession: async (input: unknown) => { requests.push({ operation: "session.create", input }); return "ses_created" },
@@ -92,7 +106,11 @@ Object.assign(window, { composerRequests: () => requests, composerState: () => s
 Object.assign(window, { composerSwitchSession: () => update({ ...state(), activeSessionID: "ses_other", view: createSessionView("ses_other") }) })
 Object.assign(window, { composerResolveCompact: (accepted = true) => resolveCompact?.(accepted), composerSetDraft: store.setDraft })
 Object.assign(window, { composerClearAutonomy: () => update({ ...state(), view: { ...state().view!, autonomy: undefined } }) })
-Object.assign(window, { composerSetWorkspaceLoading: (loading: boolean) => update({ ...state(), workspaceStatus: loading ? "loading" : "ready" }) })
+Object.assign(window, { composerSetWorkspaceLoading: (loading: boolean) => {
+  if (!loading) return releaseWorkspaces?.()
+  workspaceGate = new Promise<void>((resolve) => { releaseWorkspaces = () => { workspaceGate = undefined; resolve() } })
+  void base.queryClient.refetchQueries({ queryKey: remoteKeys.workspaces({ deviceID: "dev_fixture", generation: 0 }), type: "all" })
+} })
 Object.assign(window, { composerSetGoalStatus: (status: "active" | "completed" | "stopped" | "exhausted" | null) => update({ ...state(), view: { ...state().view!, autonomy: { mode: status === "active" ? "goal" : "normal", yolo: 3, ...(status ? { goal: { text: "Finish task", status, iteration: 2, noProgress: 0, maxNoProgress: 3 } } : {}) } } }) })
 Object.assign(window, { composerSetGoalPending: (pending: boolean) => update({ ...state(), mutations: pending
   ? [{ id: "goal_fixture", kind: "goal", label: "Set goal", state: "sending", sessionID: "ses_fixture", operation: "session.goal.set", input: { goal: "Finish task" } }]
@@ -120,14 +138,15 @@ Object.assign(window, { composerSetDiagnostics: (status: "known" | "unknown" | "
 } })
 
 function Fixture() {
+  const current = useStore(base.container)
   const [created, setCreated] = createSignal("")
   const [running, setRunning] = createSignal(false)
   return <RemoteProvider createStore={() => store}>
     <main class="composer-fixture" style={{ "max-width": "900px", margin: "auto", padding: "16px" }}>
       <button type="button" onClick={() => setRunning(!running())}>Toggle running</button>
-      <Composer sessionID={state().activeSessionID} running={running()} canSend />
+      <Composer sessionID={current().activeSessionID} running={running()} canSend />
       <ToastLayer sessionID="ses_fixture" onOpenSession={() => {}} />
-      <div class="transcript" aria-label="Fixture transcript"><For each={state().view?.messages ?? []}>{(message) => <MessageRow message={() => message} />}</For></div>
+      <div class="transcript" aria-label="Fixture transcript"><For each={current().view?.messages ?? []}>{(message) => <MessageRow message={() => message} />}</For></div>
       <NewSessionComposer onCreated={setCreated} />
       <Show when={created()}><output>Created {created()}</output></Show>
     </main>

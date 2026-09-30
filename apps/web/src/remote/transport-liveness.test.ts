@@ -35,6 +35,8 @@ class Visibility extends Signals {
   change(hidden: boolean) { this.hidden = hidden; this.dispatchEvent(new Event("visibilitychange")) }
 }
 
+const pings = (socket: Socket) => socket.sent.filter((frame) => frame === '{"type":"ping"}').length
+
 function fixture() {
   const document = new Visibility()
   const window = new Signals()
@@ -112,13 +114,13 @@ test("a hidden page gets a fresh response window on foreground and network retur
     f.advance(1000)
     expect(f.sockets[0]!.closes).toEqual([])
     f.document.change(false)
-    expect(f.sockets[0]!.sent).toHaveLength(2)
+    expect(pings(f.sockets[0]!)).toBe(2)
     f.advance(9)
     f.sockets[0]!.message()
     f.advance(1)
     expect(f.sockets[0]!.closes).toEqual([])
     f.window.dispatchEvent(new Event("online"))
-    expect(f.sockets[0]!.sent).toHaveLength(3)
+    expect(pings(f.sockets[0]!)).toBe(3)
     f.advance(10)
     expect(f.sockets[0]!.closes).toHaveLength(1)
   } finally { f.transport.close() }

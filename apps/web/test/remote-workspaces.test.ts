@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
+import { loadWorkspaces, queriesOf, workspacesOf } from "./remote-queries"
+import { remoteKeys } from "../src/remote/queries"
 import { pacedFlowTimeoutMs, startRelayDouble, waitFor, type RelayHandlerOutcome, type RelayRequestHandler } from "./relay-double"
 
 const workspace = { id: "workspace_alpha", projectID: "project_alpha", directory: "/workspace/alpha", name: "Alpha" }
@@ -50,7 +52,7 @@ describe("remote workspace session creation", () => {
       return { ok: true, value: { uri: `ycoding-upload://${String(request.input?.uploadID)}` } }
     })
     try {
-      await h.store.loadWorkspaces()
+      await loadWorkspaces(h.store)
       expect(await h.store.createSession({ workspaceID: workspace.id, prompt: { text: "Inspect screenshot", files: [{ uri: "data:image/png;base64,AAAA", name: "capture.png" }] } })).toBe(created.id)
       const operations = h.relay.requests.filter((request) => ["session.create", "session.attachment.upload", "session.prompt"].includes(request.operation))
       expect(operations.map((request) => request.operation)).toEqual(["session.create", "session.attachment.upload", "session.prompt"])
@@ -65,7 +67,7 @@ describe("remote workspace session creation", () => {
       ? failed ? { ok: false, code: "invalid_message", message: "Upload failed" } : { ok: true, value: { uri: `ycoding-upload://${String(request.input?.uploadID)}` } }
       : request.operation === "session.get" && request.sessionID === created.id ? { ok: true, value: { data: created } } : "default")
     try {
-      await h.store.loadWorkspaces()
+      await loadWorkspaces(h.store)
       expect(await h.store.createSession({ workspaceID: workspace.id, prompt: { text: "Inspect", files: [{ uri: "data:image/png;base64,AAAA", name: "capture.png" }] } })).toBeUndefined()
       expect(h.store.state().sessionCreation).toMatchObject({ id: created.id, status: "failed", message: "Upload failed" })
       expect(h.relay.requests.some((request) => request.operation === "session.prompt")).toBe(false)
@@ -99,9 +101,8 @@ describe("remote workspace session creation", () => {
       ])
     try {
       await h.store.selectSession("ses_a")
-      await h.store.loadWorkspaces()
-      expect(h.store.state().workspaces).toEqual([workspace, other])
-      expect(h.store.state().workspaceStatus).toBe("ready")
+      await loadWorkspaces(h.store)
+      expect(workspacesOf(h.store)).toMatchObject({ status: "success", data: [workspace, other] })
       expect(await h.store.createSession({ workspaceID: workspace.id })).toBe(created.id)
       expect(h.relay.requests.find((request) => request.operation === "session.create")?.input).toEqual({ id: created.id, workspace: workspace.id })
       expect(h.store.state().sessions.some((session) => session.id === created.id && session.directory === workspace.directory)).toBe(true)
@@ -128,7 +129,7 @@ describe("remote workspace session creation", () => {
     try {
       await h.store.selectSession("ses_a")
       h.store.setDraft("ses_a", "Keep while offline")
-      await h.store.loadWorkspaces()
+      await loadWorkspaces(h.store)
       const creating = h.store.createSession({ workspaceID: workspace.id })
       await waitFor(() => h.relay.requests.some((request) => request.operation === "session.create"))
       h.relay.setMe({
@@ -156,32 +157,32 @@ describe("remote workspace session creation", () => {
       ? fail ? { ok: false, code: "internal_error", message: "Inventory unavailable" } : { ok: true, value: { data: [] } }
       : "default")
     try {
-      await h.store.loadWorkspaces()
-      expect(h.store.state().workspaceStatus).toBe("ready")
-      expect(h.store.state().workspaces).toEqual([])
+      await loadWorkspaces(h.store)
+      expect(workspacesOf(h.store)).toMatchObject({ status: "success", data: [] })
       expect(await h.store.createSession({ workspaceID: "workspace_unknown" })).toBeUndefined()
       expect(h.relay.requests.some((request) => request.operation === "session.create")).toBe(false)
       fail = true
-      await h.store.loadWorkspaces()
-      expect(h.store.state().workspaceStatus).toBe("error")
-      expect(h.store.state().workspaceError).toContain("Inventory unavailable")
+      expect(await loadWorkspaces(h.store).catch((error: Error) => error.message)).toContain("Inventory unavailable")
+      expect(workspacesOf(h.store)?.status).toBe("error")
     } finally { await h.stop() }
   })
 
   test("keeps the latest workspace read when a previous response arrives later", async () => {
     const delayed = Promise.withResolvers<RelayHandlerOutcome>()
     let reads = 0
-    const h = await setup((request) => request.operation === "workspace.list"
-      ? ++reads === 1 ? delayed.promise : { ok: true, value: { data: [other] } }
-      : "default")
+    const h = await setup((request) => {
+      if (request.operation !== "workspace.list") return "default"
+      reads += 1
+      return reads === 2 ? delayed.promise : { ok: true, value: { data: reads === 1 ? [workspace] : [other] } }
+    })
     try {
-      const first = h.store.loadWorkspaces()
-      await waitFor(() => reads === 1)
-      await h.store.loadWorkspaces()
+      await loadWorkspaces(h.store)
+      const first = h.store.queryClient.refetchQueries({ queryKey: remoteKeys.workspaces(queriesOf(h.store).scope()), type: "all" })
+      await waitFor(() => reads === 2)
+      await h.store.queryClient.refetchQueries({ queryKey: remoteKeys.workspaces(queriesOf(h.store).scope()), type: "all" })
       delayed.resolve({ ok: true, value: { data: [workspace] } })
       await first
-      expect(h.store.state().workspaces).toEqual([other])
-      expect(h.store.state().workspaceStatus).toBe("ready")
+      expect(workspacesOf(h.store)).toMatchObject({ status: "success", fetchStatus: "idle", data: [other] })
     } finally { delayed.resolve("default"); await h.stop() }
   })
 
@@ -191,7 +192,7 @@ describe("remote workspace session creation", () => {
       ? { ok: true, value: { data: [workspace] } }
       : request.operation === "session.create" ? delayed.promise : "default")
     try {
-      await h.store.loadWorkspaces()
+      await loadWorkspaces(h.store)
       const creating = h.store.createSession({ workspaceID: workspace.id })
       await waitFor(() => h.relay.requests.some((request) => request.operation === "session.create"))
       h.store.connect("dev_other")
@@ -199,7 +200,7 @@ describe("remote workspace session creation", () => {
       delayed.resolve({ ok: true, value: { data: created } })
       await waitFor(() => h.store.state().connection.kind === "connected")
       expect(h.store.state().sessionCreation).toBeUndefined()
-      expect(h.store.state().workspaces).toEqual([])
+      expect(workspacesOf(h.store)).toBeUndefined()
       expect(h.store.state().sessions.some((session) => session.id === created.id)).toBe(false)
     } finally { delayed.resolve("default"); await h.stop() }
   })
@@ -211,7 +212,7 @@ describe("remote workspace session creation", () => {
       : request.operation === "session.create" ? delayed.promise
       : request.operation === "session.get" ? { ok: true, value: { data: created } } : "default")
     try {
-      await h.store.loadWorkspaces()
+      await loadWorkspaces(h.store)
       const creating = h.store.createSession({ workspaceID: workspace.id })
       await waitFor(() => h.relay.requests.some((request) => request.operation === "session.create"))
       expect(await h.store.createSession({ workspaceID: workspace.id })).toBeUndefined()
@@ -233,7 +234,7 @@ describe("remote workspace session creation", () => {
       : request.operation === "session.create" ? ++attempts === 1 ? "close" : { ok: true, value: { data: created } }
       : request.operation === "session.get" ? { ok: false, code: "session_not_allowed", message: "Session not found" } : "default")
     try {
-      await h.store.loadWorkspaces()
+      await loadWorkspaces(h.store)
       await h.store.createSession({ workspaceID: workspace.id })
       await waitFor(() => h.store.state().connection.kind === "connected")
       expect(attempts).toBe(1)
@@ -247,7 +248,7 @@ describe("remote workspace session creation", () => {
       ? { ok: true, value: { data: [workspace] } }
       : request.operation === "session.create" ? { ok: true, value: { data: { ...created, location: { directory: other.directory } } } } : "default")
     try {
-      await h.store.loadWorkspaces()
+      await loadWorkspaces(h.store)
       expect(await h.store.createSession({ workspaceID: workspace.id })).toBeUndefined()
       expect(h.store.state().sessionCreation?.status).toBe("unknown")
       expect(h.store.state().sessions.some((session) => session.id === created.id)).toBe(false)

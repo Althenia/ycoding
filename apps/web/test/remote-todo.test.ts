@@ -12,7 +12,7 @@ const second = { content: "Second", status: "in_progress", priority: "medium" } 
 test("a connector that never answers todo.list does not hold Session hydration or raise a state notice", async () => {
   const pending = Promise.withResolvers<{ readonly status: "ok"; readonly value: unknown }>()
   const store = createRemoteStore({ http: createRemoteHttp(), createTransport: (_deviceID, handlers) => ({
-    connect: () => handlers.onStatus?.({ kind: "open" }), close: () => {}, status: () => ({ kind: "open" }),
+    connect: () => handlers.onStatus?.({ kind: "open" }), close: () => {}, setPriority: () => {}, status: () => ({ kind: "open" }),
     request: async (operation) => {
       if (operation === "session.snapshot") return { status: "ok" as const, value: {
         sourceEpoch: "epoch_1", session: { id: "ses_a", title: "Root", time: { created: 1, updated: 1 } },
@@ -103,6 +103,7 @@ test("a superseded same-Session read cannot overwrite reconnect's newer todo lis
       return {
         connect: () => callbacks.onStatus?.({ kind: "open" }),
         close: () => {},
+        setPriority: () => {},
         status: () => ({ kind: "open" }),
         request: async (operation) => {
           if (operation === "session.snapshot") return { status: "ok" as const, value: {

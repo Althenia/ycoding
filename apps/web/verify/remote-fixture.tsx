@@ -9,7 +9,6 @@
  */
 import { render } from "solid-js/web"
 import { onMount } from "solid-js"
-import { RouterProvider } from "../src/router/router"
 import { ThemeProvider } from "../src/theme/theme-store"
 import { App } from "../src/app"
 import { pwaInstall } from "../src/pwa/install"
@@ -140,6 +139,7 @@ const sessions = [...(remoteScenarioData?.sessions ?? defaultSessions), ...(acco
   location: { directory: "/workspace/db-pruner" }, time: { created: ago(15), updated: ago(2) }, running: true,
 }] : [])]
 const inventoryCount = Math.min(15_000, Math.max(0, Number(accountParams.get("inventoryCount") ?? 0) || 0))
+const inventoryPageRows = Math.min(400, Math.max(0, Number(accountParams.get("pageRows") ?? 0) || 0))
 const sessionListDelayMs = Number(accountParams.get("sessionListDelay") ?? 0)
 let statusRunning = new Set(inventoryCount > 0 ? ["ses_inventory_14000"] : sessions.filter((session) => session.running).map((session) =>
   "parentID" in session && typeof session.parentID === "string" ? session.parentID : session.id))
@@ -711,7 +711,7 @@ function createFixtureStore(): Fixture {
       inventoryInputs.push(input ?? {})
       if (inventoryCount > 0) {
         const offset = Number(input?.cursor ?? 0)
-        const limit = Math.min(50, Number(input?.limit ?? 50))
+        const limit = inventoryPageRows > 0 ? inventoryPageRows : Math.min(50, Number(input?.limit ?? 50))
         const odd = input?.workspace === "workspace_other"
         const sought = typeof input?.search === "string" ? Number(input.search.match(/\d+$/)?.[0]) : NaN
         const ids = input?.status === "running" ? [14_000] : typeof input?.search === "string"
@@ -858,12 +858,15 @@ function createFixtureStore(): Fixture {
     return { status: "ok", value: null }
   }
 
+  const emitEvent = (sessionID: string, event: unknown) => handlers?.onEvents?.(sessionID, [event])
+
   const transport: RemoteTransport = {
     connect: () => {
       handlers?.onStatus?.({ kind: "open" })
       handlers?.onSessions?.()
     },
     close: () => {},
+    setPriority: () => {},
     status: (): RemoteTransportStatus => ({ kind: open ? "open" : "closed", code: open ? 1000 : 1006, reason: "", retryable: false }),
     request: async (operation, request) => {
       if (!open) return { status: "unavailable", reason: "not-connected" }
@@ -930,12 +933,12 @@ function createFixtureStore(): Fixture {
       },
     ]
     for (const [index, event] of steps.entries()) {
-      setTimeout(() => handlers?.onEvent?.(sessionID, event), index * 60)
+      setTimeout(() => emitEvent(sessionID, event), index * 60)
     }
   }
 
   const team = () => {
-    handlers?.onEvent?.(sessionID, {
+    emitEvent(sessionID, {
       id: "evt_team_delegate",
       type: "session.tool.progress",
       durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 },
@@ -943,7 +946,7 @@ function createFixtureStore(): Fixture {
     })
     setTimeout(() => {
       teamReported = true
-      handlers?.onEvent?.(sessionID, {
+      emitEvent(sessionID, {
         id: "evt_team_report",
         type: "session.synthetic",
         durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 },
@@ -974,12 +977,12 @@ function createFixtureStore(): Fixture {
 
   return {
     store, drop, stream, team, invalidateSessions: () => handlers?.onSessions?.(), missTerminal: () => {
-      handlers?.onEvent?.(sessionID, { type: "session.execution.started", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { sessionID } })
+      emitEvent(sessionID, { type: "session.execution.started", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { sessionID } })
       statusRunning = new Set()
       snapshotWatermark = nextSeq++
     }, teamCancelled: () => {
       teamCancelState = "cancelled"
-      handlers?.onEvent?.(sessionID, { id: "evt_team_cancelled", type: "session.synthetic", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 },
+      emitEvent(sessionID, { id: "evt_team_cancelled", type: "session.synthetic", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 },
         data: { sessionID, messageID: "msg_team_cancelled", text: "Subagent cancelled", metadata: { source: "subagent_notification", childID: "ses_child", type: "cancelled", revision: 3 } } })
     }, teamPrompt: async (id) => {
       const result = await outcome("session.prompt", { id: "msg_team_probe", text: "Follow up", delivery: "steer" }, id)
@@ -989,16 +992,16 @@ function createFixtureStore(): Fixture {
     transcriptDelta: (delta) => {
       if (!probeStarted) {
         probeStarted = true
-        handlers?.onEvent?.(sessionID, { type: "session.step.started", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { assistantMessageID: "probe_tail", agent: "god", model } })
-        handlers?.onEvent?.(sessionID, { type: "session.text.started", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { assistantMessageID: "probe_tail", ordinal: 0 } })
-        handlers?.onEvent?.(sessionID, { type: "session.text.delta", data: { assistantMessageID: "probe_tail", ordinal: 0, delta: probeText } })
+        emitEvent(sessionID, { type: "session.step.started", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { assistantMessageID: "probe_tail", agent: "god", model } })
+        emitEvent(sessionID, { type: "session.text.started", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { assistantMessageID: "probe_tail", ordinal: 0 } })
+        emitEvent(sessionID, { type: "session.text.delta", data: { assistantMessageID: "probe_tail", ordinal: 0, delta: probeText } })
         messages = [...messages, { id: "probe_tail", type: "assistant", agent: "god", model, content: [{ type: "text", text: probeText }], time: { created: 30 } }]
         snapshotWatermark = nextSeq - 1
       }
       probeText += delta
       messages = messages.map((message) => typeof message === "object" && message !== null && Reflect.get(message, "id") === "probe_tail"
         ? { ...message, content: [{ type: "text", text: probeText }] } : message)
-      handlers?.onEvent?.(sessionID, { type: "session.text.delta", data: { assistantMessageID: "probe_tail", ordinal: 0, delta } })
+      emitEvent(sessionID, { type: "session.text.delta", data: { assistantMessageID: "probe_tail", ordinal: 0, delta } })
     },
     transcriptRefresh: async () => {
       probeClock += 11_000
@@ -1011,7 +1014,7 @@ function createFixtureStore(): Fixture {
       responseCaptured = captured
       snapshotWatermark = nextSeq++
       probeClock += 11_000
-      handlers?.onEvent?.(sessionID, { type: running ? "session.execution.started" : "session.execution.succeeded", data: { sessionID } })
+      emitEvent(sessionID, { type: running ? "session.execution.started" : "session.execution.succeeded", data: { sessionID } })
       status(running ? [sessionID] : [], [])
       handlers?.onSessions?.()
       await store.reloadMessages()
@@ -1227,11 +1230,9 @@ if (accountParams.has("inspectOffice")) {
 pwaInstall.start()
 render(
   () => (
-    <RouterProvider>
-      <ThemeProvider>
-        <FixturePage />
-      </ThemeProvider>
-    </RouterProvider>
+    <ThemeProvider>
+      <FixturePage />
+    </ThemeProvider>
   ),
   root,
 )

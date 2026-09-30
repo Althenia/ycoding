@@ -87,7 +87,7 @@ function readAssistantContext(value: unknown): ContextWindowView | undefined {
 
 const sameModel = (left: ModelRefView | undefined, right: ModelRefView | undefined) =>
   left !== undefined && right !== undefined && left.providerID === right.providerID && left.id === right.id &&
-  (left.variant ?? "default") === (right.variant ?? "default")
+  left.variant === right.variant
 
 export function generationSpeedDisplay(view: SessionView | undefined, selected: ModelRefView | undefined) {
   const history = view?.generationSpeed

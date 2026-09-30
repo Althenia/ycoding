@@ -517,6 +517,7 @@ describe("remote notification delivery", () => {
       createTransport: (_deviceID, handlers) => ({
         connect: () => handlers.onStatus?.({ kind: "closed", code: 1006, reason: "unreachable", retryable: true }),
         close: () => {},
+        setPriority: () => {},
         status: () => ({ kind: "closed", code: 1006, reason: "unreachable", retryable: true }) as const,
         request: async () => ({ status: "unavailable", reason: "not-connected" }) as const,
       }),

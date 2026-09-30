@@ -104,6 +104,17 @@ export async function launchBrowser(executable: string, width: number, height: n
         }),
         async navigate(url: string) {
           await call("Page.navigate", { url })
+          // The router mounts the first route after its async initial load, and a cold Vite graph
+          // compiles on first visit; wait briefly for the application root to hold a rendered child.
+          // Fixtures that render into detached hosts leave the root empty and fall through after the cap.
+          for (let attempt = 0; attempt < 30; attempt += 1) {
+            const mounted = await call<{ readonly result: { readonly value?: boolean } }>("Runtime.evaluate", {
+              expression: "document.readyState === 'complete' && (document.getElementById('app') ?? document.getElementById('root') ?? document.body).children.length > 0",
+              returnByValue: true,
+            }).then((result) => result.result.value === true, () => false)
+            if (mounted) break
+            await Bun.sleep(50)
+          }
           await Bun.sleep(250)
         },
         async setViewport(nextWidth: number, nextHeight: number) {
@@ -143,8 +154,8 @@ export async function launchBrowser(executable: string, width: number, height: n
             features: [{ name: "pointer", value: enabled ? "coarse" : "fine" }],
           })
         },
-        async pressKey(key: string, code: string, windowsVirtualKeyCode: number) {
-          await call("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode, nativeVirtualKeyCode: windowsVirtualKeyCode })
+        async pressKey(key: string, code: string, windowsVirtualKeyCode: number, text?: string) {
+          await call("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode, nativeVirtualKeyCode: windowsVirtualKeyCode, ...(text === undefined ? {} : { text }) })
           await call("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode, nativeVirtualKeyCode: windowsVirtualKeyCode })
         },
         async pressEscape() {

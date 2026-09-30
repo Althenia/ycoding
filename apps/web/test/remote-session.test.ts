@@ -4,7 +4,7 @@ import { canReplyToRequest, sessionStatusLabel, visibleTranscriptMessages } from
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore, readSessionInfo, type RemoteStore } from "../src/remote/store"
 import { createRemoteTransport, type RemoteTransport, type RemoteTransportStatus } from "../src/remote/transport"
-import { startRelayDouble, waitFor, type RelayDouble, type RelayHandlerResult } from "./relay-double"
+import { startRelayDouble, waitFor, type RelayDouble, type RelayHandlerOutcome, type RelayHandlerResult } from "./relay-double"
 
 type Harness = {
   readonly store: RemoteStore
@@ -126,7 +126,7 @@ async function fakeConnectionHarness() {
       const socket: FakeSocket = {
         publish: (status) => handlers.onStatus?.(status),
         sessions: (_sessionIDs) => handlers.onSessions?.(),
-        event: (sessionID, event) => handlers.onEvent?.(sessionID, event),
+        event: (sessionID, event) => handlers.onEvents?.(sessionID, [event]),
         statusFrame: (running, attention) => handlers.onSessionStatus?.({ running, attention }),
         notices: (frame) => handlers.onNotices?.(frame),
         reconnect: () => handlers.onReconnect?.(),
@@ -140,6 +140,7 @@ async function fakeConnectionHarness() {
         },
         // The replaced socket reports nothing; these cases publish its late frames by hand.
         close: () => {},
+        setPriority: () => {},
         status: () => ({ kind: "open" }),
         request: async (operation, input) => {
           if (operation === "session.unsubscribe") socket.unsubscribes.push(String(input?.sessionID))
@@ -206,6 +207,49 @@ describe("remote store integration", () => {
       expect(test.store.state().mutationToasts ?? []).toEqual([])
       expect(test.relay.requests.filter((request) => request.operation === "session.prompt" || request.operation === "session.command")).toEqual([])
     } finally { release(); await test.stop() }
+  })
+
+  test("settles a long compaction from its durable job instead of the request timeout", async () => {
+    const test = await harness({ requestTimeoutMs: 40, handler: (request) => request.operation === "session.compact"
+      ? new Promise<RelayHandlerOutcome>(() => {})
+      : "default" })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.some((session) => session.id === "ses_a"))
+      await test.store.selectSession("ses_a")
+      const pending = test.store.compactSession()
+      await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.compact"))
+      const jobID = test.relay.requests.find((request) => request.operation === "session.compact")!.input!.id as string
+      test.relay.pushEvent("ses_a", { type: "session.compaction.started", data: { sessionID: "ses_a", jobID }, created: 10 })
+      await test.runUntil(() => test.store.state().view?.messages.some((message) => message.kind === "compaction" && message.jobID === jobID) ?? false)
+      await test.runUntil(() => test.relay.requests.length > 0 && test.store.state().mutations.find((mutation) => mutation.operation === "session.compact")?.state === "sending", 30)
+      expect(test.store.state().mutations.find((mutation) => mutation.operation === "session.compact")?.state).toBe("sending")
+      expect(test.store.state().mutationToasts ?? []).toEqual([])
+      test.relay.pushEvent("ses_a", { type: "session.compaction.ended", data: { sessionID: "ses_a", jobID, boundary: { messageID: "msg_1", seq: 1 } }, created: 20 })
+      await test.runUntil(() => !test.store.state().mutations.some((mutation) => mutation.operation === "session.compact"))
+      expect(await pending).toBe(true)
+      expect(test.store.state().mutationToasts ?? []).toEqual([])
+    } finally { await test.stop() }
+  })
+
+  test("reports a compaction whose durable job fails after the request lost its outcome", async () => {
+    const test = await harness({ requestTimeoutMs: 40, handler: (request) => request.operation === "session.compact"
+      ? new Promise<RelayHandlerOutcome>(() => {})
+      : "default" })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.some((session) => session.id === "ses_a"))
+      await test.store.selectSession("ses_a")
+      const pending = test.store.compactSession()
+      await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.compact"))
+      const jobID = test.relay.requests.find((request) => request.operation === "session.compact")!.input!.id as string
+      test.relay.pushEvent("ses_a", { type: "session.compaction.started", data: { sessionID: "ses_a", jobID }, created: 10 })
+      await test.runUntil(() => test.store.state().view?.messages.some((message) => message.kind === "compaction" && message.jobID === jobID) ?? false)
+      test.relay.pushEvent("ses_a", { type: "session.compaction.failed", data: { sessionID: "ses_a", jobID, code: "provider_failed", error: { code: "provider_failed", message: "Compaction failed: provider_failed" } }, created: 20 })
+      await test.runUntil(() => test.store.state().mutations.find((mutation) => mutation.operation === "session.compact")?.state === "failed")
+      expect(await pending).toBe(false)
+      expect(test.store.state().mutationToasts).toMatchObject([{ state: "failed", detail: "Compaction failed: provider_failed" }])
+    } finally { await test.stop() }
   })
 
   test("keeps a failed compaction visible and retries only explicitly with its same ID", async () => {
@@ -1630,6 +1674,7 @@ describe("remote store integration", () => {
           connect: () => handlers.onStatus?.({ kind: "open" }),
           // The replaced socket reports nothing here; the case publishes it by hand.
           close: () => {},
+          setPriority: () => {},
           status: () => ({ kind: "open" }),
           request: async (operation, input) => {
             if (operation === "session.unsubscribe") socket.unsubscribes.push(String(input?.sessionID))

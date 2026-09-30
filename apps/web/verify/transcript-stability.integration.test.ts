@@ -180,6 +180,10 @@ test("background snapshot, todos, captured changes, and status preserve an expan
         await page.navigate(
           `http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&transcriptProbe=1&theme=${theme}`,
         )
+        await wait(page, `document.querySelector('[data-message-id="probe_tail"]') !== null`)
+        await page.evaluate(
+          `(() => { const root=document.querySelector('.workspace__scroll'); root.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:-300})); root.scrollTop=0 })()`,
+        )
         await wait(
           page,
           `document.querySelector('.file-change-card__summary') !== null && document.querySelector('.todo-panel') !== null`,
@@ -226,3 +230,85 @@ test("background snapshot, todos, captured changes, and status preserve an expan
       }
     }
 })
+
+test("a 300-message transcript mounts a bounded window and holds the reader through prepend, streaming, and follow", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(1440, 900)
+    await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?long=1`)
+    await wait(page, `(() => { const root=document.querySelector('.workspace__scroll'); return document.querySelector('[data-message-id="long_answer_149"]') !== null && root.scrollHeight-root.clientHeight-root.scrollTop<=2 })()`)
+    const mounted = await page.evaluate<number>(`document.querySelectorAll('[data-message-id]').length`)
+    expect(mounted).toBeGreaterThan(0)
+    expect(mounted).toBeLessThanOrEqual(60)
+    expect(await page.evaluate<number>(`document.querySelectorAll('.transcript-navigation__tick').length`)).toBe(150)
+
+    await page.evaluate(`(() => { const root=document.querySelector('.workspace__scroll'); window.samples=[]; window.sampling=true; const tick=()=>{ if(!window.sampling) return; window.samples.push({top:root.scrollTop,gap:root.scrollHeight-root.clientHeight-root.scrollTop}); requestAnimationFrame(tick) }; requestAnimationFrame(tick) })()`)
+    for (let index = 0; index < 20; index++) {
+      await page.evaluate(`window.longDelta('\\n\\n${"Another streamed paragraph. ".repeat(3)}')`)
+      await Bun.sleep(35)
+    }
+    await Bun.sleep(150)
+    const following = await page.evaluate<readonly { top: number; gap: number }[]>(`(() => { window.sampling=false; return window.samples })()`)
+    expect(following.length).toBeGreaterThan(20)
+    expect(Math.max(...following.map((sample) => sample.gap))).toBeLessThanOrEqual(2)
+    expect(following.every((sample, index) => index === 0 || sample.top >= following[index - 1]!.top - 0.5)).toBe(true)
+
+    await page.evaluate(`(() => { const root=document.querySelector('.workspace__scroll'); root.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:-300})); root.scrollTop=root.scrollHeight-root.clientHeight-700 })()`)
+    await Bun.sleep(300)
+    await page.evaluate(`(() => { const root=document.querySelector('.workspace__scroll'); const bounds=root.getBoundingClientRect(); const row=[...document.querySelectorAll('[data-message-id]')].find(item=>item.getBoundingClientRect().bottom>bounds.top+20); window.anchorRow=row; window.anchorBase=row.getBoundingClientRect().top; window.samples=[]; window.sampling=true; const tick=()=>{ if(!window.sampling) return; window.samples.push(window.anchorRow.getBoundingClientRect().top); requestAnimationFrame(tick) }; requestAnimationFrame(tick) })()`)
+    for (let index = 0; index < 20; index++) {
+      await page.evaluate(`window.longDelta('\\n\\n${"Streaming while scrolled up. ".repeat(3)}')`)
+      await Bun.sleep(35)
+    }
+    await Bun.sleep(150)
+    const away = await page.evaluate<{ readonly samples: readonly number[]; readonly base: number; readonly same: boolean }>(`(() => { window.sampling=false; return { samples: window.samples, base: window.anchorBase, same: window.anchorRow.isConnected } })()`)
+    expect(away.same).toBe(true)
+    expect(away.samples.length).toBeGreaterThan(20)
+    expect(Math.max(...away.samples.map((top) => Math.abs(top - away.base)))).toBeLessThanOrEqual(1)
+
+    await page.evaluate(`(() => { const root=document.querySelector('.workspace__scroll'); root.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:-300})); root.scrollTop=100; })()`)
+    await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+    await page.evaluate(`(() => { const root=document.querySelector('.workspace__scroll'); const bounds=root.getBoundingClientRect(); const row=[...document.querySelectorAll('[data-message-id]')].find(item=>item.getBoundingClientRect().bottom>bounds.top+20); window.anchorRow=row; window.anchorBase=row.getBoundingClientRect().top; window.samples=[]; window.sampling=true; const tick=()=>{ if(!window.sampling) return; window.samples.push(window.anchorRow.getBoundingClientRect().top); requestAnimationFrame(tick) }; requestAnimationFrame(tick) })()`)
+    await wait(page, `document.querySelector('.transcript-navigation__beginning') !== null`)
+    await Bun.sleep(150)
+    const prepended = await page.evaluate<{ readonly samples: readonly number[]; readonly base: number; readonly same: boolean; readonly prompts: number; readonly mounted: number }>(`(() => { window.sampling=false; return { samples: window.samples, base: window.anchorBase, same: window.anchorRow.isConnected, prompts: document.querySelectorAll('.transcript-navigation__tick').length, mounted: document.querySelectorAll('[data-message-id]').length } })()`)
+    expect(prepended.prompts).toBe(200)
+    expect(prepended.same).toBe(true)
+    expect(prepended.mounted).toBeLessThanOrEqual(60)
+    expect(Math.max(...prepended.samples.map((top) => Math.abs(top - prepended.base)))).toBeLessThanOrEqual(1)
+  } finally { await page.close() }
+}, 40_000)
+
+test("a 150-Session window mounts bounded rows and keeps the reader anchored while paging both ways", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(1440, 900)
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&inventoryCount=14501&pageRows=200`)
+    await wait(page, `window.remoteInventoryReport?.().rows === 200 && document.querySelectorAll('.sessions-table__row').length > 0`)
+    const window150 = await page.evaluate<{ readonly mounted: number; readonly count: string | null; readonly indexes: readonly string[] }>(`({ mounted: document.querySelectorAll('.sessions-table__row').length, count: document.querySelector('.sessions-table').getAttribute('aria-rowcount'), indexes: [...document.querySelectorAll('.sessions-table__row')].slice(0, 2).map(row => row.getAttribute('aria-rowindex')) })`)
+    expect(window150.mounted).toBeGreaterThan(0)
+    expect(window150.mounted).toBeLessThanOrEqual(50)
+    expect(Number(window150.count)).toBe(await page.evaluate<number>(`window.remoteInventoryReport().rows`) + 1)
+    expect(window150.indexes.every((value) => value !== null && Number(value) >= 2)).toBe(true)
+
+    const anchored = async (setup: string, trigger: string) => {
+      const before = await page.evaluate<string>(`(() => { const report = window.remoteInventoryReport(); return report.rows + ':' + report.firstListed })()`)
+      await page.evaluate(`(() => { const root=document.querySelector('.workspace__scroll'); ${setup} })()`)
+      await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+      await page.evaluate(`(() => { const root=document.querySelector('.workspace__scroll'); const bounds=root.getBoundingClientRect(); const row=[...document.querySelectorAll('.sessions-table__row')].find(item=>item.getBoundingClientRect().top>=bounds.top); window.anchorRow=row; window.anchorBase=row.getBoundingClientRect().top; window.samples=[]; window.sampling=true; const tick=()=>{ if(!window.sampling) return; window.samples.push(window.anchorRow.getBoundingClientRect().top); requestAnimationFrame(tick) }; requestAnimationFrame(tick); ${trigger} })()`)
+      await wait(page, `(() => { const report = window.remoteInventoryReport(); return report.rows + ':' + report.firstListed !== ${JSON.stringify(before)} })()`)
+      await Bun.sleep(250)
+      return page.evaluate<{ readonly samples: readonly number[]; readonly base: number; readonly same: boolean; readonly mounted: number; readonly rows: number }>(`(() => { window.sampling=false; return { samples: window.samples, base: window.anchorBase, same: window.anchorRow.isConnected, mounted: document.querySelectorAll('.sessions-table__row').length, rows: window.remoteInventoryReport().rows } })()`)
+    }
+    for (let step = 0; step < 4; step++) {
+      const forward = await anchored(`root.scrollTop=root.scrollHeight-root.clientHeight-100`, `root.dispatchEvent(new WheelEvent('wheel',{deltaY:250,bubbles:true}))`)
+      expect(forward.same).toBe(true)
+      expect(forward.mounted).toBeLessThanOrEqual(50)
+      expect(Math.max(...forward.samples.map((top) => Math.abs(top - forward.base)))).toBeLessThanOrEqual(1)
+    }
+    const backward = await anchored(`root.scrollTop=100`, `root.dispatchEvent(new WheelEvent('wheel',{deltaY:-250,bubbles:true}))`)
+    expect(backward.same).toBe(true)
+    expect(backward.mounted).toBeLessThanOrEqual(50)
+    expect(Math.max(...backward.samples.map((top) => Math.abs(top - backward.base)))).toBeLessThanOrEqual(1)
+  } finally { await page.close() }
+}, 60_000)

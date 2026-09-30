@@ -5,6 +5,14 @@ import type { ModelOption } from "../catalog"
 import type { ModelRefView } from "../projection"
 import { effortLevel, modelSelection, orderedVariants, pairedFastModel, switchFastModel, visibleModels } from "./composer-logic"
 
+/** Fixed sparkle field: positions are stable so the fill reveals the same sky as it grows. */
+const sparkles = [
+  { x: 6, y: 34, delay: 0, size: 2 }, { x: 13, y: 66, delay: 0.7, size: 1.5 }, { x: 21, y: 28, delay: 1.3, size: 2.5 },
+  { x: 29, y: 58, delay: 0.4, size: 1.5 }, { x: 37, y: 40, delay: 1.9, size: 2 }, { x: 44, y: 70, delay: 1.1, size: 1.5 },
+  { x: 52, y: 30, delay: 0.2, size: 2.5 }, { x: 60, y: 62, delay: 1.6, size: 2 }, { x: 68, y: 44, delay: 0.9, size: 1.5 },
+  { x: 76, y: 26, delay: 1.4, size: 2 }, { x: 83, y: 64, delay: 0.5, size: 2.5 }, { x: 91, y: 38, delay: 1.8, size: 1.5 },
+] as const
+
 export function ModelControl(props: { readonly models: readonly ModelOption[]; readonly selected?: ModelRefView; readonly disabled?: boolean; readonly pending?: boolean; readonly rememberedVariant?: (model: ModelOption) => string | undefined; readonly onChange: (model: ModelRefView) => void }) {
   const [open, setOpen] = createSignal(false)
   const [listing, setListing] = createSignal(false)
@@ -22,6 +30,7 @@ export function ModelControl(props: { readonly models: readonly ModelOption[]; r
   const selectedIndex = () => Math.max(0, stops().indexOf(selected()?.variant))
   const fraction = () => drag()?.fraction ?? (stops().length < 2 ? 0 : selectedIndex() / (stops().length - 1))
   const level = () => selection().blocked || selected()?.variant === undefined ? "base" : effortLevel(selected()?.variant)
+  const glow = () => stops().length < 2 ? 0 : (drag()?.fraction ?? selectedIndex() / (stops().length - 1))
   const effortLabel = () => selection().blocked ? `Unavailable: ${selected()?.variant ?? selected()?.id}` : selected()?.variant ?? "Base"
   const models = () => visibleModels(props.models).filter((item) => `${item.name} ${item.id} ${item.providerName ?? item.providerID}`.toLowerCase().includes(query().toLowerCase())).sort((left, right) => left.providerID.localeCompare(right.providerID))
   let trigger: HTMLButtonElement | undefined
@@ -62,7 +71,9 @@ export function ModelControl(props: { readonly models: readonly ModelOption[]; r
   }
   const pointerFraction = (event: PointerEvent & { currentTarget: HTMLDivElement }) => {
     const rect = event.currentTarget.getBoundingClientRect()
-    return Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width))
+    // The thumb travels inside the track, so the usable span excludes half a thumb at each end.
+    const inset = Math.min(rect.height, rect.width / 4) / 2
+    return Math.max(0, Math.min(1, (event.clientX - rect.left - inset) / Math.max(1, rect.width - inset * 2)))
   }
   onMount(() => {
     const media = window.matchMedia("(max-width: 767px)")
@@ -92,7 +103,7 @@ export function ModelControl(props: { readonly models: readonly ModelOption[]; r
     </button>
     <Show when={open()}><Portal>
       <Show when={compact()}><div class="mini-picker__scrim" data-cursor="action" onClick={() => close()} /></Show>
-      <div ref={surface} class="mini-picker__surface model-control__surface" classList={{ "mini-picker__surface--sheet": compact(), "model-control__surface--dragging": !!drag() }} data-level={level()} data-top={selectedIndex() === stops().length - 1 && stops().length > 1} style={compact() ? undefined : { left: `${position().left}px`, top: `${position().top}px`, width: `${position().width}px` }} role="dialog" aria-label={listing() ? "Choose model" : "Reasoning effort"} onKeyDown={(event) => {
+      <div ref={surface} class="mini-picker__surface model-control__surface" classList={{ "mini-picker__surface--sheet": compact(), "model-control__surface--dragging": !!drag() }} data-level={level()} style={compact() ? undefined : { left: `${position().left}px`, top: `${position().top}px`, width: `${position().width}px` }} role="dialog" aria-label={listing() ? "Choose model" : "Reasoning effort"} onKeyDown={(event) => {
         if (event.key === "Escape") { event.preventDefault(); if (listing()) { setListing(false); queueMicrotask(() => surface?.querySelector<HTMLButtonElement>(".model-control__switch")?.focus()) } else close(true) }
         if (!listing()) return
         if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setActive((active() + (event.key === "ArrowDown" ? 1 : -1) + models().length) % (models().length || 1)) }
@@ -107,7 +118,7 @@ export function ModelControl(props: { readonly models: readonly ModelOption[]; r
             event.preventDefault()
             chooseVariant(next)
           }} onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); setDrag({ pointerID:event.pointerId, fraction:pointerFraction(event) }) }} onPointerMove={(event) => { if (drag()?.pointerID === event.pointerId) setDrag({ pointerID:event.pointerId, fraction:pointerFraction(event) }) }} onPointerUp={(event) => { if (drag()?.pointerID !== event.pointerId) return; const next = Math.round(pointerFraction(event) * (stops().length - 1)); setDrag(undefined); chooseVariant(next) }} onPointerCancel={(event) => { if (drag()?.pointerID === event.pointerId) setDrag(undefined) }} onLostPointerCapture={(event) => { if (drag()?.pointerID === event.pointerId) setDrag(undefined) }}>
-            <div class="model-control__track"><div class="model-control__fill" style={{ width: `${fraction() * 100}%` }} /><div class="model-control__sparkles" aria-hidden="true" /><div class="model-control__stops"><For each={stops()}>{(_, index) => <span classList={{ "model-control__stop--active": index() <= selectedIndex() }} />}</For></div><span class="model-control__thumb" style={{ left: `${fraction() * 100}%` }} /></div>
+            <div class="model-control__track" style={{ "--composer-effort-fraction": String(fraction()), "--composer-effort-glow": String(glow()) }}><div class="model-control__fill"><div class="model-control__sparkles" aria-hidden="true"><For each={sparkles}>{(sparkle) => <i style={{ left: `${sparkle.x}%`, top: `${sparkle.y}%`, "--composer-sparkle-delay": `${sparkle.delay}s`, "--composer-sparkle-size": `${sparkle.size}px` }} />}</For></div></div><span class="model-control__thumb" /></div>
             <div class="model-control__labels"><For each={stops()}>{(variant) => <span>{variant ?? "Base"}</span>}</For></div>
           </div></Show>
         </Show>

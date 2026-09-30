@@ -1,5 +1,6 @@
 import { For, Show, createEffect, createSignal, onCleanup, type JSX } from "solid-js"
-import { Link, useRouter } from "../router/router"
+import { useLocation, useNavigate } from "@tanstack/solid-router"
+import { Link } from "./link"
 import { SITE } from "../content/site"
 import { useTheme } from "../theme/theme-store"
 import { themePreferenceLabel } from "../theme/theme"
@@ -56,9 +57,9 @@ export function OfflineBanner(): JSX.Element {
 export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.Element {
   const [open, setOpen] = createSignal(false)
   let menuTrigger: HTMLButtonElement | undefined
-  const router = useRouter()
+  const pathname = useLocation({ select: (location) => location.pathname })
   createEffect(() => {
-    router.path()
+    pathname()
     const root = document.querySelector(".marketing > main")
     if (!(root instanceof HTMLElement)) return
     const observer = typeof IntersectionObserver === "undefined" ? undefined : new IntersectionObserver((entries) => {
@@ -81,14 +82,14 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
     })
   })
   createEffect(() => {
-    router.path()
+    pathname()
     const root = document.querySelector(".marketing > main")
     if (!(root instanceof HTMLElement)) return
     root.classList.remove("public-page-entry")
     requestAnimationFrame(() => root.classList.add("public-page-entry"))
   })
-  const inDocs = () => router.path().startsWith("/docs")
-  const inChangelog = () => router.path().startsWith("/changelog")
+  const inDocs = () => pathname().startsWith("/docs")
+  const inChangelog = () => pathname().startsWith("/changelog")
   return (
     <div class="marketing">
       <a class="skip-link" href="#main">
@@ -97,17 +98,17 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
       <OfflineBanner />
       <header class="app-header">
         <div class="container app-header__inner">
-          <Link href="/" class="brand">
+          <Link to="/" class="brand">
             <BrandMark compact />
           </Link>
           <nav class="nav" aria-label="Primary">
-            <Link href="/" class={`nav__link${router.path() === "/" ? " nav__link--active" : ""}`} ariaCurrent={router.path() === "/" ? "page" : undefined}>
+            <Link to="/" class={`nav__link${pathname() === "/" ? " nav__link--active" : ""}`} ariaCurrent={pathname() === "/" ? "page" : undefined}>
               Home
             </Link>
-            <Link href="/docs" class={`nav__link${inDocs() ? " nav__link--active" : ""}`} ariaCurrent={inDocs() ? "page" : undefined}>
+            <Link to="/docs" class={`nav__link${inDocs() ? " nav__link--active" : ""}`} ariaCurrent={inDocs() ? "page" : undefined}>
               Documentation
             </Link>
-            <Link href="/changelog" class={`nav__link${inChangelog() ? " nav__link--active" : ""}`} ariaCurrent={inChangelog() ? "page" : undefined}>
+            <Link to="/changelog" class={`nav__link${inChangelog() ? " nav__link--active" : ""}`} ariaCurrent={inChangelog() ? "page" : undefined}>
               Changelog
             </Link>
           </nav>
@@ -116,7 +117,7 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
               <ThemeToggle />
             </span>
             <span class="app-header__cta">
-              <Link href="/remote" class="button button--primary">
+              <Link to="/remote" class="button button--primary">
                 Open workspace
                 <Icon name="chevron-right" size={16} />
               </Link>
@@ -142,7 +143,7 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
           label="Navigation"
           returnFocus={menuTrigger!}
           header={
-            <Link href="/" class="primary-nav__brand" onClick={() => setOpen(false)}>
+            <Link to="/" class="primary-nav__brand" onClick={() => setOpen(false)}>
               <BrandMark compact />
             </Link>
           }
@@ -150,18 +151,18 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
         >
           <div class="primary-nav pane">
             <nav class="docs-nav primary-nav__routes" aria-label="Site">
-              <Link href="/" class={`docs-nav__link${router.path() === "/" ? " docs-nav__link--active" : ""}`} ariaCurrent={router.path() === "/" ? "page" : undefined} onClick={() => setOpen(false)}>
+              <Link to="/" class={`docs-nav__link${pathname() === "/" ? " docs-nav__link--active" : ""}`} ariaCurrent={pathname() === "/" ? "page" : undefined} onClick={() => setOpen(false)}>
                 Home
               </Link>
-              <Link href="/docs" class={`docs-nav__link${inDocs() ? " docs-nav__link--active" : ""}`} ariaCurrent={inDocs() ? "page" : undefined} onClick={() => setOpen(false)}>
+              <Link to="/docs" class={`docs-nav__link${inDocs() ? " docs-nav__link--active" : ""}`} ariaCurrent={inDocs() ? "page" : undefined} onClick={() => setOpen(false)}>
                 Documentation
               </Link>
-              <Link href="/changelog" class={`docs-nav__link${inChangelog() ? " docs-nav__link--active" : ""}`} ariaCurrent={inChangelog() ? "page" : undefined} onClick={() => setOpen(false)}>
+              <Link to="/changelog" class={`docs-nav__link${inChangelog() ? " docs-nav__link--active" : ""}`} ariaCurrent={inChangelog() ? "page" : undefined} onClick={() => setOpen(false)}>
                 Changelog
               </Link>
             </nav>
             <nav class="primary-nav__aux" aria-label="Additional navigation">
-              <Link href="/remote" class="docs-nav__link" onClick={() => setOpen(false)}>
+              <Link to="/remote" class="docs-nav__link" onClick={() => setOpen(false)}>
                 Remote workspace
               </Link>
               <a class="docs-nav__link" href={SITE.repositoryURL} rel="noreferrer noopener" target="_blank">
@@ -169,7 +170,7 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
               </a>
             </nav>
             <div class="primary-nav__actions">
-              <Link href="/remote" class="button button--primary" onClick={() => setOpen(false)}>
+              <Link to="/remote" class="button button--primary" onClick={() => setOpen(false)}>
                 Open workspace
                 <Icon name="chevron-right" size={16} />
               </Link>
@@ -187,7 +188,7 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
         <div class="container">
           <div class="footer">
             <div class="footer__brand">
-              <Link href="/" class="brand">
+              <Link to="/" class="brand">
                 <BrandMark compact />
               </Link>
               <p>AGPL-3.0 licensed.</p>
@@ -204,7 +205,7 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
                             {link.label}
                           </a>
                         ) : (
-                          <Link href={link.href}>{link.label}</Link>
+                          <Link to={link.href}>{link.label}</Link>
                         )
                       }
                     </For>
@@ -220,7 +221,7 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
 }
 
 export function LandingPage(): JSX.Element {
-  const router = useRouter()
+  const navigate = useNavigate()
   return (
     <>
       <section class="hero hero--compact">
@@ -231,14 +232,14 @@ export function LandingPage(): JSX.Element {
             <button
               type="button"
               class="button button--primary button--large"
-              onClick={() => router.navigate(SITE.hero.primaryAction.href)}
+              onClick={() => navigate({ to: SITE.hero.primaryAction.href })}
             >
               {SITE.hero.primaryAction.label}
             </button>
             <button
               type="button"
               class="button button--secondary button--large"
-              onClick={() => router.navigate(SITE.hero.secondaryAction.href)}
+              onClick={() => navigate({ to: SITE.hero.secondaryAction.href })}
             >
               {SITE.hero.secondaryAction.label}
             </button>
@@ -276,14 +277,14 @@ export function NotFoundPage(): JSX.Element {
         <h1>Page not found</h1>
         <p class="prose">The requested page does not exist or may have moved into the documentation.</p>
         <div class="not-found__actions">
-          <Link href="/docs" class="button button--primary">
+          <Link to="/docs" class="button button--primary">
             Browse documentation
           </Link>
-          <Link href="/" class="button button--secondary">
+          <Link to="/" class="button button--secondary">
             Go home
           </Link>
         </div>
-        <Link href="/remote" class="text-link not-found__workspace">
+        <Link to="/remote" class="text-link not-found__workspace">
           <Icon name="terminal" size={16} />
           Open workspace
         </Link>

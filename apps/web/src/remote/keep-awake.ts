@@ -1,3 +1,6 @@
+import { describeOutcome } from "./outcome"
+import type { RemoteRequestOutcome } from "./transport"
+
 export type KeepAwakeStatus = { readonly state: "off" | "on" | "unsupported" | "error"; readonly message?: string }
 
 export type KeepAwakeChange = {
@@ -13,8 +16,6 @@ export type KeepAwakeState = {
   readonly change?: KeepAwakeChange
 }
 
-export const emptyKeepAwake = (): KeepAwakeState => ({ read: "idle" })
-
 const maxMessageLength = 200
 
 export function readKeepAwakeStatus(payload: unknown): KeepAwakeStatus | undefined {
@@ -26,6 +27,18 @@ export function readKeepAwakeStatus(payload: unknown): KeepAwakeStatus | undefin
   if (state !== "off" && state !== "on" && state !== "unsupported" && state !== "error") return undefined
   if (message !== undefined && (typeof message !== "string" || message.length > maxMessageLength)) return undefined
   return { state, ...(message === undefined ? {} : { message }) }
+}
+
+export function keepAwakeAnswer(outcome: RemoteRequestOutcome, kept: Pick<KeepAwakeState, "change">): KeepAwakeState {
+  if (outcome.status === "ok") {
+    const status = readKeepAwakeStatus(outcome.value)
+    return status === undefined
+      ? { read: "error", message: "Keep machine awake: the machine returned an unreadable answer.", ...kept }
+      : { read: "ready", status, ...kept }
+  }
+  if (outcome.status === "failed" && outcome.error.code === "unknown_operation") return { read: "outdated", ...kept }
+  if (outcome.status === "unknown") return { read: "unanswered", ...kept }
+  return { read: "error", message: describeOutcome(outcome, "Keep machine awake"), ...kept }
 }
 
 export type KeepAwakeView = {

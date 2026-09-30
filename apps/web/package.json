@@ -18,6 +18,11 @@
     "typecheck": "tsgo --noEmit"
   },
   "dependencies": {
+    "@tanstack/solid-pacer": "0.22.0",
+    "@tanstack/solid-query": "5.104.0",
+    "@tanstack/solid-router": "1.170.36",
+    "@tanstack/solid-store": "0.11.1",
+    "@tanstack/solid-virtual": "3.13.40",
     "@ycoding-ai/remote": "workspace:*",
     "marked": "catalog:",
     "phaser": "4.2.1",

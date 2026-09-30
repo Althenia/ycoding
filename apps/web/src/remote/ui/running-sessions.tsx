@@ -1,4 +1,5 @@
 import { For, Show, createEffect, createSignal, onCleanup, type JSX } from "solid-js"
+import { createThrottler } from "@tanstack/solid-pacer"
 import type { SessionInfoView } from "../store"
 import "./running-sessions.css"
 
@@ -11,7 +12,6 @@ export function RunningSessions(props: {
   const [overflow, setOverflow] = createSignal(false)
   let track: HTMLUListElement | undefined
   let target: { readonly index: number; readonly left: number } | undefined
-  let frame = 0
   const measure = () => {
     if (!track) return
     const excess = track.scrollWidth - track.clientWidth
@@ -33,18 +33,19 @@ export function RunningSessions(props: {
     setActive(index)
     track.scrollTo({ left, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" })
   }
+  const pacedMeasure = createThrottler(measure, { wait: 50 })
   createEffect(() => {
     if (props.sessions.length === 0 || !track) { setOverflow(false); return }
-    const observer = new ResizeObserver(measure)
+    const observer = new ResizeObserver(pacedMeasure.maybeExecute)
     observer.observe(track)
-    window.addEventListener("resize", measure)
-    frame = requestAnimationFrame(measure)
-    onCleanup(() => { observer.disconnect(); window.removeEventListener("resize", measure); cancelAnimationFrame(frame) })
+    window.addEventListener("resize", pacedMeasure.maybeExecute)
+    measure()
+    onCleanup(() => { observer.disconnect(); window.removeEventListener("resize", pacedMeasure.maybeExecute); pacedMeasure.cancel() })
   })
   return <Show when={props.loading || props.sessions.length > 0}>
     <section class={`running-sessions${props.loading ? " running-sessions--loading" : " running-sessions--ready"}`} aria-labelledby="running-sessions-title" aria-busy={props.loading === true}>
       <h2 id="running-sessions-title">Running and recent</h2>
-      <ul class="running-sessions__list" ref={track} onScroll={measure} onWheel={() => { target = undefined }} onTouchStart={() => { target = undefined }}>
+      <ul class="running-sessions__list" ref={track} onScroll={pacedMeasure.maybeExecute} onWheel={() => { target = undefined }} onTouchStart={() => { target = undefined }}>
         <For each={props.sessions}>
           {(session, index) => {
             const lastActive = session.activeAt !== undefined ? new Date(session.activeAt) : undefined

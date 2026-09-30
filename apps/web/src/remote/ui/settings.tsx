@@ -1,4 +1,6 @@
-import { For, Show, createEffect, createSignal, onCleanup, onMount, type JSX } from "solid-js"
+import { createMutation, createQuery } from "@tanstack/solid-query"
+import { useStore } from "@tanstack/solid-store"
+import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
 import { CustomSelect } from "../../ui/custom-select"
 import { Modal } from "../../ui/modal"
@@ -8,6 +10,7 @@ import { useTheme } from "../../theme/theme-store"
 import type { ThemePreference } from "../../theme/theme"
 import { useRemote } from "../context"
 import { keepAwakeView } from "../keep-awake"
+import { keepAwakeState } from "../queries"
 import { createPushHttp, createRemoteHttp } from "../http"
 import { browserPushPlatform, disablePush, enablePush, pushStatusView, savePushCategories, syncPushState, type PushPlatform, type PushStatus } from "../push"
 import type { OfficeSettingsStore, WorkspacePresentation } from "../office/storage"
@@ -24,11 +27,10 @@ import {
   NOTIFICATION_CATEGORIES,
   NOTIFICATION_CHANNELS,
   describeNotificationPermission,
+  createNotificationPreferences,
   readNotificationPreferences,
   NOTIFICATION_STORAGE_KEY,
   pushCategoriesFor,
-  toggleNotificationChannel,
-  writeNotificationPreferences,
   type NotificationCategory,
   type NotificationChannel,
 } from "../preferences"
@@ -44,11 +46,9 @@ export function MachineSettings(): JSX.Element {
   const remote = useRemote()
   const state = () => remote.state()
   const reachable = () => state().activeDeviceID !== undefined && state().transport.kind === "open" && state().connection.kind === "connected"
-  const awake = () => keepAwakeView({ keepAwake: state().keepAwake, reachable: reachable() })
-  onMount(() => void remote.store.loadKeepAwake())
-  createEffect(() => {
-    if (state().keepAwake.read === "idle" && reachable()) void remote.store.loadKeepAwake()
-  })
+  const keepAwake = createQuery(() => remote.queries.keepAwake(remote.scope(), reachable()))
+  const setKeepAwake = createMutation(() => remote.queries.keepAwakeMutation(remote.scope()))
+  const awake = () => keepAwakeView({ keepAwake: keepAwakeState(keepAwake), reachable: reachable() })
   const availability = () => deviceAvailabilityView(accountReadState({ connection: state().connection, owner: state().owner }), state().devices.length, {
     devices: state().devices, activeDeviceID: state().activeDeviceID, sessionCount: state().sessions.length,
     unreachable: state().connection.kind === "offline",
@@ -67,14 +67,14 @@ export function MachineSettings(): JSX.Element {
           <input type="checkbox" aria-labelledby="machine-awake-label" aria-describedby="machine-awake-status machine-awake-caveat"
             checked={awake().checked} disabled={awake().disabled}
             onChange={(event) => {
-              void remote.store.setKeepAwake(event.currentTarget.checked)
+              setKeepAwake.mutate(event.currentTarget.checked)
               event.currentTarget.checked = awake().checked
             }} />
           <span>{awake().label}</span>
         </label>
         <Show when={awake().retry}>
           <button type="button" class="button button--secondary button--small" aria-label="Retry Keep machine awake"
-            onClick={() => void remote.store.loadKeepAwake()}>Retry</button>
+            onClick={() => void keepAwake.refetch()}>Retry</button>
         </Show>
         <span id="machine-awake-status" class="field__hint machine-awake__status" data-tone={awake().tone} role="status" aria-live="polite">{awake().detail}</span>
         <span id="machine-awake-caveat" class="field__hint machine-awake__caveat">{awake().caveat}</span>
@@ -564,7 +564,8 @@ function ChoiceRow<Value extends string | boolean>(props: {
  * the explicit button below.
  */
 export function NotificationSettings(): JSX.Element {
-  const [preferences, setPreferences] = createSignal(readNotificationPreferences())
+  const notificationPreferences = createNotificationPreferences()
+  const preferences = useStore(notificationPreferences.store)
   const [permission, setPermission] = createSignal(typeof Notification === "undefined" ? undefined : Notification.permission)
   const [pushStatus, setPushStatus] = createSignal<PushStatus>("unsupported")
   const [pushBusy, setPushBusy] = createSignal(true)
@@ -576,7 +577,7 @@ export function NotificationSettings(): JSX.Element {
 
   const storedCategories = () => pushCategoriesFor(readNotificationPreferences())
   const refresh = (event: StorageEvent) => {
-    if (event.key === NOTIFICATION_STORAGE_KEY || event.key === null) setPreferences(readNotificationPreferences())
+    if (event.key === NOTIFICATION_STORAGE_KEY || event.key === null) notificationPreferences.reload()
   }
 
   onMount(() => {
@@ -604,9 +605,7 @@ export function NotificationSettings(): JSX.Element {
   }
 
   const update = async (category: NotificationCategory, channel: NotificationChannel) => {
-    const next = toggleNotificationChannel(readNotificationPreferences(), category, channel)
-    writeNotificationPreferences(globalThis.localStorage, next)
-    setPreferences(next)
+    notificationPreferences.toggle(category, channel)
     const platform = pushPlatform
     if (channel !== "desktop" || !platform || (pushStatus() !== "on" && !pushBusy())) return
     const result = await savePushCategories(platform, pushHttp, storedCategories)

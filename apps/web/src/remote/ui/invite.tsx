@@ -1,5 +1,5 @@
 import { Show, createSignal, type JSX } from "solid-js"
-import { Link } from "../../router/router"
+import { Link } from "../../ui/link"
 import { BrandMark, ThemeToggle } from "../../ui/site"
 import { createInviteHttp } from "../http"
 import { formatAccessKey, inviteLandingView, takeInviteToken, type InvitePhase } from "../invite"
@@ -26,7 +26,7 @@ export function InvitePage(): JSX.Element {
     <main id="remote-main" class="sign-in">
       <div class="sign-in__panel">
         <div class="sign-in__top">
-          <Link href="/" class="brand" title="YCoding home"><BrandMark compact /></Link>
+          <Link to="/" class="brand" title="YCoding home"><BrandMark compact /></Link>
           <ThemeToggle />
         </div>
         <div class="sign-in__head">
@@ -50,7 +50,7 @@ export function InvitePage(): JSX.Element {
           <Show when={copyStatus()}><p role="status" class="field__hint">{copyStatus()}</p></Show>
           <button type="button" class="button button--primary sign-in__provider" onClick={() => window.location.assign("/remote/")}>Continue</button>
         </Show>
-        <Show when={phase() === "invalid"}><Link href="/remote" class="text-link">Sign in with an access key</Link></Show>
+        <Show when={phase() === "invalid"}><Link to="/remote" class="text-link">Sign in with an access key</Link></Show>
       </div>
     </main>
   )

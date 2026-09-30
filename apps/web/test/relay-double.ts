@@ -302,6 +302,7 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
           socket.send(JSON.stringify({ type: "pong" }))
           return
         }
+        if (parsed.value.type === "cancel" || parsed.value.type === "priority") return
         if (isNoticeRequest(parsed.value)) {
           const noticeRequest = parsed.value
           noticeRequests.push(noticeRequest)

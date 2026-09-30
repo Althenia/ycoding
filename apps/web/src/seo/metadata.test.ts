@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { PUBLIC_DOC_PATHS, findDocPage } from "../content/docs/registry"
 import { SITE } from "../content/site"
-import { parseLocation } from "../router/route"
 import { headMetadata, resolveRouteMetadata, type HeadTag } from "./metadata"
 
 const REMOTE_ROUTES = ["/remote", "/remote/sessions", "/remote/usage", "/remote/settings"] as const
@@ -55,13 +54,13 @@ describe("route metadata resolution", () => {
   })
 
   test("never carries query or fragment content from the location into canonical metadata", () => {
-    const secretDocument = parseLocation("/docs/installation?token=sk-live-route-secret#fragment").path
+    const secretDocument = new URL("/docs/installation?token=sk-live-route-secret#fragment", SITE.origin).pathname
     const metadata = resolveRouteMetadata(secretDocument)
     expect(metadata.kind).toBe("public")
     if (metadata.kind !== "public") throw new Error("expected public metadata")
     expect(metadata.canonical).toBe(`${SITE.origin}/docs/installation`)
 
-    const privateMetadata = resolveRouteMetadata(parseLocation("/remote/sessions?session=abc123#panel").path)
+    const privateMetadata = resolveRouteMetadata(new URL("/remote/sessions?session=abc123#panel", SITE.origin).pathname)
     expect(privateMetadata).not.toHaveProperty("canonical")
 
     const serialized = JSON.stringify(headMetadata(metadata))

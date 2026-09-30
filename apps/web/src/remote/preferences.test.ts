@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   DEFAULT_NOTIFICATION_PREFERENCES,
+  createNotificationPreferences,
   NOTIFICATION_CATEGORIES,
   NOTIFICATION_CHANNELS,
   NOTIFICATION_STORAGE_KEY,
@@ -153,4 +154,31 @@ describe("describeNotificationPermission", () => {
 test("push to this device follows only each category's System switch", () => {
   const preferences = toggleNotificationChannel(toggleNotificationChannel(DEFAULT_NOTIFICATION_PREFERENCES, "agent-completed", "desktop"), "machine-offline", "in-app")
   expect(pushCategoriesFor(preferences)).toEqual({ "agent-completed": false, "approval-requested": true, "machine-offline": true })
+})
+
+describe("notification preferences store", () => {
+  test("a toggle updates the store, notifies once, and persists through storage", () => {
+    const backing = storage()
+    const preferences = createNotificationPreferences(backing)
+    const seen: boolean[] = []
+    preferences.store.subscribe((value) => seen.push(value["agent-completed"].desktop))
+    preferences.toggle("agent-completed", "desktop")
+    expect(seen).toEqual([false])
+    expect(preferences.store.get()["agent-completed"].desktop).toBe(false)
+    expect(readNotificationPreferences(backing)["agent-completed"].desktop).toBe(false)
+  })
+
+  test("reload adopts what another tab stored", () => {
+    const backing = storage()
+    const preferences = createNotificationPreferences(backing)
+    writeNotificationPreferences(backing, toggleNotificationChannel(DEFAULT_NOTIFICATION_PREFERENCES, "machine-offline", "in-app"))
+    preferences.reload()
+    expect(preferences.store.get()["machine-offline"]["in-app"]).toBe(false)
+  })
+
+  test("starts from stored values and falls back to defaults without storage", () => {
+    const backing = storage({ [NOTIFICATION_STORAGE_KEY]: JSON.stringify({ "approval-requested": { "in-app": false } }) })
+    expect(createNotificationPreferences(backing).store.get()["approval-requested"]).toEqual({ "in-app": false, desktop: true })
+    expect(createNotificationPreferences(null).store.get()).toEqual(DEFAULT_NOTIFICATION_PREFERENCES)
+  })
 })

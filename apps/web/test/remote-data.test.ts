@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
+import { loadWorkspaces } from "./remote-queries"
 import { startRelayDouble, waitFor, type RelayHandlerResult } from "./relay-double"
 
 async function setup(handler?: (request: { operation: string; input?: Readonly<Record<string, unknown>>; sessionID?: string }) => RelayHandlerResult, requestTimeoutMs = 30_000) {
@@ -359,7 +360,7 @@ describe("remote data", () => {
     try {
       await test.store.load()
       await waitFor(() => test.store.state().sessions.length === 2)
-      await test.store.loadWorkspaces()
+      await loadWorkspaces(test.store)
       const id = await test.store.createSession({ workspaceID: "wsp_project", agent: "reviewer", model: { providerID: "openai", id: "gpt-6" },
         prompt: { text: "Start", files: [{ uri: "file:///work/a.ts" }], skills: ["audit"] } })
       expect(id).toBe("ses_created")

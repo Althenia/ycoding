@@ -457,13 +457,13 @@ test("unknown Usage reads keep good panels while one recovery read settles, then
         providers: document.querySelectorAll('.usage-provider').length, tiles: document.querySelectorAll('.usage-tile').length,
         arcs: document.querySelectorAll('.usage-donut__arc').length, rows: document.querySelectorAll('.usage-breakdown tbody tr').length,
         alerts: document.querySelectorAll('.usage-page [role="alert"]').length, requests: window.usageRequests().length,
-      })`)).toEqual({ providers: 5, tiles: 3, arcs: 2, rows: 25, alerts: 0, requests: 5 })
+      })`)).toEqual({ providers: 5, tiles: 3, arcs: 2, rows: 25, alerts: 0, requests: 10 })
       await page.evaluate(`window.usageAgentBack(false)`)
-      await wait(page, `window.usageRequests().length === 10`)
+      await wait(page, `window.usageRequests().length === 15`)
       expect(await page.evaluate<number>(`document.querySelectorAll('.usage-page [role="alert"]').length`)).toBe(0)
       await page.evaluate(`window.usageOutage()`)
       await page.evaluate(`window.usageAgentBack(true)`)
-      await wait(page, `window.usageRequests().length === 15`)
+      await wait(page, `window.usageRequests().length === 25`)
       expect(await page.evaluate<{ providers: number; tiles: number; arcs: number; rows: number; alerts: string[] }>(`({
         providers: document.querySelectorAll('.usage-provider').length, tiles: document.querySelectorAll('.usage-tile').length,
         arcs: document.querySelectorAll('.usage-donut__arc').length, rows: document.querySelectorAll('.usage-breakdown tbody tr').length,

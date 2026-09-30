@@ -1,7 +1,9 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, untrack } from "solid-js"
+import { createQuery } from "@tanstack/solid-query"
+import { batch, createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { useRemote } from "../context"
+import { usageRead } from "../queries"
 import { LoadingPlaceholder } from "./loading"
-import { dailySpend, donutGeometry, modelIdentity, money, providerDistribution, providerHeading, quotaWindow, relativeFreshness, reportKey, spendMetrics, tokenCount, tooltipPosition, usageBounds, visibleProviders, type SpendDay, type UsageProvider, type UsageReport, type UsageReportInput, type UsageReportRow, type UsageWindow } from "./usage-model"
+import { dailySpend, donutGeometry, modelIdentity, money, providerDistribution, providerHeading, quotaWindow, relativeFreshness, spendMetrics, tokenCount, tooltipPosition, usageBounds, visibleProviders, type SpendDay, type UsageProvider, type UsageReport, type UsageReportInput, type UsageReportRow, type UsageWindow } from "./usage-model"
 import "./usage.css"
 
 const groups = ["model", "session", "project", "agent"] as const
@@ -36,7 +38,6 @@ export function UsagePage() {
   const [activeProvider, setActiveProvider] = createSignal<string>()
   const [dayPosition, setDayPosition] = createSignal({ left: 0, top: 0 })
   const [providerPosition, setProviderPosition] = createSignal({ left: 0, top: 0 })
-  const [retained, setRetained] = createSignal<{ readonly deviceID?: string; readonly providers?: readonly UsageProvider[]; readonly daily?: UsageReport; readonly dailyKey?: string; readonly monthly?: UsageReport; readonly monthlyKey?: string }>({})
   let mobileRows: HTMLDivElement | undefined
   let dayCard: HTMLDivElement | undefined
   let dayTooltip: HTMLDivElement | undefined
@@ -44,7 +45,6 @@ export function UsagePage() {
   let providerTooltip: HTMLDivElement | undefined
   let deviceID = remote.state().activeDeviceID
   const connected = createMemo(() => remote.state().transport.kind === "open")
-  const providerStatus = createMemo(() => remote.state().usage.providers.status)
   const selectedZone = () => zoneMode() === "local" ? localZone : undefined
   const zoneLabel = () => zoneMode() === "local" ? `Local · ${localZone}` : "UTC"
   const zoneInput = () => selectedZone() === undefined ? {} : { timeZone: selectedZone() }
@@ -53,15 +53,24 @@ export function UsagePage() {
   const dailyInput = createMemo<UsageReportInput>(() => ({ group: "day", ...range(), limit: 30, sort: "key", order: "asc" }))
   const monthlyInput = createMemo<UsageReportInput>(() => ({ group: "model", from: bounds().monthFrom, to: openedAt, ...zoneInput(), limit: 200, sort: "cost", order: "desc" }))
   const breakdownInput = createMemo<BreakdownInput>(() => ({ group: group(), ...range(), offset: offset(), limit: 25, sort: sort(), order: order() }))
-  const daily = () => remote.state().usage.reports[reportKey(dailyInput())]
-  const monthly = () => remote.state().usage.reports[reportKey(monthlyInput())]
-  const breakdown = () => remote.state().usage.reports[reportKey(breakdownInput())]
-  const retainedForDevice = () => retained().deviceID === remote.state().activeDeviceID ? retained() : undefined
-  const providerData = () => remote.state().usage.providers.data ?? retainedForDevice()?.providers
-  const dailyData = () => daily()?.status === "unsupported" ? undefined : daily()?.data ?? (retainedForDevice()?.dailyKey === reportKey(dailyInput()) ? retainedForDevice()?.daily : undefined)
-  const monthlyData = () => monthly()?.status === "unsupported" ? undefined : monthly()?.data ?? (retainedForDevice()?.monthlyKey === reportKey(monthlyInput()) ? retainedForDevice()?.monthly : undefined)
-  const displayed = () => breakdown()?.status !== "unsupported" && shownBreakdown()?.deviceID === remote.state().activeDeviceID && shownBreakdown()?.input.timeZone === selectedZone() ? shownBreakdown()?.report : undefined
-  const updating = () => shownBreakdown() !== undefined && (breakdown() === undefined || breakdown()?.status === "loading")
+  const providersQuery = createQuery(() => remote.queries.usageProviders(remote.scope(), connected()))
+  createQuery(() => remote.queries.usageSummary(remote.scope(), connected()))
+  const dailyQuery = createQuery(() => remote.queries.usageReport(remote.scope(), connected(), dailyInput()))
+  const monthlyQuery = createQuery(() => remote.queries.usageReport(remote.scope(), connected(), monthlyInput()))
+  const breakdownQuery = createQuery(() => remote.queries.usageReport(remote.scope(), connected(), breakdownInput()))
+  const providerRead = () => usageRead(providersQuery)
+  const daily = () => usageRead(dailyQuery)
+  const monthly = () => usageRead(monthlyQuery)
+  const breakdown = () => usageRead(breakdownQuery)
+  const retryReport = (input: UsageReportInput) => {
+    const scope = remote.scope()
+    if (scope !== undefined) void remote.queries.retryUsageReport(scope, input)
+  }
+  const providerData = () => providerRead().data
+  const dailyData = () => daily().data
+  const monthlyData = () => monthly().data
+  const displayed = () => breakdown().status !== "unsupported" && shownBreakdown()?.deviceID === remote.state().activeDeviceID && shownBreakdown()?.input.timeZone === selectedZone() ? shownBreakdown()?.report : undefined
+  const updating = () => shownBreakdown() !== undefined && (breakdown().status === "idle" || breakdown().status === "loading")
   const holdRows = () => setMinimumRowsHeight(Math.max(minimumRowsHeight(), mobileRows?.offsetHeight ?? 0))
   const providers = createMemo(() => visibleProviders(providerData() ?? []))
   const providerKeys = createMemo(() => providers().map(providerKey))
@@ -93,63 +102,45 @@ export function UsagePage() {
   })
   const selectGroup = (next: (typeof groups)[number]) => {
     holdRows()
-    setGroup(next)
-    setOffset(0)
-    setSort("cost")
-    setOrder("desc")
-    void remote.store.loadUsageReport({ group: next, ...range(), offset: 0, limit: 25, sort: "cost", order: "desc" })
+    batch(() => {
+      setGroup(next)
+      setOffset(0)
+      setSort("cost")
+      setOrder("desc")
+    })
   }
   const setSorting = (next: NonNullable<UsageReportInput["sort"]>) => {
     holdRows()
     const direction = sort() === next && order() === "desc" ? "asc" : "desc"
-    setSort(next)
-    setOrder(direction)
-    setOffset(0)
-    void remote.store.loadUsageReport({ group: group(), ...range(), offset: 0, limit: 25, sort: next, order: direction })
+    batch(() => {
+      setSort(next)
+      setOrder(direction)
+      setOffset(0)
+    })
   }
   const nextPage = () => {
     const next = displayed()?.nextOffset
     if (next === undefined || updating()) return
     holdRows()
     setOffset(next)
-    void remote.store.loadUsageReport({ ...breakdownInput(), offset: next })
   }
   const previousPage = () => {
     if (updating()) return
     holdRows()
     const next = Math.max(0, (shownBreakdown()?.input.offset ?? 0) - 25)
     setOffset(next)
-    void remote.store.loadUsageReport({ ...breakdownInput(), offset: next })
   }
-  createEffect(() => {
-    if (connected() && providerStatus() === "idle") untrack(() => { void remote.store.loadUsage() })
-  })
-  createEffect(() => {
-    if (!connected()) return
-    const reports = [dailyInput(), breakdownInput(), monthlyInput()]
-    untrack(() => { void Promise.all(reports.map((input) => remote.store.loadUsageReport(input))) })
-  })
   createEffect(() => localStorage.setItem("ycoding.remote.usage.timeZone", zoneMode()))
   createEffect(() => {
     const current = remote.state().activeDeviceID
     if (current !== deviceID || current === undefined || remote.state().connection.kind === "signed-out") {
       deviceID = current
-      setRetained({})
       setShownBreakdown(undefined)
       setMinimumRowsHeight(0)
       return
     }
-    const providers = remote.state().usage.providers.data
-    const dayReport = daily()?.data
-    const monthReport = monthly()?.data
-    if (providers || dayReport || monthReport) setRetained((previous) => {
-      if (previous.deviceID === current && (providers ?? previous.providers) === previous.providers && (dayReport ?? previous.daily) === previous.daily && (monthReport ?? previous.monthly) === previous.monthly) return previous
-      return { deviceID: current, providers: providers ?? previous.providers,
-        daily: dayReport ?? previous.daily, dailyKey: dayReport ? reportKey(dailyInput()) : previous.dailyKey,
-        monthly: monthReport ?? previous.monthly, monthlyKey: monthReport ? reportKey(monthlyInput()) : previous.monthlyKey }
-    })
     const result = breakdown()
-    if (result?.status === "ready" && result.data && (shownBreakdown()?.report !== result.data || shownBreakdown()?.input !== breakdownInput()))
+    if (result.status === "ready" && result.data && (shownBreakdown()?.report !== result.data || shownBreakdown()?.input !== breakdownInput()))
       setShownBreakdown({ deviceID: current, report: result.data, input: breakdownInput() })
   })
   onMount(() => {
@@ -164,18 +155,18 @@ export function UsagePage() {
           <button type="button" aria-pressed={zoneMode() === "utc"} onClick={() => setZoneMode("utc")}>UTC</button>
           <button type="button" aria-pressed={zoneMode() === "local"} onClick={() => setZoneMode("local")}>Local</button>
         </div>
-        <button class="usage-refresh" type="button" disabled={remote.state().usage.providers.status === "loading" || remote.state().transport.kind !== "open"} onClick={() => void remote.store.loadUsage({ refresh: true })}>Refresh quotas</button>
+        <button class="usage-refresh" type="button" disabled={providerRead().status === "loading" || remote.state().transport.kind !== "open"} onClick={() => { const scope = remote.scope(); if (scope !== undefined) void remote.queries.refreshUsage(scope) }}>Refresh quotas</button>
       </div>
     </header>
 
     <section class="usage-quotas" aria-labelledby="usage-allowances">
       <h2 class="visually-hidden" id="usage-allowances">Provider quotas</h2>
-      <Show when={!providerData() && remote.state().usage.providers.status === "unsupported"}><p class="usage-message" role="status">Update YCoding on this machine to see usage.</p></Show>
-      <Show when={!providerData() && remote.state().usage.providers.status === "error"}><p class="usage-message" role="alert">{remote.state().usage.providers.message ?? "Usage could not be loaded."}</p></Show>
-      <Show when={providerData() && remote.state().usage.providers.status === "error"}><p class="usage-message" role="alert">{remote.state().usage.providers.message ?? "Usage could not be loaded."}</p></Show>
-      <Show when={!providerData() && remote.state().transport.kind !== "open" && remote.state().usage.providers.status === "idle"}><p class="usage-message" role="status">Connect to a machine to see usage.</p></Show>
-      <Show when={!providerData() && remote.state().usage.providers.status === "loading"}><LoadingPlaceholder kind="usage" label="Loading provider quotas…" /></Show>
-      <Show when={providerData() && remote.state().usage.providers.status === "ready" && providers().length === 0}><p class="usage-message">No connected provider reports quotas.</p></Show>
+      <Show when={!providerData() && providerRead().status === "unsupported"}><p class="usage-message" role="status">Update YCoding on this machine to see usage.</p></Show>
+      <Show when={!providerData() && providerRead().status === "error"}><p class="usage-message" role="alert">{providerRead().message ?? "Usage could not be loaded."}</p></Show>
+      <Show when={providerData() && providerRead().status === "error"}><p class="usage-message" role="alert">{providerRead().message ?? "Usage could not be loaded."}</p></Show>
+      <Show when={!providerData() && remote.state().transport.kind !== "open" && providerRead().status === "idle"}><p class="usage-message" role="status">Connect to a machine to see usage.</p></Show>
+      <Show when={!providerData() && providerRead().status === "loading"}><LoadingPlaceholder kind="usage" label="Loading provider quotas…" /></Show>
+      <Show when={providerData() && providerRead().status === "ready" && providers().length === 0}><p class="usage-message">No connected provider reports quotas.</p></Show>
       <div class="usage-providers"><For each={providerKeys()}>{(key, index) => {
         const initial = providers().find((provider) => providerKey(provider) === key)!
         return <ProviderCard provider={() => providers().find((provider) => providerKey(provider) === key) ?? initial} now={now()} index={index()} />
@@ -194,9 +185,9 @@ export function UsagePage() {
       <div class="usage-visuals">
         <div class="usage-chart" ref={dayCard}>
           <div class="usage-chart__head"><div><h3>Daily spend (last 30 {zoneLabel()} days)</h3><p>{zoneLabel()} day boundary · Today highlighted</p></div><button type="button" aria-expanded={tableOpen()} aria-controls="usage-daily-table" onClick={() => setTableOpen(!tableOpen())}>{tableOpen() ? "Hide table" : "View table"}</button></div>
-          <Show when={dailyData() && daily()?.status === "error"}><p class="usage-message" role="alert">{daily()?.message ?? "Daily usage could not be loaded."} <button type="button" onClick={() => void remote.store.loadUsageReport(dailyInput(), { refresh: true })}>Retry</button></p></Show>
+          <Show when={dailyData() && daily()?.status === "error"}><p class="usage-message" role="alert">{daily()?.message ?? "Daily usage could not be loaded."} <button type="button" onClick={() => retryReport(dailyInput())}>Retry</button></p></Show>
           <Show when={dailyData()} fallback={<Show when={daily()?.status === "unsupported" || daily()?.status === "error"} fallback={<Show when={connected()}><LoadingPlaceholder kind="chart" label="Loading daily spend…" /></Show>}>
-            <p class="usage-message" role={daily()?.status === "error" ? "alert" : "status"}>{daily()?.status === "unsupported" ? zoneMode() === "local" ? "Update YCoding on this machine to see Local usage. Switch to UTC to continue." : "Update YCoding on this machine to see usage." : daily()?.message}<Show when={daily()?.status === "error"}> <button type="button" onClick={() => void remote.store.loadUsageReport(dailyInput(), { refresh: true })}>Retry</button></Show></p>
+            <p class="usage-message" role={daily()?.status === "error" ? "alert" : "status"}>{daily()?.status === "unsupported" ? zoneMode() === "local" ? "Update YCoding on this machine to see Local usage. Switch to UTC to continue." : "Update YCoding on this machine to see usage." : daily()?.message}<Show when={daily()?.status === "error"}> <button type="button" onClick={() => retryReport(dailyInput())}>Retry</button></Show></p>
           </Show>}>
             <p class="usage-chart__today">Today: {money(days().at(-1)?.cost ?? 0)} · {count(days().at(-1)?.requests ?? 0)} requests</p>
             <svg viewBox="0 0 900 180" role="img" aria-label="Daily cost over the last 30 days, with exact values in the table" preserveAspectRatio="none">
@@ -224,10 +215,10 @@ export function UsagePage() {
               <button type="button" aria-pressed={distributionMetric() === "tokens"} onClick={() => setDistributionMetric("tokens")}>Tokens</button>
             </div></div>
           </div>
-          <Show when={monthlyData() && monthly()?.status === "error"}><p class="usage-message" role="alert">{monthly()?.message ?? "Monthly usage could not be loaded."} <button type="button" onClick={() => void remote.store.loadUsageReport(monthlyInput(), { refresh: true })}>Retry</button></p></Show>
+          <Show when={monthlyData() && monthly()?.status === "error"}><p class="usage-message" role="alert">{monthly()?.message ?? "Monthly usage could not be loaded."} <button type="button" onClick={() => retryReport(monthlyInput())}>Retry</button></p></Show>
           <Show when={!monthlyData() && connected() && (monthly()?.status === "loading" || monthly() === undefined)}><LoadingPlaceholder kind="chart" label="Loading monthly usage…" /></Show>
           <Show when={!monthlyData() && monthly()?.status === "unsupported"}><p class="usage-distribution__empty">{zoneMode() === "local" ? "Update YCoding on this machine to see Local usage. Switch to UTC to continue." : "Update YCoding on this machine to see monthly usage."}</p></Show>
-          <Show when={!monthlyData() && monthly()?.status === "error"}><p class="usage-distribution__empty" role="alert">{monthly()?.message} <button type="button" onClick={() => void remote.store.loadUsageReport(monthlyInput(), { refresh: true })}>Retry</button></p></Show>
+          <Show when={!monthlyData() && monthly()?.status === "error"}><p class="usage-distribution__empty" role="alert">{monthly()?.message} <button type="button" onClick={() => retryReport(monthlyInput())}>Retry</button></p></Show>
           <Show when={monthlyData()}><Show when={distribution().total > 0} fallback={<p class="usage-distribution__empty">No {distributionMetric() === "spend" ? "priced" : "token"} usage this month.</p>}>
             <div class="usage-distribution__body">
               <div class="usage-distribution__chart">
@@ -273,22 +264,22 @@ export function UsagePage() {
         event.currentTarget.querySelectorAll<HTMLButtonElement>("button")[index]?.focus()
       }}><For each={groups}>{(item) => <button id={`usage-tab-${item}`} role="tab" type="button" aria-selected={group() === item} aria-controls="usage-breakdown-panel" tabindex={group() === item ? 0 : -1} onClick={() => selectGroup(item)}>{names[item]}</button>}</For></div></div>
       <div id="usage-breakdown-panel" role="tabpanel" aria-labelledby={`usage-tab-${group()}`} class="usage-breakdown" aria-busy={updating() ? "true" : "false"}>
-        <Show when={!displayed() && remote.state().transport.kind === "open" && (breakdown()?.status === "loading" || breakdown() === undefined)}><LoadingPlaceholder kind="usage" label="Loading breakdown…" /></Show>
+        <Show when={!displayed() && remote.state().transport.kind === "open" && (breakdown().status === "loading" || breakdown().status === "idle")}><LoadingPlaceholder kind="usage" label="Loading breakdown…" /></Show>
         <Show when={!displayed() && breakdown()?.status === "unsupported"}><p class="usage-message" role="status">{zoneMode() === "local" ? "Update YCoding on this machine to see Local usage. Switch to UTC to continue." : "Update YCoding on this machine to see usage."}</p></Show>
         <Show when={!displayed() && breakdown()?.status === "error"}><p class="usage-message" role="alert">{breakdown()?.message}</p></Show>
         <Show when={displayed()}><Show when={(displayed()?.rows.length ?? 0) > 0} fallback={<p class="usage-message">No requests in this period.</p>}>
           <div class="usage-breakdown__mobile" ref={mobileRows} style={{ "min-height": `${minimumRowsHeight()}px` }}><For each={displayed()?.rows}>{(row: UsageReportRow) => {
-            const identity = () => shownBreakdown()?.input.group === "model" ? modelIdentity(row.key, remote.state().usage.providers.data ?? []) : undefined
+            const identity = () => shownBreakdown()?.input.group === "model" ? modelIdentity(row.key, providerRead().data ?? []) : undefined
             return <article class="usage-mobile-row"><div class="usage-mobile-row__top"><div><strong>{identity()?.model ?? row.label}</strong><Show when={identity()}><span class="usage-provider-chip">{identity()?.provider}</span></Show></div><b>{money(row.cost ?? 0)}</b></div>
               <p>{count(row.physical)} requests · {count(row.tokens.input)} in / {count(row.tokens.output)} out<Show when={row.tokens.cache.read > 0}> · {count(row.tokens.cache.read)} cache read</Show></p>
             </article>
           }}</For></div>
           <button class="usage-breakdown__table-toggle" type="button" aria-expanded={breakdownTableOpen()} aria-controls="usage-breakdown-table" onClick={() => setBreakdownTableOpen(!breakdownTableOpen())}>{breakdownTableOpen() ? "Hide table" : "View table"}</button>
           <div id="usage-breakdown-table" class="usage-table-wrap usage-breakdown__table" classList={{ "usage-breakdown__table--open": breakdownTableOpen() }}><table><caption>{names[shownBreakdown()?.input.group ?? group()]} by usage</caption><thead><tr><th scope="col"><button type="button" aria-label={`Sort by ${names[group()]}`} onClick={() => setSorting("key")}>{names[group()]} {sort() === "key" ? order() === "asc" ? "↑" : "↓" : "↕"}</button></th><For each={columns}>{(column) => <th scope="col"><button type="button" aria-label={`Sort by ${column.label}`} onClick={() => setSorting(column.key)}>{column.label} {sort() === column.key ? order() === "asc" ? "↑" : "↓" : "↕"}</button></th>}</For></tr></thead><tbody><For each={displayed()?.rows}>{(row: UsageReportRow) => {
-            const identity = () => shownBreakdown()?.input.group === "model" ? modelIdentity(row.key, remote.state().usage.providers.data ?? []) : undefined
+            const identity = () => shownBreakdown()?.input.group === "model" ? modelIdentity(row.key, providerRead().data ?? []) : undefined
             return <tr><th scope="row"><span>{identity()?.model ?? row.label}</span><Show when={identity()}><span class="usage-provider-chip">{identity()?.provider}</span></Show></th><td>{count(row.logical)}</td><td>{count(tokenCount(row.tokens))}</td><td>{count(row.tokens.input)}</td><td>{count(row.tokens.output)}</td><td>{count(row.tokens.reasoning)}</td><td>{count(row.tokens.cache.read)}</td><td class="usage-table__cost">{money(row.cost ?? 0)}<Show when={row.costProvenance === "current_catalog"}><small>estimate</small></Show></td></tr>
           }}</For></tbody></table></div>
-          <div class="usage-breakdown__feedback" aria-live="polite"><Show when={updating()}><span role="status">Loading {names[group()].toLowerCase()} report…</span></Show><Show when={breakdown()?.status === "error"}><span role="alert">{breakdown()?.message} <button type="button" onClick={() => void remote.store.loadUsageReport(breakdownInput(), { refresh: true })}>Retry</button></span></Show></div>
+          <div class="usage-breakdown__feedback" aria-live="polite"><Show when={updating()}><span role="status">Loading {names[group()].toLowerCase()} report…</span></Show><Show when={breakdown()?.status === "error"}><span role="alert">{breakdown()?.message} <button type="button" onClick={() => retryReport(breakdownInput())}>Retry</button></span></Show></div>
           <div class="usage-pagination"><span>Showing {(shownBreakdown()?.input.offset ?? 0) + 1}–{(shownBreakdown()?.input.offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)}</span><div><button type="button" disabled={updating() || (shownBreakdown()?.input.offset ?? 0) === 0} onClick={previousPage}>Previous</button><button type="button" disabled={updating() || displayed()?.nextOffset === undefined} onClick={nextPage}>Next</button></div></div>
         </Show></Show>
       </div>

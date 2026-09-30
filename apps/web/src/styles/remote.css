@@ -303,6 +303,7 @@ body:has(.app) {
 }
 
 .workspace__rail {
+  overflow-anchor: none;
   border-inline-end: var(--yc-border-width) solid var(--yc-border);
   background: var(--yc-surface);
   min-block-size: 0;
@@ -320,6 +321,7 @@ body:has(.app) {
 .workspace__scroll {
   position: relative;
   overflow-y: auto;
+  overflow-anchor: none;
   padding: var(--yc-space-5) var(--yc-gutter) var(--yc-space-8);
   min-inline-size: 0;
   min-block-size: 0;
@@ -664,9 +666,15 @@ body:has(.app) {
 
 /* The list runs edge to edge of its pane, one ruled row per Session. */
 .session-list {
+  position: relative;
   display: grid;
   margin-inline: calc(-1 * var(--yc-space-4));
   border-block-start: var(--yc-border-width) solid var(--yc-border);
+}
+
+.session-list__row {
+  position: absolute;
+  inset-inline: 0;
 }
 
 /* No trailing status column: at the 288px rail a trailing chip left the session
@@ -1293,6 +1301,11 @@ body:has(.app) {
   display: grid;
 }
 
+.sessions-table__body {
+  position: relative;
+  display: grid;
+}
+
 .sessions-table__head,
 .sessions-table__row {
   display: grid;
@@ -1314,6 +1327,8 @@ body:has(.app) {
 }
 
 .sessions-table__row {
+  position: absolute;
+  inset-inline: 0;
   border-block-start: var(--yc-border-width) solid var(--yc-border);
   background: var(--yc-surface-raised);
   color: inherit;
@@ -1614,7 +1629,10 @@ body:has(.app) {
 
   .sessions-table {
     grid-template-columns: minmax(0, 1fr);
-    gap: var(--yc-space-3);
+  }
+
+  .sessions-table__body {
+    row-gap: var(--yc-space-3);
   }
 
   .sessions-results {

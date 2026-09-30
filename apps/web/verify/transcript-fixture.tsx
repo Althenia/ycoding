@@ -1,4 +1,5 @@
-import { createSignal } from "solid-js"
+import { createEffect, createRoot, createSignal } from "solid-js"
+import { Store } from "@tanstack/solid-store"
 import { render } from "solid-js/web"
 import { TranscriptNavigation } from "../src/remote/ui/transcript-nav"
 import { TodoPanel } from "../src/remote/ui/todo-panel"
@@ -33,6 +34,7 @@ const notification = new URLSearchParams(location.search).has("notification")
 const visibility = new URLSearchParams(location.search).has("visibility")
 const historyMode = new URLSearchParams(location.search).has("history")
 const imagesMode = new URLSearchParams(location.search).has("images")
+const longMode = new URLSearchParams(location.search).has("long")
 const oversizedMode = new URLSearchParams(location.search).has("oversized")
 const pendingOversized = new URLSearchParams(location.search).get("oversized") === "pending"
 const compactionMode = new URLSearchParams(location.search).get("compaction")
@@ -105,6 +107,15 @@ plotContext.fillStyle = "#43c292"
 plotContext.fillRect(30, 90, 50, 60)
 plotContext.fillRect(105, 60, 50, 90)
 plotContext.fillRect(180, 25, 50, 125)
+const tall = document.createElement("canvas")
+tall.width = 390
+tall.height = 1800
+const tallContext = tall.getContext("2d")
+if (!tallContext) throw new Error("Image fixture requires a canvas")
+tallContext.fillStyle = "#122b25"
+tallContext.fillRect(0, 0, 390, 1800)
+tallContext.fillStyle = "#43c292"
+for (let row = 0; row < 12; row++) tallContext.fillRect(30, 60 + row * 150, 330, 60)
 const imageMessages: readonly RemoteMessageView[] = [
   { kind: "user", id: "msg_image", text: "Review these files", state: "consumed", created: 1, attachments: [
     { name: "screen.png", mime: "image/png", bytes: 4_096, digest: "a".repeat(64) },
@@ -116,6 +127,7 @@ const imageMessages: readonly RemoteMessageView[] = [
   ] },
   { kind: "assistant", id: "msg_tool_image", created: 2, parts: [{ kind: "tool", callID: "call_image", name: "read", status: "completed", content: [
     { kind: "image", uri: plot.toDataURL("image/png"), mime: "image/png", name: "plot.png" },
+    { kind: "image", uri: tall.toDataURL("image/png"), mime: "image/png", name: "tall.png" },
   ] }] },
 ]
 const compressionMetrics = { excludedMessages: 11, excludedParts: 1, inputTokens: 1_000, retainedTokens: 400 }
@@ -124,6 +136,10 @@ const compactionMessages: readonly RemoteMessageView[] = [
   { kind: "compaction", id: "cmp_live", jobID: "cmp_live", status: "running", created: 3 },
   { kind: "user", id: "msg_after", text: "Neighbouring row remains in place", state: "consumed", created: 4 },
 ]
+const longMessages = (prefix: string, count: number): readonly RemoteMessageView[] => Array.from({ length: count }, (_, index): readonly RemoteMessageView[] => [
+  { kind: "user", id: `${prefix}_user_${index}`, text: `Prompt ${index}: ${"inspect the current work ".repeat(1 + index % 4)}`, state: "consumed", created: index * 2 },
+  { kind: "assistant", id: `${prefix}_answer_${index}`, agent: "god", parts: [{ kind: "text", ordinal: 0, text: `Response ${index}\n\n${Array.from({ length: 1 + index % 5 }, () => "A detailed paragraph of work. ".repeat(6)).join("\n\n")}` }], created: index * 2 + 1, completed: index * 2 + 2 },
+]).flat()
 let imageFetches = 0
 if (imagesMode) {
   const originalFetch = window.fetch.bind(window)
@@ -149,16 +165,16 @@ const imageSnapshot = () => readSnapshot({ sourceEpoch: "epoch_1", session: { id
     { name: "screen.png", mime: "image/png", content: { type: "managed", bytes: 4_096, digest: "a".repeat(64) } },
   ] },
   { id: "msg_tool_image", type: "assistant", time: { created: 2 }, content: [
-    { type: "tool", id: "call_image", name: "read", state: { status: "completed", content: [{ type: "file", uri: plot.toDataURL("image/png"), mime: "image/png", name: "plot.png" }] } },
+    { type: "tool", id: "call_image", name: "read", state: { status: "completed", content: [{ type: "file", uri: plot.toDataURL("image/png"), mime: "image/png", name: "plot.png" }, { type: "file", uri: tall.toDataURL("image/png"), mime: "image/png", name: "tall.png" }] } },
     ...(streamedImageText ? [{ type: "text", text: streamedImageText }] : []),
   ] },
 ] })?.messages ?? imageMessages
-const [messages, setMessages] = createSignal(synthetic ? syntheticMessages(synthetic === "compacted") : fileChangesMode ? fileChangeMessages : toolOutput ? outputMessages : historyMode ? navigationMessages.slice(12) : imagesMode ? imageMessages : oversizedMode ? [{ kind: "oversized", id: "msg_big", projected: !pendingOversized, state: pendingOversized ? "pending" : "loading" }] as const : navigation ? navigationMessages : runningStep ? runningMessages : visibility ? visibilityMessages : notification ? notificationMessages : compactionMode ? compactionMessages : initial)
+const [messages, setMessages] = createSignal(longMode ? longMessages("long", 150) : synthetic ? syntheticMessages(synthetic === "compacted") : fileChangesMode ? fileChangeMessages : toolOutput ? outputMessages : historyMode ? navigationMessages.slice(12) : imagesMode ? imageMessages : oversizedMode ? [{ kind: "oversized", id: "msg_big", projected: !pendingOversized, state: pendingOversized ? "pending" : "loading" }] as const : navigation ? navigationMessages : runningStep ? runningMessages : visibility ? visibilityMessages : notification ? notificationMessages : compactionMode ? compactionMessages : initial)
 const [compactionHistory, setCompactionHistory] = createSignal(compactionMode && compactionMode !== "old" ? {
   data: [{ jobID: "cmp_old", trigger: "auto", status: "completed" as const, metrics: { ...compressionMetrics, inputTokens: 500, retainedTokens: 200 }, created: 2 }, { jobID: "cmp_live", trigger: "manual", status: "running" as const, created: 3 }],
   truncated: compactionMode === "truncated", completedBefore: compactionMode === "truncated" ? 2 : 0, completedCount: compactionMode === "truncated" ? 3 : 1, totalSavedTokens: compactionMode === "truncated" ? 900 : 300,
 } : undefined)
-const [history, setHistory] = createSignal<{ readonly status: "idle"; readonly before?: string }>(historyMode ? { status: "idle", before: "older" } : { status: "idle" })
+const [history, setHistory] = createSignal<{ readonly status: "idle" | "loading"; readonly before?: string }>(historyMode || longMode ? { status: "idle", before: "older" } : { status: "idle" })
 
 function syntheticMessages(compacted: boolean): readonly RemoteMessageView[] {
   const raw = Array.from({ length: 1_200 }, (_, index) => ({ id: `msg_${index}`, type: "assistant", agent: "god", content: [{ type: "reasoning", text: "**Check context** with `code` and *verify the next step*." }, { type: "text", text: `Answer ${index}` }], time: { created: index } }))
@@ -170,19 +186,24 @@ const root = document.getElementById("app")
 if (!root) throw new Error("Missing transcript root")
 const store = createRemoteStore({ http: createRemoteHttp({ fetch: Object.assign(async () => new Response(null, { status: 401 }), { preconnect: () => {} }) }), createTransport: () => { throw new Error("Fixture transport must not connect") } })
 const fixtureState = { ...store.state(), activeSessionID: "ses_a", activeDeviceID: "dev_1" }
-const listeners = new Set<() => void>()
-Object.defineProperty(store, "state", { value: () => ({ ...fixtureState, history: history(), view: fileChangesMode ? { ...createSessionView("ses_a"), status: fileChangeStatus(), messages: messages(), capturedChanges } : compactionMode ? { ...createSessionView("ses_a"), compactionHistory: compactionHistory() } : fixtureState.view }) })
-Object.defineProperty(store, "subscribe", { value: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener) } })
+const fixtureSnapshot = () => ({ ...fixtureState, history: history(), view: fileChangesMode ? { ...createSessionView("ses_a"), status: fileChangeStatus(), messages: messages(), capturedChanges } : compactionMode ? { ...createSessionView("ses_a"), compactionHistory: compactionHistory() } : fixtureState.view })
+Object.defineProperty(store, "container", { value: new Store(fixtureSnapshot()) })
+createRoot(() => createEffect(() => store.container.setState(() => fixtureSnapshot())))
 Object.defineProperty(store, "loadOlderMessages", { value: async () => {
   if (!history().before) return
+  if (longMode) {
+    setHistory({ status: "loading", before: "older" })
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    setMessages((current) => [...longMessages("older", 50), ...current])
+    setHistory({ status: "idle" })
+    return
+  }
   setMessages((current) => [...navigationMessages.slice(0, 12), ...current])
   setHistory({ status: "idle" })
-  listeners.forEach((listener) => listener())
 } })
 Object.defineProperty(store, "loadOversizedMessage", { value: async () => setMessages([{ kind: "user", id: "msg_big", text: "Recovered full content", state: "consumed", created: 2 }]) })
 if (fileChangesMode) Object.assign(window, { setFileChangeStatus: (status: SessionView["status"]) => {
   setFileChangeStatus(status)
-  listeners.forEach((listener) => listener())
 } })
 if (compactionMode) Object.assign(window, { compactionUpdate: () => {
   setMessages((current) => current.map((message) => message.kind === "compaction" ? { ...message, id: "msg_compact", status: "completed", trigger: "manual", metrics: compressionMetrics } : message))
@@ -190,11 +211,13 @@ if (compactionMode) Object.assign(window, { compactionUpdate: () => {
     { jobID: "cmp_old", trigger: "auto", status: "completed", metrics: { ...compressionMetrics, inputTokens: 500, retainedTokens: 200 }, created: 2 },
     { jobID: "cmp_live", trigger: "manual", status: "completed", metrics: compressionMetrics, created: 3 },
   ], truncated: compactionMode === "truncated", completedBefore: compactionMode === "truncated" ? 2 : 0, completedCount: compactionMode === "truncated" ? 4 : 2, totalSavedTokens: compactionMode === "truncated" ? 1_500 : 900 })
-  listeners.forEach((listener) => listener())
 } })
 if (compactionMode) Object.assign(window, { compactionFail: () => {
   setMessages((current) => current.map((message) => message.kind === "compaction" ? { ...message, status: "failed", failureCode: "cancelled" } : message))
 } })
+if (longMode) Object.assign(window, {
+  longDelta: (text: string) => setMessages((current) => current.map((item, index) => item.kind === "assistant" && index === current.length - 1 ? { ...item, parts: item.parts.map((part) => part.kind === "text" ? { ...part, text: `${part.text}${text}` } : part) } : item)),
+})
 if (imagesMode) Object.assign(window, {
   imageFetchCount: () => imageFetches,
   imageUpdate: (kind: "stream" | "live" | "reconcile" | "prepend" | "reconnect" | "corrupt-tool" | "repair-tool") => {

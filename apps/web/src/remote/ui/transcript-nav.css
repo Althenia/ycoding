@@ -1,6 +1,8 @@
 .transcript-navigation { position:relative; min-inline-size:0; }
 .transcript-navigation--empty { display:none; }
-.transcript-navigation__item { display:grid; min-inline-size:0; list-style:none; }
+.transcript-navigation .transcript { position:relative; }
+.transcript-navigation__item { position:absolute; inset-inline:0; display:grid; min-inline-size:0; list-style:none; }
+.transcript-navigation__item[data-settled] .transcript-message { animation:none; }
 .transcript-navigation__beginning,.transcript-navigation__history-error { margin:0; padding:var(--yc-space-3); text-align:center; color:var(--yc-text-muted); font-size:var(--yc-size-xs); }
 .transcript-navigation__history-error button { min-block-size:44px; color:var(--yc-green-strong); border:0; background:none; }
 .transcript-navigation__item:focus-visible { outline:2px solid var(--yc-focus); outline-offset:2px; border-radius:var(--yc-radius-lg); }

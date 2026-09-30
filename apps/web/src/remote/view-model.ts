@@ -8,6 +8,7 @@
  */
 
 import type { CreateEnrollmentResponse } from "@ycoding-ai/remote"
+import type { RemoteTransportStatus } from "./transport"
 import type { FormAnswerView, FormFieldView, FormView, SessionView, ShellOutputFetch, ShellOutputView } from "./projection"
 
 export type FormDraft = Readonly<Record<string, FormAnswerView[string] | undefined>>
@@ -285,6 +286,11 @@ export function summarizeConnection(state: RemoteConnectionState): ConnectionSum
     return { label: "Connection error", detail: state.message, tone: "attention" }
   }
   return { label: "Not available", detail: describeUnavailableReason(state.reason), tone: "attention" }
+}
+
+export function connectionLabel(state: RemoteConnectionState, transport: RemoteTransportStatus): string {
+  const label = summarizeConnection(state).label
+  return state.kind === "connected" && transport.kind === "open" && transport.rttMs !== undefined ? `${label} · ${transport.rttMs} ms` : label
 }
 
 export function hasWaitingSession(status: { readonly attention: ReadonlySet<string>; readonly failed: ReadonlySet<string> } | undefined): boolean {

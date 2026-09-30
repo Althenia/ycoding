@@ -155,12 +155,12 @@ describe("remote shell layout", () => {
       try {
         await page.setViewport(width, height)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&inventoryCount=80&sessionListDelay=1800`)
-        for (let attempt = 0; attempt < 80 && await page.evaluate<number>(`document.querySelectorAll('.sessions-table__row').length`) < 25; attempt += 1) await Bun.sleep(50)
-        const before = await page.evaluate<{ readonly rows: number; readonly title: string; readonly requests: number }>(`({ rows: document.querySelectorAll('.sessions-table__row').length, title: document.querySelector('.sessions-table__row')?.textContent?.trim() ?? '', requests: window.remoteInventoryReport().workspaceRequests })`)
+        for (let attempt = 0; attempt < 80 && await page.evaluate<number>(`(Number(document.querySelector('.sessions-table')?.getAttribute('aria-rowcount') ?? 1) - 1)`) < 25; attempt += 1) await Bun.sleep(50)
+        const before = await page.evaluate<{ readonly rows: number; readonly title: string; readonly requests: number }>(`({ rows: (Number(document.querySelector('.sessions-table')?.getAttribute('aria-rowcount') ?? 1) - 1), title: document.querySelector('.sessions-table__row')?.textContent?.trim() ?? '', requests: window.remoteInventoryReport().workspaceRequests })`)
         expect(before.rows).toBeGreaterThanOrEqual(25)
         await page.evaluate(`window.remoteInvalidateSessions()`)
         for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`window.remoteInventoryReport().listStatus === 'loading' && window.remoteInventoryReport().workspaceRequests > ${before.requests}`); attempt += 1) await Bun.sleep(25)
-        expect(await page.evaluate<{ readonly rows: number; readonly title: string; readonly loading: boolean; readonly placeholder: boolean; readonly fits: boolean }>(`({ rows: document.querySelectorAll('.sessions-table__row').length, title: document.querySelector('.sessions-table__row')?.textContent?.trim() ?? '', loading: window.remoteInventoryReport().listStatus === 'loading', placeholder: document.querySelector('.sessions-results .loading-placeholder') !== null, fits: document.documentElement.scrollWidth <= innerWidth })`)).toEqual({ rows: before.rows, title: before.title, loading: true, placeholder: false, fits: true })
+        expect(await page.evaluate<{ readonly rows: number; readonly title: string; readonly loading: boolean; readonly placeholder: boolean; readonly fits: boolean }>(`({ rows: (Number(document.querySelector('.sessions-table')?.getAttribute('aria-rowcount') ?? 1) - 1), title: document.querySelector('.sessions-table__row')?.textContent?.trim() ?? '', loading: window.remoteInventoryReport().listStatus === 'loading', placeholder: document.querySelector('.sessions-results .loading-placeholder') !== null, fits: document.documentElement.scrollWidth <= innerWidth })`)).toEqual({ rows: before.rows, title: before.title, loading: true, placeholder: false, fits: true })
       } finally { await page.close() }
     }
   }, 15_000)
@@ -170,19 +170,19 @@ describe("remote shell layout", () => {
     try {
       await page.setViewport(1440, 900)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&inventoryCount=80&sessionListDelay=3500`)
-      for (let attempt = 0; attempt < 80 && await page.evaluate<number>(`document.querySelectorAll('.sessions-table__row').length`) < 25; attempt += 1) await Bun.sleep(50)
-      const existing = await page.evaluate<number>(`document.querySelectorAll('.sessions-table__row').length`)
+      for (let attempt = 0; attempt < 80 && await page.evaluate<number>(`(Number(document.querySelector('.sessions-table')?.getAttribute('aria-rowcount') ?? 1) - 1)`) < 25; attempt += 1) await Bun.sleep(50)
+      const existing = await page.evaluate<number>(`(Number(document.querySelector('.sessions-table')?.getAttribute('aria-rowcount') ?? 1) - 1)`)
       await page.evaluate(`(() => { const root = document.querySelector('.workspace__scroll'); root.tabIndex = 0; root.focus(); })()`)
       await page.pressKey("End", "End", 35)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.sessions-page__content .loading-placeholder--session') !== null`); attempt += 1) await Bun.sleep(50)
       expect(await page.evaluate<{ readonly rows: number; readonly placeholders: number; readonly label: string }>(`(() => ({
-        rows: document.querySelectorAll('.sessions-table__row').length,
+        rows: (Number(document.querySelector('.sessions-table')?.getAttribute('aria-rowcount') ?? 1) - 1),
         placeholders: document.querySelectorAll('.sessions-page__content .loading-placeholder--session[role="status"]').length,
         label: document.querySelector('.sessions-page__content .loading-placeholder--session')?.textContent?.trim() ?? '',
       }))()`)).toEqual({ rows: existing, placeholders: 1, label: "Loading more sessions…" })
       await Bun.write(new URL(`../../../.cache/tmp/shell-loading-next-page-1440x900.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
       for (let attempt = 0; attempt < 80 && await page.evaluate<boolean>(`document.querySelector('.sessions-page__content .loading-placeholder--session') !== null`); attempt += 1) await Bun.sleep(50)
-      expect(await page.evaluate<boolean>(`document.querySelectorAll('.sessions-table__row').length > ${existing} && document.querySelector('.sessions-page__content .loading-placeholder--session') === null`)).toBe(true)
+      expect(await page.evaluate<boolean>(`(Number(document.querySelector('.sessions-table')?.getAttribute('aria-rowcount') ?? 1) - 1) > ${existing} && document.querySelector('.sessions-page__content .loading-placeholder--session') === null`)).toBe(true)
     } finally { await page.close() }
   }, 15_000)
 
@@ -1128,7 +1128,9 @@ describe("remote shell layout", () => {
       const page = await fixture(`view=${path.slice("/remote/".length)}&sessions=empty`, width, label)
       const active = await page.evaluate<string | null>(`document.querySelector('.remote-nav a[aria-current="page"]')?.textContent?.trim() ?? null`)
       expect(active).toBe(label)
-      await page.evaluate(`(() => { const link=document.querySelector('.remote-nav a[href="/remote/usage"]'); link?.focus(); link?.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key:'Enter'})); })()`)
+      await page.evaluate(`document.querySelector('${width === 1440 ? ".remote-nav" : ".bottom-nav"} a[href="/remote/usage"]')?.focus()`)
+      await page.pressKey("Enter", "Enter", 13, "\r")
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`location.pathname === '/remote/usage'`); attempt += 1) await Bun.sleep(25)
       expect(await page.evaluate<boolean>(`location.pathname === '/remote/usage'`)).toBe(true)
       await page.close()
     }

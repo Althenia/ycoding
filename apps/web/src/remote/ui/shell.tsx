@@ -1,7 +1,9 @@
 import { isSessionID } from "@ycoding-ai/remote"
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack, type JSX } from "solid-js"
+import { For, Show, Suspense, createEffect, createMemo, createSignal, onCleanup, onMount, untrack, type JSX } from "solid-js"
 import { Portal } from "solid-js/web"
-import { Link, useRouter } from "../../router/router"
+import { createDebouncer, createThrottler } from "@tanstack/solid-pacer"
+import { useLocation, useNavigate } from "@tanstack/solid-router"
+import { Link } from "../../ui/link"
 import { browserStorage, readStored, writeStored } from "../../lib/storage"
 import { Chip } from "../../ui/chip"
 import { Icon, type IconName } from "../../ui/icon"
@@ -15,28 +17,20 @@ import { normalizeAccessKey } from "../invite"
 import {
   modelLabel,
   type PendingRequestView,
-  type SessionView,
 } from "../projection"
 import type { SessionInfoView } from "../store"
-import type { RemoteTransportStatus } from "../transport"
 import {
   accountReadState,
   cachedSessionsView,
-  connectionBanner,
+  connectionLabel,
   deviceAvailabilityView,
   hasWaitingSession,
   remoteEntryView,
   sessionAvailabilityView,
   sessionProjectLabel,
-  sessionStateChips,
   summarizeConnection,
   workspaceLabels,
-  type ConnectionTone,
   type DeviceAvailabilityView,
-  type RemoteConnectionState,
-  type RemoteSessionStatus,
-  type RemoteSessionSummary,
-  type SessionChip,
 } from "../view-model"
 import { officeInputFromRemote } from "../office/adapter"
 import { projectOffice } from "../office/model"
@@ -62,22 +56,29 @@ import { TodoPanel } from "./todo-panel"
 import { RunningSessions } from "./running-sessions"
 import { LoadingPlaceholder } from "./loading"
 import { SubagentBar } from "./subagent-bar"
+import { createRowVirtualizer, sameKeys, scrollParent } from "./virtual-rows"
 import { TeamHeading, TeamView } from "./team-view"
 import { isManagedSubagent, siblingTargets, teamActiveCount, teamActivityLabel } from "./team-model"
-
-const views = ["/remote", "/remote/sessions", "/remote/usage", "/remote/settings"] as const
+import {
+  remoteSurfaceComposition,
+  connectionStripView,
+  sessionChips,
+  sessionNeedsAttention,
+  summarizeSession,
+  views,
+  type RemoteView,
+} from "./shell-model"
 
 const newSessionHash = "new-session"
 const sessionHashPrefix = "session="
 const sessionRailKey = "ycoding.remote.desktopRailCollapsed"
 
-export type RemoteView = (typeof views)[number]
-
 const settingsSupport = "Machine, account, devices, app, appearance, office view, and notifications for this workspace."
 
 export function RemoteShell(props: { readonly path: () => string }): JSX.Element {
   const remote = useRemote()
-  const router = useRouter()
+  const navigate = useNavigate()
+  const hash = useLocation({ select: (location) => location.hash })
   const [navOpen, setNavOpen] = createSignal(false)
   const [navClosing, setNavClosing] = createSignal(false)
   const [navGeneration, setNavGeneration] = createSignal(1)
@@ -123,9 +124,9 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   let loadedControlsRoot: string | undefined
   const readPhoneLayout = () => getComputedStyle(document.documentElement).getPropertyValue("--yc-phone-layout").trim() === "1"
   const [phoneLayout, setPhoneLayout] = createSignal(readPhoneLayout())
-  const updatePhoneLayout = () => setPhoneLayout(readPhoneLayout())
-  window.addEventListener("resize", updatePhoneLayout)
-  onCleanup(() => window.removeEventListener("resize", updatePhoneLayout))
+  const updatePhoneLayout = createThrottler(() => setPhoneLayout(readPhoneLayout()), { wait: 50 })
+  window.addEventListener("resize", updatePhoneLayout.maybeExecute)
+  onCleanup(() => window.removeEventListener("resize", updatePhoneLayout.maybeExecute))
   const tabletQuery = window.matchMedia("(min-width: 768px) and (max-width: 1023px)")
   const [tabletLayout, setTabletLayout] = createSignal(tabletQuery.matches)
   const updateTabletLayout = (event: MediaQueryListEvent) => setTabletLayout(event.matches)
@@ -138,29 +139,36 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   let scrollHost: HTMLDivElement | undefined
   let jumpSlot: HTMLDivElement | undefined
   const anchors = new Map<string, number>()
+  let lastScroll = { top: 0, distance: 0 }
+  const scrollTo = (top: number) => {
+    if (!scrollHost) return
+    scrollHost.scrollTop = top
+    scrollHost.dispatchEvent(new Event("scroll"))
+  }
   let restoringAnchor = false
-  let anchorTimer: ReturnType<typeof setTimeout> | undefined
-  onCleanup(() => { if (anchorTimer !== undefined) clearTimeout(anchorTimer) })
+  const endAnchorRestore = createDebouncer(() => { restoringAnchor = false }, { wait: 220 })
   let previousScrollContext = { route: view(), sessionID: state().activeSessionID }
   createEffect(() => {
     const route = view()
     const sessionID = state().activeSessionID
     if (route === previousScrollContext.route && sessionID === previousScrollContext.sessionID) return
-    if (previousScrollContext.route === "/remote" && previousScrollContext.sessionID && scrollHost)
-      anchors.set(previousScrollContext.sessionID, scrollHost.scrollTop)
+    if (previousScrollContext.route === "/remote" && previousScrollContext.sessionID) {
+      if (lastScroll.distance <= 48) anchors.delete(previousScrollContext.sessionID)
+      else anchors.set(previousScrollContext.sessionID, lastScroll.top)
+    }
     const routeChanged = previousScrollContext.route !== route
     previousScrollContext = { route, sessionID }
-    if (routeChanged && route === "/remote/sessions" && scrollHost) scrollHost.scrollTop = 0
+    if (routeChanged && route === "/remote/sessions" && scrollHost) scrollTo(0)
     restoringAnchor = false
-    if (anchorTimer !== undefined) clearTimeout(anchorTimer)
+    endAnchorRestore.cancel()
     if (routeChanged || route !== "/remote" || sessionID === undefined || !anchors.has(sessionID)) return
     restoringAnchor = true
     const restore = () => {
       if (view() === "/remote" && state().activeSessionID === sessionID && scrollHost)
-        scrollHost.scrollTop = anchors.get(sessionID) ?? 0
+        scrollTo(anchors.get(sessionID) ?? 0)
     }
     queueMicrotask(restore)
-    anchorTimer = setTimeout(() => { restoringAnchor = false }, 220)
+    endAnchorRestore.maybeExecute()
   })
   const officeShown = () => view() === "/remote" && !phoneLayout() && office.presentation() === "office"
   const activeSession = () => state().selectedSessionInfo ?? state().sessions.find((session) => session.id === state().activeSessionID)
@@ -192,20 +200,20 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     }
     setNavOpen(true)
   }
-  const newSessionOpen = () => view() === "/remote" && router.hash() === newSessionHash
+  const newSessionOpen = () => view() === "/remote" && hash() === newSessionHash
   const showNewSession = () => newSessionOpen() && canCreateSession()
   const conversationHidden = () => view() !== "/remote" || showNewSession() || (officeShown() && selected())
   const openNewSession = () => {
     if (!canCreateSession()) return
     closeNav()
-    router.navigate(`/remote#${newSessionHash}`)
+    navigate({ to: "/remote", hash: newSessionHash })
   }
   let focusAfterSelection: string | undefined
   const openSession = (sessionID: string) => {
     focusAfterSelection = newSessionOpen() ? sessionID : undefined
     closeNav()
     void remote.store.selectSession(sessionID)
-    router.navigate("/remote", { replace: view() === "/remote" && router.hash().length > 0 })
+    navigate({ to: "/remote", replace: view() === "/remote" && hash().length > 0 })
   }
   createEffect(() => {
     const route = view()
@@ -224,8 +232,8 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   })
   const openFromTeam = (sessionID: string) => { closeTeam(); openSession(sessionID) }
   const requestedSession = () => {
-    const hash = router.hash()
-    const sessionID = hash.startsWith(sessionHashPrefix) ? hash.slice(sessionHashPrefix.length) : undefined
+    const fragment = hash()
+    const sessionID = fragment.startsWith(sessionHashPrefix) ? fragment.slice(sessionHashPrefix.length) : undefined
     return view() === "/remote" && sessionID !== undefined && isSessionID(sessionID) ? sessionID : undefined
   }
   createEffect(() => {
@@ -271,7 +279,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     teamFrame = requestAnimationFrame(() => setTeamEntering(false))
   }
   const openFromAlert = (sessionID: unknown) => {
-    if (typeof sessionID === "string" && isSessionID(sessionID)) router.navigate(`/remote#${sessionHashPrefix}${sessionID}`)
+    if (typeof sessionID === "string" && isSessionID(sessionID)) navigate({ to: "/remote", hash: `${sessionHashPrefix}${sessionID}` })
   }
   const alertEvent = (event: Event) => openFromAlert(event instanceof CustomEvent ? Reflect.get(Object(event.detail), "sessionID") : undefined)
   const workerMessage = (event: MessageEvent) => {
@@ -333,6 +341,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
               </div>
             </Show>
             <div class="workspace__scroll" ref={scrollHost} onScroll={() => {
+              if (scrollHost) lastScroll = { top: scrollHost.scrollTop, distance: scrollHost.scrollHeight - scrollHost.clientHeight - scrollHost.scrollTop }
               if (!restoringAnchor || view() !== "/remote" || !scrollHost) return
               const anchor = anchors.get(state().activeSessionID ?? "")
               if (anchor !== undefined && Math.abs(scrollHost.scrollTop - anchor) > 1) scrollHost.scrollTop = anchor
@@ -469,7 +478,7 @@ function RoutePanel(props: { readonly active: boolean; readonly preserve?: boole
     if (exitTimer !== undefined) clearTimeout(exitTimer)
     if (entranceFrame !== undefined) cancelAnimationFrame(entranceFrame)
   })
-  return <Show when={mounted()}><div ref={host} class={`route-panel route-panel--${phase()}${props.class ? ` ${props.class}` : ""}`} aria-hidden={props.active ? undefined : "true"} inert={!props.active}>{props.children}</div></Show>
+  return <Show when={mounted()}><div ref={host} class={`route-panel route-panel--${phase()}${props.class ? ` ${props.class}` : ""}`} aria-hidden={props.active ? undefined : "true"} inert={!props.active}><Suspense>{props.children}</Suspense></div></Show>
 }
 
 /**
@@ -500,7 +509,7 @@ function SignInScreen(): JSX.Element {
     <main id="remote-main" class="sign-in">
       <div class="sign-in__panel">
         <div class="sign-in__top">
-          <Link href="/" class="brand" title="YCoding home">
+          <Link to="/" class="brand" title="YCoding home">
             <BrandMark compact />
           </Link>
           <ThemeToggle />
@@ -541,123 +550,11 @@ function SignInScreen(): JSX.Element {
           <button type="submit" class="button button--secondary sign-in__provider" disabled={keyBusy()}>{keyBusy() ? "Signing in…" : "Sign in"}</button>
         </form>
         <p class="sign-in__note">
-          <Link href="/docs/usage/remote" class="text-link">How remote access works</Link>
+          <Link to="/docs/usage/remote" class="text-link">How remote access works</Link>
         </p>
       </div>
     </main>
   )
-}
-
-/** The rail and composer belong only to an active conversation, never every remote screen. */
-export function remoteSurfaceComposition(path: RemoteView, hasSession: boolean) {
-  const selectedConversation = path === "/remote" && hasSession
-  return { showSessionRail: selectedConversation, showComposer: selectedConversation }
-}
-
-export type ConnectionStripView = {
-  readonly tone: ConnectionTone
-  readonly body: string
-  readonly showReconnect: boolean
-  readonly showSettings: boolean
-}
-
-/**
- * What the connection strip states, and which controls it offers. A healthy connection
- * says nothing the header's connection label does not, so the strip appears only for a
- * state that carries a message or a recovery action.
- */
-export function connectionStripView(input: {
-  readonly connection: RemoteConnectionState
-  readonly transportKind: RemoteTransportStatus["kind"]
-  readonly activeDeviceID?: string
-  readonly advertised: number
-  readonly lastRelayDrop?: { readonly code: number; readonly reason: string }
-}): ConnectionStripView | undefined {
-  if (input.connection.kind === "connected" && input.transportKind === "open") return undefined
-  const summary = summarizeConnection(input.connection)
-  const banner = connectionBanner(input.connection)
-  const body = banner === undefined ? `${summary.label} — ${summary.detail}` : `${banner.title} — ${banner.body}`
-  const drop = input.activeDeviceID !== undefined && input.lastRelayDrop !== undefined &&
-    (input.connection.kind === "connected" || input.connection.kind === "connecting" || input.connection.kind === "error")
-    ? `Last browser relay drop (${input.lastRelayDrop.code})${input.connection.kind === "error" && summary.detail === input.lastRelayDrop.reason ? "" : `: ${input.lastRelayDrop.reason}`}` : undefined
-  return {
-    tone: summary.tone,
-    body: drop === undefined ? body : `${body} · ${drop}`,
-    showReconnect:
-      input.activeDeviceID !== undefined &&
-      input.transportKind !== "open" &&
-      ((banner?.showReconnect ?? false) || input.advertised > 0),
-    showSettings: banner?.showSettings ?? false,
-  }
-}
-
-/** One advertised session as the header chips and the session rows describe it. */
-export function summarizeSession(session: SessionInfoView, view: SessionView | undefined): RemoteSessionSummary {
-  const active = view !== undefined && view.id === session.id ? view : undefined
-  const autonomy = active?.autonomy
-  const model = modelLabel(active?.model) ?? session.modelLabel
-  return {
-    id: session.id,
-    title: session.title,
-    status: sessionStatus(session, active),
-    ...(session.pinnedAt === undefined ? {} : { pinned: true }),
-    agent: active?.agent ?? session.agent,
-    model,
-    autonomy: autonomy?.mode,
-    yoloLevel: autonomy?.yolo,
-    guardrailsEnforced: autonomy === undefined ? undefined : autonomy.mode !== "yolo" || autonomy.yolo < 3,
-    updatedAt: session.updatedAt > 0 ? new Date(session.updatedAt).toISOString() : undefined,
-  }
-}
-
-/**
- * Whether the loaded session view reports an unanswered approval. Only the selected
- * session has a loaded view, so a session this client has not loaded keeps the status the
- * device reported for it instead of being described as waiting.
- */
-export function awaitsApproval(view: SessionView | undefined, sessionID: string): boolean {
-  if (view === undefined || view.id !== sessionID) return false
-  return view.requests.some((request) => request.kind === "permission" || request.kind === "guardrail")
-}
-
-export function sessionNeedsAttention(session: SessionInfoView, view: SessionView | undefined): boolean {
-  if (session.attention === true) return true
-  return view !== undefined && view.id === session.id && view.requests.length > 0
-}
-
-/**
- * The chips one session row and the selected session's header row show: the status the
- * device reported, plus the fact that the loaded view is holding an unanswered approval.
- */
-export function sessionChips(session: SessionInfoView, view: SessionView | undefined): readonly SessionChip[] {
-  const chips = sessionStateChips(summarizeSession(session, view))
-  if (awaitsApproval(view, session.id)) return [{ label: "Waiting for approval", tone: "attention" }, ...chips]
-  if (sessionNeedsAttention(session, view)) return [{ label: "Waiting for you", tone: "attention" }, ...chips]
-  return chips
-}
-
-/**
- * The client-side session filter. It reads the sessions the workspace already holds and
- * issues no request, so an empty result means the filter matched nothing rather than that
- * the device advertises nothing. Pinned sessions come first, in pin order.
- */
-export type SessionFilter = "all" | "running" | "idle"
-
-export function filterSessions(
-  sessions: readonly SessionInfoView[],
-  query: string,
-  filter: SessionFilter = "all",
-): readonly SessionInfoView[] {
-  const needle = query.trim().toLowerCase()
-  const pinned = sessions
-    .filter((session) => session.pinnedAt !== undefined)
-    .toSorted((left, right) => left.pinnedAt! - right.pinnedAt!)
-  return [...pinned, ...sessions.filter((session) => session.pinnedAt === undefined)].filter((session) => {
-    if (filter === "running" && session.running !== true) return false
-    if (filter === "idle" && (session.running === true || session.archived)) return false
-    if (needle.length === 0) return true
-    return [session.title, session.agent ?? "", session.modelLabel ?? ""].some((value) => value.toLowerCase().includes(needle))
-  })
 }
 
 const noSessionTitle = "No session selected"
@@ -695,12 +592,12 @@ function RemoteHeader(props: {
         >
           <Icon name="menu" />
         </button>
-        <Link href="/" class="brand" title="YCoding home">
+        <Link to="/" class="brand" title="YCoding home">
           <img class="brand__mark" src="/brand/ycoding-mark.svg" alt="YCoding" width={28} height={28} />
         </Link>
         <nav class="remote-nav" aria-label="Remote workspace">
           <Link
-            href="/remote/sessions"
+            to="/remote/sessions"
             class={`remote-nav__link${props.view === "/remote/sessions" ? " remote-nav__link--active" : ""}`}
             ariaCurrent={props.view === "/remote/sessions" ? "page" : undefined}
             ariaLabel={attention().sessions ? "Sessions, a session is waiting for your decision" : undefined}
@@ -709,7 +606,7 @@ function RemoteHeader(props: {
             <AttentionMark show={attention().sessions} />
           </Link>
           <Link
-            href="/remote"
+            to="/remote"
             class={`remote-nav__link${props.view === "/remote" ? " remote-nav__link--active" : ""}`}
             ariaCurrent={props.view === "/remote" ? "page" : undefined}
             ariaLabel={attention().conversation ? "Conversation, waiting for your decision" : undefined}
@@ -717,13 +614,13 @@ function RemoteHeader(props: {
             Conversation
             <AttentionMark show={attention().conversation} />
           </Link>
-          <Link href="/remote/usage" class={`remote-nav__link${props.view === "/remote/usage" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/usage" ? "page" : undefined}>Usage</Link>
-          <Link href="/remote/settings" class={`remote-nav__link${props.view === "/remote/settings" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/settings" ? "page" : undefined}>Settings</Link>
+          <Link to="/remote/usage" class={`remote-nav__link${props.view === "/remote/usage" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/usage" ? "page" : undefined}>Usage</Link>
+          <Link to="/remote/settings" class={`remote-nav__link${props.view === "/remote/settings" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/settings" ? "page" : undefined}>Settings</Link>
         </nav>
         <div class="remote-device">
           <span class="remote-connection">
             <span class={`status-dot status-dot--${connection().tone}`} aria-hidden="true" />
-            <span class="remote-connection-label">{connection().label}</span>
+            <span class="remote-connection-label">{connectionLabel(state().connection, state().transport)}</span>
           </span>
         </div>
         <div class="app-header__end">
@@ -748,7 +645,7 @@ function RemoteHeader(props: {
             <ThemeToggle />
           </span>
           <Link
-            href="/remote/settings"
+            to="/remote/settings"
             class="button button--ghost button--icon remote-header__settings"
             ariaLabel="Settings"
             title="Settings"
@@ -848,7 +745,7 @@ function ConnectionStrip(): JSX.Element {
             </button>
           </Show>
           <Show when={view().showSettings}>
-            <Link href="/remote/settings" class="button button--secondary button--small">
+            <Link to="/remote/settings" class="button button--secondary button--small">
               Open settings
             </Link>
           </Show>
@@ -910,9 +807,7 @@ function SessionPanel(props: {
               {(view) => (
                 <>
                   <p class="panel__note">{view().note}</p>
-                  <div class="session-list">
-                    <For each={state().sessions}>{(session) => <SessionRow session={session} readOnly onSelectSession={props.onSelectSession} />}</For>
-                  </div>
+                  <SessionRailList sessions={state().sessions} readOnly onSelectSession={props.onSelectSession} />
                 </>
               )}
             </Show>
@@ -944,23 +839,84 @@ function SessionPanel(props: {
               </div>
             </Show>
           }>
-            <div class="session-list" aria-busy={state().sessionRowsStale === true}>
-              <For each={state().sessions}>
-                {(session) => (
-                  <SessionRow
-                    session={session}
-                    readOnly={state().sessionRowsStale === true}
-                    onSelectSession={props.onSelectSession}
-                    onNavigate={props.onNavigate}
-                  />
-                )}
-              </For>
-            </div>
+            <SessionRailList
+              sessions={state().sessions}
+              readOnly={state().sessionRowsStale === true}
+              busy={state().sessionRowsStale === true}
+              onSelectSession={props.onSelectSession}
+              onNavigate={props.onNavigate}
+            />
           </Show>
           <Show when={advertised()}>{(note) => <p class="panel__note">{note()}</p>}</Show>
           <Show when={state().sessionPageLoading}><LoadingPlaceholder kind="session" label="Loading more sessions…" /></Show>
         </Show>
       </Show>
+    </div>
+  )
+}
+
+function SessionRailList(props: {
+  readonly sessions: readonly SessionInfoView[]
+  readonly readOnly: boolean
+  readonly busy?: boolean
+  readonly onSelectSession: (sessionID: string) => void
+  readonly onNavigate?: () => void
+}): JSX.Element {
+  let list: HTMLDivElement | undefined
+  let scroller: HTMLElement | undefined
+  const keys = createMemo(() => props.sessions.map((session) => session.id), [], { equals: sameKeys })
+  const byID = createMemo(() => new Map(props.sessions.map((session) => [session.id, session])))
+  const rows = createRowVirtualizer({
+    list: () => list,
+    scroller: () => scroller ??= list ? scrollParent(list) : undefined,
+    keys,
+    estimate: () => 64,
+    typicalSize: true,
+    overscan: 6,
+    layout: () => keys().length > 0,
+  })
+  return (
+    <div ref={list} class="session-list" role="list" aria-busy={props.busy === true} style={{ "block-size": `${rows.virtualizer.getTotalSize()}px` }}>
+      <For each={rows.rendered()}>
+        {(id) => {
+          const row = rows.row(id)
+          return (
+            <div class="session-list__row" role="listitem" aria-posinset={row.index() + 1} aria-setsize={keys().length} data-index={row.index()} style={{ "inset-block-start": `${row.top()}px` }} ref={row.measure}>
+              <SessionRow session={byID().get(id)!} readOnly={props.readOnly} onSelectSession={props.onSelectSession} onNavigate={props.onNavigate} />
+            </div>
+          )
+        }}
+      </For>
+    </div>
+  )
+}
+
+function SessionTableRows(props: {
+  readonly sessions: readonly SessionInfoView[]
+  readonly readOnly: boolean
+  readonly onSelectSession: (sessionID: string) => void
+}): JSX.Element {
+  let body: HTMLDivElement | undefined
+  let scroller: HTMLElement | undefined
+  const keys = createMemo(() => props.sessions.map((session) => session.id), [], { equals: sameKeys })
+  const byID = createMemo(() => new Map(props.sessions.map((session) => [session.id, session])))
+  const rows = createRowVirtualizer({
+    list: () => body,
+    scroller: () => scroller ??= body ? scrollParent(body) : undefined,
+    keys,
+    estimate: () => 64,
+    typicalSize: true,
+    overscan: 6,
+    layout: () => keys().length > 0,
+  })
+  return (
+    <div ref={body} class="sessions-table__body" role="rowgroup" style={{ "block-size": `${rows.virtualizer.getTotalSize()}px` }}>
+      <For each={rows.rendered()}>
+        {(id) => {
+          const row = rows.row(id)
+          return <SessionSummaryRow session={byID().get(id)!} readOnly={props.readOnly} onSelectSession={props.onSelectSession} rowIndex={row.index() + 2} top={row.top()} measure={row.measure} />
+        }}
+      </For>
     </div>
   )
 }
@@ -1010,12 +966,15 @@ function SessionSummaryRow(props: {
   readonly session: SessionInfoView
   readonly readOnly?: boolean
   readonly onSelectSession: (sessionID: string) => void
+  readonly rowIndex: number
+  readonly top: number
+  readonly measure: (element: HTMLElement) => void
 }): JSX.Element {
   const remote = useRemote()
   const summary = () => summarizeSession(props.session, remote.state().view)
   const chips = () => sessionChips(props.session, remote.state().view)
   return (
-    <div class="sessions-table__row" role="row">
+    <div class="sessions-table__row" role="row" aria-rowindex={props.rowIndex} data-index={props.rowIndex - 2} style={{ "inset-block-start": `${props.top}px` }} ref={props.measure}>
       <span class="sessions-table__title" role="cell">
         <button
           type="button"
@@ -1082,7 +1041,7 @@ function DeviceActions(props: { readonly view: () => DeviceAvailabilityView; rea
         )}
       </Show>
       <Show when={props.view().showSettings}>
-        <Link href="/remote/settings" class="button button--secondary button--small" onClick={props.onNavigate}>
+        <Link to="/remote/settings" class="button button--secondary button--small" onClick={props.onNavigate}>
           Open settings
         </Link>
       </Show>
@@ -1158,14 +1117,14 @@ function ConversationView(props: {
                   <DeviceActions view={devices} />
                 </Show>
                 <NewSessionButton disabled={!props.canCreateSession} onClick={props.onNewSession} />
-                <Link href="/docs/usage/remote" class="button button--secondary button--small">
+                <Link to="/docs/usage/remote" class="button button--secondary button--small">
                   How remote access works
                 </Link>
               </div>
             </div>
           }
         >
-          <NewSessionComposer onCreated={props.onCreated} />
+          <Suspense><NewSessionComposer onCreated={props.onCreated} /></Suspense>
         </Show>
       }
     >
@@ -1222,16 +1181,17 @@ function PresentationSwitch(props: {
     const selected = switcher?.querySelector<HTMLButtonElement>('[role="radio"][aria-checked="true"]')
     if (selected) setIndicator({ left: selected.offsetLeft, width: selected.offsetWidth, ready: true })
   }
+  const pacedIndicator = createThrottler(positionIndicator, { wait: 50 })
   createEffect(() => { props.value; queueMicrotask(positionIndicator) })
   onMount(() => {
     positionIndicator()
-    const observer = new ResizeObserver(positionIndicator)
+    const observer = new ResizeObserver(pacedIndicator.maybeExecute)
     if (switcher) {
       observer.observe(switcher)
       switcher.querySelectorAll('[role="radio"]').forEach((button) => observer.observe(button))
     }
-    window.addEventListener("resize", positionIndicator)
-    onCleanup(() => { observer.disconnect(); window.removeEventListener("resize", positionIndicator) })
+    window.addEventListener("resize", pacedIndicator.maybeExecute)
+    onCleanup(() => { observer.disconnect(); window.removeEventListener("resize", pacedIndicator.maybeExecute) })
   })
   return (
     <div ref={switcher} class="presentation-switch filters" role="radiogroup" aria-label="Workspace view"
@@ -1414,21 +1374,17 @@ function SessionsPage(props: {
               </Show>
             }>
               <div class="sessions-results" aria-busy={remote.state().sessionRowsStale === true}>
-                <div class="sessions-table" role="table" aria-label="Sessions">
-                  <div class="sessions-table__head" role="row">
+                <div class="sessions-table" role="table" aria-label="Sessions" aria-rowcount={sessions().length + 1}>
+                  <div class="sessions-table__head" role="row" aria-rowindex={1}>
                     <span role="columnheader">Title</span>
                     <span role="columnheader">Status</span>
                     <span role="columnheader">Updated</span>
                   </div>
-                  <For each={sessions()}>
-                    {(session) => (
-                      <SessionSummaryRow
-                        session={session}
-                        readOnly={cached() !== undefined || remote.state().sessionRowsStale === true}
-                        onSelectSession={props.onSelectSession}
-                      />
-                    )}
-                  </For>
+                  <SessionTableRows
+                    sessions={sessions()}
+                    readOnly={cached() !== undefined || remote.state().sessionRowsStale === true}
+                    onSelectSession={props.onSelectSession}
+                  />
                 </div>
               </div>
             </Show>
@@ -1474,25 +1430,26 @@ function WorkspaceNav(): JSX.Element {
     if (nav.style.getPropertyValue("--workspace-nav-available") !== available) nav.style.setProperty("--workspace-nav-available", available)
     nav.toggleAttribute("data-more-below", nav.scrollHeight - nav.clientHeight - nav.scrollTop > 1)
   }
+  const pacedCue = createThrottler(updateCue, { wait: 50 })
   onMount(() => {
     if (!nav) return
     scrollport = nav.closest(".workspace__scroll")
-    const observer = new ResizeObserver(updateCue)
+    const observer = new ResizeObserver(pacedCue.maybeExecute)
     observer.observe(nav)
     const list = nav.querySelector(".workspace-nav__list")
     if (list) observer.observe(list)
     if (nav.parentElement) observer.observe(nav.parentElement)
-    scrollport?.addEventListener("scroll", updateCue, { passive: true })
-    window.addEventListener("resize", updateCue)
+    scrollport?.addEventListener("scroll", pacedCue.maybeExecute, { passive: true })
+    window.addEventListener("resize", pacedCue.maybeExecute)
     updateCue()
     onCleanup(() => {
       observer.disconnect()
-      scrollport?.removeEventListener("scroll", updateCue)
-      window.removeEventListener("resize", updateCue)
+      scrollport?.removeEventListener("scroll", pacedCue.maybeExecute)
+      window.removeEventListener("resize", pacedCue.maybeExecute)
     })
   })
   return (
-    <nav ref={nav} class="workspace-nav" aria-label="Workspaces" onScroll={updateCue}>
+    <nav ref={nav} class="workspace-nav" aria-label="Workspaces" onScroll={pacedCue.maybeExecute}>
       <p class="workspace-nav__title">Workspaces</p>
       <ul class="workspace-nav__list">
         <For each={remote.state().sessionGroups}>
@@ -1536,31 +1493,17 @@ function attachSessionFeed(element: HTMLDivElement, store: ReturnType<typeof use
   const check = () => {
     if (!gesture || direction === 0 || store.state().sessionPageLoading || store.state().sessionListStatus !== "ready") return
     if (direction > 0 && root.scrollHeight - root.scrollTop - root.clientHeight < 250 && store.state().sessionHasNext) {
-      const before = store.state().sessions[0]?.id
-      const removed = store.state().sessions.length >= 150
-        ? [...element.querySelectorAll<HTMLElement>(".session-row, .sessions-table__row")].slice(0, 50).reduce((height, row) => height + row.offsetHeight, 0)
-        : 0
       gesture = false
       direction = 0
-      void store.nextSessionsPage().then(() => requestAnimationFrame(() => {
-        if (removed > 0 && store.state().sessions[0]?.id !== before) root.scrollTop = Math.max(0, root.scrollTop - removed)
-        lastTop = root.scrollTop
-      }))
+      void store.nextSessionsPage().then(() => { lastTop = root.scrollTop })
     }
     if (direction < 0 && root.scrollTop < 250 && store.state().sessionHasPrevious) {
-      const before = store.state().sessions[0]?.id
       gesture = false
       direction = 0
-      void store.previousSessionsPage().then(() => requestAnimationFrame(() => {
-        if (store.state().sessions[0]?.id !== before) {
-          const added = [...element.querySelectorAll<HTMLElement>(".session-row, .sessions-table__row")].slice(0, 50)
-            .reduce((height, row) => height + row.offsetHeight, 0)
-          root.scrollTop += added
-        }
-        lastTop = root.scrollTop
-      }))
+      void store.previousSessionsPage().then(() => { lastTop = root.scrollTop })
     }
   }
+  const pacedCheck = createThrottler(check, { wait: 100 })
   const wheel = (event: WheelEvent) => { gesture = true; direction = Math.sign(event.deltaY); check() }
   let touchY = 0
   const touchStart = (event: TouchEvent) => { gesture = true; touchY = event.changedTouches[0]?.clientY ?? 0 }
@@ -1575,7 +1518,7 @@ function attachSessionFeed(element: HTMLDivElement, store: ReturnType<typeof use
   const scroll = () => {
     if (gesture && root.scrollTop !== lastTop) direction = Math.sign(root.scrollTop - lastTop)
     lastTop = root.scrollTop
-    check()
+    pacedCheck.maybeExecute()
   }
   root.addEventListener("wheel", wheel, { passive: true })
   root.addEventListener("touchstart", touchStart, { passive: true })
@@ -1585,6 +1528,7 @@ function attachSessionFeed(element: HTMLDivElement, store: ReturnType<typeof use
   root.addEventListener("scroll", scroll, { passive: true })
   return () => {
     unsubscribe()
+    pacedCheck.cancel()
     root.removeEventListener("wheel", wheel)
     root.removeEventListener("touchstart", touchStart)
     root.removeEventListener("touchend", touch)
@@ -1633,7 +1577,7 @@ function BottomNav(props: { readonly view: RemoteView }): JSX.Element {
       <For each={items}>
         {(item) => (
           <Link
-            href={item.view}
+            to={item.view}
             class={`bottom-nav__item${props.view === item.view ? " bottom-nav__item--active" : ""}`}
             ariaLabel={flagged(item.view) ? `${item.label}, waiting for your decision` : item.label}
             ariaCurrent={props.view === item.view ? "page" : undefined}
@@ -1650,17 +1594,6 @@ function BottomNav(props: { readonly view: RemoteView }): JSX.Element {
       </For>
     </nav>
   )
-}
-
-function sessionStatus(
-  session: SessionInfoView,
-  active: SessionView | undefined,
-): RemoteSessionStatus {
-  if (session.archived) return "archived"
-  if (session.running === true) return "running"
-  if (active !== undefined && active.status === "running") return "running"
-  if (session.failed === true) return "failed"
-  return "idle"
 }
 
 function advertisedCount(count: number): string {

@@ -1,5 +1,5 @@
 import { For, Show, createMemo, createSignal, type JSX } from "solid-js"
-import { Link } from "../router/router"
+import { Link } from "./link"
 import { RELEASES, releaseYears, type ChangeEntry, type ChangeTag } from "../content/changelog"
 import { DOC_INDEX } from "../content/docs/registry"
 import { DocsShell } from "./docs"
@@ -87,10 +87,10 @@ export function ChangelogPage(): JSX.Element {
         </ol>
       </Show>
       <p class="docs-footnote">
-        <Link href="/docs/installation" class="text-link">
+        <Link to="/docs/installation" class="text-link">
           Installation guide
         </Link>
-        <Link href="/docs" class="text-link">
+        <Link to="/docs" class="text-link">
           Documentation
         </Link>
       </p>

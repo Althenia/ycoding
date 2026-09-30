@@ -96,6 +96,7 @@ async function relayHarness() {
     saveOfflineCheck: async () => undefined,
     notices,
     saveNoticeSubscription: (connectionID, value) => { if (value) subscribed.add(connectionID) },
+    savePriority: () => {},
     authorizeClientCommand: async () => ({ ok: true }),
     authorizeAgentCommand: async () => ({ ok: true }),
     authorityTtlMs: 5_000,

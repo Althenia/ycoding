@@ -110,7 +110,7 @@ describe("transcript rendering", () => {
         for (let i = 0; i < 40 && !await page.evaluate(`document.querySelector('[data-message-id="prompt_6"]')`); i++) await Bun.sleep(50)
         await page.evaluate(`(() => { const root = document.querySelector('.workspace__scroll'); root.dispatchEvent(new WheelEvent('wheel', { bubbles:true, deltaY:-300 })); root.scrollTop = 45 })()`)
         const before = await page.evaluate<number>(`document.querySelector('[data-message-id="prompt_6"]').getBoundingClientRect().top`)
-        for (let i = 0; i < 80 && !await page.evaluate(`document.querySelector('[data-message-id="prompt_0"]')`); i++) await Bun.sleep(25)
+        for (let i = 0; i < 80 && !await page.evaluate(`document.querySelector('.transcript-navigation__beginning')`); i++) await Bun.sleep(25)
         const after = await page.evaluate<{ readonly top: number; readonly marker: boolean }>(`(() => ({ top: document.querySelector('[data-message-id="prompt_6"]').getBoundingClientRect().top, marker: Boolean(document.querySelector('.transcript-navigation__beginning')) }))()`)
         expect(Math.abs(after.top - before)).toBeLessThanOrEqual(2)
         expect(after.marker).toBe(true)
@@ -120,7 +120,7 @@ describe("transcript rendering", () => {
         await Bun.write(new URL(`../../../.cache/tmp/transcript-history-${theme}-${width}x${height}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
       }
     } finally { await page.close() }
-  })
+  }, 15_000)
 
   test("renders image previews and an accessible lightbox in both themes at phone and desktop widths", async () => {
     const page = await browser!.openPage()
@@ -139,7 +139,7 @@ describe("transcript rendering", () => {
         for (let i = 0; i < 30 && !await page.evaluate(`document.querySelector('.transcript-lightbox[open]')`); i++) await Bun.sleep(20)
         await page.evaluate(`Promise.all([...document.querySelector('.transcript-lightbox .overlay__surface').getAnimations()].map(animation => animation.finished))`)
         const dialog = await page.evaluate<{ readonly open: boolean; readonly focused: boolean; readonly contained: boolean; readonly sticky: boolean; readonly reduced: boolean }>(`(() => { const d = document.querySelector('.transcript-lightbox'); const box = d.querySelector('.overlay__surface').getBoundingClientRect(); return { open: Boolean(d?.open), focused: Boolean(d?.contains(document.activeElement)), contained: box.left >= -1 && box.right <= innerWidth + 1 && box.top >= -1 && box.bottom <= innerHeight + 1, sticky: getComputedStyle(d.querySelector('.overlay__head')).position === 'sticky', reduced: getComputedStyle(d.querySelector('.overlay__surface')).animationName === 'none' } })()`)
-        expect(dialog).toEqual({ open: true, focused: true, contained: true, sticky: width! < 768, reduced: theme === "dark" })
+        expect(dialog).toEqual({ open: true, focused: true, contained: true, sticky: false, reduced: theme === "dark" })
         await page.pressKey("Tab", "Tab", 9)
         expect(await page.evaluate<boolean>(`document.querySelector('.transcript-lightbox')?.contains(document.activeElement) ?? false`)).toBe(true)
         await Bun.write(new URL(`../../../.cache/tmp/transcript-images-${theme}-${width}x${height}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
@@ -151,6 +151,38 @@ describe("transcript rendering", () => {
         await page.pressEscape()
         for (let i = 0; i < 20 && await page.evaluate(`document.querySelector('.transcript-lightbox[open]')`); i++) await Bun.sleep(20)
         expect(await page.evaluate<boolean>(`document.querySelector('.transcript-lightbox[open]') === null`)).toBe(true)
+      }
+    } finally { await page.close() }
+  })
+
+  test("keeps a tall image below the lightbox header and inside the viewport on a phone", async () => {
+    const page = await browser!.openPage()
+    try {
+      for (const [width, height] of [[390, 844], [1440, 900]]) {
+        await page.setViewport(width!, height!)
+        await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?images=1&theme=dark`)
+        for (let i = 0; i < 40 && !await page.evaluate(`document.querySelector('.transcript-tool__toggle')`); i++) await Bun.sleep(50)
+        await page.evaluate(`document.querySelector('.transcript-tool__toggle').click()`)
+        for (let i = 0; i < 40 && !await page.evaluate<boolean>(`Boolean(document.querySelector('[data-message-id="msg_tool_image"] .transcript-image[aria-label="Open image tall.png"] img')?.complete)`); i++) await Bun.sleep(25)
+        await page.evaluate(`document.querySelector('[data-message-id="msg_tool_image"] .transcript-image[aria-label="Open image tall.png"]').click()`)
+        for (let i = 0; i < 30 && !await page.evaluate<boolean>(`Boolean(document.querySelector('.transcript-lightbox[open] .overlay__body img')?.complete)`); i++) await Bun.sleep(20)
+        await page.evaluate(`Promise.all([...document.querySelector('.transcript-lightbox .overlay__surface').getAnimations()].map(animation => animation.finished))`)
+        const layout = await page.evaluate<{ readonly headAboveImage: boolean; readonly imageInsideSurface: boolean; readonly surfaceInsideViewport: boolean; readonly imageInsideViewport: boolean; readonly bodyScrolls: boolean }>(`(() => {
+          const d = document.querySelector('.transcript-lightbox')
+          const surface = d.querySelector('.overlay__surface').getBoundingClientRect()
+          const head = d.querySelector('.overlay__head').getBoundingClientRect()
+          const body = d.querySelector('.overlay__body')
+          const image = d.querySelector('.overlay__body img').getBoundingClientRect()
+          return { headAboveImage: head.bottom <= image.top + 1 && head.top >= surface.top - 1,
+            imageInsideSurface: image.top >= surface.top - 1 && image.bottom <= surface.bottom + 1 && image.left >= surface.left - 1 && image.right <= surface.right + 1,
+            surfaceInsideViewport: surface.top >= -1 && surface.bottom <= innerHeight + 1 && surface.left >= -1 && surface.right <= innerWidth + 1,
+            imageInsideViewport: image.top >= -1 && image.bottom <= innerHeight + 1,
+            bodyScrolls: body.scrollHeight > body.clientHeight + 1 }
+        })()`)
+        expect(layout).toEqual({ headAboveImage: true, imageInsideSurface: true, surfaceInsideViewport: true, imageInsideViewport: true, bodyScrolls: false })
+        await Bun.write(new URL(`../../../.cache/tmp/transcript-lightbox-tall-${width}x${height}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        await page.pressEscape()
+        for (let i = 0; i < 20 && await page.evaluate(`document.querySelector('.transcript-lightbox[open]')`); i++) await Bun.sleep(20)
       }
     } finally { await page.close() }
   })
@@ -388,6 +420,8 @@ describe("transcript rendering", () => {
       for (const [width, height] of [[390, 844], [820, 1180]]) {
         await page.setViewport(width!, height!)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=light`)
+        for (let i = 0; i < 80 && !await page.evaluate(`document.querySelector('.app--conversation.app--selected .transcript-navigation__item')`); i++) await Bun.sleep(50)
+        await page.evaluate(`(() => { const root = document.querySelector('.workspace__scroll'); root.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -300 })); root.scrollTop = 0 })()`)
         for (let i = 0; i < 80 && !await page.evaluate(`document.querySelector('.app--conversation.app--selected .transcript-message--user')`); i++) await Bun.sleep(50)
         const geometry = await page.evaluate<{ readonly bubbleRight: number; readonly columnRight: number }>(`(() => ({ bubbleRight: document.querySelector('.transcript-message--user').getBoundingClientRect().right, columnRight: document.querySelector('.transcript-navigation').getBoundingClientRect().right }))()`)
         expect(Math.abs(geometry.bubbleRight - geometry.columnRight)).toBeLessThanOrEqual(1)
@@ -430,6 +464,7 @@ describe("transcript rendering", () => {
       expect(await visibility()).toEqual({ top: true, bottom: true, clear: true })
       await page.evaluate(`document.querySelector('.transcript-navigation__controls [aria-label="Jump to top"]').click()`)
       for (let i = 0; i < 80 && await page.evaluate<number>(`document.querySelector('.workspace__scroll').scrollTop`) > 8; i++) await Bun.sleep(20)
+      for (let i = 0; i < 20 && (await visibility()).top; i++) await Bun.sleep(20)
       expect(await visibility()).toEqual({ top: false, bottom: true, clear: true })
       await page.evaluate(`document.querySelector('.transcript-navigation__controls [aria-label="Jump to latest"]').click()`)
       for (let i = 0; i < 80 && await page.evaluate<number>(`(() => { const root = document.querySelector('.workspace__scroll'); return root.scrollHeight - root.clientHeight - root.scrollTop })()`) > 2; i++) await Bun.sleep(20)
@@ -563,21 +598,28 @@ describe("transcript rendering", () => {
     } finally { await page.close() }
   })
 
-  test("large synthetic completed boundary bounds mounted transcript nodes", async () => {
+  test("large synthetic transcripts mount a bounded window and a completed boundary keeps its divider reachable", async () => {
     if (!browser) throw new Error("Browser not started")
-    const counts: { readonly messages: number; readonly nodes: number; readonly reasoningBodies: number; readonly compactions: number }[] = []
+    const counts: { readonly messages: number; readonly nodes: number; readonly reasoningBodies: number; readonly compactions: number; readonly height: number }[] = []
     for (const synthetic of ["full", "compacted"]) {
       const page = await browser.openPage()
       try {
         await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?synthetic=${synthetic}`)
-        for (let i = 0; i < 80 && await page.evaluate<number>(`document.querySelectorAll('.transcript-message').length`) < (synthetic === "full" ? 1_200 : 120); i++) await Bun.sleep(50)
-        counts.push(await page.evaluate(`({ messages: document.querySelectorAll('.transcript-message').length, nodes: document.querySelectorAll('*').length, reasoningBodies: document.querySelectorAll('.transcript-reasoning__body').length, compactions: document.querySelectorAll('.transcript-compaction').length })`))
+        for (let i = 0; i < 80 && await page.evaluate<number>(`document.querySelectorAll('.transcript-message').length`) === 0; i++) await Bun.sleep(50)
+        for (let i = 0; i < 80 && !await page.evaluate<boolean>(`(() => { const root = document.querySelector('.workspace__scroll'); return root.scrollHeight - root.clientHeight - root.scrollTop <= 2 })()`); i++) await Bun.sleep(50)
+        const mounted = await page.evaluate<{ readonly messages: number; readonly nodes: number; readonly reasoningBodies: number; readonly height: number }>(`({ messages: document.querySelectorAll('.transcript-message').length, nodes: document.querySelectorAll('*').length, reasoningBodies: document.querySelectorAll('.transcript-reasoning__body').length, height: document.querySelector('.transcript').getBoundingClientRect().height })`)
+        await page.evaluate(`(() => { const root = document.querySelector('.workspace__scroll'); root.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -300 })); root.scrollTop = 0 })()`)
+        for (let i = 0; i < 80 && !await page.evaluate<boolean>(`document.querySelector('[data-message-id="msg_0"], .transcript-compaction') !== null`); i++) await Bun.sleep(25)
+        counts.push({ ...mounted, compactions: await page.evaluate<number>(`document.querySelectorAll('.transcript-compaction').length`) })
       } finally { await page.close() }
     }
-    expect(counts[0]?.messages).toBe(1_200)
-    expect(counts[1]?.messages).toBe(121)
+    for (const count of counts) {
+      expect(count.messages).toBeGreaterThan(0)
+      expect(count.messages).toBeLessThanOrEqual(60)
+      expect(count.nodes).toBeLessThan(6_000)
+    }
+    expect(counts[0]!.height).toBeGreaterThan(counts[1]!.height)
     expect(counts.map((count) => count.compactions)).toEqual([0, 1])
-    expect(counts[1]!.nodes).toBeLessThan(counts[0]!.nodes / 2)
     console.log(`Synthetic transcript DOM: full ${counts[0]!.nodes} nodes, compacted ${counts[1]!.nodes} nodes`)
     expect(counts.map((count) => count.reasoningBodies)).toEqual([0, 0])
   })

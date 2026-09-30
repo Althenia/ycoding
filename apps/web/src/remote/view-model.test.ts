@@ -18,6 +18,7 @@ import {
   sessionStateChips,
   shellOutputPaging,
   sessionProjectLabel,
+  connectionLabel,
   summarizeConnection,
   workspaceLabels,
   type AccountReadState,
@@ -100,6 +101,20 @@ describe("capturedChangesVisible", () => {
       expect(capturedChangesVisible(status, messages, "msg_reply_1")).toBe(true)
     }
     expect(capturedChangesVisible(undefined, messages, "msg_reply_1")).toBe(false)
+  })
+})
+
+describe("connectionLabel", () => {
+  const connected = { kind: "connected", deviceName: "Studio Mac" } as const
+
+  test("appends the measured round trip to the connected label", () => {
+    expect(connectionLabel(connected, { kind: "open", rttMs: 42 })).toBe("Connected · 42 ms")
+  })
+
+  test("leaves the label unchanged without a sample or an open transport", () => {
+    expect(connectionLabel(connected, { kind: "open" })).toBe("Connected")
+    expect(connectionLabel(connected, { kind: "reconnecting", attempt: 1, delayMs: 500 })).toBe("Connected")
+    expect(connectionLabel({ kind: "connecting" }, { kind: "open", rttMs: 42 })).toBe("Connecting")
   })
 })
 

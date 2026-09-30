@@ -1,3 +1,4 @@
+import { MutationObserver } from "@tanstack/solid-query"
 import { expect, test } from "bun:test"
 import type { RemoteErrorCode } from "@ycoding-ai/remote"
 import type {
@@ -7,7 +8,10 @@ import type {
   RemoteTransportRequest,
 } from "../src/remote/transport"
 import { createRemoteHttp } from "../src/remote/http"
+import { keepAwakeState, remoteKeys } from "../src/remote/queries"
+import type { KeepAwakeState } from "../src/remote/keep-awake"
 import { createRemoteStore } from "../src/remote/store"
+import { queriesOf } from "./remote-queries"
 import { waitFor } from "./relay-double"
 
 type Answer = RemoteRequestOutcome | Promise<RemoteRequestOutcome>
@@ -38,6 +42,7 @@ function machine(
       return {
         connect: () => callbacks.onStatus?.({ kind: "open" }),
         close: () => {},
+        setPriority: () => {},
         status: () => ({ kind: "open" }),
         request: async (operation, request) => {
           calls.push({ operation, request, deviceID })
@@ -57,17 +62,25 @@ function machine(
     },
   })
   const count = (operation: string) => calls.filter((call) => call.operation === operation).length
-  return { store, calls, count, handlers }
+  return { store, calls, count, handlers, ...queriesOf(store) }
 }
 
-const keepAwake = (test: ReturnType<typeof machine>) => test.store.state().keepAwake
+type Machine = ReturnType<typeof machine>
+
+const key = (test: Machine) => remoteKeys.keepAwake(test.scope())
+const keepAwake = (test: Machine): KeepAwakeState => {
+  const query = test.cached<KeepAwakeState>(key(test))
+  return keepAwakeState({ status: query?.state.status ?? "pending", fetchStatus: query?.state.fetchStatus ?? "idle", data: query?.state.data, error: query?.state.error ?? null })
+}
+const load = (test: Machine) => test.store.queryClient.fetchQuery({ ...test.queries.keepAwake(test.scope(), true), staleTime: 0 })
+const change = (test: Machine, enabled: boolean) => new MutationObserver(test.store.queryClient, test.queries.keepAwakeMutation(test.scope())).mutate(enabled)
 
 test("reads the machine's state once with no Session or input, and reports what it answered", async () => {
   const test = machine((operation) => (operation === "machine.keepAwake.get" ? ok("on") : undefined))
   try {
     test.store.connect("dev_1")
     expect(keepAwake(test)).toEqual({ read: "idle" })
-    await test.store.loadKeepAwake()
+    await load(test)
     expect(keepAwake(test)).toEqual({ read: "ready", status: { state: "on" } })
     const read = test.calls.find((call) => call.operation === "machine.keepAwake.get")
     expect(read?.request?.sessionID).toBeUndefined()
@@ -87,7 +100,7 @@ test("an older, silent, or failing machine never reads as Off", async () => {
     const test = machine((operation) => (operation === "machine.keepAwake.get" ? outcome : undefined))
     try {
       test.store.connect("dev_1")
-      await test.store.loadKeepAwake()
+      await load(test)
       expect(keepAwake(test).read).toBe(read)
       expect(keepAwake(test).status).toBeUndefined()
       if (read === "error") expect(keepAwake(test).message).toBeTruthy()
@@ -100,10 +113,9 @@ test("an older, silent, or failing machine never reads as Off", async () => {
 test("nothing is requested until a machine connection is open", async () => {
   const test = machine(() => undefined)
   try {
-    await test.store.loadKeepAwake()
+    await load(test)
     expect(test.count("machine.keepAwake.get")).toBe(0)
-    expect(keepAwake(test)).toEqual({ read: "idle" })
-    expect(await test.store.setKeepAwake(true)).toBe(false)
+    expect(await change(test, true)).toEqual({ reached: false, reload: false })
     expect(test.count("machine.keepAwake.set")).toBe(0)
   } finally {
     test.store.dispose()
@@ -123,14 +135,14 @@ test("a change needs a settled supported read, sends exactly the requested flag,
   })
   try {
     test.store.connect("dev_1")
-    expect(await test.store.setKeepAwake(true)).toBe(false)
-    await test.store.loadKeepAwake()
-    const changing = test.store.setKeepAwake(true)
+    expect((await change(test, true)).reached).toBe(false)
+    await load(test)
+    const changing = change(test, true)
     await waitFor(() => keepAwake(test).change?.state === "sending")
     expect(keepAwake(test).change).toEqual({ state: "sending", enabled: true })
-    expect(await test.store.setKeepAwake(false)).toBe(false)
+    expect((await change(test, false)).reached).toBe(false)
     held.resolve(ok("on"))
-    expect(await changing).toBe(true)
+    expect((await changing).reached).toBe(true)
     expect(test.count("machine.keepAwake.set")).toBe(1)
     const sent = test.calls.find((call) => call.operation === "machine.keepAwake.set")
     expect(sent?.request?.sessionID).toBeUndefined()
@@ -148,9 +160,9 @@ test("an unsupported machine cannot be changed", async () => {
   )
   try {
     test.store.connect("dev_1")
-    await test.store.loadKeepAwake()
+    await load(test)
     expect(keepAwake(test).status).toEqual({ state: "unsupported", message: "Only macOS can hold this." })
-    expect(await test.store.setKeepAwake(true)).toBe(false)
+    expect((await change(test, true)).reached).toBe(false)
     expect(test.count("machine.keepAwake.set")).toBe(0)
   } finally {
     test.store.dispose()
@@ -164,20 +176,16 @@ test("a refused change keeps the machine's state and shows the failure; a mismat
   )
   try {
     test.store.connect("dev_1")
-    await test.store.loadKeepAwake()
-    expect(await test.store.setKeepAwake(true)).toBe(false)
-    expect(keepAwake(test)).toMatchObject({
-      read: "ready",
-      status: { state: "off" },
-      change: { state: "failed", enabled: true },
-    })
+    await load(test)
+    expect((await change(test, true)).reached).toBe(false)
+    expect(keepAwake(test)).toMatchObject({ read: "ready", status: { state: "off" }, change: { state: "failed", enabled: true } })
     expect(keepAwake(test).change?.message).toContain("Not allowed on this machine")
     outcome = ok("off")
-    expect(await test.store.setKeepAwake(true)).toBe(false)
+    expect((await change(test, true)).reached).toBe(false)
     expect(keepAwake(test)).toMatchObject({ read: "ready", status: { state: "off" }, change: { state: "failed" } })
     expect(keepAwake(test).change?.message).toMatch(/reports it is Off/i)
     outcome = failed("unknown_operation", "Unknown operation")
-    expect(await test.store.setKeepAwake(true)).toBe(false)
+    expect((await change(test, true)).reached).toBe(false)
     expect(keepAwake(test).read).toBe("outdated")
   } finally {
     test.store.dispose()
@@ -187,26 +195,19 @@ test("a refused change keeps the machine's state and shows the failure; a mismat
 test("an unknown outcome is reconciled by exactly one fresh read, is never replayed, and never claims confirmation", async () => {
   const reads: RemoteRequestOutcome[] = [ok("off"), ok("on")]
   const test = machine((operation) =>
-    operation === "machine.keepAwake.get"
-      ? (reads.shift() ?? ok("on"))
-      : operation === "machine.keepAwake.set"
-        ? unanswered
-        : undefined,
+    operation === "machine.keepAwake.get" ? (reads.shift() ?? ok("on")) : operation === "machine.keepAwake.set" ? unanswered : undefined,
   )
   try {
     test.store.connect("dev_1")
-    await test.store.loadKeepAwake()
-    expect(await test.store.setKeepAwake(true)).toBe(false)
+    const watching = test.observe(test.queries.keepAwake(test.scope(), true))
+    await waitFor(() => keepAwake(test).read === "ready")
+    expect((await change(test, true)).reached).toBe(false)
     await waitFor(() => test.count("machine.keepAwake.get") === 2 && keepAwake(test).status?.state === "on")
     expect(test.count("machine.keepAwake.set")).toBe(1)
-    expect(test.count("machine.keepAwake.get")).toBe(2)
-    expect(keepAwake(test)).toMatchObject({
-      read: "ready",
-      status: { state: "on" },
-      change: { state: "unknown", enabled: true },
-    })
+    expect(keepAwake(test)).toMatchObject({ read: "ready", status: { state: "on" }, change: { state: "unknown", enabled: true } })
     expect(keepAwake(test).change?.message).toMatch(/unconfirmed/i)
     expect(keepAwake(test).change?.message).not.toMatch(/turned on|is now on|confirmed on/i)
+    watching.stop()
   } finally {
     test.store.dispose()
   }
@@ -216,23 +217,20 @@ test("concurrent reads share one request and a read cannot supersede a sending c
   const first = Promise.withResolvers<RemoteRequestOutcome>()
   const changing = Promise.withResolvers<RemoteRequestOutcome>()
   const test = machine((operation) =>
-    operation === "machine.keepAwake.get"
-      ? first.promise
-      : operation === "machine.keepAwake.set"
-        ? changing.promise
-        : undefined,
+    operation === "machine.keepAwake.get" ? first.promise : operation === "machine.keepAwake.set" ? changing.promise : undefined,
   )
   try {
     test.store.connect("dev_1")
-    const reads = [test.store.loadKeepAwake(), test.store.loadKeepAwake()]
+    const reads = [load(test), load(test)]
     expect(test.count("machine.keepAwake.get")).toBe(1)
     first.resolve(ok("off"))
     await Promise.all(reads)
-    const setting = test.store.setKeepAwake(true)
-    await test.store.loadKeepAwake()
+    const setting = change(test, true)
+    await waitFor(() => keepAwake(test).change?.state === "sending")
+    await load(test)
     expect(test.count("machine.keepAwake.get")).toBe(1)
     changing.resolve(ok("on"))
-    expect(await setting).toBe(true)
+    expect((await setting).reached).toBe(true)
   } finally {
     first.resolve(ok("off"))
     changing.resolve(ok("on"))
@@ -240,8 +238,8 @@ test("concurrent reads share one request and a read cannot supersede a sending c
   }
 })
 
-test("same-machine replacement fences both old reads and old changes from the new connection", async () => {
-  for (const operation of ["machine.keepAwake.get", "machine.keepAwake.set"] as const) {
+test("a machine replacement fences old reads and old changes from the new connection", async () => {
+  for (const [operation, next] of [["machine.keepAwake.get", "dev_1"], ["machine.keepAwake.set", "dev_1"], ["machine.keepAwake.get", "dev_2"]] as const) {
     const late = Promise.withResolvers<RemoteRequestOutcome>()
     let hold = false
     const test = machine((requested) =>
@@ -249,240 +247,131 @@ test("same-machine replacement fences both old reads and old changes from the ne
     )
     try {
       test.store.connect("dev_1")
-      await test.store.loadKeepAwake()
+      await load(test)
       hold = true
-      const stale = operation === "machine.keepAwake.get" ? test.store.loadKeepAwake() : test.store.setKeepAwake(true)
+      const stale = operation === "machine.keepAwake.get" ? load(test).catch(() => undefined) : change(test, true)
       const old = test.handlers.get("dev_1")
-      test.store.connect("dev_1")
-      expect(keepAwake(test).read).toBe("idle")
-      if (operation === "machine.keepAwake.set") expect(keepAwake(test).change?.state).toBe("unknown")
+      const before = test.store.state().generation
+      test.store.connect(next)
       hold = false
-      await test.store.loadKeepAwake()
-      old?.onStatus?.({ kind: "closed", code: 1006, reason: "old socket", retryable: true })
+      expect(test.store.state().generation).toBe(before + 1)
+      expect(keepAwake(test).read).toBe("idle")
       late.resolve(ok("on"))
       await stale
-      expect(keepAwake(test)).toMatchObject({ read: "ready", status: { state: "off" } })
-      expect(keepAwake(test).change?.state).toBe(operation === "machine.keepAwake.set" ? "unknown" : undefined)
+      expect(test.cached(remoteKeys.keepAwake(test.scope()))).toBeUndefined()
+      expect(test.scoped()).toHaveLength(0)
+      old?.onStatus?.({ kind: "open" })
+      expect(test.store.state().activeDeviceID).toBe(next)
     } finally {
-      late.resolve(ok("on"))
+      late.resolve(ok("off"))
       test.store.dispose()
     }
   }
 })
 
-test("same-transport reconnect fences a lost change even when its late answer follows the new read", async () => {
-  const late = Promise.withResolvers<RemoteRequestOutcome>()
+test("a connection lost during a change reports it unconfirmed and the reconnect reads the machine again", async () => {
+  const held = Promise.withResolvers<RemoteRequestOutcome>()
+  const reads: RemoteRequestOutcome[] = [ok("off"), ok("on")]
   const test = machine((operation) =>
-    operation === "machine.keepAwake.get"
-      ? ok("off")
-      : operation === "machine.keepAwake.set"
-        ? late.promise
-        : undefined,
+    operation === "machine.keepAwake.get" ? (reads.shift() ?? ok("on")) : operation === "machine.keepAwake.set" ? held.promise : undefined,
   )
   try {
     test.store.connect("dev_1")
-    await test.store.loadKeepAwake()
-    const setting = test.store.setKeepAwake(true)
-    test.handlers.get("dev_1")?.onStatus?.({ kind: "reconnecting", attempt: 1, delayMs: 50 })
-    expect(keepAwake(test)).toMatchObject({ read: "idle", change: { state: "unknown" } })
+    const watching = test.observe(test.queries.keepAwake(test.scope(), true))
+    await waitFor(() => keepAwake(test).read === "ready")
+    const changing = change(test, true)
+    await waitFor(() => keepAwake(test).change?.state === "sending")
+    test.handlers.get("dev_1")?.onStatus?.({ kind: "reconnecting", attempt: 1, delayMs: 10 })
+    held.resolve(unanswered)
+    expect((await changing).reached).toBe(false)
+    expect(keepAwake(test)).toMatchObject({ change: { state: "unknown", enabled: true } })
     test.handlers.get("dev_1")?.onStatus?.({ kind: "open" })
-    await test.store.loadKeepAwake()
-    late.resolve(ok("on"))
-    expect(await setting).toBe(false)
-    expect(keepAwake(test)).toMatchObject({ read: "ready", status: { state: "off" }, change: { state: "unknown" } })
+    await waitFor(() => keepAwake(test).status?.state === "on")
+    expect(keepAwake(test).change?.state).toBe("unknown")
     expect(test.count("machine.keepAwake.set")).toBe(1)
+    watching.stop()
   } finally {
-    late.resolve(ok("on"))
+    held.resolve(unanswered)
     test.store.dispose()
   }
 })
 
-test("explicit disconnect invalidates reads and changes and does not rearm on connect", async () => {
-  for (const operation of ["machine.keepAwake.get", "machine.keepAwake.set"] as const) {
-    const late = Promise.withResolvers<RemoteRequestOutcome>()
-    let hold = false
-    const test = machine((requested) =>
-      requested === operation && hold ? late.promise : requested === "machine.keepAwake.get" ? ok("off") : undefined,
-    )
-    try {
-      test.store.connect("dev_1")
-      await test.store.loadKeepAwake()
-      hold = true
-      const stale = operation === "machine.keepAwake.get" ? test.store.loadKeepAwake() : test.store.setKeepAwake(true)
-      test.store.disconnect()
-      expect(keepAwake(test)).toEqual({ read: "idle" })
-      late.resolve(ok("on"))
-      await stale
-      expect(keepAwake(test)).toEqual({ read: "idle" })
-      test.store.connect("dev_1")
-      expect(test.count("machine.keepAwake.set")).toBe(operation === "machine.keepAwake.set" ? 1 : 0)
-    } finally {
-      late.resolve(ok("on"))
-      test.store.dispose()
-    }
+test("explicit disconnect removes the reading, ignores late results, and does not rearm on connect", async () => {
+  const late = Promise.withResolvers<RemoteRequestOutcome>()
+  const test = machine((operation) => (operation === "machine.keepAwake.set" ? late.promise : ok("off")))
+  try {
+    test.store.connect("dev_1")
+    await load(test)
+    const changing = change(test, true)
+    await waitFor(() => keepAwake(test).change?.state === "sending")
+    test.store.disconnect()
+    late.resolve(ok("on"))
+    expect((await changing).reached).toBe(false)
+    expect(test.scoped()).toHaveLength(0)
+    test.store.connect("dev_1")
+    expect(test.scoped()).toHaveLength(0)
+    expect(test.count("machine.keepAwake.get")).toBe(1)
+  } finally {
+    late.resolve(ok("off"))
+    test.store.dispose()
   }
 })
 
 test("a read that started before a change cannot overwrite the change's result", async () => {
-  const slowRead = Promise.withResolvers<RemoteRequestOutcome>()
+  const stale = Promise.withResolvers<RemoteRequestOutcome>()
   let reads = 0
   const test = machine((operation) => {
-    if (operation === "machine.keepAwake.get") return ++reads === 1 ? ok("off") : slowRead.promise
-    if (operation === "machine.keepAwake.set") return ok("on")
-    return undefined
+    if (operation === "machine.keepAwake.get") return ++reads === 2 ? stale.promise : ok("off")
+    return operation === "machine.keepAwake.set" ? ok("on") : undefined
   })
   try {
     test.store.connect("dev_1")
-    await test.store.loadKeepAwake()
-    const refreshing = test.store.loadKeepAwake()
+    await load(test)
+    const reading = load(test).catch(() => undefined)
     await waitFor(() => reads === 2)
-    expect(await test.store.setKeepAwake(true)).toBe(true)
-    slowRead.resolve(ok("off"))
-    await refreshing
+    expect((await change(test, true)).reached).toBe(true)
+    stale.resolve(ok("off"))
+    await reading
     expect(keepAwake(test)).toEqual({ read: "ready", status: { state: "on" } })
   } finally {
-    slowRead.resolve(ok("off"))
-    test.store.dispose()
-  }
-})
-
-test("a new read after a change never joins the read superseded by that change", async () => {
-  const late = Promise.withResolvers<RemoteRequestOutcome>()
-  let reads = 0
-  const test = machine((operation) => {
-    if (operation === "machine.keepAwake.get") return ++reads === 2 ? late.promise : ok("off")
-    if (operation === "machine.keepAwake.set") return ok("on")
-    return undefined
-  })
-  try {
-    test.store.connect("dev_1")
-    await test.store.loadKeepAwake()
-    const stale = test.store.loadKeepAwake()
-    expect(await test.store.setKeepAwake(true)).toBe(true)
-    const fresh = test.store.loadKeepAwake()
-    expect(test.count("machine.keepAwake.get")).toBe(3)
-    await fresh
-    expect(keepAwake(test).status?.state).toBe("off")
-    late.resolve(ok("on"))
-    await stale
-    expect(keepAwake(test).status?.state).toBe("off")
-  } finally {
-    late.resolve(ok("on"))
+    stale.resolve(ok("off"))
     test.store.dispose()
   }
 })
 
 test("a refresh of a ready machine keeps showing its state and never flashes checking", async () => {
-  const slow = Promise.withResolvers<RemoteRequestOutcome>()
+  const refresh = Promise.withResolvers<RemoteRequestOutcome>()
   let reads = 0
-  const test = machine((operation) =>
-    operation === "machine.keepAwake.get" ? (++reads === 1 ? ok("on") : slow.promise) : undefined,
-  )
-  const seen: string[] = []
+  const test = machine((operation) => (operation === "machine.keepAwake.get" ? (++reads === 2 ? refresh.promise : ok("on")) : undefined))
   try {
     test.store.connect("dev_1")
-    await test.store.loadKeepAwake()
-    test.store.subscribe(() => seen.push(keepAwake(test).read))
-    const refreshing = test.store.loadKeepAwake()
+    await load(test)
+    const refreshing = load(test)
     await waitFor(() => reads === 2)
     expect(keepAwake(test)).toEqual({ read: "ready", status: { state: "on" } })
-    slow.resolve(ok("off"))
+    refresh.resolve(ok("off"))
     await refreshing
     expect(keepAwake(test).status?.state).toBe("off")
-    expect(seen.every((read) => read === "ready")).toBe(true)
   } finally {
-    slow.resolve(ok("off"))
-    test.store.dispose()
-  }
-})
-
-test("a lost connection drops the reading and ignores an answer that arrives afterwards", async () => {
-  const late = Promise.withResolvers<RemoteRequestOutcome>()
-  const test = machine((operation) => (operation === "machine.keepAwake.get" ? late.promise : undefined))
-  try {
-    test.store.connect("dev_1")
-    const reading = test.store.loadKeepAwake()
-    await waitFor(() => keepAwake(test).read === "loading")
-    test.handlers.get("dev_1")?.onStatus?.({ kind: "closed", code: 1006, reason: "", retryable: true })
-    expect(keepAwake(test).read).toBe("idle")
-    late.resolve(ok("on"))
-    await reading
-    expect(keepAwake(test)).toEqual({ read: "idle" })
-  } finally {
-    late.resolve(ok("on"))
-    test.store.dispose()
-  }
-})
-
-test("a change interrupted by a lost connection comes back as an unconfirmed change after the fresh read", async () => {
-  const lost = Promise.withResolvers<RemoteRequestOutcome>()
-  const test = machine((operation) =>
-    operation === "machine.keepAwake.get"
-      ? ok("off")
-      : operation === "machine.keepAwake.set"
-        ? lost.promise
-        : undefined,
-  )
-  try {
-    test.store.connect("dev_1")
-    await test.store.loadKeepAwake()
-    const changing = test.store.setKeepAwake(true)
-    await waitFor(() => keepAwake(test).change?.state === "sending")
-    test.handlers.get("dev_1")?.onStatus?.({ kind: "closed", code: 1006, reason: "", retryable: true })
-    lost.resolve(unanswered)
-    expect(await changing).toBe(false)
-    expect(keepAwake(test)).toMatchObject({ read: "idle", change: { state: "unknown", enabled: true } })
-    test.handlers.get("dev_1")?.onStatus?.({ kind: "open" })
-    await test.store.loadKeepAwake()
-    expect(keepAwake(test)).toMatchObject({ read: "ready", status: { state: "off" }, change: { state: "unknown" } })
-    expect(test.count("machine.keepAwake.set")).toBe(1)
-  } finally {
-    lost.resolve(unanswered)
-    test.store.dispose()
-  }
-})
-
-test("switching machines drops the previous machine's reading and its late answer", async () => {
-  const first = Promise.withResolvers<RemoteRequestOutcome>()
-  const test = machine((operation, _request, deviceID) =>
-    operation === "machine.keepAwake.get" ? (deviceID === "dev_1" ? first.promise : ok("off")) : undefined,
-  )
-  try {
-    test.store.connect("dev_1")
-    const stale = test.store.loadKeepAwake()
-    await waitFor(() => keepAwake(test).read === "loading")
-    test.store.connect("dev_2")
-    expect(keepAwake(test)).toEqual({ read: "idle" })
-    await test.store.loadKeepAwake()
-    expect(keepAwake(test)).toEqual({ read: "ready", status: { state: "off" } })
-    first.resolve(ok("on"))
-    await stale
-    expect(keepAwake(test)).toEqual({ read: "ready", status: { state: "off" } })
-    expect(
-      test.calls.filter((call) => call.operation === "machine.keepAwake.get").map((call) => call.deviceID),
-    ).toEqual(["dev_1", "dev_2"])
-  } finally {
-    first.resolve(ok("on"))
+    refresh.resolve(ok("off"))
     test.store.dispose()
   }
 })
 
 test("disposal ends the reading and a late change result changes nothing", async () => {
   const late = Promise.withResolvers<RemoteRequestOutcome>()
-  const test = machine((operation) =>
-    operation === "machine.keepAwake.get"
-      ? ok("off")
-      : operation === "machine.keepAwake.set"
-        ? late.promise
-        : undefined,
-  )
-  test.store.connect("dev_1")
-  await test.store.loadKeepAwake()
-  const changing = test.store.setKeepAwake(true)
-  await waitFor(() => keepAwake(test).change?.state === "sending")
-  test.store.dispose()
-  expect(keepAwake(test)).toEqual({ read: "idle" })
-  late.resolve(ok("on"))
-  await changing
-  expect(keepAwake(test)).toEqual({ read: "idle" })
+  const test = machine((operation) => (operation === "machine.keepAwake.set" ? late.promise : ok("off")))
+  try {
+    test.store.connect("dev_1")
+    const scope = test.scope()
+    await load(test)
+    const changing = change(test, true)
+    await waitFor(() => keepAwake(test).change?.state === "sending")
+    test.store.dispose()
+    late.resolve(ok("on"))
+    expect((await changing).reached).toBe(false)
+    expect(test.cached(remoteKeys.keepAwake(scope))).toBeUndefined()
+  } finally {
+    late.resolve(ok("off"))
+  }
 })

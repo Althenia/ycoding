@@ -12,7 +12,7 @@ import {
   sessionNeedsAttention,
   remoteSurfaceComposition,
   summarizeSession,
-} from "./shell"
+} from "./shell-model"
 
 /**
  * The composition rules the approved remote surface adds. Each rule is a decision the

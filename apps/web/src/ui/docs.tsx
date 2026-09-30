@@ -1,5 +1,6 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, type JSX } from "solid-js"
-import { Link, useRouter } from "../router/router"
+import { useLocation, useNavigate } from "@tanstack/solid-router"
+import { Link } from "./link"
 import { DOC_INDEX, DOC_PAGES, docsByGroup, findDocPage, sectionId } from "../content/docs/registry"
 import { searchDocs } from "../content/docs/search"
 import type { DocBlock, DocPage, DocSection } from "../content/docs/types"
@@ -8,9 +9,8 @@ import { Icon } from "./icon"
 import { inlineSegments } from "../content/docs/inline"
 
 export function DocsNav(props: { readonly onNavigate?: () => void }): JSX.Element {
-  const router = useRouter()
   const groups = docsByGroup()
-  const current = () => router.path()
+  const current = useLocation({ select: (location) => location.pathname })
   return (
     <nav class="docs-nav" aria-label="Documentation">
       <For each={groups}>
@@ -20,7 +20,7 @@ export function DocsNav(props: { readonly onNavigate?: () => void }): JSX.Elemen
             <For each={group.pages}>
               {(page) => (
                 <Link
-                  href={`/docs/${page.slug}`}
+                  to={`/docs/${page.slug}`}
                   class={`docs-nav__link${current() === `/docs/${page.slug}` ? " docs-nav__link--active" : ""}`}
                   ariaCurrent={current() === `/docs/${page.slug}` ? "page" : undefined}
                   onClick={props.onNavigate}
@@ -153,7 +153,7 @@ function Block(props: { readonly block: DocBlock }): JSX.Element {
           <For each={block.items}>
             {(item) => (
               <li class="card">
-                <Link href={item.href} class="card__link">
+                <Link to={item.href} class="card__link">
                   <span class="card__title">{item.title}</span>
                   <span class="card__text"><Inline text={item.text} /></span>
                 </Link>
@@ -171,7 +171,7 @@ function Block(props: { readonly block: DocBlock }): JSX.Element {
               return (
                 <Show when={page}>
                   <li>
-                    <Link href={`/docs/${slug}`}>{page!.title}</Link>
+                    <Link to={`/docs/${slug}`}>{page!.title}</Link>
                   </li>
                 </Show>
               )
@@ -199,7 +199,7 @@ function Breadcrumbs(props: { readonly page: DocPage; readonly label: string; re
   const showTitle = () => props.page.title !== props.label
   return (
     <nav class={`breadcrumbs${props.class ? ` ${props.class}` : ""}`} aria-label="Breadcrumb">
-      <Link href="/docs">{props.label}</Link>
+      <Link to="/docs">{props.label}</Link>
       <Show when={showTitle()}>
         <span aria-hidden="true">/</span>
         <span>{props.page.title}</span>
@@ -214,7 +214,7 @@ export function DocsSearch(props: { readonly onNavigate?: () => void }): JSX.Ele
   const [generation, setGeneration] = createSignal(1)
   const [query, setQuery] = createSignal("")
   const [active, setActive] = createSignal(0)
-  const router = useRouter()
+  const navigate = useNavigate()
   let trigger: HTMLButtonElement | undefined
   let requestClose: (() => void) | undefined
   const hits = createMemo(() => searchDocs(query(), 8))
@@ -269,7 +269,7 @@ export function DocsSearch(props: { readonly onNavigate?: () => void }): JSX.Ele
   const navigateTo = (hit: ReturnType<typeof searchDocs>[number]) => {
     setOpen(false)
     props.onNavigate?.()
-    router.navigate(`/docs/${hit.page.slug}${hit.matchedHeading ? `#${anchorFor(hit.matchedHeading)}` : ""}`)
+    navigate({ to: `/docs/${hit.page.slug}`, hash: hit.matchedHeading ? anchorFor(hit.matchedHeading) : undefined })
   }
 
   window.addEventListener("keydown", keydown)
@@ -464,7 +464,7 @@ export function DocsIndexPage(): JSX.Element {
                 <For each={group.pages}>
                   {(page) => (
                     <li class="card motion-reveal">
-                      <Link href={`/docs/${page.slug}`} class="card__link">
+                      <Link to={`/docs/${page.slug}`} class="card__link">
                         <span class="card__title">{page.title}</span>
                         <span class="card__text"><Inline text={page.description} /></span>
                       </Link>
@@ -513,12 +513,12 @@ function DocsNotFound(): JSX.Element {
       <p class="prose">The requested documentation page is not part of the published documentation.</p>
       <ul class="related">
         <li>
-          <Link href="/docs">Documentation index</Link>
+          <Link to="/docs">Documentation index</Link>
         </li>
         <For each={DOC_PAGES.slice(0, 4)}>
           {(entry) => (
             <li>
-              <Link href={`/docs/${entry.slug}`}>{entry.title}</Link>
+              <Link to={`/docs/${entry.slug}`}>{entry.title}</Link>
             </li>
           )}
         </For>

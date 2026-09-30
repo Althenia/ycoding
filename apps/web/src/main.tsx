@@ -1,6 +1,5 @@
 import { render } from "solid-js/web"
 import { App } from "./app"
-import { RouterProvider } from "./router/router"
 import { ThemeProvider } from "./theme/theme-store"
 import { lockInstalledAppZoom } from "./pwa/installed"
 import { registerServiceWorker } from "./pwa/register"
@@ -19,11 +18,9 @@ pwaInstall.start()
 
 render(
   () => (
-    <RouterProvider>
-      <ThemeProvider>
-        <App />
-      </ThemeProvider>
-    </RouterProvider>
+    <ThemeProvider>
+      <App />
+    </ThemeProvider>
   ),
   root,
 )

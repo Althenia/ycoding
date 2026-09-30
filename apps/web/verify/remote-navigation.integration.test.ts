@@ -506,7 +506,7 @@ describe("remote navigation", () => {
         await until(page, `document.querySelector('.conversation-pane .transcript-message') !== null`)
         await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden' })()`)
         const label = `${width}px ${theme} reduced=${reduced}`
-        const before = await page.evaluate<number>(`(() => { const scroll=document.querySelector('.workspace__scroll'); scroll.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:-300})); scroll.scrollTop=300; scroll.dispatchEvent(new Event('scroll')); window.anchorMessage=document.querySelector('.conversation-pane .transcript-message'); return scroll.scrollTop })()`)
+        const before = await page.evaluate<number>(`(() => { const scroll=document.querySelector('.workspace__scroll'); scroll.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:-300})); scroll.scrollTop=300; scroll.dispatchEvent(new Event('scroll')); window.anchorMessage=document.querySelector('.conversation-pane .transcript'); return scroll.scrollTop })()`)
         expect(before, label).toBeGreaterThanOrEqual(250)
         await page.evaluate(`[...document.querySelectorAll('a[href="/remote/usage"]')].find(link=>link.getBoundingClientRect().width>0)?.click()`)
         await until(page, `location.pathname === '/remote/usage' && document.querySelector('.route-panel--exiting') === null`)
@@ -514,14 +514,16 @@ describe("remote navigation", () => {
         await page.evaluate(`[...document.querySelectorAll('a[href="/remote"]')].find(link=>link.getBoundingClientRect().width>0)?.click()`)
         await until(page, `location.pathname === '/remote' && document.querySelector('.route-panel--exiting') === null`)
         await Bun.sleep(400)
-        const after = await page.evaluate<{ readonly distance: number; readonly sameMessage: boolean; readonly samples: readonly number[] }>(`(() => { cancelAnimationFrame(window.entryFrame); const scroll = document.querySelector('.workspace__scroll'); return { distance: scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop, sameMessage: window.anchorMessage === document.querySelector('.conversation-pane .transcript-message'), samples: window.entrySamples } })()`)
+        const after = await page.evaluate<{ readonly distance: number; readonly sameMessage: boolean; readonly samples: readonly number[] }>(`(() => { cancelAnimationFrame(window.entryFrame); const scroll = document.querySelector('.workspace__scroll'); return { distance: scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop, sameMessage: window.anchorMessage === document.querySelector('.conversation-pane .transcript'), samples: window.entrySamples } })()`)
         expect(after.distance, `${label} lands at the latest message`).toBeLessThanOrEqual(2)
         expect(after.sameMessage, `${label} resident transcript`).toBe(true)
         expect(after.samples.length, `${label} sampled visible frames`).toBeGreaterThan(0)
         expect(Math.max(...after.samples), `${label} no visible frame at an inherited position`).toBeLessThanOrEqual(48)
 
-        const held = await page.evaluate<{ readonly top: number; readonly after: number }>(`(() => new Promise(resolve => { const scroll = document.querySelector('.workspace__scroll'); scroll.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -300 })); scroll.scrollTop = 200; scroll.dispatchEvent(new Event('scroll')); const top = scroll.scrollTop; document.querySelector('.conversation-pane').style.minHeight = '4200px'; setTimeout(() => resolve({ top, after: scroll.scrollTop }), 400) }))()`)
-        expect(Math.abs(held.after - held.top), `${label} a deliberate scroll-up is not forced back`).toBeLessThanOrEqual(2)
+        const held = await page.evaluate<{ readonly top: number; readonly after: number; readonly anchorShift: number; readonly sameAnchor: boolean }>(`(() => new Promise(resolve => { const scroll = document.querySelector('.workspace__scroll'); scroll.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -300 })); scroll.scrollTop = 200; scroll.dispatchEvent(new Event('scroll')); const top = scroll.scrollTop; const bounds = scroll.getBoundingClientRect(); const anchor = [...document.querySelectorAll('.conversation-pane [data-message-id]')].find((row) => { const rect = row.getBoundingClientRect(); return rect.top >= bounds.top && rect.bottom <= bounds.bottom }); const anchorTop = anchor.getBoundingClientRect().top; document.querySelector('.conversation-pane').style.minHeight = '4200px'; setTimeout(() => resolve({ top, after: scroll.scrollTop, anchorShift: anchor.getBoundingClientRect().top - anchorTop, sameAnchor: document.contains(anchor) }), 400) }))()`)
+        expect(held.sameAnchor, `${label} the visible row stays mounted`).toBe(true)
+        expect(Math.abs(held.anchorShift), `${label} a deliberate scroll-up is not forced back: the visible row does not move on screen`).toBeLessThanOrEqual(2)
+        expect(held.after, `${label} the reader is not snapped back to the tail`).toBeLessThan(held.top + 400)
       }
     } finally { await page.close() }
   }, 90_000)

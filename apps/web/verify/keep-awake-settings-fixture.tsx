@@ -55,6 +55,7 @@ const store = createRemoteStore({
     return {
       connect: () => handlers.onStatus?.({ kind: "open" }),
       close: () => {},
+      setPriority: () => {},
       status: () => ({ kind: "open" }),
       request: async (operation, request) => {
         calls.push({ operation, deviceID, request })
@@ -85,8 +86,10 @@ Object.assign(window, {
     },
     releaseRead: (mode: string) => heldReads.shift()?.(answer(mode)),
     releaseSet: (mode: string) => heldSets.shift()?.(answer(mode)),
-    drop: () =>
-      currentHandlers?.onStatus?.({ kind: "closed", code: 1006, reason: "Fixture connection lost", retryable: true }),
+    drop: () => {
+      for (const settle of [...heldReads.splice(0), ...heldSets.splice(0)]) settle(answer("silent"))
+      currentHandlers?.onStatus?.({ kind: "closed", code: 1006, reason: "Fixture connection lost", retryable: true })
+    },
     reconnect: () => currentHandlers?.onStatus?.({ kind: "open" }),
   },
 })

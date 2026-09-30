@@ -1,5 +1,6 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack, type JSX } from "solid-js"
 import { Portal } from "solid-js/web"
+import { createDebouncer, createThrottler } from "@tanstack/solid-pacer"
 import { Icon } from "../../ui/icon"
 import { catalogKey, type CatalogTarget, type CatalogView, type FileOption } from "../catalog"
 import { useRemote } from "../context"
@@ -54,7 +55,7 @@ export function MiniComposer(props: {
   let mobileTrigger: HTMLButtonElement | undefined
   let mobileSheet: HTMLElement | undefined
   let contextTrigger: HTMLButtonElement | undefined
-  let contextCloseTimer: ReturnType<typeof setTimeout> | undefined
+  const contextClose = createDebouncer(() => { if (!contextPinned()) closeContext() }, { wait: 100 })
   let request = 0
   let attachmentGeneration = 0
   const closeMobile = () => { setMobileOpen(false); queueMicrotask(() => mobileTrigger?.focus()) }
@@ -105,23 +106,19 @@ export function MiniComposer(props: {
     return value ? `Context window: ${contextLabel()}, ${value.tokens}` : ""
   }
   const ring = () => <svg class="composer__context-ring" viewBox="0 0 24 24" aria-hidden="true"><circle class="composer__context-ring-track" cx="12" cy="12" r="9" pathLength="100" fill="none" stroke-width="3" /><circle class="composer__context-ring-progress" cx="12" cy="12" r="9" pathLength="100" fill="none" stroke-width="3" stroke-dasharray={`${Math.min(100, (contextWindow()?.fraction ?? 0) * 100)} 100`} /></svg>
-  const cancelContextClose = () => { if (contextCloseTimer !== undefined) clearTimeout(contextCloseTimer); contextCloseTimer = undefined }
   const closeContext = () => {
-    cancelContextClose()
+    contextClose.cancel()
     setContextPinned(false)
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) { setContextLeaving(false); setContextOpen(false) }
     else if (contextOpen()) setContextLeaving(true)
   }
-  const showContext = () => { cancelContextClose(); setContextLeaving(false); setContextOpen(true) }
+  const showContext = () => { contextClose.cancel(); setContextLeaving(false); setContextOpen(true) }
   const finishContext = (event: AnimationEvent) => {
     if (event.target !== event.currentTarget || event.animationName !== "composer-context-out" || !contextLeaving()) return
     setContextOpen(false)
     setContextLeaving(false)
   }
-  const queueContextClose = () => {
-    cancelContextClose()
-    contextCloseTimer = setTimeout(() => { if (!contextPinned()) closeContext() }, 100)
-  }
+  const queueContextClose = () => contextClose.maybeExecute()
   const trigger = createMemo(() => suggestionTrigger(props.text, cursor(), dismissed()))
   const options = () => trigger() ? optionsForTrigger(trigger()!.trigger, trigger()!.query, catalog(), fileResult(), !!props.target && "sessionID" in props.target) : []
   const suggesting = () => options().length > 0 || fileError() !== undefined
@@ -138,17 +135,19 @@ export function MiniComposer(props: {
     const top = Math.max(viewport?.offsetTop ?? 0, region?.getBoundingClientRect().top ?? 0)
     setBound(autocompleteBound(inputWrap.getBoundingClientRect().top - top, viewport?.height ?? window.innerHeight))
   }
+  const pacedBound = createThrottler(measureBound, { wait: 50 })
   createEffect(() => {
     if (!suggesting()) return
     measureBound()
     const viewport = window.visualViewport
-    viewport?.addEventListener("resize", measureBound)
-    viewport?.addEventListener("scroll", measureBound)
-    window.addEventListener("resize", measureBound)
+    viewport?.addEventListener("resize", pacedBound.maybeExecute)
+    viewport?.addEventListener("scroll", pacedBound.maybeExecute)
+    window.addEventListener("resize", pacedBound.maybeExecute)
     onCleanup(() => {
-      viewport?.removeEventListener("resize", measureBound)
-      viewport?.removeEventListener("scroll", measureBound)
-      window.removeEventListener("resize", measureBound)
+      viewport?.removeEventListener("resize", pacedBound.maybeExecute)
+      viewport?.removeEventListener("scroll", pacedBound.maybeExecute)
+      window.removeEventListener("resize", pacedBound.maybeExecute)
+      pacedBound.cancel()
     })
   })
   createEffect(() => {
@@ -186,30 +185,31 @@ export function MiniComposer(props: {
       if (suggesting() && !inputWrap?.contains(event.target)) dismissSuggestions(false)
     }
     document.addEventListener("pointerdown", outside)
-    onCleanup(() => { document.removeEventListener("pointerdown", outside); cancelContextClose() })
+    onCleanup(() => { document.removeEventListener("pointerdown", outside) })
   })
   createEffect(() => { if (!contextWindow() && contextOpen()) closeContext() })
   createEffect(() => {
     if (mobileOpen()) queueMicrotask(() => mobileSheet?.querySelector<HTMLButtonElement>('.mini-picker__trigger')?.focus())
   })
+  const findFiles = createDebouncer((query: string, id: number) => {
+    void remote.store.findFiles(props.target!, query, 50).then((result) => {
+      if (id !== request) return
+      if (result.status === "ok") setFileResult(result.files)
+      else setFileError(result.message)
+    }, () => {
+      if (id === request) setFileError("File search failed")
+    })
+  }, { wait: 220 })
   createEffect(() => {
     const match = trigger()
     const key = targetKey()
     const id = ++request
+    findFiles.cancel()
     setActive(0)
     setFileResult([])
     setFileError(undefined)
     if (!key || match?.trigger !== "@" || !match.query.trim()) return
-    const timer = setTimeout(() => {
-      void remote.store.findFiles(props.target!, match.query, 50).then((result) => {
-        if (id !== request) return
-        if (result.status === "ok") setFileResult(result.files)
-        else setFileError(result.message)
-      }, () => {
-        if (id === request) setFileError("File search failed")
-      })
-    }, 220)
-    onCleanup(() => clearTimeout(timer))
+    findFiles.maybeExecute(match.query, id)
   })
   const edit = (text: string, position: number) => {
     setParts(reconcileMentions(props.text, text, parts()))
@@ -351,7 +351,7 @@ export function MiniComposer(props: {
       <Show when={!attachmentError() && attachments().length && remote.state().uploadError}><p class="composer__attachment-error" role="alert">{remote.state().uploadError}</p></Show>
       <div class="composer__controls">
         <ComposerPicker label="Agent" icon="user" placeholder="Default agent" value={selectedAgent()} pending={agentPending()} options={primaryAgents().map((item) => ({ value: item.id, label: item.name, detail: item.description }))} disabled={props.disabled || catalog()?.status !== "ready"} onChange={setAgent} />
-        <Show when={contextWindow()}><div class="composer__context"><button ref={contextTrigger} type="button" class="composer__context-trigger" aria-label={contextAccessible()} aria-expanded={contextOpen() && !contextLeaving()} onMouseEnter={() => { if (window.matchMedia("(hover: hover)").matches) showContext() }} onMouseLeave={queueContextClose} onFocus={showContext} onBlur={() => { if (!contextPinned()) queueContextClose() }} onClick={() => { if (contextPinned()) closeContext(); else { setContextPinned(true); showContext() } }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeContext() } }}>{ring()}</button><Show when={contextOpen()}><div class="composer__context-popover" classList={{ "composer__context-popover--leaving": contextLeaving() }} role="tooltip" aria-hidden={contextLeaving()} inert={contextLeaving()} onMouseEnter={cancelContextClose} onMouseLeave={queueContextClose} onAnimationEnd={finishContext} onAnimationCancel={finishContext}><strong>Context window</strong><span>{contextLabel()}</span><span>{contextWindow()?.tokens}</span></div></Show></div></Show>
+        <Show when={contextWindow()}><div class="composer__context"><button ref={contextTrigger} type="button" class="composer__context-trigger" aria-label={contextAccessible()} aria-expanded={contextOpen() && !contextLeaving()} onMouseEnter={() => { if (window.matchMedia("(hover: hover)").matches) showContext() }} onMouseLeave={queueContextClose} onFocus={showContext} onBlur={() => { if (!contextPinned()) queueContextClose() }} onClick={() => { if (contextPinned()) closeContext(); else { setContextPinned(true); showContext() } }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeContext() } }}>{ring()}</button><Show when={contextOpen()}><div class="composer__context-popover" classList={{ "composer__context-popover--leaving": contextLeaving() }} role="tooltip" aria-hidden={contextLeaving()} inert={contextLeaving()} onMouseEnter={contextClose.cancel} onMouseLeave={queueContextClose} onAnimationEnd={finishContext} onAnimationCancel={finishContext}><strong>Context window</strong><span>{contextLabel()}</span><span>{contextWindow()?.tokens}</span></div></Show></div></Show>
         <ModelControl models={catalog()?.models ?? []} selected={selectedModel()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready" || sessionTarget() && current() === undefined} rememberedVariant={rememberedVariant} onChange={chooseModel} />
         <Show when={props.showStatus}><ComposerStatus /></Show>
         <Show when={speed()}>{(value) => <span class="composer__speed" title="Latest generation speed">{value().label}<Show when={value().trend}><span class="composer__speed-trend" aria-hidden="true"> {value().trend}</span></Show></span>}</Show>

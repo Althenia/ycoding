@@ -1,4 +1,5 @@
 import type { PushCategories } from "@ycoding-ai/remote"
+import { Store } from "@tanstack/solid-store"
 import { browserStorage, readStored, writeStored, type StorageLike } from "../lib/storage"
 import type { CatalogView } from "./catalog"
 import type { ModelRefView } from "./projection"
@@ -83,6 +84,18 @@ export function toggleNotificationChannel(
   return {
     ...preferences,
     [category]: { ...preferences[category], [channel]: !preferences[category][channel] },
+  }
+}
+
+/** Browser-persisted notification switches: every change is written through to storage, and `reload` adopts what another tab stored. */
+export function createNotificationPreferences(storage: StorageLike | null | undefined = browserStorage()) {
+  const store = new Store(readNotificationPreferences(storage))
+  store.subscribe((preferences) => writeNotificationPreferences(storage, preferences))
+  return {
+    store,
+    toggle: (category: NotificationCategory, channel: NotificationChannel) =>
+      store.setState(() => toggleNotificationChannel(readNotificationPreferences(storage), category, channel)),
+    reload: () => store.setState(() => readNotificationPreferences(storage)),
   }
 }
 
