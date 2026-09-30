@@ -818,12 +818,20 @@ private func desktopSnapshot(_ target: DesktopTarget) throws -> (DesktopWindow, 
         entries.append(Element(path: path, role: role, label: label, frame: frame ?? [0, 0, 0, 0],
                                actions: advertisedActions.compactMap { actions.contains($0.0) ? $0.1 : nil },
                                enabled: enabled, focused: focused, value: value))
-        revisionParts.append("\(path):\(role):\(label):\(value ?? ""):\(enabled):\(focused):\(frame ?? []):\(actions)")
+        revisionParts.append("\(path):\(role):\(label):\(value ?? ""):\(enabled):\(focused):\(revisionFrame(frame, actionable: !actions.isEmpty)):\(actions)")
         if path.count < 12 {
             queue.append(contentsOf: children(node).enumerated().map { ($0.element, path + [$0.offset]) })
         }
     }
     return (window, sha256(revisionParts), entries)
+}
+
+// Some apps (Finder's sidebar images, for one) report decorative frames that drift by a
+// point or two between reads of an unchanged window. The revision keeps geometry only
+// where a mutation depends on it and rounds it, so an idle window has a stable revision.
+private func revisionFrame(_ frame: [Double]?, actionable: Bool) -> [Int] {
+    guard actionable, let frame else { return [] }
+    return frame.map { Int($0.rounded()) }
 }
 
 private func desktopElement(_ window: AXUIElement, path: [Int]) throws -> AXUIElement {
