@@ -6,6 +6,8 @@ export interface RemoteTransport {
   readonly send: (frame: string) => Promise<void>
   readonly onMessage: (handler: (event: unknown) => void) => void
   readonly disconnect: (code?: number, reason?: string) => Promise<void>
+  /** Bytes accepted by the socket but not yet written to the network, when the runtime reports them. */
+  readonly bufferedAmount?: number
 }
 
 type SocketEvent = { readonly data?: unknown; readonly code?: number; readonly reason?: string }
@@ -17,6 +19,7 @@ const CLOSED = 3
 
 export interface RemoteSocket {
   readonly readyState: number
+  readonly bufferedAmount?: number
   readonly addEventListener: (type: string, listener: SocketListener) => void
   readonly removeEventListener: (type: string, listener: SocketListener) => void
   readonly send: (value: string) => void
@@ -77,6 +80,10 @@ export class CloudflareRemoteTransport implements RemoteTransport {
       this.rejectInitial = undefined
     }
     return connected
+  }
+
+  get bufferedAmount() {
+    return this.socket?.bufferedAmount
   }
 
   async send(frame: string) {
@@ -205,6 +212,9 @@ function bunSocketFactory(url: string, options: RemoteSocketOptions): RemoteSock
     get readyState() {
       return socket.readyState
     },
+    get bufferedAmount() {
+      return socket.bufferedAmount
+    },
     addEventListener(type, listener) {
       const wrapped = (event: Event) =>
         listener(event instanceof MessageEvent ? { data: event.data } : event instanceof CloseEvent ? { code: event.code, reason: event.reason } : {})
@@ -243,6 +253,10 @@ class NodeRemoteSocket implements RemoteSocket {
 
   get readyState() {
     return this.socket.readyState
+  }
+
+  get bufferedAmount() {
+    return this.socket.bufferedAmount
   }
 
   addEventListener(type: string, listener: SocketListener) {

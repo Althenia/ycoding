@@ -23,6 +23,7 @@ function harness(options: { readonly sessions?: readonly string[]; readonly auth
   const offlineStore = options.offlineStore ?? {}
   const storedSubscriptions = new Map<string, readonly string[]>()
   const storedPending = new Map<string, readonly { relayID: string; clientID: string }[]>()
+  const storedPriorities = new Map<string, "interactive" | "background">()
   const statusStore = options.statusStore ?? {}
   const database = options.database ?? new Database(":memory:")
   const storage = createNoticeStorage(database)
@@ -47,6 +48,7 @@ function harness(options: { readonly sessions?: readonly string[]; readonly auth
     close: (connectionID, code, reason) => closed.push({ connectionID, code, reason }),
     saveSubscriptions: (connectionID, values) => storedSubscriptions.set(connectionID, values),
     savePending: (connectionID, values) => storedPending.set(connectionID, values),
+    savePriority: (connectionID, mode) => storedPriorities.set(connectionID, mode),
     loadStatus: async () => statusStore.value,
     saveStatus: async (status) => { statusStore.value = status },
     loadOfflineCheck: async () => offlineStore.value,
@@ -73,6 +75,7 @@ function harness(options: { readonly sessions?: readonly string[]; readonly auth
     pushed,
     storedSubscriptions,
     storedPending,
+    storedPriorities,
     storedStatus: () => statusStore.value,
     storedOffline: () => offlineStore.value,
     database,
@@ -125,8 +128,9 @@ function harness(options: { readonly sessions?: readonly string[]; readonly auth
   }
 }
 
-function client(connectionID: string, browserSessionID = "sess-1", noticesSubscribed = false): RelayConnection {
+function client(connectionID: string, browserSessionID = "sess-1", noticesSubscribed = false, priority: RelayConnection["priority"] = "interactive"): RelayConnection {
   return {
+    priority,
     connectionID,
     role: "client",
     ownerID: "usr_1",
@@ -1936,5 +1940,159 @@ describe("relay core: one System alert owner per browser", () => {
     await settle()
     expect(h.presentedTo("tab-1")).toEqual(["ntc_2"])
     expect(h.presentedTo("tab-2")).toEqual(["ntc_1", "ntc_2"])
+  })
+})
+
+describe("relay core: multiplexed streams", () => {
+  const events = (sessionID: string) => JSON.stringify({ type: "events", sessionID, events: [{ seq: 1 }, { seq: 2 }] })
+
+  test("delivers an events batch verbatim to clients subscribed to that session only", async () => {
+    const h = harness({ sessions: ["ses_a", "ses_b"] })
+    await h.relay.attach(agent("agent-1"))
+    await h.relay.attach({ ...client("client-1"), subscriptions: ["ses_a"] })
+    await h.relay.attach({ ...client("client-2"), subscriptions: ["ses_b"] })
+    await h.relay.attach(client("client-3"))
+    h.reset()
+
+    await h.relay.handleAgentMessage("agent-1", events("ses_a"))
+
+    expect(h.messagesTo("client-1")).toEqual([{ type: "events", sessionID: "ses_a", events: [{ seq: 1 }, { seq: 2 }] }])
+    expect(h.messagesTo("client-2")).toEqual([])
+    expect(h.messagesTo("client-3")).toEqual([])
+  })
+
+  test("closes a subscribed client whose authority was revoked instead of delivering events", async () => {
+    const h = harness()
+    await h.relay.attach(agent("agent-1"))
+    await h.relay.attach({ ...client("client-1"), subscriptions: ["ses_a"] })
+    h.reset()
+    h.setClientAuthority({ ok: false, reason: "revoked_session" })
+
+    await h.relay.handleAgentMessage("agent-1", events("ses_a"))
+
+    expect(h.messagesTo("client-1")).toEqual([])
+    expect(h.closed.map((entry) => entry.connectionID)).toEqual(["client-1"])
+  })
+
+  test("rejects events frames from a client with the unsupported close", async () => {
+    const h = harness()
+    await attachBoth(h)
+    await h.relay.handleClientMessage("client-1", events("ses_a"))
+    expect(h.closed).toEqual([{ connectionID: "client-1", code: 1003, reason: "Frame is not valid for this connection" }])
+  })
+
+  test("cancel forwards the relay ID to the agent, drops the pending entry, and discards the late response", async () => {
+    const h = harness()
+    await attachBoth(h)
+    await h.relay.handleClientMessage("client-1", request("7", "session.list"))
+    const forwarded = h.messagesTo("agent-1").at(-1)!
+    expect(h.storedPending.get("client-1")).toEqual([{ relayID: forwarded.id as string, clientID: "7" }])
+    h.reset()
+
+    await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "cancel", id: "7" }))
+
+    expect(h.messagesTo("agent-1")).toEqual([{ type: "cancel", id: forwarded.id }])
+    expect(h.messagesTo("client-1")).toEqual([])
+    expect(h.storedPending.get("client-1")).toEqual([])
+
+    await h.relay.handleAgentMessage("agent-1", response(forwarded.id as string, []))
+    expect(h.messagesTo("client-1")).toEqual([])
+  })
+
+  test("ignores a cancel for an unknown or settled request", async () => {
+    const h = harness()
+    await attachBoth(h)
+    await h.relay.handleClientMessage("client-1", request("7", "session.list"))
+    const forwarded = h.messagesTo("agent-1").at(-1)!
+    await h.relay.handleAgentMessage("agent-1", response(forwarded.id as string, []))
+    h.reset()
+
+    await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "cancel", id: "7" }))
+    await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "cancel", id: "missing" }))
+
+    expect(h.messagesTo("agent-1")).toEqual([])
+    expect(h.messagesTo("client-1")).toEqual([])
+    expect(h.closed).toEqual([])
+  })
+
+  test("a client can never cancel another client's request that shares its id", async () => {
+    const h = harness()
+    await attachBoth(h)
+    await h.relay.attach(client("client-2"))
+    await h.relay.handleClientMessage("client-1", request("1", "session.list"))
+    const first = h.messagesTo("agent-1").at(-1)!
+    await h.relay.handleClientMessage("client-2", request("1", "session.list"))
+    const second = h.messagesTo("agent-1").at(-1)!
+    h.reset()
+
+    await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "cancel", id: "1" }))
+
+    expect(h.messagesTo("agent-1")).toEqual([{ type: "cancel", id: first.id }])
+    expect(h.storedPending.get("client-2")).toEqual([{ relayID: second.id as string, clientID: "1" }])
+    await h.relay.handleAgentMessage("agent-1", response(second.id as string, ["ok"]))
+    expect(h.messagesTo("client-2")).toEqual([{ type: "response", id: "1", ok: true, value: ["ok"] }])
+  })
+
+  test("cancel frames count against the client rate window", async () => {
+    const h = harness()
+    await attachBoth(h)
+    for (let index = 0; index <= RemoteLimits.maxClientRequestsPerWindow; index += 1)
+      await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "cancel", id: "none" }))
+    expect(h.closed).toEqual([{ connectionID: "client-1", code: 1008, reason: "Client request rate exceeded" }])
+  })
+
+  test("a priority hint is persisted and forwarded to the agent with the client identity", async () => {
+    const h = harness()
+    await attachBoth(h)
+
+    await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "priority", mode: "background" }))
+
+    expect(h.storedPriorities.get("client-1")).toBe("background")
+    expect(h.messagesTo("agent-1")).toEqual([{ type: "priority", clientID: "client-1", mode: "background" }])
+    await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "priority", mode: "interactive" }))
+    expect(h.storedPriorities.get("client-1")).toBe("interactive")
+    expect(h.messagesTo("agent-1").at(-1)).toEqual({ type: "priority", clientID: "client-1", mode: "interactive" })
+  })
+
+  test("rejects priority frames from the agent with the unsupported close", async () => {
+    const h = harness()
+    await attachBoth(h)
+    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "priority", clientID: "client-1", mode: "background" }))
+    expect(h.closed).toEqual([{ connectionID: "agent-1", code: 1003, reason: "Frame is not valid for this connection" }])
+  })
+
+  test("a restored background client re-sends its priority after its subscriptions when the agent attaches", async () => {
+    const h = harness()
+    await h.relay.restore([client("client-1", "sess-1", false, "background"), client("client-2"), agent("agent-1")])
+
+    expect(h.messagesTo("agent-1")).toEqual([
+      { type: "subscriptions", clientID: "client-1", sessionIDs: [] },
+      { type: "priority", clientID: "client-1", mode: "background" },
+      { type: "subscriptions", clientID: "client-2", sessionIDs: [] },
+    ])
+  })
+
+  test("a background client that attaches while the agent is connected announces its priority after its subscriptions", async () => {
+    const h = harness()
+    await h.relay.attach(agent("agent-1"))
+    h.reset()
+    await h.relay.attach(client("client-1", "sess-1", false, "background"))
+
+    expect(h.messagesTo("agent-1")).toEqual([
+      { type: "subscriptions", clientID: "client-1", sessionIDs: [] },
+      { type: "priority", clientID: "client-1", mode: "background" },
+    ])
+  })
+
+  test("a detached client's priority is never forwarded and detaching only sends the empty snapshot", async () => {
+    const h = harness()
+    await attachBoth(h)
+    await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "priority", mode: "background" }))
+    h.reset()
+
+    h.relay.detach("client-1")
+    await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "priority", mode: "interactive" }))
+
+    expect(h.messagesTo("agent-1")).toEqual([{ type: "subscriptions", clientID: "client-1", sessionIDs: [] }])
   })
 })

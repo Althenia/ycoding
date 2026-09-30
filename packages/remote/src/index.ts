@@ -219,6 +219,8 @@ export const RemoteLimits = {
   agentRateWindowMs: 10_000,
   /** Bounded chunk count per response; larger values are a policy violation. */
   maxChunksPerResponse: 64,
+  /** Events one `events` frame may carry for a session. */
+  maxEventBatch: 64,
   /** Consecutive out-of-policy agent frames tolerated before the agent is closed. */
   maxAgentViolations: 8,
   agentHeartbeatIntervalMs: 20_000,
@@ -309,6 +311,16 @@ export type RemoteFailedResponse = { readonly type: "response"; readonly id: str
 export type RemoteResponse = RemoteSucceededResponse | RemoteFailedResponse
 
 export type RemoteEvent = { readonly type: "event"; readonly sessionID: string; readonly event: unknown }
+/**
+ * Ordered events for one session coalesced into one frame. The agent batches
+ * per session so control frames and other sessions' streams interleave instead
+ * of queueing behind a burst; the client applies a batch atomically.
+ */
+export type RemoteEventBatch = { readonly type: "events"; readonly sessionID: string; readonly events: readonly unknown[] }
+/** Delivery preference for this client's event stream; `background` allows longer coalescing. */
+export type RemotePriorityMode = "interactive" | "background"
+export type RemotePriorityHint = { readonly type: "priority"; readonly mode: RemotePriorityMode }
+export type RemotePriority = { readonly type: "priority"; readonly clientID: string; readonly mode: RemotePriorityMode }
 /** Bounded invalidation: clients page the authoritative backend list after receipt. */
 export type RemoteSessions = { readonly type: "sessions" }
 export type RemoteStatus = { readonly type: "status"; readonly running: readonly string[]; readonly attention: readonly string[]; readonly outstanding?: readonly string[]; readonly failed?: readonly string[] }
@@ -354,13 +366,13 @@ export type RemoteNoticeFrame =
 export type RemoteNoticePresentation = { readonly kind: "notice"; readonly notice: RemoteNotice } | { readonly kind: "offline"; readonly at: number }
 
 /** Frames accepted from a browser connection. */
-export type RemoteClientMessage = RemoteRequest | RemoteNoticeRequest | RemoteHeartbeat
+export type RemoteClientMessage = RemoteRequest | RemoteNoticeRequest | RemoteHeartbeat | RemoteCancel | RemotePriorityHint
 /** Frames accepted from a local agent connection. */
-export type RemoteAgentMessage = RemoteResponse | RemoteEvent | RemoteSessions | RemoteStatus | RemoteCompletions | RemoteHeartbeat
+export type RemoteAgentMessage = RemoteResponse | RemoteEvent | RemoteEventBatch | RemoteSessions | RemoteStatus | RemoteCompletions | RemoteHeartbeat
 /** Frames the relay sends to a browser connection. */
-export type RemoteRelayToClient = RemoteResponse | RemoteEvent | RemoteSessions | RemoteStatus | RemoteHeartbeat | RemoteNoticeFrame
+export type RemoteRelayToClient = RemoteResponse | RemoteEvent | RemoteEventBatch | RemoteSessions | RemoteStatus | RemoteHeartbeat | RemoteNoticeFrame
 /** Frames the relay sends to a local agent connection. */
-export type RemoteRelayToAgent = RemoteRequest | RemoteSubscriptions | RemoteHeartbeat | RemoteCancel
+export type RemoteRelayToAgent = RemoteRequest | RemoteSubscriptions | RemoteHeartbeat | RemoteCancel | RemotePriority
 
 export type ParseResult<T> =
   | { readonly ok: true; readonly value: T }
@@ -397,6 +409,16 @@ export function serializeEvent(event: RemoteEvent): string {
 
 export function serializeSessions(sessions: RemoteSessions): string {
   return JSON.stringify(sessions)
+}
+
+export function serializeEvents(batch: RemoteEventBatch): string {
+  return JSON.stringify({ type: "events", sessionID: batch.sessionID, events: [...batch.events] })
+}
+
+export function serializePriority(frame: RemotePriorityHint | RemotePriority): string {
+  return "clientID" in frame
+    ? JSON.stringify({ type: "priority", clientID: frame.clientID, mode: frame.mode })
+    : JSON.stringify({ type: "priority", mode: frame.mode })
 }
 
 export function serializeStatus(status: RemoteStatus): string {
@@ -494,12 +516,29 @@ export function parseRelayToAgentMessage(raw: string): ParseResult<RemoteRelayTo
     return id.ok ? { ok: true, value: { type: "cancel", id: id.value } } : id
   }
   if (frame.value.type === "subscriptions") return parseSubscriptions(frame.value)
+  if (frame.value.type === "priority") {
+    const keys = withOnlyKeys(frame.value, ["type", "clientID", "mode"], frame.value)
+    if (!keys.ok) return keys
+    if (!isClientID(frame.value.clientID) || !isPriorityMode(frame.value.mode)) return invalid()
+    return { ok: true, value: { type: "priority", clientID: frame.value.clientID, mode: frame.value.mode } }
+  }
   return invalid()
 }
 
 function parseClientFrame(frame: unknown): ParseResult<RemoteClientMessage> {
   if (!isRecord(frame)) return invalid()
   if (frame.type === "ping" || frame.type === "pong") return withOnlyKeys(frame, ["type"], { type: frame.type })
+  if (frame.type === "cancel") {
+    const keys = withOnlyKeys(frame, ["type", "id"], frame)
+    if (!keys.ok) return keys
+    const id = requireID(frame.id)
+    return id.ok ? { ok: true, value: { type: "cancel", id: id.value } } : id
+  }
+  if (frame.type === "priority") {
+    const keys = withOnlyKeys(frame, ["type", "mode"], frame)
+    if (!keys.ok) return keys
+    return isPriorityMode(frame.mode) ? { ok: true, value: { type: "priority", mode: frame.mode } } : invalid()
+  }
   if (frame.type !== "request") return invalid()
   if (typeof frame.operation === "string" && (remoteNoticeOperations as readonly string[]).includes(frame.operation)) return parseNoticeRequest(frame)
   return parseRequest(frame)
@@ -510,6 +549,7 @@ function parseAgentFrame(frame: unknown): ParseResult<RemoteAgentMessage> {
   if (frame.type === "ping" || frame.type === "pong") return withOnlyKeys(frame, ["type"], { type: frame.type })
   if (frame.type === "response") return parseResponse(frame)
   if (frame.type === "event") return parseEvent(frame)
+  if (frame.type === "events") return parseEventBatch(frame)
   if (frame.type === "sessions") return parseSessions(frame)
   if (frame.type === "status") return parseStatus(frame)
   if (frame.type === "completions") return parseCompletions(frame)
@@ -715,6 +755,14 @@ function parseEvent(frame: Record<string, unknown>): ParseResult<RemoteEvent> {
   return { ok: true, value: { type: "event", sessionID: frame.sessionID, event: frame.event } }
 }
 
+function parseEventBatch(frame: Record<string, unknown>): ParseResult<RemoteEventBatch> {
+  const keys = withOnlyKeys(frame, ["type", "sessionID", "events"], frame.type)
+  if (!keys.ok) return keys
+  if (!isSessionID(frame.sessionID)) return invalid()
+  if (!Array.isArray(frame.events) || frame.events.length === 0 || frame.events.length > RemoteLimits.maxEventBatch) return invalid()
+  return { ok: true, value: { type: "events", sessionID: frame.sessionID, events: frame.events } }
+}
+
 function parseSessions(frame: Record<string, unknown>): ParseResult<RemoteSessions> {
   return withOnlyKeys(frame, ["type"], { type: "sessions" })
 }
@@ -843,8 +891,7 @@ function parseNoticeIDs(value: unknown): ParseResult<readonly string[]> {
 function parseSubscriptions(frame: Record<string, unknown>): ParseResult<RemoteSubscriptions> {
   const keys = withOnlyKeys(frame, ["type", "clientID", "sessionIDs"], frame.type)
   if (!keys.ok) return keys
-  if (typeof frame.clientID !== "string" || frame.clientID.length === 0 || frame.clientID.length > 64) return invalid()
-  if (!/^[A-Za-z0-9_-]+$/.test(frame.clientID)) return invalid()
+  if (!isClientID(frame.clientID)) return invalid()
   if (!Array.isArray(frame.sessionIDs) || frame.sessionIDs.length > RemoteLimits.maxSubscriptionsPerClient) return invalid()
   const sessionIDs: string[] = []
   for (const value of frame.sessionIDs) {
@@ -852,6 +899,14 @@ function parseSubscriptions(frame: Record<string, unknown>): ParseResult<RemoteS
     if (!sessionIDs.includes(value)) sessionIDs.push(value)
   }
   return { ok: true, value: { type: "subscriptions", clientID: frame.clientID, sessionIDs } }
+}
+
+function isClientID(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 64 && /^[A-Za-z0-9_-]+$/.test(value)
+}
+
+function isPriorityMode(value: unknown): value is RemotePriorityMode {
+  return value === "interactive" || value === "background"
 }
 
 function parseError(value: unknown): ParseResult<RemoteError> {

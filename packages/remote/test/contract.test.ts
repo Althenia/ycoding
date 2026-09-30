@@ -146,11 +146,12 @@ test("Team operations stay root-scoped with bounded child, shell, side-chat, and
   ] as const) expect(parseClientMessage(JSON.stringify(request(operation, input))).ok).toBe(false)
 })
 
-test("relay-only cancel frames cannot be forged by a browser", () => {
+test("cancel frames carry the sender's own correlation ID on both control surfaces", () => {
   const frame = JSON.stringify({ type: "cancel", id: "req_message" })
   expect(parseRelayToAgentMessage(frame)).toMatchObject({ ok: true, value: { type: "cancel", id: "req_message" } })
-  expect(parseClientMessage(frame).ok).toBe(false)
+  expect(parseClientMessage(frame)).toMatchObject({ ok: true, value: { type: "cancel", id: "req_message" } })
   expect(parseRelayToAgentMessage(JSON.stringify({ type: "cancel", id: "bad!" })).ok).toBe(false)
+  expect(parseClientMessage(JSON.stringify({ type: "cancel", id: "bad!" })).ok).toBe(false)
 })
 
 test("push subscription input admits only bounded known push services and key shapes", () => {

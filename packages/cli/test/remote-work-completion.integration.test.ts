@@ -47,7 +47,7 @@ test("a real task declaration and settled answer reach the authenticated complet
   const relay = createRelay({
     now: Date.now, newID: () => crypto.randomUUID(), send: () => {},
     close: (_id, code) => { closes.push(code) },
-    saveSubscriptions: () => {}, savePending: () => {}, notices, saveNoticeSubscription: () => {},
+    saveSubscriptions: () => {}, savePriority: () => {}, savePending: () => {}, notices, saveNoticeSubscription: () => {},
     loadStatus: async () => status, saveStatus: async (value) => { status = value },
     loadOfflineCheck: async () => undefined, saveOfflineCheck: async () => {},
     authorizeClientCommand: async () => ({ ok: true }), authorizeAgentCommand: async () => ({ ok: true }),

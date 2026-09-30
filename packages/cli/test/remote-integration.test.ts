@@ -58,9 +58,15 @@ function createRelay(): Relay {
         send: async (value: string) => {
           const parsed = parseAgentMessage(value)
           if (!parsed.ok) throw new Error(`bridge sent an invalid frame: ${parsed.error.code}`)
-          if (droppingEvents && parsed.value.type === "event") return
-          values.push(parsed.value as unknown as SentValue)
-          listener?.(parsed.value as unknown as SentValue)
+          const message = parsed.value
+          if (droppingEvents && message.type === "events") return
+          const delivered = message.type === "events"
+            ? message.events.map((event) => ({ type: "event", sessionID: message.sessionID, event }))
+            : [message]
+          for (const value of delivered) {
+            values.push(value as unknown as SentValue)
+            listener?.(value as unknown as SentValue)
+          }
         },
         onMessage: (next) => {
           handler = next
@@ -321,6 +327,7 @@ test("a disconnected connector reconciles a promoted prompt from the real server
       connect: () => queueMicrotask(() => { next.onStatus?.({ kind: "open" }); next.onSessions?.() }),
       close: () => next.onStatus?.({ kind: "idle" }),
       status: () => ({ kind: "open" }),
+      setPriority: () => {},
       request: async (operation, options) => {
         const id = `req_pending_${++nextID}`
         relay.deliver(request(id, operation, options?.sessionID, options?.input ? { ...options.input } : undefined))
@@ -333,7 +340,7 @@ test("a disconnected connector reconciles a promoted prompt from the real server
     }
   } })
   relay.onSent((frame) => {
-    if (frame.type === "event" && typeof frame.sessionID === "string") handlers?.onEvent?.(frame.sessionID, frame.event)
+    if (frame.type === "event" && typeof frame.sessionID === "string") handlers?.onEvents?.(frame.sessionID, [frame.event])
     if (frame.type === "sessions") handlers?.onSessions?.()
     if (frame.type === "status" && Array.isArray(frame.running) && Array.isArray(frame.attention))
       handlers?.onSessionStatus?.({ running: frame.running.filter((id: unknown): id is string => typeof id === "string"), attention: frame.attention.filter((id: unknown): id is string => typeof id === "string") })
@@ -400,6 +407,7 @@ test("a real finished run reaches the web activity store without changing Sessio
       connect: () => queueMicrotask(() => { handlers.onStatus?.({ kind: "open" }); handlers.onSessions?.() }),
       close: () => handlers.onStatus?.({ kind: "idle" }),
       status: () => ({ kind: "open" }),
+      setPriority: () => {},
       request: async (operation, options) => {
         const id = `req_active_${++nextID}`
         relay.deliver(request(id, operation, options?.sessionID, options?.input ? { ...options.input } : undefined))
@@ -413,7 +421,7 @@ test("a real finished run reaches the web activity store without changing Sessio
   } })
   relay.onSent((frame) => {
     if (frame.type === "event" && typeof frame.sessionID === "string")
-      eventHandlers?.onEvent?.(frame.sessionID, frame.event)
+      eventHandlers?.onEvents?.(frame.sessionID, [frame.event])
     if (frame.type === "status" && Array.isArray(frame.running) && Array.isArray(frame.attention))
       eventHandlers?.onSessionStatus?.({ running: frame.running.filter((id: unknown): id is string => typeof id === "string"), attention: frame.attention.filter((id: unknown): id is string => typeof id === "string") })
   })

@@ -268,6 +268,7 @@ One JSON object per WebSocket frame, discriminated by `type`.
 | `request` | client → relay → agent | `{ type:"request", id, operation, sessionID?, input? }` |
 | `response` | agent → relay → client | `{ type:"response", id, ok:true, value, chunk? }` or `{ type:"response", id, ok:false, error:{ code, message } }` |
 | `event` | agent → relay → clients | `{ type:"event", sessionID, event }` |
+| `events` | agent → relay → clients | `{ type:"events", sessionID, events:[event,...] }` (1–64 entries) |
 | `sessions` | agent → relay → clients | `{ type:"sessions" }` |
 | `status` | agent → relay → clients | `{ type:"status", running:[rootSessionID,...], attention:[rootSessionID,...], outstanding?:[rootSessionID,...], failed?:[rootSessionID,...] }` |
 | `completions` | agent → relay only | `{ type:"completions", data:[{ id, seq, created, sessionID },...], more:boolean }` |
@@ -278,6 +279,8 @@ One JSON object per WebSocket frame, discriminated by `type`.
 | `notice.unavailable` | relay → subscribed clients | `{ type:"notice.unavailable" }` |
 | `notice.offline` | relay → subscribed clients | `{ type:"notice.offline", at }` (confirmed machine outage; `at` is the agent's close time) |
 | `notice.present` | relay → one subscribed client per browser | `{ type:"notice.present", items:[{ kind:"notice", notice:Notice } \| { kind:"offline", at },...] }` (1–100 unique items; the only frame that raises a page System alert) |
+| `cancel` | client → relay; relay → agent | client: `{ type:"cancel", id }` with the client's own request `id`; agent: `{ type:"cancel", id }` with the relay-generated request ID |
+| `priority` | client → relay; relay → agent | client: `{ type:"priority", mode:"interactive"\|"background" }`; agent: `{ type:"priority", clientID, mode }` |
 | `subscriptions` | relay → agent | `{ type:"subscriptions", clientID, sessionIDs:[...] }` |
 | `ping` | either direction | `{ type:"ping" }` |
 | `pong` | either direction | `{ type:"pong" }` |
@@ -286,7 +289,8 @@ One JSON object per WebSocket frame, discriminated by `type`.
 `operation` is one of the fixed operations in section 3.4. `sessionID` matches
 `^ses[A-Za-z0-9_-]+$` (≤128 chars). `input`, when present, is a JSON object; the
 relay forwards it verbatim and does not interpret it. `event` is forwarded
-verbatim as the local `packages/protocol` event payload.
+verbatim as the local `packages/protocol` event payload; each `events` entry is
+one such payload.
 
 Relay rules:
 
@@ -296,7 +300,24 @@ Relay rules:
   originating client's ID. Agents therefore never see colliding IDs, and a
   response is delivered only to the client that issued the corresponding request.
   Unknown or already-settled IDs are dropped.
-- `event` frames are delivered only to clients subscribed to that `sessionID`.
+- `event` and `events` frames are delivered only to clients subscribed to that
+  `sessionID`, unchanged, after the same authority check. A batch is one frame
+  for one session and is never split or merged by the relay.
+- `cancel` from a client removes that client's own in-flight request whose client
+  `id` matches, then sends the agent `cancel` with the relay-generated ID. Lookup
+  is scoped to the sending connection, so a client never cancels another client's
+  request even when both use the same `id`. The relay does not answer a
+  `cancel`, ignores an unknown or settled `id`, and drops any later agent
+  response for the cancelled request. A `cancel` counts against the client
+  request rate.
+- `priority` from a client sets that connection's mode (default `interactive`),
+  which persists across relay hibernation. The relay forwards it to the agent as
+  `{ type:"priority", clientID, mode }` using the connection ID that `subscriptions`
+  uses. When the agent connects, and when a client attaches, the relay sends a
+  `background` client's `priority` right after its `subscriptions` snapshot. The
+  relay sends no `priority` frame for a detached client; the empty
+  `subscriptions` snapshot is the agent's signal to drop that client. Agents and
+  clients that send a frame kind not valid for their role are closed with `1003`.
 - `sessions` is a bounded invalidation, never an inventory. The client responds by
   rereading the Session groups and the selected group's first `session.list` page.
   The agent sends it for membership and list-metadata changes, not for activity
@@ -892,6 +913,7 @@ rows, not an unreported backend total.
 | Agent message rate | 500 per 10 s → close `1008` |
 | Session-list page | 200 |
 | Subscriptions per client | 64 |
+| Events per `events` batch | 64 |
 | Heartbeats | `{"type":"ping"}` is answered with `{"type":"pong"}` without waking the object |
 
 The browser sends a liveness probe after 30 s without an incoming frame. Its

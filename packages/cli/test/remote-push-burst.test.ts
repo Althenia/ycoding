@@ -46,7 +46,8 @@ test("a fast 2355-delta provider stream preserves explicit completion push witho
     send: (id, frame) => {
       if (id === "agent") input && JSON.parse(frame).type === "subscriptions" && handler?.(JSON.parse(frame))
       const index = Number(id.replace("client-", ""))
-      if (JSON.parse(frame).type === "event" && index >= 0 && index < clientEvents.length) clientEvents[index]++
+      const parsed = JSON.parse(frame)
+      if (parsed.type === "events" && index >= 0 && index < clientEvents.length) clientEvents[index] += parsed.events.length
     },
     close: (id, code, reason) => {
       if (id !== "agent") return
@@ -54,7 +55,7 @@ test("a fast 2355-delta provider stream preserves explicit completion push witho
       connected = false
       input?.onClose(code, reason)
     },
-    saveSubscriptions: () => {}, savePending: () => {},
+    saveSubscriptions: () => {}, savePriority: () => {}, savePending: () => {},
     notices: createNoticeStore(createNoticeStorage(database)),
     saveNoticeSubscription: () => {},
     loadStatus: async () => status,

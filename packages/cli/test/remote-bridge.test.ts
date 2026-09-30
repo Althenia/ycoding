@@ -69,6 +69,7 @@ type ConnectionRecord = {
   readonly sent: string[]
   readonly deliver: (frame: unknown) => void
   readonly disconnected: boolean
+  bufferedAmount: number
 }
 
 function harness(options: {
@@ -107,6 +108,7 @@ function harness(options: {
           state.disconnected = true
         },
         disconnected: false,
+        bufferedAmount: 0,
       }
       const state = { disconnected: false }
       let handler: ((frame: unknown) => void) | undefined
@@ -135,6 +137,9 @@ function harness(options: {
         send: connection.send,
         onMessage: connection.onMessage,
         disconnect: connection.disconnect,
+        get bufferedAmount() {
+          return record.bufferedAmount
+        },
       }
     },
     refreshIntervalMs: 3_600_000,
@@ -165,6 +170,12 @@ function sentFrames(record: ConnectionRecord) {
   })
 }
 
+function sentEvents(record: ConnectionRecord) {
+  return sentFrames(record).flatMap((frame) =>
+    frame.type === "events" ? frame.events.map((event) => ({ sessionID: frame.sessionID, event })) : [],
+  )
+}
+
 const completion = (sessionID: string, seq = 12) => ({
   id: `evt_${sessionID}_${seq}`, seq, created: 1_000, sessionID, inputID: "msg_input", assistantMessageID: "msg_final",
 })
@@ -189,7 +200,7 @@ test("pages explicit completion receipts without a browser subscription and refr
     seq = 20
     test.streams[0].stream.onEvent({ type: "session.work.completed", data: { sessionID: "ses_1", inputID: "msg_input", assistantMessageID: "msg_final" } })
     await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "completions" && frame.data.some((item) => item.seq === 20)))
-    expect(sentFrames(test.records[0]).some((frame) => frame.type === "event")).toBe(false)
+    expect(sentEvents(test.records[0])).toHaveLength(0)
   } finally { await test.bridge.close() }
 })
 
@@ -253,7 +264,7 @@ describe("remote bridge", () => {
       test.streams[0].stream.onEvent({ type: "session.step.ended", data: { sessionID: "ses_1" } })
       await waitFor(() => sentFrames(test.records[0]).filter((frame) => frame.type === "sessions").length > before ? true : undefined)
       expect(test.calls.filter((call) => call.method === "getSession").length).toBeGreaterThan(0)
-      expect(sentFrames(test.records[0]).some((frame) => frame.type === "event")).toBe(false)
+      expect(sentEvents(test.records[0])).toHaveLength(0)
     } finally { await test.bridge.close() }
   })
 
@@ -650,8 +661,8 @@ describe("remote bridge", () => {
     expect(streams[0].stopped).toBe(false)
 
     streams[0].stream.onEvent({ type: "message.updated", data: { sessionID: "ses_2", text: "two" } })
-    await waitFor(() => sentFrames(connection).some((frame) => frame.type === "event") ? true : undefined)
-    expect(sentFrames(connection).filter((frame) => frame.type === "event")).toHaveLength(1)
+    await waitFor(() => sentEvents(connection).length > 0 ? true : undefined)
+    expect(sentEvents(connection)).toHaveLength(1)
 
     connection.deliver({ type: "subscriptions", clientID: "client-2", sessionIDs: [] })
     await Bun.sleep(5)
@@ -683,27 +694,24 @@ describe("remote bridge", () => {
     stream.onEvent({ type: "form.cancelled", data: { id: "frm_2", sessionID: "ses_1" } })
     stream.onEvent({ type: "server.connected", data: {} })
     stream.onEvent({ type: "session.created", data: { sessionID: "ses_1" } })
-    await waitFor(() => sentFrames(connection).filter((frame) => frame.type === "event").length === 5 ? true : undefined, 2_000)
+    await waitFor(() => sentEvents(connection).length === 5 ? true : undefined, 2_000)
 
-    const events = sentFrames(connection).filter((frame) => frame.type === "event")
+    const events = sentEvents(connection)
     expect(events).toEqual([
-      { type: "event", sessionID: "ses_1", event: { type: "session.created", data: { sessionID: "ses_1" } } },
+      { sessionID: "ses_1", event: { type: "session.created", data: { sessionID: "ses_1" } } },
       {
-        type: "event",
         sessionID: "ses_1",
         event: { type: "form.created", data: { sessionID: "ses_other", form: { id: "frm_1", sessionID: "ses_1" } } },
       },
       {
-        type: "event",
         sessionID: "ses_1",
         event: { type: "form.replied", data: { id: "frm_1", sessionID: "ses_1", answer: { approved: true } } },
       },
       {
-        type: "event",
         sessionID: "ses_1",
         event: { type: "form.cancelled", data: { id: "frm_2", sessionID: "ses_1" } },
       },
-      { type: "event", sessionID: "ses_1", event: { type: "session.created", data: { sessionID: "ses_1" } } },
+      { sessionID: "ses_1", event: { type: "session.created", data: { sessionID: "ses_1" } } },
     ])
 
     await bridge.close()
@@ -718,20 +726,20 @@ describe("remote bridge", () => {
 
     connection.sent.length = 0
     streams[0].stream.onEvent({ type: "message.updated", data: { sessionID: "ses_1" } })
-    await waitFor(() => sentFrames(connection).some((frame) => frame.type === "event") ? true : undefined)
-    expect(sentFrames(connection).filter((frame) => frame.type === "event")).toHaveLength(1)
+    await waitFor(() => sentEvents(connection).length > 0 ? true : undefined)
+    expect(sentEvents(connection)).toHaveLength(1)
 
     connection.sent.length = 0
     connection.input.onClose(1012)
     connection.input.onOpen()
     streams[0].stream.onEvent({ type: "message.updated", data: { sessionID: "ses_1" } })
     await Bun.sleep(5)
-    expect(sentFrames(connection).filter((frame) => frame.type === "event")).toHaveLength(0)
+    expect(sentEvents(connection)).toHaveLength(0)
 
     connection.deliver({ type: "subscriptions", clientID: "client-1", sessionIDs: ["ses_1"] })
     streams[0].stream.onEvent({ type: "message.updated", data: { sessionID: "ses_1" } })
-    await waitFor(() => sentFrames(connection).some((frame) => frame.type === "event") ? true : undefined)
-    expect(sentFrames(connection).filter((frame) => frame.type === "event")).toHaveLength(1)
+    await waitFor(() => sentEvents(connection).length > 0 ? true : undefined)
+    expect(sentEvents(connection)).toHaveLength(1)
     await bridge.close()
   })
 
@@ -808,11 +816,11 @@ describe("remote bridge", () => {
     const before = records.length
 
     streams[0].stream.onEvent({ id: "evt_big", type: "session.tool.progress", durable: { aggregateID: "ses_1", seq: 7, version: 2 }, data: { sessionID: "ses_1", assistantMessageID: "msg_large", text: "x".repeat(300_000) } })
-    await waitFor(() => sentFrames(records[0]).some((frame) => frame.type === "event") ? true : undefined)
+    await waitFor(() => sentEvents(records[0]).length > 0 ? true : undefined)
 
-    expect(sentFrames(records[0]).filter((frame) => frame.type === "event")).toMatchObject([{ type: "event", sessionID: "ses_1", event: { id: "evt_big", type: "session.remote.oversized", durable: { aggregateID: "ses_1", seq: 7, version: 2 }, data: { sessionID: "ses_1", messageID: "msg_large", truncated: true } } }])
-    const replacement = sentFrames(records[0]).find((frame) => frame.type === "event")
-    const data = replacement?.type === "event" && typeof replacement.event === "object" && replacement.event !== null ? Reflect.get(replacement.event, "data") : undefined
+    expect(sentEvents(records[0])).toMatchObject([{ sessionID: "ses_1", event: { id: "evt_big", type: "session.remote.oversized", durable: { aggregateID: "ses_1", seq: 7, version: 2 }, data: { sessionID: "ses_1", messageID: "msg_large", truncated: true } } }])
+    const replacement = sentEvents(records[0])[0]
+    const data = typeof replacement?.event === "object" && replacement.event !== null ? Reflect.get(replacement.event, "data") : undefined
     const omitted: unknown = data && typeof data === "object" ? Reflect.get(data, "omittedChars") : undefined
     expect(typeof omitted).toBe("number")
     if (typeof omitted !== "number") throw new Error("Oversized marker lacks an omitted character count")
@@ -988,5 +996,149 @@ describe("remote bridge", () => {
       args: ["ses_1", { directory: "/work" }, { text: "retry me", id: "msg_retry" }],
     })
     await bridge.close()
+  })
+})
+
+describe("remote bridge multiplexed delivery", () => {
+  const messageEvent = (sessionID: string, index: number) => ({ type: "message.updated", data: { sessionID, index } })
+  const eventFrames = (record: ConnectionRecord) => sentFrames(record).flatMap((frame) => (frame.type === "events" ? [frame] : []))
+  const chunkIndexes = (record: ConnectionRecord) =>
+    sentFrames(record).flatMap((frame) => (frame.type === "response" && frame.ok && frame.chunk !== undefined ? [frame.chunk.index] : []))
+  const largeMessages = { messages: async () => Array.from({ length: 40_000 }, (_, index) => ({ index, text: `line ${index} "quoted"` })) }
+  const unknownOperation = { ...requestFrame("session.future.unknown", "ses_1"), id: "req_2" }
+
+  async function subscribed(options: Parameters<typeof harness>[0] = {}) {
+    const test = harness({ sessions: [entry, second], ...options })
+    await test.bridge.connect()
+    const connection = test.records[0]
+    connection.deliver({ type: "subscriptions", clientID: "client-1", sessionIDs: ["ses_1", "ses_2"] })
+    await Bun.sleep(5)
+    connection.sent.length = 0
+    return { ...test, connection, emit: test.streams[0].stream.onEvent }
+  }
+
+  test("coalesces a burst for one session into one ordered events frame", async () => {
+    const test = await subscribed()
+    try {
+      for (let index = 0; index < 10; index++) test.emit(messageEvent("ses_1", index))
+      await waitFor(() => (eventFrames(test.connection).length > 0 ? true : undefined))
+      await Bun.sleep(120)
+      const frames = eventFrames(test.connection)
+      expect(frames).toHaveLength(1)
+      expect(frames[0].sessionID).toBe("ses_1")
+      expect(frames[0].events).toEqual(Array.from({ length: 10 }, (_, index) => messageEvent("ses_1", index)))
+    } finally { await test.bridge.close() }
+  })
+
+  test("splits a session burst at the shared batch bound and keeps its order", async () => {
+    const test = await subscribed()
+    try {
+      const total = RemoteLimits.maxEventBatch + 6
+      for (let index = 0; index < total; index++) test.emit(messageEvent("ses_1", index))
+      await waitFor(() => (sentEvents(test.connection).length === total ? true : undefined), 2_000)
+      const frames = eventFrames(test.connection)
+      expect(frames.map((frame) => frame.events.length)).toEqual([RemoteLimits.maxEventBatch, 6])
+      expect(sentEvents(test.connection).map((item) => Reflect.get(Reflect.get(item.event as object, "data") as object, "index"))).toEqual(Array.from({ length: total }, (_, index) => index))
+    } finally { await test.bridge.close() }
+  })
+
+  test("serves control frames and event batches between bulk chunks without head-of-line blocking", async () => {
+    const test = await subscribed({ results: largeMessages })
+    try {
+      test.connection.deliver(requestFrame("session.messages", "ses_1"))
+      await waitFor(() => (chunkIndexes(test.connection).length > 0 ? true : undefined))
+      test.connection.deliver(unknownOperation)
+      for (let index = 0; index < 3; index++) {
+        test.emit(messageEvent("ses_1", index))
+        test.emit(messageEvent("ses_2", index))
+      }
+      await waitFor(() => sentFrames(test.connection).some((frame) => frame.type === "response" && frame.ok && frame.chunk?.last) ? true : undefined, 5_000)
+
+      const frames = sentFrames(test.connection)
+      const lastChunk = frames.findIndex((frame) => frame.type === "response" && frame.ok && frame.chunk?.last)
+      const controlAt = frames.findIndex((frame) => frame.type === "response" && frame.id === "req_2")
+      const eventSessions = frames.flatMap((frame, index) => (frame.type === "events" && index < lastChunk ? [frame.sessionID] : []))
+      expect(controlAt).toBeGreaterThan(-1)
+      expect(controlAt).toBeLessThan(lastChunk)
+      expect(eventSessions.sort()).toEqual(["ses_1", "ses_2"])
+      const indexes = chunkIndexes(test.connection)
+      expect(indexes.length).toBeGreaterThan(4)
+      expect(indexes).toEqual(indexes.map((_, index) => index))
+    } finally { await test.bridge.close() }
+  })
+
+  test("uses the longer window while every subscribed client is background and restores 40 ms when one is interactive", async () => {
+    const test = await subscribed()
+    try {
+      test.connection.deliver({ type: "priority", clientID: "client-1", mode: "background" })
+      const started = Date.now()
+      test.emit(messageEvent("ses_1", 0))
+      await Bun.sleep(150)
+      expect(eventFrames(test.connection)).toHaveLength(0)
+      await waitFor(() => (eventFrames(test.connection).length > 0 ? true : undefined), 2_000)
+      expect(Date.now() - started).toBeGreaterThanOrEqual(700)
+
+      test.connection.sent.length = 0
+      test.emit(messageEvent("ses_1", 1))
+      const interactiveAt = Date.now()
+      test.connection.deliver({ type: "subscriptions", clientID: "client-2", sessionIDs: ["ses_1"] })
+      await waitFor(() => (eventFrames(test.connection).length > 0 ? true : undefined), 400)
+      expect(Date.now() - interactiveAt).toBeLessThan(400)
+
+      test.connection.sent.length = 0
+      test.emit(messageEvent("ses_1", 2))
+      await waitFor(() => (eventFrames(test.connection).length > 0 ? true : undefined), 400)
+    } finally { await test.bridge.close() }
+  })
+
+  test("a client's priority stops applying once its subscriptions snapshot is empty", async () => {
+    const test = await subscribed()
+    try {
+      test.connection.deliver({ type: "priority", clientID: "client-1", mode: "background" })
+      test.connection.deliver({ type: "subscriptions", clientID: "client-1", sessionIDs: [] })
+      test.connection.deliver({ type: "subscriptions", clientID: "client-1", sessionIDs: ["ses_1"] })
+      test.emit(messageEvent("ses_1", 0))
+      await waitFor(() => (eventFrames(test.connection).length > 0 ? true : undefined), 400)
+    } finally { await test.bridge.close() }
+  })
+
+  test("defers bulk slices while the socket buffer is above the bound and resumes below it", async () => {
+    const test = await subscribed({ results: largeMessages })
+    try {
+      test.connection.bufferedAmount = 256 * 1024 + 1
+      test.connection.deliver(requestFrame("session.messages", "ses_1"))
+      test.connection.deliver(unknownOperation)
+      test.emit(messageEvent("ses_1", 0))
+      await waitFor(() => (eventFrames(test.connection).length > 0 && sentFrames(test.connection).some((frame) => frame.type === "response" && frame.id === "req_2") ? true : undefined))
+      await Bun.sleep(150)
+      expect(chunkIndexes(test.connection)).toEqual([])
+
+      test.connection.bufferedAmount = 256 * 1024
+      await waitFor(() => sentFrames(test.connection).some((frame) => frame.type === "response" && frame.ok && frame.chunk?.last) ? true : undefined, 5_000)
+      const indexes = chunkIndexes(test.connection)
+      expect(indexes).toEqual(indexes.map((_, index) => index))
+    } finally { await test.bridge.close() }
+  })
+
+  test("drops queued batches and bulk slices when the relay connection is replaced", async () => {
+    const test = await subscribed({ results: largeMessages })
+    try {
+      test.connection.deliver({ type: "priority", clientID: "client-1", mode: "background" })
+      test.connection.bufferedAmount = 256 * 1024 + 1
+      test.connection.deliver(requestFrame("session.messages", "ses_1"))
+      test.emit(messageEvent("ses_1", 99))
+      await Bun.sleep(100)
+      test.connection.sent.length = 0
+
+      test.connection.input.onClose(1012)
+      test.connection.input.onOpen()
+      test.connection.bufferedAmount = 0
+      test.connection.deliver({ type: "subscriptions", clientID: "client-1", sessionIDs: ["ses_1"] })
+      test.emit(messageEvent("ses_1", 100))
+      await waitFor(() => (sentEvents(test.connection).some((item) => Reflect.get(Reflect.get(item.event as object, "data") as object, "index") === 100) ? true : undefined))
+      await Bun.sleep(900)
+      expect(chunkIndexes(test.connection)).toEqual([])
+      expect(sentEvents(test.connection).map((item) => Reflect.get(Reflect.get(item.event as object, "data") as object, "index"))).toEqual([100])
+    } finally { await test.bridge.close() }
   })
 })

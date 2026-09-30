@@ -17,6 +17,7 @@ import {
   serializeResponse,
   type RemoteErrorCode,
   type RemoteOperation,
+  type RemotePriorityMode,
   type RemoteRequest,
   type RemoteResponse,
   type RemoteWorkspaceInfo,
@@ -176,6 +177,10 @@ export function failureFrame(id: string, code: RemoteErrorCode, message: string)
 export type SubscriptionRegistry = {
   readonly apply: (clientID: string, sessionIDs: readonly string[]) => void
   readonly clear: () => void
+  /** Records a client's delivery preference; it lasts until that client's snapshot empties or the registry clears. */
+  readonly setPriority: (clientID: string, mode: RemotePriorityMode) => void
+  /** Whether any client subscribed to the Session wants interactive delivery; clients default to interactive. */
+  readonly interactive: (sessionID: string) => boolean
   readonly has: (sessionID: string) => boolean
   readonly count: (sessionID: string) => number
   readonly sessions: () => readonly string[]
@@ -187,18 +192,28 @@ export type SubscriptionRegistry = {
  */
 export function createSubscriptions(options: { readonly onChange?: () => void } = {}): SubscriptionRegistry {
   const clients = new Map<string, ReadonlySet<string>>()
+  const priorities = new Map<string, RemotePriorityMode>()
   const changed = () => options.onChange?.()
   return {
     apply(clientID, sessionIDs) {
-      if (sessionIDs.length === 0) clients.delete(clientID)
-      else clients.set(clientID, new Set(sessionIDs))
+      if (sessionIDs.length === 0) {
+        clients.delete(clientID)
+        priorities.delete(clientID)
+      } else clients.set(clientID, new Set(sessionIDs))
       changed()
     },
     clear() {
+      priorities.clear()
       if (clients.size === 0) return
       clients.clear()
       changed()
     },
+    setPriority(clientID, mode) {
+      priorities.set(clientID, mode)
+      changed()
+    },
+    interactive: (sessionID) =>
+      Array.from(clients).some(([clientID, sessions]) => sessions.has(sessionID) && priorities.get(clientID) !== "background"),
     has: (sessionID) => Array.from(clients.values()).some((sessions) => sessions.has(sessionID)),
     count: (sessionID) => Array.from(clients.values()).filter((sessions) => sessions.has(sessionID)).length,
     sessions: () => [...new Set(Array.from(clients.values()).flatMap((sessions) => [...sessions]))],

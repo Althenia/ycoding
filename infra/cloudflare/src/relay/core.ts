@@ -26,12 +26,14 @@ import {
   serializeRequest,
   serializeResponse,
   serializeCancel,
+  serializePriority,
   serializeSessions,
   serializeSubscriptions,
   type RemoteErrorCode,
   type RemoteNotice,
   type RemoteNoticePresentation,
   type RemoteNoticeRequest,
+  type RemotePriorityMode,
   type RemoteOperation,
   type RemoteResponse,
   type RemoteStatus,
@@ -47,6 +49,7 @@ export type RelayConnection = {
   readonly credentialExpiresAt: number
   readonly subscriptions: readonly string[]
   readonly noticesSubscribed: boolean
+  readonly priority?: RemotePriorityMode
   readonly pending: readonly { readonly relayID: string; readonly clientID: string }[]
 }
 
@@ -65,6 +68,7 @@ export type RelayDeps = {
   readonly saveStatus: (status: RemoteStatus) => Promise<void>
   readonly loadOfflineCheck: () => Promise<OfflineCheck | undefined>
   readonly saveOfflineCheck: (check: OfflineCheck | undefined) => Promise<void>
+  readonly savePriority: (connectionID: string, mode: RemotePriorityMode) => void
   readonly notices: NoticeStore
   readonly saveNoticeSubscription: (connectionID: string, subscribed: boolean) => void
   readonly authorizeClientCommand: (sessionID: string, deviceID: string) => Promise<RelayAuthority>
@@ -87,6 +91,7 @@ type ClientState = {
   readonly credentialExpiresAt: number
   subscriptions: string[]
   noticesSubscribed: boolean
+  priority: RemotePriorityMode
   windowStart: number
   windowCount: number
   authorityCheckedAt: number
@@ -348,6 +353,16 @@ export function createRelay(deps: RelayDeps) {
     deps.send(agent.connectionID, serializeSubscriptions({ type: "subscriptions", clientID, sessionIDs }))
   }
 
+  const sendPriority = (client: ClientState) => {
+    if (!agent) return
+    deps.send(agent.connectionID, serializePriority({ type: "priority", clientID: client.connectionID, mode: client.priority }))
+  }
+
+  const announceClient = (client: ClientState) => {
+    sendSubscriptionSnapshot(client.connectionID, client.subscriptions)
+    if (client.priority === "background") sendPriority(client)
+  }
+
   const relay = {
     agentConnected: () => agent !== undefined,
 
@@ -407,7 +422,7 @@ export function createRelay(deps: RelayDeps) {
             removeClient(client.connectionID, closeCodeFor(clientAuthority.reason), closeReasonFor(clientAuthority.reason))
             continue
           }
-          sendSubscriptionSnapshot(client.connectionID, client.subscriptions)
+          announceClient(client)
         }
         return
       }
@@ -440,6 +455,7 @@ export function createRelay(deps: RelayDeps) {
         credentialExpiresAt: connection.credentialExpiresAt,
         subscriptions,
         noticesSubscribed: connection.noticesSubscribed,
+        priority: connection.priority ?? "interactive",
         windowStart: deps.now(),
         windowCount: 0,
         authorityCheckedAt: deps.now(),
@@ -447,7 +463,7 @@ export function createRelay(deps: RelayDeps) {
       clients.set(client.connectionID, client)
       deps.send(client.connectionID, serializeSessions({ type: "sessions" }))
       if (latestStatus !== undefined) deps.send(client.connectionID, latestStatus)
-      sendSubscriptionSnapshot(client.connectionID, client.subscriptions)
+      announceClient(client)
       if (connection.pending.length > 0) {
         for (const entry of connection.pending)
           deps.send(client.connectionID, serializeError(entry.clientID, "outcome_unknown", outcomeUnknownMessage))
@@ -519,6 +535,20 @@ export function createRelay(deps: RelayDeps) {
         return
       }
       if (message.type === "pong") return
+      if (message.type === "cancel") {
+        const relayID = Array.from(pending).find(([, entry]) => entry.connectionID === connectionID && entry.clientID === message.id)?.[0]
+        if (relayID === undefined) return
+        pending.delete(relayID)
+        savePending(client)
+        if (agent) deps.send(agent.connectionID, serializeCancel(relayID))
+        return
+      }
+      if (message.type === "priority") {
+        client.priority = message.mode
+        deps.savePriority(connectionID, message.mode)
+        sendPriority(client)
+        return
+      }
       if (isNoticeRequest(message)) {
         await admitNoticeRequest(client, message)
         return
@@ -582,7 +612,7 @@ export function createRelay(deps: RelayDeps) {
         }
         return
       }
-      if (message.type === "event") {
+      if (message.type === "event" || message.type === "events") {
         for (const client of Array.from(clients.values())) {
           if (!client.subscriptions.includes(message.sessionID)) continue
           if (deps.now() >= client.credentialExpiresAt) {

@@ -4,7 +4,6 @@ import {
   RemoteCloseCode,
   RemoteLimits,
   parseRelayToAgentMessage,
-  serializeEvent,
   type RemoteRequest,
   serializeResponse,
   serializeSessions,
@@ -23,6 +22,7 @@ import {
   type SubscriptionRegistry,
 } from "./remote-operations"
 import type { LocalEventStream, LocalServer } from "./remote-local"
+import { RemoteScheduler } from "./remote-scheduler"
 import { CloudflareRemoteTransport } from "./remote-transport"
 
 // The local relay agent. It dials out to the relay over WSS and never listens,
@@ -39,6 +39,8 @@ export type RelayConnection = {
   readonly send: (value: string) => Promise<void>
   readonly onMessage: (handler: (frame: unknown) => void) => void
   readonly disconnect: (code?: number, reason?: string) => Promise<void>
+  /** Bytes queued on the socket and not yet written; bulk slices wait while it is high. */
+  readonly bufferedAmount?: number
 }
 
 export type ConnectionInput = {
@@ -81,12 +83,8 @@ export type BridgeState = "idle" | "live" | "terminal" | "closed"
 const terminalCloseCodes: readonly number[] = [RemoteCloseCode.unauthorized, RemoteCloseCode.forbidden]
 const maxPendingEvents = 4_096
 const agentFrameIntervalMs = 25
-
-type PendingEvent = {
-  readonly event: unknown
-  readonly connection: RelayConnection
-  readonly streamGeneration: number
-}
+const interactiveCoalesceMs = 40
+const backgroundCoalesceMs = 750
 
 export class RemoteAgent {
   private readonly registry: SessionRegistry
@@ -122,13 +120,10 @@ export class RemoteAgent {
   private eventStop?: () => Promise<void>
   private eventStarting = false
   private eventStreamGeneration = 0
-  private readonly pendingEvents: PendingEvent[] = []
   private readonly inFlight = new Map<string, AbortController>()
-  private eventDraining = false
   private eventRetryAttempt = 0
   private terminalReason?: string
-  private sendQueue: Promise<void> = Promise.resolve()
-  private nextSendAt = 0
+  private readonly scheduler: RemoteScheduler.Scheduler
 
   constructor(private readonly options: RemoteBridgeOptions) {
     this.now = options.now ?? Date.now
@@ -141,6 +136,12 @@ export class RemoteAgent {
       onChange: () => { void this.advertise(); this.attentionStatus = undefined; this.attentionGeneration++; this.failuresHydrated = false; this.scheduleStatus() },
     })
     this.subscriptions = createSubscriptions()
+    this.scheduler = new RemoteScheduler.Scheduler({
+      intervalMs: agentFrameIntervalMs,
+      now: this.now,
+      transmit: (frame) => this.transmit(frame),
+      bufferedAmount: () => this.connection?.bufferedAmount,
+    })
   }
 
   get currentState(): BridgeState {
@@ -167,7 +168,7 @@ export class RemoteAgent {
     if (this.state === "closed") return
     this.state = "closed"
     this.clearTimers()
-    this.pendingEvents.splice(0)
+    this.scheduler.reset()
     this.abortRequests()
     this.uploads.clear()
     await this.stopEventStream()
@@ -192,8 +193,7 @@ export class RemoteAgent {
         this.resetStatusRetry()
         this.resetCompletionRetry()
         this.statusOwner = {}
-        this.sendQueue = Promise.resolve()
-        this.nextSendAt = 0
+        this.scheduler.reset()
         this.subscriptions.clear()
         this.uploads.clear()
         this.uploads = createAttachmentUploads()
@@ -240,6 +240,12 @@ export class RemoteAgent {
     }
     if (parsed.value.type === "subscriptions") {
       this.subscriptions.apply(parsed.value.clientID, parsed.value.sessionIDs)
+      this.retimeEvents()
+      return
+    }
+    if (parsed.value.type === "priority") {
+      this.subscriptions.setPriority(parsed.value.clientID, parsed.value.mode)
+      this.retimeEvents()
       return
     }
     if (parsed.value.type === "cancel") { this.inFlight.get(parsed.value.id)?.abort(); return }
@@ -261,10 +267,14 @@ export class RemoteAgent {
         local: this.options.local,
       })
       if (this.connection !== owner || controller.signal.aborted) return
-      for (const frame of frames) {
-        if (controller.signal.aborted) return
-        await this.send(serializeResponse(frame), owner)
-      }
+      const live = this.live(owner)
+      if (live === undefined) return
+      const active = () => !controller.signal.aborted && live()
+      await Promise.all(frames.map((frame) =>
+        frame.ok && frame.chunk !== undefined
+          ? this.scheduler.bulk(request, serializeResponse(frame), active)
+          : this.scheduler.control(serializeResponse(frame), active),
+      ))
       if (frames.some((frame) => frame.ok) &&
         (request.operation === "session.goal.stop" || request.operation === "session.goal.set" || request.operation === "session.autonomy.set"))
         this.scheduleStatus()
@@ -278,27 +288,37 @@ export class RemoteAgent {
     this.inFlight.clear()
   }
 
-  private async send(frame: string, connection = this.connection) {
+  private send(frame: string, connection = this.connection) {
+    const live = this.live(connection)
+    return live === undefined ? Promise.resolve(false) : this.scheduler.control(frame, live)
+  }
+
+  private live(connection: RelayConnection | undefined) {
     const owner = this.statusOwner
-    if (connection === undefined || owner === undefined || this.connection !== connection || this.state !== "live") return false
-    const sent = this.sendQueue.then(async () => {
-      if (this.connection !== connection || this.statusOwner !== owner || this.state !== "live") return false
-      const delay = this.nextSendAt - this.now()
-      if (delay > 0) await new Promise<void>((resolve) => setTimeout(resolve, delay))
-      if (this.connection !== connection || this.statusOwner !== owner || this.state !== "live") return false
-      try {
-        await connection.send(frame)
-        this.nextSendAt = this.now() + agentFrameIntervalMs
-        return true
-      } catch {
-        // A dropped relay connection makes the outcome indeterminate; the client
-        // owns that decision and the agent never replays the request.
-        this.diagnostic("the relay connection dropped before the frame was delivered")
-        return false
-      }
-    })
-    this.sendQueue = sent.then(() => undefined)
-    return sent
+    if (connection === undefined || owner === undefined || this.connection !== connection || this.state !== "live") return undefined
+    return () => this.connection === connection && this.statusOwner === owner && this.state === "live"
+  }
+
+  private async transmit(frame: string) {
+    const connection = this.connection
+    if (connection === undefined) return false
+    try {
+      await connection.send(frame)
+      return true
+    } catch {
+      // A dropped relay connection makes the outcome indeterminate; the client
+      // owns that decision and the agent never replays the request.
+      this.diagnostic("the relay connection dropped before the frame was delivered")
+      return false
+    }
+  }
+
+  private retimeEvents() {
+    this.scheduler.retime((sessionID) => this.coalesceMs(sessionID))
+  }
+
+  private coalesceMs(sessionID: string) {
+    return this.subscriptions.interactive(sessionID) ? interactiveCoalesceMs : backgroundCoalesceMs
   }
 
   private async advertise() {
@@ -530,65 +550,31 @@ export class RemoteAgent {
         this.diagnostic(`could not refresh remote Sessions: ${describe(error)}`),
       )
     }
-    if (this.pendingEvents.length >= maxPendingEvents) {
-      this.pendingEvents.splice(0)
+    this.enqueueEvent(event, connection, streamGeneration)
+  }
+
+  private enqueueEvent(event: unknown, connection: RelayConnection, streamGeneration: number) {
+    const sessionID = eventSessionID(event)
+    const live = this.live(connection)
+    if (sessionID === undefined || live === undefined || this.eventStreamGeneration !== streamGeneration || !this.subscriptions.has(sessionID)) return
+    if (this.scheduler.queuedEvents >= maxPendingEvents) {
+      this.scheduler.reset()
       this.diagnostic("the remote event authorization queue filled; closing for client reconciliation")
       void this.recycleConnection("Remote event authorization queue exceeded its bound")
       return
     }
-    this.pendingEvents.push({ event, connection, streamGeneration })
-    if (!this.eventDraining) void this.drainEvents()
-  }
-
-  private async drainEvents() {
-    if (this.eventDraining) return
-    this.eventDraining = true
-    try {
-      for (;;) {
-        const pending = this.pendingEvents.shift()
-        if (pending === undefined) return
-        await this.forwardAuthorizedEvent(pending)
-      }
-    } finally {
-      this.eventDraining = false
-      if (this.pendingEvents.length > 0) void this.drainEvents()
-    }
-  }
-
-  private async forwardAuthorizedEvent(pending: PendingEvent) {
-    const sessionID = eventSessionID(pending.event)
-    if (sessionID === undefined) return
-    if (!this.subscriptions.has(sessionID)) return
-    if (
-      this.state !== "live" ||
-      this.connection !== pending.connection ||
-      this.eventStreamGeneration !== pending.streamGeneration ||
-      !this.subscriptions.has(sessionID)
+    const chars = JSON.stringify(event).length
+    const frameLength = RemoteScheduler.eventsFrameLength(sessionID, chars)
+    const bounded = frameLength > RemoteLimits.maxAgentMessageChars ? oversizedMarker(event, sessionID, frameLength) : event
+    if (bounded !== event) this.diagnostic(`forwarding a bounded invalidation for an oversized ${sessionID} event frame`)
+    this.scheduler.event(
+      sessionID,
+      bounded,
+      bounded === event ? chars : JSON.stringify(bounded).length,
+      streamGeneration,
+      () => live() && this.eventStreamGeneration === streamGeneration && this.subscriptions.has(sessionID),
+      this.coalesceMs(sessionID),
     )
-      return
-    const frame = serializeEvent({ type: "event", sessionID, event: pending.event })
-    if (frame.length > RemoteLimits.maxAgentMessageChars) {
-      const data = typeof pending.event === "object" && pending.event !== null ? Reflect.get(pending.event, "data") : undefined
-      const originalID = typeof pending.event === "object" && pending.event !== null ? Reflect.get(pending.event, "id") : undefined
-      const eventID = typeof originalID === "string" && /^evt_[A-Za-z0-9_-]+$/.test(originalID) && originalID.length <= 128 ? originalID : undefined
-      const candidates = data && typeof data === "object" ? [Reflect.get(data, "messageID"), Reflect.get(data, "assistantMessageID"), Reflect.get(data, "inputID")] : []
-      const messageID = candidates.find((value): value is string => typeof value === "string" && /^msg_[A-Za-z0-9_-]+$/.test(value) && value.length <= 128)
-      const durable = typeof pending.event === "object" && pending.event !== null ? Reflect.get(pending.event, "durable") : undefined
-      const seq: unknown = durable && typeof durable === "object" ? Reflect.get(durable, "seq") : undefined
-      const version: unknown = durable && typeof durable === "object" ? Reflect.get(durable, "version") : undefined
-      const markerDurable = durable && typeof durable === "object" && Reflect.get(durable, "aggregateID") === sessionID &&
-        typeof seq === "number" && Number.isSafeInteger(seq) && typeof version === "number" && Number.isSafeInteger(version)
-        ? { aggregateID: sessionID, seq, version }
-        : undefined
-      this.diagnostic(`forwarding a bounded invalidation for an oversized ${sessionID} event frame`)
-      await this.send(serializeEvent({ type: "event", sessionID, event: {
-        type: "session.remote.oversized", ...(eventID === undefined ? {} : { id: eventID }),
-        ...(markerDurable === undefined ? {} : { durable: markerDurable }),
-        data: { sessionID, ...(messageID === undefined ? {} : { messageID }), truncated: true, omittedChars: frame.length },
-      } }), pending.connection)
-      return
-    }
-    await this.send(frame, pending.connection)
   }
 
   private scheduleRefresh() {
@@ -609,6 +595,7 @@ export class RemoteAgent {
       this.now() - this.lastAuthAttempt >= this.authRetryWindowMs
     this.diagnostic(`relay connection closed (code ${code ?? "unreported"}${reason ? `, reason: ${reason}` : ""}); ${reconnect ? "reconnecting" : "not reconnecting"}`)
     this.subscriptions.clear()
+    this.scheduler.reset()
     this.uploads.clear()
     this.abortRequests()
     if (code !== undefined && terminalCloseCodes.includes(code)) void this.rotateConnection()
@@ -627,7 +614,7 @@ export class RemoteAgent {
     this.resetCompletionRetry()
     this.connection = undefined
     this.uploads.clear()
-    this.pendingEvents.splice(0)
+    this.scheduler.reset()
     this.abortRequests()
     try {
       await previous?.disconnect(RemoteCloseCode.tooLarge, reason)
@@ -660,7 +647,7 @@ export class RemoteAgent {
     this.resetCompletionRetry()
     this.connection = undefined
     this.uploads.clear()
-    this.pendingEvents.splice(0)
+    this.scheduler.reset()
     this.abortRequests()
     try {
       await previous?.disconnect(RemoteCloseCode.normal, "Rotating the device credential")
@@ -679,7 +666,7 @@ export class RemoteAgent {
     this.state = "terminal"
     this.terminalReason = message
     this.clearTimers()
-    this.pendingEvents.splice(0)
+    this.scheduler.reset()
     this.uploads.clear()
     this.abortRequests()
     void this.stopEventStream().catch((error) =>
@@ -747,6 +734,26 @@ function eventSessionID(event: unknown) {
   }
   const sessionID = Reflect.get(data, "sessionID")
   return typeof sessionID === "string" ? sessionID : undefined
+}
+
+function oversizedMarker(event: unknown, sessionID: string, omittedChars: number) {
+  const data = typeof event === "object" && event !== null ? Reflect.get(event, "data") : undefined
+  const originalID = typeof event === "object" && event !== null ? Reflect.get(event, "id") : undefined
+  const eventID = typeof originalID === "string" && /^evt_[A-Za-z0-9_-]+$/.test(originalID) && originalID.length <= 128 ? originalID : undefined
+  const candidates = data && typeof data === "object" ? [Reflect.get(data, "messageID"), Reflect.get(data, "assistantMessageID"), Reflect.get(data, "inputID")] : []
+  const messageID = candidates.find((value): value is string => typeof value === "string" && /^msg_[A-Za-z0-9_-]+$/.test(value) && value.length <= 128)
+  const durable = typeof event === "object" && event !== null ? Reflect.get(event, "durable") : undefined
+  const seq: unknown = durable && typeof durable === "object" ? Reflect.get(durable, "seq") : undefined
+  const version: unknown = durable && typeof durable === "object" ? Reflect.get(durable, "version") : undefined
+  const markerDurable = durable && typeof durable === "object" && Reflect.get(durable, "aggregateID") === sessionID &&
+    typeof seq === "number" && Number.isSafeInteger(seq) && typeof version === "number" && Number.isSafeInteger(version)
+    ? { aggregateID: sessionID, seq, version }
+    : undefined
+  return {
+    type: "session.remote.oversized", ...(eventID === undefined ? {} : { id: eventID }),
+    ...(markerDurable === undefined ? {} : { durable: markerDurable }),
+    data: { sessionID, ...(messageID === undefined ? {} : { messageID }), truncated: true, omittedChars },
+  }
 }
 
 function isSessionInventoryEvent(event: unknown) {

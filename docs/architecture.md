@@ -53,7 +53,7 @@ Rules:
 - TUI owns presentation and interaction, never canonical durable state.
 - UI provides reusable theme and presentation primitives used by the TUI.
 - Remote owns the closed relay envelopes and device-authentication request shapes shared by the CLI, browser, and edge relay. It does not redefine local Session semantics.
-- Web owns the responsive browser presentation and curated public content. It must not import Core or Server implementation code.
+- Web owns the responsive browser presentation and curated public content. It must not import Core or Server implementation code. The remote browser store is a TanStack Store that owns event-sourced Session state, selection, subscriptions, notices, Team state, and mutations; connection-scoped read resources (provider usage, keep-awake, workspace lists) are TanStack Query resources keyed by device and connection generation, and one Query client discards them when the connection ends. Browser-persisted notification preferences are a TanStack Store persisted through browser storage.
 
 Client, TUI, and Web code must not import Core or Server implementation modules to mutate durable state.
 
@@ -154,7 +154,7 @@ The TUI keeps bounded read models. It does not own canonical Session state.
 
 `infra/cloudflare` owns the `ycoding-cloud` Worker configuration, D1 binding, and SQLite-backed `DeviceRelay` declaration. A relay instance is addressed by `userId:deviceId`; the smoke implementation fixes those identifiers and serializes per-WebSocket role and connection metadata so hibernation never depends on ordinary JavaScript memory.
 
-The local outbound WebSocket client is process-owned in `packages/cli`. It is transport-only and opt-in for the smoke protocol. The server process that hosts the local backend owns it: `packages/cli` creates one remote host per server listener, the managed service or a `--standalone` private server, and passes `packages/server` a narrow status and on/off interface that backs the authenticated `/api/remote` routes, so Server never imports the connector. Core remains the owner of durable Sessions, Location-scoped execution, tools, filesystem access, and model calls; the TUI remains a client and never owns the remote connection's agent Session.
+The local outbound WebSocket client is process-owned in `packages/cli`. It is transport-only and opt-in for the smoke protocol. One socket carries three delivery classes scheduled by the connector under the relay's frame rate: control frames (responses, status, inventory invalidations, receipts, heartbeats) first, then per-Session `events` batches and chunked bulk responses interleaved so no Session's stream or large read blocks another; socket backpressure defers bulk only. A browser's `priority` hint lengthens the coalescing window for its Sessions while it is hidden, and a browser `cancel` releases a pending request on the relay and aborts it on the connector. The server process that hosts the local backend owns it: `packages/cli` creates one remote host per server listener, the managed service or a `--standalone` private server, and passes `packages/server` a narrow status and on/off interface that backs the authenticated `/api/remote` routes, so Server never imports the connector. Core remains the owner of durable Sessions, Location-scoped execution, tools, filesystem access, and model calls; the TUI remains a client and never owns the remote connection's agent Session.
 
 ## Runtime flow
 

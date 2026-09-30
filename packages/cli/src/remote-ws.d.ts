@@ -4,6 +4,7 @@
 declare module "ws" {
   export interface NodeWebSocket {
     readonly readyState: number
+    readonly bufferedAmount: number
     readonly on: (type: string, listener: (...args: unknown[]) => void) => unknown
     readonly off: (type: string, listener: (...args: unknown[]) => void) => unknown
     readonly send: (value: string) => void

@@ -8,7 +8,7 @@
 
 import { DurableObject } from "cloudflare:workers"
 import { randomToken } from "../auth/crypto"
-import { isSessionID, parseAgentMessage } from "../../../../packages/remote/src/index"
+import { isSessionID, parseAgentMessage, type RemotePriorityMode } from "../../../../packages/remote/src/index"
 import { createD1AuthStore } from "../auth/d1-store"
 import { createAuthService } from "../auth/service"
 import type { WorkerEnv } from "../env"
@@ -26,6 +26,7 @@ type Attachment = {
   readonly credentialExpiresAt: number
   readonly subscriptions: readonly string[]
   readonly noticesSubscribed: boolean
+  readonly priority: RemotePriorityMode
   readonly pending: readonly { readonly relayID: string; readonly clientID: string }[]
 }
 
@@ -76,6 +77,8 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
       if (check === undefined) await this.ctx.storage.delete("offlineCheck")
       else await this.ctx.storage.put("offlineCheck", check)
     },
+    savePriority: (connectionID, priority) =>
+      this.#patchAttachment(connectionID, (attachment) => ({ ...attachment, priority })),
     notices: this.#notices,
     saveNoticeSubscription: (connectionID, noticesSubscribed) =>
       this.#patchAttachment(connectionID, (attachment) => ({ ...attachment, noticesSubscribed })),
@@ -123,6 +126,7 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
       connectionID: crypto.randomUUID(),
       subscriptions: [],
       noticesSubscribed: false,
+      priority: "interactive",
       pending: [],
     }
     pair[1].serializeAttachment(attachment)
@@ -301,7 +305,7 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
   }
 }
 
-function trustedConnection(request: Request): Omit<Attachment, "connectionID" | "subscriptions" | "noticesSubscribed" | "pending"> | undefined {
+function trustedConnection(request: Request): Omit<Attachment, "connectionID" | "subscriptions" | "noticesSubscribed" | "priority" | "pending"> | undefined {
   const role = request.headers.get("x-ycoding-role")
   const ownerID = request.headers.get("x-ycoding-owner")
   const deviceID = request.headers.get("x-ycoding-device")
@@ -325,6 +329,7 @@ function toConnection(attachment: Attachment): RelayConnection {
     credentialExpiresAt: attachment.credentialExpiresAt,
     subscriptions: attachment.subscriptions,
     noticesSubscribed: attachment.noticesSubscribed,
+    priority: attachment.priority,
     pending: attachment.pending,
   }
 }
@@ -346,6 +351,7 @@ function readAttachment(socket: WebSocket): Attachment | undefined {
     credentialExpiresAt: record.credentialExpiresAt,
     subscriptions: Array.isArray(record.subscriptions) ? record.subscriptions.filter(isString) : [],
     noticesSubscribed: record.noticesSubscribed === true,
+    priority: record.priority === "background" ? "background" : "interactive",
     pending: Array.isArray(record.pending) ? record.pending.filter(isPending) : [],
   }
 }
