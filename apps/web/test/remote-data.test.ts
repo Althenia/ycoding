@@ -72,7 +72,7 @@ describe("remote data", () => {
       ])
       const reads = test.relay.requests.filter((request) => request.operation === "session.list" && request.input?.status === "running")
       expect(reads).toHaveLength(1)
-      expect(reads[0]?.input).toMatchObject({ order: "desc", status: "running", parentID: null, limit: 10 })
+      expect(reads[0]?.input).toMatchObject({ order: "active", status: "running", parentID: null, limit: 10 })
       expect(reads[0]?.input).not.toHaveProperty("workspace")
       expect(test.relay.requests.some((request) => request.operation === "session.list" && request.input?.status === "idle" && request.input.workspace === undefined)).toBe(true)
       await test.store.selectSession("ses_r2")

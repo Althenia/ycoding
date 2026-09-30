@@ -1631,6 +1631,78 @@ describe("Chrome control marker", () => {
     }
   })
 
+  const cursorEvaluations = () =>
+    harness.commands.filter((item) => item.method === "Runtime.evaluate" && item.params.expression.includes('"cursor":{'))
+  const withFont = (item) => /"fontData":"[A-Za-z0-9+/=]{1000,}"/.test(item.params.expression)
+
+  test("sends the label font once per document and never with a refresh", async () => {
+    const { socket, shared } = await connect("F")
+    try {
+      const observation = await observe(socket, shared[0].tabID)
+      await socket.receive(action("font-scroll-1", shared[0].tabID, observation, { type: "scroll", deltaY: 10 }))
+      await socket.receive(action("font-scroll-2", shared[0].tabID, observation, { type: "scroll", deltaY: 10 }))
+      expect(cursorEvaluations().map(withFont)).toEqual([true, false])
+      await refresh().callback()
+      expect(harness.commands.filter((item) => item.method === "Runtime.evaluate" && withFont(item))).toHaveLength(1)
+      expect(harness.cursorDOM.fontFaces().map((face) => face.family)).toEqual(["YCodingGeist"])
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("sends the font again for a new document but not when only the isolated world is recreated", async () => {
+    const { socket, shared } = await connect("G")
+    try {
+      const observation = await observe(socket, shared[0].tabID)
+      await socket.receive(action("font-again-1", shared[0].tabID, observation, { type: "scroll", deltaY: 10 }))
+      harness.cursorDOM.navigate()
+      harness.cursorDOM.setPageTitle("Next")
+      await harness.debuggerEvents.emit({ tabId: 17 }, "Page.frameNavigated", { frame: { url: "https://example.test/next" } })
+      await flush()
+      const next = await observe(socket, shared[0].tabID, "observe-font-next")
+      await socket.receive(action("font-again-2", shared[0].tabID, next, { type: "scroll", deltaY: 10 }))
+      expect(cursorEvaluations().map(withFont)).toEqual([true, true])
+      const settled = await observe(socket, shared[0].tabID, "observe-font-settled")
+      harness.page.staleContext = 1
+      await socket.receive(action("font-again-3", shared[0].tabID, settled, { type: "scroll", deltaY: 10 }))
+      expect(cursorEvaluations().map(withFont)).toEqual([true, true, false])
+      expect(harness.cursorDOM.fontFaces()).toHaveLength(1)
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("keeps sending the font until the page confirms it and never blocks the action when it cannot install", async () => {
+    const { socket, shared } = await connect("H")
+    try {
+      harness.cursorDOM.fontLoadFails = true
+      const observation = await observe(socket, shared[0].tabID)
+      await socket.receive(action("font-fail-1", shared[0].tabID, observation, { type: "scroll", deltaY: 10 }))
+      await socket.receive(action("font-fail-2", shared[0].tabID, observation, { type: "scroll", deltaY: 10 }))
+      expect(socket.outgoing.filter((message) => message.callID?.startsWith("font-fail")).map((message) => message.type)).toEqual(["result", "result"])
+      expect(cursorEvaluations().map(withFont)).toEqual([true, true])
+      harness.cursorDOM.fontLoadFails = false
+      await socket.receive(action("font-fail-3", shared[0].tabID, observation, { type: "scroll", deltaY: 10 }))
+      await socket.receive(action("font-fail-4", shared[0].tabID, observation, { type: "scroll", deltaY: 10 }))
+      expect(cursorEvaluations().map(withFont)).toEqual([true, true, true, false])
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("release and stop remove the page face along with the marker", async () => {
+    const { socket, shared } = await connect("I")
+    try {
+      const observation = await observe(socket, shared[0].tabID)
+      await socket.receive(action("font-release", shared[0].tabID, observation, { type: "scroll", deltaY: 10 }))
+      expect(harness.cursorDOM.fontFaces()).toHaveLength(1)
+      await socket.receive({ type: "relinquish", callID: "release-font", tabID: shared[0].tabID, generation: "bridge-1" })
+      expect(harness.cursorDOM.fontFaces()).toEqual([])
+    } finally {
+      await stopBridge()
+    }
+  })
+
   test("marks an owned tab before reporting it open and closes it when the marker cannot be shown", async () => {
     const { socket } = await connect("o")
     try {

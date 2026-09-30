@@ -1,6 +1,6 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { projectOffice, shortText, maxOfficeActors } from './model'
+import { projectOffice, shortText, maxOfficeActors, officeHydrating } from './model'
 import { defaultOfficePreferences, readOfficePreferences, hasReducedMotion } from './preferences'
 import { createOfficeMailbox } from './bridge'
 import { scenario } from './scenarios.test-helper'
@@ -87,4 +87,17 @@ test('mailbox holds latest state, not an unbounded event queue', () => {
   const mailbox = createOfficeMailbox({ snapshot:model(),preferences,systemReduced:false })
   for(let i=0;i<10000;i++) mailbox.update({ snapshot:model('attention'), preferences,systemReduced:false })
   assert.equal(mailbox.revision(),10000); assert.equal(mailbox.read().snapshot.actors[0]!.status,'attention')
+})
+
+const snapshotWith = (team: 'none' | 'loading' | 'ready' | 'unsupported' | 'error', activity: 'loading' | 'ready' | 'unsupported' | 'error', connection: 'ready' | 'offline' | 'reconnecting' | 'unavailable' = 'ready') => ({ ...model('tool'), connection, activityStatus: activity, team: { status: team, total: 0, shown: 0, more: false } })
+test('an empty floor is loading only while the connected family inputs are pending', () => {
+  assert.equal(officeHydrating(snapshotWith('loading', 'loading'), 0), true)
+  assert.equal(officeHydrating(snapshotWith('ready', 'loading'), 0), true)
+  for (const [team, activity, connection] of [['ready', 'ready', 'ready'], ['none', 'loading', 'ready'], ['unsupported', 'loading', 'ready'], ['error', 'loading', 'ready'], ['ready', 'unsupported', 'ready'], ['ready', 'error', 'ready'], ['loading', 'loading', 'offline'], ['loading', 'loading', 'reconnecting'], ['loading', 'loading', 'unavailable']] as const) {
+    assert.equal(officeHydrating(snapshotWith(team, activity, connection), 0), false, `${team}/${activity}/${connection}`)
+  }
+})
+test('a background reload never shows loading over actors already on the floor', () => {
+  assert.equal(officeHydrating(snapshotWith('loading', 'loading'), 3), false)
+  assert.equal(officeHydrating(snapshotWith('ready', 'loading'), 1), false)
 })

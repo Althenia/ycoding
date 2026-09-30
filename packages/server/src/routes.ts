@@ -6,6 +6,7 @@ import { EventV2 } from "@ycoding-ai/core/event"
 import { EventLogger } from "@ycoding-ai/core/event-logger"
 import { FileSystemSearch } from "@ycoding-ai/core/filesystem/search"
 import { Observability } from "@ycoding-ai/core/observability"
+import { KeepAwake } from "@ycoding-ai/core/keep-awake"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Config } from "@ycoding-ai/core/config"
 import { CommandV2 } from "@ycoding-ai/core/command"
@@ -77,6 +78,7 @@ const applicationServices = LayerNode.group([
   SessionRestart.node,
   SessionOrchestration.node,
   SessionOrchestrationNotifier.node,
+  KeepAwake.node,
 ])
 
 export function createRoutes(

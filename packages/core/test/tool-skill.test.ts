@@ -149,10 +149,19 @@ describe("SkillTool", () => {
               session: {
                 get: unavailable,
                 create: unavailable,
-                messages: () =>
-                  Effect.succeed(
-                    active
-                      ? current.map((skill) =>
+                messages: (input) => {
+                  const chronological = active
+                    ? [
+                        SessionMessage.Compaction.make({
+                          id: SessionMessage.ID.make("msg_compaction_before_skill"),
+                          type: "compaction",
+                          status: "completed",
+                          reason: "auto",
+                          summary: "Earlier work",
+                          recent: "Recent work",
+                          time: { created: DateTime.makeUnsafe(0) },
+                        }),
+                        ...current.map((skill) =>
                           SessionMessage.Skill.make({
                             id: SessionMessage.ID.make(`msg_active_${skill.id}`),
                             type: "skill",
@@ -162,9 +171,11 @@ describe("SkillTool", () => {
                             conflicts: skill.conflicts,
                             time: { created: DateTime.makeUnsafe(0) },
                           }),
-                        )
-                      : [],
-                  ),
+                        ),
+                      ]
+                    : []
+                  return Effect.succeed(input.order === "asc" ? chronological : chronological.toReversed())
+                },
                 prompt: unavailable,
                 generate: unavailable,
                 command: unavailable,

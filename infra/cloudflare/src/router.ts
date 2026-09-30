@@ -123,7 +123,7 @@ export function createRouter(deps: RouterDeps) {
     }
     if (url.pathname === "/health") return health(deps)
 
-    if (url.pathname.startsWith("/api/admin/")) return adminInviteRoute(deps, request, url, rateLimit)
+    if (url.pathname.startsWith("/api/admin/")) return adminRoute(deps, request, url, rateLimit, now())
     if (url.pathname === "/api/auth/invite" || url.pathname === "/api/auth/key") {
       if (request.method !== "POST") return methodNotAllowed()
       if (!rateLimit(`invite-auth:${clientAddress(request)}`)) return apiError(429, "rate_limited", "Too many attempts")
@@ -165,13 +165,9 @@ export function createRouter(deps: RouterDeps) {
       return pushKey(deps, request)
     }
     if (url.pathname === "/api/push/subscriptions") {
-      if (request.method === "POST") return subscribePush(deps, request, now())
+      if (request.method === "POST") return subscribePush(deps, request)
       if (request.method === "DELETE") return unsubscribePush(deps, request)
       return methodNotAllowed()
-    }
-    if (url.pathname === "/api/push/test") {
-      if (request.method !== "POST") return methodNotAllowed()
-      return testPush(deps, request, now())
     }
     if (url.pathname === "/api/devices/enrollments") {
       if (request.method !== "POST") return methodNotAllowed()
@@ -241,8 +237,8 @@ export function createRouter(deps: RouterDeps) {
   }
 }
 
-async function adminInviteRoute(deps: RouterDeps, request: Request, url: URL, rateLimit: (key: string) => boolean): Promise<Response> {
-  if (!deps.adminKey || deps.adminKey.length < 32 || !deps.invite) return apiError(404, "not_found", "Not found")
+async function adminRoute(deps: RouterDeps, request: Request, url: URL, rateLimit: (key: string) => boolean, now: number): Promise<Response> {
+  if (!deps.adminKey || deps.adminKey.length < 32) return apiError(404, "not_found", "Not found")
   const supplied = request.headers.get("authorization")
   const expectedHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(deps.adminKey))
   const actualHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(supplied?.startsWith("Bearer ") ? supplied.slice(7) : ""))
@@ -250,6 +246,11 @@ async function adminInviteRoute(deps: RouterDeps, request: Request, url: URL, ra
     if (!rateLimit(`admin:${clientAddress(request)}`)) return apiError(429, "rate_limited", "Too many attempts")
     return apiError(401, "unauthorized", "Admin authentication failed")
   }
+  if (url.pathname === "/api/admin/push/test") {
+    if (request.method !== "POST") return methodNotAllowed()
+    return testPush(deps, request, now)
+  }
+  if (!deps.invite) return apiError(404, "not_found", "Not found")
   if (url.pathname === "/api/admin/invites") {
     if (request.method === "GET") {
       const invites = await deps.invite.list()
@@ -450,7 +451,7 @@ async function pushKey(deps: RouterDeps, request: Request): Promise<Response> {
   return jsonResponse(body)
 }
 
-async function subscribePush(deps: RouterDeps, request: Request, now: number): Promise<Response> {
+async function subscribePush(deps: RouterDeps, request: Request): Promise<Response> {
   const guarded = requireMutationGuard(request)
   if (guarded) return guarded
   const authenticated = await requireSession(deps, request)
@@ -465,23 +466,26 @@ async function subscribePush(deps: RouterDeps, request: Request, now: number): P
     return apiError(400, "invalid_message", "Push subscription key is invalid")
   }
   if ("categories" in parsed.value) {
-    await deps.push.store.upsert(authenticated.session.userID, parsed.value, now)
+    if (!await deps.push.store.upsert(authenticated.session.userID, authenticated.session.sessionID, parsed.value, (deps.now ?? Date.now)()))
+      return apiError(401, "unauthorized", "Browser session is not authenticated")
     return jsonResponse({ subscribed: true })
   }
-  if (!await deps.push.store.renew(authenticated.session.userID, parsed.value, now))
+  const renewed = await deps.push.store.renew(authenticated.session.userID, authenticated.session.sessionID, parsed.value, (deps.now ?? Date.now)())
+  if (renewed === "unauthorized") return apiError(401, "unauthorized", "Browser session is not authenticated")
+  if (renewed === "missing")
     return apiError(404, "not_found", "The replaced push subscription is not registered")
   return jsonResponse({ subscribed: true })
 }
 
 async function testPush(deps: RouterDeps, request: Request, now: number): Promise<Response> {
-  const guarded = requireMutationGuard(request)
-  if (guarded) return guarded
-  const authenticated = await requireSession(deps, request)
-  if (!authenticated.ok) return authenticated.response
   if (!pushAvailable(deps.push)) return apiError(503, "internal_error", "Web Push is unavailable")
-  const parsed = parsePushEndpoint(await readJsonBody(request))
+  const value = await readJsonBody(request)
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== "accountID" && key !== "endpoint") ||
+    typeof value.accountID !== "string" || !/^usr_[A-Za-z0-9_-]{1,124}$/.test(value.accountID))
+    return apiError(400, "invalid_message", "Expected an account ID and its registered push endpoint")
+  const parsed = parsePushEndpoint({ endpoint: value.endpoint })
   if (!parsed.ok) return apiError(400, parsed.error.code, parsed.error.message)
-  const claim = await deps.push.store.claimTest(authenticated.session.userID, parsed.value.endpoint, now)
+  const claim = await deps.push.store.claimTest(value.accountID, parsed.value.endpoint, now)
   if (claim.status === "missing") return apiError(404, "not_found", "This device has no registered push subscription")
   if (claim.status === "limited") return apiError(429, "rate_limited", "Wait a minute before sending another test alert")
   const send = deps.fetch

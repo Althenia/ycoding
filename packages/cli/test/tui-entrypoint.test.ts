@@ -47,6 +47,24 @@ async function withHome<A>(run: (root: string) => Promise<A>) {
 }
 
 describe("TUI entrypoint", () => {
+  test("registers service management and dispatches status without starting a server", async () => {
+    const help = await tui(["service", "--help"])
+
+    expect(help.exitCode).toBe(0)
+    expect(help.stdout).toContain("Manage the background server")
+    for (const command of ["start", "restart", "status", "stop", "get", "set", "unset"]) {
+      expect(help.stdout).toMatch(new RegExp(`^  ${command}(?:\\s|$)`, "m"))
+    }
+
+    await withHome(async (root) => {
+      const status = await tui(["service", "status"], isolatedEnv(root))
+
+      expect(status.exitCode).toBe(0)
+      expect(status.stdout.trim()).toBe("stopped")
+      expect(status.stderr).not.toContain("ENOENT")
+    })
+  })
+
   test("registers remote subcommands and dispatches their existing handlers", async () => {
     const help = await tui(["remote", "--help"])
 

@@ -1,12 +1,12 @@
 import { EOL } from "os"
 import { Effect } from "effect"
 import { Service } from "@ycoding-ai/client/effect/service"
-import { Commands } from "../../commands"
+import { ServiceCommand } from "../../service"
 import { Runtime } from "../../../framework/runtime"
 import { ServiceConfig } from "../../../services/service-config"
 
 export default Runtime.handler(
-  Commands.commands.service.commands.status,
+  ServiceCommand.commands.status,
   Effect.fn("cli.service.status")(function* () {
     const options = yield* ServiceConfig.options()
     const found = yield* Service.discover({ ...options, version: undefined })

@@ -9,6 +9,15 @@ const handlers = Runtime.handlers(TuiCommand, {
   $: () => import("./commands/handlers/tui"),
   run: () => import("./commands/handlers/run"),
   update: () => import("./commands/handlers/update"),
+  service: {
+    start: () => import("./commands/handlers/service/start"),
+    restart: () => import("./commands/handlers/service/restart"),
+    status: () => import("./commands/handlers/service/status"),
+    stop: () => import("./commands/handlers/service/stop"),
+    get: () => import("./commands/handlers/service/get"),
+    set: () => import("./commands/handlers/service/set"),
+    unset: () => import("./commands/handlers/service/unset"),
+  },
   remote: {
     enroll: () => import("./commands/handlers/remote/enroll"),
     connect: () => import("./commands/handlers/remote/connect"),

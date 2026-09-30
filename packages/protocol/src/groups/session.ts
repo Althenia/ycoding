@@ -43,6 +43,7 @@ import { EventLog } from "@ycoding-ai/schema/event-log"
 import { SessionSkillStatus } from "@ycoding-ai/schema/session-skill-status"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { SourceEpoch } from "@ycoding-ai/schema/source-epoch"
+import { SessionWorkCompletion } from "@ycoding-ai/schema/session-work-completion"
 
 const ParentIDFilter = Schema.Union([
   Session.ID,
@@ -54,6 +55,11 @@ const ParentIDFilter = Schema.Union([
   ),
 ]).annotate({
   description: "Filter by parent session. Use null to return only root sessions.",
+})
+
+export const SessionCompletionsQuery = Schema.Struct({
+  after: Session.ID.pipe(Schema.optional),
+  limit: Schema.NumberFromString.pipe(Schema.decodeTo(PositiveInt.check(Schema.isLessThanOrEqualTo(200))), Schema.optional),
 })
 
 const SessionsQueryFields = {
@@ -335,12 +341,24 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
     .add(
       HttpApiEndpoint.get("session.outstanding", "/api/session/outstanding", {
         query: SessionOutstandingQuery,
-        success: Schema.Struct({ data: Schema.Array(Session.ID), failed: Schema.Array(Session.ID) }),
+        success: Schema.Struct({ data: Schema.Array(Session.ID), running: Schema.Array(Session.ID), failed: Schema.Array(Session.ID) }),
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "v2.session.outstanding",
           summary: "List outstanding Session work",
-          description: "List Sessions with executing drains, admitted inputs, background shell notices, active subagent tasks or notices, or active goals in this process. Optionally include roots whose latest execution failed until their family next starts.",
+          description: "List Sessions with executing drains, admitted inputs, background shell notices, active subagent tasks or notices, or active goals in this process. Separately report Sessions with executing drains or live shell jobs as running; a settled shell awaiting notification is outstanding but not running. Optionally include roots whose latest execution failed until their family next starts.",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.completions", "/api/session/completions", {
+        query: SessionCompletionsQuery,
+        success: SessionWorkCompletion.Page,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.completions",
+          summary: "List accepted root work completions",
+          description: "Return the latest accepted durable completion receipt per root Session, ordered by Session ID with an exclusive after cursor. Limit defaults to 200 and must be between 1 and 200. Receipt sequence numbers belong to their own Session, not a global event cursor.",
         }),
       ),
     )

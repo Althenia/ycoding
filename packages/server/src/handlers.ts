@@ -33,6 +33,7 @@ import { ProjectArtifactHandler } from "./handlers/project-artifact"
 import { EventFeed } from "./event-feed"
 import { BrowserHandler } from "./handlers/browser"
 import { IsolatedBrowserHandler } from "./handlers/isolated-browser"
+import { KeepAwakeHandler } from "./handlers/keep-awake"
 import { RemoteHandler } from "./handlers/remote"
 
 export const handlers = Layer.mergeAll(
@@ -70,4 +71,5 @@ export const handlers = Layer.mergeAll(
   BrowserHandler,
   IsolatedBrowserHandler,
   RemoteHandler,
+  KeepAwakeHandler,
 )

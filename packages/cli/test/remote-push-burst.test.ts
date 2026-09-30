@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite"
 import { expect, test } from "bun:test"
 import { createRelay } from "../../../infra/cloudflare/src/relay/core"
 import { createNoticeStore } from "../../../infra/cloudflare/src/relay/notice-store"
+import { createNoticeStorage } from "../../../infra/cloudflare/test/notice-storage"
 import { sendPushToOwner } from "../../../infra/cloudflare/src/push/send"
 import { base64UrlEncode } from "../../../infra/cloudflare/src/auth/crypto"
 import { RemoteAgent, type ConnectionInput } from "../src/remote-bridge"
@@ -15,12 +16,12 @@ async function until(check: () => boolean, timeout = 30_000) {
   }
 }
 
-test("a fast 2355-delta provider stream with several subscribers preserves the stop push and connector", async () => {
+test("a fast 2355-delta provider stream preserves explicit completion push without an idle alert", async () => {
   const sessionID = "ses_burst"
   const closes: { code: number; reason: string }[] = []
   const pushes: string[] = []
   const pushRequests: Request[] = []
-  const pushSends: Promise<void>[] = []
+  const pushSends: Promise<unknown>[] = []
   const receiver = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"])
   const vapid = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"])
   const publicKey = base64UrlEncode(new Uint8Array(await crypto.subtle.exportKey("raw", vapid.publicKey)))
@@ -34,6 +35,7 @@ test("a fast 2355-delta provider stream with several subscribers preserves the s
   let running = true
   let attention = false
   let outstanding = false
+  let completed = false
   let status: { type: "status"; running: string[]; attention: string[]; outstanding?: string[] } | undefined
   let input: ConnectionInput | undefined
   let connected = false
@@ -53,7 +55,7 @@ test("a fast 2355-delta provider stream with several subscribers preserves the s
       input?.onClose(code, reason)
     },
     saveSubscriptions: () => {}, savePending: () => {},
-    notices: createNoticeStore({ exec: (query, ...bindings) => ({ toArray: () => database.prepare(query).all(...(bindings as never[])) }) }),
+    notices: createNoticeStore(createNoticeStorage(database)),
     saveNoticeSubscription: () => {},
     loadStatus: async () => status,
     loadOfflineCheck: async () => undefined,
@@ -65,7 +67,7 @@ test("a fast 2355-delta provider stream with several subscribers preserves the s
     authorityTtlMs: 60_000,
     notifyPush: (accountID, event) => {
       pushes.push(event.category)
-      pushSends.push(sendPushToOwner({
+      const sent = sendPushToOwner({
         store: { list: async () => [subscription], upsert: async () => {}, renew: async () => false, remove: async () => {},
           claimTest: async () => ({ status: "missing" }), recordFailure: async () => {} },
         accountID, event, publicKey, privateKey, subject: "mailto:push@example.invalid", now: Date.now,
@@ -73,14 +75,17 @@ test("a fast 2355-delta provider stream with several subscribers preserves the s
           pushRequests.push(new Request(url, init))
           return new Response(null, { status: 201 })
         }, { preconnect: fetch.preconnect }),
-      }))
+      })
+      pushSends.push(sent)
+      return sent
     },
   })
   let handler: ((frame: unknown) => void) | undefined
   const local = Object.assign(createLocalServer({ url: "http://127.0.0.1:1" }), {
     listPage: async () => ({ data: [{ id: sessionID, title: "Burst", projectID: "prj_burst", time: { created: 1, updated: 1 }, location: { directory: "/work" } }] }),
     activeSessions: async () => running ? { [sessionID]: { type: "running" } } : {},
-    outstandingSessions: async () => ({ data: outstanding ? [sessionID] : [], failed: [] }),
+    outstandingSessions: async () => ({ data: outstanding || running ? [sessionID] : [], running: running ? [sessionID] : [], failed: [] }),
+    completions: async () => ({ data: completed ? [{ id: "evt_burst_complete", seq: 25, created: Date.now(), sessionID, inputID: "msg_burst_input", assistantMessageID: "msg_burst_final" }] : [] }),
     permissionRequests: async () => attention ? [{ sessionID }] : [], formRequests: async () => [], guardrailRequestList: async () => [],
     events: async (value: LocalEventStream) => { stream = value; return async () => {} },
   })
@@ -112,7 +117,7 @@ test("a fast 2355-delta provider stream with several subscribers preserves the s
       await relay.attach({ connectionID: `client-${index}`, role: "client", ownerID: "usr_1", deviceID: "dev_1", browserSessionID: `bs_${index}`, credentialExpiresAt: Date.now() + 300_000, subscriptions: [sessionID], noticesSubscribed: false, pending: [] })
     const deltas = 2_355
     for (let index = 0; index < deltas; index++)
-      stream?.onEvent({ type: "message.part.updated", data: { sessionID, index, text: "x" } })
+      stream?.onEvent({ type: "session.text.delta", data: { sessionID, assistantMessageID: "msg_burst_final", ordinal: 0, delta: "x" } })
     await until(() => closes.length > 0 || clientEvents[0] === deltas, 90_000)
     attention = true
     stream?.onEvent({ type: "permission.v2.requested", data: { sessionID } })
@@ -122,19 +127,24 @@ test("a fast 2355-delta provider stream with several subscribers preserves the s
     await until(() => status?.attention.length === 0)
     outstanding = true
     running = false
-    stream?.onEvent({ type: "session.execution.succeeded.1", data: { sessionID } })
+    stream?.onEvent({ type: "session.execution.succeeded", data: { sessionID } })
     await until(() => status?.running.length === 0 && status.outstanding?.includes(sessionID) === true)
     expect(pushes).toEqual(["approval-requested"])
     outstanding = false
     stream?.onEvent({ type: "session.shell.ended", data: { sessionID } })
+    await until(() => status?.outstanding === undefined && status?.running.length === 0)
+    expect(pushes).toEqual(["approval-requested"])
+    completed = true
+    stream?.onEvent({ type: "session.work.completed", data: { sessionID, inputID: "msg_burst_input", assistantMessageID: "msg_burst_final" } })
     await until(() => pushes.length === 2)
     expect(closes).toEqual([])
-    expect(clientEvents).toEqual([deltas + 4, deltas + 4, deltas + 4])
+    expect(clientEvents).toEqual([deltas + 5, deltas + 5, deltas + 5])
     expect(pushes).toEqual(["approval-requested", "agent-completed"])
     await Promise.all(pushSends)
     expect(pushRequests).toHaveLength(2)
     expect(pushRequests.map((request) => request.headers.get("ttl")).sort((a, b) => String(a).localeCompare(String(b)))).toEqual(["3600", "600"])
   } finally {
     await bridge.close()
+    database.close()
   }
 }, 100_000)

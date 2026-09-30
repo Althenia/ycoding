@@ -38,6 +38,7 @@ export async function launchBrowser(executable: string, width: number, height: n
       const call = <T>(method: string, params: Record<string, unknown> = {}) => send<T>(method, params, attached.sessionId)
       const requests = new Map<string, string>()
       const failures: string[] = []
+      const pausedCleanup = new Set<() => void>()
       const observeFailure = (event: MessageEvent) => {
         const message: unknown = JSON.parse(String(event.data))
         if (!message || typeof message !== "object" || !("sessionId" in message) || message.sessionId !== attached.sessionId || !("method" in message)) return
@@ -59,8 +60,38 @@ export async function launchBrowser(executable: string, width: number, height: n
       await call("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false })
       return {
         networkFailures: () => failures,
+        platformFonts: async (selector: string) => {
+          await call("DOM.enable")
+          await call("CSS.enable")
+          const document = await call<{ readonly root: { readonly nodeId: number } }>("DOM.getDocument")
+          const node = await call<{ readonly nodeId: number }>("DOM.querySelector", { nodeId: document.root.nodeId, selector })
+          if (node.nodeId === 0) throw new Error(`Font inspection target missing: ${selector}`)
+          return (await call<{ readonly fonts: readonly { readonly familyName: string; readonly isCustomFont: boolean; readonly glyphCount: number }[] }>("CSS.getPlatformFontsForNode", { nodeId: node.nodeId })).fonts
+        },
         injectOnNewDocument: (source: string) => call("Page.addScriptToEvaluateOnNewDocument", { source }),
         disableCache: () => call("Network.setCacheDisabled", { cacheDisabled: true }),
+        pauseFontRequests: async () => {
+          const paused = new Set<string>()
+          const observe = (event: MessageEvent) => {
+            const message: unknown = JSON.parse(String(event.data))
+            if (!message || typeof message !== "object" || !("sessionId" in message) || message.sessionId !== attached.sessionId || !("method" in message) || message.method !== "Fetch.requestPaused" || !("params" in message) || !message.params || typeof message.params !== "object" || !("requestId" in message.params) || typeof message.params.requestId !== "string") return
+            paused.add(message.params.requestId)
+          }
+          const cleanup = () => socket.removeEventListener("message", observe)
+          socket.addEventListener("message", observe)
+          pausedCleanup.add(cleanup)
+          await call("Fetch.enable", { patterns: [{ urlPattern: "*.woff2*", requestStage: "Request" }] })
+          return {
+            pending: () => paused.size,
+            release: async () => {
+              await Promise.all([...paused].map((requestId) => call("Fetch.continueRequest", { requestId })))
+              paused.clear()
+              await call("Fetch.disable")
+              cleanup()
+              pausedCleanup.delete(cleanup)
+            },
+          }
+        },
         screenshot: async () => (await call<{ readonly data: string }>("Page.captureScreenshot", { format: "png" })).data,
         allowServiceWorker: () => call("Network.setBlockedURLs", { urls: [] }),
         blockURLs: (patterns: readonly string[]) => call("Network.setBlockedURLs", { urls: ["*sw.js*", ...patterns] }),
@@ -92,13 +123,16 @@ export async function launchBrowser(executable: string, width: number, height: n
         setForcedColors: (active: boolean) => call("Emulation.setEmulatedMedia", {
           features: [{ name: "forced-colors", value: active ? "active" : "none" }],
         }),
-        mouse: (type: "mouseMoved" | "mousePressed" | "mouseReleased", x: number, y: number) => call("Input.dispatchMouseEvent", {
+        mouse: (type: "mouseMoved" | "mousePressed" | "mouseReleased", x: number, y: number, held = false) => call("Input.dispatchMouseEvent", {
           type,
           x,
           y,
           button: type === "mouseMoved" ? "none" : "left",
-          buttons: type === "mousePressed" ? 1 : 0,
+          buttons: type === "mousePressed" || held ? 1 : 0,
           clickCount: type === "mouseMoved" ? 0 : 1,
+        }),
+        touch: (type: "touchStart" | "touchMove" | "touchEnd" | "touchCancel", x = 0, y = 0) => call("Input.dispatchTouchEvent", {
+          type, touchPoints: type === "touchEnd" || type === "touchCancel" ? [] : [{ x, y, id: 1 }],
         }),
         wheel: (x: number, y: number, deltaX: number, deltaY: number) => call("Input.dispatchMouseEvent", {
           type: "mouseWheel", x, y, deltaX, deltaY,
@@ -123,6 +157,8 @@ export async function launchBrowser(executable: string, width: number, height: n
           return result.result.value
         },
         async close() {
+          pausedCleanup.forEach((cleanup) => cleanup())
+          pausedCleanup.clear()
           socket.removeEventListener("message", observeFailure)
           await call("Target.closeTarget", { targetId: target.targetId })
         },

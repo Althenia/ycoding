@@ -1,5 +1,6 @@
 import { expect } from "bun:test"
 import { Deferred, Effect, Layer } from "effect"
+import { adjust } from "effect/testing/TestClock"
 import { eq } from "drizzle-orm"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AgentV2 } from "@ycoding-ai/core/agent"
@@ -68,16 +69,74 @@ it.effect("derives outstanding Sessions from pending input, active goal, tasks, 
     const release = yield* Deferred.make<void>()
     const job = yield* jobs.start({ type: "shell", metadata: { sessionID: shell }, run: Deferred.await(release).pipe(Effect.as("done")) })
     yield* jobs.background(job.id)
+    expect([...(yield* sessions.outstanding()).running].toSorted()).toEqual([executing, shell].toSorted())
+    expect([...(yield* sessions.active)]).toEqual([executing])
     expect([...(yield* sessions.outstanding()).sessions].toSorted()).toEqual([executing, goal, parent, pending, shell].toSorted())
     yield* events.publish(SessionEvent.Task.Updated, { sessionID: child, change: { type: "completed" } })
     expect((yield* db.select().from(SessionTaskNotificationTable).all())).toHaveLength(1)
     yield* Deferred.succeed(release, undefined)
     yield* jobs.wait({ id: job.id })
+    expect([...(yield* sessions.outstanding()).running]).toEqual([executing])
     expect([...(yield* sessions.outstanding()).sessions].toSorted()).toEqual([executing, goal, parent, pending, shell].toSorted())
     yield* sessions.synthetic({ sessionID: parent, text: "child done", resume: false })
     yield* db.update(SessionTaskNotificationTable).set({ delivered: true }).run()
     yield* jobs.noticeAdmitted(job.id)
     expect([...(yield* sessions.outstanding()).sessions].toSorted()).toEqual([executing, goal, parent, pending].toSorted())
+  }),
+)
+
+for (const terminal of ["completed", "cancelled", "timeout"] as const) {
+  it.effect(`keeps a child's background shell running only until it is ${terminal}, not while its notice is pending`, () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionV2.Service
+      const jobs = yield* Job.Service
+      const parent = SessionV2.ID.make("ses_shell_parent")
+      const child = SessionV2.ID.make("ses_shell_child")
+      yield* sessions.create({ id: parent, location: { directory: AbsolutePath.make("/project") } })
+      yield* sessions.create({ id: child, parentID: parent })
+      const release = yield* Deferred.make<void>()
+      const run = Deferred.await(release).pipe(Effect.as("done"))
+      const job = yield* jobs.start({ type: "shell", metadata: { sessionID: child },
+        run: terminal === "timeout" ? run.pipe(Effect.timeout("1 second")) : run })
+      yield* jobs.background(job.id)
+      const busy = yield* sessions.outstanding(true)
+      expect([...busy.running].toSorted()).toEqual([executing, child].toSorted())
+      expect(busy.sessions.has(child)).toBe(true)
+      expect([...busy.failed]).toEqual([])
+      expect([...(yield* sessions.active)]).toEqual([executing])
+      if (terminal === "cancelled") yield* jobs.cancel(job.id)
+      if (terminal === "completed") yield* Deferred.succeed(release, undefined)
+      if (terminal === "timeout") yield* adjust("1 second")
+      expect((yield* jobs.wait({ id: job.id })).info?.status).toBe(terminal === "timeout" ? "error" : terminal)
+      const settled = yield* sessions.outstanding(true)
+      expect([...settled.running]).toEqual([executing])
+      expect(settled.sessions.has(child)).toBe(true)
+      expect([...settled.failed]).toEqual([])
+      yield* jobs.noticeAdmitted(job.id)
+      expect((yield* sessions.outstanding()).sessions.has(child)).toBe(false)
+    }),
+  )
+}
+
+it.effect("does not count nonshell jobs or malformed shell owners as running", () =>
+  Effect.gen(function* () {
+    const sessions = yield* SessionV2.Service
+    const jobs = yield* Job.Service
+    const owner = SessionV2.ID.make("ses_other_job")
+    yield* sessions.create({ id: owner, location: { directory: AbsolutePath.make("/project") } })
+    const release = yield* Deferred.make<void>()
+    for (const input of [
+      { type: "verification", metadata: { sessionID: owner } },
+      { type: "shell", metadata: { sessionID: 42 } },
+      { type: "shell", metadata: { sessionID: "not-a-session" } },
+      { type: "shell", metadata: {} },
+    ]) {
+      const job = yield* jobs.start({ ...input, run: Deferred.await(release).pipe(Effect.as("done")) })
+      yield* jobs.background(job.id)
+    }
+    expect([...(yield* sessions.outstanding()).running]).toEqual([executing])
+    expect([...(yield* sessions.active)]).toEqual([executing])
+    yield* Deferred.succeed(release, undefined)
   }),
 )
 

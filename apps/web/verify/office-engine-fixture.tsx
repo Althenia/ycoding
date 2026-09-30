@@ -19,6 +19,8 @@ function Fixture() {
   const [zeroSize, setZeroSize] = createSignal(false)
   const [showTeamCue, setShowTeamCue] = createSignal(query.get("cue") !== "0")
   const [extraSession, setExtraSession] = createSignal(false)
+  const [inputsPending, setInputsPending] = createSignal(query.has("hydrate"))
+  const [otherScope, setOtherScope] = createSignal(false)
   const [taskState, setTaskState] = createSignal(((["starting", "running", "waiting", "cancelling", "cancelled", "completed", "failed", "lost"] as const)
     .find((value) => value === query.get("taskState")) ?? "running"))
   const snapshot = createMemo(() => {
@@ -26,6 +28,7 @@ function Fixture() {
     const pulse = revision()
     return projectOffice({
     ...current,
+    ...(otherScope() ? { deviceID: "other-device" } : {}),
     ...(query.has("activity") && current.selected ? { selected: { ...current.selected, activity: (["research", "implement", "coordinate", "verify"] as const).find((value) => value === query.get("activity")) } }
       : query.has("snapshots") && current.selected ? { selected: { ...current.selected, activeTool: undefined, thinking: pulse % 2 === 1 } } : {}),
     sessions: [
@@ -33,7 +36,7 @@ function Fixture() {
       ...(extraSession() ? [{ id: "session-new", parentID: "session-a", title: "New research task", agent: "Researcher", archived: false, running: true }] : []),
     ],
     activeSessionID: selected(),
-    familyActivity: { status: "ready", members: [
+    familyActivity: { status: inputsPending() ? "loading" : "ready", members: [
       { sessionID: "session-a", executing: !["idle", "failed", "interrupted"].includes(state()),
         ...(["idle", "failed", "interrupted"].includes(state()) ? {} : { activity: state() === "thinking" || query.has("snapshots") && pulse % 2 === 1
           ? { kind: "thinking" as const, room: "hold" as const, text: "Thinking" }
@@ -41,13 +44,13 @@ function Fixture() {
             : query.get("activity") === "coordinate" ? "meeting" as const : "developer" as const,
           text: query.get("activity") === "verify" ? "Running bun test" : query.get("activity") === "research" ? "Reading store.ts"
             : query.get("activity") === "coordinate" ? "Dispatching a subagent" : "Editing app.ts" } }) },
-      ...(query.has("team") ? [{ sessionID: "session-b", executing: ["starting", "running", "cancelling"].includes(taskState()),
-        ...(["starting", "running", "cancelling"].includes(taskState()) ? { activity: { kind: "tool" as const, room: query.has("sequence") ? (["qa", "meeting", "developer", "research"] as const)[activityStep() % 4]! : "qa" as const, text: "Running bun test" } } : {}) }] : []),
+      ...(query.has("team") ? [{ sessionID: "session-b", executing: !query.has("teamIdle") && ["starting", "running", "cancelling"].includes(taskState()),
+        ...(!query.has("teamIdle") && ["starting", "running", "cancelling"].includes(taskState()) ? { activity: { kind: "tool" as const, room: query.has("sequence") ? (["qa", "meeting", "developer", "research"] as const)[activityStep() % 4]! : "qa" as const, text: "Running bun test" } } : {}) }] : []),
       ...(query.get("team") === "multi" ? [{ sessionID: "session-d", executing: true, activity: { kind: "tool" as const, room: query.has("sequence") ? (["research", "developer", "meeting", "qa"] as const)[activityStep() % 4]! : "research" as const, text: "Reading model.ts" } }] : []),
       ...(extraSession() ? [{ sessionID: "session-new", executing: true, activity: { kind: "tool" as const, room: "research" as const, text: "Searching files" } }] : []),
     ] },
     ...(query.has("team") || query.has("arrival") ? { team: {
-      rootID: "session-a", status: "ready" as const,
+      rootID: "session-a", status: inputsPending() ? "loading" as const : "ready" as const,
       members: [
         ...(query.has("team") ? [{ sessionID: "session-b", parentID: "session-a", description: "Review implementation", agent: "Reviewer", state: taskState() }] : []),
         ...(query.get("team") === "multi" ? [{ sessionID: "session-d", parentID: "session-a", description: "Investigate model behavior", agent: "Researcher", state: "running" as const }] : []),
@@ -87,6 +90,11 @@ function Fixture() {
       <button type="button" onClick={() => setPreferences({ ...preferences(), quality: preferences().quality === "standard" ? "battery" : "standard" })}>Toggle quality</button>
       <Show when={query.has("team")}><button type="button" style={{ display: "none" }} onClick={() => setShowTeamCue(!showTeamCue())}>Toggle observed cue</button></Show>
       <Show when={query.has("transitionTask")}><button type="button" onClick={() => setTaskState(taskState() === "running" ? "completed" : "running")}>Toggle task completion</button></Show>
+      <Show when={query.has("hydrate")}>
+        <button type="button" onClick={() => setInputsPending(false)}>Settle inputs</button>
+        <button type="button" onClick={() => setInputsPending(true)}>Reload inputs</button>
+        <button type="button" onClick={() => { setOtherScope(!otherScope()); setInputsPending(true) }}>Switch scope</button>
+      </Show>
       <Show when={query.has("arrival")}><button type="button" onClick={() => setExtraSession(!extraSession())}>Toggle arriving session</button></Show>
     </nav>
     <p>Selected session: <output id="selected-session">{selected()}</output>. Quality: <output id="office-quality">{preferences().quality}</output>. Motion: <output id="office-motion">{preferences().motion}</output>.</p>

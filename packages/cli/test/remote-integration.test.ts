@@ -528,6 +528,14 @@ test("bridges authorized session operations against an isolated server", async (
     })
     expect(invalidation).toEqual({ type: "sessions" })
 
+    const awake = process.platform === "darwin" ? { state: "off" } : { state: "unsupported", message: "Keep machine awake is available on macOS only." }
+    relay.deliver(request("machine_awake_read", "machine.keepAwake.get"))
+    expect(valueOf(await answer(relay, "machine_awake_read"))).toEqual({ data: awake })
+    relay.deliver(request("machine_awake_off", "machine.keepAwake.set", undefined, { enabled: false }))
+    expect(valueOf(await answer(relay, "machine_awake_off"))).toEqual({ data: awake })
+    relay.deliver(request("machine_awake_scoped", "machine.keepAwake.set", sessionID, { enabled: true }))
+    expect(errorOf(await answer(relay, "machine_awake_scoped")).code).toBe("invalid_message")
+
     // Reads return the local Protocol body verbatim.
     relay.deliver(request("list_1", "session.list"))
     const listed = valueOf(await answer(relay, "list_1")) as { data: readonly { id: string }[] }

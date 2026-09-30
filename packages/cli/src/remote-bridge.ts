@@ -9,6 +9,7 @@ import {
   serializeResponse,
   serializeSessions,
   serializeStatus,
+  serializeCompletions,
 } from "@ycoding-ai/remote"
 import { DeviceAuthorizationError } from "./remote-credentials"
 import { agentURL } from "./remote-config"
@@ -108,6 +109,10 @@ export class RemoteAgent {
   private statusOwner?: object
   private statusRetryAttempt = 0
   private statusDirty = false
+  private completionTimer?: ReturnType<typeof setTimeout>
+  private completionReading?: object
+  private completionDirty = false
+  private completionRetryAttempt = 0
   private lastStatus?: string
   private attentionStatus?: readonly string[]
   private attentionGeneration = 0
@@ -185,6 +190,7 @@ export class RemoteAgent {
       onOpen: () => {
         if (this.connection !== connection) return
         this.resetStatusRetry()
+        this.resetCompletionRetry()
         this.statusOwner = {}
         this.sendQueue = Promise.resolve()
         this.nextSendAt = 0
@@ -200,7 +206,10 @@ export class RemoteAgent {
         this.failuresHydrated = false
         this.statusReading = undefined
         this.statusDirty = false
+        this.completionReading = undefined
+        this.completionDirty = false
         void this.sendStatus()
+        void this.sendCompletions()
         this.syncEventStream()
       },
       onClose: (code, reason) => { if (this.connection === connection) this.onConnectionClosed(code, reason) },
@@ -270,12 +279,13 @@ export class RemoteAgent {
   }
 
   private async send(frame: string, connection = this.connection) {
-    if (connection === undefined || this.connection !== connection || this.state !== "live") return false
+    const owner = this.statusOwner
+    if (connection === undefined || owner === undefined || this.connection !== connection || this.state !== "live") return false
     const sent = this.sendQueue.then(async () => {
-      if (this.connection !== connection || this.state !== "live") return false
+      if (this.connection !== connection || this.statusOwner !== owner || this.state !== "live") return false
       const delay = this.nextSendAt - this.now()
       if (delay > 0) await new Promise<void>((resolve) => setTimeout(resolve, delay))
-      if (this.connection !== connection || this.state !== "live") return false
+      if (this.connection !== connection || this.statusOwner !== owner || this.state !== "live") return false
       try {
         await connection.send(frame)
         this.nextSendAt = this.now() + agentFrameIntervalMs
@@ -366,6 +376,63 @@ export class RemoteAgent {
     }
   }
 
+  private scheduleCompletions() {
+    if (this.state !== "live" || this.statusOwner === undefined) return
+    if (this.completionReading === this.statusOwner) {
+      this.completionDirty = true
+      return
+    }
+    if (this.completionTimer !== undefined) return
+    this.completionTimer = setTimeout(() => {
+      this.completionTimer = undefined
+      void this.sendCompletions()
+    }, 250)
+  }
+
+  private async sendCompletions() {
+    const connection = this.connection
+    const owner = this.statusOwner
+    if (connection === undefined || owner === undefined || this.state !== "live") return
+    if (this.completionReading === owner) {
+      this.completionDirty = true
+      return
+    }
+    this.completionReading = owner
+    try {
+      let after: string | undefined
+      for (;;) {
+        const page = await this.options.local.completions({ limit: RemoteLimits.maxCompletionBatch, ...(after === undefined ? {} : { after }) })
+        if (this.connection !== connection || this.statusOwner !== owner || this.state !== "live") return
+        if (page.next !== undefined && (page.next !== page.data.at(-1)?.sessionID || (after !== undefined && page.next <= after)))
+          throw new Error("Completion pagination did not advance")
+        if (!await this.send(serializeCompletions({ type: "completions", data: page.data, more: page.next !== undefined }), connection))
+          throw new Error("Completion receipt delivery interrupted")
+        if (page.next === undefined) break
+        after = page.next
+      }
+      this.completionRetryAttempt = 0
+    } catch (error) {
+      if (this.connection !== connection || this.statusOwner !== owner || this.state !== "live") return
+      this.diagnostic(`could not synchronize work completions: ${describe(error)}`)
+      const delay = Math.min(this.eventRetryInitialMs * 2 ** this.completionRetryAttempt, this.eventRetryMaxMs)
+      if (delay < this.eventRetryMaxMs) this.completionRetryAttempt++
+      const timer = setTimeout(() => {
+        if (this.completionTimer !== timer) return
+        this.completionTimer = undefined
+        if (this.statusOwner === owner) void this.sendCompletions()
+      }, delay)
+      this.completionTimer = timer
+    } finally {
+      if (this.completionReading === owner && this.statusOwner === owner) {
+        this.completionReading = undefined
+        if (this.completionDirty) {
+          this.completionDirty = false
+          this.scheduleCompletions()
+        }
+      }
+    }
+  }
+
   private syncEventStream() {
     const wanted = this.state === "live"
     if (wanted && this.eventStop === undefined && !this.eventStarting) void this.startEventStream()
@@ -388,6 +455,7 @@ export class RemoteAgent {
       else {
         this.eventStop = stop
         this.eventRetryAttempt = 0
+        this.scheduleCompletions()
       }
     } catch (error) {
       this.onEventStreamEnd(error, streamGeneration)
@@ -428,6 +496,7 @@ export class RemoteAgent {
     if (connection === undefined || this.state !== "live") return
     if (typeof event === "object" && event !== null) {
       const type = Reflect.get(event, "type")
+      if (type === "session.work.completed") this.scheduleCompletions()
       if (typeof type === "string" && (type.startsWith("session.step.") || type.startsWith("session.execution.") ||
         type.startsWith("session.task.") || type.startsWith("session.shell.") || type.startsWith("shell.") ||
         type.startsWith("session.input.") || type.startsWith("permission.v2.") || type.startsWith("form.") || type.startsWith("guardrail."))) {
@@ -447,6 +516,13 @@ export class RemoteAgent {
           this.attentionGeneration++
         }
         this.scheduleStatus()
+      }
+      if (typeof type === "string" && (type.startsWith("session.step.ended") || type.startsWith("session.step.failed") ||
+        type.startsWith("session.execution.succeeded") || type.startsWith("session.execution.failed") || type.startsWith("session.execution.interrupted"))) {
+        const sessionID = eventSessionID(event)
+        if (sessionID !== undefined) void this.registry.verify(sessionID).catch((error) =>
+          this.diagnostic(`could not refresh Session activity: ${describe(error)}`),
+        )
       }
     }
     if (isSessionInventoryEvent(event)) {
@@ -520,7 +596,7 @@ export class RemoteAgent {
       this.refreshTimer = undefined
       if (this.state !== "live") return
       const rotate = this.accessExpiresAt - this.now() < defaults.rotateBeforeExpiryMs
-      void (rotate ? this.rotateConnection() : this.republish()).then(() => { this.scheduleStatus(); this.scheduleRefresh() })
+      void (rotate ? this.rotateConnection() : this.republish()).then(() => { this.scheduleStatus(); this.scheduleCompletions(); this.scheduleRefresh() })
     }, this.refreshIntervalMs)
   }
 
@@ -528,6 +604,7 @@ export class RemoteAgent {
     if (this.state !== "live") return
     this.statusOwner = undefined
     this.resetStatusRetry()
+    this.resetCompletionRetry()
     const reconnect = code === undefined || !terminalCloseCodes.includes(code) ||
       this.now() - this.lastAuthAttempt >= this.authRetryWindowMs
     this.diagnostic(`relay connection closed (code ${code ?? "unreported"}${reason ? `, reason: ${reason}` : ""}); ${reconnect ? "reconnecting" : "not reconnecting"}`)
@@ -547,6 +624,7 @@ export class RemoteAgent {
     const previous = this.connection
     this.statusOwner = undefined
     this.resetStatusRetry()
+    this.resetCompletionRetry()
     this.connection = undefined
     this.uploads.clear()
     this.pendingEvents.splice(0)
@@ -579,6 +657,7 @@ export class RemoteAgent {
     const previous = this.connection
     this.statusOwner = undefined
     this.resetStatusRetry()
+    this.resetCompletionRetry()
     this.connection = undefined
     this.uploads.clear()
     this.pendingEvents.splice(0)
@@ -626,6 +705,7 @@ export class RemoteAgent {
     if (this.retryTimer) clearTimeout(this.retryTimer)
     this.statusOwner = undefined
     this.resetStatusRetry()
+    this.resetCompletionRetry()
     this.refreshTimer = undefined
     this.retryTimer = undefined
   }
@@ -634,6 +714,12 @@ export class RemoteAgent {
     if (this.statusTimer !== undefined) clearTimeout(this.statusTimer)
     this.statusTimer = undefined
     this.statusRetryAttempt = 0
+  }
+
+  private resetCompletionRetry() {
+    if (this.completionTimer !== undefined) clearTimeout(this.completionTimer)
+    this.completionTimer = undefined
+    this.completionRetryAttempt = 0
   }
 
   private diagnostic(message: string) {

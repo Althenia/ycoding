@@ -26,6 +26,36 @@ async function setup(handler: (operation: string, sessionID?: string, cursor?: u
 }
 
 describe("remote team facts", () => {
+  test("a background shell counts without an active subagent, stays resident during refresh and updates on terminal work", async () => {
+    let exited = false
+    let hold = false
+    const held = Promise.withResolvers<RelayHandlerOutcome>()
+    let reads = 0
+    const shell = { id: "sh_fixture", ownerID: "ses_a", command: "fixture", status: "running", startedAt: 1 }
+    const h = await setup(() => ({ ok: true, value: { data: [], summary: { total: 0, active: 0 }, cursor: {} } }), undefined, (request) => {
+      if (request.operation === "session.team.shell.list") { reads++; return hold ? held.promise : { ok: true, value: { data: [{ ...shell, status: exited ? "exited" : "running" }] } } }
+      if (request.operation === "session.status") return { ok: true, value: { running: ["ses_a"], attention: [] } }
+      return "default"
+    })
+    try {
+      h.store.watchTeam(true); await h.store.selectSession("ses_a")
+      await waitFor(() => h.store.state().team?.shellStatus === "ready")
+      expect(h.store.state().team).toMatchObject({ activeTotal: 0, shells: [{ status: "running" }] })
+      expect(h.store.state().view?.executionStarted).toBeUndefined()
+      hold = true
+      h.relay.pushEvent("ses_a", { type: "session.execution.succeeded", created: 10, data: {} })
+      await waitFor(() => reads >= 2)
+      expect(h.store.state().team).toMatchObject({ shellStatus: "ready", shells: [{ status: "running" }] })
+      expect(h.store.state().view?.status).toBe("running")
+      held.resolve({ ok: true, value: { data: [{ ...shell, status: "running" }] } }); hold = false
+      await waitFor(() => h.store.state().view?.activeAt === 10)
+      exited = true
+      h.relay.pushStatus([], [])
+      await waitFor(() => h.store.state().team?.shells[0]?.status === "exited")
+      expect(h.store.state().view?.status).toBe("idle")
+    } finally { held.resolve("default"); await h.stop() }
+  })
+
   test("Team controls read bounded family economics, cancel and answer tasks, kill shells, and create BTW", async () => {
     const test = await setup(() => ({ ok: true, value: { data: [{ ...task("ses_child"), state: "waiting", question: { id: "qst_1", text: "Which scope?", time: 2 } }], summary: { total: 1, active: 1 }, cursor: {} } }), undefined,
       (request) => {
@@ -58,6 +88,75 @@ describe("remote team facts", () => {
       expect(test.relay.requests.filter((request) => request.operation === "session.family.activity")).toEqual([])
     } finally { await test.stop() }
   })
+
+  test("a background team refresh keeps every task's usage and never raises the older-page loading flag", async () => {
+    const held = Promise.withResolvers<RelayHandlerOutcome>()
+    let reads = 0
+    const page = { ok: true as const, value: { data: [{ ...task("ses_child"), time: { created: 1, updated: 9 } }], summary: { total: 1, active: 1 }, cursor: {} } }
+    const test = await setup(() => ++reads === 1 ? page : held.promise, undefined, (request) =>
+      request.operation === "session.team.economics" ? { ok: true, value: { data: [{ sessionID: "ses_child", cost: 0.25,
+        tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 3, write: 0 } }, cacheHitRatio: 0.75, contextTotal: 800, contextLimit: 2_000, cacheRead: 3, cacheWrite: 0 }] } } : "default")
+    const loading: boolean[] = []
+    try {
+      test.store.watchTeam(true)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().team?.status === "ready")
+      await test.store.loadTeamControls()
+      await waitFor(() => test.store.state().team?.tasks[0]?.tokens === 20)
+      test.store.subscribe(() => loading.push(test.store.state().team?.pageLoading === true))
+      test.relay.pushEvent("ses_a", { id: "evt_team_refresh", type: "session.tool.progress", durable: { aggregateID: "ses_a", seq: 1, version: 1 },
+        data: { sessionID: "ses_a", assistantMessageID: "msg_1", callID: "call_1", structured: { sessionID: "ses_child", status: "running" }, content: [] } })
+      await waitFor(() => reads === 2)
+      expect(test.store.state().team?.refreshing).toBe(true)
+      held.resolve({ ok: true, value: { data: [{ ...task("ses_child"), time: { created: 1, updated: 11 } }], summary: { total: 1, active: 1 }, cursor: {} } })
+      await waitFor(() => test.store.state().team?.tasks[0]?.updatedAt === 11)
+      expect(test.store.state().team?.tasks[0]).toMatchObject({ tokens: 20, cost: 0.25, contextTotal: 800, contextLimit: 2_000, cacheHitRatio: 0.75, cacheRead: 3, cacheWrite: 0 })
+      expect(test.store.state().team).toMatchObject({ refreshing: false, pageLoading: false })
+      expect(loading.includes(true)).toBe(false)
+    } finally { held.resolve("default"); await test.stop() }
+  })
+
+  test("usage is marked loading only while its read is open, and stays unreported when the read fails", async () => {
+    const held = Promise.withResolvers<RelayHandlerOutcome>()
+    let economics = 0
+    const test = await setup(() => ({ ok: true, value: { data: [task("ses_child")], summary: { total: 1, active: 1 }, cursor: {} } }), undefined, (request) => {
+      if (request.operation !== "session.team.economics") return "default"
+      return ++economics === 1 ? held.promise : { ok: false, code: "internal_error", message: "economics unavailable" }
+    })
+    try {
+      test.store.watchTeam(true)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().team?.status === "ready")
+      expect(test.store.state().team?.economicsLoading).toBeFalsy()
+      const controls = test.store.loadTeamControls()
+      await waitFor(() => test.store.state().team?.economicsLoading === true)
+      held.resolve({ ok: false, code: "internal_error", message: "economics unavailable" })
+      await controls
+      expect(test.store.state().team?.economicsLoading).toBe(false)
+      expect(test.store.state().team?.economicsUnsupported).toBeFalsy()
+      expect(test.store.state().team?.tasks[0]?.tokens).toBeUndefined()
+    } finally { held.resolve("default"); await test.stop() }
+  })
+
+  test("a lost connection keeps the rows, shells and side chats on screen while they are read again", async () => {
+    const test = await setup(() => ({ ok: true, value: { data: [task("ses_child")], summary: { total: 1, active: 1 }, cursor: {} } }), undefined, (request) => {
+      if (request.operation === "session.team.economics") return { ok: true, value: { data: [{ sessionID: "ses_child", cost: 0.25, tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } } }] } }
+      if (request.operation === "session.team.shell.list") return { ok: true, value: { data: [{ id: "sh_child", ownerID: "ses_child", command: "bun test", status: "running", startedAt: 1 }] } }
+      if (request.operation === "session.side-chat.list") return { ok: true, value: { data: [{ id: "ses_btw", title: "Side question", updatedAt: 3 }], cursor: {} } }
+      return "default"
+    })
+    try {
+      test.store.watchTeam(true)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().team?.status === "ready")
+      await test.store.loadTeamControls()
+      await waitFor(() => test.store.state().team?.sideChatStatus === "ready" && test.store.state().team?.tasks[0]?.tokens === 2)
+      test.relay.dropConnections(1006, "")
+      await waitFor(() => test.store.state().transport.kind !== "open")
+      expect(test.store.state().team).toMatchObject({ status: "loading", shellStatus: "loading", sideChatStatus: "loading",
+        tasks: [{ sessionID: "ses_child", tokens: 2 }], shells: [{ id: "sh_child" }], sideChats: [{ id: "ses_btw" }] })
+    } finally { await test.stop() }
+  }, pacedFlowTimeoutMs)
 
   test("watching task facts in Conversation never starts Office activity polling", async () => {
     const test = await setup(() => ({ ok: true, value: { data: [task("ses_child")], summary: { total: 1 }, cursor: {} } }))

@@ -59,6 +59,78 @@ async function closeReport(page: Awaited<ReturnType<NonNullable<typeof browser>[
 }
 
 describe("one close control per modal", () => {
+  for (const theme of ["light", "dark"] as const) {
+    test(`icon controls use neutral borders and keyboard focus in ${theme}`, async () => {
+      const page = await browser!.openPage()
+      try {
+        await page.setMobileViewport(390, 844)
+        await page.navigate(`${origin}/verify/modal-focus-fixture.html?theme=${theme}`)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('[aria-label="Icon focus variants"]') !== null`); attempt += 1) await Bun.sleep(25)
+        await page.pressKey("Tab", "Tab", 9)
+        const report = await page.evaluate<readonly { name: string; visible: boolean; neutral: boolean; greenBorder: boolean }[]>(`(() => {
+          const neutral = getComputedStyle(document.querySelector('[data-neutral-focus]')).color;
+          const green = getComputedStyle(document.querySelector('[data-green-focus]')).color;
+          const greenBorder = getComputedStyle(document.querySelector('[data-green-border]')).color;
+          return [...document.querySelectorAll('[aria-label="Icon focus variants"] button')].map(button => {
+            button.focus(); const style = getComputedStyle(button);
+            const outlined = style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) >= 2;
+            return { name: button.getAttribute('aria-label'), visible: outlined || style.boxShadow !== 'none',
+              neutral: outlined ? style.outlineColor === neutral : style.boxShadow.includes(neutral),
+              greenBorder: style.borderTopStyle !== 'none' && parseFloat(style.borderTopWidth) > 0 && [green, greenBorder].includes(style.borderTopColor) };
+          });
+        })()`)
+        expect(report.map((item) => item.name)).toEqual(["Close fixture", "Open Team", "Zoom in", "Main session", "Jump to latest", "Open task", "Answer task", "Pending model", "Pending agent"])
+        expect(report.filter((item) => !item.visible || !item.neutral || item.greenBorder)).toEqual([])
+      } finally { await page.close() }
+    }, 30_000)
+  }
+  for (const theme of ["light", "dark"] as const) {
+    test(`workspace close keeps touch autofocus borderless and keyboard focus visible in ${theme}`, async () => {
+      const page = await browser!.openPage()
+      try {
+        await page.setMobileViewport(390, 844)
+        await page.navigate(`${origin}/verify/modal-focus-fixture.html?theme=${theme}`)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('[aria-label="Workspace"]') !== null`); attempt += 1) await Bun.sleep(25)
+        await page.evaluate(`document.querySelector('[aria-label="Workspace"]').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))`)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('dialog[open] .overlay__close') !== null`); attempt += 1) await Bun.sleep(25)
+        expect(await page.evaluate<{ focused: boolean; outline: string; shadow: string }>(`(() => {
+          const button = document.querySelector('dialog[open] .overlay__close'); const style = getComputedStyle(button);
+          return { focused: document.activeElement === button, outline: style.outlineStyle, shadow: style.boxShadow };
+        })()`)).toEqual({ focused: true, outline: "none", shadow: "none" })
+        if (theme === "dark") await Bun.write(new URL("../../../.cache/tmp/modal-close-focus-dark.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        await page.pressKey("Tab", "Tab", 9)
+        await page.evaluate(`document.querySelector('dialog[open] .overlay__close').focus()`)
+        expect(await page.evaluate<boolean>(`(() => {
+          const button = document.querySelector('dialog[open] .overlay__close'); const style = getComputedStyle(button);
+          return button.matches(':focus-visible') && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) >= 2;
+        })()`)).toBe(true)
+        await page.pressEscape()
+        expect(await page.evaluate<boolean>(`document.querySelector('dialog[open]') === null && document.activeElement?.getAttribute('aria-label') === 'Workspace'`)).toBe(true)
+        for (let attempt = 0; attempt < 80 && await page.evaluate<boolean>(`document.querySelector('dialog') !== null`); attempt += 1) await Bun.sleep(25)
+        await page.pressKey(" ", "Space", 32)
+        expect(await page.evaluate<boolean>(`(() => {
+          const button = document.querySelector('dialog[open] .overlay__close');
+          return document.activeElement === button && getComputedStyle(button).outlineStyle !== 'none';
+        })()`)).toBe(true)
+      } finally { await page.close() }
+    }, 30_000)
+  }
+  test("unknown activation and forced colors keep visible modal focus", async () => {
+    for (const forced of [false, true]) {
+      const page = await browser!.openPage()
+      try {
+        await page.setMobileViewport(390, 844)
+        await page.setForcedColors(forced)
+        await page.navigate(`${origin}/verify/modal-focus-fixture.html?theme=dark`)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('[aria-label="Workspace"]') !== null`); attempt += 1) await Bun.sleep(25)
+        await page.evaluate(`document.querySelector('[aria-label="Workspace"]').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: ${forced ? 1 : 0} }))`)
+        expect(await page.evaluate<boolean>(`(() => {
+          const button = document.querySelector('dialog[open] .overlay__close');
+          return document.activeElement === button && getComputedStyle(button).outlineStyle !== 'none';
+        })()`)).toBe(true)
+      } finally { await page.close() }
+    }
+  }, 30_000)
   for (const width of [390, 768] as const) for (const theme of ["light", "dark"] as const) for (const method of ["button", "escape"] as const) {
     test(`Team ${method} at ${width} in ${theme}`, async () => {
       const page = await openTeam(width, theme)
@@ -75,6 +147,7 @@ describe("one close control per modal", () => {
         if (method === "button") await page.evaluate(`document.querySelector('dialog.team-view__sheet .overlay__close').click()`)
         else await page.pressEscape()
         expect(await page.evaluate<boolean>(`document.activeElement?.getAttribute('aria-label') === 'Open Team' && document.querySelector('dialog.team-view__sheet[open]') === null`)).toBe(true)
+        expect(await page.evaluate<boolean>(`getComputedStyle(document.activeElement).getPropertyValue('--yc-focus').trim() === getComputedStyle(document.documentElement).getPropertyValue('--yc-border-strong').trim()`)).toBe(true)
       } finally { await page.close() }
     }, 30_000)
   }

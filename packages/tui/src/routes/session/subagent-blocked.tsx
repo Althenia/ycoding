@@ -1,7 +1,13 @@
-import { createMemo, Show } from "solid-js"
-import { Prompt } from "../../component/prompt"
+import type { TextareaRenderable } from "@opentui/core"
+import type { SessionOrchestrationTask } from "@ycoding-ai/client"
+import { createEffect, createMemo, createSignal, onCleanup, onMount, Show } from "solid-js"
+import { useClient } from "../../context/client"
+import { useData } from "../../context/data"
 import { Keymap } from "../../context/keymap"
 import { useTheme } from "../../context/theme"
+import { useRoute } from "../../context/route"
+import { useDialog } from "../../ui/dialog"
+import { errorMessage } from "../../util/error"
 import { Locale } from "../../util/locale"
 
 export function SubagentBlockedSurface(props: {
@@ -67,25 +73,107 @@ export function SubagentBlockedSurface(props: {
   )
 }
 
-export function SubagentAnswerComposer(props: { sessionID: string; branch?: string }) {
+export function SubagentQuestionNotice(props: { task: SessionOrchestrationTask }) {
   const { themeV2 } = useTheme()
-  const submitShortcut = Keymap.useShortcut("input.submit")
-  const hint = createMemo(() => submitShortcut()?.replaceAll("ctrl+", "⌃").replaceAll("enter", "Enter"))
+  const route = useRoute()
+  const shortcut = Keymap.useShortcut("session.child.first")
+  return (
+    <box
+      paddingLeft={3}
+      paddingRight={2}
+      paddingBottom={1}
+      flexShrink={0}
+      onMouseUp={() => route.navigate({ type: "session", sessionID: props.task.sessionID })}
+    >
+      <text fg={themeV2.text.feedback.warning.default}>
+        ? {props.task.agent} awaiting input{" "}
+        <span style={{ fg: themeV2.text.subdued }}>· {shortcut()?.replaceAll("ctrl+", "⌃")} subagents</span>
+      </text>
+      <text fg={themeV2.text.feedback.warning.default}>{props.task.question?.text}</text>
+    </box>
+  )
+}
+
+export function SubagentAnswerComposer(props: { task: SessionOrchestrationTask }) {
+  const { themeV2 } = useTheme()
+  const client = useClient()
+  const data = useData()
+  const dialog = useDialog()
+  const keymap = Keymap.use()
+  const questionID = props.task.question?.id
+  const [submitting, setSubmitting] = createSignal(false)
+  const [feedback, setFeedback] = createSignal<string>()
+  let textarea: TextareaRenderable | undefined
+  let answered = false
+
+  onMount(() => onCleanup(keymap.mode.push("subagent-answer")))
+  createEffect(() => {
+    if (!textarea || textarea.isDestroyed) return
+    if (dialog.stack.length > 0) return textarea.blur()
+    textarea.focus()
+  })
+
+  async function submit() {
+    if (submitting() || answered || dialog.stack.length > 0 || !textarea?.plainText.trim()) return
+    if (props.task.state !== "waiting" || !questionID || props.task.question?.id !== questionID) {
+      setFeedback("Question changed or resolved · answer retained")
+      return
+    }
+    const text = textarea.plainText
+    setSubmitting(true)
+    setFeedback(undefined)
+    const result = await client.api.session.subagent
+      .answer({
+        parentID: props.task.parentID,
+        childID: props.task.sessionID,
+        questionID,
+        text,
+      })
+      .then(
+        () => ({ sent: true }) as const,
+        (error: unknown) => ({ sent: false, error }) as const,
+      )
+    setSubmitting(false)
+    if (!result.sent) {
+      setFeedback(`Answer not sent · draft retained: ${errorMessage(result.error)}`)
+      return
+    }
+    answered = true
+    if (!textarea.isDestroyed && textarea.plainText === text) textarea.clear()
+    setFeedback("Answer sent")
+    data.session.subagent.invalidate(props.task.parentID)
+    void data.session.subagent
+      .sync(props.task.parentID)
+      .catch((error: unknown) => setFeedback(`Answer sent · refresh failed: ${errorMessage(error)}`))
+  }
+
+  Keymap.createLayer(() => ({
+    mode: "subagent-answer",
+    commands: [{ id: "prompt.submit", title: "Submit subagent answer", run: () => void submit() }],
+    bindings: ["prompt.submit"],
+  }))
 
   return (
-    <box>
-      <Prompt
-        landing
-        sessionID={props.sessionID}
-        branch={props.branch}
-        placeholders={{ normal: ["Enter answer"] }}
-        hint={
-          <text fg={themeV2.text.subdued}>
-            {hint()} answer
-          </text>
-        }
-        right={<text fg={themeV2.text.feedback.warning.default}>answering</text>}
+    <box paddingLeft={3} paddingRight={2} paddingTop={1} flexShrink={0}>
+      <textarea
+        ref={(value: TextareaRenderable) => {
+          textarea = value
+          value.traits = { status: "ANSWER" }
+          value.focus()
+        }}
+        placeholder="Enter answer"
+        placeholderColor={themeV2.text.subdued}
+        textColor={themeV2.text.default}
+        focusedTextColor={themeV2.text.default}
+        cursorColor={themeV2.text.default}
+        focusedBackgroundColor="transparent"
+        minHeight={1}
+        maxHeight={6}
+        onSubmit={() => void submit()}
       />
+      <Show when={submitting() || feedback()}>
+        <text fg={themeV2.text.subdued}>{submitting() ? "Sending answer…" : feedback()}</text>
+      </Show>
     </box>
   )
 }

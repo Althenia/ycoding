@@ -85,6 +85,28 @@ test("compaction history is a read-only Session-scoped operation with no caller 
     expect(parseClientMessage(JSON.stringify({ ...request, input })).ok).toBe(false)
 })
 
+test("manual compaction admits only a Session and a stable compaction ID", () => {
+  const frame = { type: "request", id: "req_compact", operation: "session.compact", sessionID: "ses_1", input: { id: "cmp_web_1" } }
+  expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
+  expect(parseRelayToAgentMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
+  expect(parseClientMessage(JSON.stringify({ ...frame, sessionID: undefined }))).toMatchObject({ ok: false, error: { code: "session_required" } })
+  for (const input of [undefined, {}, { id: "msg_wrong" }, { id: "cmp_" }, { id: "cmp_web_1", directory: "/private" }, { id: "cmp_web_1", workspaceID: "wsp_other" }])
+    expect(parseClientMessage(JSON.stringify({ ...frame, input })).ok).toBe(false)
+})
+
+test("machine keep-awake controls are global and accept only the explicit enabled flag", () => {
+  const read = { type: "request", id: "req_awake", operation: "machine.keepAwake.get" }
+  const write = { ...read, operation: "machine.keepAwake.set", input: { enabled: true } }
+  for (const frame of [read, write, { ...write, input: { enabled: false } }]) {
+    expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
+    expect(parseRelayToAgentMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
+    expect(parseClientMessage(JSON.stringify({ ...frame, sessionID: "ses_1" })).ok).toBe(false)
+  }
+  for (const input of [undefined, {}, { enabled: "true" }, { enabled: true, directory: "/private" }, { enabled: true, workspaceID: "wsp_other" }])
+    expect(parseClientMessage(JSON.stringify({ ...write, input })).ok).toBe(false)
+  expect(parseClientMessage(JSON.stringify({ ...read, input: {} })).ok).toBe(false)
+})
+
 test("captured changes is a read-only Session-scoped paged operation without caller placement", () => {
   const frame = { type: "request", id: "req_changes", operation: "session.capturedChanges.list", sessionID: "ses_root" }
   expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
@@ -486,6 +508,7 @@ describe("remote operations", () => {
       "session.messages",
       "session.capturedChanges.list",
       "session.compaction.list",
+      "session.compact",
       "session.snapshot",
       "session.pending.list",
       "session.attachment.read",
@@ -532,6 +555,8 @@ describe("remote operations", () => {
       "usage.providers",
       "usage.summary",
       "usage.report",
+      "machine.keepAwake.get",
+      "machine.keepAwake.set",
     ])
     expect(remoteOperations.filter(requireSession)).toEqual([...remoteSessionOperations])
     expect(requireSession("workspace.list")).toBe(false)
@@ -543,6 +568,9 @@ describe("remote operations", () => {
     expect(requireSession("session.family.activity")).toBe(true)
     expect(parseAgentMessage('{"type":"response","id":"r","ok":false,"error":{"code":"subagent_read_only","message":"Managed subagent"}}')).toMatchObject({ ok: true })
     expect(requireSession("session.goal.stop")).toBe(true)
+    expect(requireSession("session.compact")).toBe(true)
+    expect(requireSession("machine.keepAwake.get")).toBe(false)
+    expect(requireSession("machine.keepAwake.set")).toBe(false)
     expect(RemoteProtocolVersion).toBe(3)
     expect(RemoteWebSocketPath).toEqual({ client: "/ws/v3/client", agent: "/ws/v3/agent" })
     expect(parseClientMessage('{"type":"request","id":"r","operation":"session.question.list","sessionID":"ses_1"}').ok).toBe(false)
@@ -702,6 +730,8 @@ describe("notice log contract", () => {
     expect(parseClientMessage(request("notice.read", { ids: ids(RemoteLimits.maxNoticeBatch) })).ok).toBe(true)
     for (const frame of [
       request("notice.subscribe", {}),
+      request("notice.subscribe", { push: null }),
+      request("notice.subscribe", { push: "A".repeat(43) }),
       request("notice.readAll", { ids: [] }),
       request("notice.subscribe", undefined, { sessionID: "ses_a" }),
       request("notice.list"),
@@ -733,6 +763,7 @@ describe("notice log contract", () => {
       { type: "notice.cleared" },
       { type: "notice.unavailable" },
       { type: "notice.offline", at: 1_790_000_000_000 },
+      { type: "notice.present", items: [{ kind: "notice", notice }, { kind: "notice", notice: { ...notice, id: "ntc_2" } }, { kind: "offline", at: 1_790_000_000_000 }] },
     ]
     for (const frame of frames) {
       expect(parseRelayToClientMessage(JSON.stringify(frame))).toEqual({ ok: true, value: frame })
@@ -778,6 +809,15 @@ describe("notice log contract", () => {
       { type: "notice.offline", at: 1.5 },
       { type: "notice.offline", at: "1790000000000" },
       { type: "notice.offline", at: 1, deviceID: "dev_1" },
+      { type: "notice.present", items: [] },
+      { type: "notice.present" },
+      { type: "notice.present", items: [{ kind: "notice", notice }, { kind: "notice", notice }] },
+      { type: "notice.present", items: [{ kind: "offline", at: 5 }, { kind: "offline", at: 5 }] },
+      { type: "notice.present", items: [{ kind: "offline", at: 0 }] },
+      { type: "notice.present", items: [{ kind: "offline", at: 1, deviceID: "dev_1" }] },
+      { type: "notice.present", items: [{ kind: "notice", notice: { ...notice, endpoint: "https://fcm.googleapis.com/fcm/send/abc" } }] },
+      { type: "notice.present", items: [{ kind: "push", notice }] },
+      { type: "notice.present", items: many.map((entry) => ({ kind: "notice", notice: entry })) },
     ]) expect(parseRelayToClientMessage(JSON.stringify(frame)).ok).toBe(false)
     expect(parseRelayToClientMessage("not json").ok).toBe(false)
     expect(parseRelayToClientMessage("x".repeat(RemoteLimits.maxAgentMessageChars + 1))).toMatchObject({ ok: false, error: { code: "message_too_large" } })

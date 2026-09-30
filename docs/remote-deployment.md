@@ -38,6 +38,24 @@ curl -fsS -X DELETE 'https://ycoding.althenia.app/api/admin/invites/<invite-id>'
 
 Web Push uses one VAPID key pair. Generate it locally with `bun infra/cloudflare/script/vapid-keys.ts`, keep the private value private, and set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` (an operator-owned `mailto:` or `https:` URI) as Worker secrets. While any of them is missing or invalid, `GET /api/push/key` answers `503`, browsers report push as unavailable, and the relay sends no pushes. Rotating the pair invalidates existing browser subscriptions until each browser subscribes again. Apply `0002_push.sql` and `0004_push_categories.sql` with the migration procedure below before deploying a Worker that stores subscriptions; the release workflow builds and deploys but does not apply D1 migrations. `0004_push_categories.sql` adds each subscription's System categories and last test-alert time; it keeps every existing row and enables all three categories on it until that browser next registers its own choices.
 
+### Operator push test
+
+`POST /api/admin/push/test` accepts exactly `{ "accountID": "<existing-account-id>", "endpoint": "<registered-push-endpoint>" }` with the admin Bearer credential. Browser cookies do not authorize it. The target must already be registered to that account; the request supplies no keys, payload, or category overrides and never broadcasts to other subscriptions.
+
+Use the account ID returned as `user.id` by that user's authenticated `/api/me` response. Retrieve the exact endpoint from the browser's push subscription or an authorized private lookup of `push_subscription` filtered by `account_id`. A subscription identifies a browser installation, not an enrolled backend machine. Do not query or expose its encryption keys.
+
+Keep the request body in a restricted file outside the repository, represented below as `target.json`. Disable shell tracing and keep the endpoint and admin credential out of command arguments, logs, and diagnostic artifacts.
+
+```sh
+printf 'header = "Authorization: Bearer %s"\n' "$YCODING_ADMIN_API_KEY" |
+  curl --config - --silent --show-error --fail-with-body \
+    --request POST 'https://ycoding.althenia.app/api/admin/push/test' \
+    --header 'Content-Type: application/json' \
+    --data-binary @target.json
+```
+
+HTTP `200` returns `{ "outcome": "accepted" | "rejected" | "expired" | "unreachable", "status"?: <push-service HTTP status> }`. `accepted` confirms push-service acceptance, not OS display. `expired` removes the expired stored subscription; `unreachable` omits the status. A subscription can be tested once per 60 seconds, including unsuccessful delivery attempts. Route errors are `400` for invalid input, `401` for missing or invalid Bearer authentication, `404` for a missing account/subscription pair or disabled admin configuration, `405` for the wrong method, `429` for a rate limit, and `503` for unavailable Web Push configuration. Responses are not cached.
+
 Commands below run from the repository root and target the committed configuration with `--config infra/cloudflare/wrangler.jsonc`. Wrangler is pinned to 4.133.0; `bunx wrangler` resolves that local version.
 
 ### WebSocket v3 cutover
@@ -45,6 +63,16 @@ Commands below run from the repository root and target the committed configurati
 The current relay accepts WebSockets only at `/ws/v3/client` and `/ws/v3/agent`. Missing-version, v1, v2, and unknown-version relay paths return `404` before a WebSocket upgrade; there are no aliases or protocol fallbacks. The v3 operation set uses native Forms for remote human input and contains no legacy Question operations. Enrollment records, device identities, and browser sign-in data remain valid, so this cutover requires no credential or data migration.
 
 Perform a coordinated release in this order: stop existing `ycoding remote connect` processes; upgrade every installed connector to a build that uses `/ws/v3/agent`; deploy the Worker and web assets from the same release; refresh open browser tabs so they use `/ws/v3/client`; then restart each connector and reconnect the existing enrolled identity. A v2 connector cannot connect after the Worker cutover, and a v2 browser tab must be refreshed. Do not re-enroll a device unless its existing credential is independently invalid.
+
+### Notification protocol cutover
+
+Deploy the Worker and web assets together. Save unsent drafts and reload every open remote tab and installed web app before using remote controls or notifications after the deployment. A new service worker does not replace JavaScript already running in a page. Notification ownership requires the current client and its `notice.present` frame; unsupported clients can reject that frame and reconnect until reloaded. There is no old-client compatibility path. Browser sign-in and enrolled device credentials remain valid.
+
+The browser-owned push registration schema requires `0005_push_browser_owner.sql`. This migration recreates only `push_subscription`, resetting its registrations and requiring a verified browser-session owner for every new row. It does not change Sessions, authentication, device enrollment, browser category preferences, or unread notices in Durable Object storage.
+
+After source validation, use the approved migration procedure below to record a recovery bookmark, verify that only the reviewed migration is unapplied, and apply it before the gated release deployment. The release workflow does not apply it. Push registration remains unavailable to the older Worker between migration and deployment; a delayed or failed deployment extends that pause. Other remote controls remain available. After deployment, each browser or installed web app must reopen. An existing subscription re-registers automatically when notification permission is granted; otherwise the user checks **Settings → Notifications → Push to this device** and restores it if needed. Background push resumes when that browser registers again.
+
+A Worker rollback alone neither restores cleared registrations nor makes an older registration writer compatible with the required ownership column. Prefer a compatible roll-forward. A database restore requires separate approval and consideration of every intervening metadata write, not just push registrations.
 
 ## Stored metadata and retention
 
@@ -60,7 +88,7 @@ Authenticated `GET /api/devices` and `GET /api/me` return each retained device w
 | `device_credential`              | Hashed access and refresh credentials with expiry and revocation markers.                                      |
 | `enrollment`, `device_challenge` | Short-lived, single-use enrollment and challenge rows.                                                         |
 | `oauth_transaction`              | Google OIDC transaction state, nonce, code verifier, and redirect target.                                      |
-| `push_subscription`              | Web Push endpoint, owning account, the browser's P-256 and auth keys, creation time, a failure count, the three System category choices, and the last test-alert time. |
+| `push_subscription`              | Web Push endpoint, owning account and verified browser-session identity, the browser's P-256 and auth keys, creation time, a failure count, the three System category choices, and the last test-alert time. |
 | `invite`                         | Invite ID, optional label, dates, user ID after redemption, and SHA-256 hashes of the invite token and access key; neither secret is stored. |
 
 Single-use rows contain plaintext values required by the protocol: `oauth_transaction.nonce` and `code_verifier` (10-minute lifetime) and `device_challenge.nonce` (2-minute lifetime). The OAuth nonce travels in the Google authorization redirect; the verifier stays server-side. The device challenge nonce is returned to the enrolling agent. Do not log these values.

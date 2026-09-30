@@ -16,9 +16,11 @@ import {
   type ProviderUsageListOutput,
   type UsageGetOutput,
   type UsageReportOutput,
+  type KeepAwakeStatus,
   type Project,
   type ProjectDirectory,
   type SessionInfo,
+  type SessionCompletionsOutput,
   type SessionMessageInfo,
   type YCodingClient,
 } from "@ycoding-ai/client/promise"
@@ -67,6 +69,8 @@ export type LocalEventStream = {
 }
 
 export type LocalServer = {
+  readonly keepAwakeGet: () => Promise<KeepAwakeStatus>
+  readonly keepAwakeSet: (enabled: boolean) => Promise<KeepAwakeStatus>
   readonly listPage: (input: { limit: number; cursor?: string }) => Promise<{
     readonly data: readonly SessionInfo[]
     readonly next?: string
@@ -78,7 +82,8 @@ export type LocalServer = {
   readonly getSession: (sessionID: string, location: LocalLocation) => Promise<SessionInfo>
   /** Process-wide running status; the caller filters it to the current inventory. */
   readonly activeSessions: () => Promise<unknown>
-  readonly outstandingSessions: (failures?: boolean) => Promise<{ readonly data: readonly string[]; readonly failed: readonly string[] }>
+  readonly outstandingSessions: (failures?: boolean) => Promise<{ readonly data: readonly string[]; readonly running: readonly string[]; readonly failed: readonly string[] }>
+  readonly completions: (input: { readonly after?: string; readonly limit: number }) => Promise<SessionCompletionsOutput>
   readonly providerUsageList: (refresh?: boolean) => Promise<ProviderUsageListOutput>
   readonly usageSummary: () => Promise<UsageGetOutput>
   readonly usageReport: (input: RemoteUsageReportInput) => Promise<UsageReportOutput>
@@ -127,6 +132,7 @@ export type LocalServer = {
   readonly command: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly command: string; readonly arguments?: string; readonly files?: LocalPrompt["files"]; readonly agents?: LocalPrompt["agents"]; readonly delivery?: LocalPrompt["delivery"] }) => Promise<unknown>
   readonly skill: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly skill: string; readonly resume?: boolean }) => Promise<void>
   readonly interrupt: (sessionID: string, location: LocalLocation) => Promise<void>
+  readonly compact: (sessionID: string, location: LocalLocation, id: string) => Promise<unknown>
   readonly permissionReply: (
     sessionID: string,
     location: LocalLocation,
@@ -206,6 +212,7 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     activeSessions: () => call(() => client.session.active({ signal: AbortSignal.timeout(timeoutMs) })),
     outstandingSessions: (failures) => call(() => client.session.outstanding(failures ? { failures: true } : undefined,
       { signal: AbortSignal.timeout(timeoutMs) })),
+    completions: (input) => call(() => client.session.completions(input, { signal: AbortSignal.timeout(timeoutMs) })),
     providerUsageList: (refresh) => call(() => client.providerUsage.list({ ...(refresh === undefined ? {} : { refresh }) }, { signal: AbortSignal.timeout(timeoutMs) })),
     usageSummary: () => call(() => client.usage.get({ signal: AbortSignal.timeout(timeoutMs) })),
     usageReport: (input) => call(() => client.usage.report(input, { signal: AbortSignal.timeout(timeoutMs) })),
@@ -321,6 +328,11 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       call(async () => {
         await client.session.interrupt({ sessionID }, request(location, timeoutMs))
       }),
+    compact: (sessionID, location, id) => call(async () => {
+      const result = await client.session.compact({ sessionID, id }, request(location, RemoteLimits.compactionTimeoutMs))
+      if (result.status === "failed") throw new LocalFailure("server", `Compaction failed: ${result.failure ?? "unknown failure"}`)
+      return result
+    }, RemoteLimits.compactionTimeoutMs),
     permissionReply: (sessionID, location, requestID, reply, message) =>
       call(async () => {
         await client.permission.reply(
@@ -345,6 +357,8 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       call(async () => {
         await client.form.cancel({ sessionID, formID }, request(location, timeoutMs))
       }),
+    keepAwakeGet: () => call(() => client.keepAwake.get({ signal: AbortSignal.timeout(timeoutMs) })),
+    keepAwakeSet: (enabled) => call(() => client.keepAwake.set({ enabled }, { signal: AbortSignal.timeout(timeoutMs) })),
     autonomySet: (sessionID, location, payload) => {
       const deadline = "goal" in payload && typeof payload.goal === "string" ? RemoteLimits.goalSetTimeoutMs : timeoutMs
       return call(() =>

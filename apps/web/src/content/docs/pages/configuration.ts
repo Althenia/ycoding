@@ -46,6 +46,10 @@ export const configurationPages: readonly DocPage[] = [
             kind: "paragraph",
             text: "YCoding reads three independent configuration surfaces. A key placed in the wrong surface has no effect: terminal preferences in `ycoding.jsonc` are ignored, and runtime settings in `cli.json` are ignored.",
           },
+          {
+            kind: "paragraph",
+            text: "Keep machine awake is a process-local machine control, not a configuration-file preference. Use the TUI status dialog or remote Settings → Machine. It defaults to Off and on macOS prevents idle sleep only; manual sleep and closing the lid remain possible. Linux and Windows report Unsupported. Stopping or restarting the backend ends the assertion, and no client remembers or re-enables it automatically.",
+          },
           surfaces,
         ],
       },

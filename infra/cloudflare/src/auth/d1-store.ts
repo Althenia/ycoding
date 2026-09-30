@@ -135,9 +135,6 @@ export function createD1AuthStore(db: D1Database): AuthStore {
     },
 
     async rotateBrowserSession(currentID, next, now) {
-      // One transaction: insert the replacement only while the current session is
-      // still live, then revoke it. A PK/constraint failure rolls both statements
-      // back, so a failed rotation can never burn the current session.
       const [inserted, revoked] = await db.batch([
         db
           .prepare(
@@ -147,6 +144,9 @@ export function createD1AuthStore(db: D1Database): AuthStore {
         db
           .prepare("UPDATE browser_session SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL AND expires_at > ?")
           .bind(now, currentID, now),
+        db
+          .prepare("UPDATE push_subscription SET browser_session_id = ? WHERE browser_session_id = ? AND EXISTS (SELECT 1 FROM browser_session WHERE id = ? AND rotated_from = ? AND created_at = ?)")
+          .bind(next.id, currentID, next.id, currentID, next.createdAt),
       ])
       return inserted !== undefined && revoked !== undefined && changed(inserted) && changed(revoked)
     },

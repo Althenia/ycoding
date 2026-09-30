@@ -1,16 +1,29 @@
 import { describe, expect, test } from "bun:test"
-import { autocompleteBound, optionsForTrigger, applyMention, reconcileMentions, submission, suggestionTrigger, tokenKey, triggerAt, orderedVariants, visibleModels, pairedFastModel, switchFastModel, effortLevel } from "./composer-logic"
+import { autocompleteBound, modelSelection, optionsForTrigger, applyMention, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, orderedVariants, visibleModels, pairedFastModel, switchFastModel, effortLevel } from "./composer-logic"
 import type { CatalogView, ModelOption } from "../catalog"
 
 const models: ModelOption[] = [
-  { providerID: "openai", id: "gpt-6-sol", name: "GPT-6 Sol", variants: ["low", "medium", "high"], defaultVariant: "high" },
-  { providerID: "openai", id: "gpt-6-sol-fast", name: "GPT-6 Sol Fast", variants: ["low", "high"], defaultVariant: "low" },
-  { providerID: "anthropic", id: "claude-opus-5-5", name: "Claude Opus 5.5", variants: ["high", "max"], defaultVariant: "high" },
-  { providerID: "anthropic", id: "claude-opus-5-5-fast", name: "Claude Opus 5.5 Fast", variants: ["medium", "high"], defaultVariant: "medium" },
+  { providerID: "openai", id: "gpt-6-sol", name: "GPT-6 Sol", variants: ["low", "medium", "high"] },
+  { providerID: "openai", id: "gpt-6-sol-fast", name: "GPT-6 Sol Fast", variants: ["low", "high"] },
+  { providerID: "anthropic", id: "claude-opus-5-5", name: "Claude Opus 5.5", variants: ["high", "max"] },
+  { providerID: "anthropic", id: "claude-opus-5-5-fast", name: "Claude Opus 5.5 Fast", variants: ["medium", "high"] },
   { providerID: "openai", id: "gpt-6-lite", name: "GPT-6 Lite", variants: [] },
   { providerID: "zai", id: "glm-fast-latest", name: "GLM Fast Latest", variants: [] },
   { providerID: "openai", id: "quant-fp8-fast", name: "Quant FP8 Fast", variants: [] },
 ]
+
+test("model selection uses only offered effort and explains unsupported incoming references", () => {
+  const incoming = { providerID: "openai", id: "gpt-6-sol", variant: "max" }
+  expect(modelSelection(models, incoming)).toMatchObject({ model: incoming, blocked: true })
+  expect(modelSelection(models, incoming).warning).toContain("max")
+  expect(incoming.variant).toBe("max")
+  expect(modelSelection(models, { providerID: "openai", id: "gpt-6-lite", variant: "max" }).blocked).toBe(true)
+  expect(modelSelection(models, { providerID: "openai", id: "absent" }).blocked).toBe(true)
+  expect(modelSelection(models, { providerID: "openai", id: "absent" }).warning).toContain("Choose another model")
+  expect(modelSelection(models, { providerID: "openai", id: "gpt-6-sol" }).model).toEqual({ providerID: "openai", id: "gpt-6-sol" })
+  expect(sameModel(incoming, { ...incoming })).toBe(true)
+  expect(sameModel(incoming, { ...incoming, variant: "high" })).toBe(false)
+})
 
 test("paired fast models hide from the picker and switch model identity without changing an offered effort", () => {
   expect(visibleModels(models).map((item) => item.id)).toEqual(["gpt-6-sol", "claude-opus-5-5", "gpt-6-lite", "glm-fast-latest", "quant-fp8-fast"])
@@ -20,8 +33,8 @@ test("paired fast models hide from the picker and switch model identity without 
   expect(switchFastModel(models, normal)).toEqual(fast)
   expect(pairedFastModel(models, fast)).toMatchObject({ base: models[0], fast: models[1], active: true })
   expect(switchFastModel(models, fast)).toEqual(normal)
-  expect(switchFastModel(models, { ...normal, variant: "medium" })).toEqual({ providerID: "openai", id: "gpt-6-sol-fast", variant: "low" })
-  expect(switchFastModel(models, { providerID: "anthropic", id: "claude-opus-5-5-fast", variant: "medium" })).toEqual({ providerID: "anthropic", id: "claude-opus-5-5", variant: "high" })
+  expect(switchFastModel(models, { ...normal, variant: "medium" })).toEqual({ providerID: "openai", id: "gpt-6-sol-fast" })
+  expect(switchFastModel(models, { providerID: "anthropic", id: "claude-opus-5-5-fast", variant: "medium" })).toEqual({ providerID: "anthropic", id: "claude-opus-5-5" })
   expect(pairedFastModel(models, { providerID: "zai", id: "glm-fast-latest" })).toBeUndefined()
   expect(switchFastModel(models, { providerID: "openai", id: "gpt-6-lite" })).toBeUndefined()
 })
@@ -48,7 +61,7 @@ describe("composer input semantics", () => {
   test("returns the full ranked catalog for bare skill and command triggers", () => {
     const large = { ...catalog, skills: Array.from({ length: 63 }, (_, index) => ({ id: `skill-${index}`, name: `Skill ${index}`, slash: true })), commands: Array.from({ length: 24 }, (_, index) => ({ name: `command-${index}` })) }
     expect(optionsForTrigger("$", "", large, [])).toHaveLength(63)
-    expect(optionsForTrigger("/", "", large, [])).toHaveLength(89)
+    expect(optionsForTrigger("/", "", large, [])).toHaveLength(90)
   })
   test("detects a trigger adjacent to the caret without matching prose or later text", () => {
     expect(triggerAt("/pla", 4)).toEqual({ trigger: "/", start: 0, query: "pla" })

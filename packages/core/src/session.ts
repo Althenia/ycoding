@@ -63,6 +63,7 @@ import { Mime } from "./mime"
 import type { EventLog } from "@ycoding-ai/schema/event-log"
 import { SkillV2 } from "./skill"
 import { Job } from "./job"
+import { SessionCompletion } from "./session/completion"
 import { CommandV2 } from "./command"
 import { Shell } from "./shell"
 import { ShellSandbox } from "./shell-sandbox"
@@ -406,8 +407,12 @@ export interface Interface {
   readonly compact: Compact
   readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
+  readonly completions: (input: { readonly after?: SessionSchema.ID; readonly limit: number }) => Effect.Effect<
+    Effect.Success<ReturnType<typeof SessionCompletion.latest>>
+  >
   readonly outstanding: (includeFailures?: boolean) => Effect.Effect<{
     readonly sessions: ReadonlySet<SessionSchema.ID>
+    readonly running: ReadonlySet<SessionSchema.ID>
     readonly failed: ReadonlySet<SessionSchema.ID>
   }>
   readonly background: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
@@ -1853,6 +1858,7 @@ const layer = Layer.effect(
         yield* execution.awaitIdle(sessionID)
       }),
       active: execution.active,
+      completions: (input) => SessionCompletion.latest(db, input),
       outstanding: Effect.fn("V2Session.outstanding")(function* (includeFailures = false) {
         const tasks = yield* db.select({ sessionID: SessionTaskTable.parent_id }).from(SessionTaskTable)
           .where(inArray(SessionTaskTable.state, ["starting", "running", "waiting", "cancelling"]))
@@ -1865,8 +1871,13 @@ const layer = Layer.effect(
         const pending = yield* db.select({ sessionID: SessionPendingTable.session_id }).from(SessionPendingTable)
           .groupBy(SessionPendingTable.session_id).all().pipe(Effect.orDie)
         const active = yield* execution.active
+        const running = new Set([...active, ...(yield* jobs.list()).flatMap((job) => {
+          const sessionID = job.metadata?.sessionID
+          return job.type === "shell" && job.status === "running" && Schema.is(SessionSchema.ID)(sessionID)
+            ? [sessionID] : []
+        })])
         const sessions = new Set([...tasks, ...notices, ...goals, ...pending].map((row) => row.sessionID).concat([...shellJobs, ...active]))
-        if (!includeFailures) return { sessions, failed: new Set<SessionSchema.ID>() }
+        if (!includeFailures) return { sessions, running, failed: new Set<SessionSchema.ID>() }
         const startedType = Event.versionedType(SessionEvent.Execution.Started.type, SessionEvent.Execution.Started.durable.version)
         const failedType = Event.versionedType(SessionEvent.Execution.Failed.type, SessionEvent.Execution.Failed.durable.version)
         const latest = db.select({ aggregateID: EventTable.aggregate_id, seq: sql<number>`max(${EventTable.seq})`.as("seq") })
@@ -1891,7 +1902,7 @@ const layer = Layer.effect(
           if (event.type === failedType) failed.add(root)
           else failed.delete(root)
         }
-        return { sessions, failed }
+        return { sessions, running, failed }
       }),
       background: Effect.fn("V2Session.background")(function* (sessionID) {
         yield* result.get(sessionID)

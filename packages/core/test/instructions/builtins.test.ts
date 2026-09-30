@@ -7,6 +7,7 @@ import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { Global } from "@ycoding-ai/core/global"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { InstructionBuiltIns } from "@ycoding-ai/core/instructions/builtins"
+import { Instructions } from "@ycoding-ai/core/instructions/index"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { ProjectArtifactInstructions } from "../../src/project-artifact/instructions"
 import { location } from "../fixture/location"
@@ -21,6 +22,8 @@ const otherSessionID = SessionSchema.ID.make("ses_builtin_other")
 const localDate = (time: number) => new Date(time).toDateString()
 const gitAttribution =
   "When creating commits, use the user's existing Git author and committer identity and write messages without Co-authored-by trailers or AI, model, agent, or provider attribution. Do not set `user.name`, `user.email`, or `GIT_AUTHOR_*`/`GIT_COMMITTER_*`, or pass `--author` or `--reset-author`, as part of committing. If Git reports a missing identity, report it and ask the user to configure their own identity; never invent one."
+const taskCompletion =
+  "Call task_complete once after all accepted work is finished and verified, immediately before your final reply. Do not call it for ordinary replies, idle, partial results, blockers, or unfinished pending, subagent, or background work. In goal mode, first complete the achieved goal with the goal tool; goal completion alone is not work-completion evidence. If new input or unfinished work intervenes, finish and verify it before declaring completion again."
 const locationLayer = Layer.succeed(
   Location.Service,
   Location.Service.of(
@@ -71,6 +74,8 @@ describe("InstructionBuiltIns", () => {
           "When working with a Git worktree, create it at `<main repository root>/.worktrees/<name>`, creating the `.worktrees` directory first if it does not exist. Give every worktree a named branch identical to its worktree name, for example `git worktree add -b <name> .worktrees/<name>`; never create a detached HEAD worktree. Keep history linear when integrating a worktree branch: if the target branch has moved, rebase the worktree branch onto it, then from the target branch checkout run `git merge --ff-only --autostash <name>`; never create a merge commit.",
           "",
           gitAttribution,
+          "",
+          taskCompletion,
         ].join("\n"),
       )
     }),
@@ -86,6 +91,21 @@ describe("InstructionBuiltIns", () => {
       expect(second.text).toBe(first.text)
       expect(first.text).not.toContain(sessionID)
       expect(first.text).not.toContain(otherSessionID)
+    }),
+  )
+
+  it.effect("appends one stable explicit work-completion directive for every Session", () =>
+    Effect.gen(function* () {
+      const builtins = yield* InstructionBuiltIns.Service
+      const first = yield* builtins.load(sessionID)
+      const second = yield* builtins.load(otherSessionID)
+      expect(first.at(-1)?.key).toBe(Instructions.Key.make("core/task-completion"))
+      const source = first.at(-1)!
+      const value = yield* source.read
+      expect(value).toBe(taskCompletion)
+      expect(source.initial(taskCompletion)).toBe(taskCompletion)
+      expect(source.changed(taskCompletion, taskCompletion)).toBe(taskCompletion)
+      expect(yield* second.at(-1)!.read).toBe(value)
     }),
   )
 

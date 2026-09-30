@@ -16,6 +16,8 @@ import type {
   SessionActiveOutput,
   SessionOutstandingInput,
   SessionOutstandingOutput,
+  SessionCompletionsInput,
+  SessionCompletionsOutput,
   SessionGetInput,
   SessionGetOutput,
   SessionSnapshotInput,
@@ -357,6 +359,9 @@ import type {
   RemoteGetOutput,
   RemoteSetInput,
   RemoteSetOutput,
+  KeepAwakeGetOutput,
+  KeepAwakeSetInput,
+  KeepAwakeSetOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -622,6 +627,18 @@ export function make(options: ClientOptions) {
             method: "GET",
             path: `/api/session/outstanding`,
             query: { failures: input?.["failures"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      completions: (input?: SessionCompletionsInput, requestOptions?: RequestOptions) =>
+        request<SessionCompletionsOutput>(
+          {
+            method: "GET",
+            path: `/api/session/completions`,
+            query: { after: input?.["after"], limit: input?.["limit"] },
             successStatus: 200,
             declaredStatuses: [401, 400],
             empty: false,
@@ -2907,6 +2924,25 @@ export function make(options: ClientOptions) {
           {
             method: "PUT",
             path: `/api/remote`,
+            body: { enabled: input["enabled"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+    },
+    keepAwake: {
+      get: (requestOptions?: RequestOptions) =>
+        request<{ readonly data: KeepAwakeGetOutput }>(
+          { method: "GET", path: `/api/keep-awake`, successStatus: 200, declaredStatuses: [401, 400], empty: false },
+          requestOptions,
+        ).then((value) => value.data),
+      set: (input: KeepAwakeSetInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: KeepAwakeSetOutput }>(
+          {
+            method: "PUT",
+            path: `/api/keep-awake`,
             body: { enabled: input["enabled"] },
             successStatus: 200,
             declaredStatuses: [401, 400],

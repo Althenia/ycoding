@@ -283,6 +283,7 @@ export type PendingRequestView =
       readonly resources: readonly string[]
       readonly reason: string
       readonly hardReview: boolean
+      readonly metadata?: Readonly<Record<string, unknown>>
       readonly askedAt: number
     }
   | {
@@ -374,6 +375,7 @@ export const messageTextLimit = 4_000
  * unhandled counter.
  */
 const ignoredEventTypes: readonly string[] = [
+  "session.work.completed",
   "session.file-change.recorded",
   "guardrail.decided",
   "session.instructions.updated",
@@ -1009,6 +1011,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         resources: stringList(data.resources),
         reason: stringField(data.reason) ?? "Guardrail review required",
         hardReview: data.hardReview === true,
+        ...(isRecord(data.metadata) ? { metadata: data.metadata } : {}),
         askedAt: now,
       })
     case "guardrail.replied":
@@ -1695,15 +1698,50 @@ export function readSnapshot(payload: unknown): SessionSnapshot | undefined {
   }
 }
 
+function openPartKey(message: Extract<RemoteMessageView, { kind: "assistant" }>, part: AssistantPart): string | undefined {
+  if (message.completed !== undefined) return undefined
+  if (part.kind === "text") return part.text === "" ? partKey(message.id, "text", String(part.ordinal)) : undefined
+  if (part.kind === "reasoning") return part.text === "" && part.completed === undefined ? partKey(message.id, "reasoning", String(part.ordinal)) : undefined
+  return part.status === "streaming" && (part.inputText ?? "") === "" ? partKey(message.id, "tool", part.callID) : undefined
+}
+
 /** Part keys a snapshot already covers; matching ephemeral fragments are stale. */
 export function sealedPartKeys(messages: readonly RemoteMessageView[]): readonly string[] {
   return messages.flatMap((message) => {
     if (message.kind !== "assistant") return []
     return message.parts.flatMap((part) => {
+      if (openPartKey(message, part) !== undefined) return []
       if (part.kind === "text" || part.kind === "reasoning") return [partKey(message.id, part.kind, String(part.ordinal))]
       if (part.kind === "tool") return [partKey(message.id, "tool", part.callID)]
       return []
     })
+  })
+}
+
+export function streamedPartText(messages: readonly RemoteMessageView[]): ReadonlyMap<string, string> {
+  return new Map(messages.flatMap((message) => {
+    if (message.kind !== "assistant") return []
+    return message.parts.flatMap((part): readonly (readonly [string, string])[] => {
+      const key = part.kind === "tool" ? partKey(message.id, "tool", part.callID) : partKey(message.id, part.kind, String(part.ordinal))
+      const text = part.kind === "tool" ? part.inputText : part.text
+      return text === undefined || text === "" ? [] : [[key, text]]
+    })
+  }))
+}
+
+export function carryStreamedText(messages: readonly RemoteMessageView[], streamed: ReadonlyMap<string, string>): readonly RemoteMessageView[] {
+  if (streamed.size === 0) return messages
+  return messages.map((message) => {
+    if (message.kind !== "assistant") return message
+    let changed = false
+    const parts = message.parts.map((part) => {
+      const key = openPartKey(message, part)
+      const text = key === undefined ? undefined : streamed.get(key)
+      if (text === undefined) return part
+      changed = true
+      return part.kind === "tool" ? { ...part, inputText: text } : { ...part, text }
+    })
+    return changed ? { ...message, parts } : message
   })
 }
 
@@ -1791,6 +1829,7 @@ export function readGuardrailRequests(payload: unknown, now: number): readonly P
         resources: stringList(item.resources),
         reason: stringField(item.reason) ?? "Guardrail review required",
         hardReview: item.hardReview === true,
+        ...(isRecord(item.metadata) ? { metadata: item.metadata } : {}),
         askedAt: now,
       },
     ]
@@ -1840,13 +1879,14 @@ export function readEventSequence(payload: unknown): { readonly seq?: number; re
   }
 }
 
-/**
- * A guardrail list covers the root session family. Only reviews owned by the
- * active session may be answered from this client.
- */
 export function canReplyToRequest(request: PendingRequestView, activeSessionID: string | undefined): boolean {
   if (request.kind !== "guardrail") return true
-  return activeSessionID !== undefined && request.sessionID === activeSessionID
+  return activeSessionID !== undefined
+}
+
+export function guardrailContextAvailable(request: PendingRequestView): boolean {
+  return request.kind !== "guardrail" || request.resources.some((resource) => resource.trim() !== "") ||
+    typeof request.metadata?.command === "string" && request.metadata.command.trim() !== ""
 }
 
 /** Replaces the request queue with an authoritative list read. */

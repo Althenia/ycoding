@@ -37,6 +37,15 @@ export type FileDiffInfo = {
 
 export type SessionActive = { type: "running" }
 
+export type SessionWorkCompletionReceipt = {
+  id: string
+  seq: number
+  created: number
+  sessionID: string
+  inputID: string
+  assistantMessageID: string
+}
+
 export type SessionMessageArtifactProvenance = {
   scopeID: string
   versionID: string
@@ -503,6 +512,8 @@ export type BrowserPairing = { secret: string; expiresAt: number }
 
 export type BrowserCaptureOutput = { mediaType: "image/png"; data: string; bytes: number }
 
+export type KeepAwakeState = "off" | "on" | "unsupported" | "error"
+
 export type SessionMessageModelSelected = {
   id: string
   metadata?: { [x: string]: JsonValue }
@@ -809,6 +820,17 @@ export type SessionExecutionInterrupted = {
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
   data: { sessionID: string; reason: "user" | "shutdown" | "superseded" }
+}
+
+export type SessionWorkCompleted = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.work.completed"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; inputID: string; assistantMessageID: string }
 }
 
 export type SessionInstructionsUpdated = {
@@ -1285,6 +1307,8 @@ export type V2EventServerConnected = {
 }
 
 export type SessionRevert = { messageID: string; snapshot?: string; files?: Array<FileDiffInfo> }
+
+export type SessionWorkCompletionPage = { data: Array<SessionWorkCompletionReceipt>; next?: string }
 
 export type SessionMessageAgentSelected = {
   id: string
@@ -2176,6 +2200,8 @@ export type BrowserElement = {
   destination?: BrowserPage
 }
 
+export type KeepAwakeStatus = { state: KeepAwakeState; message?: string }
+
 export type SessionGenerationSpeedHistory = { latest?: SessionGenerationSpeed; recent: Array<SessionGenerationSpeed> }
 
 export type PermissionV2Ruleset = Array<PermissionV2Rule>
@@ -3012,6 +3038,16 @@ export type SessionLogItem =
       created: number
       metadata?: { [x: string]: any }
       sourceEpoch: string
+      type: "session.work.completed"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: { sessionID: string; inputID: string; assistantMessageID: string }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
       type: "session.instructions.updated"
       durable: { aggregateID: string; seq: number; version: 2 }
       location?: LocationRef
@@ -3484,6 +3520,7 @@ export type V2Event =
   | SessionExecutionSucceeded
   | SessionExecutionFailed
   | SessionExecutionInterrupted
+  | SessionWorkCompleted
   | SessionInstructionsUpdated
   | SessionContextObserved
   | SessionTaskUpdated
@@ -4015,7 +4052,14 @@ export type SessionActiveOutput = { data: { [x: string]: SessionActive } }["data
 
 export type SessionOutstandingInput = { readonly failures?: { readonly failures?: boolean | undefined }["failures"] }
 
-export type SessionOutstandingOutput = { data: Array<string>; failed: Array<string> }
+export type SessionOutstandingOutput = { data: Array<string>; running: Array<string>; failed: Array<string> }
+
+export type SessionCompletionsInput = {
+  readonly after?: { readonly after?: string | undefined; readonly limit?: number | undefined }["after"]
+  readonly limit?: { readonly after?: string | undefined; readonly limit?: number | undefined }["limit"]
+}
+
+export type SessionCompletionsOutput = SessionWorkCompletionPage
 
 export type SessionGetInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
@@ -8152,3 +8196,9 @@ export type RemoteSetInput = { readonly enabled: { readonly enabled: boolean }["
 export type RemoteSetOutput = {
   data: { state: "off" | "connecting" | "on" | "error"; message?: string | undefined }
 }["data"]
+
+export type KeepAwakeGetOutput = { data: KeepAwakeStatus }["data"]
+
+export type KeepAwakeSetInput = { readonly enabled: { readonly enabled: boolean }["enabled"] }
+
+export type KeepAwakeSetOutput = { data: KeepAwakeStatus }["data"]

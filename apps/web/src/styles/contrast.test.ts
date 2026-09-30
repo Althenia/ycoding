@@ -57,7 +57,8 @@ describe("primary button contrast", () => {
     const disabled = declarations(base, ".button[disabled]")
     expect(Number(value(disabled, "opacity"))).toBeLessThan(1)
     expect(Number(value(disabled, "opacity"))).toBeGreaterThan(0)
-    expect(value(disabled, "cursor")).toBe("not-allowed")
+    const cursor = declarations(base, ':where(:disabled, [aria-disabled="true"], label:has(:disabled), [inert])')
+    expect(value(cursor, "cursor")).toBe("var(--yc-cursor-disabled)")
   })
 })
 
@@ -143,6 +144,13 @@ describe("focus indicator token contrast", () => {
       const tokens = themes[theme]
       for (const surface of ["--yc-bg", "--yc-surface", "--yc-surface-raised", "--yc-surface-sunken"]) {
         expect(contrastRatio(required(tokens, "--yc-focus"), required(tokens, surface)), `${theme} ${surface}`).toBeGreaterThanOrEqual(3)
+      }
+    })
+    test(`${theme} neutral icon focus contrasts with pending picker fills`, async () => {
+      const { themes } = await stylesheets()
+      const tokens = themes[theme]
+      for (const surface of ["--yc-bg", "--yc-surface", "--yc-surface-raised", "--yc-surface-sunken"]) {
+        expect(contrastRatio(required(tokens, "--yc-border-strong"), composite(required(tokens, "--yc-green-soft"), required(tokens, surface))), `${theme} ${surface}`).toBeGreaterThanOrEqual(3)
       }
     })
   }

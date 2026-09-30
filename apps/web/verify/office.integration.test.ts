@@ -177,7 +177,7 @@ describe("remote Office presentation", () => {
     const page = await openRemote("view=chat&presentation=office&team=two&inspectOffice=1")
     try {
       expect(await until(page, `document.querySelectorAll('.office-roster__row').length===3&&window.__officeGame?.scene.getScene('office').latestFrames.length===3&&document.querySelector('.office-roster__row[data-session-id="ses_child"] .office-roster__status')?.textContent==='Running bun test'`, 150)).toBe(true)
-      expect(await until(page, `window.__officeGame.scene.getScene('office').latestFrames.some(frame=>frame.actor.sessionID==='ses_fixture'&&frame.room==='lounge'&&!frame.moving)`, 150)).toBe(true)
+      expect(await until(page, `window.__officeGame.scene.getScene('office').latestFrames.some(frame=>frame.actor.sessionID==='ses_fixture'&&frame.room==='lounge'&&!frame.moving&&frame.pose==='play'&&Math.floor(frame.position.x/32)===14&&Math.floor(frame.position.y/32)===26)`, 150)).toBe(true)
       await page.evaluate<void>(`(() => {
         const game=window.__officeGame,scene=game.scene.getScene('office'),rows=[...document.querySelectorAll('.office-roster__row')];
         window.officeContinuity={game,scene,canvas:document.querySelector('.office-canvas-host canvas'),camera:scene.cameras.main,
@@ -441,6 +441,27 @@ describe("remote Office presentation", () => {
       await page.close()
     }
   }, 60_000)
+
+  test("returning to Office after leaving it shows known members in place without replaying the entrance", async () => {
+    const page = await openRemote("view=chat&presentation=office&team=two&inspectOffice=1")
+    try {
+      const placements = `window.__officeGame.scene.getScene('office').latestFrames.map(frame=>({id:frame.actor.sessionID,x:Math.floor(frame.position.x/32),y:Math.floor(frame.position.y/32),moving:frame.moving,leaving:frame.leaving})).sort((a,b)=>a.id.localeCompare(b.id))`
+      expect(await until(page, `window.__officeGame?.scene.getScene('office').latestFrames.length===3&&window.__officeGame.scene.getScene('office').latestFrames.every(frame=>!frame.moving)`, 150)).toBe(true)
+      const before = await page.evaluate<readonly { readonly id: string; readonly x: number; readonly y: number; readonly moving: boolean }[]>(placements)
+      await page.evaluate<void>(`(() => {window.__entrances=[];const tick=()=>{for(const frame of window.__officeGame?.scene.getScene('office')?.latestFrames??[]){const y=Math.floor(frame.position.y/32);if(frame.moving||y>=37)window.__entrances.push({id:frame.actor.sessionID,moving:frame.moving,y})}requestAnimationFrame(tick)};tick()})()`)
+      for (const [away, back] of [["/remote/settings", "/remote"], ["/remote/usage", "/remote"]] as const) {
+        const mounts = await page.evaluate<number>(`window.__officeMounts`)
+        await page.evaluate<void>(`document.querySelector('.remote-nav__link[href=${JSON.stringify(away)}]').click()`)
+        expect(await until(page, `document.querySelectorAll('.office-canvas-host canvas').length===0`, 100)).toBe(true)
+        await page.evaluate<void>(`document.querySelector('.remote-nav__link[href=${JSON.stringify(back)}]').click()`)
+        expect(await until(page, `window.__officeMounts===${mounts + 1}&&window.__officeGame.scene.getScene('office').latestFrames.length===3`, 150)).toBe(true)
+        await Bun.sleep(700)
+        expect(await page.evaluate<unknown>(placements)).toEqual(before)
+        expect(await page.evaluate<boolean>(`!document.querySelector('.office-notice[role=status]')`)).toBe(true)
+      }
+      expect(await page.evaluate<readonly unknown[]>(`window.__entrances`)).toEqual([])
+    } finally { await page.close() }
+  }, 90_000)
 
   test("shows the selected Session's real subagent once and announces only live verified handoffs", async () => {
     const page = await openRemote("view=chat&presentation=office")

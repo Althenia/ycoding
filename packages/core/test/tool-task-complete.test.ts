@@ -10,7 +10,7 @@ import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { Image } from "@ycoding-ai/core/image"
 import { testEffect } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
-import { executeTool, registerToolPlugin, toolDefinitions, toolIdentity } from "./lib/tool"
+import { registerToolPlugin, settleTool, toolDefinitions, toolIdentity } from "./lib/tool"
 
 const plugin = makeLocationNode({
   name: "test/task-complete-plugin",
@@ -31,13 +31,16 @@ describe("TaskCompleteTool", () => {
       const definitions = yield* toolDefinitions(registry)
       expect(definitions.map((item) => item.name)).toContain("task_complete")
       expect(definitions.find((item) => item.name === "task_complete")?.description).toContain("verified")
-      expect(
-        yield* executeTool(registry, {
-          sessionID: SessionV2.ID.make("ses_complete_test"),
-          ...toolIdentity,
-          call: { type: "tool-call", id: "call-complete", name: "task_complete", input: {} },
-        }),
-      ).toEqual({ type: "text", value: "Task completion recorded." })
+      const settlement = yield* settleTool(registry, {
+        sessionID: SessionV2.ID.make("ses_complete_test"),
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-complete", name: "task_complete", input: {} },
+      })
+      expect(settlement.output?.structured).toEqual({ recorded: true })
+      expect(settlement.result).toEqual({
+        type: "text",
+        value: "Completion declaration recorded. Final reply settlement is still pending.",
+      })
     }),
   )
 })

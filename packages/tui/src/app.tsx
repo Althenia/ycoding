@@ -90,6 +90,7 @@ import { destroyRenderer } from "./util/renderer"
 import { cliErrorMessage, errorFormat, errorMessage } from "./util/error"
 import { writeHeapSnapshot } from "node:v8"
 import { saveCustomEndpoint } from "./custom-endpoint-save"
+import { KeepAwakeProvider, type KeepAwakeStatus } from "./keep-awake"
 import { RemoteProvider, type RemoteStatus } from "./remote-connector"
 
 const themePerformance = DevTools.register({ id: "theme-performance", title: "Theme performance" })
@@ -167,6 +168,7 @@ export type TuiInput = {
   >
   log?: LogSink
   remote?: { get: () => Promise<RemoteStatus>; set: (enabled: boolean) => Promise<RemoteStatus> }
+  keepAwake?: { get: () => Promise<KeepAwakeStatus>; set: (enabled: boolean) => Promise<KeepAwakeStatus> }
 }
 
 export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
@@ -345,6 +347,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                   <ThemeProvider mode={mode}>
                                                     <LocalProvider>
                                                       <RemoteProvider server={input.remote}>
+                                                      <KeepAwakeProvider server={input.keepAwake}>
                                                       <PromptStashProvider>
                                                         <DialogProvider>
                                                           <FrecencyProvider>
@@ -370,6 +373,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                           </FrecencyProvider>
                                                         </DialogProvider>
                                                       </PromptStashProvider>
+                                                      </KeepAwakeProvider>
                                                       </RemoteProvider>
                                                     </LocalProvider>
                                                   </ThemeProvider>

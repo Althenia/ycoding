@@ -67,7 +67,7 @@ async function harness(count: number) {
     saveStatus: async (status) => { storedStatus = status },
     loadOfflineCheck: async () => undefined,
     saveOfflineCheck: async () => undefined,
-    notices: { append: () => ({ notices: [], total: 0 }), page: () => ({ notices: [], total: 0 }), remove: () => ({ ids: [], total: 0 }), clear: () => {}, unavailable: () => false, markUnavailable: () => {} },
+    notices: { append: () => ({ notices: [], total: 0 }), complete: () => ({ notices: [], total: 0 }), page: () => ({ notices: [], total: 0 }), remove: () => ({ ids: [], total: 0 }), clear: () => {}, unavailable: () => false, markUnavailable: () => {} },
     saveNoticeSubscription: () => {},
     authorizeClientCommand: async () => ({ ok: true }),
     authorizeAgentCommand: async () => ({ ok: true }),

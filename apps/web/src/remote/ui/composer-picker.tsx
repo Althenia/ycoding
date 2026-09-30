@@ -98,7 +98,7 @@ export function ComposerPicker(props: {
       <Show when={props.icon}><Icon name={props.icon!} /></Show><span>{props.options.find((option) => option.value === props.value)?.label ?? props.placeholder}</span><Icon name="chevron-down" />
     </button>
     <Show when={open() || closing()}><Portal>
-      <Show when={compact()}><div class="mini-picker__scrim" classList={{ "mini-picker__scrim--closing": closing() }} inert={closing()} aria-hidden={closing() ? "true" : undefined} onClick={() => close()} /></Show>
+      <Show when={compact()}><div class="mini-picker__scrim" data-cursor="action" classList={{ "mini-picker__scrim--closing": closing() }} inert={closing()} aria-hidden={closing() ? "true" : undefined} onClick={() => close()} /></Show>
       <div ref={surface} class={`mini-picker__surface${compact() ? " mini-picker__surface--sheet" : ""}`} classList={{ "mini-picker__surface--closing": closing() }} inert={closing()} aria-hidden={closing() ? "true" : undefined} style={compact() ? undefined : { left: `${position().left}px`, top: `${position().top}px`, width: `${position().width}px` }} onKeyDown={keys}>
         <div class="mini-picker__heading"><strong>{props.label}</strong><button type="button" aria-label={`Close ${props.label}`} onClick={() => close(true)}><Icon name="close" /></button></div>
         <Show when={props.searchable}><input ref={searchInput} class="mini-picker__search" type="search" role="combobox" aria-label={`Search ${props.label}`} aria-autocomplete="list" aria-expanded="true" aria-controls={`${id}-list`} aria-activedescendant={filtered().length ? `${id}-${active()}` : undefined} placeholder="Search models…" value={query()} onInput={(event) => { setQuery(event.currentTarget.value); setActive(0) }} /></Show>

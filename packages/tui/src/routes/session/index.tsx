@@ -81,7 +81,8 @@ import {
 } from "./subagent-footer"
 import { SubagentSiblingSwitcher } from "./subagent-sibling-switcher"
 import { SubagentEconomicsSurface } from "./subagent-economics"
-import { SubagentAnswerComposer, SubagentBlockedSurface } from "./subagent-blocked"
+import { SubagentAnswerComposer, SubagentBlockedSurface, SubagentQuestionNotice } from "./subagent-blocked"
+import { createCapturedChildHydration } from "./captured-child-hydration"
 import { BtwContext, BtwFooter } from "./btw"
 import { SubagentTodos } from "./subagent-todos"
 import { filetype } from "../../util/filetype"
@@ -223,26 +224,47 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const promptRef = usePromptRef()
   const session = createMemo(() => data.session.get(route.sessionID))
   const messages = () => data.session.message.list(route.sessionID)
-  const [capturedChildIDs, setCapturedChildIDs] = createSignal<string[]>([])
-  let capturedChangesGeneration = 0
   const dispatchedChildKey = createMemo(() => (session()?.parentID ? "" : capturedChildSessionIDs(messages()).join(",")))
+  const capturedChildren = createCapturedChildHydration({
+    sessionID: () => route.sessionID,
+    parentID: () => session()?.parentID,
+    dispatched: dispatchedChildKey,
+  })
   const capturedUnits = createMemo(() =>
     summarizeCapturedChanges(
       messages(),
-      new Map(capturedChildIDs().map((sessionID) => [sessionID, data.session.message.list(sessionID)])),
+      new Map(capturedChildren.ids().map((sessionID) => [sessionID, data.session.message.list(sessionID)])),
       (assistantMessageID, callID) => SessionOrchestrationIdentity.send(route.sessionID, assistantMessageID, callID),
     ),
   )
   const capturedAnchors = createMemo(() => {
-    const anchors = new Map<SessionRow, InlineDiffFile[]>()
-    capturedUnits().forEach((unit) => {
-      if (!data.session.message.get(route.sessionID, unit.placementMessageID)) return
+    const anchors = new Map<
+      SessionRow,
+      { files: InlineDiffFile[]; hydration: ReturnType<typeof capturedChildren.status>; children: string[] }
+    >()
+    const units = new Map(capturedUnits().map((unit) => [unit.placementMessageID, unit]))
+    const groups = messages().reduce<SessionMessageInfo[][]>((groups, message) => {
+      if (message.type === "user" || groups.length === 0) {
+        groups.push([message])
+        return groups
+      }
+      groups.at(-1)!.push(message)
+      return groups
+    }, [])
+    groups.forEach((group) => {
+      const assistants = group.filter((message) => message.type === "assistant")
+      const placement = assistants.at(-1)?.id
+      if (!placement || !data.session.message.get(route.sessionID, placement)) return
+      const children = capturedChildSessionIDs(group)
+      const hydration = capturedChildren.status(children)
+      const unit = units.get(placement)
+      if (!unit && !hydration) return
       const anchor = rows.findLast(
         (row) =>
           (row.type === "part" || row.type === "group" || row.type === "assistant-footer") &&
-          unit.assistantMessageIDs.includes(sessionRowMessageID(row) ?? ""),
+          assistants.some((assistant) => assistant.id === sessionRowMessageID(row)),
       )
-      if (anchor) anchors.set(anchor, unit.files.flatMap((file) => file.files))
+      if (anchor) anchors.set(anchor, { files: unit?.files.flatMap((file) => file.files) ?? [], hydration, children })
     })
     return anchors
   })
@@ -286,7 +308,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   })
   const forms = createMemo(() => {
     const global = data.session.form.list("global", location()) ?? []
-    if (session()?.parentID) return global
     return [route.sessionID, ...descendantSessionIDs()]
       .flatMap((sessionID) => data.session.form.list(sessionID) ?? [])
       .concat(global)
@@ -617,6 +638,15 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const blockedQuestion = createMemo(() =>
     currentTask()?.state === "waiting" ? currentTask()?.question?.text : undefined,
   )
+  const waitingChild = createMemo(() =>
+    data.session.subagent.page(route.sessionID)?.data.find((task) => task.state === "waiting" && task.question),
+  )
+  createEffect(
+    on([() => route.sessionID, () => client.connection.status()], ([sessionID, status]) => {
+      if (status !== "connected") return
+      void data.session.subagent.sync(sessionID).catch(toast.error)
+    }),
+  )
   const blockedBody = createMemo(() => {
     const message = messages().findLast((item) => item.type === "assistant")
     if (message?.type !== "assistant") return undefined
@@ -625,25 +655,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const blockedActivity = createMemo(() => currentTask()?.description)
   const editor = useEditorContext()
   const rows = createSessionRows(() => route.sessionID)
-  createEffect(
-    on(
-      [() => route.sessionID, () => session()?.parentID, () => client.connection.status(), dispatchedChildKey],
-      ([sessionID, parentID, status, dispatched]) => {
-        const generation = ++capturedChangesGeneration
-        if (parentID || status !== "connected" || dispatched === "") {
-          setCapturedChildIDs([])
-          return
-        }
-        void (async () => {
-          await data.session.subagent.sync(sessionID)
-          const family = new Set((await data.session.subagent.children(sessionID)).map((child) => child.sessionID))
-          const children = dispatched.split(",").filter((childID) => family.has(childID))
-          await Promise.all(children.map((childID) => data.session.message.sync(childID)))
-          if (generation === capturedChangesGeneration) setCapturedChildIDs(children)
-        })().catch(() => undefined)
-      },
-    ),
-  )
   const boundaries = createMemo(() => messageBoundaryIDs(rows, messages()))
   const MAX_MOUNTED_ROWS = 400
   const mountedRows = createMemo(() =>
@@ -836,6 +847,16 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   }
 
   const globalCommands = [
+    {
+      id: "session.captured-changes.retry",
+      title: "Retry captured changes",
+      group: "Session",
+      enabled: () => Boolean(capturedChildren.status(dispatchedChildKey().split(","))?.error),
+      run: () => {
+        capturedChildren.retry()
+        dialog.clear()
+      },
+    },
     {
       id: "session.page.up",
       title: "Page up",
@@ -1559,9 +1580,38 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                         subagent={(sessionID) => navigate({ type: "session", sessionID })}
                       />
                       <Show when={capturedAnchors().get(row)}>
-                        {(files) => (
+                        {(capture) => (
                           <box width="100%" marginTop={1} flexShrink={0} visible={!blockedQuestion()}>
-                            <FileChangeBlock files={files()} label="Captured changes" collapsed />
+                            <FileChangeBlock
+                              files={capture().files}
+                              label="Captured changes"
+                              collapsed
+                              incomplete={!!capture().hydration}
+                            />
+                            <Show when={capture().hydration}>
+                              {(hydration) => (
+                                <box paddingLeft={8} flexDirection="column">
+                                  <text
+                                    fg={hydration().loading ? themeV2.text.subdued : themeV2.text.feedback.warning.default}
+                                  >
+                                    {hydration().loading
+                                      ? "Child changes loading…"
+                                      : hydration().failed > 0
+                                        ? `${hydration().failed} ${hydration().failed === 1 ? "child" : "children"} unavailable`
+                                        : "Child membership unavailable"}
+                                  </text>
+                                  <Show when={hydration().error}>
+                                    <text fg={themeV2.text.subdued}>{hydration().error}</text>
+                                    <text
+                                      fg={themeV2.text.action.primary.default}
+                                      onMouseUp={() => capturedChildren.retry(capture().children)}
+                                    >
+                                      Retry child changes
+                                    </text>
+                                  </Show>
+                                </box>
+                              )}
+                            </Show>
                           </box>
                         )}
                       </Show>
@@ -1596,6 +1646,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
               }
             >
               <PluginSlot name="session.composer.top" input={{ sessionID: route.sessionID }} />
+              <Show when={waitingChild()}>{(task) => <SubagentQuestionNotice task={task()} />}</Show>
               <Show when={blockedReason()}>
                 {(reason) => (
                   <box paddingLeft={1} flexShrink={0}>
@@ -1618,9 +1669,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                 prompt={composer.open && !disabled() ? sessionPrompt() : undefined}
               /></Show>
               <Switch>
-                <Match when={blockedQuestion()}>
-                  <SubagentAnswerComposer sessionID={route.sessionID} branch={branch()} />
-                </Match>
                 <Match when={activeGuardrailRequest()}>{(request) => <GuardrailPrompt request={request()} />}</Match>
                 <Match when={permissions().length > 0}>
                   <Show when={permissions()[0]?.id} keyed>
@@ -1638,6 +1686,11 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                       const form = forms()[0]
                       return form ? <FormPrompt form={form} /> : null
                     }}
+                  </Show>
+                </Match>
+                <Match when={blockedQuestion()}>
+                  <Show when={currentTask()?.question?.id} keyed>
+                    {(_) => <SubagentAnswerComposer task={currentTask()!} />}
                   </Show>
                 </Match>
                 <Match when={session()?.parentID && !btw()}>{null}</Match>
@@ -1674,7 +1727,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         <Match when={btw() && parentID()}>
           {(id) => <BtwFooter sessionID={route.sessionID} parentID={id()} />}
         </Match>
-        <Match when={subagent()}><SubagentFooter /></Match>
+        <Match when={subagent()}><SubagentFooter reviewing={disabled()} /></Match>
         <Match when={true}><Footer branch={branch()} sessionID={route.sessionID} autonomy={autonomy()} /></Match>
       </Switch>
       </context.Provider>
@@ -3226,7 +3279,7 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean }
  * reader can scan — one header plus one row per file — and only opens into the full diff on the
  * transcript's usual expand interaction.
  */
-function FileChangeBlock(props: { files: InlineDiffFile[]; label?: string; collapsed?: boolean }) {
+function FileChangeBlock(props: { files: InlineDiffFile[]; label?: string; collapsed?: boolean; incomplete?: boolean }) {
   const { themeV2 } = useTheme()
   const renderer = useRenderer()
   const files = createMemo(() => groupCapturedPatches(props.files.flatMap((file) => {
@@ -3234,7 +3287,8 @@ function FileChangeBlock(props: { files: InlineDiffFile[]; label?: string; colla
     return parsed ? [parsed] : []
   })))
   const summary = createMemo(
-    () => `${props.label ?? "Edited"} ${files().length} ${files().length === 1 ? "file" : "files"}`,
+    () =>
+      `${props.label ?? "Edited"} ${files().length}${props.incomplete ? " known" : ""} ${files().length === 1 ? "file" : "files"}${props.incomplete ? " · incomplete" : ""}`,
   )
   const [expanded, setExpanded] = createSignal(!props.collapsed)
   const counts = createMemo(() => {

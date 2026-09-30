@@ -324,7 +324,7 @@ export function SubagentFooterContent(props: {
   )
 }
 
-export function SubagentFooter() {
+export function SubagentFooter(props: { reviewing?: boolean }) {
   const route = useRouteData("session")
   const navigation = useRoute()
   const data = useData()
@@ -420,7 +420,9 @@ export function SubagentFooter() {
           </box>
           <text fg={themeV2.text.feedback.warning.default} wrapMode="none">awaiting input</text>
           <box flexGrow={1} />
-          <text fg={themeV2.text.action.primary.default} wrapMode="none">Enter answer</text>
+          <text fg={themeV2.text.action.primary.default} wrapMode="none">
+            {props.reviewing ? "Review pending" : "Enter answer"}
+          </text>
         </>
       </Show>
     </box>

@@ -11,40 +11,66 @@ export function safeHref(href: string): string | undefined {
 }
 
 function Inline(props: { readonly tokens: readonly Token[] }): JSX.Element {
-  return <For each={props.tokens}>{(token) => {
-    if (token.type === "text" || token.type === "escape") return <>{token.text}</>
-    if (token.type === "codespan") return <code>{token.text}</code>
-    if (token.type === "strong") return <strong><Inline tokens={token.tokens ?? []} /></strong>
-    if (token.type === "em") return <em><Inline tokens={token.tokens ?? []} /></em>
-    if (token.type === "del") return <del><Inline tokens={token.tokens ?? []} /></del>
+  return <For each={props.tokens.map(tokenKey)}>{(key) => {
+    const current = () => props.tokens[Number(key.slice(0, key.indexOf(":")))]!
+    const token = current()
+    const text = () => { const value = current(); return "text" in value && typeof value.text === "string" ? value.text : value.raw }
+    const tokens = () => { const value = current(); return "tokens" in value ? value.tokens ?? [] : [] }
+    if (token.type === "text" || token.type === "escape") return <>{text()}</>
+    if (token.type === "codespan") return <code>{text()}</code>
+    if (token.type === "strong") return <strong><Inline tokens={tokens()} /></strong>
+    if (token.type === "em") return <em><Inline tokens={tokens()} /></em>
+    if (token.type === "del") return <del><Inline tokens={tokens()} /></del>
     if (token.type === "br") return <br />
     if (token.type === "link" || token.type === "image") {
-      const href = safeHref(token.href)
-      const label = token.type === "image" ? token.text || token.href : <Inline tokens={token.tokens ?? []} />
-      return href ? <a href={href} target="_blank" rel="noopener noreferrer">{label}</a> : <span>{token.type === "image" ? token.text : token.raw}</span>
+      const href = () => { const value = current(); return (value.type === "link" || value.type === "image") ? safeHref(value.href) : undefined }
+      return <Show when={href()} fallback={<span>{token.type === "image" ? text() : current().raw}</span>}>
+        <a href={href()} target="_blank" rel="noopener noreferrer">{token.type === "image" ? text() : <Inline tokens={tokens()} />}</a>
+      </Show>
     }
-    if (token.type === "html") return <>{token.raw}</>
-    return <>{"text" in token && typeof token.text === "string" ? token.text : token.raw}</>
+    if (token.type === "html") return <>{current().raw}</>
+    return <>{text()}</>
   }}</For>
 }
 
 function Blocks(props: { readonly tokens: readonly Token[] }): JSX.Element {
-  return <For each={props.tokens}>{(token) => {
+  return <For each={props.tokens.map(tokenKey)}>{(key) => {
+    const current = () => props.tokens[Number(key.slice(0, key.indexOf(":")))]!
+    const token = current()
+    const tokens = () => { const value = current(); return "tokens" in value ? value.tokens ?? [] : [] }
+    const text = () => { const value = current(); return "text" in value && typeof value.text === "string" ? value.text : value.raw }
     if (token.type === "space") return null
-    if (token.type === "heading") return <div class={`transcript-md__heading transcript-md__heading--${token.depth}`} role="heading" aria-level={token.depth}><Inline tokens={token.tokens ?? []} /></div>
-    if (token.type === "paragraph") return <p><Inline tokens={token.tokens ?? []} /></p>
-    if (token.type === "text") return <p><Inline tokens={token.tokens ?? marked.Lexer.lexInline(token.text)} /></p>
-    if (token.type === "hr") return <hr />
-    if (token.type === "html") return <p>{token.raw}</p>
-    if (token.type === "blockquote") return <blockquote><Blocks tokens={token.tokens ?? []} /></blockquote>
-    if (token.type === "list") {
-      const items = <For each={token.items}>{(item) => <li><Show when={item.task}><input type="checkbox" disabled checked={item.checked} aria-label={item.checked ? "Completed task" : "Incomplete task"} /></Show><Blocks tokens={item.tokens.filter((entry: Token) => entry.type !== "checkbox")} /></li>}</For>
-      return token.ordered ? <ol start={token.start || 1}>{items}</ol> : <ul>{items}</ul>
+    if (token.type === "heading") {
+      const depth = () => { const value = current(); return value.type === "heading" ? value.depth : 1 }
+      return <div class={`transcript-md__heading transcript-md__heading--${depth()}`} role="heading" aria-level={depth()}><Inline tokens={tokens()} /></div>
     }
-    if (token.type === "table") return <div class="transcript-md__table" tabindex="0"><table><thead><tr><For each={token.header}>{(cell) => <th><Inline tokens={cell.tokens} /></th>}</For></tr></thead><tbody><For each={token.rows}>{(row) => <tr><For each={row}>{(cell) => <td><Inline tokens={cell.tokens} /></td>}</For></tr>}</For></tbody></table></div>
-    if (token.type === "code") return <FencedCode text={token.text} language={token.lang} />
-    return <p>{token.raw}</p>
+    if (token.type === "paragraph") return <p><Inline tokens={tokens()} /></p>
+    if (token.type === "text") return <p><Inline tokens={tokens().length ? tokens() : marked.Lexer.lexInline(text())} /></p>
+    if (token.type === "hr") return <hr />
+    if (token.type === "html") return <p>{current().raw}</p>
+    if (token.type === "blockquote") return <blockquote><Blocks tokens={tokens()} /></blockquote>
+    if (token.type === "list") {
+      const list = () => { const value = current(); return value.type === "list" ? value : undefined }
+      const items = <For each={list()?.items.map((_: unknown, index: number) => index)}>{(index) => {
+        const item = () => list()!.items[index]!
+        return <li><Show when={item().task}><input type="checkbox" disabled checked={item().checked} aria-label={item().checked ? "Completed task" : "Incomplete task"} /></Show><Blocks tokens={item().tokens.filter((entry: Token) => entry.type !== "checkbox")} /></li>
+      }}</For>
+      return token.ordered ? <ol start={list()?.start || 1}>{items}</ol> : <ul>{items}</ul>
+    }
+    if (token.type === "table") {
+      const table = () => { const value = current(); return value.type === "table" ? value : undefined }
+      return <div class="transcript-md__table" tabindex="0"><table><thead><tr><For each={table()?.header.map((_: unknown, index: number) => index)}>{(index) => <th><Inline tokens={table()!.header[index]!.tokens} /></th>}</For></tr></thead><tbody><For each={table()?.rows.map((_: unknown, index: number) => index)}>{(row) => <tr><For each={table()!.rows[row]!.map((_: unknown, index: number) => index)}>{(cell) => <td><Inline tokens={table()!.rows[row]![cell]!.tokens} /></td>}</For></tr>}</For></tbody></table></div>
+    }
+    if (token.type === "code") {
+      const language = () => { const value = current(); return value.type === "code" ? value.lang : undefined }
+      return <FencedCode text={text()} language={language()} />
+    }
+    return <p>{current().raw}</p>
   }}</For>
+}
+
+function tokenKey(token: Token, index: number): string {
+  return `${index}:${token.type}${token.type === "list" && token.ordered ? ":ordered" : ""}`
 }
 
 function FencedCode(props: { readonly text: string; readonly language?: string }) {

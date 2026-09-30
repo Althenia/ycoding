@@ -42,6 +42,7 @@ export const remoteOperations = [
   "session.messages",
   "session.capturedChanges.list",
   "session.compaction.list",
+  "session.compact",
   "session.snapshot",
   "session.pending.list",
   "session.attachment.read",
@@ -88,6 +89,8 @@ export const remoteOperations = [
   "usage.providers",
   "usage.summary",
   "usage.report",
+  "machine.keepAwake.get",
+  "machine.keepAwake.set",
 ] as const
 
 /** Operations that address one session and therefore require `sessionID`. */
@@ -96,6 +99,7 @@ export const remoteSessionOperations = [
   "session.messages",
   "session.capturedChanges.list",
   "session.compaction.list",
+  "session.compact",
   "session.snapshot",
   "session.pending.list",
   "session.attachment.read",
@@ -187,6 +191,7 @@ export type RemoteWorkspaceInfo = {
 /** Shared bounds. Both sides enforce the same numbers so neither can drift. */
 export const RemoteLimits = {
   goalSetTimeoutMs: 5 * 60_000,
+  compactionTimeoutMs: 5 * 60_000,
   maxClientMessageChars: 32_768,
   maxAttachmentChunkChars: 28_000,
   maxAttachmentChunks: 1_024,
@@ -197,6 +202,7 @@ export const RemoteLimits = {
   maxAgentMessageChars: 262_144,
   maxPendingRequestsPerClient: 32,
   maxSessionListPage: 200,
+  maxCompletionBatch: 200,
   maxStatusSessions: 500,
   maxFamilyMembers: 16,
   maxCompactionHistory: 100,
@@ -306,6 +312,8 @@ export type RemoteEvent = { readonly type: "event"; readonly sessionID: string; 
 /** Bounded invalidation: clients page the authoritative backend list after receipt. */
 export type RemoteSessions = { readonly type: "sessions" }
 export type RemoteStatus = { readonly type: "status"; readonly running: readonly string[]; readonly attention: readonly string[]; readonly outstanding?: readonly string[]; readonly failed?: readonly string[] }
+export type RemoteWorkCompletion = { readonly id: string; readonly seq: number; readonly created: number; readonly sessionID: string }
+export type RemoteCompletions = { readonly type: "completions"; readonly data: readonly RemoteWorkCompletion[]; readonly more: boolean }
 export type RemoteSubscriptions = {
   readonly type: "subscriptions"
   readonly clientID: string
@@ -341,11 +349,14 @@ export type RemoteNoticeFrame =
   | { readonly type: "notice.cleared" }
   | { readonly type: "notice.unavailable" }
   | { readonly type: "notice.offline"; readonly at: number }
+  | { readonly type: "notice.present"; readonly items: readonly RemoteNoticePresentation[] }
+
+export type RemoteNoticePresentation = { readonly kind: "notice"; readonly notice: RemoteNotice } | { readonly kind: "offline"; readonly at: number }
 
 /** Frames accepted from a browser connection. */
 export type RemoteClientMessage = RemoteRequest | RemoteNoticeRequest | RemoteHeartbeat
 /** Frames accepted from a local agent connection. */
-export type RemoteAgentMessage = RemoteResponse | RemoteEvent | RemoteSessions | RemoteStatus | RemoteHeartbeat
+export type RemoteAgentMessage = RemoteResponse | RemoteEvent | RemoteSessions | RemoteStatus | RemoteCompletions | RemoteHeartbeat
 /** Frames the relay sends to a browser connection. */
 export type RemoteRelayToClient = RemoteResponse | RemoteEvent | RemoteSessions | RemoteStatus | RemoteHeartbeat | RemoteNoticeFrame
 /** Frames the relay sends to a local agent connection. */
@@ -392,6 +403,14 @@ export function serializeStatus(status: RemoteStatus): string {
   return JSON.stringify(status)
 }
 
+export function serializeCompletions(frame: RemoteCompletions): string {
+  return JSON.stringify({
+    type: frame.type,
+    data: frame.data.map((item) => ({ id: item.id, seq: item.seq, created: item.created, sessionID: item.sessionID })),
+    more: frame.more,
+  })
+}
+
 export function serializeSubscriptions(subscriptions: RemoteSubscriptions): string {
   return JSON.stringify({ ...subscriptions, sessionIDs: [...subscriptions.sessionIDs] })
 }
@@ -400,6 +419,8 @@ export function serializeNoticeFrame(frame: RemoteNoticeFrame): string {
   if (frame.type === "notice.removed") return JSON.stringify({ type: frame.type, ids: [...frame.ids], total: frame.total })
   if (frame.type === "notice.added") return JSON.stringify({ type: frame.type, notices: frame.notices.map(noticeWire), total: frame.total })
   if (frame.type === "notice.offline") return JSON.stringify({ type: frame.type, at: frame.at })
+  if (frame.type === "notice.present")
+    return JSON.stringify({ type: frame.type, items: frame.items.map((item) => item.kind === "notice" ? { kind: item.kind, notice: noticeWire(item.notice) } : { kind: item.kind, at: item.at }) })
   return JSON.stringify({ type: frame.type })
 }
 
@@ -446,7 +467,10 @@ export function parseRelayToClientMessage(raw: string): ParseResult<RemoteRelayT
   const frame = decodeJson(raw)
   if (!frame.ok) return frame
   if (isRecord(frame.value) && typeof frame.value.type === "string" && frame.value.type.startsWith("notice.")) return parseNoticeFrame(frame.value)
-  return parseAgentFrame(frame.value)
+  const parsed = parseAgentFrame(frame.value)
+  if (!parsed.ok) return parsed
+  if (parsed.value.type === "completions") return invalid()
+  return { ok: true, value: parsed.value }
 }
 
 export function isNoticeRequest(message: RemoteClientMessage): message is RemoteNoticeRequest {
@@ -488,7 +512,25 @@ function parseAgentFrame(frame: unknown): ParseResult<RemoteAgentMessage> {
   if (frame.type === "event") return parseEvent(frame)
   if (frame.type === "sessions") return parseSessions(frame)
   if (frame.type === "status") return parseStatus(frame)
+  if (frame.type === "completions") return parseCompletions(frame)
   return invalid()
+}
+
+function parseCompletions(frame: Record<string, unknown>): ParseResult<RemoteCompletions> {
+  const keys = withOnlyKeys(frame, ["type", "data", "more"], frame.type)
+  if (!keys.ok) return keys
+  if (!Array.isArray(frame.data) || frame.data.length > RemoteLimits.maxCompletionBatch || typeof frame.more !== "boolean") return invalid()
+  const data: RemoteWorkCompletion[] = []
+  for (const item of frame.data) {
+    if (!isRecord(item) || Object.keys(item).some((key) => !["id", "seq", "created", "sessionID"].includes(key)) ||
+      typeof item.id !== "string" || !/^evt_[A-Za-z0-9_-]+$/.test(item.id) || item.id.length > 128 ||
+      typeof item.seq !== "number" || !Number.isSafeInteger(item.seq) || item.seq < 1 ||
+      typeof item.created !== "number" || !Number.isSafeInteger(item.created) || item.created < 0 ||
+      !isSessionID(item.sessionID) || item.sessionID.length > RemoteLimits.maxSessionIDChars) return invalid()
+    data.push({ id: item.id, seq: item.seq, created: item.created, sessionID: item.sessionID })
+  }
+  if (new Set(data.map((item) => item.sessionID)).size !== data.length) return invalid()
+  return { ok: true, value: { type: "completions", data, more: frame.more } }
 }
 
 function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest> {
@@ -505,7 +547,8 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
   if (requireSession(operation) && frame.sessionID === undefined)
     return failRequest("session_required", "Operation requires a session")
   if ((operation === "session.status" || operation === "workspace.catalog" || operation === "workspace.file.find" ||
-    operation === "usage.providers" || operation === "usage.summary" || operation === "usage.report") && frame.sessionID !== undefined)
+    operation === "usage.providers" || operation === "usage.summary" || operation === "usage.report" ||
+    operation === "machine.keepAwake.get" || operation === "machine.keepAwake.set") && frame.sessionID !== undefined)
     return failRequest("invalid_message", "Global operation does not accept a session")
   if (frame.input !== undefined && !isRecord(frame.input)) return invalid()
   if (!validOperationInput(operation, frame.input)) return failRequest("invalid_message", "Input does not match the remote operation")
@@ -527,8 +570,12 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
 }
 
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
+  if (operation === "machine.keepAwake.get") return input === undefined
+  if (operation === "machine.keepAwake.set") return isRecord(input) && typeof input.enabled === "boolean" && Object.keys(input).length === 1
   if (operation === "session.capturedChanges.list") return input === undefined || isRecord(input) && typeof input.cursor === "string" && input.cursor.length > 0 && input.cursor.length <= 256 && Object.keys(input).length === 1
   if (operation === "session.compaction.list") return input === undefined
+  if (operation === "session.compact") return isRecord(input) && typeof input.id === "string" &&
+    /^cmp_[A-Za-z0-9_-]+$/.test(input.id) && input.id.length <= 128 && Object.keys(input).length === 1
   if (operation === "session.snapshot") return input === undefined || (isRecord(input) &&
     typeof input.limit === "number" && Number.isSafeInteger(input.limit) && input.limit >= 1 && input.limit <= 200 &&
     (input.before === undefined || (typeof input.before === "string" && input.before.length > 0 && input.before.length <= 256)) &&
@@ -728,6 +775,11 @@ function parseNoticeFrame(frame: Record<string, unknown>): ParseResult<RemoteNot
     const keys = withOnlyKeys(frame, ["type", "at"], frame.type)
     return keys.ok && isCount(frame.at) && frame.at > 0 ? { ok: true, value: { type: "notice.offline", at: frame.at } } : invalid()
   }
+  if (frame.type === "notice.present") {
+    const keys = withOnlyKeys(frame, ["type", "items"], frame.type)
+    if (!keys.ok) return keys
+    return parsePresentations(frame.items)
+  }
   if (frame.type === "notice.removed") {
     const keys = withOnlyKeys(frame, ["type", "ids", "total"], frame.type)
     if (!keys.ok) return keys
@@ -740,6 +792,25 @@ function parseNoticeFrame(frame: Record<string, unknown>): ParseResult<RemoteNot
   if (!Array.isArray(frame.notices) || frame.notices.length === 0 || frame.notices.length > RemoteLimits.maxNoticeBatch || !isCount(frame.total)) return invalid()
   const notices = parseNotices(frame.notices)
   return notices.ok ? { ok: true, value: { type: "notice.added", notices: notices.value, total: frame.total } } : notices
+}
+
+function parsePresentations(values: unknown): ParseResult<RemoteNoticeFrame> {
+  if (!Array.isArray(values) || values.length === 0 || values.length > RemoteLimits.maxNoticeBatch) return invalid()
+  const items: RemoteNoticePresentation[] = []
+  for (const value of values) {
+    if (!isRecord(value)) return invalid()
+    if (value.kind === "offline") {
+      const at = value.at
+      if (!withOnlyKeys(value, ["kind", "at"], value).ok || !isCount(at) || at <= 0 || items.some((item) => item.kind === "offline" && item.at === at)) return invalid()
+      items.push({ kind: "offline", at })
+      continue
+    }
+    if (value.kind !== "notice" || !withOnlyKeys(value, ["kind", "notice"], value).ok) return invalid()
+    const notice = parseNotice(value.notice)
+    if (!notice.ok || items.some((item) => item.kind === "notice" && item.notice.id === notice.value.id)) return invalid()
+    items.push({ kind: "notice", notice: notice.value })
+  }
+  return { ok: true, value: { type: "notice.present", items } }
 }
 
 function parseNotices(values: readonly unknown[]): ParseResult<readonly RemoteNotice[]> {

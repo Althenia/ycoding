@@ -2,6 +2,16 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-09-30: Add Server-Owned Keep Awake
+
+- Add `KeepAwake.Status` with `state` (`off`, `on`, `unsupported`, or `error`) and an optional message of at most 200 characters.
+- Add authenticated `GET /api/keep-awake` and `PUT /api/keep-awake` with payload `{ enabled: boolean }`, both returning `{ data: KeepAwake.Status }`.
+- Keep the choice in the server process, initially off, without persistence or automatic re-enabling. macOS prevents idle system sleep while enabled; other platforms return `unsupported`. Manual sleep and lid closure remain effective.
+
+Compatibility:
+
+- The shapes and operations are additive, require no stored-data migration, and use the regenerated Promise and Effect clients.
+
 ## 2026-09-28: Add Session Generation Speed
 
 - Add `Session.GenerationSpeed` (`model`, positive `tokens`, positive `durationNs`, positive finite `tokensPerSecond`) and `Session.GenerationSpeedHistory` (optional `latest`, `recent` with at most eight samples).

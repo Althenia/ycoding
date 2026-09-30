@@ -18,6 +18,14 @@ export function navigationTargets(scrollTop: number, following: boolean) {
   return { top: scrollTop > 8, bottom: !following }
 }
 
+export function jumpBehavior(): ScrollBehavior {
+  return matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth"
+}
+
+export function JumpControls(props: { readonly onTop?: () => void; readonly onBottom?: () => void; readonly hidden?: boolean; readonly clearance?: number }): JSX.Element {
+  return <div class="transcript-navigation__controls" style={{ "margin-block-end": `${props.clearance ?? 0}px` }} classList={{ "transcript-navigation__controls--visible": props.hidden !== true && (props.onTop !== undefined || props.onBottom !== undefined) }}><Show when={props.onTop}>{(jump) => <button type="button" aria-label="Jump to top" onClick={jump()}><Icon name="arrow-up" size={18} /></button>}</Show><Show when={props.onBottom}>{(jump) => <button type="button" aria-label="Jump to latest" onClick={jump()}><Icon name="arrow-down" size={18} /></button>}</Show></div>
+}
+
 export function promptPreview(text: string): string {
   const normalized = text.replace(/\s+/g, " ").trim()
   return normalized.length > 90 ? `${normalized.slice(0, 89)}…` : normalized
@@ -31,6 +39,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
   const [hovered, setHovered] = createSignal<string>()
   const [tooltipTop, setTooltipTop] = createSignal(0)
   const [jumpSlot, setJumpSlot] = createSignal<HTMLElement>()
+  const [clearance, setClearance] = createSignal(0)
   const targets = () => navigationTargets(scrollTop(), !away())
   const rows = createMemo(() => visibleTranscriptMessages(props.messages()))
   const checkpoint = createMemo(() => hasCompactionCheckpoint(props.messages()))
@@ -62,6 +71,16 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
       return bounds.top < viewport.bottom && bounds.bottom > viewport.top
     }).map((row) => row.dataset.promptId!))
     setVisible((previous) => previous.size === next.size && [...next].every((id) => previous.has(id)) ? previous : next)
+    const slot = jumpSlot()
+    const controls = slot?.querySelector<HTMLElement>(".transcript-navigation__controls")
+    if (!slot || !controls) return
+    const bounds = slot.getBoundingClientRect()
+    const bottom = bounds.top + controls.offsetTop + controls.offsetHeight + clearance()
+    const left = bounds.left + controls.offsetLeft
+    const gap = Number.parseFloat(getComputedStyle(controls).bottom)
+    setClearance([...scrollRoot.querySelectorAll<HTMLElement>(".request__actions")].map((row) => row.getBoundingClientRect()).sort((a, b) => b.top - a.top).reduce((offset, row) =>
+      row.left < left + controls.offsetWidth && row.right > left && row.top < bottom - offset && row.bottom > bottom - offset - controls.offsetHeight
+        ? bottom - row.top + gap : offset, 0))
   }
   const pin = () => {
     if (!active() || !scrollRoot || !following) return
@@ -116,7 +135,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     jumping = true
     jumpingTop = false
     setAway(false)
-    scrollRoot.scrollTo({ top: scrollRoot.scrollHeight, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" })
+    scrollRoot.scrollTo({ top: scrollRoot.scrollHeight, behavior: jumpBehavior() })
   }
   const jumpToTop = () => {
     if (!scrollRoot) return
@@ -124,7 +143,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     jumping = false
     jumpingTop = true
     setAway(true)
-    scrollRoot.scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" })
+    scrollRoot.scrollTo({ top: 0, behavior: jumpBehavior() })
     void loadOlder(false)
   }
   const selectPrompt = (id: string) => {
@@ -136,7 +155,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     following = false
     setAway(true)
     row.focus({ preventScroll: true })
-    scrollRoot.scrollTo({ top: scrollRoot.scrollTop + row.getBoundingClientRect().top - scrollRoot.getBoundingClientRect().top - 12, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" })
+    scrollRoot.scrollTo({ top: scrollRoot.scrollTop + row.getBoundingClientRect().top - scrollRoot.getBoundingClientRect().top - 12, behavior: jumpBehavior() })
   }
   const revealPrompt = (id: string, button: HTMLButtonElement) => {
     setHovered(id)
@@ -156,9 +175,11 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
       showPromptsInView()
     })
     let observing = false
+    let resumed = false
     const stop = () => {
       if (!observing) return
       observing = false
+      resumed = true
       observer.disconnect()
       root.removeEventListener("scroll", onScroll)
       root.removeEventListener("wheel", onUserScroll)
@@ -176,7 +197,9 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
       root.addEventListener("wheel", onUserScroll, { passive: true })
       root.addEventListener("touchstart", onUserScroll, { passive: true })
       root.addEventListener("pointerdown", onUserScroll, { passive: true })
-      following = followState(following, { kind: "scroll", distance: distance() })
+      following = resumed ? followState(following, { kind: "session", distance: distance() }) : followState(following, { kind: "scroll", distance: distance() })
+      if (resumed) { jumping = false; jumpingTop = false }
+      resumed = false
       setAway(!following)
       setScrollTop(root.scrollTop)
       schedule()
@@ -214,6 +237,6 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     <Show when={!checkpoint() && remote.state().history?.status === "idle" && !remote.state().history?.before}><p class="transcript-navigation__beginning">Beginning of conversation</p></Show>
     <Show when={!checkpoint() && remote.state().history?.status === "error"}><p class="transcript-navigation__history-error" role="alert">{remote.state().history?.error} <button type="button" onClick={() => void loadOlder(true)}>Retry older history</button></p></Show>
     <ol class="transcript"><For each={ids()}>{(id) => <li class="transcript-navigation__item" data-message-id={id} data-prompt-id={message(id).kind === "user" ? id : undefined} tabindex={message(id).kind === "user" ? -1 : undefined}><MessageRow message={() => message(id)} /></li>}</For></ol>
-    <Show when={jumpSlot()}>{(slot) => <Portal mount={slot()}><div class="transcript-navigation__controls" classList={{ "transcript-navigation__controls--visible": targets().top || targets().bottom }}><Show when={targets().top}><button type="button" aria-label="Jump to top" onClick={jumpToTop}><Icon name="arrow-up" size={18} /></button></Show><Show when={targets().bottom}><button type="button" aria-label="Jump to latest" onClick={jumpToBottom}><Icon name="arrow-down" size={18} /></button></Show></div></Portal>}</Show>
+    <Show when={jumpSlot()}>{(slot) => <Portal mount={slot()}><JumpControls hidden={!active()} clearance={clearance()} onTop={targets().top ? jumpToTop : undefined} onBottom={targets().bottom ? jumpToBottom : undefined} /></Portal>}</Show>
   </div>
 }

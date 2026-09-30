@@ -362,6 +362,12 @@ body:has(.app) {
   padding: var(--yc-space-4);
 }
 
+.new-session__trigger {
+  inline-size: var(--yc-control-h-dense);
+  min-inline-size: var(--yc-control-h-dense);
+  padding-inline: 0;
+}
+
 .new-session__support,
 .new-session__empty {
   color: var(--yc-text-muted);
@@ -514,7 +520,6 @@ body:has(.app) {
   font: inherit;
   font-size: var(--yc-size-sm);
   text-align: start;
-  cursor: pointer;
   transition:
     background-color var(--yc-dur-quick) var(--yc-ease-standard),
     color var(--yc-dur-quick) var(--yc-ease-standard),
@@ -615,7 +620,7 @@ body:has(.app) {
 
 .workspace__rail .pane__head--sessions .pane__title { grid-area: title; }
 .workspace__rail .pane__head--sessions .new-session__trigger { grid-area: new; justify-self: start; }
-.session-panel__collapse { grid-area: collapse; display: grid; place-items: center; inline-size: var(--yc-hit-min); block-size: var(--yc-hit-min); border: var(--yc-border-width) solid var(--yc-border); border-radius: var(--yc-radius-md); background: var(--yc-surface-raised); color: var(--yc-text-muted); cursor: pointer; }
+.session-panel__collapse { grid-area: collapse; display: grid; place-items: center; inline-size: var(--yc-hit-min); block-size: var(--yc-hit-min); border: var(--yc-border-width) solid var(--yc-border); border-radius: var(--yc-radius-md); background: var(--yc-surface-raised); color: var(--yc-text-muted); }
 .session-panel__collapse:hover { color: var(--yc-text); background: var(--yc-surface-sunken); }
 .session-panel__collapse:focus-visible { outline: 2px solid var(--yc-focus); outline-offset: 2px; }
 .workspace__rail-expand { margin: var(--yc-space-4) auto 0; }
@@ -679,16 +684,10 @@ body:has(.app) {
   color: inherit;
   font: inherit;
   text-align: start;
-  cursor: pointer;
 }
 
 .session-row:hover:not(:disabled) {
   background: var(--yc-surface-sunken);
-}
-
-.session-row:disabled,
-.sessions-table__select:disabled {
-  cursor: default;
 }
 
 .session-row--active {
@@ -804,7 +803,6 @@ body:has(.app) {
   color: var(--yc-text-muted);
   font-family: var(--yc-font-mono);
   font-size: var(--yc-size-xs);
-  cursor: pointer;
 }
 
 .session-filters__option--active {
@@ -1045,7 +1043,6 @@ body:has(.app) {
   background: var(--yc-surface-sunken);
   font-size: var(--yc-size-sm);
   line-height: var(--yc-leading-sm);
-  cursor: pointer;
 }
 
 .question__option + .question__option {
@@ -1218,6 +1215,18 @@ body:has(.app) {
 
 .conversation-jump-slot { display: none; }
 
+.app--sessions .conversation-jump-slot {
+  position: relative;
+  display: block;
+  block-size: 0;
+  inline-size: calc(100% - 2 * var(--yc-gutter));
+  margin-inline: auto;
+}
+
+.app--sessions .workspace__scroll {
+  padding-block-end: var(--yc-space-20);
+}
+
 .app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading) .conversation-jump-slot {
   position: relative;
   display: block;
@@ -1333,7 +1342,6 @@ body:has(.app) {
   font: inherit;
   font-weight: inherit;
   text-align: start;
-  cursor: pointer;
 }
 
 .sessions-table__name {
@@ -2074,7 +2082,7 @@ body:has(.app) {
 }
 
 .app-header__team { gap: var(--yc-space-1); min-inline-size: var(--yc-control-h); padding-inline: var(--yc-space-2); border-radius: var(--yc-radius-pill); font-family: var(--yc-font-mono); transition: background-color var(--yc-dur-base) var(--yc-ease-standard), border-color var(--yc-dur-base) var(--yc-ease-standard), color var(--yc-dur-base) var(--yc-ease-standard); }
-.app-header__team[aria-expanded="true"] { border-color: var(--yc-green-strong); background: var(--yc-green-soft); color: var(--yc-green-strong); }
+.app-header__team[aria-expanded="true"] { border-color: transparent; background: var(--yc-green-soft); color: var(--yc-green-strong); }
 .app-header__team[inert] { clip-path: inset(100%); }
 .app-header__team svg { flex: none; }
 .app-header__team-count { font-variant-numeric: tabular-nums; }
@@ -2170,6 +2178,8 @@ body:has(.app) {
   align-items: center;
   gap: var(--yc-space-2);
 }
+
+.presentation-switch .filters__option svg { display: block; flex: none; }
 
 .team-control__panel {
   position: fixed;

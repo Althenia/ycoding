@@ -31,6 +31,7 @@ function remoteState(patch: Partial<RemoteStoreState> = {}): RemoteStoreState {
     drafts: {},
     catalogs: {},
     usage: { providers: { status: "idle" }, summary: { status: "idle" }, reports: {} },
+    keepAwake: { read: "idle" },
     workspaces: [],
     workspaceStatus: "idle",
     transport: { kind: "open" },
@@ -149,6 +150,16 @@ describe("office adapter", () => {
     expect(input.sessions.map((item) => [item.id, item.parentID])).toEqual([["ses_a", undefined], ["ses_c", "ses_a"]])
     expect(projectOffice(input, defaultOfficePreferences).actors.map((actor) => actor.sessionID))
       .toEqual(["ses_a"])
+  })
+
+  test("a selected Session whose team has not been read yet is loading, never an empty team", () => {
+    const root = officeInputFromRemote(remoteState({ activeSessionID: "ses_a", selectedSessionInfo: session("ses_a") }))
+    expect(root.team).toEqual({ rootID: "ses_a", status: "loading", members: [], more: false, cues: [] })
+    expect(projectOffice(root, defaultOfficePreferences).team.status).toBe("loading")
+    const child = officeInputFromRemote(remoteState({ activeSessionID: "ses_c", selectedSessionInfo: session("ses_c", { parentID: "ses_a" }) }))
+    expect(child.team?.rootID).toBe("ses_a")
+    expect(child.team?.status).toBe("loading")
+    expect(officeInputFromRemote(remoteState()).team).toBeUndefined()
   })
 
   test("maps connection state without claiming readiness it does not have", () => {

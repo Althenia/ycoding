@@ -20,7 +20,7 @@ export function officeInputFromRemote(state: RemoteStoreState): OfficeInput {
     connection: officeConnection(state),
     activeSessionID: state.activeSessionID,
     sessions: officeSessions(state),
-    team: state.team && {
+    team: state.team ? {
       rootID: state.team.rootID,
       status: state.team.status,
       members: state.team.tasks.map((task) => ({
@@ -33,6 +33,12 @@ export function officeInputFromRemote(state: RemoteStoreState): OfficeInput {
       total: state.team.total,
       more: state.team.next !== undefined,
       cues: state.teamCues,
+    } : state.activeSessionID === undefined ? undefined : {
+      rootID: state.selectedSessionInfo?.parentID ?? state.activeSessionID,
+      status: "loading",
+      members: [],
+      more: false,
+      cues: [],
     },
     familyActivity: state.familyActivity ?? { status: "loading", members: [] },
     selected: view && {

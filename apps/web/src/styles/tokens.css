@@ -17,6 +17,38 @@
  * The steps are: 360, 480, 640, 768, 1024, 1280, 1600.
  */
 
+@font-face {
+  font-family: "Geist";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../../../../assets/brand/fonts/Geist.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Geist";
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../../../../assets/brand/fonts/Geist-Italic.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../../../../assets/brand/fonts/GeistMono.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../../../../assets/brand/fonts/GeistMono-Italic.woff2") format("woff2");
+}
+
 :root {
   color-scheme: light;
 
@@ -56,8 +88,19 @@
   --yc-terminal-accent: #5fe3a1;
 
   /* type scale — fixed sizes, fixed line heights */
-  --yc-font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
-  --yc-font-mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", "Geist Mono", Menlo, monospace;
+  --yc-font-sans: "Geist", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --yc-font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, monospace;
+
+  --yc-cursor-surface: default;
+  --yc-cursor-action: pointer;
+  --yc-cursor-text: text;
+  --yc-cursor-disabled: not-allowed;
+  --yc-cursor-busy: progress;
+  --yc-cursor-pan: grab;
+  --yc-cursor-panning: grabbing;
+  --yc-cursor-zoom-in: zoom-in;
+  --yc-cursor-adjust-x: ew-resize;
+  --yc-cursor-resize-y: ns-resize;
 
   --yc-size-2xs: 12px;
   --yc-leading-2xs: 16px;

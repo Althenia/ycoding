@@ -116,7 +116,7 @@ export type OfficeSnapshot = {
 
 export type Point = { readonly x: number; readonly y: number }
 
-export type OfficeSpot = { readonly cell: Point; readonly facing: Direction; readonly pose: "sit" | "stand" }
+export type OfficeSpot = { readonly cell: Point; readonly facing: Direction; readonly pose: "sit" | "stand" | "play" }
 
 export type OfficeLayout = {
   readonly columns: number
@@ -129,7 +129,7 @@ export type OfficeLayout = {
   readonly roomAt: (cell: Point) => OfficeRoomID | undefined
 }
 
-export type ActorPose = "stand" | "walk" | "sit" | "type" | "talk" | "wave"
+export type ActorPose = "stand" | "walk" | "sit" | "type" | "talk" | "wave" | "play"
 export type ActorSpeech = "chat" | "delegate" | "report"
 
 export type ActorFrame = {

@@ -7,7 +7,38 @@ export function createFakePage() {
   const moves = []
   const scrolls = []
   const animations = []
-  const state = { visibility: "visible", reducedMotion: false, headless: false, frameRequests: 0, suppressFrames: false }
+  const state = {
+    visibility: "visible",
+    reducedMotion: false,
+    headless: false,
+    frameRequests: 0,
+    suppressFrames: false,
+    fontLoadFails: false,
+    fontFaceMissing: false,
+    fontLoadDeferred: false,
+  }
+  const faces = new Set()
+  const fontLoads = []
+  const pendingLoads = []
+
+  class FontFace {
+    constructor(family, source, descriptors) {
+      this.family = family
+      this.source = source
+      this.descriptors = descriptors
+      this.status = "unloaded"
+    }
+    async load() {
+      if (state.fontLoadFails) throw new Error("font decode failed")
+      if (state.fontLoadDeferred) {
+        this.status = "loading"
+        return new Promise((resolve, reject) => pendingLoads.push({ face: this, resolve, reject }))
+      }
+      this.status = "loaded"
+      fontLoads.push(this)
+      return this
+    }
+  }
 
   class Style {
     cssText = ""
@@ -107,6 +138,11 @@ export function createFakePage() {
       element.textContent = String(value)
       changed()
     },
+    fonts: {
+      add: (face) => faces.add(face),
+      delete: (face) => faces.delete(face),
+      [Symbol.iterator]: () => faces[Symbol.iterator](),
+    },
     createElement: (tag) => new Node(tag),
     createElementNS: (namespace, tag) => new Node(tag, namespace),
     querySelector: (selector) => documentElement.querySelector(selector),
@@ -133,6 +169,10 @@ export function createFakePage() {
 
   const globals = {
     document,
+    atob,
+    get FontFace() {
+      return state.fontFaceMissing ? undefined : FontFace
+    },
     MutationObserver,
     Date: { now: () => clock.now },
     setTimeout: clock.setTimeout,
@@ -162,6 +202,27 @@ export function createFakePage() {
     set headless(value) {
       state.headless = value
     },
+    set fontLoadFails(value) {
+      state.fontLoadFails = value
+    },
+    set fontLoadDeferred(value) {
+      state.fontLoadDeferred = value
+    },
+    settleFonts(outcome) {
+      for (const load of pendingLoads.splice(0)) {
+        if (outcome === "reject") load.reject(new Error("font decode failed"))
+        else {
+          load.face.status = "loaded"
+          fontLoads.push(load.face)
+          load.resolve(load.face)
+        }
+      }
+    },
+    set fontFaceMissing(value) {
+      state.fontFaceMissing = value
+    },
+    fontFaces: () => Array.from(faces),
+    fontLoads,
     setVisibility: (value) => (state.visibility = value),
     setPageTitle(value) {
       document.title = value
@@ -191,6 +252,7 @@ export function createFakePage() {
       for (const child of head.children.slice()) child.remove()
       for (const observer of Array.from(observers)) observer.disconnect()
       listeners.clear()
+      faces.clear()
       clock.reset()
     },
     async evaluate(expression) {
@@ -214,6 +276,12 @@ export function createFakePage() {
       state.headless = false
       state.frameRequests = 0
       state.suppressFrames = false
+      state.fontLoadFails = false
+      state.fontFaceMissing = false
+      state.fontLoadDeferred = false
+      faces.clear()
+      fontLoads.length = 0
+      pendingLoads.length = 0
     },
   }
 }

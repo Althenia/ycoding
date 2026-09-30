@@ -7,6 +7,7 @@ import { Global } from "@ycoding-ai/core/global"
 import { createEventStream, createFetch, type FetchHandler } from "../fixture/tui-client"
 import type { TuiPluginStatus } from "../../src/plugin/host-api"
 import type { ClipboardService } from "../../src/context/clipboard"
+import type { KeepAwakeStatus } from "../../src/keep-awake"
 import type { RemoteStatus } from "../../src/remote-connector"
 
 /**
@@ -32,6 +33,7 @@ export async function renderScreen(input: {
   settle: string
   config?: Record<string, unknown>
   remote?: { get: () => Promise<RemoteStatus>; set: (enabled: boolean) => Promise<RemoteStatus> }
+  keepAwake?: { get: () => Promise<KeepAwakeStatus>; set: (enabled: boolean) => Promise<KeepAwakeStatus> }
   state?: string
 }) {
   const setup = await createTestRenderer({
@@ -69,6 +71,7 @@ export async function renderScreen(input: {
       args: input.args ?? {},
       log: () => {},
       remote: input.remote,
+      keepAwake: input.keepAwake,
     }).pipe(Effect.provide(input.state ? Global.layerWith({ state: input.state }) : AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
   )
 
@@ -104,6 +107,7 @@ export async function renderScreen(input: {
       throw new Error("the app never attached a stable live-event subscription")
     },
     frame: () => setup.captureCharFrame(),
+    renderOnce: setup.renderOnce,
     lines: () => setup.captureCharFrame().split("\n"),
     spans: () => setup.captureSpans(),
     scrollbox: () => findScrollBox(setup.renderer.root),

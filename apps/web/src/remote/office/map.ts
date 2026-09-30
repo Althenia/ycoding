@@ -222,13 +222,14 @@ export function wallFrameAt(x: number, y: number): number {
   return y === rows - 1 && (x === outerDoor.x || x === outerDoor.x + 1) ? 3 : wallAt(x, y) ? 0 : 2
 }
 
-const rest = (x: number, y: number, facing: OfficeSpot["facing"] = "up"): OfficeSpot => spot(x, y, facing, "stand")
+const rest = (x: number, y: number, facing: OfficeSpot["facing"] = "up", pose: OfficeSpot["pose"] = "stand"): OfficeSpot => spot(x, y, facing, pose)
 
 export const officeLayout: OfficeLayout = {
   columns, rows, tileSize, walkable, roomAt, door: outerDoor, pods,
   lounge: [
+    rest(14, 26, "right", "play"), rest(19, 26, "left", "play"), rest(16, 28, "up", "play"), rest(17, 28, "up", "play"),
     rest(14, 21), rest(15, 21), rest(16, 21), rest(17, 21), rest(19, 21), rest(20, 21), rest(21, 21), rest(22, 21),
-    rest(10, 25), rest(11, 25), rest(20, 25), rest(21, 25), rest(14, 26, "right"), rest(19, 26, "left"), rest(16, 28), rest(17, 28), rest(11, 30), rest(12, 30),
+    rest(10, 25), rest(11, 25), rest(20, 25), rest(21, 25), rest(11, 30), rest(12, 30),
     rest(27, 22, "right"), rest(27, 23, "right"), rest(36, 22, "left"), rest(36, 23, "left"),
     rest(29, 31), rest(31, 31), rest(34, 31), rest(36, 31),
   ],

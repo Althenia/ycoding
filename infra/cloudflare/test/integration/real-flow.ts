@@ -32,7 +32,7 @@ import { crc32 } from "node:zlib"
 import { createSession, password, startServer } from "../../../../packages/cli/test/remote-harness"
 import { createLocalServer } from "../../../../packages/cli/src/remote-local"
 import { RemoteAgent } from "../../../../packages/cli/src/remote-bridge"
-import { RemoteLimits, RemoteWebSocketPath } from "../../../../packages/remote/src/index"
+import { RemoteLimits, RemoteWebSocketPath, parsePushTestResponse } from "../../../../packages/remote/src/index"
 import {
   enroll,
   generateDeviceKey,
@@ -45,6 +45,7 @@ import { generateVapidKeys } from "../../script/vapid-keys"
 import { deriveWebPushKeys } from "../../src/push/crypto"
 import { createRemoteStore } from "../../../../apps/web/src/remote/store"
 import { openChromePush } from "./chrome-push"
+import { parsePushDiagnostic, type PushDiagnostic } from "./push-diagnostic"
 import { createRemoteTransport, type RemoteTransportStatus } from "../../../../apps/web/src/remote/transport"
 import { base64UrlEncode } from "../../src/auth/crypto"
 import { deltaChunk, finishChunk, toolCallChunk } from "../../../../packages/ai/test/lib/openai-chunks"
@@ -271,8 +272,20 @@ try {
   })
   const googleOrigin = `http://127.0.0.1:${google.port}`
   const vapid = await generateVapidKeys()
+  const adminKey = "A".repeat(48)
+  const servedPublicKeyHash = await sha256Hex(vapid.VAPID_PUBLIC_KEY)
+  let chromeEndpointHash: string | undefined
+  const pushDiagnostics: PushDiagnostic[] = []
   const pushRequests: { method: string; ttl: string | null; body: Uint8Array }[] = []
   const pushStub = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async (request) => {
+    if (new URL(request.url).pathname === "/push-diagnostic") {
+      const evidence = parsePushDiagnostic(await request.json().catch(() => undefined))
+      if (evidence === undefined) return new Response("Invalid push diagnostic", { status: 400 })
+      pushDiagnostics.push(evidence)
+      console.log(JSON.stringify({ component: "push-diagnostic", ...evidence,
+        endpointMatchesChrome: chromeEndpointHash === undefined ? "unreported" : evidence.endpointHash === chromeEndpointHash }))
+      return new Response(null, { status: 201 })
+    }
     pushRequests.push({ method: request.method, ttl: request.headers.get("ttl"), body: new Uint8Array(await request.arrayBuffer()) })
     return new Response(null, { status: 201 })
   } })
@@ -294,6 +307,7 @@ try {
       "--config",
       configPath,
       "--define", `PUSH_STUB_PORT:${pushStub.port}`,
+      "--define", `PUSH_SERVED_PUBLIC_KEY_HASH:${JSON.stringify(servedPublicKeyHash)}`,
       "--persist-to",
       persist,
       "--port",
@@ -317,6 +331,7 @@ try {
       "--var", `VAPID_PUBLIC_KEY:${vapid.VAPID_PUBLIC_KEY}`,
       "--var", `VAPID_PRIVATE_KEY:${vapid.VAPID_PRIVATE_KEY}`,
       "--var", "VAPID_SUBJECT:mailto:push@example.invalid",
+      "--var", `ADMIN_API_KEY:${adminKey}`,
     ],
     { cwd: repositoryRoot, stdout: "inherit", stderr: "inherit" },
   )
@@ -333,32 +348,10 @@ try {
     return fetch(input, { ...init, headers })
   }
 
-  const started = await fetch(`${workerOrigin}/api/auth/google/start?redirect_after=/remote/`, { redirect: "manual" })
-  const oauthCookie = setCookiePair(started, "yc_oauth")
-  const state = new URL(started.headers.get("location") ?? "").searchParams.get("state") ?? ""
-  const nonce = await readNonce(await sha256Hex(cookieValue(oauthCookie)), persist)
-  expect(nonce.length > 0, "OAuth transaction was not found in the isolated local D1 state")
-  const issuedAt = Math.floor(Date.now() / 1000)
-  idTokenHolder.value = await signedIdToken(identityKey.pair, {
-    iss: googleOrigin,
-    aud: "flow-client",
-    sub: `flow-subject-${crypto.randomUUID()}`,
-    iat: issuedAt,
-    exp: issuedAt + 3600,
-    nonce,
-    email: allowedEmail,
-    email_verified: true,
-  })
-  const callback = await fetch(`${workerOrigin}/api/auth/google/callback?code=flow-code&state=${state}`, {
-    headers: { cookie: oauthCookie },
-    redirect: "manual",
-  })
-  expect(
-    callback.headers.get("location") === "/remote/",
-    "Google callback refused sign-in",
-  )
-  cookie = cookiePair(callback, "yc_session")
-  expect(cookie.includes("yc_session="), "Google sign-in did not issue a browser session")
+  const signInInput = { pair: identityKey.pair, token: idTokenHolder, issuer: googleOrigin,
+    subject: `flow-subject-${crypto.randomUUID()}`, persist }
+  const receiverIdentity = await signInBrowser(signInInput)
+  cookie = receiverIdentity.cookie
   checks.push("browser signed in through the real relay with a Google stand-in")
 
   const pushHttp = createPushHttp({ baseURL: workerOrigin, fetch: browserFetch })
@@ -1178,19 +1171,28 @@ try {
   )
   await waitFor(guardSessionIdle, 30_000, "the guard session stayed active after the rejected hard review")
   expect(!existsSync(join(workspace, "hard-denied.txt")), "the rejected hard command ran")
+  expect((await Promise.all(pushRequests.map(decryptPush))).every((payload) => payload.category !== "agent-completed"),
+    "an ordinary reply without an explicit completion declaration produced a finished-work push")
   checks.push("hard review once ran the command and reject prohibited it")
 
   /* --------------------------------------- interrupt through the real service */
 
-  const chrome = process.argv.includes("--push-chrome")
-    ? await openChromePush({ home, origin: workerOrigin, cookie })
-    : undefined
+  const chromeIdentity = process.argv.includes("--push-chrome") ? await signInBrowser(signInInput) : undefined
+  if (chromeIdentity) {
+    expect(chromeIdentity.userID === receiverIdentity.userID, "Chrome and synthetic receiver signed into different accounts")
+    expect(await sha256Hex(cookieValue(chromeIdentity.cookie)) !== await sha256Hex(cookieValue(receiverIdentity.cookie)),
+      "Chrome and synthetic receiver did not receive independent verified browser sessions")
+  }
+  const chrome = chromeIdentity ? await openChromePush({ home, origin: workerOrigin, cookie: chromeIdentity.cookie }) : undefined
   if (chrome) {
+    chromeEndpointHash = chrome.endpointHash
     disposals.push(() => chrome.close())
+    expect(chrome.servedPublicKeyHash === servedPublicKeyHash, "Chrome read a different test VAPID public key")
     if (!process.argv.includes("--page-alert")) await chrome.leavePage()
   }
   providerMode = "hold"
-  providerTurn = { text: providerText, prompt: "finish after the review" }
+  releaseStream = undefined
+  providerTurn = { tool: { id: "call_real_flow_complete", name: "task_complete", input: {} }, text: "", prompt: "finish after the review" }
   const finishing = await probeRequest("session.prompt", {
     sessionID: guardSessionID,
     input: { id: "msg_real_flow_finish", text: "finish after the review" },
@@ -1198,20 +1200,27 @@ try {
   expect(finishing.status === "ok", `completion prompt failed: ${JSON.stringify(finishing)}`)
   await waitFor(() => store.state().sessionStatus?.running.has(guardSessionID) ? true : undefined, 30_000,
     "the finishing Session did not publish its running status")
+  const finishStream = await waitFor(() => releaseStream, 30_000, "the declared completion did not reach its final response")
   const pushesBeforeFinish = pushRequests.length
-  releaseStream?.()
-  await waitFor(() => pushRequests.length > pushesBeforeFinish &&
+  const diagnosticsBeforeFinish = pushDiagnostics.length
+  finishStream()
+  await waitFor(() =>
     store.state().sessionStatus?.running.has(guardSessionID) === false &&
     store.state().sessionStatus?.outstanding.has(guardSessionID) === false ? true : undefined, 30_000,
-  "the completed Session did not publish its finished status and push")
-  const pushPayloads = await Promise.all(pushRequests.slice(pushesBeforeFinish).map(async (request) =>
-    ({ method: request.method, ttl: request.ttl, payload: await decryptPush(request) })))
-  const finishedPush = pushPayloads.find((item) => item.method === "POST" && item.ttl === "600" &&
-    item.payload.category === "agent-completed" && item.payload.sessionID === guardSessionID &&
-    item.payload.deviceID === enrolled.deviceID && typeof item.payload.noticeID === "string")
-  expect(finishedPush !== undefined, "the hibernatable Durable Object did not complete the finished Session's encrypted push POST with its notice id")
+  "the completed Session did not publish its finished status")
+  const finishedPush = await waitFor(async () => {
+    const payloads = await Promise.all(pushRequests.slice(pushesBeforeFinish).map(async (request) =>
+      ({ method: request.method, ttl: request.ttl, payload: await decryptPush(request) })))
+    return payloads.find((item) => item.method === "POST" && item.ttl === "600" &&
+      item.payload.category === "agent-completed" && item.payload.sessionID === guardSessionID &&
+      item.payload.deviceID === enrolled.deviceID && typeof item.payload.noticeID === "string")
+  }, 30_000, "the hibernatable Durable Object did not complete the declared Session's encrypted push POST with its notice id")
   const finishedTag = `ycoding-${enrolled.deviceID}-${String(finishedPush?.payload.noticeID)}`
   if (chrome) {
+    const evidence = await waitFor(() => pushDiagnostics.slice(diagnosticsBeforeFinish).find((item) => item.endpointHash === chrome.endpointHash), 30_000,
+      "the Chrome push sending boundary did not report sanitized diagnostic evidence")
+    expect(evidence.publicKeyMatchesServed && evidence.jwtVerified && evidence.audienceMatches,
+      "the Chrome push VAPID key, signature, or audience did not match the served test key and endpoint")
     if (process.argv.includes("--page-alert")) {
       await waitFor(async () => {
         const tags = await chrome.pageAlerts()
@@ -1222,12 +1231,12 @@ try {
       const notifications = await waitFor(async () => {
         const shown = await chrome.notifications()
         return Array.isArray(shown) && shown.some((item) => isRecord(item) && item.title === "YCoding — work finished" && item.tag === finishedTag) ? shown : undefined
-      }, 90_000, "headed Chrome did not show a decrypted Web Push notification from FCM")
+      }, 90_000, () => `headed Chrome did not show a decrypted Web Push notification from FCM (${JSON.stringify(evidence)})`)
       expect(notifications.length > 0, "headed Chrome received no notification")
       checks.push("headed Chrome received the FCM push through the built service worker and showed the finished-work notification")
     }
   }
-  checks.push("finished status reached the hibernatable Durable Object and completed a push POST to the local endpoint stub")
+  checks.push("ordinary replies produced no completion push; explicit completion and final settlement produced an encrypted push with its stored notice id")
   providerMode = "hold"
   providerTurn = { text: providerText, prompt: "hold the stream open" }
   const executing = await probeRequest("session.prompt", {
@@ -1439,14 +1448,18 @@ try {
   const offlineOnly = { "agent-completed": false, "approval-requested": false, "machine-offline": true }
   expect((await pushHttp.subscribe({ endpoint, keys: pushKeys, categories: offlineOnly })).ok, "the push subscription could not store this device's System choices")
   const pushesBeforeTest = pushRequests.length
-  const tested = await pushHttp.test(endpoint)
-  expect(tested.ok && tested.value.outcome === "accepted" && tested.value.status === 201, `the test alert was not accepted: ${JSON.stringify(tested)}`)
+  const testPush = () => fetch(`${workerOrigin}/api/admin/push/test`, { method: "POST", signal: AbortSignal.timeout(10_000),
+    headers: { authorization: `Bearer ${adminKey}`, "content-type": "application/json" },
+    body: JSON.stringify({ accountID: receiverIdentity.userID, endpoint }) })
+  const testedResponse = await testPush()
+  const tested = parsePushTestResponse(await testedResponse.json())
+  expect(testedResponse.ok && tested.ok && tested.value.outcome === "accepted" && tested.value.status === 201, "the admin test alert was not accepted")
   const testRequests = pushRequests.slice(pushesBeforeTest)
   expect(testRequests.length === 1 && JSON.stringify(await decryptPush(testRequests[0] as { body: Uint8Array })) === JSON.stringify({ category: "test" }),
     "the test alert did not reach exactly the registered subscription with a test payload")
-  const limitedTest = await pushHttp.test(endpoint)
-  expect(!limitedTest.ok && limitedTest.status === 429, `a second test alert inside the window was not refused: ${JSON.stringify(limitedTest)}`)
-  checks.push("a same-origin test alert reached only this device's stored subscription through the real Worker and reported push-service acceptance")
+  const limitedTest = await testPush()
+  expect(!limitedTest.ok && limitedTest.status === 429, "a second admin test alert inside the window was not refused")
+  checks.push("an admin-authenticated test alert reached only the registered receiver through the real Worker and reported push-service acceptance")
 
   const offlinePushes = async (from: number) => (await Promise.all(pushRequests.slice(from).map(decryptPush)))
     .filter((payload) => payload.category === "machine-offline")
@@ -1528,6 +1541,27 @@ async function pendingIDs(server: { request: (path: string, init?: RequestInit) 
 async function sha256Hex(value: string) {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)))
   return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("")
+}
+
+async function signInBrowser(input: { readonly pair: CryptoKeyPair; readonly token: { value: string }; readonly issuer: string; readonly subject: string; readonly persist: string }) {
+  const started = await fetch(`${workerOrigin}/api/auth/google/start?redirect_after=/remote/`, { redirect: "manual" })
+  const oauthCookie = setCookiePair(started, "yc_oauth")
+  const state = new URL(started.headers.get("location") ?? "").searchParams.get("state") ?? ""
+  const nonce = await readNonce(await sha256Hex(cookieValue(oauthCookie)), input.persist)
+  expect(nonce.length > 0, "OAuth transaction was not found in the isolated local D1 state")
+  const issuedAt = Math.floor(Date.now() / 1000)
+  input.token.value = await signedIdToken(input.pair, { iss: input.issuer, aud: "flow-client", sub: input.subject,
+    iat: issuedAt, exp: issuedAt + 3600, nonce, email: allowedEmail, email_verified: true })
+  const callback = await fetch(`${workerOrigin}/api/auth/google/callback?code=flow-code&state=${state}`, {
+    headers: { cookie: oauthCookie }, redirect: "manual",
+  })
+  expect(callback.headers.get("location") === "/remote/", "Google callback refused sign-in")
+  const cookie = cookiePair(callback, "yc_session")
+  const response = await fetch(`${workerOrigin}/api/me`, { headers: { cookie } })
+  const account: unknown = await response.json()
+  if (response.status !== 200 || !isRecord(account) || !isRecord(account.user) || typeof account.user.id !== "string")
+    throw new Error("Google sign-in could not read its verified account")
+  return { cookie, userID: account.user.id }
 }
 
 async function run(command: string, args: string[]): Promise<string> {

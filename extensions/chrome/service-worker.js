@@ -8,6 +8,7 @@ import {
   safePage,
   tabID,
 } from "./protocol.js"
+import { geistSans } from "./fonts.js"
 import { LABELS, TITLE_PREFIX, markerScript, timing, tokens } from "./indicator.js"
 
 const PROTOCOL_VERSION = "1.3"
@@ -162,7 +163,7 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
   tab.revision = 0
   tab.refs.clear()
   tab.url = params.frame.url
-  tab.world = undefined
+  forgetDocument(tab)
   if (tab.marked) void mark(tab)
   tabInfo(tab).then(
     (info) => {
@@ -884,6 +885,11 @@ async function scroll(tab, deltaY, markDispatched) {
   return "trusted"
 }
 
+function forgetDocument(tab) {
+  tab.world = undefined
+  tab.fontInstalled = false
+}
+
 function isolatedWorld(tab) {
   tab.world ??= createWorld(tab).catch((error) => {
     tab.world = undefined
@@ -992,12 +998,17 @@ async function mark(tab, cursor) {
   const controlled = () => tab.controlEpoch === epoch && tab.attached && tabs.get(tab.id) === tab
   const ok = await serialize(tab, async () => {
     if (!controlled()) return false
+    const documentGeneration = tab.documentGeneration
+    const font = cursor && !tab.fontInstalled ? geistSans : undefined
     const applied = await bounded(
-      pageEvaluate(tab, markerScript("mark", cursor), { awaitPromise: true }),
+      pageEvaluate(tab, markerScript("mark", cursor, font), { awaitPromise: true }),
       timing.mark,
       "Control marker timed out",
     ).then(
-      ({ result }) => result?.value?.ok === true,
+      ({ result }) => {
+        if (cursor && result?.value?.font === true && tab.documentGeneration === documentGeneration) tab.fontInstalled = true
+        return result?.value?.ok === true
+      },
       () => false,
     )
     return applied && controlled()
@@ -1017,7 +1028,7 @@ async function clearMarker(tab) {
     timing.clear,
     "Control marker cleanup timed out",
   ).catch(() => {})
-  tab.world = undefined
+  forgetDocument(tab)
 }
 
 async function ensureControlled(tab) {

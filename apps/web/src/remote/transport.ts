@@ -55,6 +55,9 @@ export type RemoteTransportOptions = {
   readonly resetDelayMs?: number
   readonly maxDelayMs?: number
   readonly pingIntervalMs?: number
+  readonly pongTimeoutMs?: number
+  readonly document?: Pick<Document, "hidden" | "addEventListener" | "removeEventListener">
+  readonly window?: Pick<Window, "addEventListener" | "removeEventListener">
   readonly requestTimeoutMs?: number
   readonly maxInFlight?: number
   readonly random?: () => number
@@ -77,6 +80,9 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
   const resetDelayMs = options.resetDelayMs ?? 500
   const maxDelayMs = options.maxDelayMs ?? 15_000
   const pingIntervalMs = options.pingIntervalMs ?? 30_000
+  const pongTimeoutMs = options.pongTimeoutMs ?? 10_000
+  const visibility = options.document ?? (typeof document === "undefined" ? undefined : document)
+  const network = options.window ?? (typeof window === "undefined" ? undefined : window)
   const requestTimeoutMs = options.requestTimeoutMs ?? defaultTimeoutMs
   const maxInFlight = options.maxInFlight ?? defaultMaxInFlight
 
@@ -87,6 +93,10 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
   let connectedOnce = false
   let cancelFlush: (() => void) | undefined
   let timer: (() => void) | undefined
+  let probing = false
+  let probeID = 0
+  let listening = false
+  let removeSocketListeners: (() => void) | undefined
   let cancelOutbound: (() => void) | undefined
   const outbound: { readonly frame: unknown; readonly onSend?: () => void }[] = []
   const sentAt: number[] = []
@@ -116,6 +126,60 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
   const releaseTimer = () => {
     timer?.()
     timer = undefined
+    probing = false
+    probeID += 1
+  }
+
+  const stopListening = () => {
+    visibility?.removeEventListener("visibilitychange", resume)
+    network?.removeEventListener("online", resume)
+    listening = false
+  }
+
+  const resume = () => {
+    if (closedByUs) return
+    if (visibility?.hidden) { releaseTimer(); return }
+    if (socket?.readyState === 1) probeSocket(socket)
+    if (socket === undefined && current.kind === "reconnecting") connect()
+  }
+
+  const resetLiveness = (owner: WebSocket) => {
+    releaseTimer()
+    if (visibility?.hidden) return
+    timer = schedule(() => {
+      if (socket === owner && !closedByUs && !visibility?.hidden) probeSocket(owner)
+    }, pingIntervalMs)
+  }
+
+  const probeSocket = (owner: WebSocket) => {
+    if (probing || socket !== owner || closedByUs || visibility?.hidden) return
+    releaseTimer()
+    probing = true
+    const id = probeID
+    send({ type: "ping" }, () => {
+      if (socket !== owner || id !== probeID || !probing || visibility?.hidden) return
+      timer = schedule(() => {
+        if (socket !== owner || id !== probeID || !probing || visibility?.hidden) return
+        endSocket(owner, 4000, "Relay heartbeat timed out")
+        owner.close(4000, "Relay heartbeat timed out")
+      }, pongTimeoutMs)
+    })
+  }
+
+  const endSocket = (owner: WebSocket, code: number, reason: string) => {
+    if (socket !== owner) return
+    releaseTimer()
+    removeSocketListeners?.()
+    removeSocketListeners = undefined
+    socket = undefined
+    settlePending({
+      status: "unknown",
+      error: { code: "outcome_unknown", message: "The relay connection closed before this request settled" },
+    })
+    const retryable = !closedByUs && code !== RemoteCloseCode.unauthorized && code !== RemoteCloseCode.forbidden
+    if (!retryable) stopListening()
+    publish({ kind: "closed", code, reason: closeReason(code, reason), retryable })
+    if (retryable) scheduleReconnect()
   }
 
   const scheduleReconnect = () => {
@@ -131,6 +195,11 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
   const connect = () => {
     if (socket !== undefined && socket.readyState <= 1) return
     closedByUs = false
+    if (!listening) {
+      visibility?.addEventListener("visibilitychange", resume)
+      network?.addEventListener("online", resume)
+      listening = true
+    }
     cancelFlush?.()
     cancelFlush = undefined
     publish({ kind: "connecting", attempt })
@@ -143,42 +212,38 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
       return
     }
     socket = next
-    next.addEventListener("open", () => {
+    const opened = () => {
+      if (socket !== next || closedByUs) return
       const reconnected = connectedOnce
       connectedOnce = true
       attempt = 0
       sentAt.length = 0
       publish({ kind: "open" })
       if (reconnected) handlers.onReconnect?.()
-      timer = schedule(() => send({ type: "ping" }), pingIntervalMs)
-    })
-    next.addEventListener("message", (message) => {
-      releaseTimer()
+      resetLiveness(next)
+    }
+    const received = (message: MessageEvent) => {
+      if (socket !== next || closedByUs) return
+      resetLiveness(next)
       handleFrame(typeof message.data === "string" ? message.data : "")
-      timer = schedule(() => send({ type: "ping" }), pingIntervalMs)
-    })
-    next.addEventListener("error", () => {
+    }
+    const errored = () => {
+      if (socket !== next || closedByUs) return
       const reason =
         next.readyState === next.CLOSED ? "The relay connection closed unexpectedly" : "The relay connection failed"
       publish({ kind: "closed", code: 0, reason, retryable: true })
-    })
-    next.addEventListener("close", (event) => {
-      releaseTimer()
-      socket = undefined
-      // A dropped connection leaves in-flight mutations without a settlement.
-      settlePending({
-        status: "unknown",
-        error: { code: "outcome_unknown", message: "The relay connection closed before this request settled" },
-      })
-      if (closedByUs) {
-        publish({ kind: "closed", code: event.code, reason: event.reason, retryable: false })
-        return
-      }
-      const retryable = event.code !== RemoteCloseCode.unauthorized && event.code !== RemoteCloseCode.forbidden
-      const reason = closeReason(event.code, event.reason)
-      publish({ kind: "closed", code: event.code, reason, retryable })
-      if (retryable) scheduleReconnect()
-    })
+    }
+    const closed = (event: CloseEvent) => endSocket(next, event.code, event.reason)
+    next.addEventListener("open", opened)
+    next.addEventListener("message", received)
+    next.addEventListener("error", errored)
+    next.addEventListener("close", closed)
+    removeSocketListeners = () => {
+      next.removeEventListener("open", opened)
+      next.removeEventListener("message", received)
+      next.removeEventListener("error", errored)
+      next.removeEventListener("close", closed)
+    }
   }
 
   const flushOutbound = () => {
@@ -227,7 +292,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
       handlers.onEvent?.(frame.sessionID, frame.event)
       return
     }
-    if (frame.type === "notice.added" || frame.type === "notice.removed" || frame.type === "notice.cleared" || frame.type === "notice.unavailable" || frame.type === "notice.offline") {
+    if (frame.type === "notice.added" || frame.type === "notice.removed" || frame.type === "notice.cleared" || frame.type === "notice.unavailable" || frame.type === "notice.offline" || frame.type === "notice.present") {
       handlers.onNotices?.(frame)
       return
     }
@@ -325,6 +390,9 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
       cancelFlush?.()
       cancelFlush = undefined
       releaseTimer()
+      stopListening()
+      removeSocketListeners?.()
+      removeSocketListeners = undefined
       const active = socket
       socket = undefined
       active?.close(code, reason)

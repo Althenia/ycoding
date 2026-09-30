@@ -23,7 +23,7 @@ import type {
   RemoteTransportHandlers,
   RemoteTransportStatus,
 } from "../src/remote/transport"
-import { RemoteLimits, noticePageValue, noticeSequence, type RemoteDeviceInfo, type RemoteNotice, type RemoteNoticeOperation, type RemoteOperation } from "@ycoding-ai/remote"
+import { RemoteLimits, noticePageValue, noticeSequence, type RemoteCapturedChangesPage, type RemoteDeviceInfo, type RemoteNotice, type RemoteNoticeOperation, type RemoteOperation } from "@ycoding-ai/remote"
 import { remoteScenario } from "./remote-scenarios"
 import "../src/styles/tokens.css"
 import "../src/styles/base.css"
@@ -64,12 +64,15 @@ const connectionMode = remoteScenarioData?.connection ?? accountParams.get("conn
 const formMode = accountParams.get("form") ?? "question"
 /** Delays native Form settlement so the browser can observe disabled duplicate controls. */
 const formDelayMs = Number(accountParams.get("formDelay") ?? 0)
+const pushDelivered = accountParams.get("push") === "delivered"
 /** `?formOutcome=unknown` leaves the native Form mutation unresolved without replay. */
 const formOutcome = accountParams.get("formOutcome")
 const promptOutcome = accountParams.get("promptOutcome")
 const goalGate = accountParams.get("goalGate") === "1"
 let releaseGoal: ((result: "ok" | "failed" | "unknown") => void) | undefined
 ;(window as typeof window & { remoteReleaseGoal?: (result: "ok" | "failed" | "unknown") => void }).remoteReleaseGoal = (result) => releaseGoal?.(result)
+const heldPrompts: ((result: "ok" | "failed" | "unknown") => void)[] = []
+;(window as typeof window & { remoteReleasePrompt?: (result?: "ok" | "failed" | "unknown") => void }).remoteReleasePrompt = (result = "ok") => heldPrompts.shift()?.(result)
 const deviceMode = accountParams.get("devices")
 const emptyBackend = remoteScenarioData?.emptyBackend ?? accountParams.get("sessions") === "empty"
 const fixtureTheme = accountParams.get("theme") ?? remoteScenarioData?.theme
@@ -340,7 +343,17 @@ const defaultMessages = [
     time: { created: ago(2), completed: ago(2) },
   },
 ]
-const messages = remoteScenarioData?.messages ?? defaultMessages
+const transcriptProbe = accountParams.get("transcriptProbe") === "1"
+const responseProbe = accountParams.get("responseProbe") === "1"
+let probeText = "## Stable heading\n\nParagraph before streaming.\n\n```ts\nconst pending = 1"
+let messages: readonly unknown[] = transcriptProbe ? [...Array.from({ length: 12 }, (_, index) => [
+    { id: `probe_prompt_${index}`, type: "user", text: `Investigate part ${index}`, time: { created: index * 2 + 1, consumed: index * 2 + 2 } },
+    { id: `probe_reply_${index}`, type: "assistant", agent: "god", model, content: [{ type: "text", text: `## Part ${index}\n\n${"Verified content remains in place. ".repeat(8)}` }], time: { created: index * 2 + 2, completed: index * 2 + 3 } },
+  ]).flat(),
+    { id: "probe_tool_only", type: "assistant", agent: "god", model, content: [{ type: "tool", id: "call_heading", name: "read", state: { status: "completed", content: [] } }], time: { created: 25, completed: 26 } },
+    { id: "probe_thought_only", type: "assistant", agent: "god", model, content: [{ type: "reasoning", text: "A private planning note" }], time: { created: 27, completed: 28 } },
+    { id: "probe_mixed_reply", type: "assistant", agent: "god", model, content: [{ type: "reasoning", text: "Planning" }, { type: "text", text: "A real assistant reply" }], time: { created: 29, completed: 30 } },
+  ] : responseProbe ? [] : remoteScenarioData?.messages ?? defaultMessages
 
 const permission = { id: "per_fixture", sessionID, action: "shell", resources: ["bun test *"], metadata: {} }
 const guardrail = {
@@ -420,9 +433,10 @@ const catalog = {
     { id: "compaction", name: "compaction", mode: "primary", hidden: true },
   ],
   models: [
-    { providerID: "anthropic", providerName: "Anthropic", id: "claude-opus-5-5", name: "Claude Opus 5.5", variants: ["high", "max"], defaultVariant: "high" },
-    { providerID: "openai", providerName: "OpenAI", id: "gpt-6-sol", name: "GPT-6 Sol", variants: ["low", "medium", "high", "xhigh"], defaultVariant: "medium" },
-    { providerID: "openai", providerName: "OpenAI", id: "gpt-6-luna", name: "GPT-6 Luna", variants: ["none", "low", "medium", "high"], defaultVariant: "medium" },
+    { providerID: "openai", providerName: "OpenAI", id: model.id, name: "Gpt 6", variants: ["low", "medium", "high"] },
+    { providerID: "anthropic", providerName: "Anthropic", id: "claude-opus-5-5", name: "Claude Opus 5.5", variants: ["high", "max"] },
+    { providerID: "openai", providerName: "OpenAI", id: "gpt-6-sol", name: "GPT-6 Sol", variants: ["low", "medium", "high", "xhigh"] },
+    { providerID: "openai", providerName: "OpenAI", id: "gpt-6-luna", name: "GPT-6 Luna", variants: ["none", "low", "medium", "high"] },
     { providerID: "openrouter", providerName: "OpenRouter", id: "perceptron/perceptron-mk1.5", name: "Perceptron Mk1.5", variants: [] },
   ],
   defaultModel: { providerID: "anthropic", id: "claude-opus-5-5", variant: "high" },
@@ -510,6 +524,9 @@ type Fixture = {
   readonly inventoryRequests: () => number
   readonly inventoryInputs: () => readonly Readonly<Record<string, unknown>>[]
   readonly operationReport: () => { readonly transports: number; readonly operations: Readonly<Record<string, number>> }
+  readonly transcriptDelta: (delta: string) => void
+  readonly transcriptRefresh: () => Promise<void>
+  readonly responseSnapshot: (messages: readonly unknown[], captured: RemoteCapturedChangesPage["data"], running: boolean) => Promise<void>
 }
 
 function createFixtureStore(): Fixture {
@@ -518,6 +535,10 @@ function createFixtureStore(): Fixture {
   let streamed = false
   let nextSeq = 43
   let snapshotWatermark = 42
+  let probeStarted = false
+  let probeClock = 0
+  let probeCaptured = "after"
+  let responseCaptured: RemoteCapturedChangesPage["data"] = []
   let teamReported = false
   let teamCancelState: "running" | "cancelling" | "cancelled" = "running"
   let teamShellKilled = false
@@ -618,6 +639,9 @@ function createFixtureStore(): Fixture {
       return { status: "ok", value: null }
     }
     operationCounts.set(operation, (operationCounts.get(operation) ?? 0) + 1)
+    if (responseProbe && operation === "session.capturedChanges.list") return { status: "ok", value: { data: structuredClone(responseCaptured) } }
+    if (transcriptProbe && operation === "session.todo.list") return { status: "ok", value: { data: [{ content: "Verify stable transcript", status: "in_progress", priority: "high" }] } }
+    if (transcriptProbe && operation === "session.capturedChanges.list") return { status: "ok", value: { data: [{ placementMessageID: "probe_reply_4", path: "src/probe.ts", additions: 1, deletions: 1, status: "modified", files: [{ path: "src/probe.ts", diff: `@@ -1 +1 @@\n-before\n+${probeCaptured}`, additions: 1, deletions: 1, status: "modified" }] }] } }
     if (connectionMode === "offline") return { status: "failed", error: { code: "agent_unavailable", message: "No local agent is connected" } }
     if (accountParams.get("teamControls") === "unsupported" && ["session.team.economics", "session.team.shell.list", "session.team.shell.kill", "session.side-chat.list", "session.side-chat.create", "session.subagent.cancel", "session.subagent.answer"].includes(operation))
       return { status: "failed", error: { code: "unknown_operation", message: "Update YCoding on this machine" } }
@@ -760,7 +784,7 @@ function createFixtureStore(): Fixture {
         value: {
           sourceEpoch: "epoch_fixture",
           session: createdSessions.get(targetSessionID) ?? sessions.find((item) => item.id === targetSessionID),
-          messages: targetSessionID === sessionID ? messages : [],
+          messages: targetSessionID === sessionID ? structuredClone(messages) : targetSessionID === "ses_child" && accountParams.has("childTranscript") ? structuredClone(defaultMessages) : [],
           watermark: { type: "log.synced", aggregateID: targetSessionID, seq: targetSessionID === sessionID ? snapshotWatermark : 0 },
         },
       }
@@ -804,6 +828,13 @@ function createFixtureStore(): Fixture {
       return { status: "ok", value: null }
     }
     if (operation === "session.prompt" && targetSessionID === "ses_child") return { status: "failed", error: { code: "subagent_read_only", message: "Managed subagents accept input only from their parent Session" } }
+    if (operation === "session.prompt" && promptOutcome === "hold") {
+      return new Promise((resolve) => {
+        heldPrompts.push((result) => resolve(result === "ok" ? { status: "ok", value: { data: { ...input, admittedSeq: 43 } } } : result === "failed"
+          ? { status: "failed", error: { code: "internal_error", message: "Synthetic failed prompt" } }
+          : { status: "unknown", error: { code: "outcome_unknown", message: "Synthetic unknown prompt outcome" } }))
+      })
+    }
     if (operation === "session.prompt") return promptOutcome === "unknown"
       ? { status: "unknown", error: { code: "outcome_unknown", message: "Synthetic unknown prompt outcome" } }
       : { status: "ok", value: { data: { ...input, admittedSeq: 43 } } }
@@ -842,6 +873,10 @@ function createFixtureStore(): Fixture {
 
   const store = createRemoteStore({
     http: syntheticHttp,
+    ...(transcriptProbe || responseProbe ? { now: () => Date.now() + probeClock, schedule: (callback: () => void, ms: number) => {
+      const timer = setTimeout(callback, ms >= 1_000 ? 1 : ms)
+      return () => clearTimeout(timer)
+    } } : {}),
     createTransport: (_deviceID, transportHandlers) => {
       transportsCreated += 1
       handlers = transportHandlers
@@ -934,6 +969,7 @@ function createFixtureStore(): Fixture {
     if (added.length === 0) return
     fixtureNotices = [...fixtureNotices, ...added]
     handlers?.onNotices?.({ type: "notice.added", notices: added, total: fixtureNotices.length })
+    if (!pushDelivered) handlers?.onNotices?.({ type: "notice.present", items: added.map((notice) => ({ kind: "notice", notice })) })
   }
 
   return {
@@ -950,11 +986,42 @@ function createFixtureStore(): Fixture {
       return result.status === "failed" || result.status === "unknown" ? result.error.code : result.status
     }, createdSideChatID: () => createdSideChatID,
     status, formRequests: () => formRequests, mutationRequests: () => mutationRequests, inventoryRequests: () => inventoryInputs.length, inventoryInputs: () => inventoryInputs,
+    transcriptDelta: (delta) => {
+      if (!probeStarted) {
+        probeStarted = true
+        handlers?.onEvent?.(sessionID, { type: "session.step.started", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { assistantMessageID: "probe_tail", agent: "god", model } })
+        handlers?.onEvent?.(sessionID, { type: "session.text.started", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { assistantMessageID: "probe_tail", ordinal: 0 } })
+        handlers?.onEvent?.(sessionID, { type: "session.text.delta", data: { assistantMessageID: "probe_tail", ordinal: 0, delta: probeText } })
+        messages = [...messages, { id: "probe_tail", type: "assistant", agent: "god", model, content: [{ type: "text", text: probeText }], time: { created: 30 } }]
+        snapshotWatermark = nextSeq - 1
+      }
+      probeText += delta
+      messages = messages.map((message) => typeof message === "object" && message !== null && Reflect.get(message, "id") === "probe_tail"
+        ? { ...message, content: [{ type: "text", text: probeText }] } : message)
+      handlers?.onEvent?.(sessionID, { type: "session.text.delta", data: { assistantMessageID: "probe_tail", ordinal: 0, delta } })
+    },
+    transcriptRefresh: async () => {
+      probeClock += 11_000
+      probeCaptured = "fresh"
+      handlers?.onSessions?.()
+      await store.reloadMessages()
+    },
+    responseSnapshot: async (projected, captured, running) => {
+      messages = projected
+      responseCaptured = captured
+      snapshotWatermark = nextSeq++
+      probeClock += 11_000
+      handlers?.onEvent?.(sessionID, { type: running ? "session.execution.started" : "session.execution.succeeded", data: { sessionID } })
+      status(running ? [sessionID] : [], [])
+      handlers?.onSessions?.()
+      await store.reloadMessages()
+    },
     operationReport: () => ({ transports: transportsCreated, operations: Object.fromEntries(operationCounts) }),
   }
 }
 
 const fixture = createFixtureStore()
+Object.assign(window, { transcriptDelta: fixture.transcriptDelta, transcriptRefresh: fixture.transcriptRefresh, responseSnapshot: fixture.responseSnapshot, responseStatus: () => fixture.store.state().view?.status })
 Object.assign(window, { remoteInventoryReport: () => ({ requests: fixture.inventoryRequests(), rows: fixture.store.state().sessions.length,
   groups: fixture.store.state().sessionGroups.length, next: fixture.store.state().sessionHasNext,
   first: fixture.store.state().sessions[0]?.id, last: fixture.store.state().sessions.at(-1)?.id, inputs: fixture.inventoryInputs(),
@@ -970,6 +1037,7 @@ async function openFixtureWorkspace(store: RemoteStore) {
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
   if (!accountParams.has("noSelection") && store.state().activeSessionID === undefined) await store.selectSession(sessionID)
+  if (transcriptProbe) fixture.transcriptDelta("")
 }
 
 /** Selects the fixture device and lets the real store settle its rejected list read. */

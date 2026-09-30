@@ -722,6 +722,88 @@ describe("snapshot synchronization", () => {
     }
   })
 
+  test("a resync keeps the streamed text of an open part and appends later deltas once", async () => {
+    let watermark = 10
+    const content: readonly unknown[] = [{ type: "text", text: "" }]
+    const test = await harness({
+      snapshot: (sessionID) => ({
+        sourceEpoch: "epoch_1",
+        session: { title: "t", time: { created: 1, updated: 1 } },
+        messages: [{ id: "msg_a", type: "assistant", agent: "god", content, time: { created: 1 } }],
+        watermark: { type: "log.synced", aggregateID: sessionID, seq: watermark },
+      }),
+    })
+    const delta = (text: string) => test.relay.pushEvent("ses_a", { type: "session.text.delta", data: { assistantMessageID: "msg_a", ordinal: 0, delta: text }, sourceEpoch: "epoch_1" })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      delta("Hel")
+      delta("lo")
+      await test.runUntil(() => textOf(test.store.state().view).join("") === "Hello")
+
+      watermark = 11
+      await test.store.reloadMessages()
+      expect(textOf(test.store.state().view)).toEqual(["Hello"])
+      delta(" world")
+      await test.runUntil(() => textOf(test.store.state().view).join("") === "Hello world")
+
+      test.relay.pushEvent("ses_a", { type: "session.text.ended", data: { assistantMessageID: "msg_a", ordinal: 0, text: "Hello world!" },
+        durable: { aggregateID: "ses_a", seq: 12, version: 1 }, sourceEpoch: "epoch_1" })
+      await test.runUntil(() => textOf(test.store.state().view).join("") === "Hello world!")
+    } finally {
+      await test.stop()
+    }
+  }, 30_000)
+
+  test("a resync keeps an open thought and an open tool input, and never carries text into another part", async () => {
+    let watermark = 10
+    const messages: readonly unknown[] = [{ id: "msg_a", type: "assistant", agent: "god", time: { created: 1 }, content: [
+      { type: "reasoning", text: "", time: { created: 1 } },
+      { type: "tool", id: "call_1", name: "shell", time: { created: 2 }, state: { status: "streaming", input: "" } },
+      { type: "reasoning", text: "", time: { created: 3 } },
+    ] }]
+    const test = await harness({
+      snapshot: (sessionID) => ({
+        sourceEpoch: "epoch_1",
+        session: { title: "t", time: { created: 1, updated: 1 } },
+        messages,
+        watermark: { type: "log.synced", aggregateID: sessionID, seq: watermark },
+      }),
+    })
+    const thought = (text: string) => test.relay.pushEvent("ses_a", { type: "session.reasoning.delta", data: { assistantMessageID: "msg_a", ordinal: 0, delta: text }, sourceEpoch: "epoch_1" })
+    const input = (text: string) => test.relay.pushEvent("ses_a", { type: "session.tool.input.delta", data: { assistantMessageID: "msg_a", callID: "call_1", delta: text }, sourceEpoch: "epoch_1" })
+    const part = (kind: "reasoning" | "tool") => {
+      const message = test.store.state().view?.messages.find((item) => item.id === "msg_a")
+      return message?.kind === "assistant" ? message.parts.find((item) => item.kind === kind) : undefined
+    }
+    const thoughtText = () => { const found = part("reasoning"); return found?.kind === "reasoning" ? found.text : undefined }
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      thought("Consider")
+      input("{\"command\":")
+      await test.runUntil(() => thoughtText() === "Consider")
+
+      watermark = 11
+      await test.store.reloadMessages()
+      expect(part("reasoning")).toMatchObject({ text: "Consider" })
+      expect(test.store.state().view?.messages.flatMap((item) => item.kind === "assistant" ? item.parts.flatMap((entry) => entry.kind === "reasoning" ? [entry.text] : []) : [])).toEqual(["Consider", ""])
+      expect(part("tool")).toMatchObject({ status: "streaming", inputText: "{\"command\":" })
+      thought(" more")
+      input("\"ls\"}")
+      await test.runUntil(() => thoughtText() === "Consider more")
+      expect(part("tool")).toMatchObject({ inputText: "{\"command\":\"ls\"}" })
+      test.relay.pushEvent("ses_a", { type: "session.reasoning.delta", data: { assistantMessageID: "msg_a", ordinal: 2, delta: "Fresh" }, sourceEpoch: "epoch_1" })
+      await test.runUntil(() => test.store.state().view?.messages.some((item) => item.kind === "assistant" && item.parts.some((entry) => entry.kind === "reasoning" && entry.text === "Fresh")) === true)
+      const texts = test.store.state().view?.messages.flatMap((item) => item.kind === "assistant" ? item.parts.flatMap((entry) => entry.kind === "reasoning" ? [entry.text] : []) : [])
+      expect(texts).toEqual(["Consider more", "Fresh"])
+    } finally {
+      await test.stop()
+    }
+  }, 30_000)
+
   test("does not resurrect compacted assistant parts from late ephemeral frames after snapshot or reconnect", async () => {
     const test = await harness({
       snapshot: (sessionID) => ({

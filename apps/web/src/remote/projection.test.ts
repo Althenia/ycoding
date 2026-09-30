@@ -317,6 +317,11 @@ test("keeps synthetic notification identity and metadata across admission and sn
   expect(apply(createSessionView("ses_a"), "session.input.admitted", { inputID: "msg_user", input: { type: "user", data: { text: "Ordinary prompt" } } }).messages[0]).toMatchObject({ kind: "user", text: "Ordinary prompt" })
 })
 
+test("recognizes a work completion receipt without a transcript row, status transition or unhandled warning", () => {
+  const view = { ...createSessionView("ses_a"), status: "running" as const }
+  expect(apply(view, "session.work.completed", { sessionID: "ses_a", inputID: "msg_input", assistantMessageID: "msg_reply" })).toBe(view)
+})
+
 test("classifies terminal synthetic statuses without inventing raw-text user messages", () => {
   for (const [type, status] of [["completed", "completed"], ["failed", "failed"], ["waiting", "waiting"], ["unrecognized", "updated"]] as const) {
     expect(classifySyntheticNotice({ kind: "synthetic", id: "n", text: "raw", metadata: { source: "subagent_notification", type, childID: "ses_1" }, created: 1 })).toEqual({ kind: "subagent", label: "ses_1", status })
@@ -506,6 +511,7 @@ describe("requests", () => {
       resources: ["build"],
       reason: "Deletion needs review",
       hardReview: true,
+      metadata: { workdir: "/fixture/project" },
     })
     view = apply(view, "form.created", {
       form: {
@@ -518,7 +524,7 @@ describe("requests", () => {
     })
     expect(view.requests.map((request) => request.kind)).toEqual(["permission", "guardrail", "form"])
     const guardrail = view.requests.find((request) => request.kind === "guardrail")
-    expect(guardrail).toMatchObject({ hardReview: true, reason: "Deletion needs review" })
+    expect(guardrail).toMatchObject({ hardReview: true, reason: "Deletion needs review", metadata: { workdir: "/fixture/project" } })
 
     view = apply(view, "permission.v2.replied", { requestID: "per_1", reply: "once" })
     view = apply(view, "guardrail.replied", { requestID: "grq_1", reply: "reject" })

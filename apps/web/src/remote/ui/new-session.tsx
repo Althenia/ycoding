@@ -8,7 +8,7 @@ import { Icon } from "../../ui/icon"
 import { LoadingPlaceholder } from "./loading"
 
 export function NewSessionButton(props: { readonly disabled: boolean; readonly onClick: () => void }): JSX.Element {
-  return <button type="button" class="button button--primary new-session__trigger" disabled={props.disabled} onClick={props.onClick}>New session</button>
+  return <button type="button" class="button button--primary button--small new-session__trigger" aria-label="New session" title="New session" disabled={props.disabled} onClick={props.onClick}><Icon name="plus" size={18} /></button>
 }
 
 export function NewSessionComposer(props: { readonly onCreated: (sessionID: string) => void }): JSX.Element {

@@ -15,6 +15,8 @@ async function makeFixture(options: { readonly label: string } = { label: "asset
   )
   await fs.mkdir(path.join(fixture, "script"), { recursive: true })
   await fs.mkdir(path.join(fixture, "docs", "examples"), { recursive: true })
+  await fs.mkdir(path.join(fixture, "assets", "brand", "fonts"), { recursive: true })
+  await Bun.write(path.join(fixture, "assets", "brand", "fonts", "OFL.txt"), Bun.file(path.join(root, "assets", "brand", "fonts", "OFL.txt")))
   await fs.mkdir(path.join(fixture, "apps", "web", "dist", "assets"), { recursive: true })
   await Bun.write(path.join(fixture, "script", "install.sh"), "#!/bin/sh\necho ycoding\n")
   await Bun.write(
@@ -42,7 +44,7 @@ async function listFiles(directory: string, prefix = ""): Promise<string[]> {
 }
 
 describe("web build asset publisher", () => {
-  test("publishes the installer, configuration schema, and JSONC example into the web build", async () => {
+  test("publishes the installer, configuration assets, and font license into the web build", async () => {
     const { fixture, outdir } = await makeFixture({ label: "content" })
     try {
       await buildWebAssets({ root: fixture, outdir })
@@ -50,6 +52,9 @@ describe("web build asset publisher", () => {
       expect(await Bun.file(path.join(outdir, "install.sh")).text()).toBe("#!/bin/sh\necho ycoding\n")
       expect(await Bun.file(path.join(outdir, "examples", "ycoding.jsonc")).text()).toBe(
         await Bun.file(path.join(fixture, "docs", "examples", "ycoding.jsonc")).text(),
+      )
+      expect(await Bun.file(path.join(outdir, "fonts", "OFL.txt")).text()).toBe(
+        await Bun.file(path.join(fixture, "assets", "brand", "fonts", "OFL.txt")).text(),
       )
 
       const schema = JSON.parse(await Bun.file(path.join(outdir, "ycoding.schema.json")).text())
@@ -62,10 +67,10 @@ describe("web build asset publisher", () => {
       expect(schema.$defs["Config.Info"].properties).toHaveProperty("$schema")
       expect(schema.$defs["Config.Info"].properties).toHaveProperty("model")
 
-      // The published build is exactly the web application plus the three required assets.
       expect(await listFiles(outdir)).toEqual([
         "assets/app-abc123.js",
         "examples/ycoding.jsonc",
+        "fonts/OFL.txt",
         "index.html",
         "install.sh",
         "ycoding.schema.json",
@@ -138,6 +143,21 @@ describe("web build asset publisher", () => {
       expect(await Bun.file(path.join(outdir, "install.sh")).exists()).toBe(true)
       expect(await Bun.file(path.join(outdir, "ycoding.schema.json")).exists()).toBe(true)
       expect(await Bun.file(path.join(outdir, "examples", "ycoding.jsonc")).exists()).toBe(true)
+      expect(await Bun.file(path.join(outdir, "fonts", "OFL.txt")).exists()).toBe(true)
+    } finally {
+      await fs.rm(fixture, { recursive: true, force: true })
+    }
+  })
+  test("rejects a missing font license before adding public assets", async () => {
+    const { fixture, outdir } = await makeFixture({ label: "font-license" })
+    try {
+      await fs.rm(path.join(fixture, "assets", "brand", "fonts", "OFL.txt"))
+      const error = await buildWebAssets({ root: fixture, outdir }).catch((error) => error)
+      expect(error).toBeInstanceOf(Error)
+      if (!(error instanceof Error)) throw error
+      expect(error.message).toContain("Missing required font license")
+      expect(await Bun.file(path.join(outdir, "install.sh")).exists()).toBe(false)
+      expect(await Bun.file(path.join(outdir, "assets", "app-abc123.js")).text()).toBe("console.log('web')\n")
     } finally {
       await fs.rm(fixture, { recursive: true, force: true })
     }

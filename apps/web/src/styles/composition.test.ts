@@ -180,6 +180,14 @@ describe("responsive contract", () => {
     expect(declarationsWhere(remote, (rule) => rule.header === ".app--conversation.app--selected:not(.app--office, .app--new-session) .workspace__scroll" && rule.conditions.length === 0)["padding-block-end"]).toBe("var(--yc-space-20)")
   })
 
+  test("gives Sessions the same zero-height jump slot with bottom clearance and no second pill style", async () => {
+    const remote = await readStylesheet("remote.css")
+    const nav = await readStylesheet("../remote/ui/transcript-nav.css")
+    expect(declarationsWhere(remote, (rule) => rule.header === ".app--sessions .conversation-jump-slot" && rule.conditions.length === 0)).toMatchObject({ position: "relative", display: "block", "block-size": "0" })
+    expect(declarationsWhere(remote, (rule) => rule.header === ".app--sessions .workspace__scroll" && rule.conditions.length === 0)["padding-block-end"]).toBe("var(--yc-space-20)")
+    expect(nav.rules.some((rule) => rule.header.includes("sessions"))).toBe(false)
+  })
+
   test("anchors suggestions inside the composer and bounds them by the measured viewport space", async () => {
     const composer = await readStylesheet("../remote/ui/composer.css")
     expect(composer.rules.some((rule) => rule.header.includes(".mini-composer__autocomplete") && rule.declarations.position === "fixed")).toBe(false)

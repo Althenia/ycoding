@@ -22,6 +22,26 @@ test("R7 sends explicit goal resume and preserves the returned objective", async
   expect(await requests[0]!.json()).toEqual({ goal: true, yolo: 1 })
 })
 
+test("keep-awake methods use the local-runtime HTTP contract without a Session or Location", async () => {
+  const requests: Request[] = []
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      requests.push(request)
+      return Response.json({ data: request.method === "PUT" ? { state: "on" } : { state: "unsupported", message: "Keep machine awake is available on macOS only." } })
+    },
+  })
+  expect(await client.keepAwake.get()).toEqual({ state: "unsupported", message: "Keep machine awake is available on macOS only." })
+  expect(await client.keepAwake.set({ enabled: true })).toEqual({ state: "on" })
+  expect(requests.map((request) => [request.method, new URL(request.url).pathname])).toEqual([
+    ["GET", "/api/keep-awake"],
+    ["PUT", "/api/keep-awake"],
+  ])
+  expect(await requests[1]!.json()).toEqual({ enabled: true })
+  expect(requests.every((request) => !request.headers.has("x-ycoding-directory"))).toBe(true)
+})
+
 test("exposes every standard HTTP API group", () => {
   const client = YCoding.make({ baseUrl: "http://localhost:3000" })
 
@@ -60,7 +80,9 @@ test("exposes every standard HTTP API group", () => {
     "isolatedBrowser",
     "usage",
     "remote",
+    "keepAwake",
   ])
+  expect(Object.keys(client.keepAwake)).toEqual(["get", "set"])
   expect(Object.keys(client.debug)).toEqual(["location"])
   expect(Object.keys(client.debug.location)).toEqual(["list", "evict"])
   expect(Object.keys(client.message)).toEqual(["list"])
@@ -86,6 +108,7 @@ test("exposes every standard HTTP API group", () => {
     "observe",
     "open",
     "close",
+    "release",
     "action",
     "control",
     "stop",

@@ -1,3 +1,5 @@
+export const FONT_ALIAS = "YCodingGeist"
+
 export const tokens = {
   colors: {
     "agent-cursor": "#8b5cf6",
@@ -8,7 +10,7 @@ export const tokens = {
     "badge-on": "#28753e",
   },
   typography: {
-    "agent-label": { fontFamily: "system-ui, sans-serif", fontSize: "12px", fontWeight: 400, lineHeight: 1.2 },
+    "agent-label": { fontFamily: `${FONT_ALIAS}, system-ui, sans-serif`, fontSize: "12px", fontWeight: 400, lineHeight: 1.2 },
   },
   rounded: { "agent-label": "5px" },
   motion: { duration: { "cursor-move": "320ms", ripple: "450ms" } },
@@ -33,7 +35,7 @@ export const timing = {
   cursorAnimationTimeout: 500,
 }
 
-export function markerScript(op, cursor) {
+export function markerScript(op, cursor, font) {
   const label = tokens.typography["agent-label"]
   return `(${agentMarker.toString()})(${JSON.stringify({
     op,
@@ -41,6 +43,8 @@ export function markerScript(op, cursor) {
     ttl: timing.expiry,
     check: timing.check,
     animationTimeout: timing.cursorAnimationTimeout,
+    fontFamily: FONT_ALIAS,
+    fontData: font,
     cursor,
     style: {
       layer: tokens.layers["agent-overlay"],
@@ -70,7 +74,19 @@ async function agentMarker(options) {
     if (marker.dataset.created) document.querySelector("title")?.remove()
     else document.title = marker.dataset.base
   }
+  const removeFont = () => {
+    for (const face of Array.from(document.fonts)) if (face.family === options.fontFamily) document.fonts.delete(face)
+  }
+  const installFont = () => {
+    if (!options.fontData || typeof FontFace !== "function") return
+    if (Array.from(document.fonts).some((face) => face.family === options.fontFamily)) return
+    const bytes = Uint8Array.from(atob(options.fontData), (character) => character.charCodeAt(0))
+    const face = new FontFace(options.fontFamily, bytes.buffer, { weight: "100 900", style: "normal", display: "swap" })
+    document.fonts.add(face)
+    face.load().catch(() => document.fonts.delete(face))
+  }
   const clear = (marker) => {
+    removeFont()
     restoreTitle(marker)
     marker.dataset.epoch = ""
     marker.remove()
@@ -122,6 +138,7 @@ async function agentMarker(options) {
 
   if (options.op === "clear") {
     if (existing) clear(existing)
+    removeFont()
     for (const cursor of cursorHosts()) cursor.remove()
     return { ok: true }
   }
@@ -141,8 +158,14 @@ async function agentMarker(options) {
   marker.dataset.deadline = String(Date.now() + options.ttl)
   sync(marker)
 
-  if (options.cursor) await moveCursor(options.cursor)
-  return { ok: marker.isConnected && document.title === marker.dataset.marked && document.title.startsWith(options.prefix.trim()) }
+  if (options.cursor) {
+    installFont()
+    await moveCursor(options.cursor)
+  }
+  return {
+    ok: marker.isConnected && document.title === marker.dataset.marked && document.title.startsWith(options.prefix.trim()),
+    font: Array.from(document.fonts).some((face) => face.family === options.fontFamily && face.status === "loaded"),
+  }
 
   async function moveCursor({ x, y, label, click }) {
     const style = options.style

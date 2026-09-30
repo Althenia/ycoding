@@ -129,3 +129,69 @@ test("a superseded same-Session read cannot overwrite reconnect's newer todo lis
     store.dispose()
   }
 })
+
+test("a background resync keeps the loaded todos visible and reuses unchanged items", async () => {
+  let gate: ReturnType<typeof Promise.withResolvers<RelayHandlerOutcome>> | undefined
+  const relay = await startRelayDouble({ advertisedSessions: ["ses_a"], handler: (request) =>
+    request.operation === "session.todo.list" ? gate?.promise ?? { ok: true, value: { data: [{ ...first }, { ...second }] } } : "default" })
+  const store = createRemoteStore({
+    http: createRemoteHttp({ baseURL: relay.httpURL }),
+    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }),
+    batchMs: 0,
+  })
+  const observed: (readonly TodoView[] | undefined)[] = []
+  try {
+    await store.load()
+    await waitFor(() => store.state().sessions.length > 0)
+    await store.selectSession("ses_a")
+    const loaded = store.state().todos
+    expect(loaded).toHaveLength(2)
+    store.subscribe(() => observed.push(store.state().todos))
+
+    gate = Promise.withResolvers<RelayHandlerOutcome>()
+    const resync = store.reloadMessages()
+    await waitFor(() => relay.requests.filter((request) => request.operation === "session.todo.list").length === 2)
+    expect(store.state().todos).toBe(loaded)
+    gate.resolve({ ok: true, value: { data: [{ ...first }, { ...second, status: "completed" }] } })
+    await resync
+    await waitFor(() => store.state().todos?.[1]?.status === "completed")
+    const refreshed = store.state().todos
+    expect(refreshed?.[0]).toBe(loaded?.[0])
+    expect(observed.every((todos) => todos !== undefined)).toBe(true)
+
+    relay.pushEvent("ses_a", { type: "todo.updated", data: { sessionID: "ses_a", todos: [{ ...first }, { ...second, status: "completed" }] } })
+    await Bun.sleep(30)
+    expect(store.state().todos).toBe(refreshed)
+
+  } finally {
+    gate?.resolve("default")
+    store.dispose()
+    await relay.stop()
+  }
+})
+
+test("an unreadable background todo answer keeps the todos already shown", async () => {
+  let readable = true
+  const relay = await startRelayDouble({ advertisedSessions: ["ses_a"], handler: (request) =>
+    request.operation === "session.todo.list" ? { ok: true, value: { data: readable ? [{ ...first }] : "unreadable" } } : "default" })
+  const store = createRemoteStore({
+    http: createRemoteHttp({ baseURL: relay.httpURL }),
+    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }),
+    batchMs: 0,
+  })
+  try {
+    await store.load()
+    await waitFor(() => store.state().sessions.length > 0)
+    await store.selectSession("ses_a")
+    const loaded = store.state().todos
+    expect(loaded).toEqual([first])
+    readable = false
+    await store.reloadMessages()
+    await waitFor(() => relay.requests.filter((request) => request.operation === "session.todo.list").length === 2)
+    await Bun.sleep(30)
+    expect(store.state().todos).toBe(loaded)
+  } finally {
+    store.dispose()
+    await relay.stop()
+  }
+})

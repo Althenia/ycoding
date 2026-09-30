@@ -1009,7 +1009,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
         case "session.model.selected":
           if (store.session.info[event.data.sessionID])
-            setStore("session", "info", event.data.sessionID, "model", event.data.model)
+            setStore("session", "info", event.data.sessionID, "model", reconcile(event.data.model))
           if (!store.session.message[event.data.sessionID]) break
           message.update(event.data.sessionID, (draft, index) => {
             message.append(draft, index, {

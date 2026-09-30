@@ -979,6 +979,13 @@ async function startMarkerBridge(extensionDirectory: string) {
           : undefined,
       "private extension popup",
     )
+    await eventually(async () => ((await evaluate(client, popupSession, "document.readyState === 'complete'")) === true ? true : undefined), "popup stylesheet loaded")
+    await evaluate(client, popupSession, "Promise.all([document.fonts.load('13px Geist'), document.fonts.load('13px \"Geist Mono\"')]).then(() => true)")
+    const popupFonts = {
+      body: await platformFonts(client, popupSession, (node) => node.nodeName === "LABEL" && String(node.attributes).includes("server")),
+      address: await platformFonts(client, popupSession, (node) => node.nodeName === "#text" && node.nodeValue === "http://127.0.0.1:4096"),
+      faces: [...(await loadedFaces(client, popupSession, "Geist")), ...(await loadedFaces(client, popupSession, "Geist Mono"))],
+    }
     const paired = record(
       await evaluate(
         client,
@@ -1040,7 +1047,7 @@ async function startMarkerBridge(extensionDirectory: string) {
     }
     return {
       base, origin, client, request, post, listTabs, profileAt, observe, open, targetTitle, pageSessionAt,
-      popupSession, workerSession, pageSession, dispose,
+      popupSession, workerSession, pageSession, dispose, popupFonts,
       workerVersion: () => workerVersion,
       awaitTitle: (path: string, expected: (title: string) => boolean, label: string, timeoutMs = 10_000) =>
         eventuallyFor(async () => {
@@ -1104,6 +1111,11 @@ async function markerLifecycle(extensionDirectory: string) {
         return { count: hosts.length, pointerEvents: hosts[0] && getComputedStyle(hosts[0]).pointerEvents }
       })()`),
     ).toEqual({ count: 1, pointerEvents: "none" })
+    expect(live.popupFonts.faces).toEqual(["loaded", "loaded"])
+    expect(live.popupFonts.body).toEqual([{ family: "Geist", custom: true }])
+    expect(live.popupFonts.address).toEqual([{ family: "Geist Mono", custom: true }])
+    expect(await loadedFaces(client, plainPage, "YCodingGeist")).toEqual(["loaded"])
+    expect(await platformFonts(client, plainPage, textOf("YCoding · Click"))).toEqual([{ family: "Geist", custom: true }])
     await client.send("Target.detachFromTarget", { sessionId: plainPage })
 
     const csp = await live.profileAt(markerOther, "/csp")
@@ -1122,6 +1134,8 @@ async function markerLifecycle(extensionDirectory: string) {
     await live.awaitTitle("/csp", (title) => title === `${prefix}CSP fixture`, "marked title under strict CSP and Trusted Types")
     expect(await evaluate(client, cspPage, "window.__violations")).toEqual([])
     expect(await evaluate(client, cspPage, "document.querySelectorAll('[data-ycoding-agent-cursor]').length")).toBe(1)
+    expect(await loadedFaces(client, cspPage, "YCodingGeist")).toEqual(["loaded"])
+    expect(await platformFonts(client, cspPage, textOf("YCoding · Click"))).toEqual([{ family: "Geist", custom: true }])
     await client.send("Target.detachFromTarget", { sessionId: cspPage })
 
     const dynamic = await live.profileAt(markerOwner, "/dynamic")
@@ -1167,6 +1181,9 @@ async function markerLifecycle(extensionDirectory: string) {
 
     expect((await live.post(markerOwner, "release", { tabID: plain.id, generation: plain.generation, callID: "release-plain" })).status).toBe(204)
     await live.awaitTitle("/plain", (title) => title === "Plain fixture", "restored plain title")
+    const releasedPage = await live.pageSessionAt("/plain")
+    expect(await loadedFaces(client, releasedPage, "YCodingGeist")).toEqual([])
+    await client.send("Target.detachFromTarget", { sessionId: releasedPage })
     const transferred = await live.observe(markerOther, plain, "marker-transfer")
     expect(transferred.status, await transferred.clone().text()).toBe(200)
     await live.awaitTitle("/plain", (title) => title === `${prefix}Plain fixture`, "marked title after transfer")
@@ -1220,8 +1237,18 @@ async function markerExpiry(extensionDirectory: string) {
     const visibleTab = await live.profileAt(markerOwner, "/plain")
     const hiddenTab = await live.profileAt(markerOwner, "/second")
     const frozenTab = await live.profileAt(markerOwner, "/csp")
-    for (const tab of [visibleTab, hiddenTab, frozenTab])
+    for (const tab of [hiddenTab, frozenTab])
       expect((await live.observe(markerOwner, tab, `expire-${tab.id}`)).status).toBe(200)
+    const visibleObserved = await live.observe(markerOwner, visibleTab, "expire-visible")
+    expect(visibleObserved.status).toBe(200)
+    const visibleObservation = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Observation }))(await visibleObserved.json()).data
+    const scrolled = await live.post(markerOwner, "action", {
+      tabID: visibleTab.id, generation: visibleTab.generation, documentGeneration: visibleObservation.documentGeneration,
+      observationRevision: visibleObservation.revision, callID: "expire-scroll", action: { type: "scroll", deltaY: 10 },
+    })
+    expect(scrolled.status, await scrolled.clone().text()).toBe(200)
+    const visiblePage = await live.pageSessionAt("/plain")
+    expect(await loadedFaces(client, visiblePage, "YCodingGeist")).toEqual(["loaded"])
     await live.awaitTitle("/plain", (title) => title.startsWith("[YCoding] "), "visible marker")
     await live.awaitTitle("/second", (title) => title.startsWith("[YCoding] "), "hidden marker")
     await live.awaitTitle("/csp", (title) => title.startsWith("[YCoding] "), "frozen marker")
@@ -1235,6 +1262,8 @@ async function markerExpiry(extensionDirectory: string) {
 
     const bound = timing.expiry + timing.check + 10_000
     await live.awaitTitle("/plain", (title) => title === "Plain fixture", "visible marker expiry after worker loss", bound)
+    expect(await loadedFaces(client, visiblePage, "YCodingGeist")).toEqual([])
+    expect(await evaluate(client, visiblePage, "document.querySelectorAll('[data-ycoding-agent-cursor]').length")).toBe(0)
     await live.awaitTitle("/second", (title) => title === "Second fixture", "hidden marker expiry after worker loss", bound)
     expect(Date.now() - lostAt).toBeLessThan(bound)
 
@@ -1246,6 +1275,47 @@ async function markerExpiry(extensionDirectory: string) {
   } finally {
     await live.dispose()
   }
+}
+
+type DomNode = Readonly<Record<string, unknown>>
+
+function domChildren(node: DomNode): DomNode[] {
+  return ["children", "shadowRoots", "contentDocument"].flatMap((key) => {
+    const value = node[key]
+    return Array.isArray(value) ? value.map(record) : value ? [record(value)] : []
+  })
+}
+
+function findNode(node: DomNode, match: (node: DomNode) => boolean): DomNode | undefined {
+  if (match(node)) return node
+  for (const child of domChildren(node)) {
+    const found = findNode(child, match)
+    if (found) return found
+  }
+  return undefined
+}
+
+async function platformFonts(cdp: Client, sessionID: string, match: (node: DomNode) => boolean) {
+  await cdp.send("DOM.enable", {}, sessionID)
+  await cdp.send("CSS.enable", {}, sessionID)
+  const root = record(record(await cdp.send("DOM.getDocument", { depth: -1, pierce: true }, sessionID)).root)
+  const node = findNode(root, match)
+  if (!node) throw new Error("Rendered node was not found")
+  const fonts = record(await cdp.send("CSS.getPlatformFontsForNode", { nodeId: number(node.nodeId) }, sessionID)).fonts
+  if (!Array.isArray(fonts)) throw new Error("Chrome did not report platform fonts")
+  return fonts.map(record).map((font) => ({ family: String(font.familyName), custom: font.isCustomFont === true }))
+}
+
+const textOf = (text: string) => (node: DomNode) =>
+  node.nodeName === "SPAN" && domChildren(node).some((child) => child.nodeValue === text)
+
+async function loadedFaces(cdp: Client, sessionID: string, family: string) {
+  const value = await evaluate(
+    cdp,
+    sessionID,
+    `document.fonts.ready.then(() => Array.from(document.fonts).filter((face) => face.family.replaceAll('"', '') === ${JSON.stringify(family)}).map((face) => face.status))`,
+  )
+  return Array.isArray(value) ? value : []
 }
 
 async function evaluate(cdp: Client, sessionID: string, expression: string) {

@@ -435,6 +435,47 @@ describe("remote navigation", () => {
     }
   }, 90_000)
 
+  test("entering Sessions starts at the top after a scrolled Conversation, and its top anchor returns a long list to the top", async () => {
+    const page = await requireBrowser().openPage()
+    try {
+      for (const [width, height, theme] of [[1440, 900, "light"], [390, 844, "dark"]] as const) for (const reduced of [false, true]) {
+        await page.setViewport(width, height)
+        await page.setReducedMotion(reduced)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}&inventoryCount=120`)
+        await until(page, `document.querySelector('.conversation-pane .transcript-message') !== null && document.querySelectorAll('.workspace__rail .session-row, .bottom-nav__item').length > 0`)
+        await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden' })()`)
+        const label = `${width}px ${theme} reduced=${reduced}`
+        const conversation = await page.evaluate<number>(`(() => { const scroll = document.querySelector('.workspace__scroll'); document.querySelector('.conversation-pane').style.minHeight = '2600px'; scroll.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -300 })); scroll.scrollTop = 900; scroll.dispatchEvent(new Event('scroll')); return scroll.scrollTop })()`)
+        expect(conversation, label).toBeGreaterThanOrEqual(800)
+        await page.evaluate(`[...document.querySelectorAll('a[href="/remote/sessions"]')].find(link => link.getBoundingClientRect().width > 0)?.click()`)
+        await until(page, `location.pathname === '/remote/sessions' && document.querySelector('.route-panel--exiting') === null && document.querySelectorAll('.sessions-table__name').length > 0`)
+        await Bun.sleep(350)
+        const entry = await page.evaluate<{ readonly scrollTop: number; readonly scrollable: boolean; readonly pill: boolean; readonly overflow: boolean }>(`(() => { const scroll = document.querySelector('.workspace__scroll'); const pill = document.querySelector('.conversation-jump-slot .transcript-navigation__controls'); return { scrollTop: scroll.scrollTop, scrollable: scroll.scrollHeight > scroll.clientHeight * 1.2, pill: Boolean(pill && getComputedStyle(pill).visibility === 'visible'), overflow: document.documentElement.scrollWidth > innerWidth } })()`)
+        expect(entry.scrollTop, `${label} entry scroll`).toBe(0)
+        expect(entry.scrollable, `${label} long list`).toBe(true)
+        expect(entry.pill, `${label} no top anchor at the top`).toBe(false)
+        expect(entry.overflow, `${label} overflow`).toBe(false)
+
+        await page.evaluate(`(() => { const scroll = document.querySelector('.workspace__scroll'); scroll.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: 300 })); scroll.scrollTop = 700; scroll.dispatchEvent(new Event('scroll')) })()`)
+        await until(page, `document.querySelector('.conversation-jump-slot .transcript-navigation__controls--visible [aria-label="Jump to top"]') !== null`)
+        await page.evaluate(`Promise.all(document.getAnimations().filter(animation => animation.effect?.getComputedTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => undefined)))`)
+        const anchor = await page.evaluate<{ readonly width: number; readonly height: number; readonly insideScroll: boolean; readonly clearOfNav: boolean; readonly down: boolean; readonly reachable: boolean; readonly overflow: boolean; readonly slotHeight: number }>(`(() => { const button = document.querySelector('.conversation-jump-slot .transcript-navigation__controls--visible [aria-label="Jump to top"]'); const rect = button.getBoundingClientRect(); const scroll = document.querySelector('.workspace__scroll').getBoundingClientRect(); const nav = document.querySelector('.bottom-nav'); const navRect = nav && getComputedStyle(nav).display !== 'none' ? nav.getBoundingClientRect() : undefined; const hit = document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2); return { width: rect.width, height: rect.height, insideScroll: rect.top >= scroll.top && rect.bottom <= scroll.bottom && rect.left >= scroll.left && rect.right <= scroll.right, clearOfNav: !navRect || rect.bottom <= navRect.top, down: document.querySelector('.conversation-jump-slot [aria-label="Jump to latest"]') !== null && getComputedStyle(document.querySelector('.conversation-jump-slot [aria-label="Jump to latest"]')).visibility === 'visible', reachable: button.contains(hit), overflow: document.documentElement.scrollWidth > innerWidth, slotHeight: document.querySelector('.conversation-jump-slot').getBoundingClientRect().height } })()`)
+        expect(anchor.width, `${label} anchor width`).toBeGreaterThanOrEqual(width < 768 ? 36 : 36)
+        expect(anchor.height, `${label} anchor height`).toBeGreaterThanOrEqual(36)
+        expect(anchor, label).toMatchObject({ insideScroll: true, clearOfNav: true, down: false, reachable: true, overflow: false, slotHeight: 0 })
+        await page.evaluate(`document.querySelector('.conversation-jump-slot .transcript-navigation__controls--visible [aria-label="Jump to top"]').click()`)
+        for (let attempt = 0; attempt < 80 && await page.evaluate<number>(`document.querySelector('.workspace__scroll').scrollTop`) > 8; attempt += 1) await Bun.sleep(25)
+        expect(await page.evaluate<number>(`document.querySelector('.workspace__scroll').scrollTop`), `${label} anchor returns to top`).toBeLessThanOrEqual(8)
+        await until(page, `document.querySelector('.conversation-jump-slot .transcript-navigation__controls--visible') === null`)
+
+        await page.evaluate(`[...document.querySelectorAll('a[href="/remote"]')].find(link => link.getBoundingClientRect().width > 0)?.click()`)
+        await until(page, `location.pathname === '/remote' && document.querySelector('.route-panel--exiting') === null`)
+        await Bun.sleep(350)
+        expect(await page.evaluate<number>(`(() => { const scroll = document.querySelector('.workspace__scroll'); return scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop })()`), `${label} Conversation re-enters at the latest message`).toBeLessThanOrEqual(2)
+      }
+    } finally { await page.close() }
+  }, 120_000)
+
   test("managed child view keeps the parent draft resident and restores it on return", async () => {
     const page = await requireBrowser().openPage()
     try {
@@ -455,24 +496,35 @@ describe("remote navigation", () => {
     } finally { await page.close() }
   }, 90_000)
 
-  test("Conversation returns to its resident transcript scroll anchor after another view", async () => {
+  test("Conversation re-enters at the latest message without showing a wrong position, then leaves a deliberate scroll-up alone", async () => {
     const page = await requireBrowser().openPage()
     try {
-      for (const [width, height] of [[1440, 900], [390, 844]] as const) for (const theme of themes) {
+      for (const [width, height] of [[1440, 900], [390, 844]] as const) for (const theme of themes) for (const reduced of [false, true]) {
         await page.setViewport(width, height)
+        await page.setReducedMotion(reduced)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}`)
         await until(page, `document.querySelector('.conversation-pane .transcript-message') !== null`)
+        await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden' })()`)
+        const label = `${width}px ${theme} reduced=${reduced}`
         const before = await page.evaluate<number>(`(() => { const scroll=document.querySelector('.workspace__scroll'); scroll.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:-300})); scroll.scrollTop=300; scroll.dispatchEvent(new Event('scroll')); window.anchorMessage=document.querySelector('.conversation-pane .transcript-message'); return scroll.scrollTop })()`)
-        expect(before).toBeGreaterThanOrEqual(250)
+        expect(before, label).toBeGreaterThanOrEqual(250)
         await page.evaluate(`[...document.querySelectorAll('a[href="/remote/usage"]')].find(link=>link.getBoundingClientRect().width>0)?.click()`)
         await until(page, `location.pathname === '/remote/usage' && document.querySelector('.route-panel--exiting') === null`)
+        await page.evaluate(`(() => { window.entrySamples = []; const sample = () => { const scroll = document.querySelector('.workspace__scroll'); const panel = document.querySelector('.remote-conversation-view'); if (scroll && panel && !panel.classList.contains('route-panel--idle') && getComputedStyle(panel).opacity !== '0' && getComputedStyle(panel).contentVisibility !== 'hidden') window.entrySamples.push(scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop) }; const tick = () => { window.entryFrame = requestAnimationFrame(() => { setTimeout(sample, 0); tick() }) }; tick() })()`)
         await page.evaluate(`[...document.querySelectorAll('a[href="/remote"]')].find(link=>link.getBoundingClientRect().width>0)?.click()`)
         await until(page, `location.pathname === '/remote' && document.querySelector('.route-panel--exiting') === null`)
-        const after = await page.evaluate<{ readonly scrollTop: number; readonly sameMessage: boolean }>(`({ scrollTop:document.querySelector('.workspace__scroll').scrollTop, sameMessage:window.anchorMessage===document.querySelector('.conversation-pane .transcript-message') })`)
-        expect(Math.abs(after.scrollTop - before) <= 1 && after.sameMessage).toBe(true)
+        await Bun.sleep(400)
+        const after = await page.evaluate<{ readonly distance: number; readonly sameMessage: boolean; readonly samples: readonly number[] }>(`(() => { cancelAnimationFrame(window.entryFrame); const scroll = document.querySelector('.workspace__scroll'); return { distance: scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop, sameMessage: window.anchorMessage === document.querySelector('.conversation-pane .transcript-message'), samples: window.entrySamples } })()`)
+        expect(after.distance, `${label} lands at the latest message`).toBeLessThanOrEqual(2)
+        expect(after.sameMessage, `${label} resident transcript`).toBe(true)
+        expect(after.samples.length, `${label} sampled visible frames`).toBeGreaterThan(0)
+        expect(Math.max(...after.samples), `${label} no visible frame at an inherited position`).toBeLessThanOrEqual(48)
+
+        const held = await page.evaluate<{ readonly top: number; readonly after: number }>(`(() => new Promise(resolve => { const scroll = document.querySelector('.workspace__scroll'); scroll.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -300 })); scroll.scrollTop = 200; scroll.dispatchEvent(new Event('scroll')); const top = scroll.scrollTop; document.querySelector('.conversation-pane').style.minHeight = '4200px'; setTimeout(() => resolve({ top, after: scroll.scrollTop }), 400) }))()`)
+        expect(Math.abs(held.after - held.top), `${label} a deliberate scroll-up is not forced back`).toBeLessThanOrEqual(2)
       }
     } finally { await page.close() }
-  }, 60_000)
+  }, 90_000)
 })
 
 async function capture(page: { screenshot(): Promise<string> }, name: string) {

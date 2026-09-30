@@ -205,7 +205,7 @@ export function UsagePage() {
                 const entry = () => days().find((item) => item.key === key)!
                 const height = () => entry().cost === 0 ? 2 : Math.max(4, entry().cost / Math.max(1, ...days().map((item) => item.cost)) * 138)
                 return <rect x={index() * 30 + 7} y={156 - height()} width="16" height={height()} rx="2" class={index() === 29 ? "usage-chart__bar usage-chart__bar--today" : "usage-chart__bar"}
-                  tabindex="0" role="img" aria-label={`${key}: estimated cost ${money(entry().cost)}, ${count(entry().requests)} requests, ${count(entry().tokens)} tokens`}
+                  tabindex="0" role="img" data-cursor="action" aria-label={`${key}: estimated cost ${money(entry().cost)}, ${count(entry().requests)} requests, ${count(entry().tokens)} tokens`}
                   onPointerEnter={(event) => { if (event.pointerType !== "touch") { setActiveDay(entry()); queueMicrotask(() => placeDay(event.clientX, event.clientY)) } }}
                   onPointerMove={(event) => { if (event.pointerType !== "touch") placeDay(event.clientX, event.clientY) }} onPointerLeave={(event) => { if (event.pointerType !== "touch") setActiveDay(undefined) }}
                   onFocus={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setActiveDay(entry()); queueMicrotask(() => placeDay(rect.left + rect.width / 2, rect.top + rect.height / 2)) }}
@@ -238,7 +238,7 @@ export function UsagePage() {
                   const segment = () => arcs().find((item) => item.providerID === id) ?? initial
                   return <circle class="usage-donut__arc" cx="100" cy="100" r="72" fill="none" stroke-width="26"
                     style={{ stroke: distributionColors[index() % distributionColors.length], "--usage-dash": `${segment().length} ${segment().circumference - segment().length}`, "--usage-circumference": segment().circumference, "stroke-dashoffset": segment().offset }}
-                    tabindex="0" role="img" aria-label={`${segment().label}: estimated cost ${money(providerCosts().get(id) ?? 0)}, ${Math.round(segment().share * 100)}% share${distributionMetric() === "tokens" ? `, ${count(segment().value)} tokens` : ""}`}
+                    tabindex="0" role="img" data-cursor="action" aria-label={`${segment().label}: estimated cost ${money(providerCosts().get(id) ?? 0)}, ${Math.round(segment().share * 100)}% share${distributionMetric() === "tokens" ? `, ${count(segment().value)} tokens` : ""}`}
                     onPointerEnter={(event) => { if (event.pointerType !== "touch") { setActiveProvider(id); queueMicrotask(() => placeProvider(event.clientX, event.clientY)) } }}
                     onPointerMove={(event) => { if (event.pointerType !== "touch") placeProvider(event.clientX, event.clientY) }} onPointerLeave={(event) => { if (event.pointerType !== "touch") setActiveProvider(undefined) }}
                     onFocus={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setActiveProvider(id); queueMicrotask(() => placeProvider(rect.left + rect.width / 2, rect.top + rect.height / 2)) }}

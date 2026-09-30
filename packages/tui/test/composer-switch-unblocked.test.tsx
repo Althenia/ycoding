@@ -1,7 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
+import type { ModelInfo, ModelRef, YCodingEvent } from "@ycoding-ai/client"
+import { mkdir } from "node:fs/promises"
+import path from "node:path"
 import { json } from "./fixture/tui-client"
 import { renderScreen } from "./screen/harness"
+import { isRecord } from "../src/util/record"
 
 const sessionID = "ses_composer_switch"
 const directory = "/tmp/ycoding/composer-switch"
@@ -140,6 +144,7 @@ async function typeAndSend(screen: Awaited<ReturnType<typeof renderScreen>>, tex
   expect(promptRow).toBeGreaterThan(-1)
   await screen.mouse.click(3, promptRow)
   await screen.input.typeText(text)
+  expect(await waitForFrameText(screen, text)).toBe(true)
   screen.input.pressEnter()
 }
 
@@ -203,6 +208,107 @@ test("steers immediately by interrupting the active step before the wake", async
     switchGate = undefined
     await screen.dispose()
   }
+}, 30_000)
+
+async function renderModelAuthority(input: { state: string; initial?: ModelRef; unselected?: boolean }) {
+  const state = path.resolve("../../.cache/tui-model-authority", input.state)
+  await mkdir(state, { recursive: true })
+  await Bun.write(path.join(state, "model.json"), JSON.stringify({ recent: [], favorite: [], variant: {} }))
+  let selected: ModelRef | undefined = input.unselected ? undefined : input.initial ?? session.model
+  let seq = 0
+  const switches: ModelRef[] = []
+  const prompts: { resume?: boolean; model: ModelRef | undefined }[] = []
+  const plain: ModelInfo = { ...model, id: "model-without-effort", modelID: "model-without-effort", name: "Plain model", variants: [], status: "active" }
+  const projected = new Map<string, unknown>()
+  const screen = await renderScreen({ width: 120, height: 45, state, args: { sessionID }, settle: "Message YCoding…", route: async (url, request) => {
+    if (url.pathname === "/api/session/active") return json({ data: {} })
+    if (url.pathname === "/api/session") return json({ data: [{ ...session, model: selected }], cursor: {} })
+    if (url.pathname === `/api/session/${sessionID}`) return json({ data: { ...session, model: selected } })
+    if (url.pathname === "/api/model") return json({ location, data: [{ ...model, status: "active" }, plain] satisfies ModelInfo[] })
+    if (url.pathname.startsWith(`/api/session/${sessionID}/message/`)) return json({ data: projected.get(url.pathname.split("/").at(-1)!) })
+    if (url.pathname === `/api/session/${sessionID}/model` && request.method === "POST") {
+      const body: unknown = await request.json()
+      if (!isRecord(body) || !isRecord(body.model) || typeof body.model.providerID !== "string" || typeof body.model.id !== "string" || body.model.variant !== undefined && typeof body.model.variant !== "string") throw new Error("Invalid model selection request")
+      selected = { providerID: body.model.providerID, id: body.model.id, ...(body.model.variant === undefined ? {} : { variant: body.model.variant }) }
+      switches.push(selected)
+      return new Response(null, { status: 204 })
+    }
+    if (url.pathname === `/api/session/${sessionID}/prompt` && request.method === "POST") {
+      const body: unknown = await request.json()
+      const prompt = promptBody(body)
+      if (!isRecord(body) || typeof body.id !== "string" || !prompt) throw new Error("Invalid prompt admission request")
+      prompts.push({ resume: prompt.resume, model: selected })
+      return json({ data: { id: body.id, sessionID, admittedSeq: prompts.length, timeCreated: 1, type: "user", data: { text: prompt.text, files: [] }, delivery: "steer" } })
+    }
+    return route(url, request)
+  } })
+  await screen.waitForEventStream()
+  return {
+    screen, switches, prompts,
+    selectExternal(next: ModelRef) {
+      selected = next
+      seq += 1
+      const id = `evt_authority_${seq}`
+      projected.set(id.replace(/^evt_/, "msg_"), { id: id.replace(/^evt_/, "msg_"), type: "model-switched", model: next, time: { created: seq + 3 } })
+      screen.events.emit({ id, created: seq + 3, durable: { aggregateID: sessionID, seq, version: 1 }, type: "session.model.selected", location: { directory }, data: { sessionID, model: next } } satisfies YCodingEvent)
+    },
+  }
+}
+
+const externalTargets: readonly ModelRef[] = [{ ...session.model, variant: "low" }, { providerID: "openai", id: "model-without-effort" }]
+for (const target of externalTargets) {
+  test(`ordinary submit follows external durable ${target.id} ${target.variant ?? "base"} without silently reselecting`, async () => {
+    const probe = await renderModelAuthority({ state: `external-${target.id}-${target.variant ?? "base"}` })
+    try {
+      probe.selectExternal(target)
+      expect(await waitForFrameText(probe.screen, target.variant ? "GPT 5.6 Terra · low" : "Plain model")).toBe(true)
+      if (!target.variant) expect(probe.screen.frame()).not.toContain("Plain model · high")
+      expect(probe.switches).toEqual([])
+      await typeAndSend(probe.screen, "follow the durable selection")
+      expect(await waitForFrameText(probe.screen, "Message YCoding…")).toBe(true)
+      expect(probe.switches).toEqual([])
+      expect(probe.prompts).toEqual([{ resume: false, model: target }, { resume: true, model: target }])
+    } finally { await probe.screen.dispose() }
+  }, 30_000)
+}
+
+test("a genuine pending effort survives an external durable model update and switches before admission", async () => {
+  const probe = await renderModelAuthority({ state: "pending-external" })
+  try {
+    await typeAndSend(probe.screen, "/variants")
+    expect(await waitForFrameText(probe.screen, "Select variant")).toBe(true)
+    probe.screen.input.pressKey("ARROW_DOWN")
+    probe.screen.input.pressEnter()
+    expect(await waitForFrameText(probe.screen, "Message YCoding…")).toBe(true)
+    probe.selectExternal({ providerID: "openai", id: "model-without-effort" })
+    expect(await waitForFrameText(probe.screen, "Plain model")).toBe(true)
+    await typeAndSend(probe.screen, "use my pending choice")
+    expect(await waitForFrameText(probe.screen, "Message YCoding…")).toBe(true)
+    const desired = { ...session.model, variant: "low" }
+    expect(probe.switches).toEqual([desired])
+    expect(probe.prompts).toEqual([{ resume: false, model: desired }, { resume: true, model: desired }])
+  } finally { await probe.screen.dispose() }
+}, 30_000)
+
+test("an unavailable durable effort retains the draft without silently repairing or admitting it", async () => {
+  const probe = await renderModelAuthority({ state: "unavailable-effort", initial: { ...session.model, variant: "max" } })
+  try {
+    await typeAndSend(probe.screen, "keep this invalid selection draft")
+    expect(await waitForFrameText(probe.screen, "Model selection needs attention")).toBe(true)
+    expect(probe.screen.frame()).toContain("keep this invalid selection draft")
+    expect(probe.switches).toEqual([])
+    expect(probe.prompts).toEqual([])
+  } finally { await probe.screen.dispose() }
+}, 30_000)
+
+test("an existing Session without a saved model admits on its default without persisting a UI fallback", async () => {
+  const probe = await renderModelAuthority({ state: "default-without-selection", unselected: true })
+  try {
+    await typeAndSend(probe.screen, "use the Session default")
+    expect(await waitForFrameText(probe.screen, "Message YCoding…")).toBe(true)
+    expect(probe.switches).toEqual([])
+    expect(probe.prompts).toEqual([{ resume: false, model: undefined }, { resume: true, model: undefined }])
+  } finally { await probe.screen.dispose() }
 }, 30_000)
 
 test("holds the composer behind an awaited model switch and admits on the selected variant", async () => {

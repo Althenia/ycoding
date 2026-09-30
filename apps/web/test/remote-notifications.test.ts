@@ -170,7 +170,9 @@ let noticeSeq = 0
 
 async function raised(test: Harness, category: NoticeCategory, sessionID = "ses_a") {
   const id = `ntc_${++noticeSeq}`
-  test.relay.pushNotices({ type: "notice.added", notices: [{ id, category, sessionID, createdAt: 1_000 + noticeSeq }], total: noticeSeq })
+  const notice = { id, category, sessionID, createdAt: 1_000 + noticeSeq }
+  test.relay.pushNotices({ type: "notice.added", notices: [notice], total: noticeSeq })
+  test.relay.pushNotices({ type: "notice.present", items: [{ kind: "notice", notice }] })
   await test.runUntil(() => test.store.state().notifications.some((entry) => entry.id === id))
   return id
 }
@@ -446,7 +448,9 @@ describe("remote notification delivery", () => {
     })
     try {
       await test.openSession()
-      test.relay.pushNotices({ type: "notice.added", notices: [{ id: "ntc_51", category: "approval-requested", sessionID: "ses_a", createdAt: 5 }], total: 1 })
+      const notice = { id: "ntc_51", category: "approval-requested" as const, sessionID: "ses_a", createdAt: 5 }
+      test.relay.pushNotices({ type: "notice.added", notices: [notice], total: 1 })
+      test.relay.pushNotices({ type: "notice.present", items: [{ kind: "notice", notice }] })
       test.relay.pushEvent("ses_a", { id: "evt_denied", type: "guardrail.decided", data: { decision: "deny" } })
       await test.flush()
       await Bun.sleep(30)

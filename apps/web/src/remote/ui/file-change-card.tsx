@@ -20,26 +20,26 @@ export function FileChangeCard(props: { readonly files: () => readonly CapturedF
         </span>
         <span class="file-change-card__chevron" aria-hidden="true"><Icon name="chevron-down" size={14} /></span>
       </button>
-      <ul class="file-change-card__files" id={filesID} hidden={!open()}><For each={props.files()}>{(file) => <FileChangeRow file={file} />}</For></ul>
+      <ul class="file-change-card__files" id={filesID} hidden={!open()}><For each={props.files().map((file) => file.path)}>{(path) => <FileChangeRow file={() => props.files().find((file) => file.path === path)!} />}</For></ul>
     </section>
   )
 }
 
-function FileChangeRow(props: { readonly file: CapturedFile }): JSX.Element {
+function FileChangeRow(props: { readonly file: () => CapturedFile }): JSX.Element {
   const [expanded, setExpanded] = createSignal(false)
   const id = createUniqueId()
-  const path = filePathParts(props.file.path)
+  const path = createMemo(() => filePathParts(props.file().path))
   return (
     <li class="file-change-card__file">
       <button type="button" class="file-change-card__file-toggle" aria-expanded={expanded()} aria-controls={id} onClick={() => setExpanded(!expanded())}>
-        <span class="file-change-card__path" title={props.file.path}><span class="file-change-card__directory">{path.directory}</span><span class="file-change-card__basename">{path.basename}</span></span>
-        <span class="file-change-card__file-counts"><span class="file-change-card__added">+{props.file.additions}</span><span class="file-change-card__removed">−{props.file.deletions}</span></span>
+        <span class="file-change-card__path" title={props.file().path}><span class="file-change-card__directory">{path().directory}</span><span class="file-change-card__basename">{path().basename}</span></span>
+        <span class="file-change-card__file-counts"><span class="file-change-card__added">+{props.file().additions}</span><span class="file-change-card__removed">−{props.file().deletions}</span></span>
         <span class="file-change-card__chevron" aria-hidden="true"><Icon name="chevron-down" size={14} /></span>
       </button>
-      <div class="file-change-card__diff" id={id} role="region" aria-label={`${props.file.files.length === 1 ? "Latest change" : "Recorded changes"} in ${props.file.path}`} hidden={!expanded()} tabindex="0">
+      <div class="file-change-card__diff" id={id} role="region" aria-label={`${props.file().files.length === 1 ? "Latest change" : "Recorded changes"} in ${props.file().path}`} hidden={!expanded()} tabindex="0">
         <Show when={expanded()}>
-          <For each={props.file.files}>{(patch, index) => <div class="file-change-card__patch">
-            <div class="file-change-card__diff-label">{props.file.files.length === 1 ? "Latest change" : `Change ${index() + 1}`}</div>
+          <For each={props.file().files}>{(patch, index) => <div class="file-change-card__patch">
+            <div class="file-change-card__diff-label">{props.file().files.length === 1 ? "Latest change" : `Change ${index() + 1}`}</div>
             <Show when={!patch.unavailable && parseUnifiedPatch(patch.diff)} fallback={<p class="file-change-card__unavailable">Diff unavailable for this file.</p>}>
               {(diff) => <>
               <div class="file-change-card__split" aria-label="Side-by-side diff">

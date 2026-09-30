@@ -11,6 +11,7 @@ const GROUP_TO_PROPERTY = {
   rounded: (name: string) => `--yc-radius-${name}`,
   elevation: (name: string) => name === "focus-ring" ? "--yc-focus-ring" : `--yc-shadow-${name}`,
   controls: (name: string) => `--yc-${name}`,
+  cursors: (name: string) => `--yc-cursor-${name}`,
   layout: (name: string) => `--yc-${name}`,
   layers: (name: string) => `--yc-z-${name}`,
   "motion.duration": (name: string) => `--yc-dur-${name}`,

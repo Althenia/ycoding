@@ -261,7 +261,7 @@ export const Plugin = {
             execute: (input, context) =>
               Effect.gen(function* () {
                 const messages = yield* runtime.session
-                  .messages({ sessionID: context.sessionID })
+                  .messages({ sessionID: context.sessionID, order: "asc" })
                   .pipe(Effect.mapError((error) => unableToLoad(input.id, error)))
                 const { SessionSkillStatus } = yield* Effect.promise(() => import("../session/skill-status"))
                 const statuses = SessionSkillStatus.list(messages, [])

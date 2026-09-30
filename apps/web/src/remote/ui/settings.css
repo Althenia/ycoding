@@ -1,0 +1,12 @@
+.machine-awake__status,
+.machine-awake__caveat {
+  flex-basis: 100%;
+}
+
+.machine-awake__status[data-tone="danger"] {
+  color: var(--yc-danger);
+}
+
+.machine-awake__status[data-tone="attention"] {
+  color: var(--yc-yellow-strong);
+}

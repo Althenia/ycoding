@@ -368,3 +368,206 @@ test("clicking a character selects its Session while camera dragging does not", 
   expect(Math.abs(after.x - before.x) + Math.abs(after.y - before.y)).toBeGreaterThan(1)
   await page.close()
 }, 30_000)
+
+const frameSummary = `window.__officeGame.scene.getScene('office').latestFrames.map(frame=>({id:frame.actor.sessionID,pose:frame.pose,direction:frame.direction,room:frame.room,moving:frame.moving,cell:{x:Math.floor(frame.position.x/32),y:Math.floor(frame.position.y/32)}}))`
+
+test("Office mouse cursors follow shared floor/action/panning roles and restore after release, exit and disposal", async () => {
+  const page = await requireBrowser().openPage()
+  try {
+    await page.navigate(url("tool", "&team=1"))
+    await page.evaluate(`import('/src/styles/base.css')`)
+    await waitFor(page, "window.__officeGame?.scene.getScene('office').latestFrames.length===2")
+    await page.evaluate(`(() => { const scene=window.__officeGame.scene.getScene('office'); const sprite=[...scene.objects.values()][1].sprite; scene.followSuspended=true; scene.cameras.main.centerOn(sprite.x,sprite.y); })()`)
+    await Bun.sleep(60)
+    const points = await page.evaluate<{ readonly actor: { readonly x: number; readonly y: number }; readonly floor: { readonly x: number; readonly y: number }; readonly outside: { readonly x: number; readonly y: number } }>(`(() => { const scene=window.__officeGame.scene.getScene('office'); const sprite=[...scene.objects.values()][1].sprite; const canvas=document.querySelector('.office-canvas-host canvas'); const r=canvas.getBoundingClientRect(); const p=scene.cameras.main.matrixCombined.transformPoint(sprite.x,sprite.y-14); return {actor:{x:r.left+p.x*r.width/canvas.width,y:r.top+p.y*r.height/canvas.height},floor:{x:r.left+10,y:r.bottom-10},outside:{x:r.left+10,y:r.top-10}}; })()`)
+    await page.mouse("mouseMoved", points.floor.x, points.floor.y)
+    await Bun.sleep(60)
+    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.office-canvas-host canvas')).cursor`)).toBe("grab")
+    await page.mouse("mouseMoved", points.actor.x, points.actor.y)
+    await waitFor(page, `getComputedStyle(document.querySelector('.office-canvas-host canvas')).cursor === 'pointer'`)
+    await page.mouse("mousePressed", points.actor.x, points.actor.y)
+    await waitFor(page, `getComputedStyle(document.querySelector('.office-canvas-host canvas')).cursor === 'grabbing'`)
+    expect(await page.evaluate<string>(`document.querySelector('canvas').style.cursor`)).toBe("var(--yc-cursor-action)")
+    await page.mouse("mouseMoved", points.actor.x + 30, points.actor.y + 15, true)
+    await waitFor(page, `getComputedStyle(document.querySelector('.office-canvas-host canvas')).cursor === 'grabbing'`)
+    await page.mouse("mouseReleased", points.actor.x + 30, points.actor.y + 15)
+    await waitFor(page, `document.querySelector('canvas').dataset.cursor === undefined`)
+    expect(await page.evaluate<string>(`document.querySelector('#selected-session').textContent`)).toBe("session-a")
+    const actor = await page.evaluate<{ readonly x: number; readonly y: number }>(`(() => { const scene=window.__officeGame.scene.getScene('office'); const sprite=[...scene.objects.values()][1].sprite; const canvas=document.querySelector('canvas'),r=canvas.getBoundingClientRect(),p=scene.cameras.main.matrixCombined.transformPoint(sprite.x,sprite.y-14); return {x:r.left+p.x*r.width/canvas.width,y:r.top+p.y*r.height/canvas.height}; })()`)
+    await page.mouse("mouseMoved", actor.x, actor.y)
+    await waitFor(page, `getComputedStyle(document.querySelector('canvas')).cursor === 'pointer'`)
+    await page.mouse("mousePressed", actor.x, actor.y)
+    await page.mouse("mouseReleased", actor.x, actor.y)
+    await waitFor(page, `document.querySelector('#selected-session').textContent === 'session-b' && document.querySelector('canvas').dataset.cursor === undefined`)
+    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('canvas')).cursor`)).toBe("pointer")
+    await page.mouse("mouseMoved", points.floor.x, points.floor.y)
+    await waitFor(page, `getComputedStyle(document.querySelector('canvas')).cursor === 'grab'`)
+    await page.mouse("mousePressed", points.floor.x, points.floor.y)
+    await page.mouse("mouseMoved", points.outside.x, points.outside.y, true)
+    await waitFor(page, `document.querySelector('canvas').dataset.cursor === undefined`)
+    await page.mouse("mouseReleased", points.outside.x, points.outside.y)
+    await page.mouse("mouseMoved", points.floor.x, points.floor.y)
+    await waitFor(page, `getComputedStyle(document.querySelector('canvas')).cursor === 'grab'`)
+    await page.mouse("mousePressed", points.floor.x, points.floor.y)
+    await page.evaluate(`window.cursorCanvas=document.querySelector('canvas'); [...document.querySelectorAll('button')].find((button)=>button.textContent==='Unmount office').click()`)
+    await waitFor(page, `document.querySelector('canvas') === null`)
+    await waitFor(page, `window.cursorCanvas.dataset.cursor === undefined`)
+    expect(await page.evaluate<string | null>(`window.cursorCanvas.dataset.cursor??null`)).toBeNull()
+    await page.mouse("mouseReleased", points.floor.x, points.floor.y)
+  } finally { await page.close() }
+})
+
+test("native touch cancellation clears Office panning without selecting or leaving a stuck role", async () => {
+  const page = await requireBrowser().openPage()
+  try {
+    await page.setMobileViewport(390, 844)
+    await page.navigate(url("tool"))
+    await page.evaluate(`import('/src/styles/base.css')`)
+    await waitFor(page, "window.__officeGame?.scene.getScene('office').objects.size>0")
+    const point = await page.evaluate<{ readonly x: number; readonly y: number }>(`(() => {const r=document.querySelector('canvas').getBoundingClientRect();return{x:r.left+10,y:r.bottom-10}})()`)
+    await page.touch("touchStart", point.x, point.y)
+    await waitFor(page, `document.querySelector('canvas').dataset.cursor === 'panning'`)
+    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('canvas')).cursor`)).toBe("grabbing")
+    await page.touch("touchCancel")
+    await waitFor(page, `document.querySelector('canvas').dataset.cursor === undefined`)
+    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('canvas')).cursor`)).toBe("grab")
+    expect(await page.evaluate<string>(`document.querySelector('#selected-session').textContent`)).toBe("session-a")
+  } finally { await page.close() }
+})
+type FrameSummary = readonly { readonly id: string; readonly pose: string; readonly direction: string; readonly room: string | undefined; readonly moving: boolean; readonly cell: { readonly x: number; readonly y: number } }[]
+
+async function openIdlePair(reduced = false) {
+  const page = await requireBrowser().openPage()
+  await page.setViewport(1440, 900)
+  await page.navigate(url("idle", "&team=1&teamIdle=1&workspace=1&freeCamera=1"))
+  await waitFor(page, "window.__officeGame?.scene.getScene('office').latestFrames.length===2")
+  if (reduced) await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle reduced motion')?.click()")
+  return page
+}
+
+test("idle agents play table tennis with a moving ball and visibly changing frames", async () => {
+  const page = await openIdlePair()
+  try {
+    const frames = await page.evaluate<FrameSummary>(frameSummary)
+    expect(frames.map((frame) => frame.cell)).toEqual([{ x: 14, y: 26 }, { x: 19, y: 26 }])
+    expect(frames.map((frame) => frame.direction)).toEqual(["right", "left"])
+    expect(frames.every((frame) => frame.pose === "play" && frame.room === "lounge" && !frame.moving)).toBe(true)
+    const samples: { readonly frames: readonly string[]; readonly ball: number; readonly visible: boolean; readonly animation: readonly string[] }[] = []
+    for (let step = 0; step < 18; step++) {
+      samples.push(await page.evaluate<(typeof samples)[number]>(`(()=>{const scene=window.__officeGame.scene.getScene('office');return {frames:scene.latestFrames.map(frame=>String(scene.objects.get(frame.actor.id).sprite.frame.name)),ball:scene.ball.x,visible:scene.ball.visible,animation:scene.latestFrames.map(frame=>scene.objects.get(frame.actor.id).sprite.anims.currentAnim?.key??'')}})()`))
+      await Bun.sleep(100)
+    }
+    expect(samples.every((sample) => sample.visible)).toBe(true)
+    expect(new Set(samples.map((sample) => Math.round(sample.ball))).size).toBeGreaterThanOrEqual(8)
+    expect(new Set(samples.map((sample) => sample.frames[0])).size).toBeGreaterThanOrEqual(2)
+    expect(new Set(samples.map((sample) => sample.frames[1])).size).toBeGreaterThanOrEqual(2)
+    expect(samples.every((sample) => sample.animation.every((key) => key.endsWith("-play")))).toBe(true)
+    await page.evaluate<void>(`(()=>{const scene=window.__officeGame.scene.getScene('office');scene.followSuspended=true;scene.fitting=false;scene.desiredZoom=scene.resolution*3.2;scene.cameras.main.setZoom(scene.desiredZoom);scene.cameras.main.centerOn(544,858)})()`)
+    await advance(page, 4)
+    await Bun.sleep(300)
+    const capture = join(captures, "table-tennis-play.png")
+    await Bun.write(capture, Buffer.from(await page.screenshot(), "base64"))
+    expect((await Bun.file(capture).arrayBuffer()).byteLength).toBeGreaterThan(12_000)
+  } finally { await page.close() }
+}, 30_000)
+
+test("any working or attention state ends play at once and removes the ball", async () => {
+  for (const state of ["tool", "attention", "thinking"] as const) {
+    const page = await openIdlePair()
+    try {
+      expect(await page.evaluate<boolean>("window.__officeGame.scene.getScene('office').ball.visible")).toBe(true)
+      await page.evaluate<void>(`(()=>{const select=document.querySelector('select[aria-label="Office state"]');select.value='${state}';select.dispatchEvent(new Event('change',{bubbles:true}))})()`)
+      await advance(page, 1)
+      const frames = await page.evaluate<FrameSummary>(frameSummary)
+      const root = frames.find((frame) => frame.id === "session-a")!
+      expect(root.pose, state).not.toBe("play")
+      expect(root.moving, state).toBe(true)
+      expect(await page.evaluate<boolean>("window.__officeGame.scene.getScene('office').ball.visible"), state).toBe(false)
+      expect(frames.find((frame) => frame.id === "session-b")!.pose, state).toBe("play")
+    } finally { await page.close() }
+  }
+}, 45_000)
+
+test("reduced motion shows static stand poses facing the table and no ball", async () => {
+  const page = await openIdlePair(true)
+  try {
+    await advance(page, 2)
+    const frames = await page.evaluate<FrameSummary>(frameSummary)
+    expect(frames.map((frame) => frame.pose)).toEqual(["stand", "stand"])
+    expect(frames.map((frame) => frame.direction)).toEqual(["right", "left"])
+    expect(await page.evaluate<boolean>("window.__officeGame.scene.getScene('office').ball.visible")).toBe(false)
+    const before = await page.evaluate<readonly number[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>frame.position.x)")
+    await advance(page, 40)
+    expect(await page.evaluate<readonly number[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>frame.position.x)")).toEqual(before)
+  } finally { await page.close() }
+}, 30_000)
+
+const entranceSampler = `(()=>{window.__entrances=[];const tick=()=>{const scene=window.__officeGame?.scene.getScene('office');for(const frame of scene?.latestFrames??[]){const x=Math.floor(frame.position.x/32),y=Math.floor(frame.position.y/32);if(frame.moving||y>=37)window.__entrances.push({id:frame.actor.id,moving:frame.moving,x,y})}requestAnimationFrame(tick)};tick()})()`
+
+test("initial loading is named over reserved geometry, then known members appear in place and reloads keep them", async () => {
+  const page = await requireBrowser().openPage()
+  try {
+    await page.setViewport(1440, 900)
+    await page.navigate(url("tool", "&team=multi&cue=0&hydrate=1&workspace=1&freeCamera=1"))
+    await waitFor(page, "window.__officeGame?.scene.getScene('office').ready===true")
+    await page.evaluate<void>(entranceSampler)
+    const rect = `(()=>{const box=(selector)=>{const r=document.querySelector(selector).getBoundingClientRect();return [r.left,r.top,r.width,r.height]};return {host:box('.office-canvas-host'),stage:box('.office-stage')}})()`
+    await waitFor(page, "document.querySelector('.office-notice[role=status]')?.textContent==='Loading the office…' && getComputedStyle(document.querySelector('.loading-placeholder--office')).visibility==='visible'")
+    const loading = await page.evaluate<{ readonly host: readonly number[]; readonly stage: readonly number[]; readonly frames: number; readonly placeholder: readonly number[] }>(`({...${rect},frames:window.__officeGame.scene.getScene('office').latestFrames.length,placeholder:(()=>{const r=document.querySelector('.loading-placeholder--office').getBoundingClientRect();return [r.left,r.top,r.width,r.height]})()})`)
+    expect(loading.frames).toBe(0)
+    expect(loading.placeholder[2]! * loading.placeholder[3]!).toBeGreaterThan(loading.host[2]! * loading.host[3]! * 0.8)
+    expect(loading.placeholder[0]!).toBeGreaterThanOrEqual(loading.stage[0]!)
+    expect(loading.placeholder[0]! + loading.placeholder[2]!).toBeLessThanOrEqual(loading.stage[0]! + loading.stage[2]! + 1)
+    await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Settle inputs')?.click()")
+    await waitFor(page, "window.__officeGame.scene.getScene('office').latestFrames.length===3 && !document.querySelector('.office-notice[role=status]')")
+    expect((await page.evaluate<typeof loading>(`({...${rect},frames:3,placeholder:[]})`)).host).toEqual(loading.host)
+    const placed = await page.evaluate<FrameSummary>(frameSummary)
+    expect(placed.every((frame) => !frame.moving)).toBe(true)
+    await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Reload inputs')?.click()")
+    await advance(page, 20)
+    await Bun.sleep(400)
+    expect(await page.evaluate<FrameSummary>(frameSummary)).toEqual(placed)
+    expect(await page.evaluate<boolean>("!document.querySelector('.office-notice[role=status]') && window.__officeGame.scene.getScene('office').latestFrames.every(frame=>!frame.leaving)")).toBe(true)
+    expect(await page.evaluate<readonly unknown[]>("window.__entrances")).toEqual([])
+  } finally { await page.close() }
+}, 45_000)
+
+test("switching scope and returning shows the same members in place without an entrance", async () => {
+  const page = await requireBrowser().openPage()
+  try {
+    await page.setViewport(1440, 900)
+    await page.navigate(url("tool", "&team=multi&cue=0&workspace=1&freeCamera=1&hydrate=1"))
+    await waitFor(page, "window.__officeGame?.scene.getScene('office').ready===true")
+    await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Settle inputs')?.click()")
+    await waitFor(page, "window.__officeGame.scene.getScene('office').latestFrames.length===3")
+    await page.evaluate<void>(entranceSampler)
+    const original = await page.evaluate<FrameSummary>(frameSummary)
+    for (let cycle = 0; cycle < 2; cycle++) {
+      await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Switch scope')?.click()")
+      await waitFor(page, "window.__officeGame.scene.getScene('office').latestFrames.length===0 && document.querySelector('.office-notice[role=status]')?.textContent==='Loading the office…'")
+      await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Settle inputs')?.click()")
+      await waitFor(page, "window.__officeGame.scene.getScene('office').latestFrames.length===3 && !document.querySelector('.office-notice[role=status]')")
+      const other = await page.evaluate<FrameSummary>(frameSummary)
+      expect(other.map((frame) => frame.cell)).toEqual(original.map((frame) => frame.cell))
+      expect(await page.evaluate<boolean>("window.__officeGame.scene.getScene('office').latestFrames.every(frame=>frame.actor.id.includes('other-device'))")).toBe(true)
+      await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Switch scope')?.click()")
+      await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Settle inputs')?.click()")
+      await waitFor(page, "window.__officeGame.scene.getScene('office').latestFrames.length===3 && window.__officeGame.scene.getScene('office').latestFrames.every(frame=>frame.actor.id.includes('fixture-device'))")
+      expect(await page.evaluate<FrameSummary>(frameSummary)).toEqual(original)
+    }
+    expect(await page.evaluate<readonly unknown[]>("window.__entrances")).toEqual([])
+  } finally { await page.close() }
+}, 45_000)
+
+test("inputs that settle within a beat never flash the loading notice", async () => {
+  const page = await requireBrowser().openPage()
+  await page.injectOnNewDocument("(()=>{window.__notices=[];new MutationObserver(()=>{const notice=document.querySelector('.office-notice[role=status]');if(notice)window.__notices.push(notice.textContent)}).observe(document,{subtree:true,childList:true,characterData:true});const settle=new MutationObserver(()=>{if(!document.querySelector('.office-canvas-host canvas'))return;settle.disconnect();[...document.querySelectorAll('button')].find(button=>button.textContent==='Settle inputs')?.click()});settle.observe(document,{subtree:true,childList:true})})()")
+  try {
+    await page.setViewport(1440, 900)
+    await page.navigate(url("tool", "&team=multi&cue=0&hydrate=1&workspace=1&freeCamera=1"))
+    await waitFor(page, "window.__officeGame.scene.getScene('office').latestFrames.length===3")
+    await Bun.sleep(400)
+    const notices = await page.evaluate<readonly string[]>("window.__notices")
+    expect(notices.filter((text) => text === "Loading the office…")).toEqual([])
+  } finally { await page.close() }
+}, 30_000)

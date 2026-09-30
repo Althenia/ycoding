@@ -576,6 +576,96 @@ describe("remote shell layout", () => {
     }
   }, 30_000)
 
+  test("keeps the selected-subagent bar compact, labelled, and contained at every width in both themes", async () => {
+    for (const [width, height] of [[320, 640], [390, 844], [820, 1180], [1440, 900]] as const) for (const theme of ["dark", "light"] as const) {
+      const page = await fixture("view=chat&team=two", width, "Stream remote output safely", theme, height)
+      try {
+        const coarse = width < 768
+        if (coarse) await page.setCoarsePointer(true)
+        await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`)
+        for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.app-header [aria-label="Open Team"]') !== null`); attempt += 1) await Bun.sleep(50)
+        await page.evaluate(`document.querySelector('.app-header [aria-label="Open Team"]').click()`)
+        for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.team-view__task[data-session-id="ses_child"] [data-action="open"]') !== null`); attempt += 1) await Bun.sleep(50)
+        await page.evaluate(`document.querySelector('.team-view__task[data-session-id="ses_child"] [data-action="open"]').click()`)
+        for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.subagent-bar [aria-label="Main session"]') !== null`); attempt += 1) await Bun.sleep(50)
+        await page.evaluate(`Promise.all(document.getAnimations().filter(animation => animation.effect?.getComputedTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => undefined)))`)
+        const label = `${width}px ${theme}`
+        const bar = await page.evaluate<{ readonly overflow: boolean; readonly contained: boolean; readonly agent: string; readonly status: string; readonly statusMark: boolean; readonly navigation: readonly { readonly name: string | null; readonly width: number; readonly height: number; readonly icon: boolean; readonly disabled: boolean }[]; readonly detailsMounted: boolean; readonly height: number; readonly mainHeight: number }>(`(() => {
+          const bar = document.querySelector('.subagent-bar'), box = bar.getBoundingClientRect()
+          const inside = [...bar.querySelectorAll('.subagent-bar__header > *, .subagent-bar__navigation button')].every((element) => { const rect = element.getBoundingClientRect(); return rect.left >= box.left - 1 && rect.right <= box.right + 1 })
+          return {
+            overflow: document.documentElement.scrollWidth > innerWidth, contained: inside,
+            agent: bar.querySelector('.subagent-bar__agent')?.textContent?.trim() ?? '', status: bar.querySelector('.subagent-bar__status')?.textContent?.trim() ?? '', statusMark: bar.querySelector('.subagent-bar__status .subagent-bar__mark') !== null,
+            navigation: [...bar.querySelectorAll('.subagent-bar__navigation button')].map((button) => { const rect = button.getBoundingClientRect(); return { name: button.getAttribute('aria-label'), width: rect.width, height: rect.height, icon: button.querySelector('svg') !== null, disabled: button.disabled } }),
+            detailsMounted: bar.querySelector('.subagent-bar__details') !== null, height: box.height, mainHeight: document.querySelector('.workspace__main').getBoundingClientRect().height
+          }
+        })()`)
+        expect(bar.overflow, `${label} page overflow`).toBe(false)
+        expect(bar.contained, `${label} contents inside the bar`).toBe(true)
+        expect(bar.agent.length, `${label} agent`).toBeGreaterThan(0)
+        expect(bar.status.length, `${label} status word`).toBeGreaterThan(0)
+        expect(bar.statusMark, `${label} status mark`).toBe(true)
+        expect(bar.navigation.map((item) => item.name), `${label} controls`).toEqual(["Main session", "Previous subagent", "Next subagent", "Subagent details"])
+        for (const item of bar.navigation) {
+          expect(item.icon, `${label} ${item.name} icon`).toBe(true)
+          expect(item.width, `${label} ${item.name} width`).toBeGreaterThanOrEqual(coarse ? 44 : 36)
+          expect(item.height, `${label} ${item.name} height`).toBeGreaterThanOrEqual(coarse ? 44 : 36)
+        }
+        expect(bar.navigation[0]?.disabled, `${label} Main session stays enabled`).toBe(false)
+        expect(bar.detailsMounted, `${label} details start unmounted`).toBe(false)
+        expect(bar.height, `${label} compact height`).toBeLessThanOrEqual(bar.mainHeight * 0.4)
+        await Bun.write(new URL(`../../../.cache/tmp/subagent-bar-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        await page.evaluate(`document.querySelector('.subagent-bar [aria-label="Subagent details"]').click()`)
+        await page.evaluate(`Promise.all(document.querySelector('dialog[aria-label="Subagent details"]').getAnimations({ subtree: true }).map((animation) => animation.finished))`)
+        const details = await page.evaluate<{ readonly contained: boolean; readonly description: string; readonly metrics: readonly string[]; readonly rollup: string; readonly dockHeight: number }>(`(() => {
+          const dialog = document.querySelector('dialog[aria-label="Subagent details"][open]')
+          return { contained: [...dialog.querySelectorAll('.subagent-bar__metric, .subagent-bar__description, .subagent-bar__rollup')].every((element) => { const rect = element.getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth }), description: dialog.querySelector('.subagent-bar__description').textContent, metrics: [...dialog.querySelectorAll('.subagent-bar__metric')].map((metric) => metric.querySelector('dt').textContent.trim() + ':' + metric.querySelector('dd').textContent.trim()), rollup: dialog.querySelector('.subagent-bar__rollup').textContent, dockHeight: document.querySelector('.subagent-bar').getBoundingClientRect().height }
+        })()`)
+        expect(details.contained, `${label} details contained`).toBe(true)
+        expect(details.description.length, `${label} task description`).toBeGreaterThan(0)
+        expect(details.metrics.length, `${label} metric cells`).toBeGreaterThan(0)
+        expect(details.metrics.every((metric) => /^(Model|Tokens|Cache|Cost|Context):.+/.test(metric)), `${label} metric labels ${details.metrics.join("|")}`).toBe(true)
+        expect(details.rollup, `${label} roll-up`).toContain("Rolls up to")
+        expect(details.dockHeight, `${label} details do not consume transcript height`).toBeCloseTo(bar.height, 2)
+        await page.pressEscape()
+        expect(await page.evaluate<boolean>(`document.activeElement?.getAttribute('aria-label') === 'Subagent details'`), `${label} focus returns`).toBe(true)
+      } finally { await page.close() }
+    }
+  }, 120_000)
+
+  test("pairs an icon with each Conversation and Office option in one keyboard-operable segmented switch", async () => {
+    for (const [width, height] of [[820, 1180], [1024, 768], [1440, 900]] as const) for (const theme of ["dark", "light"] as const) {
+      const page = await fixture("view=chat", width, "Stream remote output safely", theme, height)
+      try {
+        await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`)
+        for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelectorAll('.presentation-switch [role="radio"]').length === 2`); attempt += 1) await Bun.sleep(50)
+        await page.evaluate(`Promise.allSettled(document.getAnimations().filter(animation => animation.effect?.getComputedTiming().iterations !== Infinity).map(animation => animation.finished))`)
+        const label = `${width}px ${theme}`
+        const read = () => page.evaluate<{ readonly options: readonly { readonly text: string; readonly icon: boolean; readonly height: number; readonly checked: string | null; readonly tab: number }[]; readonly indicatorAligned: boolean; readonly overflow: boolean; readonly geometry: readonly number[] }>(`(() => {
+          const options = [...document.querySelectorAll('.presentation-switch [role="radio"]')], selected = document.querySelector('.presentation-switch [aria-checked="true"]'), indicator = document.querySelector('.presentation-switch__indicator')
+          const a = selected.getBoundingClientRect(), b = indicator.getBoundingClientRect()
+          return { options: options.map((option) => ({ text: option.textContent.trim(), icon: option.querySelector('svg') !== null, height: option.getBoundingClientRect().height, checked: option.getAttribute('aria-checked'), tab: option.tabIndex })), geometry: [a.left, b.left, a.width, b.width], indicatorAligned: Math.abs(a.left - b.left) <= 2 && Math.abs(a.width - b.width) <= 2, overflow: document.documentElement.scrollWidth > innerWidth }
+        })()`)
+        const initial = await read()
+        expect(initial.options.map((option) => option.text.replace(/\s+/g, " ")), label).toEqual(["Conversation", "Office"])
+        for (const option of initial.options) {
+          expect(option.icon, `${label} ${option.text} icon`).toBe(true)
+          expect(option.height, `${label} ${option.text} height`).toBeGreaterThanOrEqual(44)
+        }
+        expect(initial.options.map((option) => option.checked), label).toEqual(["true", "false"])
+        expect(initial.indicatorAligned, `${label} selection indicator`).toBe(true)
+        expect(initial.overflow, `${label} overflow`).toBe(false)
+        await page.evaluate(`document.querySelector('.presentation-switch [aria-checked="true"]').focus()`)
+        await page.pressKey("ArrowRight", "ArrowRight", 39)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.presentation-switch [role="radio"]:last-child')?.getAttribute('aria-checked') === 'true'`); attempt += 1) await Bun.sleep(50)
+        await page.evaluate(`Promise.allSettled(document.querySelector('.presentation-switch__indicator').getAnimations().map(animation => animation.finished))`)
+        const moved = await read()
+        expect(moved.options.map((option) => option.checked), `${label} arrow key selects Office`).toEqual(["false", "true"])
+        expect(moved.indicatorAligned, `${label} indicator follows ${moved.geometry.join(",")}`).toBe(true)
+      } finally { await page.close() }
+    }
+  }, 120_000)
+
   test("shows running roots before recent cross-workspace Sessions on desktop and phone", async () => {
     for (const [width, height] of [[1440, 900], [390, 844]] as const) {
       const page = await fixture(`scenario=session-list-${width}`, width, "Async Auth Token Revocation Migration")
@@ -882,47 +972,79 @@ describe("remote shell layout", () => {
     await page.close()
   }, 30_000)
 
-  for (const width of [390, 1440] as const) test(`shows the Sent outcome toast below the header at ${width}px, then pauses and expires it like a notification toast`, async () => {
-    const page = await fixture("view=chat", width, "Stream remote output safely")
-    try {
-      await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`)
-      await page.evaluate(`(() => {
+  const submitPrompt = (text: string) => `(() => {
         const input=document.querySelector('.composer__input');
-        input.value='Work on A';
+        input.value=${JSON.stringify(text)};
         input.dispatchEvent(new InputEvent('input',{bubbles:true}));
         document.querySelector('button[aria-label="Send prompt"]')?.click();
-      })()`)
-      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.mutation-toast--sent') !== null`); attempt += 1) await Bun.sleep(50)
-      const placement = await page.evaluate<{ role: string | null; layer: boolean; belowHeader: boolean; covered: readonly string[] }>(`(() => {
-        const toast = document.querySelector('.mutation-toast--sent'), box = toast.getBoundingClientRect();
+      })()`
+  const cleanFixture = `(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`
+
+  for (const width of [390, 1440] as const) test(`a successful send raises no popup and keeps its inline receipt at ${width}px`, async () => {
+    const page = await fixture("view=chat&promptOutcome=hold", width, "Stream remote output safely")
+    try {
+      await page.evaluate(cleanFixture)
+      await page.evaluate(submitPrompt("Work on A"))
+      for (let attempt = 0; attempt < 40 && await page.evaluate<number>(`window.remoteMutationReport().filter(request => request.operation === 'session.prompt').length`) === 0; attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.mutation-toast, .yc-toast').length`)).toBe(0)
+      await page.evaluate(`window.remoteReleasePrompt('ok')`)
+      await Bun.sleep(600)
+      const state = await page.evaluate<{ readonly popups: number; readonly receipts: number; readonly text: boolean }>(`({ popups: document.querySelectorAll('.mutation-toast, .yc-toast').length, receipts: document.querySelectorAll('.transcript-message--user .transcript-message__receipt').length, text: document.body.innerText.includes('Work on A') })`)
+      expect(state.popups).toBe(0)
+      expect(state.receipts).toBeGreaterThan(0)
+      expect(state.text).toBe(true)
+      await Bun.sleep(1_500)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.mutation-toast, .yc-toast').length`)).toBe(0)
+    } finally { await page.close() }
+  }, 30_000)
+
+  for (const width of [390, 1440] as const) test(`an unknown or failed send raises one alert below the header that pauses on hover and focus, dismisses, expires, and keeps a safe retry at ${width}px`, async () => {
+    const page = await fixture("view=chat&promptOutcome=unknown", width, "Stream remote output safely")
+    try {
+      await page.evaluate(cleanFixture)
+      await page.evaluate(submitPrompt("Work on A"))
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.mutation-toast--unknown') !== null`); attempt += 1) await Bun.sleep(50)
+      const placement = await page.evaluate<{ role: string | null; layer: boolean; belowHeader: boolean; covered: readonly string[]; text: string }>(`(() => {
+        const toast = document.querySelector('.mutation-toast--unknown'), box = toast.getBoundingClientRect();
         const controls = [...document.querySelectorAll('.app-header :is(a,button,input,select), .workspace__topbar :is(a,button,input,select)')];
         return {
           role: toast.getAttribute('role'),
           layer: toast.parentElement?.classList.contains('yc-toasts') === true,
           belowHeader: box.top >= document.querySelector('.app-header').getBoundingClientRect().bottom,
-          covered: controls.filter((control) => { const other = control.getBoundingClientRect(); return other.width > 0 && box.left < other.right && box.right > other.left && box.top < other.bottom && box.bottom > other.top }).map((control) => control.getAttribute('aria-label') ?? control.textContent?.trim() ?? control.className),
+          covered: controls.filter((control) => { const other = control.getBoundingClientRect(); return other.width > 0 && box.left < other.right && box.right > other.left && box.top < other.bottom && box.bottom > other.top }).map((control) => control.getAttribute('aria-label') ?? control.textContent.trim()),
+          text: toast.textContent
         };
       })()`)
-      expect(placement).toEqual({ role: "status", layer: true, belowHeader: true, covered: [] })
-      await page.evaluate(`document.querySelector('.mutation-toast--sent').dispatchEvent(new MouseEvent('mouseenter'))`)
-      expect(await page.evaluate<boolean>(`document.querySelector('.mutation-toast--sent').classList.contains('yc-toast--paused')`)).toBe(true)
+      expect(placement).toMatchObject({ role: "alert", layer: true, belowHeader: true, covered: [] })
+      expect(placement.text).toContain("Outcome unknown")
+      expect(await page.evaluate<number>(`document.querySelectorAll('.mutation-toast').length`)).toBe(1)
+      const retryBefore = await page.evaluate<number>(`window.remoteMutationReport().filter(request => request.operation === 'session.prompt').length`)
+      expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.transcript-message__send-error button')].some(button => button.textContent.trim() === 'Retry send')`)).toBe(true)
+
+      await page.evaluate(`document.querySelector('.mutation-toast--unknown').dispatchEvent(new MouseEvent('mouseenter'))`)
+      expect(await page.evaluate<boolean>(`document.querySelector('.mutation-toast--unknown').classList.contains('yc-toast--paused')`)).toBe(true)
       await Bun.sleep(6_500)
-      expect(await page.evaluate<boolean>(`document.querySelector('.mutation-toast--sent') !== null`)).toBe(true)
-      await page.evaluate(`document.querySelector('.mutation-toast--sent').dispatchEvent(new MouseEvent('mouseleave'))`)
-      await Bun.sleep(6_600)
-      expect(await page.evaluate<boolean>(`document.querySelector('.mutation-toast--sent') === null`)).toBe(true)
-      await page.evaluate(`(() => {
-        const input=document.querySelector('.composer__input');
-        input.value='Work on B';
-        input.dispatchEvent(new InputEvent('input',{bubbles:true}));
-        document.querySelector('button[aria-label="Send prompt"]')?.click();
-      })()`)
-      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.mutation-toast--sent') !== null`); attempt += 1) await Bun.sleep(50)
-      expect(await page.evaluate<boolean>(`document.querySelector('.mutation-toast--sent') !== null`)).toBe(true)
-      await Bun.sleep(6_600)
-      expect(await page.evaluate<boolean>(`document.querySelector('.mutation-toast--sent') === null`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.querySelector('.mutation-toast--unknown') !== null`)).toBe(true)
+      await page.evaluate(`document.querySelector('.mutation-toast--unknown .yc-toast__close').focus()`)
+      await page.evaluate(`document.querySelector('.mutation-toast--unknown').dispatchEvent(new MouseEvent('mouseleave'))`)
+      await Bun.sleep(6_500)
+      expect(await page.evaluate<boolean>(`document.querySelector('.mutation-toast--unknown') !== null`)).toBe(true)
+      await page.evaluate(`document.querySelector('.mutation-toast--unknown .yc-toast__close').blur()`)
+      await Bun.sleep(6_800)
+      expect(await page.evaluate<boolean>(`document.querySelector('.mutation-toast--unknown') === null`)).toBe(true)
+      expect(await page.evaluate<number>(`window.remoteMutationReport().filter(request => request.operation === 'session.prompt').length`)).toBe(retryBefore)
+      expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.transcript-message__send-error button')].some(button => button.textContent.trim() === 'Retry send')`)).toBe(true)
+
+      await page.evaluate(`[...document.querySelectorAll('.transcript-message__send-error button')].find(button => button.textContent.trim() === 'Retry send').click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.mutation-toast--unknown') !== null`); attempt += 1) await Bun.sleep(50)
+      const ids = await page.evaluate<readonly string[]>(`window.remoteMutationReport().filter(request => request.operation === 'session.prompt').map(request => request.input.id)`)
+      expect(ids.length).toBe(retryBefore + 1)
+      expect(new Set(ids).size).toBe(1)
+      await page.evaluate(`document.querySelector('.mutation-toast--unknown .yc-toast__close').click()`)
+      for (let attempt = 0; attempt < 40 && await page.evaluate<boolean>(`document.querySelector('.mutation-toast--unknown') !== null`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<boolean>(`document.querySelector('.mutation-toast--unknown') === null && document.querySelector('.transcript-message__send-error') !== null`)).toBe(true)
     } finally { await page.close() }
-  }, 40_000)
+  }, 60_000)
 
   test("uses the SVG chevron primitive without polluting the Device control name at compact and desktop widths", async () => {
     for (const width of [390, 1440] as const) {

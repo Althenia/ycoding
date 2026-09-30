@@ -26,9 +26,9 @@ vocabulary changes the contract for all three at once.
 | `GET` | `/api/me` | browser session | not required | Owner, session expiry, and device list (read-only, no `Set-Cookie`) |
 | `GET` | `/api/devices` | browser session | not required | `{ devices: RemoteDeviceInfo[] }` (pinned `DevicesResponse`) |
 | `GET` | `/api/push/key` | browser session | not required | `{ publicKey }`; `503` if VAPID is unavailable |
-| `POST` | `/api/push/subscriptions` | browser session | same-origin required | Upsert `{ endpoint, keys: { p256dh, auth }, categories }` for this account, or renew `{ endpoint, keys, replaces }`; `404` if `replaces` is not this account's subscription |
+| `POST` | `/api/push/subscriptions` | browser session | same-origin required | Upsert `{ endpoint, keys: { p256dh, auth }, categories }` as this browser's registration, or renew `{ endpoint, keys, replaces }`; `404` if `replaces` is not this account's subscription |
 | `DELETE` | `/api/push/subscriptions` | browser session | same-origin required | Remove `{ endpoint }` for this account |
-| `POST` | `/api/push/test` | browser session | same-origin required | Send one test alert to this account's stored `{ endpoint }`; `{ outcome, status? }`, `404` unknown, `429` within 60 s |
+| `POST` | `/api/admin/push/test` | admin bearer | none (operator client) | Send one test alert to the registered `{ accountID, endpoint }` pair; `{ outcome, status? }`, `404` unknown, `429` within 60 s; acceptance does not confirm OS display |
 | `POST` | `/api/devices/enrollments` | browser session | same-origin required | Mint a one-use enrollment code |
 | `POST` | `/api/devices/enroll` | enrollment code | none (native agent) | Register a device public key |
 | `POST` | `/api/devices/challenge` | none (rate limited) | none (native agent) | Mint a one-use device challenge |
@@ -228,8 +228,8 @@ invalid everywhere afterward. Another invite creates a new independent owner.
 Every relay command path requires an authenticated owner, an authenticated device
 owned by that account, a non-revoked device, and a live browser session. The local
 agent resolves scoped Session IDs against its backend before execution. The relay
-re-checks session expiry and device revocation from D1 on each command rather than
-trusting the connection's upgrade state.
+checks session expiry and applies the bounded D1 revalidation policy below rather
+than trusting the connection's upgrade state for its lifetime.
 
 ## 3. Relay transport
 
@@ -250,11 +250,14 @@ trusting the connection's upgrade state.
 - Browser-session logout and rotation, and device revocation, push a close to every
   Durable Object the owner may hold sockets in; logout and rotation notify each
   owned device object, not a single one.
-- Revocation is also fail-closed without the push: a restored connection re-validates
-  authority when the object wakes, and every event delivery re-validates the
-  recipient's session and device at most once per `5s` window before the frame is
-  sent. A revoked or expired recipient is closed (`4401`) and never receives the
-  event. A refusal never suppresses the close.
+- Revocation is also enforced without the push: a restored connection re-validates
+  authority when the object wakes. Commands and Session-event delivery reuse a
+  successful session/device check for at most `5s`. Status and every notice fanout
+  freshly validate each recipient and recheck connection ownership and expiry
+  after the lookup. Browser-session revocation or expiry closes the recipient
+  (`4401`); a failed fresh authority lookup closes it with retryable `1011` and
+  sends no status or notice frame. An authority lookup failure does not mark
+  notice storage unavailable.
 
 ### 3.2 Envelope
 
@@ -267,12 +270,14 @@ One JSON object per WebSocket frame, discriminated by `type`.
 | `event` | agent → relay → clients | `{ type:"event", sessionID, event }` |
 | `sessions` | agent → relay → clients | `{ type:"sessions" }` |
 | `status` | agent → relay → clients | `{ type:"status", running:[rootSessionID,...], attention:[rootSessionID,...], outstanding?:[rootSessionID,...], failed?:[rootSessionID,...] }` |
+| `completions` | agent → relay only | `{ type:"completions", data:[{ id, seq, created, sessionID },...], more:boolean }` |
 | `request` (`notice.subscribe`, `notice.list`, `notice.read`, `notice.readAll`) | client → relay | `{ type:"request", id, operation, input? }`; answered by the relay itself, never forwarded to the agent |
 | `notice.added` | relay → subscribed clients | `{ type:"notice.added", notices:[Notice,...], total }` (1–100 entries) |
 | `notice.removed` | relay → subscribed clients | `{ type:"notice.removed", ids:[noticeID,...], total }` |
 | `notice.cleared` | relay → subscribed clients | `{ type:"notice.cleared" }` |
 | `notice.unavailable` | relay → subscribed clients | `{ type:"notice.unavailable" }` |
 | `notice.offline` | relay → subscribed clients | `{ type:"notice.offline", at }` (confirmed machine outage; `at` is the agent's close time) |
+| `notice.present` | relay → one subscribed client per browser | `{ type:"notice.present", items:[{ kind:"notice", notice:Notice } \| { kind:"offline", at },...] }` (1–100 unique items; the only frame that raises a page System alert) |
 | `subscriptions` | relay → agent | `{ type:"subscriptions", clientID, sessionIDs:[...] }` |
 | `ping` | either direction | `{ type:"ping" }` |
 | `pong` | either direction | `{ type:"pong" }` |
@@ -296,7 +301,8 @@ Relay rules:
   rereading the Session groups and the selected group's first `session.list` page.
   The agent sends it for membership and list-metadata changes, not for activity
   that only advances a Session's updated time.
-- `status` reports running root families, roots needing human attention, and
+- `status` reports root families with foreground execution or a live background
+  shell, roots needing human attention, and
   optional `outstanding` roots with non-executing work. An absent `outstanding`
   means none. It includes admitted inputs, background shell notices, active
   subagent tasks or undelivered parent notices, and active goals, excluding roots
@@ -310,10 +316,24 @@ Relay rules:
   execution/request/work state to at most one later frame per 250 ms. The relay
   validates and broadcasts it unchanged to each device client; a new client
   receives the latest frame from the live agent. Execution-only changes read
-  process activity and one aggregate outstanding-work read without rescanning
+  the aggregate outstanding-work read's `running` set without rescanning
   pending requests; request transitions and inventory changes refresh the
   pending-request set before publishing. The connector reads persisted failed
   state on connect and updates it from execution start/failure events afterward.
+
+- `completions` carries at most 200 explicit accepted work receipts per frame.
+  Each receipt has a bounded `evt_` ID, positive safe-integer per-Session `seq`,
+  nonnegative safe-integer epoch-millisecond `created`, and a bounded root
+  `sessionID`; a frame cannot repeat a Session. Neither browser requests nor
+  relay-to-browser frames accept this envelope. The connector obtains receipts
+  from authenticated `GET /api/session/completions`, never from transcript text
+  or idle status. It sends every page in Session-ID order, sets `more` while a
+  next page exists, and sends a final frame even for an empty read. Connection
+  opens, local event-stream recovery, explicit `session.work.completed` events,
+  and periodic inventory refreshes synchronize receipts. Reads and queued sends
+  are fenced to their connection opening; failed reads or sends retry from the
+  first page without declaring a partial synchronization complete. Only the
+  latest accepted receipt per root is reconciled after an interruption.
 
 - The client's registered subscription is updated when a `session.subscribe` or
   `session.unsubscribe` response succeeds.
@@ -348,41 +368,61 @@ Endpoints must use HTTPS on `fcm.googleapis.com`,
 `push.apple.com`, or a subdomain of `notify.windows.com`; URL credentials,
 nonstandard ports, and fragments are rejected. `p256dh` is an uncompressed
 65-byte P-256 public point and `auth` is 16 bytes, both unpadded base64url.
-An account retains at most ten subscriptions; a new one evicts the oldest.
-The relay stores only endpoint, browser encryption keys, account owner,
-created time, consecutive failures, the last test-alert time, and the
-subscription's System categories. It deletes a 404/410 endpoint or one that
+Each subscription belongs to the verified browser session that wrote it, taken
+only from the request's session cookie, never from the request body. Registration
+and renewal check that the account and browser session remain live in the same
+transaction as every mutation. Expiry, revocation, or rotation during request
+processing returns `401` without changing any subscription. A browser holds at
+most one subscription. Registering or renewing replaces that browser's
+previous subscription in the same transaction, and registering an endpoint
+another browser holds moves it to the registering browser. Rotating a browser
+session moves its subscription to the replacement session in the transaction
+that installs it. An account retains at most ten subscriptions; a new one
+evicts the oldest. The relay stores only endpoint, browser encryption keys,
+account owner, owning browser session, created time, consecutive failures, the
+last test-alert time, and the subscription's System categories. It deletes a 404/410 endpoint or one that
 reaches five other failed deliveries.
 
 `categories` is `{ "agent-completed", "approval-requested", "machine-offline" }`,
 each a boolean and all three required. Each subscription receives only the
 categories it enabled; the browser sends its System switches when it enables
 push, on every workspace load, and whenever a System switch changes, and reports
-a failed update as unsaved. Subscriptions stored before categories existed have
-all three enabled. A renewal `{ endpoint, keys, replaces }` comes from the
+a failed update as unsaved. A renewal `{ endpoint, keys, replaces }` comes from the
 service worker when the browser replaces a subscription: the relay copies the
-replaced subscription's categories to the new endpoint and deletes the replaced
-row atomically; when the replaced row is gone it answers `404` and stores
+replaced subscription's categories to the new endpoint, assigns it to the
+renewing browser session, and deletes the replaced row atomically; when the
+replaced row is gone it answers `404` and stores
 nothing, so the next workspace load registers the active subscription with that
 browser's own choices. Exactly one of `categories` or `replaces` is present. A
 browser that replaces its subscription without reporting the replaced one sends
 no renewal; that browser receives no closed-app push until YCoding next loads in
-it and registers the active subscription, and the relay deletes the unreported
-old endpoint once its push service answers `404` or `410`.
+it and registers the active subscription, which replaces the unreported old
+endpoint.
 
-`POST /api/push/test` accepts `{ endpoint }` only for a subscription this account
-already stored and sends one push with plaintext `{ category: "test" }`, TTL 60,
-high urgency, and no Topic. It admits one test per subscription per 60 seconds.
+`POST /api/admin/push/test` requires the configured admin Bearer credential and
+accepts exactly `{ accountID, endpoint }` for an existing registered pair. The
+endpoint must pass the same HTTPS push-host allowlist as registration. It sends
+one push with plaintext `{ category: "test" }`, TTL 60, high urgency, and no
+Topic, using only stored encryption keys. Browser cookies cannot authorize the
+route. It admits one test per subscription per 60 seconds, including failed
+delivery attempts; it never sends to an arbitrary destination or broadcasts.
 The answer is `{ outcome: "accepted" | "rejected" | "expired", status }` with the
 push service's HTTP status, or `{ outcome: "unreachable" }` when no response
-arrived. `expired` (404/410) deletes the subscription. Acceptance means the push
+arrived within the 10-second delivery deadline. `expired` (404/410) deletes the subscription. Acceptance means the push
 service took the message, not that the device displayed it.
 
 The first `status` frame after agent connect or Durable Object restore is a
-silent push baseline. Later newly attentive roots emit `approval-requested`;
-roots leaving the union of `running` and `outstanding` emit `agent-completed`
-only if they are not attentive. Attention wins over completion. The same
-transitions are recorded as device notices (section 3.2a) before the push is sent.
+silent attention baseline. Later newly attentive roots emit `approval-requested`.
+Work-finished notices come only from accepted `completions` receipts. The first
+receipt synchronization is silent through its first `more:false` frame. The
+Durable Object persists that initialization marker and a per-Session sequence
+high-water mark. Each newer received receipt atomically advances its mark and
+inserts an `agent-completed` notice before push dispatch. Duplicate or older
+receipts, reconnects, process restarts, and reading or clearing notices cannot
+replay that completion. Failed storage rolls back both changes, reports notice
+sync unavailability, and leaves the receipt retryable; no completion push is
+sent without its stored notice. Running, outstanding, and transcript transitions
+never create work-finished notices.
 The push plaintext has only `{ category, sessionID, deviceID, noticeID? }`;
 `noticeID` names the stored notice and is absent only when notice storage failed.
 Browsers tag a notice alert `ycoding-<deviceID>-<noticeID>`, so the page alert
@@ -392,7 +432,7 @@ and the tag `ycoding-<deviceID>-offline-<offlineAt>`, where `offlineAt` is the c
 time stored in the confirmed offline check. Every plaintext is encrypted using RFC 8291
 `aes128gcm` and authenticated using RFC 8292 ES256 VAPID. The JWT audience is
 the endpoint origin and expires within twelve hours. Approval uses TTL 3600
-and high urgency; stopped-work uses TTL 600 and normal urgency; machine offline
+and high urgency; completed work uses TTL 600 and normal urgency; machine offline
 uses TTL 3600 and normal urgency. A Topic of at most 32 base64url characters
 derived from the Session ID (device ID for machine offline) and category
 collapses repeats that the push service has not delivered yet.
@@ -410,9 +450,9 @@ the check for the alarm's retry. It then deletes the check unless an agent
 attached or another confirmation settled it during the read, and, if the device
 is still active, sends `notice.offline` with the check's close time to every
 notice-subscribed browser of that device and one `machine-offline` push to each
-subscription that enabled it. Open browsers raise their Machine offline alert
-only from that frame, with the same tag as the push, so the page alert and the
-push for one outage show one banner while a later outage alerts again. The check
+subscription that enabled it. That frame adds the in-app entry only; its System
+alert follows the presentation rule in section 3.2a, so one outage raises at most
+one alert per browser while a later outage alerts again. The check
 survives hibernation, and a close delivered after a wake still counts.
 
 The relay drops pushes beyond twenty events per device per minute, machine
@@ -430,8 +470,8 @@ Each notice occupies a row in the device's SQLite-backed Durable Object storage.
 No age limit, count limit, or push-rate limit removes or suppresses stored notices.
 Deleting the device deletes its log.
 
-- A connection receives no notice frame until it sends `notice.subscribe`; the
-  relay answers with the newest page `{ notices, next?, total, unavailable }`
+- A connection receives no notice frame until it sends `notice.subscribe`
+  (no `input`); the relay answers with the newest page `{ notices, next?, total, unavailable }`
   (at most 50 notices, newest first) and persists the opt-in on the connection,
   so a wake from hibernation still delivers additions and removals. The page is
   a read, never a new event: clients must not alert on it. `notice.list` requires
@@ -448,6 +488,28 @@ Deleting the device deletes its log.
   replies carry `unavailable: true`; existing rows remain readable and can be
   dismissed or cleared with `notice.readAll`. The browser shows a sync error
   rather than claiming all transitions were saved.
+- System alerts have one owner per browser, where a browser is the relay-verified
+  browser session behind its authentication cookie. For each new notice or
+  confirmed outage the presenter is the earliest-attached notice-subscribed
+  connection of that browser. When the event is pushed, the relay waits for the
+  push outcomes, each naming the browser session that owns its subscription.
+  Every push request is abandoned as `unreachable` when the push service has not
+  answered within 10 seconds, and is never retried. A browser whose subscription
+  the push service accepted keeps the alert with its service worker, and so does
+  a browser whose push is `unreachable`: its delivery is unknown, so its page
+  raises nothing, and the alert may never be shown. Every other browser that had a presenter when the event was admitted,
+  including one without a subscription, one whose push was not sent (its
+  category is off), rejected, or expired, and every browser when the subscription
+  read failed before any request, gets `notice.present` sent to its presenter at
+  the time the outcomes settle. Every event beyond the push limit gets
+  `notice.present` at once. Before sending a page fallback, the relay freshly
+  validates the current presenter's session/device authority, including after
+  asynchronous push settlement. A settled outcome with no attached subscribed
+  connection in that browser is dropped, so a later tab never replays it. The
+  relay keeps the event that admitted a push open until the outcomes settle and
+  any fallback is sent. Browsers raise a System alert only from
+  `notice.present`; `notice.added` and `notice.offline` update the in-app list
+  only.
 - Notice requests need the client's own authority (a live, unrevoked browser
   session for the device's owner) but no connected agent; a failed authority check
   closes the connection like any other request.
@@ -508,11 +570,14 @@ grouping and Session-list filters are derived from backend metadata.
 | `usage.providers` | no | `v2.providerUsage.list` | `GET /api/provider/usage` | `refresh?` boolean |
 | `usage.summary` | no | `v2.usage.get` | `GET /api/usage` | — |
 | `usage.report` | no | `v2.usage.report` | `GET /api/usage/report` | `group`, `timeZone?`, `from?`, `to?`, `offset?`, `limit?`, `sort?`, `order?` |
+| `machine.keepAwake.get` | no | `v2.keepAwake.get` | `GET /api/keep-awake` | — |
+| `machine.keepAwake.set` | no | `v2.keepAwake.set` | `PUT /api/keep-awake` | `enabled` boolean |
 | `session.status` | no | `v2.session.active`, `v2.session.outstanding`, pending Session permission/form/guardrail reads | Local active, outstanding-work, and pending-request GET routes | — |
 | `session.get` | yes | `v2.session.get` | `GET /api/session/:sessionID` | — |
 | `session.messages` | yes | `v2.message.list` | `GET /api/session/:sessionID/message` | — |
 | `session.capturedChanges.list` | yes | `v2.message.list` | Verified root and dispatched direct-child reads at their backend Locations | `cursor?` (opaque, at most 256 chars) |
 | `session.compaction.list` | yes | `v2.message.list` | `GET /api/session/:sessionID/message` at the verified Session Location | — |
+| `session.compact` | yes | `v2.session.compact` | `POST /api/session/:sessionID/compact` at the verified Session Location | `id` (`cmp_` prefix, at most 128 characters) |
 | `session.snapshot` | yes | `v2.session.snapshot` | `GET /api/session/:sessionID/snapshot` | `limit?` (1–200), `before?` (requires limit; at most 256 chars) |
 | `session.pending.list` | yes | `v2.session.pending.list` | `GET /api/session/:sessionID/pending` | — |
 | `session.attachment.read` | yes | `v2.session.attachment.read` | `GET /api/session/:sessionID/attachment/:digest` | `digest` (64 lowercase hex) |
@@ -555,6 +620,10 @@ grouping and Session-list filters are derived from backend metadata.
 
 `session.compaction.list` returns `{ data, truncated, completedBefore, completedCount, totalSavedTokens }`. `data` contains the latest 100 job-backed compaction messages in chronological order, each with `jobID`, `trigger`, `status`, `created` (milliseconds), and completed `metrics` or failure `code` where applicable. `truncated` marks omitted older jobs; `completedBefore` counts completed jobs omitted from `data`. `completedCount` and `totalSavedTokens` cover all completed jobs, including omitted ones; savings is the sum of `inputTokens - retainedTokens`. The connector verifies the Session against its recorded Location, excludes message content and error text, and accepts no caller-selected path, cursor, or Location.
 
+`session.compact` requests manual compaction using its stable job ID and waits up to five minutes for settlement. An ended job returns `{ data: SessionCompaction.Result }`; a failed job reports a request failure rather than success. It accepts no arguments, files, caller placement, or managed-subagent direct input. It never becomes an ordinary provider prompt. A transport failure leaves the outcome unknown; an explicit retry retains the same job ID.
+
+`machine.keepAwake.get` and `machine.keepAwake.set` address the connected backend, not a Session or Location, and reject `sessionID` and caller placement. The authenticated enrolled-device owner is their authorization boundary. Both return `{ data: { state, message? } }`, with `state` one of `off`, `on`, `unsupported`, and `error`, and a message of at most 200 characters. Unsupported and inhibitor errors are successful status responses, not transport failures. Enabling is runtime-only, initially off, and prevents idle system sleep on macOS until disabled or the backend exits. Manual sleep and lid closure remain effective. Other platforms report `unsupported`. Clients never persist or automatically re-enable this choice; an uncertain write may be followed by a fresh status read but is not automatically replayed.
+
 `workspace.list` returns `{ data: RemoteWorkspaceInfo[] }`, where each item is
 `{ id, projectID, directory, workspaceID?, name? }`. Without `sessionsOnly: true`,
 the backend builds the creation inventory from existing Session Locations,
@@ -579,15 +648,16 @@ uses current backend activity: a root Session is running while any Session in
 its family runs, and a child Session by its own activity; archived Sessions are
 not idle. Omitted status
 includes all states. `order` accepts `"asc"`, `"desc"` (default), `"pinned"`, or `"active"`.
-Session list/get data carries the optional `time.active` of the latest terminal Step or execution event. The connector forwards the event's `created` millisecond time to the browser for live activity display; list ordering and cursors continue to use `time.updated`.
+Session list/get data carries the optional `time.active` of the latest terminal Step or execution event. The connector refreshes that Session's recorded activity on settlement and invalidates its list consumers when the activity timestamp changes, including when the Session is not subscribed for transcript events. Metadata-only `time.updated` changes do not trigger streaming list invalidations.
 `session.pending.list` returns admitted but unpromoted user and synthetic inputs in admission order at the verified backend Session Location. The connector refuses more than 200 pending inputs or a response beyond the relay's bounded chunk limit rather than truncating the list. The browser reads it beside the projected Session window to restore processing and queued rows after reload or dropped events.
 Goal text sent through `session.goal.set` or `session.autonomy.set` has a five-minute browser and connector-local deadline for synchronous synthesis and starting steer. The generic request deadline is 30 seconds, with narrower per-operation read and control overrides; goal stop and non-text autonomy updates do not use the extended deadline. The relay imposes no per-request lifetime.
 Pinned order lists pins by ascending pin time, then unpinned Sessions by descending
 update time and ID. Its opaque cursors include the pin sort key and support both
-directions. Active order places running root families first, then pins by
-descending pin time, then Sessions by descending update time and ID. Its cursors
-carry the running, pin, update, and ID sort keys in both directions; running
-membership is evaluated on each request. `limit` defaults to 50 and is capped
+directions. Active order places running root families first, then descending
+reported activity time (`time.active`, or `time.updated` when unreported), with
+ascending Session ID breaking equal-time ties. Pins do not override active
+order. Its cursors carry running state, the activity sort time, and Session ID
+in both directions; running membership is evaluated on each request. `limit` defaults to 50 and is capped
 at 200. Search, group, status,
 and order changes start a new cursor traversal.
 
@@ -774,6 +844,9 @@ same root Location; another placement with that ID is rejected. Only
 `SessionMessage.ID`. That ID belongs to one Session and input kind; its first
 admission wins, including its text and delivery mode. A
 client retrying an indeterminate `session.prompt` must reuse the same `input.id`.
+Manual compaction uses its separate `SessionCompaction.ID`; retries of
+`session.compact` retain that ID and join or read its durable job instead of
+starting a second job.
 
 The reply operations carry **no** idempotency key: permission and guardrail
 replies use `"once" | "always" | "reject"`, and native Form replies carry typed
@@ -821,6 +894,15 @@ rows, not an unreported backend total.
 | Subscriptions per client | 64 |
 | Heartbeats | `{"type":"ping"}` is answered with `{"type":"pong"}` without waking the object |
 
+The browser sends a liveness probe after 30 s without an incoming frame. Its
+10 s response window starts when the rate-paced ping is transmitted; any received
+frame satisfies it. A timeout retires the socket synchronously and reconnects
+with backoff, independently of the old socket's close event. Hidden pages suspend
+the watchdog. Foreground and network-online events probe an open connection or
+immediately retry backoff. Unanswered sent requests have unknown outcomes; queued
+unsent requests are unavailable. Neither is replayed automatically. Authorization
+closures `4401` and `4403` are terminal and do not resume on these events.
+
 | Close code | Meaning |
 | --- | --- |
 | `1000` | normal |
@@ -828,6 +910,7 @@ rows, not an unreported backend total.
 | `1008` | rate limit, chunk policy violation, or repeated policy violation |
 | `1009` | frame exceeds the size bound |
 | `1012` | replaced by a newer agent connection |
+| `4000` | browser liveness response window expired (`Relay heartbeat timed out`) |
 | `4401` | credential expired, revoked, or invalid on an active path |
 | `4403` | authenticated but not permitted (wrong owner, revoked device, role mismatch) |
 

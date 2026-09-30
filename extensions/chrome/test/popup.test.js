@@ -228,3 +228,18 @@ function node() {
     },
   }
 }
+
+test("popup typography uses the embedded Geist faces, offline, with Geist Mono for machine-readable values", async () => {
+  const css = await Bun.file(new URL("../popup.css", import.meta.url)).text()
+  const manifest = await Bun.file(new URL("../manifest.json", import.meta.url)).json()
+  expect(css).toMatch(/--font-sans:\s*"Geist",/)
+  expect(css).toMatch(/--font-mono:\s*"Geist Mono",/)
+  expect(css).toMatch(/font:\s*13px\/1\.45 var\(--font-sans\)/)
+  expect(css).toMatch(/#server,\s*#secret\s*\{[^}]*font-family:\s*var\(--font-mono\)/)
+  const code = css.replace(/\/\*[\s\S]*?\*\//g, "")
+  expect(code.match(/@font-face/g)).toHaveLength(2)
+  expect(code.match(/url\(([^)]+)\)/g).every((reference) => reference.startsWith('url("data:font/woff2;base64,'))).toBe(true)
+  expect(code).not.toMatch(/https?:\/\//)
+  expect(manifest.content_security_policy.extension_pages).toBe("script-src 'self'; object-src 'none'; base-uri 'none'")
+  expect(manifest.host_permissions).toEqual(["http://127.0.0.1/*", "http://localhost/*"])
+})

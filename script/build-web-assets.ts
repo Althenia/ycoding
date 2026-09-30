@@ -19,12 +19,16 @@ export async function buildWebAssets(options: { readonly root: string; readonly 
   const example = Bun.file(path.join(options.root, "docs", "examples", "ycoding.jsonc"))
   if (!(await example.exists())) throw new Error("Missing required configuration example: docs/examples/ycoding.jsonc")
 
+  const fontLicense = Bun.file(path.join(options.root, "assets", "brand", "fonts", "OFL.txt"))
+  if (!(await fontLicense.exists())) throw new Error("Missing required font license: assets/brand/fonts/OFL.txt")
+
   const schema = await configSchema(options.root)
-  await fs.mkdir(path.join(outdir, "examples"), { recursive: true })
+  await Promise.all(["examples", "fonts"].map((directory) => fs.mkdir(path.join(outdir, directory), { recursive: true })))
   await Promise.all([
     Bun.write(path.join(outdir, "install.sh"), installer),
     Bun.write(path.join(outdir, schemaPath), JSON.stringify(schema, null, 2) + "\n"),
     Bun.write(path.join(outdir, "examples", "ycoding.jsonc"), example),
+    Bun.write(path.join(outdir, "fonts", "OFL.txt"), fontLicense),
   ])
 }
 

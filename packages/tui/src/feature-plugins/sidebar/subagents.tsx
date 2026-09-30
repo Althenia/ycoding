@@ -13,7 +13,6 @@ import { formatSubagentElapsed } from "../../util/time"
 export function SubagentRail(props: { sessionID: string }) {
   const route = useRoute()
   const data = useData()
-  createEffect(() => void data.session.subagent.sync(props.sessionID))
   const page = createMemo(() => data.session.subagent.page(props.sessionID))
   const navigation = createMemo(() => data.session.subagent.navigation(props.sessionID))
   const [now, setNow] = createSignal(Date.now())

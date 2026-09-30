@@ -31,6 +31,7 @@ export function CustomSelect(props: {
   const [open, setOpen] = createSignal(false)
   const [closing, setClosing] = createSignal(false)
   const [compact, setCompact] = createSignal(false)
+  const [pointerOpened, setPointerOpened] = createSignal(false)
   const [pendingValue, setPendingValue] = createSignal<string>()
   const [active, setActive] = createSignal(0)
   const [placement, setPlacement] = createSignal({ left: 0, top: 0, width: 260 })
@@ -44,8 +45,9 @@ export function CustomSelect(props: {
   let typeahead = ""
   let typeaheadTimer: ReturnType<typeof setTimeout> | undefined
 
-  const openMenu = () => {
+  const openMenu = (pointer = false) => {
     if (props.disabled || closing() || props.options.length === 0) return
+    setPointerOpened(pointer)
     setActive(selected() < 0 ? 0 : selected())
     setPendingValue(props.value)
     setOpen(true)
@@ -210,7 +212,7 @@ export function CustomSelect(props: {
         </For>
       </div>
       <Show when={props.footer}>
-        {(footer) => <div class="custom-select__footer" onClick={() => closeMenu(false)}>{footer()}</div>}
+        {(footer) => <div class="custom-select__footer" data-cursor="action" onClick={() => closeMenu(false)}>{footer()}</div>}
       </Show>
     </>
   )
@@ -230,7 +232,7 @@ export function CustomSelect(props: {
         aria-activedescendant={open() && !compact() ? `${listboxID}-${activeIndex()}` : undefined}
         disabled={props.disabled}
         aria-disabled={closing()}
-        onClick={() => (open() ? closeMenu(false) : openMenu())}
+        onClick={(event) => (open() ? closeMenu(false) : openMenu(event.detail > 0))}
         onKeyDown={onKeyDown}
       >
         <span class="custom-select__value">{label()}</span>
@@ -253,7 +255,7 @@ export function CustomSelect(props: {
               {options()}
             </div>
           }>
-            <Modal class={`overlay--sheet custom-select__dialog${props.surfaceClass ? ` ${props.surfaceClass}` : ""}`} label={props.sheetTitle ?? props.label} returnFocus={trigger!} requestClose={(close) => closeModal = close} onDismiss={() => { setClosing(true); setOpen(false) }} onClose={() => setClosing(false)}>
+            <Modal class={`overlay--sheet custom-select__dialog${props.surfaceClass ? ` ${props.surfaceClass}` : ""}`} label={props.sheetTitle ?? props.label} pointerOpened={pointerOpened()} returnFocus={trigger!} requestClose={(close) => closeModal = close} onDismiss={() => { setClosing(true); setOpen(false) }} onClose={() => setClosing(false)}>
               <p class="custom-select__subtitle">{props.sheetSubtitle ?? "Available options"}</p>
               {options()}
               <div class="custom-select__confirm-footer"><button

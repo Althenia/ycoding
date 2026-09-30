@@ -38,7 +38,7 @@ export function groupNotifications(entries: readonly RemoteNotificationView[], n
 }
 
 export function newlyAddedNotifications(seen: ReadonlySet<string>, entries: readonly RemoteNotificationView[]) {
-  return entries.filter((entry) => entry.live && !seen.has(entry.id))
+  return entries.filter((entry) => entry.live && !entry.synced && entry.category === "approval-requested" && !seen.has(entry.id))
 }
 
 export function enqueueToasts(current: readonly RemoteNotificationView[], added: readonly RemoteNotificationView[]) {
@@ -208,9 +208,9 @@ function NoticeToast(props: { readonly notification: () => RemoteNotificationVie
 function OutcomeToast(props: { readonly toast: MutationToast }): JSX.Element {
   const remote = useRemote()
   return (
-    <Toast class={`mutation-toast mutation-toast--${props.toast.state}`} role={props.toast.state === "sent" ? "status" : "alert"} onDismiss={() => remote.store.dismissMutationToast(props.toast.id)}>{(dismiss) => <>
-      <span class="yc-toast__icon" aria-hidden="true"><Icon name={props.toast.state === "sent" ? "check" : "alert"} size={18} /></span>
-      <div class="yc-toast__body"><strong>{props.toast.label} · {props.toast.state === "sent" ? "Sent" : props.toast.state === "unknown" ? "Outcome unknown" : "Failed"}</strong><Show when={props.toast.detail}><span>{props.toast.detail}</span></Show></div>
+    <Toast class={`mutation-toast mutation-toast--${props.toast.state}`} role="alert" onDismiss={() => remote.store.dismissMutationToast(props.toast.id)}>{(dismiss) => <>
+      <span class="yc-toast__icon" aria-hidden="true"><Icon name="alert" size={18} /></span>
+      <div class="yc-toast__body"><strong>{props.toast.label} · {props.toast.state === "unknown" ? "Outcome unknown" : "Failed"}</strong><Show when={props.toast.detail}><span>{props.toast.detail}</span></Show></div>
       <button type="button" class="yc-toast__close" aria-label={`Dismiss ${props.toast.label} outcome`} onClick={dismiss}><Icon name="close" size={14} /></button>
     </>}</Toast>
   )

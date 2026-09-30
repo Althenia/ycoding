@@ -288,10 +288,10 @@ function sessionInventoryChanged(previous: SessionInfo | undefined, current: Ses
   if (previous === undefined) return true
   return JSON.stringify([
     previous.title, previous.agent, previous.model, previous.projectID, previous.location,
-    previous.time.archived, previous.time.pinned,
+    previous.time.archived, previous.time.pinned, previous.time.active,
   ]) !== JSON.stringify([
     current.title, current.agent, current.model, current.projectID, current.location,
-    current.time.archived, current.time.pinned,
+    current.time.archived, current.time.pinned, current.time.active,
   ])
 }
 
@@ -578,7 +578,7 @@ async function run(input: OperationInput) {
   if (validated.kind === "session.create")
     return { data: await createRootSession(input, validated.id, validated.workspace, validated.agent, validated.model) }
   if (validated.kind === "list") return listPage(input.sessions.snapshot(), validated.query,
-    validated.query.status === undefined && validated.query.order !== "active" ? undefined : activeIDs(await input.local.activeSessions()))
+    validated.query.status === undefined && validated.query.order !== "active" ? undefined : new Set((await input.local.outstandingSessions()).running))
   if (validated.kind === "active") {
     const allowed = new Set(input.sessions.ids())
     const active = await input.local.activeSessions()
@@ -594,6 +594,8 @@ async function run(input: OperationInput) {
   if (validated.kind === "usage.providers") return { data: (await input.local.providerUsageList(validated.refresh)).data }
   if (validated.kind === "usage.summary") return { data: await input.local.usageSummary() }
   if (validated.kind === "usage.report") return { data: await input.local.usageReport(validated.input) }
+  if (validated.kind === "keepAwake.get") return { data: await input.local.keepAwakeGet() }
+  if (validated.kind === "keepAwake.set") return { data: await input.local.keepAwakeSet(validated.enabled) }
   if (!scopedOperation(request.operation)) return unknownOperation()
   const sessionID = request.sessionID
   if (sessionID === undefined) throw new OperationError("session_required", "Operation requires a session")
@@ -603,7 +605,7 @@ async function run(input: OperationInput) {
   if (verified === undefined)
     throw new OperationError("session_not_allowed", "Session is not available at its recorded location")
   if (verified.parentID !== undefined && verified.agent !== "btw" && [
-    "session.prompt", "session.command", "session.skill", "session.attachment.upload",
+    "session.prompt", "session.command", "session.compact", "session.skill", "session.attachment.upload",
     "session.switchModel", "session.switchAgent", "session.autonomy.set", "session.goal.set", "session.goal.stop",
   ].includes(request.operation))
     throw new OperationError("subagent_read_only", "Managed subagents accept input only from their parent Session")
@@ -789,6 +791,8 @@ async function run(input: OperationInput) {
     case "interrupt":
       await input.local.interrupt(sessionID, location)
       return null
+    case "compact":
+      return { data: await input.local.compact(sessionID, location, validated.id) }
     case "permission.reply":
       await input.local.permissionReply(
         sessionID,
@@ -828,6 +832,9 @@ function unknownOperation(): never {
 type Reply = "once" | "always" | "reject"
 
 type Validated =
+  | { readonly kind: "keepAwake.get" }
+  | { readonly kind: "keepAwake.set"; readonly enabled: boolean }
+  | { readonly kind: "compact"; readonly id: string }
   | { readonly kind: "workspace.list"; readonly sessionsOnly: boolean }
   | { readonly kind: "list"; readonly query: ListQuery }
   | { readonly kind: "active" }
@@ -903,6 +910,12 @@ const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
 
 function validate(request: RemoteRequest): Validated {
   const fields = validateFields(request)
+  if (request.operation === "machine.keepAwake.get" || request.operation === "machine.keepAwake.set") {
+    if (request.sessionID !== undefined) throw new OperationError("invalid_message", "Machine controls do not accept a Session")
+    if (request.operation === "machine.keepAwake.set") return { kind: "keepAwake.set", enabled: requireBoolean(fields.enabled, "enabled") }
+    if (request.input !== undefined) throw new OperationError("invalid_message", "Keep-awake status does not accept input")
+    return { kind: "keepAwake.get" }
+  }
   if (request.operation === "session.attachment.upload") {
     if (typeof fields.uploadID !== "string" || typeof fields.index !== "number" || typeof fields.last !== "boolean" || typeof fields.data !== "string")
       throw new OperationError("invalid_message", "Invalid attachment upload")
@@ -982,6 +995,11 @@ function validate(request: RemoteRequest): Validated {
   const plain = plainKinds[request.operation]
   if (plain !== undefined) return { kind: plain } as Validated
   switch (request.operation) {
+    case "session.compact": {
+      const id = requireString(fields.id, "id", 128)
+      if (!/^cmp_[A-Za-z0-9_-]+$/.test(id)) throw new OperationError("invalid_message", "Invalid compaction ID")
+      return { kind: "compact", id }
+    }
     case "session.switchModel": return { kind: "switchModel", model: modelSelection(fields.model) }
     case "session.switchAgent": return { kind: "switchAgent", agent: requireString(fields.agent, "agent", 128) }
     case "session.command": return { kind: "command", input: {
@@ -1253,9 +1271,9 @@ export async function sessionStatus(local: LocalServer, sessions: readonly Sessi
     const session = typeof sessionID === "string" ? byID.get(sessionID) : undefined
     return session === undefined ? undefined : rootSessionID(session, byID)
   }
-  const executing = [...activeIDs(await local.activeSessions())].flatMap((id) => byID.get(id) ?? [])
-  const running = new Set(executing.flatMap((session) => rootSessionID(session, byID) ?? []))
   const work = await local.outstandingSessions(knownFailures === undefined)
+  const executing = work.running.flatMap((id) => byID.get(id) ?? [])
+  const running = new Set(executing.flatMap((session) => rootSessionID(session, byID) ?? []))
   const outstanding = new Set(work.data.flatMap((id) => rootOf(id) ?? []).filter((id) => !running.has(id)))
   const failed = knownFailures ?? new Set(work.failed.flatMap((id) => rootOf(id) ?? []))
   if (running.size > RemoteLimits.maxStatusSessions || (knownAttention !== undefined && knownAttention.length > RemoteLimits.maxStatusSessions))
@@ -1331,7 +1349,7 @@ export function parseListQuery(fields: Readonly<Record<string, unknown>>): ListQ
   const anchor = fields.cursor === undefined ? undefined : cursor(fields.cursor)
   if (order === "pinned" && anchor !== undefined && anchor.pinned === undefined)
     throw new OperationError("invalid_message", "Pinned Session cursor is missing its sort key")
-  if (order === "active" && anchor !== undefined && (anchor.pinned === undefined || anchor.running === undefined))
+  if (order === "active" && anchor !== undefined && anchor.running === undefined)
     throw new OperationError("invalid_message", "Active Session cursor is missing its sort key")
   return {
     order,
@@ -1353,7 +1371,7 @@ export function listPage(sessions: readonly SessionInfo[], query: ListQuery, run
   const byID = new Map(sessions.map((session) => [session.id, session]))
   const runningRoots = new Set(sessions.filter((session) => running?.has(session.id)).map((session) => rootSessionID(session, byID)).filter((id): id is string => id !== undefined))
   const isRunning = (session: SessionInfo) => session.parentID === undefined ? runningRoots.has(session.id) : running?.has(session.id) === true
-  const activeKey = (session: SessionInfo) => ({ id: session.id, time: session.time,
+  const activeKey = (session: SessionInfo) => ({ id: session.id, time: session.time.active ?? session.time.updated,
     running: session.parentID === undefined && runningRoots.has(session.id) })
   const needle = search?.toLowerCase()
   const matching = sessions
@@ -1367,7 +1385,7 @@ export function listPage(sessions: readonly SessionInfo[], query: ListQuery, run
     .sort(order === "active" ? (left, right) => compareActiveSessions(activeKey(left), activeKey(right)) : order === "pinned" ? comparePinnedSessions : compareSessions)
   const ordered = effectiveOrder === "asc" || ((effectiveOrder === "pinned" || effectiveOrder === "active") && direction === "next") ? matching : matching.toReversed()
   const anchored = anchor === undefined ? ordered : ordered.filter((session) => effectiveOrder === "active"
-    ? compareActiveSessions(activeKey(session), { id: anchor.id, time: { updated: anchor.time, pinned: anchor.pinned ?? undefined }, running: anchor.running === true }) * (direction === "next" ? 1 : -1) > 0
+    ? compareActiveSessions(activeKey(session), { id: anchor.id, time: anchor.time, running: anchor.running === true }) * (direction === "next" ? 1 : -1) > 0
     : effectiveOrder === "pinned"
       ? comparePinnedSessions(session, { id: anchor.id, time: { updated: anchor.time, pinned: anchor.pinned ?? undefined } }) * (direction === "next" ? 1 : -1) > 0
       : afterAnchor(session, anchor, effectiveOrder))
@@ -1380,10 +1398,10 @@ export function listPage(sessions: readonly SessionInfo[], query: ListQuery, run
     data,
     cursor: {
       previous: first && (direction === "next" ? anchor !== undefined : remaining > 0)
-        ? encodeCursor({ id: first.id, time: first.time.updated, direction: "previous", ...(order === "pinned" || order === "active" ? { pinned: first.time.pinned ?? null } : {}), ...(order === "active" ? { running: activeKey(first).running } : {}) })
+        ? encodeCursor({ id: first.id, time: order === "active" ? activeKey(first).time : first.time.updated, direction: "previous", ...(order === "pinned" ? { pinned: first.time.pinned ?? null } : {}), ...(order === "active" ? { running: activeKey(first).running } : {}) })
         : undefined,
       next: last && (direction === "previous" ? anchor !== undefined : remaining > 0)
-        ? encodeCursor({ id: last.id, time: last.time.updated, direction: "next", ...(order === "pinned" || order === "active" ? { pinned: last.time.pinned ?? null } : {}), ...(order === "active" ? { running: activeKey(last).running } : {}) })
+        ? encodeCursor({ id: last.id, time: order === "active" ? activeKey(last).time : last.time.updated, direction: "next", ...(order === "pinned" ? { pinned: last.time.pinned ?? null } : {}), ...(order === "active" ? { running: activeKey(last).running } : {}) })
         : undefined,
     },
   }
@@ -1426,14 +1444,10 @@ function comparePinnedSessions(left: SessionOrderKey, right: SessionOrderKey) {
   return -compareSessions(left, right)
 }
 
-function compareActiveSessions(left: SessionOrderKey & { readonly running: boolean }, right: SessionOrderKey & { readonly running: boolean }) {
+function compareActiveSessions(left: { readonly id: string; readonly time: number; readonly running: boolean }, right: { readonly id: string; readonly time: number; readonly running: boolean }) {
   if (left.running !== right.running) return left.running ? -1 : 1
-  const pinnedLeft = left.time.pinned
-  const pinnedRight = right.time.pinned
-  if (pinnedLeft !== undefined && pinnedRight === undefined) return -1
-  if (pinnedLeft === undefined && pinnedRight !== undefined) return 1
-  if (pinnedLeft !== undefined && pinnedRight !== undefined && pinnedLeft !== pinnedRight) return pinnedRight - pinnedLeft
-  return -compareSessions(left, right)
+  if (left.time !== right.time) return right.time - left.time
+  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0
 }
 
 function activeIDs(value: unknown): ReadonlySet<string> {
@@ -1448,6 +1462,8 @@ function afterAnchor(session: SessionInfo, anchor: Cursor, order: "asc" | "desc"
 }
 
 const allowedFields: Readonly<Record<string, readonly string[]>> = {
+  "machine.keepAwake.get": [],
+  "machine.keepAwake.set": ["enabled"],
   "workspace.list": ["sessionsOnly"],
   "session.list": ["limit", "order", "search", "searchFields", "parentID", "cursor", "workspace", "status"],
   "session.active": [],
@@ -1481,6 +1497,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.messages": [],
   "session.capturedChanges.list": ["cursor"],
   "session.compaction.list": [],
+  "session.compact": ["id"],
   "session.todo.list": [],
   "session.log": ["after"],
   "session.autonomy.get": [],
@@ -1512,6 +1529,8 @@ function validateFields(request: RemoteRequest): Readonly<Record<string, unknown
 }
 
 const mutations: ReadonlySet<string> = new Set([
+  "machine.keepAwake.set",
+  "session.compact",
   "session.create",
   "session.subagent.cancel",
   "session.subagent.answer",

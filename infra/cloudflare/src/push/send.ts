@@ -7,6 +7,10 @@ export type PushEvent =
   | { readonly category: RemoteNoticeCategory; readonly sessionID: string; readonly deviceID: string; readonly noticeID?: string }
   | { readonly category: "machine-offline"; readonly deviceID: string; readonly offlineAt: number }
 
+export const pushDeliveryTimeoutMs = 10_000
+
+export type PushOutcome = { readonly owner: string; readonly outcome: "accepted" | "unreachable" | "rejected" | "expired" | "unsent" }
+
 type PushSender = {
   readonly publicKey: string
   readonly privateKey: string
@@ -24,15 +28,17 @@ type PushMessage = {
   readonly targetCount: number
 }
 
-export async function sendPushToOwner(input: PushSender & { readonly store: PushStore; readonly accountID: string; readonly event: PushEvent }): Promise<void> {
+export async function sendPushToOwner(input: PushSender & { readonly store: PushStore; readonly accountID: string; readonly event: PushEvent }): Promise<readonly PushOutcome[]> {
   const subscriptions = await input.store.list(input.accountID)
   const targets = subscriptions.filter((subscription) => subscription.categories[input.event.category])
+  const unsent = subscriptions.filter((subscription) => !subscription.categories[input.event.category])
+    .map((subscription): PushOutcome => ({ owner: subscription.browserSessionID, outcome: "unsent" }))
   if (targets.length === 0) {
     console.info(JSON.stringify({ component: "web-push", category: input.event.category, host: "none", targetCount: 0,
       errorClass: subscriptions.length === 0 ? "no_subscriptions" : "category_off" }))
-    return
+    return unsent
   }
-  const scope = input.event.category === "machine-offline" ? input.event.deviceID : input.event.sessionID
+  const scope = input.event.category === "machine-offline" ? `${input.event.deviceID}:${input.event.offlineAt}` : `${input.event.deviceID}:${input.event.noticeID ?? input.event.sessionID}`
   const message: PushMessage = {
     category: input.event.category,
     payload: new TextEncoder().encode(JSON.stringify(input.event)),
@@ -41,7 +47,11 @@ export async function sendPushToOwner(input: PushSender & { readonly store: Push
     topic: base64UrlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${scope}:${input.event.category}`)))).slice(0, 32),
     targetCount: targets.length,
   }
-  await Promise.all(targets.map((subscription) => deliver(input, input.store, subscription, message)))
+  const sent = await Promise.all(targets.map(async (subscription): Promise<PushOutcome> => {
+    const result = await deliver(input, input.store, subscription, message).catch((): PushTestResponse => ({ outcome: "unreachable" }))
+    return { owner: subscription.browserSessionID, outcome: result.outcome }
+  }))
+  return [...unsent, ...sent]
 }
 
 export function sendTestPush(input: PushSender & { readonly store: PushStore; readonly subscription: PushSubscription }): Promise<PushTestResponse> {
@@ -62,7 +72,7 @@ async function deliver(sender: PushSender, store: PushStore, subscription: PushS
     try {
       const body = await encryptWebPushPayload(message.payload, subscription.keys.p256dh, subscription.keys.auth)
       const jwt = await vapidJwt(subscription.endpoint, sender.publicKey, sender.privateKey, sender.subject, Math.floor(sender.now() / 1000))
-      return await send(subscription.endpoint, { method: "POST", body: cryptoBytes(body),
+      return await send(subscription.endpoint, { method: "POST", body: cryptoBytes(body), signal: AbortSignal.timeout(pushDeliveryTimeoutMs),
         headers: { authorization: `vapid t=${jwt}, k=${sender.publicKey}`,
           "content-encoding": "aes128gcm", "content-type": "application/octet-stream",
           ttl: message.ttl, urgency: message.urgency, ...(message.topic === undefined ? {} : { topic: message.topic }) } })

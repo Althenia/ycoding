@@ -32,6 +32,50 @@ test("reads admitted pending prompts at their verified Session Location", async 
   expect(fixture.calls.filter((call) => call.method === "pendingList")).toHaveLength(1)
 })
 
+test("manual compaction uses only the backend's verified Session Location and stable ID", async () => {
+  const result = { id: "cmp_web_1", sessionID: "ses_1", trigger: "manual", status: "ended", requestedThrough: { messageID: "msg_1", seq: 1 }, timeCreated: 100 }
+  const fixture = await harness({ results: { compact: result } })
+  const run = (sessionID: string, input: Record<string, unknown> = { id: "cmp_web_1" }) => executeRemoteOperation({
+    request: { ...request("session.compact", input), sessionID }, local: fixture.local,
+    sessions: fixture.registry, subscriptions: fixture.subscriptions,
+  })
+  expect(valueOf(await run("ses_1"))).toEqual({ data: result })
+  expect(fixture.calls.filter((call) => call.method === "compact")).toEqual([
+    { method: "compact", args: ["ses_1", { directory: "/work" }, "cmp_web_1"] },
+  ])
+  expect(errorOf(await run("ses_other")).code).toBe("session_not_allowed")
+  expect(errorOf(await run("ses_1", { id: "cmp_web_1", directory: "/private" })).code).toBe("invalid_message")
+  expect(errorOf(await run("ses_1", { id: "msg_wrong" })).code).toBe("invalid_message")
+  expect(fixture.calls.filter((call) => call.method === "compact")).toHaveLength(1)
+})
+
+test("machine keep-awake forwards global backend controls without a caller Location or Session", async () => {
+  const fixture = await harness({ sessions: [], results: { keepAwakeGet: { state: "off" }, keepAwakeSet: { state: "on" } } })
+  const run = (operation: RemoteRequest["operation"], input?: Record<string, unknown>, sessionID?: string) => executeRemoteOperation({
+    request: { ...request(operation, input), ...(sessionID === undefined ? {} : { sessionID }) }, local: fixture.local,
+    sessions: fixture.registry, subscriptions: fixture.subscriptions,
+  })
+  expect(valueOf(await run("machine.keepAwake.get"))).toEqual({ data: { state: "off" } })
+  expect(valueOf(await run("machine.keepAwake.set", { enabled: true }))).toEqual({ data: { state: "on" } })
+  expect(fixture.calls).toEqual([{ method: "keepAwakeGet", args: [] }, { method: "keepAwakeSet", args: [true] }])
+  expect(errorOf(await run("machine.keepAwake.set", { enabled: true, directory: "/private" })).code).toBe("invalid_message")
+  expect(errorOf(await run("machine.keepAwake.set", { enabled: "true" })).code).toBe("invalid_message")
+  expect(errorOf(await run("machine.keepAwake.get", undefined, "ses_1")).code).toBe("invalid_message")
+  expect(fixture.calls).toHaveLength(2)
+})
+
+test("unconfirmed machine control and compaction writes are unknown, not failed or replayed", async () => {
+  const fixture = await harness({ results: {
+    compact: new LocalFailureClass("transport", "Socket closed"),
+    keepAwakeSet: new LocalFailureClass("transport", "Socket closed"),
+  } })
+  for (const frame of [request("session.compact", { id: "cmp_1" }), request("machine.keepAwake.set", { enabled: true })]) {
+    expect(errorOf(await executeRemoteOperation({ request: frame, local: fixture.local,
+      sessions: fixture.registry, subscriptions: fixture.subscriptions })).code).toBe("outcome_unknown")
+  }
+  expect(fixture.calls.filter((call) => call.method === "compact" || call.method === "keepAwakeSet")).toHaveLength(2)
+})
+
 test("refuses an oversized pending inventory rather than silently dropping prompts", async () => {
   const pending = Array.from({ length: 201 }, (_, index) => ({ id: `msg_${index}`, sessionID: "ses_1", admittedSeq: index,
     timeCreated: index, type: "user", data: { text: `Prompt ${index}` }, delivery: "queue" }))
@@ -327,7 +371,7 @@ function formInfo(id: string, sessionID: string) {
 type Call = { readonly method: string; readonly args: readonly unknown[] }
 
 function fakeLocal(results: Partial<Record<keyof LocalServer, unknown>> = {}) {
-  results.outstandingSessions ??= { data: [], failed: [] }
+  results.outstandingSessions ??= { data: [], running: [], failed: [] }
   const calls: Call[] = []
   const local = new Proxy({} as LocalServer, {
     get(_target, property: PropertyKey) {
@@ -450,6 +494,20 @@ describe("backend Session authorization", () => {
     await registry.refresh()
     expect(invalidations).toBe(0)
     expect(registry.snapshot().map((session) => session.time.updated)).toEqual([50])
+  })
+
+  test("notifies list consumers when reported activity changes without repeating an unchanged read", async () => {
+    let current = { ...sessionInfo("ses_1", { updated: 1 }), time: { created: 1, updated: 1, active: 2 } }
+    let invalidations = 0
+    const { local } = fakeLocal({ listPage: async () => ({ data: [current] }), getSession: async () => current })
+    const registry = createSessionRegistry({ local, onChange: () => invalidations++ })
+    await registry.refresh()
+    invalidations = 0
+    current = { ...current, time: { ...current.time, active: 5 } }
+    await registry.verify("ses_1")
+    expect(invalidations).toBe(1)
+    await registry.refresh()
+    expect(invalidations).toBe(1)
   })
 
   test("refuses a session absent from the authoritative backend inventory", async () => {
@@ -733,7 +791,7 @@ describe("operation mapping", () => {
 
   test("a cached-attention status still refuses more than 500 running roots", async () => {
     const sessions = Array.from({ length: RemoteLimits.maxStatusSessions + 1 }, (_, index) => sessionInfo(`ses_${index}`, { updated: index }))
-    const { local } = fakeLocal({ activeSessions: Object.fromEntries(sessions.map((session) => [session.id, { type: "running" }])) })
+    const { local } = fakeLocal({ outstandingSessions: { data: sessions.map((session) => session.id), running: sessions.map((session) => session.id), failed: [] } })
     const failure = await sessionStatus(local, sessions, []).then(() => undefined, (cause: unknown) => cause)
     expect(failure instanceof Error ? failure.message : undefined).toBe("Session status exceeds the bounded root count")
   })
@@ -750,7 +808,7 @@ describe("operation mapping", () => {
     ]
     const idleRead = new Error("an idle Location was read for status")
     const { local, calls } = fakeLocal({
-      activeSessions: { ses_child: { type: "running" } },
+      outstandingSessions: { data: ["ses_child"], running: ["ses_child"], failed: [] },
       permissionRequests: async (location: LocalLocation) => location.directory === directory ? [{ id: "per_1", sessionID: "ses_child" }] : Promise.reject(idleRead),
       formRequests: async (location: LocalLocation) => location.directory === directory ? [formInfo("frm_1", "ses_idle")] : Promise.reject(idleRead),
       guardrailRequestList: async () => [],
@@ -766,17 +824,16 @@ describe("operation mapping", () => {
   test("maps the one process-wide outstanding read to non-executing family roots without per-root work reads", async () => {
     const sessions = [sessionInfo("ses_parent", { updated: 1 }),
       sessionInfo("ses_child", { updated: 2, parentID: "ses_parent" }), sessionInfo("ses_other", { updated: 3 })]
-    const { local, calls } = fakeLocal({ activeSessions: { ses_other: { type: "running" } },
-      outstandingSessions: { data: ["ses_child", "ses_other"], failed: [] } })
+    const { local, calls } = fakeLocal({ outstandingSessions: { data: ["ses_child", "ses_other"], running: ["ses_other"], failed: [] } })
     expect(await sessionStatus(local, sessions, [])).toMatchObject({ running: ["ses_other"], outstanding: ["ses_parent"] })
-    expect(calls.map((call) => call.method)).toEqual(["activeSessions", "outstandingSessions"])
+    expect(calls.map((call) => call.method)).toEqual(["outstandingSessions"])
   })
 
   test("status folds active descendants and unresolved requests to unique root IDs", async () => {
     const directory = process.cwd()
     const sessions = [sessionInfo("ses_root", { updated: 1, directory }), sessionInfo("ses_child", { updated: 2, parentID: "ses_root", directory }), sessionInfo("ses_other", { updated: 3, directory })]
     const { local, registry, subscriptions } = await harness({ sessions, results: {
-      activeSessions: { ses_child: { type: "running" } },
+      outstandingSessions: { data: ["ses_child"], running: ["ses_child"], failed: [] },
       permissionRequests: async () => [{ id: "per_1", sessionID: "ses_child" }],
       formRequests: async () => [formInfo("frm_1", "ses_other")],
       guardrailRequestList: async (id: string) => id === "ses_root" ? [{ id: "grq_1", sessionID: "ses_child", rootSessionID: id }] : [],
@@ -790,10 +847,9 @@ describe("operation mapping", () => {
     const sessions = [sessionInfo("ses_failed", { updated: 1, directory }), sessionInfo("ses_both", { updated: 2, directory }),
       sessionInfo("ses_child", { updated: 3, parentID: "ses_failed", directory })]
     const { local, registry, subscriptions } = await harness({ sessions, results: {
-      activeSessions: { ses_both: { type: "running" } },
       permissionRequests: async () => [{ id: "per_1", sessionID: "ses_both" }],
       formRequests: async () => [],
-      outstandingSessions: { data: [], failed: ["ses_child", "ses_both"] },
+      outstandingSessions: { data: ["ses_both"], running: ["ses_both"], failed: ["ses_child", "ses_both"] },
       guardrailRequestList: async () => [],
     } })
     const outcome = await executeRemoteOperation({ request: request("session.status"), local, sessions: registry, subscriptions })
@@ -1036,10 +1092,11 @@ describe("operation mapping", () => {
     })
     for (const [operation, fields] of [
       ["session.prompt", { text: "Hello" }], ["session.command", { command: "test" }], ["session.skill", { skill: "review" }],
+      ["session.compact", { id: "cmp_child" }],
       ["session.switchModel", { model: { providerID: "test", id: "model" } }], ["session.switchAgent", { agent: "general" }],
       ["session.autonomy.set", { yolo: 2 }], ["session.goal.set", { goal: "Write code" }], ["session.goal.stop", { goal: null }],
     ] as const) expect(errorOf(await send(operation, fields)).code).toBe("subagent_read_only")
-    expect(test.calls.some((call) => ["prompt", "command", "skill", "switchModel", "switchAgent", "autonomySet"].includes(call.method))).toBe(false)
+    expect(test.calls.some((call) => ["prompt", "command", "compact", "skill", "switchModel", "switchAgent", "autonomySet"].includes(call.method))).toBe(false)
     expect(valueOf(await send("session.get"))).toMatchObject({ data: { id: "ses_child" } })
     expect(valueOf(await send("session.interrupt"))).toBeNull()
     expect(valueOf(await send("session.prompt", { text: "Side chat" }, "ses_btw"))).toEqual({ data: { id: "msg_1" } })
@@ -1738,7 +1795,23 @@ describe("local endpoint scope", () => {
 })
 
 describe("session list paging", () => {
-  test("active order ranks running families before pins and pages both directions when running membership changes", () => {
+  test("live background shell owners make their family running; settled notices remain outstanding only", async () => {
+    const root = sessionInfo("ses_root", { updated: 1 })
+    const child = sessionInfo("ses_child", { updated: 2, parentID: "ses_root" })
+    let work = { data: ["ses_child"], running: ["ses_child"], failed: [] as string[] }
+    const h = await harness({ sessions: [root, child], results: { activeSessions: {}, outstandingSessions: () => work } })
+    const list = async (status: "running" | "idle") => valueOf(await executeRemoteOperation({ request: request("session.list", { status, parentID: null, order: "active" }),
+      local: h.local, sessions: h.registry, subscriptions: h.subscriptions }))
+    expect(await sessionStatus(h.local, h.registry.snapshot(), [], new Set())).toMatchObject({ running: ["ses_root"] })
+    expect(recordOf(await list("running")).data).toEqual([root])
+    expect(recordOf(await list("idle")).data).toEqual([])
+    work = { ...work, running: [] }
+    expect(await sessionStatus(h.local, h.registry.snapshot(), [], new Set())).toMatchObject({ running: [], outstanding: ["ses_root"] })
+    expect(recordOf(await list("running")).data).toEqual([])
+    expect(recordOf(await list("idle")).data).toEqual([root])
+  })
+
+  test("active order ranks running families then recent activity and pages both directions when running membership changes", () => {
     const root = { ...sessionInfo("ses_root", { updated: 2 }), time: { created: 2, updated: 2 } }
     const child = sessionInfo("ses_child", { updated: 5, parentID: "ses_root" })
     const pinned = { ...sessionInfo("ses_pinned", { updated: 3 }), time: { created: 3, updated: 3, pinned: 9 } }
@@ -1750,8 +1823,28 @@ describe("session list paging", () => {
     const after = listPage(sessions, parseListQuery({ order: "active", parentID: null, limit: 2, cursor: page.cursor.next }), new Set(["ses_child", "ses_recent"]))
     expect(after.data.map((session) => session.id)).toEqual(["ses_pinned"])
     const previous = listPage(sessions, parseListQuery({ order: "active", parentID: null, limit: 1, cursor: after.cursor.previous }), running)
-    expect(previous.data.map((session) => session.id)).toEqual(["ses_root"])
+    expect(previous.data.map((session) => session.id)).toEqual(["ses_recent"])
     expect(() => parseListQuery({ order: "active", cursor: Buffer.from(JSON.stringify({ id: "ses_root", time: 2, direction: "next" })).toString("base64url") })).toThrow()
+  })
+
+  test("active ordering uses reported activity before metadata edits or pins, with stable bidirectional pages", () => {
+    const sessions = [
+      { ...sessionInfo("ses_old_pin", { updated: 1000 }), time: { created: 1, updated: 1000, active: 5, pinned: 1 } },
+      { ...sessionInfo("ses_idle_recent", { updated: 2 }), time: { created: 1, updated: 2, active: 90 } },
+      { ...sessionInfo("ses_running_old", { updated: 900 }), time: { created: 1, updated: 900, active: 30, pinned: 2 } },
+      { ...sessionInfo("ses_running_new", { updated: 3 }), time: { created: 1, updated: 3, active: 40 } },
+      { ...sessionInfo("ses_unknown", { updated: 2 }), time: { created: 1, updated: 2 } },
+    ]
+    const running = new Set(["ses_running_old", "ses_running_new"])
+    const expected = ["ses_running_new", "ses_running_old", "ses_idle_recent", "ses_old_pin", "ses_unknown"]
+    expect(listPage(sessions, parseListQuery({ order: "active", limit: 10 }), running).data.map((session) => session.id)).toEqual(expected)
+    const first = listPage(sessions, parseListQuery({ order: "active", limit: 2 }), running)
+    const second = listPage(sessions, parseListQuery({ order: "active", limit: 2, cursor: first.cursor.next }), running)
+    const last = listPage(sessions, parseListQuery({ order: "active", limit: 2, cursor: second.cursor.next }), running)
+    expect([...first.data, ...second.data, ...last.data].map((session) => session.id)).toEqual(expected)
+    const previous = listPage(sessions, parseListQuery({ order: "active", limit: 2, cursor: second.cursor.previous }), running)
+    expect(previous.data.map((session) => session.id)).toEqual(expected.slice(0, 2))
+    expect(listPage(sessions, parseListQuery({ order: "pinned", limit: 1 }), running).data[0]?.id).toBe("ses_old_pin")
   })
 
   test("status filters classify a root by its family, so an idle root with a running subagent is running", () => {

@@ -60,7 +60,7 @@ test("real remote Team opens on phone, tablet, and desktop with no Office activi
       await page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
       for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view__task[data-session-id="ses_child"]') !== null`); attempt += 1) await Bun.sleep(25)
       for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view__task[data-session-id="ses_child"]')?.textContent.includes('$0.25') ?? false`); attempt += 1) await Bun.sleep(25)
-      expect(await page.evaluate<string>(`document.querySelector('.team-view__task[data-session-id="ses_child"]')?.textContent ?? ''`)).toContain("20 tokens · $0.25 · Context 800 / 2,000 · 75% hit")
+      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.team-view__task[data-session-id="ses_child"] .team-view__usage-cell')].map((cell) => cell.querySelector('dt').textContent + '=' + cell.querySelector('dd').textContent)`)).toEqual(["Tokens=20", "Cost=$0.25", "Context=800 / 2,000", "Cache=75% hit"])
       expect(await page.evaluate<boolean>(`document.querySelector('.team-view [role="tablist"]') !== null && document.querySelector('.team-view__task[data-session-id="ses_child"]') !== null && (document.querySelector('.team-view')?.closest('dialog[open]') !== null) === (innerWidth < 768) && document.documentElement.scrollWidth <= innerWidth && (window.remoteOperationReport().operations['session.family.activity'] ?? 0) === 0`)).toBe(true)
     } finally { await page.close() }
   }
@@ -145,7 +145,7 @@ test("Team tabs keep keyed rows, counts, and navigation across phone, tablet, an
       await page.setViewport(width, height)
       await page.navigate(`http://127.0.0.1:${port}/verify/team-fixture.html?mode=team&theme=${theme}`)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.team-view [role="tablist"]') !== null`); attempt += 1) await Bun.sleep(50)
-      expect(await page.evaluate<{ readonly tabs: readonly string[]; readonly sections: readonly string[]; readonly rows: number; readonly overflow: boolean; readonly sheet: boolean; readonly smallTargets: readonly string[] }>(`(() => ({ tabs: [...document.querySelectorAll('.team-view [role="tab"]')].map((item) => item.textContent.trim()), sections: [...document.querySelectorAll('.team-view__section')].map((item) => item.textContent.trim()), rows: document.querySelectorAll('.team-view__task').length, overflow: document.documentElement.scrollWidth > innerWidth, sheet: document.querySelector('.team-view')?.closest('dialog[open]') !== null, smallTargets: [...document.querySelectorAll('.team-view button')].filter((button) => button.getClientRects().length > 0 && button.getBoundingClientRect().height < 43.5).map((button) => button.textContent.trim() + ':' + button.getBoundingClientRect().height) }))()`)).toEqual({ tabs: ["Subagents 4", "Shell 1", "Side chats 1"], sections: ["ACTIVE", "INACTIVE"], rows: 3, overflow: false, sheet: width < 768, smallTargets: [] })
+      expect(await page.evaluate<{ readonly tabs: readonly string[]; readonly sections: readonly string[]; readonly rows: number; readonly overflow: boolean; readonly sheet: boolean; readonly smallTargets: readonly string[] }>(`(() => ({ tabs: [...document.querySelectorAll('.team-view [role="tab"]')].map((item) => item.textContent.trim()), sections: [...document.querySelectorAll('.team-view__section h3')].map((item) => item.textContent.trim()), rows: document.querySelectorAll('.team-view__task').length, overflow: document.documentElement.scrollWidth > innerWidth, sheet: document.querySelector('.team-view')?.closest('dialog[open]') !== null, smallTargets: [...document.querySelectorAll('.team-view button')].filter((button) => button.getClientRects().length > 0 && button.getBoundingClientRect().height < (innerWidth < 768 || matchMedia('(pointer: coarse)').matches ? 43.5 : 31.5)).map((button) => button.textContent.trim() + ':' + button.getBoundingClientRect().height) }))()`)).toEqual({ tabs: ["Subagents 4", "Shell 1", "Side chats 1"], sections: ["ACTIVE", "INACTIVE"], rows: 3, overflow: false, sheet: width < 768, smallTargets: [] })
       await Bun.write(new URL(`../../../.cache/tmp/team-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
       await page.evaluate(`window.teamRow = document.querySelector('.team-view__task[data-session-id="ses_child"]'); window.teamRefresh()`)
       expect(await page.evaluate<boolean>(`window.teamRow === document.querySelector('.team-view__task[data-session-id="ses_child"]')`)).toBe(true)
@@ -155,6 +155,36 @@ test("Team tabs keep keyed rows, counts, and navigation across phone, tablet, an
       expect(await page.evaluate<boolean>(`window.teamRow === document.querySelector('.team-view__task[data-session-id="ses_child"]')`)).toBe(true)
       await page.evaluate(`document.querySelector('.team-view__task[data-session-id="ses_child"] [data-action="open"]').click()`)
       expect(await page.evaluate<string>(`window.teamSelected()`)).toBe("ses_child")
+    } finally { await page.close() }
+  }
+}, 30_000)
+
+test("Team cards keep identity, order, focus and geometry while usage loads and progress arrives", async () => {
+  if (!browser) throw new Error("Browser not started")
+  for (const [width, height] of [[390, 844], [1440, 900]] as const) {
+    const page = await browser.openPage()
+    try {
+      await page.setViewport(width, height)
+      await page.navigate(`http://127.0.0.1:${port}/verify/team-fixture.html?mode=team&crowded&usage=loading`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.team-view__task[data-session-id="ses_child"]') !== null`); attempt += 1) await Bun.sleep(50)
+      const snapshot = `(() => [...document.querySelectorAll('.team-view__task')].map((card) => ({ id: card.dataset.sessionId, top: Math.round(card.getBoundingClientRect().top), height: Math.round(card.getBoundingClientRect().height), cells: card.querySelectorAll('.team-view__usage-cell').length, skeletons: card.querySelectorAll('.team-view__skeleton').length })))()`
+      const before = await page.evaluate<readonly { readonly id: string; readonly top: number; readonly height: number; readonly cells: number; readonly skeletons: number }[]>(snapshot)
+      expect(before.length).toBeGreaterThanOrEqual(5)
+      expect(before.every((card) => card.cells === 4 && card.skeletons === 4)).toBe(true)
+      await page.evaluate(`window.teamNodes = [...document.querySelectorAll('.team-view__task, .team-view__usage-cell')]; document.querySelector('.team-view__task[data-session-id="ses_extra_2"] [data-action="open"]').focus({preventScroll:true})`)
+      await page.evaluate(`window.teamUsage('ses_child'); window.teamUsage('ses_waiting'); window.teamUsage('ses_done'); window.teamUsage('ses_extra_1')`)
+      const after = await page.evaluate<readonly { readonly id: string; readonly top: number; readonly height: number; readonly cells: number; readonly skeletons: number }[]>(snapshot)
+      expect(after.map((card) => [card.id, card.top, card.height])).toEqual(before.map((card) => [card.id, card.top, card.height]))
+      expect(after.every((card) => card.skeletons === 0 && card.cells === 4)).toBe(true)
+      expect(await page.evaluate<boolean>(`window.teamNodes.every((node) => node.isConnected)`)).toBe(true)
+      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.team-view__task[data-session-id="ses_child"] .team-view__usage-cell dd')].map((item) => item.textContent)`)).toEqual(["20", "$0.25", "800 / 2,000", "75% hit"])
+
+      const order = `[...document.querySelectorAll('.team-view__task')].map((card) => card.dataset.sessionId)`
+      const ordered = await page.evaluate<readonly string[]>(order)
+      await page.evaluate(`window.teamProgress('ses_extra_1'); window.teamProgress('ses_extra_3'); window.teamProgress('ses_extra_1')`)
+      expect(await page.evaluate<readonly string[]>(order)).toEqual(ordered)
+      expect(await page.evaluate<boolean>(`window.teamNodes.every((node) => node.isConnected) && document.activeElement === document.querySelector('.team-view__task[data-session-id="ses_extra_2"] [data-action="open"]')`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
     } finally { await page.close() }
   }
 }, 30_000)
@@ -188,7 +218,7 @@ test("Team keeps one titled header, sheet padding, and a non-overlapping older c
   for (const layout of reports) {
     expect(layout.headings, JSON.stringify(layout)).toBe(1)
     expect(layout.closes).toBe(1)
-    expect(layout.count).toContain("5 active")
+    expect(layout.count).toContain("6 active")
     if (layout.width === 390) {
       expect(layout.left).toBeGreaterThanOrEqual(layout.token)
       expect(layout.right).toBeGreaterThanOrEqual(layout.token)
@@ -252,9 +282,9 @@ test("loading older subagents appends the next page without replacing resident r
     await page.setViewport(390, 844)
     await page.navigate(`http://127.0.0.1:${port}/verify/team-fixture.html?mode=team`)
     for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.team-view__task[data-session-id="ses_child"]') !== null`); attempt += 1) await Bun.sleep(50)
-    await page.evaluate(`window.teamRow = document.querySelector('.team-view__task[data-session-id="ses_child"]'); document.querySelector('.team-view__more').click()`)
+    await page.evaluate(`window.teamRow = document.querySelector('.team-view__task[data-session-id="ses_child"]'); document.querySelector('#team-panel-subagents .team-view__more').click()`)
     for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.team-view__task[data-session-id="ses_old"]') !== null`); attempt += 1) await Bun.sleep(25)
-    expect(await page.evaluate<boolean>(`window.teamRow === document.querySelector('.team-view__task[data-session-id="ses_child"]') && document.querySelector('.team-view__more') === null`)).toBe(true)
+    expect(await page.evaluate<boolean>(`window.teamRow === document.querySelector('.team-view__task[data-session-id="ses_child"]') && document.querySelector('#team-panel-subagents .team-view__more') === null`)).toBe(true)
     expect(await page.evaluate<string[]>(`window.teamEvents()`)).toEqual(["older:subagents"])
   } finally { await page.close() }
 })
@@ -339,8 +369,10 @@ test("managed child bar navigates siblings and parent while BTW retains its comp
     await page.navigate(`http://127.0.0.1:${port}/verify/team-fixture.html?mode=child`)
     for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.subagent-bar') !== null`); attempt += 1) await Bun.sleep(50)
     expect(await page.evaluate<boolean>(`document.querySelector('textarea[aria-label="Message main session"], textarea[aria-label="Message BTW"]') === null`)).toBe(true)
-    expect(await page.evaluate<string>(`document.querySelector('.subagent-bar')?.textContent ?? ''`)).toContain("100% hit")
-    expect(await page.evaluate<string>(`document.querySelector('.subagent-bar')?.textContent ?? ''`)).toContain("read unreported · write unreported")
+    await page.evaluate(`document.querySelector('.subagent-bar [aria-label="Subagent details"]').click()`)
+    expect(await page.evaluate<string>(`document.querySelector('dialog[aria-label="Subagent details"][open]')?.textContent ?? ''`)).toContain("100% hit")
+    expect(await page.evaluate<string>(`document.querySelector('dialog[aria-label="Subagent details"][open]')?.textContent ?? ''`)).toContain("read unreported · write unreported")
+    await page.pressEscape()
     await page.evaluate(`document.querySelector('.subagent-bar [aria-label="Next subagent"]').click()`)
     expect(await page.evaluate<string>(`window.teamSelected()`)).toBe("ses_done")
     await page.evaluate(`document.querySelector('.subagent-bar [aria-label="Previous subagent"]').click()`)
@@ -352,6 +384,70 @@ test("managed child bar navigates siblings and parent while BTW retains its comp
     expect(await page.evaluate<boolean>(`document.querySelector('textarea[aria-label="Message BTW"]') !== null && document.querySelector('.subagent-bar') === null`)).toBe(true)
   } finally { await page.close() }
 })
+
+test("phone subagent context keeps task details out of the reading area", async () => {
+  if (!browser) throw new Error("Browser not started")
+  for (const width of [320, 360, 390, 430]) {
+    const page = await browser.openPage()
+    try {
+      await page.setMobileViewport(width, 844)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&presentation=conversation&team=two&theme=dark&childTranscript`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('[aria-label="Open Team"]') !== null`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`)
+      await page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view__task[data-session-id="ses_child"] [data-action="open"]') !== null`); attempt += 1) await Bun.sleep(25)
+      await page.evaluate(`document.querySelector('.team-view__task[data-session-id="ses_child"] [data-action="open"]').click()`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.subagent-bar')?.getClientRects().length > 0 && document.querySelector('dialog[aria-label="Team"]') === null`); attempt += 1) await Bun.sleep(25)
+      await page.evaluate(`Promise.allSettled(document.getAnimations().filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity).map((animation) => animation.finished))`)
+      expect(await page.evaluate<boolean>(`document.querySelector('.conversation-pane')?.textContent.includes('Refactor the session sync and run the targeted tests.') ?? false`)).toBe(true)
+      const layout = await page.evaluate<{ readonly compact: boolean; readonly room: boolean; readonly visibleDetails: number; readonly overflow: boolean; readonly smallTargets: number }>(`(() => {
+        const bar = document.querySelector('.subagent-bar')
+        const tokens = getComputedStyle(document.documentElement)
+        const maxHeight = 2 * parseFloat(tokens.getPropertyValue('--yc-control-h-dense')) + 2 * parseFloat(tokens.getPropertyValue('--yc-space-3')) + parseFloat(tokens.getPropertyValue('--yc-space-2')) + parseFloat(tokens.getPropertyValue('--yc-border-width'))
+        return { compact: bar.getBoundingClientRect().height <= maxHeight, room: document.querySelector('.workspace__scroll').getBoundingClientRect().height > 3 * bar.getBoundingClientRect().height, visibleDetails: [...bar.querySelectorAll('.subagent-bar__description, .subagent-bar__metrics, .subagent-bar__rollup')].filter((item) => item.getClientRects().length > 0).length, overflow: document.documentElement.scrollWidth > innerWidth, smallTargets: [...bar.querySelectorAll('button')].filter((button) => button.getClientRects().length > 0 && (button.getBoundingClientRect().height < 43.5 || button.getBoundingClientRect().width < 43.5)).length }
+      })()`)
+      expect(layout).toEqual({ compact: true, room: true, visibleDetails: 0, overflow: false, smallTargets: 0 })
+      if (width === 390) await Bun.write(new URL("../.cache/subagent-mobile/closed.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      await page.evaluate(`window.childTranscript = document.querySelector('.conversation-pane'); window.childScrollTop = document.querySelector('.workspace__scroll').scrollTop; document.querySelector('.subagent-bar [aria-label="Subagent details"]').focus({ preventScroll: true })`)
+      expect(await page.evaluate<boolean>(`document.activeElement?.getAttribute('aria-label') === 'Subagent details'`)).toBe(true)
+      await page.pressKey(" ", "Space", 32)
+      expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Subagent details"][open]') !== null`)).toBe(true)
+      await page.evaluate(`Promise.all(document.querySelector('dialog[aria-label="Subagent details"]').getAnimations({ subtree: true }).map((animation) => animation.finished))`)
+      if (width === 390) await Bun.write(new URL("../.cache/subagent-mobile/details.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      await page.pressEscape()
+      expect(await page.evaluate<boolean>(`document.activeElement?.getAttribute('aria-label') === 'Subagent details'`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.querySelector('.conversation-pane') === window.childTranscript && document.querySelector('.workspace__scroll').scrollTop === window.childScrollTop`)).toBe(true)
+    } finally { await page.close() }
+  }
+}, 30_000)
+
+test("subagent details preserve complete metrics and answer access without growing the dock", async () => {
+  if (!browser) throw new Error("Browser not started")
+  for (const [width, theme, reduced] of [[320, "dark", false], [390, "light", true], [820, "dark", false], [1440, "light", false]] as const) {
+    const page = await browser.openPage()
+    try {
+      await page.setViewport(width, 844)
+      await page.setCoarsePointer(width < 768)
+      await page.setReducedMotion(reduced)
+      await page.navigate(`http://127.0.0.1:${port}/verify/team-fixture.html?mode=child&longChild&theme=${theme}`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.subagent-bar__agent') !== null`); attempt += 1) await Bun.sleep(25)
+      expect(await page.evaluate<boolean>(`document.querySelector('.subagent-bar__metrics') === null`)).toBe(true)
+      expect(await page.evaluate<{ readonly contained: boolean; readonly title: string }>(`({ contained: document.documentElement.scrollWidth <= innerWidth, title: document.querySelector('.subagent-bar__agent')?.getAttribute('title') })`)).toEqual({ contained: true, title: "documentation-and-runtime-reviewer-with-a-long-agent-name" })
+      await page.evaluate(`window.barNode = document.querySelector('.subagent-bar'); window.barHeight = window.barNode.getBoundingClientRect().height; document.querySelector('.subagent-bar [aria-label="Subagent details"]').click()`)
+      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('dialog[aria-label="Subagent details"][open] .subagent-bar__metric')].map((item) => item.textContent)`)).toEqual(["Modelopenai/gpt-6-sol#high", "Tokens50,000,000", "Cache100% hit · 4,000,000 read · 0 write", "Cost$25.00", "Context500,000 / 1,000,000"])
+      expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Subagent details"][open]')?.textContent.includes('Review asynchronous worker behavior and connection lifetime safety across the selected workspace') && document.querySelector('.subagent-bar').getBoundingClientRect().height === window.barHeight && document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+      await page.evaluate(`window.dialogNode = document.querySelector('dialog[aria-label="Subagent details"][open]'); window.teamUsage('ses_child'); window.teamRefresh()`)
+      expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Subagent details"][open]') === window.dialogNode && document.querySelector('[data-metric="tokens"] dd')?.textContent === '20'`)).toBe(true)
+      await page.pressEscape()
+      expect(await page.evaluate<boolean>(`document.activeElement?.getAttribute('aria-label') === 'Subagent details'`)).toBe(true)
+      for (let attempt = 0; attempt < 40 && await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Subagent details"]') !== null`); attempt += 1) await Bun.sleep(25)
+      await page.evaluate(`document.querySelector('.subagent-bar [aria-label="Previous subagent"]').click()`)
+      expect(await page.evaluate<boolean>(`document.querySelector('textarea[aria-label="Answer subagent question"]')?.getClientRects().length > 0 && document.querySelector('dialog[aria-label="Subagent details"]') === null`)).toBe(true)
+      await page.evaluate(`document.querySelector('.subagent-bar [aria-label="Subagent details"]').click(); window.teamSelectedBefore = window.teamSelected(); window.teamSelect('ses_child')`)
+      expect(await page.evaluate<boolean>(`window.teamSelected() !== window.teamSelectedBefore && document.querySelector('dialog[aria-label="Subagent details"]') === null`)).toBe(true)
+    } finally { await page.close() }
+  }
+}, 30_000)
 
 test("Team tabs and row actions are keyboard operable, and Escape closes the phone sheet", async () => {
   if (!browser) throw new Error("Browser not started")

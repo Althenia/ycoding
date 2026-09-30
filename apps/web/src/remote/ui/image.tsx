@@ -11,7 +11,7 @@ export function ImagePreview(props: { readonly src: string; readonly name: strin
   createEffect(() => { source(); setFailed(false) })
   return <>
     <Show when={!failed()} fallback={<div class="transcript-image__unavailable" role="status">Image unavailable <button type="button" onClick={() => setFailed(false)}>Retry {props.name}</button></div>}>
-      <button type="button" class="transcript-image" aria-label={`Open image ${props.name}`} onClick={() => setOpen(true)}>
+      <button type="button" class="transcript-image" data-cursor="zoom-in" aria-label={`Open image ${props.name}`} onClick={() => setOpen(true)}>
         <img src={props.src} alt={props.name} loading="lazy" onError={() => setFailed(true)} />
       </button>
     </Show>
@@ -24,8 +24,8 @@ function ImageLightbox(props: { readonly src: string; readonly name: string; rea
   let closeButton: HTMLButtonElement | undefined
   onMount(() => dialog?.showModal())
   onCleanup(() => { if (dialog?.open) dialog.close() })
-  return <dialog ref={dialog} class="overlay overlay--dialog transcript-lightbox" aria-label={`Image: ${props.name}`} onCancel={props.onClose} onClose={props.onClose} onClick={(event) => { if (event.target === event.currentTarget) props.onClose() }} onKeyDown={(event) => { if (event.key === "Tab") { event.preventDefault(); closeButton?.focus() } }}>
-    <div class="overlay__surface">
+  return <dialog ref={dialog} class="overlay overlay--dialog transcript-lightbox" data-cursor="action" aria-label={`Image: ${props.name}`} onCancel={props.onClose} onClose={props.onClose} onClick={(event) => { if (event.target === event.currentTarget) props.onClose() }} onKeyDown={(event) => { if (event.key === "Tab") { event.preventDefault(); closeButton?.focus() } }}>
+    <div class="overlay__surface" data-cursor="surface">
       <div class="overlay__head"><span class="overlay__title">Image: {props.name}</span><button ref={closeButton} type="button" class="button button--ghost button--icon overlay__close" aria-label="Close image" onClick={props.onClose}><Icon name="close" /></button></div>
       <div class="overlay__body"><img src={props.src} alt={props.name} /></div>
     </div>

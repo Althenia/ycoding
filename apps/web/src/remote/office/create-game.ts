@@ -64,7 +64,11 @@ export function mountOffice(host: HTMLElement, initial: OfficeFrameInput, select
     game?.pause()
     fail(message)
   }
-  const scene = new OfficeScene(mailbox, selectSession, reportFailure, resolution, onLocations)
+  const style = getComputedStyle(host)
+  const scene = new OfficeScene(mailbox, selectSession, reportFailure, resolution, onLocations, {
+    sans: style.getPropertyValue("--yc-font-sans").trim() || "sans-serif",
+    mono: style.getPropertyValue("--yc-font-mono").trim() || "monospace",
+  })
   game = new OfficeGame({
     type: Phaser.AUTO, parent: host,
     width: Math.max(1, Math.round(host.clientWidth * resolution)), height: Math.max(1, Math.round(host.clientHeight * resolution)),
@@ -102,6 +106,8 @@ export function mountOffice(host: HTMLElement, initial: OfficeFrameInput, select
     game.resume()
   }
   document.addEventListener("visibilitychange", visibility)
+  const fontSettlement = () => scene.refreshFonts()
+  document.fonts.addEventListener("loadingdone", fontSettlement)
   const contextLost = () => reportFailure("The office renderer lost its graphics context. Return to the normal workspace or reload the view.")
   const canvas = () => host.querySelector("canvas")
   const ready = () => {
@@ -126,6 +132,7 @@ export function mountOffice(host: HTMLElement, initial: OfficeFrameInput, select
       resize.disconnect()
       host.removeEventListener("wheel", wheel)
       document.removeEventListener("visibilitychange", visibility)
+      document.fonts.removeEventListener("loadingdone", fontSettlement)
       game.events.off("ready", ready)
       canvas()?.removeEventListener("webglcontextlost", contextLost)
       game.resume()

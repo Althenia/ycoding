@@ -271,6 +271,7 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
     if (isLegacyCompactionEvent(event)) return yield* updateLegacyCompaction(adapter, event)
     yield* SessionEvent.match(event, {
       "session.created": () => Effect.void,
+      "session.work.completed": () => Effect.void,
       "session.usage.updated": () => Effect.void,
       "session.diagnostics.updated": () => Effect.void,
       "session.usage.recorded": () => Effect.void,

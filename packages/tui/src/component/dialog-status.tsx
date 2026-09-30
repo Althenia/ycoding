@@ -2,6 +2,7 @@ import { useData } from "../context/data"
 import { createMemo } from "solid-js"
 import { DialogSelect } from "../ui/dialog-select"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { useKeepAwake } from "../keep-awake"
 import { useRemote } from "../remote-connector"
 
 export type DialogStatusProps = {
@@ -14,6 +15,7 @@ export type DialogStatusProps = {
 export function DialogStatus(props: DialogStatusProps = {}) {
   const data = useData()
   const remote = useRemote()
+  const keepAwake = useKeepAwake()
   const mcp = createMemo(() => data.location.mcp.server.list() ?? [])
   const connected = createMemo(() => mcp().filter((server) => server.status.status === "connected").length)
   return (
@@ -29,6 +31,14 @@ export function DialogStatus(props: DialogStatusProps = {}) {
           state: remote.status().state === "error" ? "error" as const : remote.status().state === "on" ? "connected" as const : undefined,
           category: "Services",
           value: "remote",
+        },
+        {
+          title: "Keep awake",
+          description: keepAwake.status()?.message,
+          footer: keepAwake.status()?.state ?? "Checking",
+          state: keepAwake.status()?.state === "error" ? "error" as const : keepAwake.status()?.state === "on" ? "connected" as const : undefined,
+          category: "Services",
+          value: "keepAwake",
         },
         {
           title: "MCP servers",

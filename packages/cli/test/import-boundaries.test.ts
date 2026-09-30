@@ -98,6 +98,7 @@ describe("CLI frontend import boundaries", () => {
           file !== "packages/cli/src/commands/handlers/run.ts" &&
           file !== "packages/cli/src/commands/handlers/run-shared.ts" &&
           file !== "packages/cli/src/commands/handlers/update.ts" &&
+          !/^packages\/cli\/src\/commands\/handlers\/service\/(?:start|restart|status|stop|get|set|unset)\.ts$/.test(file) &&
           file !== "packages/cli/src/commands/handlers/serve-shared.ts" &&
           file !== "packages/cli/src/commands/handlers/remote/enroll.ts" &&
           file !== "packages/cli/src/commands/handlers/remote/connect.ts" &&

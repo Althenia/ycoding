@@ -15,13 +15,11 @@
   background: var(--yc-surface-raised);
   color: var(--yc-text);
   text-align: start;
-  cursor: pointer;
 }
 
 .custom-select__trigger[disabled] {
   color: var(--yc-text-subtle);
   background: var(--yc-surface-sunken);
-  cursor: not-allowed;
 }
 
 .custom-select__value {
@@ -93,7 +91,6 @@
   background: transparent;
   color: var(--yc-text);
   text-align: start;
-  cursor: pointer;
 }
 
 .custom-select__option + .custom-select__option {

@@ -120,16 +120,17 @@ test("pending prompts, mutation toasts, and the active goal remain accessible on
       await page.evaluate(`window.composerSetPending('queue'); window.composerSetMutation('sending')`)
       expect(await page.evaluate<string>(`document.querySelector('.transcript-message__receipt')?.textContent?.trim()`)).toContain("Queued")
       expect(await page.evaluate<number>(`document.querySelectorAll('.mutation-toast').length`)).toBe(0)
-      for (const status of ["sent", "failed", "unknown"] as const) {
+      await page.evaluate(`window.composerSetMutation('sent')`)
+      await wait(page, `document.querySelector('.transcript-message__send-error') === null`)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.mutation-toast').length`)).toBe(0)
+      for (const status of ["failed", "unknown"] as const) {
         await page.evaluate(`window.composerSetMutation(${JSON.stringify(status)})`)
         await wait(page, `document.querySelector('.mutation-toast')?.classList.contains('mutation-toast--${status}') === true`)
-        expect(await page.evaluate<string>(`document.querySelector('.mutation-toast')?.getAttribute('role')`)).toBe(status === "sent" ? "status" : "alert")
+        expect(await page.evaluate<string>(`document.querySelector('.mutation-toast')?.getAttribute('role')`)).toBe("alert")
         expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.mutation-toast')).animationDuration`)).toBe("0s")
         expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
-        if (status !== "sent") {
-          await page.evaluate(`document.querySelector('.transcript-message__send-error button')?.click()`)
-          expect(await page.evaluate<string>(`window.composerRequests().at(-1)?.operation`)).toBe("retry")
-        }
+        await page.evaluate(`document.querySelector('.transcript-message__send-error button')?.click()`)
+        expect(await page.evaluate<string>(`window.composerRequests().at(-1)?.operation`)).toBe("retry")
         await page.evaluate(`document.querySelector('.mutation-toast button')?.click()`)
         await wait(page, `document.querySelector('.mutation-toast') === null`)
       }
@@ -251,6 +252,7 @@ test("status stays inside a fixed-height composer and pending picks survive unre
     await wait(page, `document.querySelector('[role="slider"]') !== null`)
     await page.evaluate(`document.querySelector('[role="slider"]')?.focus()`)
     await page.pressKey("Home", "Home", 36)
+    await page.pressKey("ArrowRight", "ArrowRight", 39)
     await page.evaluate(`document.querySelector('button[aria-label="Close model picker"]')?.click()`)
     const idle = await page.evaluate<number>(`document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect().height`)
     expect(idle).toBeLessThanOrEqual(160)
@@ -448,7 +450,7 @@ test("full skill list scrolls to the last skill without unrelated updates snappi
   } finally { await page.close() }
 }, 30_000)
 
-test("model effort supports keyboard and pointer changes and reset to the catalog default", async () => {
+test("model effort supports keyboard and pointer choices and explicit reset to Base", async () => {
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
@@ -457,11 +459,11 @@ test("model effort supports keyboard and pointer changes and reset to the catalo
     await wait(page, `document.querySelector('[role="slider"]') !== null`)
     await page.evaluate(`document.querySelector('[role="slider"]')?.focus()`)
     await page.pressKey("Home", "Home", 36)
-    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("low")
+    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("Base")
     await page.evaluate(`(() => { const slider = document.querySelector('[role="slider"]'); const rect = slider.getBoundingClientRect(); slider.setPointerCapture=()=>{}; slider.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, clientX: rect.right - 1, clientY: rect.top + 4 })); slider.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: rect.right - 1, clientY: rect.top + 4 })); })()`)
     expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("high")
     await page.evaluate(`document.querySelector('button[aria-label="Reset reasoning effort"]')?.click()`)
-    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("high")
+    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("Base")
   } finally { await page.close() }
 }, 30_000)
 
@@ -494,10 +496,11 @@ test("lightning toggles paired fast models, preserves available effort, and keep
     expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.model-control__model')].some(item => item.textContent.includes('gpt-6-sol-fast') || item.textContent.includes('claude-opus-5-5-fast'))`)).toBe(false)
     await page.evaluate(`[...document.querySelectorAll('.model-control__model')].find(item => item.textContent.includes('Claude Opus 5.5'))?.click()`)
     expect(await page.evaluate<string>(`document.querySelector('button[aria-label="Fast model"]')?.getAttribute('aria-pressed')`)).toBe("true")
-    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("high")
+    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("Base")
     await type(page, ".mini-composer__mount textarea", "Use Claude fast")
     await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Send prompt"]')?.click()`)
-    expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)?.input`)).toMatchObject({ model: { providerID: "anthropic", id: "claude-opus-5-5-fast", variant: "high" } })
+    expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)?.input`)).toMatchObject({ model: { providerID: "anthropic", id: "claude-opus-5-5-fast" } })
+    expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)?.input.model.variant`)).toBeUndefined()
     await page.evaluate(`document.querySelector('.model-control__switch')?.click()`)
     await page.evaluate(`[...document.querySelectorAll('.model-control__model')].find(item => item.textContent.includes('GPT-6 Lite'))?.click()`)
     await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.click()`)
@@ -552,6 +555,7 @@ test("every effort level has a distinct gradient and AA hero text in both themes
       await wait(page, `document.querySelector('[role="slider"]') !== null`)
       await page.evaluate(`document.querySelector('[role="slider"]')?.focus()`)
       await page.pressKey("Home", "Home", 36)
+      await page.pressKey("ArrowRight", "ArrowRight", 39)
       const views: { level: string; gradient: string; color: string; background: string }[] = []
       for (const [index] of variants.entries()) {
         if (index) await page.pressKey("ArrowRight", "ArrowRight", 39)
@@ -579,7 +583,7 @@ test("effort thumb follows drag before snapping, keeps keyboard semantics and su
     expect(dragging.position).toBeLessThan(.8)
     expect(dragging.fill).toBeGreaterThan(.65)
     expect(dragging.fill).toBeLessThan(.8)
-    expect(dragging.committed).toBe("low")
+    expect(dragging.committed).toBe("Base")
     await page.evaluate(`(() => { const slider=document.querySelector('[role="slider"]'), r=slider.getBoundingClientRect(); slider.dispatchEvent(new PointerEvent('pointerup', { bubbles:true, pointerId:7, clientX:r.left+r.width*.72, clientY:r.top+15 })); })()`)
     expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("medium")
     await Bun.sleep(300)
@@ -1078,6 +1082,42 @@ test("a failed file search leaves no stuck panel: Escape and Close dismiss it an
 async function type(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, selector: string, text: string) {
   await page.evaluate(`(() => { const field = document.querySelector(${JSON.stringify(selector)}); field.focus(); field.value = ${JSON.stringify(text)}; field.setSelectionRange(field.value.length, field.value.length); field.dispatchEvent(new InputEvent('input', { bubbles: true })); })()`)
 }
+test("compact autocomplete dispatches its action, rejects arguments and attachments, and keeps later drafts on settlement", async () => {
+  for (const width of [390, 1440]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width, 900)
+      await page.setReducedMotion(true)
+      await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html?compactGate=1`)
+      await wait(page, `document.querySelector('.mini-composer__mount textarea') !== null`)
+      await page.evaluate(`(() => { const field=document.querySelector('.mini-composer__mount textarea'); field.value='/comp'; field.focus(); field.setSelectionRange(5,5); field.dispatchEvent(new Event('input',{bubbles:true})); })()`)
+      await wait(page, `[...document.querySelectorAll('.mini-composer__autocomplete [role="option"]')].some(option=>option.textContent.includes('compact'))`)
+      await page.evaluate(`[...document.querySelectorAll('.mini-composer__autocomplete [role="option"]')].find(option=>option.textContent.includes('compact')).click()`)
+      await page.evaluate(`document.querySelector('.mini-composer__mount [aria-label="Send prompt"]').click()`)
+      await wait(page, `window.composerRequests().length === 1`)
+      expect(await page.evaluate<string[]>(`window.composerRequests().map(request=>request.operation)`)).toEqual(["session.compact"])
+      await page.evaluate(`window.composerSetDraft('ses_fixture','A newer draft'); window.composerResolveCompact()`)
+      await wait(page, `!document.querySelector('.mini-composer__mount [aria-label="Send prompt"]').disabled`)
+      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount textarea').value`)).toBe("A newer draft")
+
+      await page.evaluate(`window.composerSetDraft('ses_fixture','/compact'); document.querySelector('.mini-composer__mount [aria-label="Send prompt"]').click()`)
+      await wait(page, `window.composerRequests().length === 2`)
+      await page.evaluate(`window.composerSetDraft('ses_other','Other Session draft'); window.composerSwitchSession(); window.composerResolveCompact()`)
+      await wait(page, `document.querySelector('.mini-composer__mount textarea').value === 'Other Session draft'`)
+      expect(await page.evaluate<string>(`window.composerState().drafts.ses_other`)).toBe("Other Session draft")
+
+      await page.evaluate(`window.composerSetDraft('ses_other','/compact extra'); document.querySelector('.mini-composer__mount [aria-label="Send prompt"]').click()`)
+      await wait(page, `document.querySelector('.mini-composer__mount .composer__attachment-error') !== null`)
+      expect(await page.evaluate<number>(`window.composerRequests().length`)).toBe(2)
+      await page.evaluate(`(() => { window.composerSetDraft('ses_other','/compact'); const files=new DataTransfer(); files.items.add(new File(['safe fixture'],'probe.txt',{type:'text/plain'})); const field=document.querySelector('.mini-composer__mount input[type="file"]'); field.files=files.files; field.dispatchEvent(new Event('change',{bubbles:true})); })()`)
+      await wait(page, `document.querySelector('.mini-composer__mount .composer__attachment') !== null`)
+      await page.evaluate(`document.querySelector('.mini-composer__mount [aria-label="Send prompt"]').click()`)
+      await wait(page, `document.querySelector('.mini-composer__mount .composer__attachment-error')?.textContent.includes('Remove attachments')`)
+      expect(await page.evaluate<string[]>(`window.composerRequests().map(request=>request.operation)`)).toEqual(["session.compact", "session.compact"])
+    } finally { await page.close() }
+  }
+}, 30_000)
+
 async function wait(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, expression: string) {
   for (let index = 0; index < 50; index++) {
     if (await page.evaluate<boolean>(expression)) return

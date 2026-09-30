@@ -35,9 +35,7 @@ const layer = Layer.effect(
               ),
               render: {
                 initial: (environment) =>
-                  ["Here is some useful information about the environment you are running in:", environment].join(
-                    "\n",
-                  ),
+                  ["Here is some useful information about the environment you are running in:", environment].join("\n"),
                 changed: (_previous, environment) =>
                   ["The environment you are running in is now:", environment].join("\n"),
               },
@@ -76,7 +74,9 @@ const layer = Layer.effect(
             Instructions.make({
               key: Instructions.Key.make("core/project-artifact-authoring"),
               codec: Schema.toCodecJson(Schema.String),
-              read: Effect.succeed("At a safe boundary after the primary task is complete and validated, create or update at most one Project Artifact for each newly learned reusable insight. The insight must be repeated, durable, repository-specific, and useful in future work. Never persist transient task state, current todos, user preferences, prompts, logs, secrets, credentials, private paths/URLs, customer data, or speculation. Search existing artifacts first and update the owned project version rather than duplicating it. Prefer a skill; use a command only for an invokable instruction-only template; use a least-privilege agent only for a genuine reusable role. Workflows are not a first-class artifact. Never create or enable a plugin automatically. Do not interrupt the primary task to author an artifact."),
+              read: Effect.succeed(
+                "At a safe boundary after the primary task is complete and validated, create or update at most one Project Artifact for each newly learned reusable insight. The insight must be repeated, durable, repository-specific, and useful in future work. Never persist transient task state, current todos, user preferences, prompts, logs, secrets, credentials, private paths/URLs, customer data, or speculation. Search existing artifacts first and update the owned project version rather than duplicating it. Prefer a skill; use a command only for an invokable instruction-only template; use a least-privilege agent only for a genuine reusable role. Workflows are not a first-class artifact. Never create or enable a plugin automatically. Do not interrupt the primary task to author an artifact.",
+              ),
               render: { initial: (instruction) => instruction, changed: (_previous, instruction) => instruction },
             }),
             Instructions.make({
@@ -92,6 +92,14 @@ const layer = Layer.effect(
               codec: Schema.toCodecJson(Schema.String),
               read: Effect.succeed(
                 "When creating commits, use the user's existing Git author and committer identity and write messages without Co-authored-by trailers or AI, model, agent, or provider attribution. Do not set `user.name`, `user.email`, or `GIT_AUTHOR_*`/`GIT_COMMITTER_*`, or pass `--author` or `--reset-author`, as part of committing. If Git reports a missing identity, report it and ask the user to configure their own identity; never invent one.",
+              ),
+              render: { initial: (instruction) => instruction, changed: (_previous, instruction) => instruction },
+            }),
+            Instructions.make({
+              key: Instructions.Key.make("core/task-completion"),
+              codec: Schema.toCodecJson(Schema.String),
+              read: Effect.succeed(
+                "Call task_complete once after all accepted work is finished and verified, immediately before your final reply. Do not call it for ordinary replies, idle, partial results, blockers, or unfinished pending, subagent, or background work. In goal mode, first complete the achieved goal with the goal tool; goal completion alone is not work-completion evidence. If new input or unfinished work intervenes, finish and verify it before declaring completion again.",
               ),
               render: { initial: (instruction) => instruction, changed: (_previous, instruction) => instruction },
             }),

@@ -15,7 +15,7 @@ test("carousel ranks every running family before recent roots regardless of pin 
   const relay = await startRelayDouble({ handler: (request) => {
     if (request.operation === "session.status") return { ok: true, value: { running: running.map((item) => item.id), attention: [] } }
     if (request.operation !== "session.list" || request.input?.workspace !== undefined) return "default"
-    if (request.input?.status === "running") return { ok: true, value: { data: request.input.order === "desc" ? [running[1], running[0]] : [running[1]], cursor: {} } }
+    if (request.input?.status === "running") return { ok: true, value: { data: request.input.order === "active" ? [running[1], running[0]] : [running[1]], cursor: {} } }
     if (request.input?.status === "idle") return { ok: true, value: { data: recent.slice(0, Number(request.input.limit)), cursor: {} } }
     return "default"
   } })
@@ -29,8 +29,8 @@ test("carousel ranks every running family before recent roots regardless of pin 
     ])
     expect(store.state().carouselSessions?.map((session) => session.running)).toEqual([true, true, false, false, false, false, false, false, false, false])
     expect(relay.requests.filter((request) => request.operation === "session.list" && request.input?.workspace === undefined).map((request) => request.input)).toEqual([
-      expect.objectContaining({ order: "desc", status: "running", parentID: null, limit: 10 }),
-      expect.objectContaining({ order: "desc", status: "idle", parentID: null, limit: 10 }),
+      expect.objectContaining({ order: "active", status: "running", parentID: null, limit: 10 }),
+      expect.objectContaining({ order: "active", status: "idle", parentID: null, limit: 10 }),
     ])
   } finally { store.dispose(); await relay.stop() }
 }, 15_000)
@@ -40,7 +40,7 @@ test("carousel limits twelve running roots to the ten most recently active", asy
   const relay = await startRelayDouble({ handler: (request) => {
     if (request.operation === "session.status") return { ok: true, value: { running: running.map((item) => item.id), attention: [] } }
     if (request.operation !== "session.list" || request.input?.workspace !== undefined) return "default"
-    if (request.input?.status === "running") return { ok: true, value: { data: request.input.order === "desc" ? running.slice(0, Number(request.input.limit)) : [running[11], ...running.slice(0, 11)], cursor: {} } }
+    if (request.input?.status === "running") return { ok: true, value: { data: request.input.order === "active" ? running.slice(0, Number(request.input.limit)) : [running[11], ...running.slice(0, 9)], cursor: {} } }
     return "default"
   } })
   const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }),
@@ -49,6 +49,7 @@ test("carousel limits twelve running roots to the ten most recently active", asy
     await store.load()
     await waitFor(() => (store.state().carouselSessions?.length ?? 0) > 0)
     expect(store.state().carouselSessions?.map((session) => session.id)).toEqual(Array.from({ length: 10 }, (_, index) => `ses_running_${index}`))
+    expect(relay.requests.find((request) => request.operation === "session.list" && request.input?.status === "running")?.input).toMatchObject({ order: "active", parentID: null, limit: 10 })
     expect(relay.requests.some((request) => request.operation === "session.list" && request.input?.status === "idle" && request.input?.workspace === undefined)).toBe(false)
   } finally { store.dispose(); await relay.stop() }
 }, 15_000)
@@ -72,7 +73,8 @@ test("finished selected run advances carousel activity without changing list ord
     await waitFor(() => store.state().activeSessionID === older.id)
     relay.pushEvent(older.id, { type: "session.step.ended", created: 350, data: { sessionID: older.id, assistantMessageID: "msg_run" } })
     relay.pushEvent(older.id, { type: "session.execution.succeeded", created: 350, data: { sessionID: older.id } })
-    await waitFor(() => store.state().carouselSessions?.[0]?.activeAt === 350)
+    relay.pushStatus([], [])
+    await waitFor(() => store.state().carouselSessions?.[0]?.activeAt === 350 && store.state().carouselSessions?.[0]?.running === false)
     expect(store.state().carouselSessions?.map((row) => row.updatedAt)).toEqual([100, 200])
     expect(store.state().carouselSessions?.[0]?.running).toBe(false)
     expect(store.state().carouselSessions?.[1]?.activeAt).toBeUndefined()

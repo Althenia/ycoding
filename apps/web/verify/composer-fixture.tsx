@@ -21,15 +21,15 @@ const catalog: CatalogView = {
     { id: "btw", name: "BTW", mode: "subagent", hidden: false },
   ],
   models: [
-    { providerID: "anthropic", providerName: "Anthropic", id: "claude-opus-5-5", name: "Claude Opus 5.5", variants: ["high", "max"], defaultVariant: "high" },
-    { providerID: "anthropic", providerName: "Anthropic", id: "claude-opus-5-5-fast", name: "Claude Opus 5.5 Fast", variants: ["medium", "high"], defaultVariant: "medium" },
-    { providerID: "openai", providerName: "OpenAI", id: "gpt-6-sol", name: "GPT-6 Sol", variants: ["low", "medium", "high"], defaultVariant: "high" },
-    { providerID: "openai", providerName: "OpenAI", id: "gpt-6-sol-fast", name: "GPT-6 Sol Fast", variants: ["low", "high"], defaultVariant: "low" },
-    { providerID: "anthropic", providerName: "Anthropic", id: "claude-haiku-5-5", name: "Claude Haiku 5.5", variants: ["low", "high"], defaultVariant: "high" },
+    { providerID: "anthropic", providerName: "Anthropic", id: "claude-opus-5-5", name: "Claude Opus 5.5", variants: ["high", "max"] },
+    { providerID: "anthropic", providerName: "Anthropic", id: "claude-opus-5-5-fast", name: "Claude Opus 5.5 Fast", variants: ["medium", "high"] },
+    { providerID: "openai", providerName: "OpenAI", id: "gpt-6-sol", name: "GPT-6 Sol", variants: ["low", "medium", "high"] },
+    { providerID: "openai", providerName: "OpenAI", id: "gpt-6-sol-fast", name: "GPT-6 Sol Fast", variants: ["low", "high"] },
+    { providerID: "anthropic", providerName: "Anthropic", id: "claude-haiku-5-5", name: "Claude Haiku 5.5", variants: ["low", "high"] },
     { providerID: "openai", providerName: "OpenAI", id: "gpt-6-lite", name: "GPT-6 Lite", variants: [] },
     { providerID: "openai", providerName: "OpenAI", id: "glm-fast-latest", name: "GLM Fast Latest", variants: [] },
     { providerID: "openai", providerName: "OpenAI", id: "quant-fp8-fast", name: "Quant FP8 Fast", variants: [] },
-    { providerID: "openai", providerName: "OpenAI", id: "effort-spectrum", name: "Effort Spectrum", variants: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "custom"], defaultVariant: "medium" },
+    { providerID: "openai", providerName: "OpenAI", id: "effort-spectrum", name: "Effort Spectrum", variants: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "custom"] },
   ],
   commands: [{ name: "plan", description: "Plan work" }],
   skills: [{ id: "frontend-workflow", name: "Frontend workflow", slash: true }, { id: "gpt-subgent-routing", name: "GPT subagent routing", slash: false }, { id: "audit", name: "Audit", slash: false }, ...Array.from({ length: 63 }, (_, index) => ({ id: `skill-${String(index).padStart(2, "0")}`, name: `Skill ${index}`, slash: false }))],
@@ -37,6 +37,7 @@ const catalog: CatalogView = {
   resources: [{ name: "Runbook", uri: "mcp://docs/runbook" }],
 }
 const requests: { operation: string; input: unknown }[] = []
+let resolveCompact: ((accepted: boolean) => void) | undefined
 const workspace = { id: "work_one", projectID: "project_hash", directory: "/workspace/ycoding", name: "YCoding" }
 const other = { id: "work_two", projectID: "other_hash", directory: "/workspace/other", name: "Other repository" }
 const [state, setState] = createSignal<RemoteStoreState>({
@@ -47,6 +48,7 @@ const [state, setState] = createSignal<RemoteStoreState>({
   devices: [], advertised: [], sessions: [], sessionGroups: [], sessionQuery: "", sessionFilter: "all", sessionListStatus: "ready", sessionPageLoading: false, sessionHasNext: false, sessionHasPrevious: false,
   teamCues: [], notifications: [], noticeSync: { status: "ready", total: 0, loaded: 0, hidden: 0, loadingMore: false, message: undefined }, unhandledEvents: 0,
   usage: { providers: { status: "idle" }, summary: { status: "idle" }, reports: {} },
+  keepAwake: { read: "idle" },
 })
 const listeners = new Set<() => void>()
 const update = (next: RemoteStoreState) => { setState(next); listeners.forEach((listener) => listener()) }
@@ -65,6 +67,12 @@ const store: RemoteStore = {
   sendPrompt: async (input: { readonly skills?: readonly string[] }) => { for (const skill of input.skills ?? []) requests.push({ operation: "session.skill", input: { skill, resume: false } }); requests.push({ operation: "session.prompt", input }) },
   activateSkill: async (skill: string) => { requests.push({ operation: "session.skill", input: { skill } }); return true },
   runCommand: async (input: unknown) => { requests.push({ operation: "session.command", input }) },
+  compactSession: async () => {
+    requests.push({ operation: "session.compact", input: { id: "cmp_fixture" } })
+    return new URLSearchParams(location.search).get("compactGate") === "1"
+      ? new Promise<boolean>((resolve) => { resolveCompact = resolve }) : true
+  },
+  loadKeepAwake: async () => {}, setKeepAwake: async () => false,
   cancelUpload: () => { requests.push({ operation: "upload.cancel", input: {} }); update({ ...state(), upload: undefined, uploadError: "Attachment upload cancelled. Files were not sent." }) },
   interrupt: async () => { requests.push({ operation: "session.interrupt", input: {} }) },
   createSession: async (input: unknown) => { requests.push({ operation: "session.create", input }); return "ses_created" },
@@ -80,8 +88,9 @@ const store: RemoteStore = {
   setGoal: async (goal) => { requests.push({ operation: "session.goal.set", input: { goal } }); update({ ...state(), view: { ...state().view!, autonomy: { mode: "goal", yolo: state().view?.autonomy?.yolo ?? 0, goal: { text: goal, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } } } }); return true },
   stopGoal: async () => { requests.push({ operation: "session.goal.stop", input: { goal: null } }); update({ ...state(), view: { ...state().view!, autonomy: { mode: "normal", yolo: state().view?.autonomy?.yolo ?? 0 } } }) }, setAutonomy: () => {},
 }
-Object.assign(window, { composerRequests: () => requests, composerState: () => state(), composerSetMutation: (status: "sending" | "unknown" | "failed" | "sent" | null) => update({ ...state(), mutations: status === null || status === "sent" ? [] : [{ id: "msg_fixture", kind: "prompt", label: "Prompt", state: status, sessionID: "ses_fixture", operation: "session.prompt", input: { text: "Review" }, detail: status === "failed" ? "Send failed" : status === "unknown" ? "The outcome is unknown" : undefined }], mutationToasts: status === null || status === "sending" ? [] : [{ id: "msg_fixture", label: "Prompt", state: status, sessionID: "ses_fixture", ...(status === "sent" ? {} : { detail: status === "failed" ? "Send failed" : "The outcome is unknown" }) }] }), composerSetPending: (delivery: "steer" | "queue") => update({ ...state(), view: { ...state().view!, messages: [{ kind: "user", id: "msg_fixture", text: "Review", delivery, state: "pending", created: 1 }] } }), composerSetUpload: (percent: number) => update({ ...state(), upload: { sessionID: "ses_fixture", name: "capture.png", percent } }), composerSetStatus: (status: "idle" | "running" | "tool" | "tool-yolo" | "family-yolo" | "waiting" | "goal" | "goal-yolo" | "yolo") => update({ ...state(), view: { ...state().view!, status: status === "running" || status === "tool" || status === "tool-yolo" || status === "waiting" ? "running" : "idle", executionStarted: status === "running" ? Date.now() - 6000 : undefined, messages: status === "tool" || status === "tool-yolo" ? [{ kind: "assistant", id: "msg_tool", created: Date.now(), parts: [{ kind: "tool", callID: "call_tool", name: "shell", status: "running", content: [], started: Date.now() }] }] : [], requests: status === "waiting" ? [{ kind: "permission", id: "p", action: "read", resources: [], askedAt: Date.now() }] : [], autonomy: status === "goal" || status === "goal-yolo" ? { mode: "goal", yolo: status === "goal-yolo" ? 2 : 0, goal: { text: "Finish task", status: "active", iteration: 2, noProgress: 0, maxNoProgress: 3 } } : { mode: status === "yolo" || status === "tool-yolo" || status === "family-yolo" ? "yolo" : "normal", yolo: status === "yolo" ? 2 : status === "tool-yolo" || status === "family-yolo" ? 3 : 0 } }, sessionStatus: status === "family-yolo" ? { running: new Set(["ses_fixture"]), attention: new Set<string>(), outstanding: new Set<string>(), failed: new Set<string>() } : undefined }) })
+Object.assign(window, { composerRequests: () => requests, composerState: () => state(), composerSetMutation: (status: "sending" | "unknown" | "failed" | "sent" | null, sessionID = "ses_fixture") => update({ ...state(), mutations: status === null || status === "sent" ? [] : [{ id: "msg_fixture", kind: "prompt", label: "Prompt", state: status, sessionID, operation: "session.prompt", input: { text: "Review" }, detail: status === "failed" ? "Send failed" : status === "unknown" ? "The outcome is unknown" : undefined }], mutationToasts: status === "failed" || status === "unknown" ? [{ id: "msg_fixture", label: "Prompt", state: status, sessionID: "ses_fixture", detail: status === "failed" ? "Send failed" : "The outcome is unknown" }] : [] }), composerSetPending: (delivery: "steer" | "queue", text = "Review") => update({ ...state(), view: { ...state().view!, messages: [{ kind: "user", id: "msg_fixture", text, delivery, state: "pending", created: 1 }] } }), composerSetUpload: (percent: number) => update({ ...state(), upload: { sessionID: "ses_fixture", name: "capture.png", percent } }), composerSetStatus: (status: "idle" | "running" | "tool" | "tool-yolo" | "family-yolo" | "waiting" | "goal" | "goal-yolo" | "yolo") => update({ ...state(), view: { ...state().view!, status: status === "running" || status === "tool" || status === "tool-yolo" || status === "waiting" ? "running" : "idle", executionStarted: status === "running" ? Date.now() - 6000 : undefined, messages: status === "tool" || status === "tool-yolo" ? [{ kind: "assistant", id: "msg_tool", created: Date.now(), parts: [{ kind: "tool", callID: "call_tool", name: "shell", status: "running", content: [], started: Date.now() }] }] : [], requests: status === "waiting" ? [{ kind: "permission", id: "p", action: "read", resources: [], askedAt: Date.now() }] : [], autonomy: status === "goal" || status === "goal-yolo" ? { mode: "goal", yolo: status === "goal-yolo" ? 2 : 0, goal: { text: "Finish task", status: "active", iteration: 2, noProgress: 0, maxNoProgress: 3 } } : { mode: status === "yolo" || status === "tool-yolo" || status === "family-yolo" ? "yolo" : "normal", yolo: status === "yolo" ? 2 : status === "tool-yolo" || status === "family-yolo" ? 3 : 0 } }, sessionStatus: status === "family-yolo" ? { running: new Set(["ses_fixture"]), attention: new Set<string>(), outstanding: new Set<string>(), failed: new Set<string>() } : undefined }) })
 Object.assign(window, { composerSwitchSession: () => update({ ...state(), activeSessionID: "ses_other", view: createSessionView("ses_other") }) })
+Object.assign(window, { composerResolveCompact: (accepted = true) => resolveCompact?.(accepted), composerSetDraft: store.setDraft })
 Object.assign(window, { composerClearAutonomy: () => update({ ...state(), view: { ...state().view!, autonomy: undefined } }) })
 Object.assign(window, { composerSetWorkspaceLoading: (loading: boolean) => update({ ...state(), workspaceStatus: loading ? "loading" : "ready" }) })
 Object.assign(window, { composerSetGoalStatus: (status: "active" | "completed" | "stopped" | "exhausted" | null) => update({ ...state(), view: { ...state().view!, autonomy: { mode: status === "active" ? "goal" : "normal", yolo: 3, ...(status ? { goal: { text: "Finish task", status, iteration: 2, noProgress: 0, maxNoProgress: 3 } } : {}) } } }) })
@@ -116,7 +125,7 @@ function Fixture() {
   return <RemoteProvider createStore={() => store}>
     <main class="composer-fixture" style={{ "max-width": "900px", margin: "auto", padding: "16px" }}>
       <button type="button" onClick={() => setRunning(!running())}>Toggle running</button>
-      <Composer sessionID="ses_fixture" running={running()} canSend />
+      <Composer sessionID={state().activeSessionID} running={running()} canSend />
       <ToastLayer sessionID="ses_fixture" onOpenSession={() => {}} />
       <div class="transcript" aria-label="Fixture transcript"><For each={state().view?.messages ?? []}>{(message) => <MessageRow message={() => message} />}</For></div>
       <NewSessionComposer onCreated={setCreated} />

@@ -29,6 +29,14 @@ test("unmatched slash heads, including paths, remain complete ordinary prompts",
     expect(submission(text, [], catalog, "steer")).toEqual({ kind: "prompt", input: { text, delivery: "steer" } })
 })
 
+test("manual compact is an available Session action, not a provider prompt or configured command", () => {
+  expect(optionsForTrigger("/", "compact", catalog, [])[0]?.label).toBe("/compact")
+  expect(optionsForTrigger("/", "compact", catalog, [], false)).toEqual([])
+  expect(submission("/compact", [], catalog, "steer")).toEqual({ kind: "compact" })
+  expect(submission("/compact extra", [], catalog, "queue")).toMatchObject({ kind: "invalid" })
+  expect(submission("/compact", [], { ...catalog, commands: [{ name: "compact" }] }, "steer")).toEqual({ kind: "compact" })
+})
+
 test("dollar activation, at mentions, and hash alias produce the TUI prompt parts and skill requests", () => {
   const skill = optionsForTrigger("$", "aud", catalog, [])[0]!
   const dollar = applyMention("$aud", 0, 4, skill, [])

@@ -15,6 +15,74 @@
 
 html {
   -webkit-text-size-adjust: 100%;
+  cursor: var(--yc-cursor-surface);
+}
+
+:where(input:not([type="button"], [type="submit"], [type="reset"], [type="checkbox"], [type="radio"], [type="file"], [type="range"]), textarea, [contenteditable="true"], [contenteditable="plaintext-only"], h1, h2, h3, h4, h5, h6, p, pre, code, kbd, samp, blockquote, td, th, dt, dd, [data-cursor="text"]) {
+  cursor: var(--yc-cursor-text);
+}
+
+:where(a[href], button, select, summary, input[type="button"], input[type="submit"], input[type="reset"], input[type="checkbox"], input[type="radio"], input[type="file"], [role="button"], [role="link"], [role="tab"], [role="option"], [role="menuitem"], [role="switch"], [role="checkbox"], [role="radio"], label:has(input[type="checkbox"], input[type="radio"]), [data-cursor="action"]) {
+  cursor: var(--yc-cursor-action);
+}
+
+:where(a[href], button, summary, [role="button"], [role="link"], [role="tab"], [role="option"], [role="menuitem"], [role="switch"], [role="checkbox"], [role="radio"], [role="slider"], label:has(input[type="checkbox"], input[type="radio"])) * {
+  cursor: inherit;
+}
+
+:where(input[type="range"], [role="slider"]) {
+  cursor: var(--yc-cursor-adjust-x);
+}
+
+input::-webkit-inner-spin-button,
+input::-webkit-outer-spin-button {
+  cursor: var(--yc-cursor-action);
+}
+
+input::file-selector-button,
+input:disabled::-webkit-inner-spin-button,
+input:disabled::-webkit-outer-spin-button {
+  cursor: inherit;
+}
+
+textarea::-webkit-resizer {
+  cursor: var(--yc-cursor-resize-y);
+}
+
+:where([data-cursor="surface"], .team-control__phone .team-view__sheet > .overlay__surface) {
+  cursor: var(--yc-cursor-surface);
+}
+
+:where(.team-control__phone .team-view__sheet),
+:where(dialog[data-cursor="action"], .team-control__phone .team-view__sheet)::backdrop {
+  cursor: var(--yc-cursor-action);
+}
+
+dialog[inert]::backdrop {
+  cursor: var(--yc-cursor-disabled);
+}
+
+:where([data-cursor="zoom-in"]) {
+  cursor: var(--yc-cursor-zoom-in);
+}
+
+:where([data-cursor="panning"]) {
+  --yc-cursor-pan: var(--yc-cursor-panning);
+  --yc-cursor-action: var(--yc-cursor-panning);
+  cursor: var(--yc-cursor-panning);
+}
+
+:where(:disabled, [aria-disabled="true"], label:has(:disabled), [inert]) {
+  cursor: var(--yc-cursor-disabled);
+}
+
+:where(:disabled:not(fieldset), [aria-disabled="true"], label:has(:disabled), [inert]) * {
+  cursor: inherit;
+}
+
+:where(button, input, select, textarea, [role="button"], [role="combobox"], [role="switch"])[aria-busy="true"],
+:where([aria-busy="true"]) :where(:disabled, label:has(:disabled)) {
+  cursor: var(--yc-cursor-busy);
 }
 
 body {
@@ -96,6 +164,11 @@ kbd {
   outline: 2px solid var(--yc-focus);
   outline-offset: 2px;
   border-radius: var(--yc-radius-sm);
+}
+
+:is(button, a, summary, [role="button"]):has(svg) {
+  --yc-focus: var(--yc-border-strong);
+  --yc-focus-ring: 0 0 0 2px var(--yc-bg), 0 0 0 4px var(--yc-border-strong);
 }
 
 ::selection {
@@ -248,7 +321,6 @@ kbd {
   /* A wrapped label would squeeze a two-control row instead of growing it. */
   white-space: nowrap;
   text-decoration: none;
-  cursor: pointer;
   transition: background-color var(--yc-dur-quick) var(--yc-ease-standard),
     border-color var(--yc-dur-quick) var(--yc-ease-standard),
     translate var(--yc-dur-quick) var(--yc-ease-standard);
@@ -264,7 +336,6 @@ kbd {
 
 .button[disabled] {
   opacity: 0.55;
-  cursor: not-allowed;
   translate: none;
 }
 
@@ -511,7 +582,6 @@ kbd {
 .textarea[disabled] {
   background: var(--yc-surface-sunken);
   color: var(--yc-text-subtle);
-  cursor: not-allowed;
 }
 
 /* Native checkbox and radio, styled once. The whole label row is the target so the
@@ -525,7 +595,6 @@ kbd {
   border: var(--yc-border-width) solid transparent;
   border-radius: var(--yc-radius-md);
   font-size: var(--yc-size-sm);
-  cursor: pointer;
 }
 
 .check:hover {
@@ -594,7 +663,6 @@ kbd {
   align-items: center;
   gap: var(--yc-space-3);
   min-block-size: var(--yc-hit-min);
-  cursor: pointer;
   font-size: var(--yc-size-sm);
 }
 
@@ -1045,6 +1113,12 @@ kbd {
 
 .overlay__close {
   margin-inline-start: auto;
+}
+
+@media (forced-colors: none) {
+  .overlay__close[data-pointer-focus]:focus-visible {
+    outline: none;
+  }
 }
 
 .overlay__body {

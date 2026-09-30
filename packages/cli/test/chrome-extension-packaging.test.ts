@@ -63,6 +63,25 @@ test("bundles the indicator module into service-worker.js and keeps protocol.js 
   })
 })
 
+test("bundles the Geist Sans data into service-worker.js once, without shipping fonts.js or Geist Mono there", async () => {
+  await packaged(async (bin, extension) => {
+    const worker = await readFile(path.join(extension, "service-worker.js"), "utf8")
+    const sans = Buffer.from(await readFile(path.join(chromeExtensionSource, "../../assets/brand/fonts/Geist.woff2"))).toString("base64")
+    const mono = Buffer.from(await readFile(path.join(chromeExtensionSource, "../../assets/brand/fonts/GeistMono.woff2"))).toString("base64")
+    expect(worker.split(sans).length - 1).toBe(1)
+    expect(worker).not.toContain(mono)
+    expect(await Bun.file(path.join(extension, "fonts.js")).exists()).toBe(false)
+    const css = await readFile(path.join(extension, "popup.css"), "utf8")
+    expect(css).toBe(await readFile(path.join(chromeExtensionSource, "popup.css"), "utf8"))
+    expect(css).toContain(sans)
+    expect(css).toContain(mono)
+    const license = (await readFile(path.join(chromeExtensionSource, "../../assets/brand/fonts/OFL.txt"), "utf8")).trim()
+    expect(worker).toContain(license)
+    expect(css).toContain(license)
+    await releasedUpdaterAcceptsLinuxArchive(await archive(bin))
+  })
+})
+
 test("the packaged service worker passes the extension lifecycle and marker suite without indicator.js", async () => {
   await packaged(async (bin, extension) => {
     const mirror = path.join(bin, "mirror")

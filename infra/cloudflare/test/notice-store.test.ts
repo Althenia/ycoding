@@ -1,20 +1,95 @@
 import { Database } from "bun:sqlite"
 import { describe, expect, test } from "bun:test"
 import { RemoteLimits } from "../../../packages/remote/src/index"
-import { createNoticeStore, type NoticeEvent, type NoticeSql } from "../src/relay/notice-store"
+import { createNoticeStore, type NoticeEvent } from "../src/relay/notice-store"
+import { createNoticeStorage } from "./notice-storage"
 
-function sqlPort(database: Database, hooks: { readonly beforeExec?: (query: string) => void } = {}): NoticeSql {
+function sqlPort(database: Database, hooks: { readonly beforeExec?: (query: string) => void; readonly beforeCommit?: () => void } = {}) {
+  const storage = createNoticeStorage(database)
   return {
-    exec: (query, ...bindings) => {
+    ...storage,
+    sql: { exec: (query: string, ...bindings: unknown[]) => {
       hooks.beforeExec?.(query)
-      const rows = database.prepare(query).all(...(bindings as never[]))
-      return { toArray: () => rows }
-    },
+      return storage.sql.exec(query, ...bindings)
+    } },
+    transactionSync: <Value>(operation: () => Value) => storage.transactionSync(() => {
+      const result = operation()
+      hooks.beforeCommit?.()
+      return result
+    }),
   }
 }
 
 const event = (index: number, category: NoticeEvent["category"] = "agent-completed"): NoticeEvent => ({
   category, sessionID: `ses_${index}`, createdAt: 1_000 + index,
+})
+
+const receipt = (sessionID: string, seq: number) => ({ id: `evt_${sessionID}_${seq}`, sessionID, seq, created: 10_000 + seq })
+
+describe("completion receipt SQLite and transactional KV", () => {
+  test("all baseline pages are silent, including empty pages, and dedup survives reopening and reads", () => {
+    const database = new Database(":memory:")
+    const storage = sqlPort(database)
+    const first = createNoticeStore(storage)
+    const initial = Array.from({ length: 200 }, (_, index) => receipt(`ses_${index}`, 10))
+    expect(first.complete(initial, true)).toEqual({ notices: [], total: 0 })
+    expect(first.complete([], true)).toEqual({ notices: [], total: 0 })
+    const reopened = createNoticeStore(sqlPort(database))
+    expect(reopened.complete([receipt("ses_last", 100)], false)).toEqual({ notices: [], total: 0 })
+    expect(reopened.complete([receipt("ses_0", 10), receipt("ses_last", 99)], false)).toEqual({ notices: [], total: 0 })
+    expect(reopened.complete([receipt("ses_0", 11), receipt("ses_1", 11)], false)).toEqual({
+      notices: [
+        { id: "ntc_1", category: "agent-completed", sessionID: "ses_0", createdAt: 10_011 },
+        { id: "ntc_2", category: "agent-completed", sessionID: "ses_1", createdAt: 10_011 },
+      ], total: 2,
+    })
+    reopened.remove([1])
+    reopened.clear()
+    const restarted = createNoticeStore(sqlPort(database))
+    expect(restarted.complete([receipt("ses_0", 11), receipt("ses_1", 10)], false)).toEqual({ notices: [], total: 0 })
+    expect(restarted.complete([receipt("ses_0", 12)], false).notices[0]?.id).toBe("ntc_3")
+  })
+
+  test("empty final baseline arms future receipts and each Session owns its sequence", () => {
+    const store = createNoticeStore(sqlPort(new Database(":memory:")))
+    expect(store.complete([], false)).toEqual({ notices: [], total: 0 })
+    expect(store.complete([receipt("ses_a", 100)], true).notices).toHaveLength(1)
+    expect(store.complete([receipt("ses_b", 1)], false).notices).toHaveLength(1)
+    expect(store.complete([receipt("ses_a", 99), receipt("ses_a", 100), receipt("ses_b", 1)], false)).toEqual({ notices: [], total: 2 })
+  })
+
+  test("SQL insertion failure rolls back receipt high-water and retry admits the same completion once", () => {
+    const database = new Database(":memory:")
+    let fail = false
+    const storage = sqlPort(database, { beforeExec: (query) => {
+      if (fail && query.startsWith("INSERT INTO notice ")) throw new Error("SQLITE_FULL")
+    } })
+    const store = createNoticeStore(storage)
+    store.complete([], false)
+    store.append([event(1, "approval-requested")])
+    fail = true
+    expect(() => store.complete([receipt("ses_a", 3)], false)).toThrow("SQLITE_FULL")
+    expect(store.page().total).toBe(1)
+    fail = false
+    expect(store.complete([receipt("ses_a", 3)], false).notices).toHaveLength(1)
+    expect(store.complete([receipt("ses_a", 3)], false)).toEqual({ notices: [], total: 2 })
+  })
+
+  test("failure after SQL and KV changes rolls back baseline marker, receipts, notices, and cached count", () => {
+    const database = new Database(":memory:")
+    let fail = true
+    const storage = sqlPort(database, { beforeCommit: () => { if (fail) throw new Error("commit failed") } })
+    const store = createNoticeStore(storage)
+    expect(() => store.complete([receipt("ses_a", 1)], false)).toThrow("commit failed")
+    fail = false
+    expect(store.complete([receipt("ses_a", 2)], false)).toEqual({ notices: [], total: 0 })
+    fail = true
+    expect(() => store.complete([receipt("ses_a", 3)], false)).toThrow("commit failed")
+    expect(store.page()).toEqual({ notices: [], total: 0 })
+    const reopened = createNoticeStore(sqlPort(database))
+    expect(reopened.complete([receipt("ses_a", 3)], false).notices).toHaveLength(1)
+    expect(reopened.complete([receipt("ses_a", 3)], false)).toEqual({ notices: [], total: 1 })
+  })
 })
 const events = (count: number, offset = 0) => Array.from({ length: count }, (_, index) => event(offset + index))
 

@@ -22,12 +22,14 @@ export function Modal(props: {
   readonly label: string
   readonly header?: JSX.Element
   readonly returnFocus: HTMLElement
+  readonly pointerOpened?: boolean
   readonly onClose: () => void
   readonly onDismiss?: () => void
   readonly requestClose?: (close: () => void) => void
   readonly children: JSX.Element
 }) {
   const [closing, setClosing] = createSignal(false)
+  const [pointerFocus, setPointerFocus] = createSignal(props.pointerOpened === true)
   let element: HTMLDialogElement | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
   const close = () => {
@@ -60,7 +62,9 @@ export function Modal(props: {
       data-closing={closing() ? "" : undefined}
       onClose={() => { if (!closing()) close() }}
       onCancel={(event) => { event.preventDefault(); event.stopPropagation(); close() }}
+      onPointerDown={() => setPointerFocus(true)}
       onKeyDown={(event) => {
+        setPointerFocus(false)
         if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); return }
         if (event.key !== "Tab") return
         const controls = [...event.currentTarget.querySelectorAll<HTMLElement>(
@@ -80,6 +84,7 @@ export function Modal(props: {
             type="button"
             class="button button--ghost button--icon overlay__close"
             aria-label={`Close ${props.label}`}
+            data-pointer-focus={pointerFocus() ? "" : undefined}
             onClick={close}
           >
             <Icon name="close" />

@@ -27,6 +27,7 @@ export type ProviderFixture = {
    */
   readonly holdAfter?: number
   readonly settleDelayMs?: number
+  readonly reply?: (request: unknown) => readonly ReturnType<typeof deltaChunk>[]
 }
 
 export type ProviderStandIn = {
@@ -127,10 +128,11 @@ async function startProviderStandIn(fixture: ProviderFixture) {
     async fetch(request) {
       if (!new URL(request.url).pathname.endsWith("/chat/completions"))
         return new Response("not found", { status: 404 })
-      requests.push(await request.json())
+      const body = await request.json()
+      requests.push(body)
       const heldRequest = fixture.holdAfter !== undefined && requests.length > fixture.holdAfter
       const encoder = new TextEncoder()
-      const frames = [deltaChunk({ role: "assistant" }), deltaChunk({ content: fixture.text }), finishChunk("stop")]
+      const frames = fixture.reply?.(body) ?? [deltaChunk({ role: "assistant" }), deltaChunk({ content: fixture.text }), finishChunk("stop")]
       const stream = new ReadableStream({
         async start(controller) {
           for (const frame of frames) controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`))

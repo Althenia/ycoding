@@ -18,6 +18,19 @@ export function orderedVariants(variants: readonly string[]): string[] {
   })
 }
 
+export function sameModel(left: ModelRefView | undefined, right: ModelRefView | undefined): boolean {
+  return left !== undefined && right !== undefined && left.providerID === right.providerID && left.id === right.id && left.variant === right.variant
+}
+
+export function modelSelection(models: readonly ModelOption[], selected: ModelRefView | undefined): { readonly model?: ModelRefView; readonly warning?: string; readonly blocked?: boolean } {
+  if (!selected) return {}
+  const option = models.find((item) => item.providerID === selected.providerID && item.id === selected.id)
+  if (!option) return { model: selected, blocked: true, warning: `Model ${selected.id} is not offered by this machine. Choose another model before sending.` }
+  if (selected.variant !== undefined && !option.variants.includes(selected.variant)) return { model: selected, blocked: true,
+    warning: `Saved effort ${selected.variant} is not offered for ${option.name}. Use Reset to choose Base, or select this model again and choose an offered effort before sending.` }
+  return { model: selected }
+}
+
 export function visibleModels(models: readonly ModelOption[]): ModelOption[] {
   return models.filter((item) => !item.id.endsWith("-fast") || !models.some((base) => base.providerID === item.providerID && base.id === item.id.slice(0, -5)))
 }
@@ -34,8 +47,8 @@ export function switchFastModel(models: readonly ModelOption[], selected: ModelR
   const pair = pairedFastModel(models, selected)
   if (!pair) return undefined
   const target = pair.active ? pair.base : pair.fast
-  const variant = selected?.variant && target.variants.includes(selected.variant) ? selected.variant : target.defaultVariant
-  return { providerID: target.providerID, id: target.id, ...(variant ? { variant } : {}) }
+  const variant = selected?.variant && target.variants.includes(selected.variant) ? selected.variant : undefined
+  return modelSelection([target], { providerID: target.providerID, id: target.id, ...(variant ? { variant } : {}) }).model
 }
 
 export function effortLevel(variant: string | undefined) {
@@ -91,7 +104,7 @@ export function optionsForTrigger(trigger: Trigger, query: string, catalog: Cata
   const resources: ComposerOption[] = [...catalog.references, ...catalog.resources]
     .map((resource) => ({ label: `@${resource.name}`, description: resource.description, kind: "file", value: resource.name, uri: resource.uri }))
   const candidates: ComposerOption[] = trigger === "/"
-    ? [...(sessionActions ? [{ label: "/goal", description: "Set an autonomous goal", kind: "command" as const, value: "goal" }, { label: "/yolo", description: "Set the autonomy level", kind: "command" as const, value: "yolo" }] : []), ...catalog.commands.filter((command) => !unsupportedSlashActions.has(command.name) && (!sessionActions || command.name !== "goal" && command.name !== "yolo")).map((command) => ({ label: `/${command.name}`, description: command.description, kind: "command" as const, value: command.name })), ...(sessionActions ? skills.filter((skill) => catalog.skills.find((entry) => entry.id === skill.value)?.slash).map((skill) => ({ ...skill, label: `/${skill.value}` })) : [])]
+    ? [...(sessionActions ? [{ label: "/compact", description: "Compact this Session's context", kind: "command" as const, value: "compact" }, { label: "/goal", description: "Set an autonomous goal", kind: "command" as const, value: "goal" }, { label: "/yolo", description: "Set the autonomy level", kind: "command" as const, value: "yolo" }] : []), ...catalog.commands.filter((command) => !unsupportedSlashActions.has(command.name) && command.name !== "compact" && (!sessionActions || command.name !== "goal" && command.name !== "yolo")).map((command) => ({ label: `/${command.name}`, description: command.description, kind: "command" as const, value: command.name })), ...(sessionActions ? skills.filter((skill) => catalog.skills.find((entry) => entry.id === skill.value)?.slash).map((skill) => ({ ...skill, label: `/${skill.value}` })) : [])]
     : trigger === "@" ? [...catalog.references.map((resource) => resources.find((item) => item.uri === resource.uri)!), ...agents, ...catalog.resources.map((resource) => resources.find((item) => item.uri === resource.uri)!), ...files.map((file) => ({ label: `@${file.path}`, kind: "file" as const, value: file.path, uri: file.uri }))]
       : trigger === "$" ? skills : [...skills.map((skill) => ({ ...skill, label: catalog.skills.find((item) => item.id === skill.value)?.name ?? skill.label })), ...agents.map((agent) => ({ ...agent, label: catalog.agents.find((item) => item.id === agent.value)?.name ?? agent.label }))]
   return candidates.map((option) => ({ option, score: Math.max(fuzzy(option.value, query), fuzzy(option.description ?? "", query) - 20) }))
@@ -132,6 +145,9 @@ export function reconcileMentions(before: string, after: string, parts: readonly
 export function submission(text: string, parts: readonly MentionPart[], catalog: CatalogView | undefined, delivery: "steer" | "queue", agent?: string, model?: ModelRefView) {
   const trimmed = text.trim()
   const command = trimmed.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/)
+  if (command?.[1] === "compact") return command[2]?.trim()
+    ? { kind: "invalid" as const, message: "Use /compact without arguments." }
+    : { kind: "compact" as const }
   if (command?.[1] === "goal") return command[2]?.trim()
     ? { kind: "goal" as const, input: { goal: command[2].trim() } }
     : { kind: "invalid" as const, message: "Enter goal text after /goal." }

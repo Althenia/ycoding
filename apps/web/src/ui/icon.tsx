@@ -35,6 +35,8 @@ export type IconName =
   | "maximize"
   | "crosshair"
   | "arrow-left"
+  | "arrow-right"
+  | "office"
   | "arrow-up"
   | "folder"
   | "sparkles"
@@ -85,6 +87,8 @@ const paths: Record<IconName, readonly string[]> = {
   maximize: ["M4 9V4h5", "M20 9V4h-5", "M4 15v5h5", "M20 15v5h-5"],
   crosshair: ["M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M12 3v4", "M12 17v4", "M3 12h4", "M17 12h4"],
   "arrow-left": ["M19 12H5", "M11 6l-6 6 6 6"],
+  "arrow-right": ["M5 12h14", "M13 6l6 6-6 6"],
+  office: ["M5 20V5l7-2 7 2v15", "M3 20h18", "M9 8h2", "M13 8h2", "M9 12h2", "M13 12h2", "M10 20v-4h4v4"],
   "arrow-up": ["M12 19V5", "M6 11l6-6 6 6"],
   folder: ["M3 6h6l2 2h10v11H3z"],
   sparkles: ["M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8z", "M18.5 14.5l.8 1.7 1.7.8-1.7.8-.8 1.7-.8-1.7-1.7-.8 1.7-.8z"],

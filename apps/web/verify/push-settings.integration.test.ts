@@ -54,11 +54,9 @@ const platform = (initial: { readonly permission: "default" | "granted"; readonl
       const failure = state.answers.post;
       return failure ? Response.json({ error: { code: 'internal_error', message: failure } }, { status: 503 }) : Response.json({ subscribed: true });
     }
-    if (url.pathname === '/api/push/test') {
+    if (url.pathname === '/api/push/test' || url.pathname === '/api/admin/push/test') {
       state.tests.push(init && init.body ? JSON.parse(init.body) : undefined);
-      if (state.holdTest) await gate('test');
-      const answer = state.answers.test || { status: 200, body: { outcome: 'accepted', status: 201 } };
-      return Response.json(answer.body, { status: answer.status });
+      return Response.json({ error: { code: 'not_found' } }, { status: 404 });
     }
     return network(input, init);
   };
@@ -165,27 +163,18 @@ describe("Settings push to this device", () => {
     } finally { await page.close() }
   })
 
-  test("Send test alert stays busy until the relay answers, then reports acceptance, refusal, or an expired subscription", async () => {
-    const page = await open({ permission: "granted", subscribed: true })
-    const testButton = `[...document.querySelectorAll('button')].find(button => button.textContent === 'Send test alert')`
-    try {
-      await until(page, `${pushButton}.textContent === 'Turn off'`)
-      await page.evaluate(`window.__push.holdTest = true; ${testButton}.click()`)
-      await until(page, `window.__push.gates.test !== undefined`)
-      expect(await page.evaluate<{ test: boolean; push: boolean }>(`({ test: ${testButton}.disabled, push: ${pushButton}.disabled })`)).toEqual({ test: true, push: true })
-      expect(await page.evaluate<unknown>(`window.__push.tests`)).toEqual([{ endpoint: "https://fcm.googleapis.com/send/fixture" }])
-      await page.evaluate(`window.__push.gates.test()`)
-      await until(page, `${status}.startsWith('The push service accepted')`)
-      expect(await page.evaluate<boolean>(`${testButton}.disabled`)).toBe(false)
-      await page.evaluate(`window.__push.holdTest = false; window.__push.answers.test = { status: 200, body: { outcome: 'rejected', status: 403 } }; ${testButton}.click()`)
-      await until(page, `${status} === 'The push service refused the test alert (HTTP 403).'`)
-      expect(await page.evaluate<string>(`${pushButton}.textContent`)).toBe("Retry setup")
-      await page.evaluate(`window.__push.answers.test = { status: 200, body: { outcome: 'expired', status: 410 } }; ${pushButton}.click()`)
-      await until(page, `${pushButton}.textContent === 'Turn off'`)
-      await page.evaluate(`${testButton}.click()`)
-      await until(page, `${pushButton}.textContent === 'Re-enable'`)
-      expect(await page.evaluate<string>(status)).toBe("The push service reports this subscription expired. Use Re-enable to register this device again.")
-      expect(await page.evaluate<{ unsubscribed: number; visible: boolean }>(`({ unsubscribed: window.__push.unsubscribed, visible: ${testButton} !== undefined })`)).toEqual({ unsubscribed: 1, visible: false })
-    } finally { await page.close() }
+  test("Settings keeps push registration controls without a test-alert action or admin requests", async () => {
+    for (const width of [390, 1440]) {
+      const page = await open({ permission: "granted", subscribed: true })
+      try {
+        await page.setViewport(width, 844)
+        await until(page, `${pushButton}.textContent === 'Turn off'`)
+        expect(await page.evaluate<string[]>(`[...document.querySelector('[aria-label="Push to this device"]').closest('.defs__row').querySelectorAll('button')].map((button) => button.textContent)`)).toEqual(["Turn off"])
+        expect(await page.evaluate<string>(status)).toBe("Push is registered on this device for the System alerts chosen above.")
+        await page.evaluate(`${pushButton}.click()`)
+        await until(page, `${pushButton}.textContent === 'Turn on'`)
+        expect(await page.evaluate<{ readonly requests: readonly unknown[]; readonly unsubscribed: number }>(`({ requests: window.__push.tests, unsubscribed: window.__push.unsubscribed })`)).toEqual({ requests: [], unsubscribed: 1 })
+      } finally { await page.close() }
+    }
   })
 })

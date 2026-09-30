@@ -1,4 +1,5 @@
 import { appearanceFor } from "./sprites"
+import { officeInputsSettled } from "./model"
 import { findPath } from "./navigation"
 import type { ActorFrame, ActorSpeech, OfficeActor, OfficeCue, OfficeLayout, OfficeSnapshot, OfficeSpot, Point } from "./types"
 
@@ -48,6 +49,7 @@ export class OfficeDirector {
     }
     const priorRoot = this.snapshot?.team.rootActorID
     this.snapshot = snapshot
+    if (!officeInputsSettled(snapshot)) return
     const visible = new Set(snapshot.actors.map((actor) => actor.id))
     for (const [id, state] of this.actors) {
       if (visible.has(id)) continue
@@ -165,7 +167,8 @@ export class OfficeDirector {
   private claimLounge(actor: OfficeActor): OfficeSpot {
     const occupied = new Set([...this.actors.values()].flatMap((state) => state.lounge ? [`${state.lounge.cell.x},${state.lounge.cell.y}`] : []))
     const offset = appearanceFor(actor.sessionID) % this.layout.lounge.length
-    return this.layout.lounge.map((_, index) => this.layout.lounge[(offset + index) % this.layout.lounge.length]!)
+    const rotated = this.layout.lounge.map((_, index) => this.layout.lounge[(offset + index) % this.layout.lounge.length]!)
+    return [...this.layout.lounge.filter((spot) => spot.pose === "play"), ...rotated.filter((spot) => spot.pose !== "play")]
       .find((spot) => !occupied.has(`${spot.cell.x},${spot.cell.y}`)) ?? this.layout.lounge[offset]!
   }
 
@@ -220,11 +223,12 @@ export class OfficeDirector {
   private frame(state: ActorState, reducedMotion: boolean): ActorFrame {
     const atWork = !state.path.length && same(cellAt(this.layout, state.position), this.workSpot(state.pod, state.actor).cell)
     const spot = state.actor.status === "idle" && state.lounge ? state.lounge : this.workSpot(state.pod, state.actor)
+    const playing = spot.pose === "play" && !state.path.length && !reducedMotion && state.actor.source !== "unavailable" && same(cellAt(this.layout, state.position), spot.cell)
     const working = ["working", "tool", "compacting"].includes(state.actor.status)
     return {
       actor: state.actor, appearance: appearanceFor(state.actor.sessionID), position: state.position,
       direction: state.path.length ? state.direction : spot.facing,
-      pose: state.path.length && !reducedMotion ? "walk" : state.speech ? "talk" : state.actor.status === "attention" && atWork ? "wave" : working && atWork && (!state.actor.activity || state.actor.activity === "implement") ? "type" : spot.pose,
+      pose: state.path.length && !reducedMotion ? "walk" : state.speech ? "talk" : state.actor.status === "attention" && atWork ? "wave" : working && atWork && (!state.actor.activity || state.actor.activity === "implement") ? "type" : spot.pose === "play" ? playing ? "play" : "stand" : spot.pose,
       moving: state.path.length > 0 && !reducedMotion && state.actor.source !== "unavailable",
       blocked: state.blocked, room: this.layout.roomAt(cellAt(this.layout, state.position)), speech: state.speech,
       leaving: state.leaving, opacity: state.leaving ? Math.max(0, 1 - state.leavingAge / 400) : state.opacityAge / 400,

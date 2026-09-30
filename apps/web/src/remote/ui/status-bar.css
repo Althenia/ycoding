@@ -5,7 +5,7 @@
 .session-status__slot--attention { background:var(--yc-yellow-soft); color:var(--yc-yellow-strong); }
 .session-status__label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .session-status__mobile { display:none; min-inline-size:0; max-inline-size:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.session-status__yolo-trigger,.session-status__goal-trigger { flex:none; min-block-size:var(--yc-control-h-dense); padding-inline:var(--yc-space-2); border:0; border-radius:var(--yc-radius-pill); background:var(--yc-green-soft); color:var(--yc-green-strong); font:inherit; cursor:pointer; white-space:nowrap; }
+.session-status__yolo-trigger,.session-status__goal-trigger { flex:none; min-block-size:var(--yc-control-h-dense); padding-inline:var(--yc-space-2); border:0; border-radius:var(--yc-radius-pill); background:var(--yc-green-soft); color:var(--yc-green-strong); font:inherit; white-space:nowrap; }
 .session-status__goal-trigger { background:var(--yc-surface-sunken); color:var(--yc-text-muted); transition:background var(--yc-dur-base) var(--yc-ease-standard), color var(--yc-dur-base) var(--yc-ease-standard); }
 .session-status__goal-trigger--active { background:var(--yc-green-soft); color:var(--yc-green-strong); }
 .session-status__yolo-compact { display:none; }
@@ -25,7 +25,7 @@
 @keyframes session-status-goal-in { from { opacity:0; transform:translateY(8px) scale(.96); } to { opacity:1; transform:none; } }
 @keyframes session-status-out { to { opacity:0; transform:translateY(8px) scale(.96); } }
 .session-status__yolo-popover [role="radiogroup"] { display:grid; gap:var(--yc-space-1); }
-.session-status__yolo-popover [role="radio"] { display:grid; gap:var(--yc-space-1); inline-size:100%; min-block-size:44px; padding:var(--yc-space-2); border:1px solid var(--yc-border); border-radius:var(--yc-radius-md); background:var(--yc-surface-raised); color:var(--yc-text); text-align:start; cursor:pointer; }
+.session-status__yolo-popover [role="radio"] { display:grid; gap:var(--yc-space-1); inline-size:100%; min-block-size:44px; padding:var(--yc-space-2); border:1px solid var(--yc-border); border-radius:var(--yc-radius-md); background:var(--yc-surface-raised); color:var(--yc-text); text-align:start; }
 .session-status__yolo-popover [role="radio"][aria-checked="true"] { border-color:var(--yc-green-strong); background:var(--yc-green-soft); }
 .session-status__yolo-popover [role="radio"] span { color:var(--yc-text-muted); font-size:var(--yc-size-2xs); }
 .session-status__guardrail-note { margin:var(--yc-space-2) 0 0; color:var(--yc-text-muted); font-size:var(--yc-size-2xs); }
@@ -33,8 +33,8 @@
 .session-status__goal-popover span { display:block; color:var(--yc-text-muted); font-size:var(--yc-size-2xs); }
 .session-status__goal-popover form { display:grid; gap:var(--yc-space-2); }
 .session-status__goal-popover input { inline-size:100%; min-block-size:44px; padding-inline:var(--yc-space-2); border:1px solid var(--yc-border-strong); border-radius:var(--yc-radius-md); background:var(--yc-bg); color:var(--yc-text); font:inherit; }
-.session-status__goal-popover button { min-block-size:44px; margin-block-start:var(--yc-space-2); padding-inline:var(--yc-space-3); border:1px solid var(--yc-border); border-radius:var(--yc-radius-pill); background:var(--yc-green-soft); color:var(--yc-green-strong); cursor:pointer; }
-.session-status__goal-popover button:disabled { opacity:.5; cursor:not-allowed; }
+.session-status__goal-popover button { min-block-size:44px; margin-block-start:var(--yc-space-2); padding-inline:var(--yc-space-3); border:1px solid var(--yc-border); border-radius:var(--yc-radius-pill); background:var(--yc-green-soft); color:var(--yc-green-strong); }
+.session-status__goal-popover button:disabled { opacity:.5; }
 .session-status__goal-popover button:not([type="submit"]) { background:var(--yc-danger-soft); color:var(--yc-danger); }
 :is(.session-status,.session-status__popover) :is(button,input):focus-visible { outline:2px solid var(--yc-focus); outline-offset:2px; }
 @media (max-width:767px), (pointer:coarse) { .session-status__slot, .session-status__yolo-trigger, .session-status__goal-trigger { min-block-size:44px; } .session-status__yolo-trigger,.session-status__goal-trigger { min-inline-size:44px; } }

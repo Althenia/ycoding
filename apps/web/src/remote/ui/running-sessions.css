@@ -49,7 +49,6 @@
   background: var(--yc-surface-raised);
   color: var(--yc-text);
   text-align: start;
-  cursor: pointer;
 }
 
 .running-sessions__item:hover {
@@ -93,7 +92,7 @@
 }
 
 .running-sessions__pagination { display: flex; justify-content: center; }
-.running-sessions__pagination button { inline-size: 24px; block-size: 28px; padding: 0; border: 0; background: transparent; cursor: pointer; display: grid; place-items: center; }
+.running-sessions__pagination button { inline-size: 24px; block-size: 28px; padding: 0; border: 0; background: transparent; display: grid; place-items: center; }
 .running-sessions__pagination button::after { content: ""; inline-size: 6px; block-size: 6px; border-radius: 50%; background: var(--yc-border-strong); }
 .running-sessions__pagination button[aria-current="true"]::after { inline-size: 8px; block-size: 8px; background: var(--yc-green-strong); }
 .running-sessions__pagination button:focus-visible { outline: 2px solid var(--yc-focus); outline-offset: 2px; }

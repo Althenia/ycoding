@@ -29,6 +29,9 @@ export type TeamPanelData = {
   readonly activeTotal?: number
   readonly next?: string
   readonly pageLoading: boolean
+  readonly refreshing?: boolean
+  readonly economicsLoading?: boolean
+  readonly economicsUnsupported?: boolean
   readonly shells: readonly TeamShell[]
   readonly shellTruncated?: boolean
   readonly shellStatus: "loading" | "ready" | "unsupported" | "error"
@@ -54,16 +57,27 @@ export function canCancelSubagent(state: TeamSubagent["state"]): boolean {
   return state === "starting" || state === "running" || state === "waiting"
 }
 
-export function teamActiveCount(data: Pick<TeamPanelData, "activeTotal" | "tasks">): number {
-  return data.activeTotal ?? data.tasks.filter((entry) => isActiveSubagent(entry.state)).length
+export function teamActiveCount(data: Pick<TeamPanelData, "status" | "activeTotal" | "tasks" | "shells" | "shellStatus">): number | undefined {
+  if (data.status !== "ready" || data.shellStatus !== "ready") return undefined
+  return (data.activeTotal ?? data.tasks.filter((entry) => isActiveSubagent(entry.state)).length) + data.shells.filter((shell) => shell.status === "running").length
+}
+
+export function teamActivityLabel(data: Pick<TeamPanelData, "status" | "activeTotal" | "tasks" | "shells" | "shellStatus" | "next" | "shellTruncated">): string {
+  const count = teamActiveCount(data)
+  if (count === undefined) return "Activity unreported"
+  return `${data.shellTruncated || data.activeTotal === undefined && data.next !== undefined ? "At least " : ""}${count} active`
 }
 
 export function isActiveSubagent(state: TeamSubagent["state"]): boolean {
   return canCancelSubagent(state) || state === "cancelling"
 }
 
+function recency(task: TeamSubagent): number {
+  return isActiveSubagent(task.state) ? task.startedAt ?? 0 : task.updatedAt
+}
+
 export function taskRows(tasks: readonly TeamSubagent[]): readonly string[] {
-  const ordered = [...tasks].sort((left, right) => rank[left.state] - rank[right.state] || right.updatedAt - left.updatedAt || left.sessionID.localeCompare(right.sessionID))
+  const ordered = [...tasks].sort((left, right) => rank[left.state] - rank[right.state] || recency(right) - recency(left) || left.sessionID.localeCompare(right.sessionID))
   const active = ordered.filter((item) => isActiveSubagent(item.state))
   const inactive = ordered.filter((item) => !isActiveSubagent(item.state))
   return [
@@ -94,4 +108,30 @@ export function formatElapsed(startedAt: number | undefined, endedAt: number): s
   if (seconds >= 3_600) return `${Math.floor(seconds / 3_600)}h ${Math.floor(seconds % 3_600 / 60)}m`
   if (seconds >= 60) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
   return `${seconds}s`
+}
+
+export type UsageSlot = {
+  readonly key: "tokens" | "cost" | "context" | "cache"
+  readonly label: string
+  readonly state: "value" | "loading" | "unreported"
+  readonly value: string
+  readonly meter?: number
+}
+
+const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })
+
+export function usageSlots(task: TeamSubagent, economics: { readonly loading?: boolean }): readonly UsageSlot[] {
+  const slot = (key: UsageSlot["key"], label: string, value: string | undefined, meter?: number): UsageSlot =>
+    value !== undefined ? { key, label, state: "value", value, ...(meter === undefined ? {} : { meter }) }
+      : { key, label, state: economics.loading === true ? "loading" : "unreported", value: "—" }
+  const context = task.contextTotal === undefined ? undefined
+    : `${task.contextTotal.toLocaleString("en-US")} / ${task.contextLimit === undefined ? "unreported" : task.contextLimit.toLocaleString("en-US")}`
+  const meter = task.contextTotal === undefined || task.contextLimit === undefined || task.contextLimit <= 0 ? undefined : Math.min(1, task.contextTotal / task.contextLimit)
+  const cache = formatCacheHit(task.cacheHitRatio)
+  return [
+    slot("tokens", "Tokens", task.tokens?.toLocaleString("en-US")),
+    slot("cost", "Cost", task.cost === undefined ? undefined : money.format(task.cost)),
+    slot("context", "Context", context, meter),
+    slot("cache", "Cache", task.cacheHitRatio === undefined || cache === "—" ? undefined : cache),
+  ]
 }

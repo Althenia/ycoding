@@ -12,6 +12,12 @@ import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionV2 } from "@ycoding-ai/core/session"
 import { SessionCompactionExecution } from "@ycoding-ai/core/session/compaction-execution"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
+import { SessionEvent } from "@ycoding-ai/core/session/event"
+import { SessionPending } from "@ycoding-ai/core/session/pending"
+import { SessionProjector } from "@ycoding-ai/core/session/projector"
+import { Job } from "@ycoding-ai/core/job"
+import { SessionCompletion } from "@ycoding-ai/core/session/completion"
+import { Money } from "@ycoding-ai/schema/money"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionGoal } from "@ycoding-ai/core/session/goal"
 import { SessionRestart } from "@ycoding-ai/core/session/execution/restart"
@@ -33,7 +39,376 @@ import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Logg
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
-const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionStore.node])))
+const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionStore.node, Job.node])))
+const completionIt = testEffect(AppNodeBuilder.build(LayerNode.group([
+  Database.node, EventV2.node, SessionStore.node, SessionProjector.node, Job.node,
+])))
+
+completionIt.effect("records verified work once after an explicit declaration and the final response settle", () =>
+  Effect.gen(function* () {
+    const database = yield* Database.Service
+    const events = yield* EventV2.Service
+    const sessionID = SessionV2.ID.make("ses_verified_work")
+    yield* seedSessions(database, [sessionID])
+    const inputID = SessionMessage.ID.make("msg_verified_input")
+    yield* SessionPending.admit(database.db, events, { id: inputID, sessionID, input: SessionPending.Message.make({
+      type: "user", delivery: "steer", data: { text: "Implement and verify the change" },
+    }) })
+    const scope = yield* Scope.make()
+    const context = yield* buildExecution(scope, () => completionExchange(database, events, sessionID))
+    yield* Context.get(context, SessionExecution.Service).resume(sessionID)
+    const history = yield* database.db.select().from(EventTable).all().pipe(Effect.orDie)
+    const completed = history.filter((row) => row.type === "session.work.completed.1")
+    expect(completed).toHaveLength(1)
+    expect(completed[0].data).toEqual({ sessionID, inputID, assistantMessageID: "msg_work_final" })
+    expect(completed[0].seq).toBeGreaterThan(history.findLast((row) => row.type === "session.step.ended.1")!.seq)
+    expect(completed[0].seq).toBeGreaterThan(history.findLast((row) => row.type === "session.execution.succeeded.1")!.seq)
+    const jobs = yield* Job.Service
+    const completion = SessionCompletion.make({ db: database.db, events, jobs })
+    yield* Effect.all([
+      completion.complete(sessionID, Effect.succeed(new Set([sessionID]))),
+      completion.complete(sessionID, Effect.succeed(new Set([sessionID]))),
+    ], { concurrency: "unbounded" })
+    expect(SessionCompletion).toHaveProperty("latest")
+    const page = yield* SessionCompletion.latest(database.db, { limit: 1 })
+    expect(page).toEqual({ data: [{ id: completed[0].id, seq: EventV2.Seq.make(completed[0].seq), created: completed[0].created,
+      sessionID, inputID, assistantMessageID: SessionMessage.ID.make("msg_work_final") }] })
+    expect(yield* SessionCompletion.latest(database.db, { after: sessionID, limit: 1 })).toEqual({ data: [] })
+    yield* Scope.close(scope, Exit.void)
+  }),
+)
+
+function completionExchange(
+  database: Database.Service["Service"], events: EventV2.Interface, sessionID: SessionV2.ID,
+  options: {
+    declaration?: boolean; text?: string; finish?: "stop" | "length"; phase?: "commentary";
+    providerExecuted?: boolean; beforeDeclaration?: Effect.Effect<void>; afterDeclaration?: Effect.Effect<void>; failedStep?: boolean;
+    suffix?: string;
+  } = {},
+) {
+  return Effect.gen(function* () {
+    yield* SessionPending.promoteSteers(database.db, events, sessionID)
+    const model = { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") }
+    const tokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+    if (options.declaration !== false) {
+      const assistantMessageID = SessionMessage.ID.make(`msg_work_declaration${options.suffix ?? ""}`)
+      yield* events.publish(SessionEvent.Step.Started, { sessionID, assistantMessageID, agent: AgentV2.defaultID, model })
+      yield* options.beforeDeclaration ?? Effect.void
+      yield* events.publish(SessionEvent.Tool.Input.Started, { sessionID, assistantMessageID, callID: "complete", name: "task_complete" })
+      yield* events.publish(SessionEvent.Tool.Called, { sessionID, assistantMessageID, callID: "complete", input: {}, executed: options.providerExecuted ?? false })
+      yield* events.publish(SessionEvent.Tool.Success, { sessionID, assistantMessageID, callID: "complete", structured: { recorded: true }, content: [], executed: options.providerExecuted ?? false })
+      yield* options.afterDeclaration ?? Effect.void
+      yield* events.publish(SessionEvent.Step.Ended, { sessionID, assistantMessageID, finish: "tool-calls", cost: Money.USD.zero, tokens })
+    }
+    const finalID = SessionMessage.ID.make(`msg_work_final${options.suffix ?? ""}`)
+    yield* events.publish(SessionEvent.Step.Started, { sessionID, assistantMessageID: finalID, agent: AgentV2.defaultID, model })
+    yield* events.publish(SessionEvent.Text.Started, { sessionID, assistantMessageID: finalID, ordinal: 0 })
+    yield* events.publish(SessionEvent.Text.Ended, { sessionID, assistantMessageID: finalID, ordinal: 0,
+      text: options.text ?? "Implemented and verified.", ...(options.phase ? { phase: options.phase } : {}) })
+    if (options.failedStep) {
+      yield* events.publish(SessionEvent.Step.Failed, { sessionID, assistantMessageID: finalID, error: { type: "aborted", message: "Final response interrupted" } })
+      return
+    }
+    yield* events.publish(SessionEvent.Step.Ended, { sessionID, assistantMessageID: finalID, finish: options.finish ?? "stop", cost: Money.USD.zero, tokens })
+  })
+}
+
+for (const scenario of [
+  { name: "ordinary reply", options: { declaration: false } },
+  { name: "blank final reply", options: { text: " \n\t" } },
+  { name: "commentary without final reply", options: { phase: "commentary" as const } },
+  { name: "truncated final reply", options: { finish: "length" as const } },
+  { name: "failed final step", options: { failedStep: true } },
+  { name: "provider-executed declaration", options: { providerExecuted: true } },
+]) {
+  completionIt.effect(`does not certify ${scenario.name} as verified work`, () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const events = yield* EventV2.Service
+      const sessionID = SessionV2.ID.make("ses_unverified_reply")
+      yield* seedSessions(database, [sessionID])
+      yield* admitCompletionInput(database, events, sessionID)
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(scope, () => completionExchange(database, events, sessionID, scenario.options))
+      yield* Context.get(context, SessionExecution.Service).resume(sessionID)
+      expect(yield* completionReceipts(database, sessionID)).toEqual([])
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+}
+
+for (const outcome of ["failed", "interrupted"] as const) {
+  completionIt.effect(`does not certify an execution that ${outcome} after declaring completion`, () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const events = yield* EventV2.Service
+      const sessionID = SessionV2.ID.make("ses_unverified_execution")
+      yield* seedSessions(database, [sessionID])
+      yield* admitCompletionInput(database, events, sessionID)
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(scope, () => completionExchange(database, events, sessionID).pipe(
+        Effect.andThen(outcome === "interrupted" ? Effect.fail(new UserInterruptedError()) : Effect.die(new Error("run failed"))),
+      ))
+      expect(Exit.isFailure(yield* Effect.exit(Context.get(context, SessionExecution.Service).resume(sessionID)))).toBe(true)
+      expect(yield* completionReceipts(database, sessionID)).toEqual([])
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+}
+
+for (const delivery of ["queue", "steer"] as const) {
+  completionIt.effect(`a ${delivery} admitted during the declaring step requires a fresh declaration`, () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const events = yield* EventV2.Service
+      const sessionID = SessionV2.ID.make("ses_stale_completion")
+      yield* seedSessions(database, [sessionID])
+      yield* admitCompletionInput(database, events, sessionID)
+      const changed = admitCompletionInput(database, events, sessionID, "msg_new_work", delivery).pipe(
+        Effect.andThen(delivery === "steer" ? SessionPending.promoteSteers(database.db, events, sessionID) : Effect.void),
+        Effect.asVoid,
+      )
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(scope, () => completionExchange(database, events, sessionID, { afterDeclaration: changed }))
+      yield* Context.get(context, SessionExecution.Service).resume(sessionID)
+      expect(yield* completionReceipts(database, sessionID)).toEqual([])
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+}
+
+completionIt.effect("a late tool declaration is scoped to its invoking step rather than a newer admitted input", () =>
+  Effect.gen(function* () {
+    const database = yield* Database.Service
+    const events = yield* EventV2.Service
+    const sessionID = SessionV2.ID.make("ses_late_declaration")
+    yield* seedSessions(database, [sessionID])
+    yield* admitCompletionInput(database, events, sessionID)
+    const scope = yield* Scope.make()
+    const context = yield* buildExecution(scope, () => completionExchange(database, events, sessionID, {
+      beforeDeclaration: admitCompletionInput(database, events, sessionID, "msg_newer_steer").pipe(
+        Effect.andThen(SessionPending.promoteSteers(database.db, events, sessionID)), Effect.asVoid,
+      ),
+    }))
+    yield* Context.get(context, SessionExecution.Service).resume(sessionID)
+    expect(yield* completionReceipts(database, sessionID)).toEqual([])
+    yield* Scope.close(scope, Exit.void)
+  }),
+)
+
+for (const change of ["admission", "revert"] as const) {
+  completionIt.effect(`atomically rejects a completion raced by ${change} before publication`, () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const events = yield* EventV2.Service
+      const sessionID = SessionV2.ID.make("ses_raced_completion")
+      yield* seedSessions(database, [sessionID])
+      yield* admitCompletionInput(database, events, sessionID)
+      let attempted = false
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(scope, () => completionExchange(database, events, sessionID), (type) =>
+        Effect.gen(function* () {
+          if (type !== "session.work.completed") return
+          attempted = true
+          if (change === "admission") {
+            yield* admitCompletionInput(database, events, sessionID, "msg_racing_work", "queue")
+            return
+          }
+          yield* events.publish(SessionEvent.RevertEvent.Committed, { sessionID, to: SessionMessage.ID.make("msg_work_final") })
+        }),
+      )
+      yield* Context.get(context, SessionExecution.Service).resume(sessionID)
+      expect(attempted).toBe(true)
+      expect(yield* completionReceipts(database, sessionID)).toEqual([])
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+}
+
+completionIt.effect("restart does not backfill an old declaration; completion reads survive a new owner and compacted projections", () =>
+  Effect.gen(function* () {
+    const database = yield* Database.Service
+    const events = yield* EventV2.Service
+    const jobs = yield* Job.Service
+    const sessionID = SessionV2.ID.make("ses_restart_completion")
+    yield* seedSessions(database, [sessionID])
+    yield* admitCompletionInput(database, events, sessionID)
+    yield* events.publish(SessionEvent.Execution.Started, { sessionID })
+    yield* completionExchange(database, events, sessionID)
+    yield* database.db.delete(SessionMessageTable).run().pipe(Effect.orDie)
+    const scope = yield* Scope.make()
+    const context = yield* buildExecution(scope, () => completionExchange(database, events, sessionID, { declaration: false }))
+    yield* Context.get(context, SessionExecution.Service).resume(sessionID)
+    expect(yield* completionReceipts(database, sessionID)).toEqual([])
+    yield* Scope.close(scope, Exit.void)
+    yield* database.db.delete(SessionMessageTable).run().pipe(Effect.orDie)
+    yield* events.publish(SessionEvent.Execution.Started, { sessionID })
+    yield* completionExchange(database, events, sessionID)
+    yield* events.publish(SessionEvent.Execution.Succeeded, { sessionID })
+    yield* database.db.delete(SessionMessageTable).run().pipe(Effect.orDie)
+    yield* SessionCompletion.make({ db: database.db, events, jobs }).complete(sessionID, Effect.succeed(new Set([sessionID])))
+    const completed = yield* completionReceipts(database, sessionID)
+    expect(completed).toHaveLength(1)
+    yield* SessionCompletion.make({ db: database.db, events, jobs }).complete(sessionID, Effect.succeed(new Set([sessionID])))
+    expect(yield* completionReceipts(database, sessionID)).toEqual(completed)
+  }),
+)
+
+completionIt.effect("a child declaration never certifies the parent's work", () =>
+  Effect.gen(function* () {
+    const database = yield* Database.Service
+    const events = yield* EventV2.Service
+    const parentID = SessionV2.ID.make("ses_completion_parent")
+    const childID = SessionV2.ID.make("ses_completion_child")
+    yield* seedSessions(database, [parentID, childID])
+    yield* database.db.update(SessionTable).set({ parent_id: parentID }).where(eq(SessionTable.id, childID)).run().pipe(Effect.orDie)
+    yield* admitCompletionInput(database, events, childID)
+    const scope = yield* Scope.make()
+    const context = yield* buildExecution(scope, () => completionExchange(database, events, childID))
+    yield* Context.get(context, SessionExecution.Service).resume(childID)
+    expect(yield* completionReceipts(database, parentID)).toEqual([])
+    expect(yield* completionReceipts(database, childID)).toHaveLength(1)
+    yield* Scope.close(scope, Exit.void)
+  }),
+)
+
+for (const blocker of ["goal", "task", "waiting task", "pending child", "notice", "shell notice", "job", "active grandchild"] as const) {
+  completionIt.effect(`refuses completion while ${blocker} remains unfinished in the family`, () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const events = yield* EventV2.Service
+      const jobs = yield* Job.Service
+      const sessionID = SessionV2.ID.make("ses_work_family")
+      const childID = SessionV2.ID.make("ses_work_child")
+      const grandchildID = SessionV2.ID.make("ses_work_grandchild")
+      yield* seedSessions(database, [sessionID, childID, grandchildID])
+      yield* database.db.update(SessionTable).set({ parent_id: sessionID }).where(eq(SessionTable.id, childID)).run().pipe(Effect.orDie)
+      yield* database.db.update(SessionTable).set({ parent_id: childID }).where(eq(SessionTable.id, grandchildID)).run().pipe(Effect.orDie)
+      yield* admitCompletionInput(database, events, sessionID)
+      yield* events.publish(SessionEvent.Execution.Started, { sessionID })
+      yield* completionExchange(database, events, sessionID)
+      yield* events.publish(SessionEvent.Execution.Succeeded, { sessionID })
+      const active = new Set([sessionID])
+      if (blocker === "active grandchild") active.add(grandchildID)
+      if (blocker === "goal") yield* SessionAutonomy.make({ db: database.db }).setGoal({ sessionID: childID, text: "Unfinished" })
+      if (blocker === "task" || blocker === "waiting task" || blocker === "notice") {
+        yield* seedTask(database, { parentID: sessionID, childID, state: blocker === "waiting task" ? "waiting" : "running" })
+        if (blocker === "notice") yield* events.publish(SessionEvent.Task.Updated, { sessionID: childID, change: { type: "completed" } })
+      }
+      if (blocker === "pending child") yield* admitCompletionInput(database, events, grandchildID, "msg_child_work", "queue")
+      const released = yield* Deferred.make<void>()
+      if (blocker === "shell notice" || blocker === "job") {
+        const job = yield* jobs.start({ type: blocker === "job" ? "verification" : "shell", metadata: { sessionID: grandchildID }, run: Deferred.await(released).pipe(Effect.as("done")) })
+        yield* jobs.background(job.id)
+        if (blocker === "shell notice") {
+          yield* Deferred.succeed(released, undefined)
+          yield* jobs.wait({ id: job.id })
+        }
+      }
+      yield* SessionCompletion.make({ db: database.db, events, jobs }).complete(sessionID, Effect.succeed(active))
+      expect(yield* completionReceipts(database, sessionID)).toEqual([])
+      yield* Deferred.succeed(released, undefined)
+    }),
+  )
+}
+
+function admitCompletionInput(database: Database.Service["Service"], events: EventV2.Interface,
+  sessionID: SessionV2.ID, id = "msg_work_input", delivery: "steer" | "queue" = "steer") {
+  return SessionPending.admit(database.db, events, { id: SessionMessage.ID.make(id), sessionID,
+    input: SessionPending.Message.make({ type: "user", delivery, data: { text: "Do and verify this work" } }),
+  }).pipe(Effect.asVoid)
+}
+
+function completionReceipts(database: Database.Service["Service"], sessionID: SessionV2.ID) {
+  return database.db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID))
+    .orderBy(EventTable.seq).all().pipe(Effect.orDie, Effect.map((rows) => rows.filter((row) => row.type === "session.work.completed.1")
+      .map((row) => ({ id: row.id, seq: EventV2.Seq.make(row.seq), created: row.created,
+        ...Schema.decodeUnknownSync(SessionEvent.Work.Completed.data)(row.data) }))))
+}
+
+completionIt.effect("does not resurrect a completion declaration outside its settling execution", () =>
+  Effect.gen(function* () {
+    const database = yield* Database.Service
+    const events = yield* EventV2.Service
+    const jobs = yield* Job.Service
+    const sessionID = SessionV2.ID.make("ses_idle_declaration")
+    yield* seedSessions(database, [sessionID])
+    yield* admitCompletionInput(database, events, sessionID)
+    yield* events.publish(SessionEvent.Execution.Started, { sessionID })
+    yield* completionExchange(database, events, sessionID)
+    yield* events.publish(SessionEvent.Execution.Succeeded, { sessionID })
+    yield* SessionCompletion.make({ db: database.db, events, jobs }).complete(sessionID, Effect.succeed(new Set()))
+    expect(yield* completionReceipts(database, sessionID)).toEqual([])
+  }),
+)
+
+for (const completedGoal of [false, true]) {
+  completionIt.effect(`idle success${completedGoal ? " with a completed goal" : ""} is not verified work`, () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const sessionID = SessionV2.ID.make("ses_ordinary_idle")
+      yield* seedSessions(database, [sessionID])
+      if (completedGoal) {
+        const autonomy = SessionAutonomy.make({ db: database.db })
+        yield* autonomy.setGoal({ sessionID, text: "Already done" })
+        yield* autonomy.complete(sessionID)
+      }
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(scope, () => Effect.void)
+      yield* Context.get(context, SessionExecution.Service).resume(sessionID)
+      expect(yield* completionReceipts(database, sessionID)).toEqual([])
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+}
+
+completionIt.effect("pages latest root receipts by Session ID without unrelated-job suppression or child receipts", () =>
+  Effect.gen(function* () {
+    const database = yield* Database.Service
+    const events = yield* EventV2.Service
+    const jobs = yield* Job.Service
+    const sessionID = SessionV2.ID.make("ses_completed_pages")
+    const otherID = SessionV2.ID.make("ses_other_completed")
+    const childID = SessionV2.ID.make("ses_completed_child")
+    const unrelated = SessionV2.ID.make("ses_unrelated_work")
+    yield* seedSessions(database, [sessionID, otherID, childID, unrelated])
+    yield* database.db.update(SessionTable).set({ parent_id: sessionID }).where(eq(SessionTable.id, childID)).run().pipe(Effect.orDie)
+    const release = yield* Deferred.make<void>()
+    const job = yield* jobs.start({ type: "verification", metadata: { sessionID: unrelated }, run: Deferred.await(release).pipe(Effect.as("done")) })
+    const scope = yield* Scope.make()
+    let exchange = 0
+    const context = yield* buildExecution(scope, (input) => completionExchange(database, events, input.sessionID, { suffix: String(exchange++) }))
+    const execution = Context.get(context, SessionExecution.Service)
+    yield* admitCompletionInput(database, events, sessionID, "msg_first_work")
+    yield* execution.resume(sessionID)
+    yield* admitCompletionInput(database, events, sessionID, "msg_second_work")
+    yield* execution.resume(sessionID)
+    yield* admitCompletionInput(database, events, otherID, "msg_other_work")
+    yield* execution.resume(otherID)
+    yield* admitCompletionInput(database, events, childID, "msg_child_work")
+    yield* execution.resume(childID)
+    expect(SessionCompletion).toHaveProperty("latest")
+    const first = yield* SessionCompletion.latest(database.db, { limit: 1 })
+    expect(first.data).toHaveLength(1)
+    expect(first.data[0].sessionID).toBe(sessionID)
+    expect(first.data[0].inputID).toBe(SessionMessage.ID.make("msg_second_work"))
+    expect(first.next).toBe(sessionID)
+    const second = yield* SessionCompletion.latest(database.db, { after: first.next, limit: 1 })
+    expect(second.data).toHaveLength(1)
+    expect(second.data[0].sessionID).toBe(otherID)
+    expect(second.data[0].inputID).toBe(SessionMessage.ID.make("msg_other_work"))
+    expect(second.next).toBeUndefined()
+    expect(yield* SessionCompletion.latest(database.db, { after: otherID, limit: 1 })).toEqual({ data: [] })
+    expect((yield* completionReceipts(database, sessionID)).map((row) => row.inputID)).toEqual([
+      SessionMessage.ID.make("msg_first_work"), SessionMessage.ID.make("msg_second_work"),
+    ])
+    expect(yield* completionReceipts(database, childID)).toHaveLength(1)
+    expect(yield* completionReceipts(database, unrelated)).toEqual([])
+    yield* Deferred.succeed(release, undefined)
+    yield* jobs.wait({ id: job.id })
+    yield* Scope.close(scope, Exit.void)
+  }),
+)
 
 describe("SessionExecution lifecycle", () => {
   test("classifies success and typed failure terminals", () => {
@@ -804,6 +1179,7 @@ function buildExecution(
       : published
     const store = yield* SessionStore.Service
     const autonomy = SessionAutonomy.make({ db: database.db })
+    const jobs = yield* Job.Service
     const runner = Layer.succeed(SessionRunner.Service, SessionRunner.Service.of({ drain }))
     const shell = Layer.mock(Shell.Service, { list: shells })
     const goals = Layer.succeed(
@@ -829,6 +1205,7 @@ function buildExecution(
         Layer.provide(Layer.succeed(EventV2.Service, events)),
         Layer.provide(Layer.succeed(SessionStore.Service, store)),
         Layer.provide(Layer.succeed(SessionAutonomy.Service, autonomy)),
+        Layer.provide(Layer.succeed(Job.Service, jobs)),
         Layer.provide(Layer.succeed(SessionCompactionExecution.Service, compactionExecution)),
         Layer.provide(locations),
       ),

@@ -45,7 +45,7 @@ A plan, deleted package, or stale generated file does not override current code.
 
 Use `docs` for maintained product, contributor, and operator behavior. Use `specs/v2` for detailed cross-module contracts and accepted architectural decisions that are difficult to recover from one source file.
 
-The public site at `https://ycoding.althenia.app` contains curated user documentation maintained in `apps/web`, not an automatic publication of this engineering documentation directory. Public content must exclude internal architecture, infrastructure topology, implementation plans, and private configuration. Build it with `bun run build:web`; Vite writes `apps/web/dist` including the generated `sitemap.xml`, then `script/build-web-assets.ts` adds the maintained installer, the runtime-generated configuration JSON Schema, and the public configuration example.
+The public site at `https://ycoding.althenia.app` contains curated user documentation maintained in `apps/web`, not an automatic publication of this engineering documentation directory. Public content must exclude internal architecture, infrastructure topology, implementation plans, and private configuration. Build it with `bun run build:web`; Vite writes `apps/web/dist` including the generated `sitemap.xml`, then `script/build-web-assets.ts` adds the maintained installer, the runtime-generated configuration JSON Schema, the public configuration example, and the bundled font license at `/fonts/OFL.txt`.
 
 Temporary implementation plans belong under an explicitly temporary planning directory and must not be cited as current behavior.
 

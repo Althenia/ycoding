@@ -34,10 +34,11 @@ describe("notification presentation", () => {
   })
 
   test("only new IDs enter the newest-first three-toast queue", () => {
-    const initial = [notice("already", today)]
+    const block = (id: string, at: number) => ({ ...notice(id, at), synced: false })
+    const initial = [block("already", today)]
     const seen = new Set(initial.map((item) => item.id))
     expect(newlyAddedNotifications(seen, initial)).toEqual([])
-    const added = [notice("four", today + 4), notice("three", today + 3), notice("two", today + 2), notice("one", today + 1), ...initial]
+    const added = [block("four", today + 4), block("three", today + 3), block("two", today + 2), block("one", today + 1), ...initial]
     expect(newlyAddedNotifications(seen, added).map((item) => item.id)).toEqual(["four", "three", "two", "one"])
     expect(enqueueToasts([notice("prior", today)], added.slice(0, 4)).map((item) => item.id)).toEqual(["four", "three", "two"])
     expect(enqueueToasts(added.slice(0, 3), [added[0]!]).map((item) => item.id)).toEqual(["four", "three", "two"])
@@ -45,8 +46,19 @@ describe("notification presentation", () => {
 
   test("an entry restored from a relay snapshot never enters the toast queue", () => {
     const seen = new Set<string>()
-    const entries = [notice("live", today), notice("snapshot", today - 1, false)]
+    const entries = [{ ...notice("live", today), synced: false }, { ...notice("snapshot", today - 1, false), synced: false }]
     expect(newlyAddedNotifications(seen, entries).map((item) => item.id)).toEqual(["live"])
+  })
+
+  test("only a guardrail block raised live in this page pops a toast; finished work, machine status, and relay attention stay in the center", () => {
+    const entries: RemoteNotificationView[] = [
+      { ...notice("guardrail-block", today), synced: false },
+      { ...notice("relay-attention", today), synced: true },
+      { ...notice("finished", today), category: "agent-completed", title: "YCoding — work finished", body: "A session finished all its work." },
+      { ...notice("offline_dev_1_1", today), synced: false, category: "machine-offline", title: "YCoding — machine offline", body: "The connected machine stopped reporting.", sessionID: undefined },
+    ]
+    expect(newlyAddedNotifications(new Set(), entries).map((item) => item.id)).toEqual(["guardrail-block"])
+    expect(noticeCenterView({ status: "ready", total: 2, loaded: 2, hidden: 0, loadingMore: false, message: undefined }, entries).unread).toBe(4)
   })
 
   test("counts every stored unread notice even when its in-app category is muted", () => {

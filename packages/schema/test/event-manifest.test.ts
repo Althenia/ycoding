@@ -25,6 +25,24 @@ import { SessionMessage } from "../src/session-message.js"
 import { WorkspaceEvent } from "../src/workspace-event.js"
 
 describe("public event manifest", () => {
+  test("publishes one canonical minimal durable work completion contract", () => {
+    const definition = EventManifest.Latest.get("session.work.completed")
+    expect(definition).toBeDefined()
+    expect(definition?.durable).toEqual({ aggregate: "sessionID", version: 1 })
+    expect(EventManifest.Server.get("session.work.completed")).toBe(definition)
+    if (!definition || definition.durability !== "durable")
+      throw new Error("Missing durable work completion definition")
+    expect(EventManifest.Durable.get("session.work.completed.1")).toBe(definition)
+    expect(definition).toBe(SessionEvent.Work.Completed)
+    expect(
+      Schema.decodeUnknownSync(definition.data)({
+        sessionID: "ses_complete",
+        inputID: "msg_work",
+        assistantMessageID: "msg_final",
+        transcript: "not public",
+      }),
+    ).toEqual({ sessionID: "ses_complete", inputID: "msg_work", assistantMessageID: "msg_final" })
+  })
   test("owns the complete current public event surface", () => {
     expect(EventManifest.ServerDefinitions).toContain(Agent.Event.Updated)
     expect(EventManifest.Definitions).toContain(Agent.Event.Updated)
@@ -163,6 +181,7 @@ describe("public event manifest", () => {
         "session.execution.succeeded.1",
         "session.execution.failed.1",
         "session.execution.interrupted.1",
+        "session.work.completed.1",
         "session.file-change.recorded.1",
         "session.instructions.updated.2",
         "session.context.observed.1",

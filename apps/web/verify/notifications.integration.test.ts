@@ -40,7 +40,7 @@ describe("notification center and live toasts", () => {
     for (const [width, theme] of [[390, "light"], [1440, "dark"]] as const) {
       const page = await open(width, theme, "empty")
       try {
-        await page.evaluate(`window.remoteNotify('agent-completed', 'ses_alpha', false)`)
+        await page.evaluate(`window.remoteNotify('approval-requested', 'ses_alpha', false)`)
         for (let attempt = 0; attempt < 30 && !await page.evaluate<boolean>(`document.querySelector('.yc-toast__body span') !== null`); attempt += 1) await Bun.sleep(30)
         await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
         expect(await page.evaluate<{ row: string; toast: string }>(`({ row: document.querySelector('.yc-notification__open span')?.textContent, toast: document.querySelector('.yc-toast__body span')?.textContent })`)).toEqual({ row: "An action needs attention.", toast: "An action needs attention." })
@@ -209,10 +209,24 @@ describe("notification center and live toasts", () => {
     }
   }, 15_000)
 
+  test("finished work, machine status, and relay-synced attention stay in the center without a popup; a guardrail block raised here pops one", async () => {
+    const page = await open(390, "light", "empty")
+    try {
+      await page.evaluate(`window.remoteNotify('agent-completed', 'ses_alpha'); window.remoteNotify('machine-offline', 'ses_alpha'); window.remoteNotify('approval-requested', 'ses_beta', true, true)`)
+      await Bun.sleep(300)
+      expect(await page.evaluate<{ toasts: number; badge: string }>(`({ toasts: document.querySelectorAll('.yc-toast').length, badge: document.querySelector('.yc-notification-center__badge')?.textContent ?? '' })`)).toEqual({ toasts: 0, badge: "3" })
+      await page.evaluate(`window.remoteNotify('approval-requested', 'ses_alpha')`)
+      for (let attempt = 0; attempt < 30 && await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`) !== 1; attempt += 1) await Bun.sleep(30)
+      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.yc-toast')].map(toast => toast.className.includes('yc-toast--approval-requested') ? 'attention' : 'other')`)).toEqual(["attention"])
+      await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification').length`)).toBe(4)
+    } finally { await page.close() }
+  }, 15_000)
+
   test("opening a live notice from its toast reads that notice rather than only closing the toast", async () => {
     const page = await open(390, "light", "empty")
     try {
-      await page.evaluate(`window.remoteNotify('agent-completed', 'ses_alpha')`)
+      await page.evaluate(`window.remoteNotify('approval-requested', 'ses_alpha')`)
       expect(await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`)).toBe(1)
       await page.evaluate(`document.querySelector('.yc-toast__open').click()`)
       expect(await page.evaluate<string[]>(`window.remoteOpened()`)).toEqual(["ses_alpha"])

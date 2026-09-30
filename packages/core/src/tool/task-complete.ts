@@ -12,10 +12,13 @@ export const Plugin = {
         draft.add(
           "task_complete",
           Tool.make({
-            description: "Record verified task completion locally; do not call for routine idle or unfinished work.",
+            description:
+              "Declare verified completion of all current work; do not call for routine replies, idle, or unfinished work. Send the final reply afterward. Completion is accepted only after that reply settles successfully with no pending or background work.",
             input: Schema.Struct({}),
             output: Schema.Struct({ recorded: Schema.Literal(true) }),
-            toModelOutput: () => [{ type: "text", text: "Task completion recorded." }],
+            toModelOutput: () => [
+              { type: "text", text: "Completion declaration recorded. Final reply settlement is still pending." },
+            ],
             execute: () => Effect.succeed({ recorded: true }),
           }),
           { codemode: false },

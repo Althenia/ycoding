@@ -22,7 +22,7 @@ type Subscription = { readonly endpoint: string; getKey: (name: "p256dh" | "auth
 type Registration = { readonly pushManager: { getSubscription: () => Promise<Subscription | null>;
   subscribe: (options: { readonly userVisibleOnly: true; readonly applicationServerKey: Uint8Array<ArrayBuffer> }) => Promise<Subscription> } }
 
-type PushHttp = Pick<ReturnType<typeof createPushHttp>, "key" | "subscribe" | "remove" | "test">
+type PushHttp = Pick<ReturnType<typeof createPushHttp>, "key" | "subscribe" | "remove">
 
 export type PushPlatform = {
   readonly secure: boolean
@@ -138,24 +138,6 @@ export async function savePushCategories(platform: PushPlatform, http: PushHttp,
     return { status: "on" }
   } catch (cause) {
     return { status: "error", message: `Saved on this device only. Closed-app alerts still use the previous choice: ${cause instanceof Error ? cause.message : "the browser push state is unavailable"}` }
-  }
-}
-
-export async function sendPushTest(platform: PushPlatform, http: PushHttp): Promise<{ status: PushStatus; message: string }> {
-  try {
-    const subscription = await (await platform.registration()).pushManager.getSubscription()
-    if (!subscription) return { status: "off", message: "This device has no push subscription. Turn on push first." }
-    const result = await http.test(subscription.endpoint)
-    if (!result.ok) return { status: result.status === 404 ? "needs-setup" : "on", message: result.message }
-    const status = result.value.status ?? 0
-    if (result.value.outcome === "accepted")
-      return { status: "on", message: `The push service accepted a test alert (HTTP ${status}). If none appears, check this device's notification settings for this browser or app.` }
-    if (result.value.outcome === "rejected") return { status: "error", message: `The push service refused the test alert (HTTP ${status}).` }
-    if (result.value.outcome === "unreachable") return { status: "on", message: "The relay could not reach the push service. Try again later." }
-    await subscription.unsubscribe()
-    return { status: "needs-setup", message: "The push service reports this subscription expired. Use Re-enable to register this device again." }
-  } catch (cause) {
-    return { status: "error", message: cause instanceof Error ? cause.message : "This browser could not send a test alert." }
   }
 }
 

@@ -36,7 +36,6 @@
   border: var(--yc-border-width) solid var(--yc-border-strong);
   border-radius: var(--yc-radius-md);
   font-size: var(--yc-size-sm);
-  cursor: pointer;
 }
 
 @media (max-width: 1023px) {
@@ -67,7 +66,6 @@
   border-radius: var(--yc-radius-md);
   color: var(--yc-text-muted);
   font-size: var(--yc-size-sm);
-  cursor: pointer;
 }
 
 .docs-search-trigger kbd {
@@ -533,7 +531,6 @@
   background: transparent;
   border: var(--yc-border-width) solid transparent;
   text-align: start;
-  cursor: pointer;
 }
 
 .search__result:hover {
@@ -701,7 +698,6 @@
   font-size: var(--yc-size-sm);
   text-align: start;
   text-decoration: none;
-  cursor: pointer;
 }
 
 .filters__option:hover {

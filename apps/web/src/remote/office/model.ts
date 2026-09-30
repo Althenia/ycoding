@@ -14,6 +14,16 @@ import type {
 
 export const maxOfficeActors = 16
 
+export function officeInputsSettled(snapshot: OfficeSnapshot): boolean {
+  if (snapshot.connection !== "ready") return true
+  if (snapshot.team.status === "loading") return false
+  return snapshot.team.status !== "ready" || snapshot.activityStatus !== "loading"
+}
+
+export function officeHydrating(snapshot: OfficeSnapshot, placedActors: number): boolean {
+  return placedActors === 0 && !officeInputsSettled(snapshot)
+}
+
 export function officeLocationLabel(room: OfficeRoomID | undefined): string {
   const labels: Record<OfficeRoomID, string> = {
     block: "Agent block", lounge: "Relax area", hall: "Open floor",

@@ -1,4 +1,4 @@
-import { noticeSequence } from "@ycoding-ai/remote"
+import { noticeSequence, type RemoteNoticePresentation } from "@ycoding-ai/remote"
 import { readNotificationPreferences, type NotificationCategory, type NotificationPreferences } from "./preferences"
 
 export type RemoteNotificationView = {
@@ -109,6 +109,7 @@ export type NotificationDelivery = {
   readonly deliver: (category: NotificationCategory, context?: { readonly sessionID?: string; readonly sessionTitle?: string }) => void
   readonly receive: (notice: SyncedNotice, deviceID: string) => void
   readonly offline: (deviceID: string, at: number) => void
+  readonly present: (items: readonly RemoteNoticePresentation[], deviceID: string) => void
   readonly replaceSynced: (notices: readonly SyncedNotice[]) => void
   readonly appendSynced: (notices: readonly SyncedNotice[]) => void
   readonly entries: () => readonly RemoteNotificationView[]
@@ -168,12 +169,16 @@ export function createNotificationDelivery(options: NotificationDeliveryOptions 
     offline: (deviceID, at) => {
       const id = `offline_${deviceID}_${at}`
       if (known(id)) return
-      alert("machine-offline", undefined, `ycoding-${deviceID}-offline-${at}`)
       if (listed("machine-offline")) bounded([...entries, view({ id, category: "machine-offline", at }, false, true)])
+    },
+    present: (items, deviceID) => {
+      for (const item of items) {
+        if (item.kind === "offline") alert("machine-offline", undefined, `ycoding-${deviceID}-offline-${item.at}`)
+        else alert(item.notice.category, item.notice.sessionID, `ycoding-${deviceID}-${item.notice.id}`)
+      }
     },
     receive: (notice, deviceID) => {
       if (known(notice.id)) return
-      alert(notice.category, notice.sessionID, `ycoding-${deviceID}-${notice.id}`)
       const entry = admit(notice, true)
       bounded(entry === undefined ? entries : [...entries, entry])
     },

@@ -20,11 +20,11 @@ const helpText = help.stdout.toString()
 const helpError = help.stderr.toString()
 if (help.exitCode !== 0) throw new Error(`TUI help failed (${help.exitCode}): ${helpError || helpText}`)
 if (!helpText.includes("YCoding TUI")) throw new Error("TUI help is missing the product description")
-for (const command of ["run", "update", "remote"]) {
+for (const command of ["run", "update", "remote", "service"]) {
   if (!new RegExp(`^  ${command}(?:\\s|$)`, "m").test(helpText))
     throw new Error(`TUI help is missing command: ${command}`)
 }
-for (const command of ["api", "auth", "debug", "mcp", "mini", "service"]) {
+for (const command of ["api", "auth", "debug", "mcp", "mini"]) {
   if (new RegExp(`^  ${command}(?:\\s|$)`, "m").test(helpText))
     throw new Error(`TUI help exposes excluded command: ${command}`)
 }
@@ -32,6 +32,7 @@ for (const expected of [
   { command: "run", text: "Run YCoding with a message", flag: "--model" },
   { command: "update", text: "Update ycoding to a release", flag: "--version" },
   { command: "remote", text: "Control this machine's YCoding agent", flag: "enroll" },
+  { command: "service", text: "Manage the background server", flag: "restart" },
 ]) {
   const result = Bun.spawnSync([binary, expected.command, "--help"], { stdout: "pipe", stderr: "pipe" })
   const text = result.stdout.toString()

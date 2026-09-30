@@ -243,11 +243,26 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
         )
       })
 
-      const selectedModel = () => {
+      const selection = () => {
         const sessionID = route.data.type === "session" ? route.data.sessionID : undefined
         const pending = sessionID ? pendingTargets()[sessionID] : undefined
-        if (pending && isModelValid(pending)) return { providerID: pending.providerID, modelID: pending.modelID }
-        return currentModel()
+        if (pending) return pending
+        const saved = sessionID ? data.session.get(sessionID)?.model : undefined
+        if (saved)
+          return { providerID: saved.providerID, modelID: saved.id, variant: normalizeModelVariant(saved.variant) }
+        const configured = agent.current()?.model
+        const value = sessionID
+          ? getFirstValidModel(
+              () => configured && { providerID: configured.providerID, modelID: configured.id },
+              fallbackModel,
+            )
+          : currentModel()
+        if (!value) return undefined
+        return { ...value, variant: normalizeModelVariant(modelStore.variant[modelPreferenceKey(value)]) }
+      }
+      const selectedModel = () => {
+        const value = selection()
+        return value && { providerID: value.providerID, modelID: value.modelID }
       }
 
       event.on("session.deleted", (evt) => clearPendingTarget(evt.data.sessionID))
@@ -271,8 +286,10 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
           options?: { sessionID?: string },
         ) {
           const target = { providerID: input.providerID, modelID: input.modelID }
-          const variant = normalizeModelVariant(input.variant)
-          if (!isModelValid(target)) {
+          const info = data.location.model
+            .list(activeLocation())
+            ?.find((item) => item.providerID === target.providerID && item.id === target.modelID)
+          if (!info) {
             toast.show({
               message: `Model ${target.providerID}/${target.modelID} is not valid`,
               variant: "warning",
@@ -280,15 +297,43 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
             })
             return
           }
+          const explicit = "variant" in input
+          const requested = normalizeModelVariant(input.variant)
+          if (explicit && requested !== undefined && !info.variants.some((item) => item.id === requested)) {
+            toast.show({
+              message: `Variant ${requested} is not available for ${target.providerID}/${target.modelID}`,
+              variant: "warning",
+              duration: 3000,
+            })
+            return
+          }
+          const prior = selection()
+          const remembered =
+            prior?.providerID === target.providerID && prior.modelID === target.modelID
+              ? prior.variant
+              : modelStore.variant[modelPreferenceKey(target)]
+          const variant = explicit
+            ? requested
+            : info.variants.some((item) => item.id === remembered) ? remembered : undefined
+          if (
+            prior &&
+            (prior.variant === undefined || data.location.model
+              .list(activeLocation())
+              ?.find((item) => item.providerID === prior.providerID && item.id === prior.modelID)
+              ?.variants.some((item) => item.id === prior.variant))
+          ) {
+            setModelStore("variant", modelPreferenceKey(prior), prior.variant)
+          }
+          setModelStore("variant", modelPreferenceKey(target), variant)
           const sessionID = options?.sessionID
           if (!sessionID) {
             // The home screen only records the next-Session preference; no Session API call.
             this.set(target, { recent: true })
-            this.variant.set(variant)
             return
           }
           const desired = { ...target, ...(variant === undefined ? {} : { variant }) }
           setPendingTargets((current) => ({ ...current, [sessionID]: desired }))
+          save()
         },
         commitPending(
           sessionID: string,
@@ -298,10 +343,8 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
           if (!pending) return
           if (pending.providerID !== model.providerID || pending.modelID !== model.id) return
           if (normalizeModelVariant(pending.variant) !== normalizeModelVariant(model.variant)) return
-          if (route.data.type === "session" && route.data.sessionID === sessionID) {
-            this.set(pending, { recent: true })
-            this.variant.set(pending.variant)
-          }
+          setModelStore("recent", recentModels(pending, modelStore.recent))
+          save()
           clearPendingTarget(sessionID)
         },
         parsed: createMemo(() => {
@@ -326,7 +369,7 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
         cycle(direction: 1 | -1) {
           const sessionID = route.data.type === "session" ? route.data.sessionID : undefined
           // Rapid cycling follows the latest desired target, not the last committed preference.
-          const current = (sessionID ? pendingTargets()[sessionID] : undefined) ?? currentModel()
+          const current = selectedModel()
           if (!current) return Promise.resolve()
           const recent = modelStore.recent
           const index = recent.findIndex((x) => x.providerID === current.providerID && x.modelID === current.modelID)
@@ -351,7 +394,7 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
             return Promise.resolve()
           }
           // Rapid cycling follows the latest desired target, not the last committed preference.
-          const current = (sessionID ? pendingTargets()[sessionID] : undefined) ?? currentModel()
+          const current = selectedModel()
           let index = -1
           if (current) {
             index = favorites.findIndex((x) => x.providerID === current.providerID && x.modelID === current.modelID)
@@ -412,15 +455,14 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
         },
         variant: {
           selected() {
-            const sessionID = route.data.type === "session" ? route.data.sessionID : undefined
-            const pending = sessionID ? pendingTargets()[sessionID] : undefined
-            if (pending) return normalizeModelVariant(pending.variant)
-            const m = currentModel()
-            if (!m) return undefined
-            return normalizeModelVariant(modelStore.variant[modelPreferenceKey(m)])
+            return selection()?.variant
           },
           current() {
             const v = this.selected()
+            if (
+              route.data.type === "session" &&
+              (pendingTargets()[route.data.sessionID] || data.session.get(route.data.sessionID)?.model)
+            ) return v
             if (v && this.list().includes(v)) return v
             return undefined
           },
@@ -432,12 +474,6 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
               ?.find((item) => item.providerID === m.providerID && item.id === m.modelID)
             return info?.variants?.map((variant) => variant.id) ?? []
           },
-          set(value: string | undefined) {
-            const m = selectedModel()
-            if (!m) return
-            setModelStore("variant", modelPreferenceKey(m), normalizeModelVariant(value))
-            save()
-          },
           cycle() {
             const variants = this.list()
             if (variants.length === 0) return Promise.resolve()
@@ -445,7 +481,7 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
             if (!m) return Promise.resolve()
             const next = cycleModelVariant(this.current(), variants)
             const sessionID = route.data.type === "session" ? route.data.sessionID : undefined
-            return model.select({ ...m, ...(next === undefined ? {} : { variant: next }) }, { sessionID })
+            return model.select({ ...m, variant: next }, { sessionID })
           },
         },
       }

@@ -13,10 +13,16 @@ colors:
   badge-on: "#28753e"
 typography:
   agent-label:
-    fontFamily: system-ui, sans-serif
+    fontFamily: YCodingGeist, system-ui, sans-serif
     fontSize: 12px
     fontWeight: 400
     lineHeight: 1.2
+  popup-body:
+    fontFamily: Geist, system-ui, -apple-system, Segoe UI, sans-serif
+    fontSize: 13px
+    lineHeight: 1.45
+  popup-mono:
+    fontFamily: Geist Mono, ui-monospace, SFMono-Regular, Menlo, monospace
 rounded:
   agent-label: 5px
 components:
@@ -65,7 +71,9 @@ The Chrome extension marks every tab YCoding is controlling so the person using 
 | X4 | approved | The cursor tip MUST sit on the actual action coordinates and MUST NEVER move to a coordinate that no action uses; under reduced motion it MUST jump without animation. | `extensions/chrome/test/service-worker.test.js` |
 | X5 | approved | Explicit cleanup MUST complete, bounded in time, before the debugger detaches; when refresh stops, the page MUST remove the marker no later than the documented expiry plus its check interval, and on visibility or resume events. | `extensions/chrome/test/service-worker.test.js`, `packages/server/test-integration/browser-owned-chrome.test.ts` |
 | X6 | approved | A pinned tab MUST NEVER be controlled, because the tab strip shows only its favicon and no verified marker exists for it. | `extensions/chrome/test/service-worker.test.js` |
-| X7 | approved | Documented `colors`, `rounded`, `typography`, `motion.duration`, `layers`, and component sizes MUST equal `extensions/chrome/indicator.js`, and documented values MUST NOT be missing from or extra to it. | `extensions/chrome/test/design-md.test.js` |
+| X8 | approved | The popup MUST render text in Geist and its local service address and pairing code in Geist Mono, from faces embedded in `popup.css`, and MUST NOT fetch a font or add a font file, permission, or CSP source. | `extensions/chrome/test/popup.test.js`, `extensions/chrome/test/fonts.test.js`, `packages/server/test-integration/browser-owned-chrome.test.ts` |
+| X9 | approved | The page label MUST use Geist through a page-scoped `FontFace` under the alias `YCodingGeist`, registered once per document with the first cursor without delaying the label, removed with the marker whether loaded or pending, and MUST fall back to the system UI stack, never blocking the action, when the face cannot be installed. | `extensions/chrome/test/indicator.test.js`, `extensions/chrome/test/service-worker.test.js`, `packages/server/test-integration/browser-owned-chrome.test.ts` |
+| X7 | approved | Documented `colors`, `rounded`, `typography`, `motion.duration`, `layers`, and component sizes MUST equal `extensions/chrome/indicator.js`, with `popup-body` and `popup-mono` equal to the `--font-sans` and `--font-mono` values in `popup.css`, and documented values MUST NOT be missing from or extra to them. | `extensions/chrome/test/design-md.test.js` |
 
 ## Colors
 
@@ -73,7 +81,7 @@ The purple cursor, label, and ripple, and the green badge, are the existing exte
 
 ## Typography
 
-The label uses one system UI style so it reads as browser overlay text rather than page text: 12px, 1.2 line height, regular weight, white on the label color.
+The label is 12px, 1.2 line height, regular weight, white on the label color, in Geist. The page has no Geist, so the extension installs the embedded face into the controlled document as `YCodingGeist`, a name no site is likely to use, so a site's own `Geist` family is never replaced. The `FontFace` API takes bytes directly, so the label does not depend on the page's `font-src` policy. The face is registered before it loads and the label never waits for it: it shows the fallback with `font-display: swap` and switches when the face is loaded. A load that fails removes its face, a load that settles after the marker ended cannot add it back, and removing the marker removes the face, loaded or pending. If the face cannot be installed the label falls back to the system UI stack. The popup body is 13px, 1.45 line height, Geist, set on `body` because Chrome's extension-page default style sets a system family there and would override one inherited from `:root`; the local service address and pairing code are Geist Mono. Both faces are variable (100-900) and embedded in `popup.css` as data URLs, so the popup needs no network, permission, or CSP source. Native surfaces (the tab title, toolbar badge, and debugger infobar) use Chrome's own font and are outside this rule.
 
 ## Elevation & Depth
 

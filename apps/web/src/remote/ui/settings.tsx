@@ -1,4 +1,4 @@
-import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js"
+import { For, Show, createEffect, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
 import { CustomSelect } from "../../ui/custom-select"
 import { Modal } from "../../ui/modal"
@@ -7,8 +7,9 @@ import { InstallPWAButton } from "../../pwa/install-button"
 import { useTheme } from "../../theme/theme-store"
 import type { ThemePreference } from "../../theme/theme"
 import { useRemote } from "../context"
+import { keepAwakeView } from "../keep-awake"
 import { createPushHttp, createRemoteHttp } from "../http"
-import { browserPushPlatform, disablePush, enablePush, pushStatusView, savePushCategories, sendPushTest, syncPushState, type PushPlatform, type PushStatus } from "../push"
+import { browserPushPlatform, disablePush, enablePush, pushStatusView, savePushCategories, syncPushState, type PushPlatform, type PushStatus } from "../push"
 import type { OfficeSettingsStore, WorkspacePresentation } from "../office/storage"
 import type { OfficePreferences } from "../office/types"
 import {
@@ -31,6 +32,7 @@ import {
   type NotificationCategory,
   type NotificationChannel,
 } from "../preferences"
+import "./settings.css"
 
 const themeOptions: readonly { readonly id: ThemePreference; readonly label: string }[] = [
   { id: "system", label: "System" },
@@ -41,6 +43,12 @@ const themeOptions: readonly { readonly id: ThemePreference; readonly label: str
 export function MachineSettings(): JSX.Element {
   const remote = useRemote()
   const state = () => remote.state()
+  const reachable = () => state().activeDeviceID !== undefined && state().transport.kind === "open" && state().connection.kind === "connected"
+  const awake = () => keepAwakeView({ keepAwake: state().keepAwake, reachable: reachable() })
+  onMount(() => void remote.store.loadKeepAwake())
+  createEffect(() => {
+    if (state().keepAwake.read === "idle" && reachable()) void remote.store.loadKeepAwake()
+  })
   const availability = () => deviceAvailabilityView(accountReadState({ connection: state().connection, owner: state().owner }), state().devices.length, {
     devices: state().devices, activeDeviceID: state().activeDeviceID, sessionCount: state().sessions.length,
     unreachable: state().connection.kind === "offline",
@@ -52,6 +60,26 @@ export function MachineSettings(): JSX.Element {
       options={state().devices.filter((device) => device.status === "active" && device.online).map((device) => ({ value: device.id, label: device.name, badge: "Online" }))}
       onChange={(deviceID) => remote.store.connect(deviceID)}
       footer={devicePickerNote(state().devices)} />
+    <div class="defs__row" aria-busy={awake().busy}>
+      <span class="defs__key" id="machine-awake-label">Keep machine awake</span>
+      <span class="defs__value">
+        <label class="switch">
+          <input type="checkbox" aria-labelledby="machine-awake-label" aria-describedby="machine-awake-status machine-awake-caveat"
+            checked={awake().checked} disabled={awake().disabled}
+            onChange={(event) => {
+              void remote.store.setKeepAwake(event.currentTarget.checked)
+              event.currentTarget.checked = awake().checked
+            }} />
+          <span>{awake().label}</span>
+        </label>
+        <Show when={awake().retry}>
+          <button type="button" class="button button--secondary button--small" aria-label="Retry Keep machine awake"
+            onClick={() => void remote.store.loadKeepAwake()}>Retry</button>
+        </Show>
+        <span id="machine-awake-status" class="field__hint machine-awake__status" data-tone={awake().tone} role="status" aria-live="polite">{awake().detail}</span>
+        <span id="machine-awake-caveat" class="field__hint machine-awake__caveat">{awake().caveat}</span>
+      </span>
+    </div>
   </Section>
 }
 
@@ -575,16 +603,6 @@ export function NotificationSettings(): JSX.Element {
     setPushBusy(false)
   }
 
-  const testPush = async () => {
-    if (!pushPlatform || pushBusy()) return
-    setPushBusy(true)
-    const result = await sendPushTest(pushPlatform, pushHttp)
-    if (!active) return
-    setPushStatus(result.status)
-    setPushError(result.message)
-    setPushBusy(false)
-  }
-
   const update = async (category: NotificationCategory, channel: NotificationChannel) => {
     const next = toggleNotificationChannel(readNotificationPreferences(), category, channel)
     writeNotificationPreferences(globalThis.localStorage, next)
@@ -649,10 +667,6 @@ export function NotificationSettings(): JSX.Element {
               aria-label="Push to this device" aria-describedby="push-device-status"
               aria-pressed={pushView().pressed} disabled={pushBusy() || pushView().disabled}
               onClick={() => void togglePush()}>{pushBusy() ? "Checking…" : pushView().label}</button>
-            <Show when={pushStatus() === "on"}>
-              <button type="button" class="button button--secondary button--small" aria-describedby="push-device-status"
-                disabled={pushBusy()} onClick={() => void testPush()}>Send test alert</button>
-            </Show>
             <span id="push-device-status" class="field__hint" role="status" aria-live="polite">{pushError() || pushView().detail}</span>
           </span>
         </div>

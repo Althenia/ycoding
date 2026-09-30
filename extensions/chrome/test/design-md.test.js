@@ -35,9 +35,18 @@ function literals(source) {
   return Object.fromEntries([...groups, ...components])
 }
 
-function drift(document, code) {
+function popupTypography(stylesheet) {
+  const variable = (name) => new RegExp(`--${name}:\\s*([^;]+);`).exec(stylesheet)?.[1]?.trim().replaceAll('"', "")
+  const shorthand = /\bfont:\s*(\d+px)\/([\d.]+) var\(--font-sans\)/.exec(stylesheet)
+  return {
+    "popup-body": { fontFamily: variable("font-sans"), fontSize: shorthand?.[1], lineHeight: Number(shorthand?.[2]) },
+    "popup-mono": { fontFamily: variable("font-mono") },
+  }
+}
+
+function drift(document, code, stylesheet) {
   const expected = literals(documented(document))
-  const actual = literals(code)
+  const actual = literals({ ...code, typography: { ...code.typography, ...popupTypography(stylesheet) } })
   return [...new Set([...Object.keys(actual), ...Object.keys(expected)])]
     .sort()
     .filter((name) => actual[name] !== expected[name])
@@ -46,11 +55,12 @@ function drift(document, code) {
 
 describe("extension DESIGN.md token drift", () => {
   test("matches every documented token and indicator constant in both directions", async () => {
-    expect(drift(await Bun.file(new URL("../DESIGN.md", import.meta.url)).text(), tokens)).toEqual([])
+    expect(drift(await Bun.file(new URL("../DESIGN.md", import.meta.url)).text(), tokens, await Bun.file(new URL("../popup.css", import.meta.url)).text())).toEqual([])
   })
 
   test("detects changed, missing, and stale tokens on scratch copies", async () => {
     const document = await Bun.file(new URL("../DESIGN.md", import.meta.url)).text()
+    const stylesheet = await Bun.file(new URL("../popup.css", import.meta.url)).text()
     const probes = [
       [document, { ...tokens, colors: { ...tokens.colors, "agent-cursor": "#000000" } }, "colors.agent-cursor"],
       [
@@ -62,10 +72,13 @@ describe("extension DESIGN.md token drift", () => {
       [document, { ...tokens, layers: { ...tokens.layers, extra: 1 } }, "layers.extra"],
       [document.replace("cursor-move: 320ms", "cursor-move: 1ms"), tokens, "motion.duration.cursor-move"],
       [document.replace("padding: 3px 6px", "padding: 0"), tokens, "components.agent-label.padding"],
+      [document.replace("fontFamily: Geist Mono,", "fontFamily: Mono,"), tokens, "typography.popup-mono.fontFamily"],
+      [document.replace("fontSize: 13px", "fontSize: 14px"), tokens, "typography.popup-body.fontSize"],
+      [document, { ...tokens, typography: { "agent-label": { ...tokens.typography["agent-label"], fontFamily: "system-ui" } } }, "typography.agent-label.fontFamily"],
     ]
     for (const [specimen, code, name] of probes)
       expect(
-        drift(specimen, code).some((issue) => issue.startsWith(name)),
+        drift(specimen, code, stylesheet).some((issue) => issue.startsWith(name)),
         name,
       ).toBe(true)
   })

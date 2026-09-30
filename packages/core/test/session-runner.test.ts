@@ -59,6 +59,10 @@ import { ProviderRequestObserver } from "@ycoding-ai/core/session/provider-reque
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
+import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
+import type { LocationServices } from "@ycoding-ai/core/location-services"
+import { Job } from "@ycoding-ai/core/job"
+import { TaskCompleteTool } from "@ycoding-ai/core/tool/task-complete"
 import { SessionRunCoordinator } from "@ycoding-ai/core/session/run-coordinator"
 import { SessionRunner } from "@ycoding-ai/core/session/runner"
 import * as SessionRunnerLLM from "@ycoding-ai/core/session/runner/llm"
@@ -100,12 +104,13 @@ import { McpInstructions } from "@ycoding-ai/core/mcp/instructions"
 import { ModelV2 } from "@ycoding-ai/core/model"
 import { Location } from "@ycoding-ai/core/location"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
-import { Cause, Clock, DateTime, Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect"
+import { Cause, Clock, Context, DateTime, Deferred, Duration, Effect, Exit, Fiber, Layer, LayerMap, Schema, Scope, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { and, asc, eq, lte } from "drizzle-orm"
 import { chmod, writeFile } from "fs/promises"
 import { AttachmentStore } from "@ycoding-ai/core/attachment-store"
 import { testEffect } from "./lib/effect"
+import { registerToolPlugin } from "./lib/tool"
 import { agentHost, catalogHost, host } from "./plugin/host"
 import PROMPT_DEFAULT from "../src/session/runner/prompt/base.txt"
 
@@ -759,6 +764,7 @@ const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       Database.node,
+      Job.node,
       EventV2.node,
       Form.node,
       SessionProjector.node,
@@ -1233,6 +1239,51 @@ const verifyPartialFlushOnInterruption = (kind: FragmentKind) =>
   })
 
 describe("SessionRunnerLLM", () => {
+  it.effect("accepts verified work through the real runner, tool settlement and execution coordinator", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* registerToolPlugin(TaskCompleteTool.Plugin)
+      const database = yield* Database.Service
+      const events = yield* EventV2.Service
+      const store = yield* SessionStore.Service
+      const autonomy = yield* SessionAutonomy.Service
+      const jobs = yield* Job.Service
+      const compaction = yield* SessionCompactionExecution.Service
+      const runner = yield* SessionRunner.Service
+      const scope = yield* Scope.Scope
+      const locations = yield* LayerMap.make((_ref: Location.Ref) =>
+        Layer.succeed(SessionRunner.Service, runner) as unknown as Layer.Layer<LocationServices>,
+      )
+      const context = yield* Layer.buildWithScope(SessionExecution.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(EventV2.Service, events)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionAutonomy.Service, autonomy)),
+        Layer.provide(Layer.succeed(Job.Service, jobs)),
+        Layer.provide(Layer.succeed(SessionCompactionExecution.Service, compaction)),
+        Layer.provide(Layer.succeed(LocationServiceMap.Service, locations)),
+      ), scope)
+      const execution = Context.get(context, SessionExecution.Service)
+      responses = [reply.tool("call-work-complete", "task_complete", {}), reply.text("Implemented and verified.", "work-final")]
+      const input = yield* session.prompt({ sessionID, text: "Implement and verify the accepted work", resume: false })
+      yield* execution.resume(sessionID)
+      expect(requests).toHaveLength(2)
+      const history = yield* database.db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID))
+        .orderBy(asc(EventTable.seq)).all().pipe(Effect.orDie)
+      const completed = history.filter((event) => event.type === "session.work.completed.1")
+      expect(completed).toHaveLength(1)
+      const final = history.findLast((event) => event.type === "session.step.ended.1")!
+      expect(completed[0].data).toEqual({ sessionID, inputID: input.id, assistantMessageID: final.data.assistantMessageID })
+      expect(completed[0].seq).toBeGreaterThan(final.seq)
+      expect(completed[0].seq).toBeGreaterThan(history.findLast((event) => event.type === "session.execution.succeeded.1")!.seq)
+      const declaration = history.find((event) => event.type === "session.tool.success.1")!
+      expect(declaration.data.structured).toEqual({ recorded: true })
+      expect(declaration.data.executed).toBe(false)
+      expect(history.some((event) => event.type === "session.text.ended.1" && event.data.text === "Implemented and verified.")).toBe(true)
+      expect((yield* session.completions({ limit: 200 })).data).toHaveLength(1)
+      expect([...(yield* execution.active)]).toEqual([])
+    }),
+  )
   it.effect("retains delivered Session state as visible append-only history", () =>
     Effect.gen(function* () {
       const session = yield* setup

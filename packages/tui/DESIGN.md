@@ -26,19 +26,19 @@ colors:
   backdrop: "#00000096"
 typography:
   body:
-    fontFamily: JetBrains Mono
+    fontFamily: Geist Mono
     fontSize: 14px
     fontWeight: 400
     lineHeight: 18px
     letterSpacing: 0px
   title:
-    fontFamily: JetBrains Mono
+    fontFamily: Geist Mono
     fontSize: 14px
     fontWeight: 700
     lineHeight: 18px
     letterSpacing: 0px
   hint:
-    fontFamily: JetBrains Mono
+    fontFamily: Geist Mono
     fontSize: 14px
     fontWeight: 400
     lineHeight: 18px
@@ -105,6 +105,9 @@ Each rule describes current TUI behavior and names its enforcing test or review 
 | T5 | approved | Transcript timeline selection MUST follow option identity rather than list index when new events reorder options. | review-only (`AGENTS.md`, `docs/runtime.md`) |
 | T6 | approved | Documented `colors` MUST equal the resolved default `ycoding` theme for every mapped role, in both directions; a documented color without an honest theme counterpart MUST be a recorded exception. | `test/design-md.test.ts` |
 | T7 | approved | Completed `edit` and `patch` tool parts MUST NOT render as per-tool blocks. Each prompt segment (the messages from one `user` message up to the next) MUST show one collapsed `Captured changes` summary after its last resident assistant row, whether or not that row is a terminal footer and whether or not the Session is still running, listing each path once with counts summed over the recorded patches; an earlier segment's summary MUST stay after its own last row and MUST NOT be repeated in a later segment, and a segment with no completed edit MUST show none. Running and failed edit tools MUST keep their own rows. | `test/file-change-summary.test.tsx`, `test/captured-file-changes-summary.test.tsx` |
+| T8 | approved | The command palette MUST offer exactly one `Keep machine awake` command whose footer is `● Checking` until the initial backend read settles, then `● ` plus the backend state word (`off`, `on`, `unsupported`, or `error`); `on` MUST use the success color, `error` the error color, and Checking, `off`, and `unsupported` the subdued color, so color never carries the state alone. Choosing it MUST NOT write while the state is unknown or `unsupported`, and turning it on MUST show one toast line stating that only idle sleep is blocked and that manual sleep and the lid still apply. The Status dialog MUST list Checking before initial settlement, then the same backend state under Services with the backend message. | `test/keep-awake.test.tsx`, `test/screen/keep-awake-status.screen.test.tsx` |
+| T9 | approved | A parent MUST show its resident waiting child's question with warning ink, an `awaiting input` label, and the configured Subagents shortcut; clicking the notice MUST open that child. The child answer textarea MUST submit literal text only to its owned question, retain rejected drafts, and NEVER admit a prompt or command. Guardrail, permission, and form review MUST precede question answering; the footer MUST NOT invite an answer while review owns input. | `test/screen/subagent-answer.screen.test.tsx`, `test/subagent-answer.test.tsx` |
+| T10 | approved | A prompt segment with unread dispatched-child transcripts MUST label its file count `known` and `incomplete`, retain available root and child patches, and show a loading or warning-colored unavailable state even at zero known files. Failed reads MUST expose a primary-colored `Retry child changes` action and keyboard command. Recovery MUST retry only failed authorized reads, coalesce in-flight requests, and reject obsolete selections. Expanding a summary MUST NOT fetch; totals MUST remain isolated by prompt segment. | `test/screen/captured-child-recovery.screen.test.tsx`, `test/captured-file-changes-summary.test.tsx` |
 
 T1 and T2 separate complete durable projection from resident row rendering. T3 applies to the captured-change diff, not every inline tool diff; the tested `diffs.view` cases and threshold are specified in `docs/runtime.md`. T7 keeps the segment summary as the only completed-edit presentation; child edits join the segment whose `subagent` or `subagent_control` call dispatched them, and a child segment ends at the child's next `user` input or answer.
 
@@ -122,7 +125,7 @@ The default "ycoding" dark theme (users can switch among ~30 themes, so designs 
 
 ## Typography
 
-One monospace font (render as JetBrains Mono 14px / 18px line). The only typographic variations are **bold** (titles, category headers, the selected value), normal, and colour. No size changes, no italics for meaning, no headings larger than body text. Text that does not fit is truncated with `…`; file paths truncate from the left and abbreviate the home directory as `~`.
+Use Geist Mono at 14px / 18px line height for terminal specimens. The running TUI uses the terminal application's user-selected monospace font and cell size; it does not install fonts or change host settings. The only typographic variations are **bold** (titles, category headers, the selected value), normal, and colour. No size changes, no italics for meaning, no headings larger than body text. Text that does not fit is truncated with `…`; file paths truncate from the left and abbreviate the home directory as `~`.
 
 ## Layout
 
@@ -153,7 +156,7 @@ Everything is rectangular, aligned to character cells. No rounded corners. Borde
 
 ## Verification
 
-T1: `bun test test/cli/tui/transcript-history.test.tsx` from `packages/tui`. T2: `bun test test/session-transcript-boundary.test.tsx`. T3: `bun test test/file-change-summary.test.tsx`. T7: `bun test test/file-change-summary.test.tsx test/captured-file-changes-summary.test.tsx`. T4: `bun test test/subagent-summary-reconnect.test.tsx`. T6: `bun test test/design-md.test.ts`. T5 remains review-only against the timeline selection contract in `AGENTS.md` and `docs/runtime.md`. Theme color drift and scratch-copy mutation probes run in `bun test test/design-md.test.ts`; lint this file, `../../DESIGN.md`, and `../../apps/web/DESIGN.md` with `python3 ~/.agents/skills/daedalus/scripts/design_md.py lint <file>`. `git diff --check` verifies whitespace only.
+T1: `bun test test/cli/tui/transcript-history.test.tsx` from `packages/tui`. T2: `bun test test/session-transcript-boundary.test.tsx`. T3: `bun test test/file-change-summary.test.tsx`. T7: `bun test test/file-change-summary.test.tsx test/captured-file-changes-summary.test.tsx`. T4: `bun test test/subagent-summary-reconnect.test.tsx`. T6: `bun test test/design-md.test.ts`. T8: `bun test test/keep-awake.test.tsx test/screen/keep-awake-status.screen.test.tsx`. T5 remains review-only against the timeline selection contract in `AGENTS.md` and `docs/runtime.md`. Theme color drift and scratch-copy mutation probes run in `bun test test/design-md.test.ts`; lint this file, `../../DESIGN.md`, and `../../apps/web/DESIGN.md` with `python3 ~/.agents/skills/daedalus/scripts/design_md.py lint <file>`. `git diff --check` verifies whitespace only.
 
 ## Maintenance
 

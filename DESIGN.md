@@ -39,6 +39,7 @@ Each approved rule binds inherited surfaces. An exception records an unresolved 
 | R6 | approved | Web, terminal, and app marks MUST carry the YCoding identity; raster derivatives MUST come from the canonical SVG generator. | `packages/simulation/test/brand-assets.test.ts`, `bun run check:ycoding-brand` |
 | R7 | approved | Token values documented by the web surface MUST match its light root and dark overrides in both directions. | `apps/web/src/styles/design-md.test.ts` |
 | R8 | approved | Interactive states MUST remain distinguishable without color alone; focus MUST remain visible and controls keyboard operable. | review-only; `apps/web/verify/design-contract.integration.test.ts` samples rendered states |
+| R9 | approved | GUI typography MUST use Geist Sans (`Geist`) for interface prose and Geist Mono for code and compact metadata. Web fonts MUST be self-hosted and extension fonts MUST be embedded without external font requests or new archive entries. Terminal typography MUST document Geist Mono as its reference without changing the user's terminal font settings. | `apps/web/src/styles/typography.test.ts`, `extensions/chrome/test/design-md.test.js`; terminal host control is review-only |
 
 ## Colors
 
@@ -46,7 +47,9 @@ The mark's Trace, Frost, Attention, dark Surface, Rule, and Canvas are SVG asset
 
 ## Typography
 
-The terminal renders whole cells in one user-controlled monospace font and size; web uses a system UI stack for titles/prose and a monospace stack for code and remote metadata. Hierarchy comes from weight, position, and semantic ink before decoration (`packages/tui/DESIGN.md`, `apps/web/src/styles/base.css`, `apps/web/src/styles/remote.css`).
+Geist Sans (`Geist`) is the GUI family for titles, prose, and interface labels; Geist Mono is the family for code and compact remote metadata. Use the unmodified variable fonts and SIL Open Font License in `assets/brand/fonts`; the web serves them from its own build and the extension embeds its required faces. Keep owned platform fallback stacks for unavailable fonts and unsupported glyphs. Preserve each surface's sizes, line heights, and weights; hierarchy comes from weight, position, and semantic ink before decoration (`packages/tui/DESIGN.md`, `apps/web/src/styles/base.css`, `apps/web/src/styles/remote.css`).
+
+The terminal renders whole cells in the user's selected monospace font and size. Geist Mono is the reference face for terminal specimens, not a setting the TUI can enforce. Native browser-owned badge typography also remains browser-controlled. Canonical mark geometry remains unchanged.
 
 ## Motion
 
@@ -92,4 +95,4 @@ Read the nearest surface file and its `extends` chain before UI changes. Add or 
 | R2 | Existing web controls and native input variants | A complete never-default audit is not established by current unit tests; unowned variants require rendered review, not assumed compliance. | pending | 2026-10-29 |
 | R5 | Installed-app accessibility | Page zoom lock is the approved product contract but removes page magnification; legibility and reflow require separate verification. | approved | 2026-10-29 |
 | R6 | Web and default terminal action color | `apps/web/src/styles/tokens.css` uses green (`--yc-primary-bg`) while `packages/tui/src/theme/assets/ycoding.json` uses blue interactive `#79B8FF`; preserve both implemented roles pending an explicit cross-surface palette decision. | pending | 2026-10-29 |
-| R6 | Terminal typography | `packages/tui/DESIGN.md` specifies JetBrains Mono at 14/18px, but the default theme JSON defines colors only and the terminal controls its font and cell size; treat the pixel typography as a specimen, not an enforceable renderer value. | pending | 2026-10-29 |
+| R9 | Terminal typography | `packages/tui/DESIGN.md` specifies Geist Mono at 14/18px for specimens; the terminal controls its actual font and cell size, and the TUI does not change those host settings. | approved | 2026-10-29 |

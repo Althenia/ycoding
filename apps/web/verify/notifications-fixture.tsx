@@ -10,8 +10,8 @@ import "../src/styles/base.css"
 const parameters = new URLSearchParams(location.search)
 document.documentElement.dataset.theme = parameters.get("theme") === "dark" ? "dark" : "light"
 
-const baseline = (id: string, category: RemoteNotificationView["category"], at: number, sessionID: string, titled = true, live = false): RemoteNotificationView => ({
-  id, category, at, sessionID, ...(titled ? { sessionTitle: sessionID === "ses_alpha" ? "Alpha Session" : "Beta Session" } : {}), synced: true, live,
+const baseline = (id: string, category: RemoteNotificationView["category"], at: number, sessionID: string, titled = true, live = false, synced = true): RemoteNotificationView => ({
+  id, category, at, sessionID, ...(titled ? { sessionTitle: sessionID === "ses_alpha" ? "Alpha Session" : "Beta Session" } : {}), synced, live,
   title: "YCoding notice", body: "An action needs attention.",
 })
 const initial = parameters.get("initial") === "empty" ? [] : [
@@ -41,8 +41,8 @@ const store: RemoteStore = {
   reloadNotifications: async () => {},
 }
 Object.assign(window, {
-  remoteNotify: (category: RemoteNotificationView["category"] = "approval-requested", sessionID = "ses_alpha", titled = true) => {
-    const entry = baseline(`notice_live_${++serial}`, category, Date.now(), sessionID, titled, true)
+  remoteNotify: (category: RemoteNotificationView["category"] = "approval-requested", sessionID = "ses_alpha", titled = true, synced = category !== "approval-requested") => {
+    const entry = baseline(`notice_live_${++serial}`, category, Date.now(), sessionID, titled, true, synced)
     publish([entry, ...state.notifications].slice(0, 50))
   },
   remoteResolveTitle: (sessionID: string, title: string) => publish(state.notifications.map((entry) => entry.sessionID === sessionID ? { ...entry, sessionTitle: title } : entry)),

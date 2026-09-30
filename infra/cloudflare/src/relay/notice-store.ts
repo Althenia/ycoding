@@ -1,7 +1,13 @@
-import { RemoteLimits, type RemoteNotice, type RemoteNoticeCategory } from "../../../../packages/remote/src/index"
+import { RemoteLimits, type RemoteNotice, type RemoteNoticeCategory, type RemoteWorkCompletion } from "../../../../packages/remote/src/index"
 
 export type NoticeSql = {
   readonly exec: (query: string, ...bindings: unknown[]) => { readonly toArray: () => unknown[] }
+}
+
+export type NoticeStorage = {
+  readonly sql: NoticeSql
+  readonly kv: { readonly get: <Value>(key: string) => Value | undefined; readonly put: <Value>(key: string, value: Value) => void }
+  readonly transactionSync: <Value>(operation: () => Value) => Value
 }
 
 export type NoticeEvent = {
@@ -18,6 +24,7 @@ export type NoticePage = {
 
 export type NoticeStore = {
   readonly append: (events: readonly NoticeEvent[]) => { readonly notices: readonly RemoteNotice[]; readonly total: number }
+  readonly complete: (receipts: readonly RemoteWorkCompletion[], more: boolean) => { readonly notices: readonly RemoteNotice[]; readonly total: number }
   readonly page: (before?: number) => NoticePage
   readonly remove: (sequences: readonly number[]) => { readonly ids: readonly string[]; readonly total: number }
   readonly clear: () => void
@@ -27,7 +34,8 @@ export type NoticeStore = {
 
 type Row = { readonly seq: number; readonly category: RemoteNoticeCategory; readonly session_id: string; readonly created_at: number }
 
-export function createNoticeStore(sql: NoticeSql): NoticeStore {
+export function createNoticeStore(storage: NoticeStorage): NoticeStore {
+  const sql = storage.sql
   sql.exec(
     "CREATE TABLE IF NOT EXISTS notice (seq INTEGER PRIMARY KEY AUTOINCREMENT, category TEXT NOT NULL, session_id TEXT NOT NULL, created_at INTEGER NOT NULL)",
   ).toArray()
@@ -45,8 +53,7 @@ export function createNoticeStore(sql: NoticeSql): NoticeStore {
     }
   }
 
-  return {
-    append: (events) =>
+  const append = (events: readonly NoticeEvent[]) =>
       guarded(() => {
         if (events.length === 0) return { notices: [], total: count() }
         const before = count()
@@ -56,7 +63,21 @@ export function createNoticeStore(sql: NoticeSql): NoticeStore {
         ).toArray() as Row[]
         total = before + rows.length
         return { notices: rows.sort((left, right) => left.seq - right.seq).map(notice), total }
-      }),
+      })
+
+  return {
+    append,
+    complete: (receipts, more) => guarded(() => storage.transactionSync(() => {
+      const baseline = storage.kv.get<boolean>("completionSync") !== true
+      const events = receipts.flatMap((receipt) => {
+        const key = `completion:${receipt.sessionID}`
+        if (receipt.seq <= (storage.kv.get<number>(key) ?? 0)) return []
+        storage.kv.put(key, receipt.seq)
+        return baseline ? [] : [{ category: "agent-completed" as const, sessionID: receipt.sessionID, createdAt: receipt.created }]
+      })
+      if (baseline && !more) storage.kv.put("completionSync", true)
+      return append(events)
+    })),
     page: (before = Number.MAX_SAFE_INTEGER) => {
       const rows = sql.exec(
         "SELECT seq, category, session_id, created_at FROM notice WHERE seq < ? ORDER BY seq DESC LIMIT ?",

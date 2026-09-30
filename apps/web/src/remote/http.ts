@@ -1,4 +1,4 @@
-import { parsePushTestResponse, type CreateEnrollmentResponse, type MeResponse, type RemoteDeviceInfo, type PushKeyResponse, type PushRegistration, type PushTestResponse } from "@ycoding-ai/remote"
+import { type CreateEnrollmentResponse, type MeResponse, type RemoteDeviceInfo, type PushKeyResponse, type PushRegistration } from "@ycoding-ai/remote"
 
 export type RemoteHttpFailureReason = "http" | "unexpected-body" | "network"
 
@@ -130,12 +130,6 @@ export function createPushHttp(options: RemoteHttpOptions = {}) {
     remove: async (endpoint: string): Promise<RemoteHttpResult<void>> => {
       const result = await request("DELETE", "/api/push/subscriptions", { endpoint })
       return result.ok ? { ok: true, value: undefined } : result
-    },
-    test: async (endpoint: string): Promise<RemoteHttpResult<PushTestResponse>> => {
-      const result = await request("POST", "/api/push/test", { endpoint })
-      if (!result.ok) return result
-      const parsed = parsePushTestResponse(result.value)
-      return parsed.ok ? parsed : failure(200, "The response was not an API document", "unexpected-body")
     },
   }
 }

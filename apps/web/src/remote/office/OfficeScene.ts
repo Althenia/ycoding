@@ -2,6 +2,7 @@ import Phaser from "phaser"
 import { OfficeDirector } from "./director"
 import type { OfficeMailbox } from "./bridge"
 import { columns, floorFrameAt, officeLayout, props, rows, tileSize, wallAt, wallFrameAt, worldHeight, worldWidth } from "./map"
+import { rallyBall } from "./leisure"
 import { shortText } from "./model"
 import { hasReducedMotion } from "./preferences"
 import { characterAppearances, characterColumns, characterDirections, characterFrame } from "./sprites"
@@ -27,6 +28,7 @@ export class OfficeScene extends Phaser.Scene {
   private readonly seenCues = new Set<string>()
   private badgeQueue: OfficeCue[] = []
   private badge?: Phaser.GameObjects.Text
+  private ball?: Phaser.GameObjects.Ellipse
   private badgeActorID?: string
   private badgeUntil = 0
   private cueScope = ""
@@ -43,7 +45,7 @@ export class OfficeScene extends Phaser.Scene {
   private latestFrames: readonly ActorFrame[] = []
   private lastLocations = ""
 
-  constructor(private readonly mailbox: OfficeMailbox, private readonly selectSession: (id: string) => void, private readonly fail: (message: string) => void, private readonly resolution: number, private readonly onLocations: (locations: Readonly<Record<string, ActorFrame["room"]>>) => void) {
+  constructor(private readonly mailbox: OfficeMailbox, private readonly selectSession: (id: string) => void, private readonly fail: (message: string) => void, private readonly resolution: number, private readonly onLocations: (locations: Readonly<Record<string, ActorFrame["room"]>>) => void, private readonly fonts: { readonly sans: string; readonly mono: string }) {
     super({ key: "office" })
     this.desiredZoom = resolution
   }
@@ -86,12 +88,13 @@ export class OfficeScene extends Phaser.Scene {
       if (prop.layer === "floor") image.setOrigin(0).setDisplaySize(prop.width * tileSize, prop.height * tileSize).setDepth(-1900)
       if (prop.layer === "object") image.setOrigin(0, 1).setScale(prop.width * tileSize / image.width).setDepth((prop.cell.y + prop.height) * tileSize - 1)
     }
-    this.badge = this.add.text(0, 0, "", { fontFamily: "sans-serif", fontSize: "13px", color: "#1e2934", backgroundColor: "#f4bd3d", padding: { x: 6, y: 3 }, resolution: this.resolution })
+    this.ball = this.add.ellipse(0, 0, 6, 6, 0xf7f5ec).setStrokeStyle(1, 0x3d4e5b).setDepth(896).setVisible(false)
+    this.badge = this.add.text(0, 0, "", { fontFamily: this.fonts.mono, fontSize: "13px", color: "#1e2934", backgroundColor: "#f4bd3d", padding: { x: 6, y: 3 }, resolution: this.resolution })
       .setOrigin(0.5, 1).setDepth(10007).setVisible(false)
     for (let appearance = 0; appearance < characterAppearances; appearance++) for (const direction of characterDirections) {
       for (const [pose, columns, speed] of [
         ["stand", characterColumns.stand, 1], ["walk", characterColumns.walk, 8],
-        ["talk", characterColumns.talk, 3], ["type", characterColumns.type, 4],
+        ["talk", characterColumns.talk, 3], ["type", characterColumns.type, 4], ["play", characterColumns.talk, 2],
       ] as const) {
         this.anims.create({ key: `${appearance}-${direction}-${pose}`,
           frames: this.anims.generateFrameNumbers("characters", { start: characterFrame(appearance, direction, columns[0]), end: characterFrame(appearance, direction, columns[columns.length - 1]!) }),
@@ -102,22 +105,29 @@ export class OfficeScene extends Phaser.Scene {
     this.cameras.main.setZoom(this.desiredZoom)
     this.boundCamera()
     this.cameras.main.centerOn(worldWidth / 2, worldHeight / 2)
+    const canvas = this.sys.game.canvas
+    const endDrag = () => { this.drag = undefined; delete canvas.dataset.cursor }
+    this.input.setDefaultCursor("var(--yc-cursor-pan)")
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       this.drag = { x: pointer.x, y: pointer.y, scrollX: this.cameras.main.scrollX, scrollY: this.cameras.main.scrollY }
+      canvas.dataset.cursor = "panning"
     })
     this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
       if (!pointer.isDown || !this.drag) return
       if (pointer.getDistance() >= 6) this.followSuspended = true
       this.cameras.main.setScroll(this.drag.scrollX - (pointer.x - this.drag.x) / this.cameras.main.zoom, this.drag.scrollY - (pointer.y - this.drag.y) / this.cameras.main.zoom)
     })
-    this.input.on("pointerup", () => { this.drag = undefined })
-    this.input.on("gameout", () => { this.drag = undefined })
+    this.input.on("pointerup", endDrag)
+    this.input.on("pointerupoutside", endDrag)
+    this.input.on("gameout", endDrag)
+    this.events.once("destroy", endDrag)
     this.cueScope = this.mailbox.read().snapshot.scope
     this.cueRootID = this.mailbox.read().snapshot.team.rootActorID
     this.lastConnection = this.mailbox.read().snapshot.connection
     for (const cue of this.mailbox.read().snapshot.cues) this.seenCues.add(cue.id)
     this.events.once("shutdown", () => {
-      this.objects.clear(); this.badge = undefined
+      endDrag()
+      this.objects.clear(); this.badge = undefined; this.ball = undefined
       this.badgeQueue = []; this.seenCues.clear(); this.ready = false
     })
     this.ready = true
@@ -181,6 +191,17 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   settle(): void { this.director.settle() }
+
+  refreshFonts(): void {
+    if (!this.ready) return
+    this.badge?.style.update(true)
+    for (const objects of this.objects.values()) {
+      objects.label.style.update(true)
+      objects.bubble.style.update(true)
+      objects.marker.style.update(true)
+    }
+    this.update(this.time.now, 0)
+  }
 
   adoptLatest(): void {
     const snapshot = this.mailbox.read().snapshot
@@ -246,6 +267,9 @@ export class OfficeScene extends Phaser.Scene {
       this.objects.delete(id)
     }
     for (const frame of this.latestFrames) this.paintActor(frame, input.snapshot, scale)
+    const ball = rallyBall(this.latestFrames, time)
+    if (ball) this.ball?.setPosition(ball.x, ball.y)
+    this.ball?.setVisible(ball !== undefined)
     this.placeBubbles(scale)
     this.placeLabels(scale)
     const target = this.latestFrames.find((frame) => frame.actor.id === this.badgeActorID)
@@ -349,7 +373,7 @@ export class OfficeScene extends Phaser.Scene {
     let objects = this.objects.get(frame.actor.id)
     if (!objects) {
       const sprite = this.add.sprite(0, 0, "characters", characterFrame(frame.appearance, frame.direction, 0))
-        .setName(frame.actor.id).setOrigin(0.5, 46 / 48).setScale(1.5).setInteractive({ useHandCursor: true })
+        .setName(frame.actor.id).setOrigin(0.5, 46 / 48).setScale(1.5).setInteractive({ cursor: "var(--yc-cursor-action)" })
       sprite.on("pointerup", (pointer: Phaser.Input.Pointer) => {
         if (pointer.getDistance() < 6 && !this.latestFrames.find((item) => item.actor.id === frame.actor.id)?.leaving) this.selectSession(frame.actor.sessionID)
       })
@@ -357,11 +381,11 @@ export class OfficeScene extends Phaser.Scene {
         sprite,
         shadow: this.add.ellipse(0, 0, 23, 7, 0x24334a, 0.3),
         ring: this.add.ellipse(0, 0, 34, 14, 0x8fe0c6, 0.22).setStrokeStyle(2, 0x6de3b3),
-        label: this.add.text(0, 0, "", { fontFamily: "sans-serif", fontSize: "12px", color: "#ffffff", resolution: this.resolution }).setOrigin(0, 0).setDepth(10001),
+        label: this.add.text(0, 0, "", { fontFamily: this.fonts.mono, fontSize: "12px", color: "#ffffff", resolution: this.resolution }).setOrigin(0, 0).setDepth(10001),
         labelPlate: this.add.graphics().setDepth(10000),
-        bubble: this.add.text(0, 0, "", { fontFamily: "sans-serif", fontSize: "13px", color: "#253443", wordWrap: { width: 180 }, resolution: this.resolution }).setOrigin(0.5, 1).setDepth(10003),
+        bubble: this.add.text(0, 0, "", { fontFamily: this.fonts.sans, fontSize: "13px", color: "#253443", wordWrap: { width: 180 }, resolution: this.resolution }).setOrigin(0.5, 1).setDepth(10003),
         bubblePlate: this.add.graphics().setDepth(10002),
-        marker: this.add.text(0, 0, "!", { fontFamily: "sans-serif", fontSize: "18px", color: "#243340", backgroundColor: "#f3be65", padding: { x: 5, y: 1 }, resolution: this.resolution }).setOrigin(0.5, 1).setDepth(10005),
+        marker: this.add.text(0, 0, "!", { fontFamily: this.fonts.sans, fontSize: "18px", color: "#243340", backgroundColor: "#f3be65", padding: { x: 5, y: 1 }, resolution: this.resolution }).setOrigin(0.5, 1).setDepth(10005),
       }
       this.objects.set(frame.actor.id, objects)
     }
@@ -370,7 +394,7 @@ export class OfficeScene extends Phaser.Scene {
     const alpha = frame.opacity * (frame.actor.source === "unavailable" ? 0.45 : frame.actor.status === "unknown" ? 0.7 : 1)
     objects.sprite.setPosition(x, y).setDepth(y).setAlpha(alpha)
     if (frame.leaving) objects.sprite.disableInteractive()
-    if (!frame.leaving && !objects.sprite.input) objects.sprite.setInteractive({ useHandCursor: true })
+    if (!frame.leaving && !objects.sprite.input) objects.sprite.setInteractive({ cursor: "var(--yc-cursor-action)" })
     if (frame.pose === "sit" || frame.pose === "wave") {
       objects.sprite.anims.stop()
       objects.sprite.setTexture("characters", characterFrame(frame.appearance, frame.direction, characterColumns[frame.pose][0]))

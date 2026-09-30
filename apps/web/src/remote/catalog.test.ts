@@ -19,12 +19,12 @@ describe("modelDisplayLabel", () => {
 test("reads the device catalog while rejecting malformed entries", () => {
   expect(readCatalog({
     agents: [{ id: "god", name: "God", mode: "primary", hidden: false }, { id: "bad", mode: "primary" }],
-    models: [{ providerID: "openai", id: "gpt-6", name: "GPT-6", variants: ["low", "high"], defaultVariant: "high" }],
+    models: [{ providerID: "openai", id: "gpt-6", name: "GPT-6", variants: ["low", "high"] }],
     defaultModel: { providerID: "openai", id: "gpt-6" },
     commands: [{ name: "test" }], skills: [{ id: "review", name: "Review", slash: true }],
     references: [{ name: "guide", uri: "https://example.test/guide" }], resources: [],
   })).toEqual({ status: "ready", agents: [{ id: "god", name: "God", mode: "primary", hidden: false }],
-    models: [{ providerID: "openai", id: "gpt-6", name: "GPT-6", variants: ["low", "high"], defaultVariant: "high" }],
+    models: [{ providerID: "openai", id: "gpt-6", name: "GPT-6", variants: ["low", "high"] }],
     defaultModel: { providerID: "openai", id: "gpt-6" }, commands: [{ name: "test" }],
     skills: [{ id: "review", name: "Review", slash: true }], references: [{ name: "guide", uri: "https://example.test/guide" }], resources: [] })
   expect(readCatalog({})).toBeUndefined()

@@ -1,5 +1,5 @@
 .file-change-card { inline-size:100%; min-inline-size:0; max-inline-size:100%; overflow:hidden; border:1px solid var(--yc-border); border-radius:var(--yc-radius-lg); background:var(--yc-surface-raised); color:var(--yc-text); font:var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); }
-.file-change-card__summary { display:flex; align-items:center; gap:var(--yc-space-2); inline-size:100%; min-inline-size:0; min-block-size:44px; padding:var(--yc-space-2) var(--yc-space-3); border:0; background:transparent; color:inherit; font:inherit; text-align:start; cursor:pointer; }
+.file-change-card__summary { display:flex; align-items:center; gap:var(--yc-space-2); inline-size:100%; min-inline-size:0; min-block-size:44px; padding:var(--yc-space-2) var(--yc-space-3); border:0; background:transparent; color:inherit; font:inherit; text-align:start; }
 .file-change-card__icon { flex:none; display:grid; place-items:center; inline-size:28px; block-size:28px; border-radius:var(--yc-radius-sm); background:var(--yc-green-soft); color:var(--yc-green-strong); }
 .file-change-card__title { min-inline-size:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:var(--yc-weight-semibold); }
 .file-change-card__totals { display:flex; flex:none; gap:var(--yc-space-2); margin-inline-start:auto; white-space:nowrap; font-weight:var(--yc-weight-semibold); }
@@ -8,7 +8,7 @@
 .file-change-card__files { margin:0; padding:0; list-style:none; }
 .file-change-card__file { min-inline-size:0; border-block-end:1px solid var(--yc-border); }
 .file-change-card__file:last-child { border-block-end:0; }
-.file-change-card__file-toggle { display:flex; align-items:center; gap:var(--yc-space-2); inline-size:100%; min-inline-size:0; min-block-size:44px; padding:var(--yc-space-2) var(--yc-space-3); border:0; background:transparent; color:inherit; text-align:start; cursor:pointer; }
+.file-change-card__file-toggle { display:flex; align-items:center; gap:var(--yc-space-2); inline-size:100%; min-inline-size:0; min-block-size:44px; padding:var(--yc-space-2) var(--yc-space-3); border:0; background:transparent; color:inherit; text-align:start; }
 .file-change-card__summary:hover,.file-change-card__file-toggle:hover { background:var(--yc-surface-sunken); }
 .file-change-card__summary:focus-visible,.file-change-card__file-toggle:focus-visible { outline:2px solid var(--yc-focus); outline-offset:-2px; }
 .file-change-card__summary[aria-expanded="true"] { border-block-end:1px solid var(--yc-border); }

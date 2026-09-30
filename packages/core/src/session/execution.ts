@@ -23,6 +23,8 @@ import { and, eq, inArray } from "drizzle-orm"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 import { Shell } from "../shell"
 import { SessionGoal } from "./goal"
+import { SessionCompletion } from "./completion"
+import { Job } from "../job"
 
 export interface Interface {
   /** Snapshots active execution owned by this process. */
@@ -70,6 +72,8 @@ export const layer = Layer.effect(
     const db = (yield* Database.Service).db
     const autonomy = yield* SessionAutonomy.Service
     const compactionExecution = yield* SessionCompactionExecution.Service
+    const jobs = yield* Job.Service
+    const completion = SessionCompletion.make({ db, events, jobs })
     const reportLifecycle = <A>(sessionID: SessionSchema.ID, effect: Effect.Effect<A>) =>
       effect.pipe(
         Effect.tapCause((cause) =>
@@ -240,7 +244,7 @@ export const layer = Layer.effect(
         )
       }),
       // One terminal observation per busy period, covering every coalesced drain.
-      settled: (sessionID, exit, reason) =>
+      settled: (sessionID, exit, reason): Effect.Effect<void> =>
         Effect.gen(function* () {
           const outcome = terminal(exit, reason)
           const advanced =
@@ -263,6 +267,7 @@ export const layer = Layer.effect(
                   { sessionID },
                   clearSuspensionOnCommit(sessionID),
                 )
+                yield* completion.complete(sessionID, coordinator.active)
                 return
               }
               if (outcome.type === "interrupted") {
@@ -321,6 +326,7 @@ export const node = makeGlobalNode({
     SessionStore.node,
     LocationServiceMap.node,
     EventV2.node,
+    Job.node,
   ],
 })
 

@@ -19,7 +19,6 @@ export type ModelOption = {
   readonly id: string
   readonly name: string
   readonly variants: readonly string[]
-  readonly defaultVariant?: string
 }
 
 export type CommandOption = { readonly name: string; readonly description?: string }
@@ -97,8 +96,7 @@ export function readCatalog(value: unknown): CatalogView | undefined {
       const entry = record(item)
       if (!entry || !text(entry.providerID) || !text(entry.id) || !text(entry.name) || !Array.isArray(entry.variants) || !entry.variants.every((variant) => typeof variant === "string")) return []
       return [{ providerID: text(entry.providerID)!, id: text(entry.id)!, name: text(entry.name)!, variants: entry.variants,
-        ...(text(entry.providerName) === undefined ? {} : { providerName: text(entry.providerName) }),
-        ...(text(entry.defaultVariant) === undefined ? {} : { defaultVariant: text(entry.defaultVariant) }) }]
+        ...(text(entry.providerName) === undefined ? {} : { providerName: text(entry.providerName) }) }]
     }),
     commands: commands.flatMap((item) => {
       const entry = record(item)

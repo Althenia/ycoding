@@ -1,6 +1,7 @@
 import { Show, createEffect, createSignal, onCleanup, onMount } from "solid-js"
 import { Icon } from "../../ui/icon"
 import { LoadingPlaceholder } from "../ui/loading"
+import { officeHydrating } from "./model"
 import type { OfficePreferences, OfficeRoomID, OfficeSnapshot } from "./types"
 import type { OfficeHandle } from "./create-game"
 import "./office.css"
@@ -18,6 +19,18 @@ export function OfficeCanvas(props: {
   let disposed = false
   const [error, setError] = createSignal<string>()
   const [loading, setLoading] = createSignal(true)
+  const [placed, setPlaced] = createSignal(0)
+  const hydrating = () => officeHydrating(props.snapshot, placed())
+  const [hydratingNamed, setHydratingNamed] = createSignal(false)
+  const loadingLabel = () => loading() ? "Loading the office renderer…" : "Loading the office…"
+  createEffect(() => {
+    if (loading() || !hydrating()) {
+      setHydratingNamed(false)
+      return
+    }
+    const timer = setTimeout(() => setHydratingNamed(true), 140)
+    onCleanup(() => clearTimeout(timer))
+  })
   const query = window.matchMedia("(prefers-reduced-motion: reduce)")
   const [systemReduced, setSystemReduced] = createSignal(query.matches)
   const change = (event: MediaQueryListEvent) => setSystemReduced(event.matches)
@@ -32,9 +45,19 @@ export function OfficeCanvas(props: {
     if (request) handle?.focus(request.actorID)
   })
   onMount(() => {
-    void import("./create-game").then(({ mountOffice }) => {
+    const style = getComputedStyle(host)
+    const fonts = Promise.all(["--yc-font-sans", "--yc-font-mono"].map((token) => document.fonts.load(`400 13px ${style.getPropertyValue(token).trim()}`, "YCoding"))).catch(() => [])
+    const ready = new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 1500)
+      void fonts.then(() => { clearTimeout(timer); resolve() })
+      onCleanup(() => { clearTimeout(timer); resolve() })
+    })
+    void Promise.all([import("./create-game"), ready]).then(([{ mountOffice }]) => {
       if (disposed) return
-      handle = mountOffice(host, input(), props.onSelectSession, setError, props.onLocations)
+      handle = mountOffice(host, input(), props.onSelectSession, setError, (locations) => {
+        setPlaced(Object.keys(locations).length)
+        props.onLocations(locations)
+      })
       handle.update(input())
       if (props.focusRequest) handle.focus(props.focusRequest.actorID)
       setLoading(false)
@@ -57,7 +80,10 @@ export function OfficeCanvas(props: {
       <button type="button" onClick={() => handle?.follow()} aria-label="Follow selected" data-tooltip="Follow selected"><Icon name="crosshair" size={22} /></button>
       <button type="button" onClick={props.onNormalView} aria-label="Back to conversation" data-tooltip="Back to conversation"><Icon name="chat" size={22} /></button>
     </div>
-    <Show when={loading()}><LoadingPlaceholder kind="office" label="Loading the office renderer…" announce={false} /><p class="office-notice" role="status">Loading the office renderer…</p></Show>
+    <Show when={loading() || hydrating()}>
+      <LoadingPlaceholder kind="office" label={loadingLabel()} announce={false} />
+      <Show when={loading() || hydratingNamed()}><p class="office-notice" role="status">{loadingLabel()}</p></Show>
+    </Show>
     <Show when={error()}>{(message) => <p class="office-notice" role="alert">{message()} <button type="button" onClick={props.onNormalView}>Use normal view</button></p>}</Show>
     <div ref={host} class="office-canvas-host" role="region" aria-label="Office floor" aria-describedby="office-camera-hint" tabindex="0" onKeyDown={(event) => {
       if (event.altKey || event.ctrlKey || event.metaKey) return

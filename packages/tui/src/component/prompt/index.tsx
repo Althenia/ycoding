@@ -150,6 +150,7 @@ type PromptSubmissionPayload = {
     id: string
     variant?: string
   }
+  modelSelectionPending: boolean
   editor?: {
     key: string
     text: string
@@ -178,6 +179,7 @@ function submissionKey(sessionID: string | undefined, payload: PromptSubmissionP
     mode: payload.mode,
     agent: payload.agentID,
     model: payload.model,
+    modelSelectionPending: payload.modelSelectionPending,
     daybreak: payload.daybreak,
     autonomy: payload.autonomy,
     editor: payload.editor?.key,
@@ -527,7 +529,6 @@ export function Prompt(props: PromptProps) {
     ),
   )
 
-  // Initialize agent/model/variant from the durable V2 Session state.
   let syncedSessionID: string | undefined
   createEffect(() => {
     const sessionID = props.sessionID
@@ -537,15 +538,8 @@ export function Prompt(props: PromptProps) {
     const agents = data.location.agent.list(session.location)
     const models = data.location.model.list(session.location)
     if (!agents || !models) return
-    const agent = session.agent && agents.find((agent) => agent!.id === session.agent)
-    if (agent && session.agent !== "btw" && !args.agent) local.agent.set(agent!.id)
-    if (session.model && session.agent !== "btw") {
-      local.model.set({
-        providerID: session.model.providerID,
-        modelID: session.model.id,
-      })
-      local.model.variant.set(session.model.variant)
-    }
+    const agent = session.agent && agents.find((agent) => agent.id === session.agent)
+    if (agent && session.agent !== "btw" && !args.agent) local.agent.set(agent.id)
     syncedSessionID = sessionID
   })
 
@@ -1696,25 +1690,21 @@ export function Prompt(props: PromptProps) {
       }
     }
     const fixedModel = btwSession()?.model
-    let selectedModel = fixedModel
+    const selectedModel = fixedModel
       ? { providerID: fixedModel.providerID, modelID: fixedModel.id }
       : local.model.current()
-    if (!selectedModel) {
-      const sessionModel = props.sessionID ? data.session.get(props.sessionID)?.model : undefined
-      if (sessionModel) {
-        selectedModel = { providerID: sessionModel.providerID, modelID: sessionModel.id }
-        local.model.variant.set(sessionModel.variant)
-      } else {
-        const firstModel = data.location.model.list(currentLocation.current)?.[0]
-        if (firstModel) selectedModel = { providerID: firstModel.providerID, modelID: firstModel.id }
-        else {
-          void promptModelWarning()
-          selectedModel = { providerID: "openai", modelID: "gpt-5-mini" } as unknown as typeof selectedModel
-        }
-      }
-    }
-
     const variant = fixedModel ? fixedModel.variant : local.model.variant.current()
+    const info = selectedModel && data.location.model
+      .list(currentLocation.current)
+      ?.find((item) => item.providerID === selectedModel.providerID && item.id === selectedModel.modelID)
+    if (!info || variant !== undefined && !info.variants.some((item) => item.id === variant)) {
+      toast.show({
+        title: "Model selection needs attention",
+        message: "The selected model or effort is unavailable in the current catalog. Refresh the catalog or choose an available model and effort; draft retained.",
+        variant: "warning",
+      })
+      return false
+    }
     const promptFiles = store.prompt.files?.map((file) => ({
       ...file,
       mention: file.mention ? { ...file.mention } : undefined,
@@ -1746,10 +1736,11 @@ export function Prompt(props: PromptProps) {
         ...(props.autonomy?.goal?.status === "active" ? { goal: props.autonomy.goal.text } : {}),
       },
       model: {
-        providerID: selectedModel!.providerID,
-        id: selectedModel!.modelID,
+        providerID: selectedModel.providerID,
+        id: selectedModel.modelID,
         variant,
       },
+      modelSelectionPending: !!local.model.pendingTarget(props.sessionID),
       editor: candidateEditorSelection
         ? {
             key: editorSelectionKey(candidateEditorSelection),
@@ -1886,7 +1877,7 @@ export function Prompt(props: PromptProps) {
             command: command.slice(1),
             arguments: args,
             agent: submission.payload.agentID,
-            model: submission.payload.model,
+            ...(submission.payload.modelSelectionPending ? { model: submission.payload.model } : {}),
             files: submission.payload.files,
             agents: submission.payload.agents,
           },
@@ -1951,9 +1942,10 @@ export function Prompt(props: PromptProps) {
         }
       }
       const switchRequired =
-        session?.model?.providerID !== submission.payload.model.providerID ||
-        session?.model?.id !== submission.payload.model.id ||
-        normalizeModelVariant(session?.model?.variant) !== normalizeModelVariant(submission.payload.model.variant)
+        submission.payload.modelSelectionPending &&
+        (session?.model?.providerID !== submission.payload.model.providerID ||
+          session?.model?.id !== submission.payload.model.id ||
+          normalizeModelVariant(session?.model?.variant) !== normalizeModelVariant(submission.payload.model.variant))
       if (session?.revert) {
         updateOperation(currentOperation.id, "Committing revert…")
         const error = await client.api.session.revert.commit({ sessionID }, requestOptions(currentOperation)).then(

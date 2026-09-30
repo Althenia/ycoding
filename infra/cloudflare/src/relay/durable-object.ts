@@ -49,7 +49,11 @@ type MessageStream = {
 export class DeviceRelay extends DurableObject<WorkerEnv> {
   readonly #service = createAuthService(createD1AuthStore(this.env.DB))
   readonly #messageStreams = new Map<string, MessageStream>()
-  readonly #notices = createNoticeStore(this.ctx.storage.sql)
+  readonly #notices = createNoticeStore({
+    sql: this.ctx.storage.sql,
+    kv: this.ctx.storage.kv,
+    transactionSync: (operation) => this.ctx.storage.transactionSync(operation),
+  })
   readonly #relay = createRelay({
     now: () => Date.now(),
     newID: () => randomToken(9),
@@ -85,12 +89,13 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
       const subject = this.env.VAPID_SUBJECT
       if (!publicKey || !privateKey || !subject) {
         console.info(JSON.stringify({ component: "web-push", category: event.category, host: "none", targetCount: 0, errorClass: "configuration_missing" }))
-        return
+        return Promise.resolve([])
       }
-      this.ctx.waitUntil(sendPushToOwner({ store: createD1PushStore(this.env.DB), accountID, event,
-        publicKey, privateKey, subject, now: Date.now, fetch: (input, init) => globalThis.fetch(input, init) }).catch(() => {
+      return sendPushToOwner({ store: createD1PushStore(this.env.DB), accountID, event,
+        publicKey, privateKey, subject, now: Date.now, fetch: (input, init) => globalThis.fetch(input, init) }).catch((cause: unknown) => {
         console.error(JSON.stringify({ component: "web-push", category: event.category, host: "unknown", targetCount: null, errorClass: "dispatch_error" }))
-      }))
+        throw cause
+      })
     },
   })
   readonly #attached = new Set<string>()
@@ -142,6 +147,7 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     if (attachment.role === "agent") await this.#relay.handleAgentMessage(attachment.connectionID, message)
     else await this.#relay.handleClientMessage(attachment.connectionID, message)
     if (this.#attached.has(attachment.connectionID)) await this.#armAlarm()
+    await this.#relay.settleDeliveries()
   }
 
   override async webSocketClose(socket: WebSocket): Promise<void> {
@@ -162,6 +168,7 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     this.#relay.sweep()
     await this.#relay.confirmOffline()
     await this.#armAlarm()
+    await this.#relay.settleDeliveries()
   }
 
   async #internal(url: URL, request: Request): Promise<Response> {

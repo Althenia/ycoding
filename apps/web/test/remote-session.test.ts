@@ -178,6 +178,55 @@ async function fakeConnectionHarness() {
 }
 
 describe("remote store integration", () => {
+  test("compacts the selected Session without sending a prompt or clearing another Session's draft", async () => {
+    let release = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const test = await harness({ handler: async (request) => {
+      if (request.operation !== "session.compact") return "default" as const
+      await gate
+      return { ok: true as const, value: { data: { id: request.input?.id, sessionID: request.sessionID, trigger: "manual", status: "ended", requestedThrough: { messageID: "msg_1", seq: 1 }, timeCreated: 100 } } }
+    } })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.some((session) => session.id === "ses_a"))
+      await test.store.selectSession("ses_a")
+      const pending = test.store.compactSession()
+      await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.compact"))
+      const request = test.relay.requests.find((request) => request.operation === "session.compact")!
+      expect(request.sessionID).toBe("ses_a")
+      expect(request.input?.id).toMatch(/^cmp_[A-Za-z0-9_-]+$/)
+      expect(test.store.state().mutations.find((mutation) => mutation.operation === "session.compact")?.state).toBe("sending")
+      await test.store.selectSession("ses_b")
+      test.store.setDraft("ses_b", "Keep this draft")
+      release()
+      expect(await pending).toBe(true)
+      expect(test.store.state().activeSessionID).toBe("ses_b")
+      expect(test.store.state().drafts.ses_b).toBe("Keep this draft")
+      expect(test.store.state().mutations.some((mutation) => mutation.operation === "session.compact")).toBe(false)
+      expect(test.store.state().mutationToasts ?? []).toEqual([])
+      expect(test.relay.requests.filter((request) => request.operation === "session.prompt" || request.operation === "session.command")).toEqual([])
+    } finally { release(); await test.stop() }
+  })
+
+  test("keeps a failed compaction visible and retries only explicitly with its same ID", async () => {
+    const test = await harness({ handler: (request) => request.operation === "session.compact"
+      ? { ok: false, code: "internal_error", message: "Compaction failed: provider_failed" }
+      : "default" })
+    try {
+      expect(await test.store.compactSession()).toBe(false)
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.some((session) => session.id === "ses_a"))
+      await test.store.selectSession("ses_a")
+      expect(await test.store.compactSession()).toBe(false)
+      const mutation = test.store.state().mutations.find((entry) => entry.operation === "session.compact")!
+      expect(mutation.state).toBe("failed")
+      expect(test.store.state().mutationToasts).toMatchObject([{ state: "failed", detail: "Compaction failed: provider_failed" }])
+      expect(test.relay.requests.filter((request) => request.operation === "session.compact")).toHaveLength(1)
+      await test.store.retryMutation(mutation.id)
+      expect(test.relay.requests.filter((request) => request.operation === "session.compact").map((request) => request.input?.id)).toEqual([mutation.input.id, mutation.input.id])
+    } finally { await test.stop() }
+  })
+
   test("loads exactly through the completed checkpoint and never requests the cursor before it", async () => {
     const metrics = { excludedMessages: 5, excludedParts: 0, inputTokens: 1_000, retainedTokens: 400 }
     const pages: Record<string, { readonly before?: string; readonly messages: readonly unknown[] }> = {
@@ -518,7 +567,7 @@ describe("remote store integration", () => {
       expect(test.store.state().view?.executionStarted).toBeUndefined()
       test.relay.pushStatus(["ses_a"], [])
       await waitFor(() => test.store.state().sessionStatus?.running.has("ses_a") === true)
-      expect(test.store.state().view?.status).toBe("idle")
+      expect(test.store.state().view?.status).toBe("running")
       expect(test.store.state().view?.executionStarted).toBeUndefined()
       test.relay.pushEvent("ses_a", { type: "session.execution.failed", data: { sessionID: "ses_a", error: { code: "provider_error", message: "Provider failed" } } })
       await test.flush()
@@ -678,7 +727,7 @@ describe("remote store integration", () => {
     } finally { await test.stop() }
   })
 
-  test("a family-running status frame never fabricates execution or overwrites failure", async () => {
+  test("canonical root running has no invented execution timing and never overwrites failure", async () => {
     const test = await harness()
     try {
       await test.store.load()
@@ -686,7 +735,7 @@ describe("remote store integration", () => {
       await test.store.selectSession("ses_a")
       test.relay.pushStatus(["ses_a"], [])
       await waitFor(() => test.store.state().sessionStatus?.running.has("ses_a") === true)
-      expect(test.store.state().view?.status).toBe("idle")
+      expect(test.store.state().view?.status).toBe("running")
       expect(test.store.state().view?.executionStarted).toBeUndefined()
       test.relay.pushEvent("ses_a", { type: "session.execution.failed", data: { sessionID: "ses_a", error: { code: "provider_error", message: "Provider failed" } } })
       await test.flush()
@@ -2065,8 +2114,6 @@ describe("remote store integration", () => {
       expect(prompt?.sessionID).toBe("ses_a")
       expect(test.store.state().mutations).toHaveLength(0)
       expect(test.store.state().view?.messages.at(-1)).toMatchObject({ kind: "user", id: "msg_local_1", text: "Run the tests", delivery: "queue" })
-      expect(test.store.state().mutationToasts?.at(-1)).toMatchObject({ id: "msg_local_1", state: "sent" })
-      test.store.dismissMutationToast("msg_local_1")
       expect(test.store.state().mutationToasts).toEqual([])
     } finally {
       await test.stop()
@@ -2122,7 +2169,7 @@ describe("remote store integration", () => {
       await test.runUntil(() => test.store.state().transport.kind === "open")
       await test.runUntil(() => test.store.state().mutations.every((mutation) => mutation.id !== "msg_local_1"))
       expect(test.store.state().view?.messages.filter((message) => message.id === "msg_local_1")).toHaveLength(1)
-      expect(test.store.state().mutationToasts?.find((toast) => toast.id === "msg_local_1")?.state).toBe("sent")
+      expect(test.store.state().mutationToasts?.find((toast) => toast.id === "msg_local_1")).toBeUndefined()
       expect(test.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(1)
     } finally { await test.stop() }
   })
@@ -2336,7 +2383,11 @@ describe("remote store integration", () => {
       await test.store.replyPermission("per_1", "once")
       expect(test.store.state().view?.requests.map((request) => request.id)).toEqual(["per_1"])
       expect(test.store.state().mutations.some((mutation) => mutation.state === "failed")).toBe(true)
-      expect(test.store.state().mutationToasts?.at(-1)).toMatchObject({ state: "failed" })
+      const failed = test.store.state().mutationToasts?.at(-1)
+      expect(failed).toMatchObject({ state: "failed", label: expect.any(String) })
+      test.store.dismissMutationToast(failed?.id ?? "")
+      expect(test.store.state().mutationToasts).toEqual([])
+      expect(test.store.state().mutations.some((mutation) => mutation.state === "failed")).toBe(true)
     } finally {
       await test.stop()
     }
@@ -2388,7 +2439,6 @@ describe("remote store integration", () => {
       expect(test.relay.requests.filter((request) => request.operation === "session.autonomy.get").length).toBeGreaterThanOrEqual(2)
       expect(test.store.state().mutations.find((mutation) => mutation.kind === "goal")).toMatchObject({ state: "unknown" })
       expect(test.store.state().mutationToasts?.find((toast) => toast.label === "Set goal")).toMatchObject({ state: "unknown" })
-      expect(test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal" && toast.state === "sent")).toBe(false)
     } finally { await test.stop() }
   })
 
@@ -2447,7 +2497,7 @@ describe("remote store integration", () => {
       calculation.resolve()
       await waitFor(() => test.store.state().view?.autonomy?.goal?.status === "active")
       expect(test.store.state().mutations).toEqual([])
-      expect(test.store.state().mutationToasts?.at(-1)).toMatchObject({ label: "Set goal", state: "sent" })
+      expect(test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal")).toBe(false)
     } finally { calculation.resolve(); await test.stop() }
   })
 
@@ -2546,7 +2596,6 @@ describe("remote store integration", () => {
       test.relay.pushEvent("ses_a", goalSteerAdmitted)
       await test.runUntil(() => test.store.state().view?.autonomy?.goal?.status === "active")
       expect(test.store.state().mutations.find((mutation) => mutation.kind === "goal")).toMatchObject({ state: "unknown" })
-      expect(test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal" && toast.state === "sent")).toBe(false)
       expect(test.relay.requests.filter((request) => request.operation === "session.goal.set")).toHaveLength(1)
     } finally { await test.stop() }
   })
@@ -2568,7 +2617,7 @@ describe("remote store integration", () => {
       expect(await test.store.setGoal("Second objective")).toBe(true)
       await waitFor(() => test.store.state().view?.autonomy?.goal?.text === "Second objective")
       expect(test.store.state().mutations).toEqual([])
-      expect(test.store.state().mutationToasts?.filter((toast) => toast.label === "Set goal" && toast.state === "sent")).toHaveLength(1)
+      expect(test.store.state().mutationToasts?.filter((toast) => toast.label === "Set goal").map((toast) => toast.state)).toEqual(["unknown"])
     } finally { await test.stop() }
   })
 
@@ -2588,7 +2637,6 @@ describe("remote store integration", () => {
       test.relay.dropConnections(1006, "")
       await test.runUntil(() => test.store.state().transport.kind === "open" && test.store.state().view?.autonomy?.goal?.status === "active")
       expect(test.store.state().mutations.find((mutation) => mutation.kind === "goal")).toMatchObject({ state: "unknown" })
-      expect(test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal" && toast.state === "sent")).toBe(false)
       expect(test.relay.requests.filter((request) => request.operation === "session.goal.set")).toHaveLength(1)
     } finally { await test.stop() }
   })
@@ -2619,7 +2667,7 @@ describe("remote store integration", () => {
       calculation.resolve()
       await waitFor(() => test.store.state().view?.autonomy?.goal?.text === "Replacement objective")
       expect(test.store.state().mutations).toEqual([])
-      expect(test.store.state().mutationToasts?.at(-1)).toMatchObject({ label: "Set goal", state: "sent" })
+      expect(test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal")).toBe(false)
     } finally { autonomy.resolve(); calculation.resolve(); await test.stop() }
   })
 
@@ -2648,7 +2696,7 @@ describe("remote store integration", () => {
       calculation.resolve()
       await waitFor(() => test.store.state().view?.autonomy?.goal?.text === "Requested objective")
       expect(test.store.state().mutations).toEqual([])
-      expect(test.store.state().mutationToasts?.filter((toast) => toast.label === "Set goal")).toMatchObject([{ state: "sent" }])
+      expect(test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal")).toBe(false)
     } finally { calculation.resolve(); await test.stop() }
   })
 
@@ -2669,7 +2717,6 @@ describe("remote store integration", () => {
       test.relay.pushEvent("ses_a", goalSteerAdmitted)
       await test.runUntil(() => test.store.state().view?.autonomy?.goal?.text === "Other writer objective")
       expect(test.store.state().mutations.find((mutation) => mutation.kind === "goal")).toMatchObject({ state: "unknown" })
-      expect(test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal" && toast.state === "sent")).toBe(false)
       expect(test.store.state().drafts.ses_a).toBe("/goal Inspect the migration")
     } finally { await test.stop() }
   })
@@ -2686,9 +2733,9 @@ describe("remote store integration", () => {
       await test.store.selectSession("ses_a")
       await waitFor(() => test.store.state().view?.autonomy?.goal?.text === "Ship the workspace")
       expect(await test.store.setGoal("  Ship   the workspace ")).toBe(true)
-      await waitFor(() => test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal") === true)
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.goal.set") && test.store.state().mutations.length === 0)
       expect(test.store.state().mutations).toEqual([])
-      expect(test.store.state().mutationToasts?.at(-1)).toMatchObject({ label: "Set goal", state: "sent" })
+      expect(test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal")).toBe(false)
     } finally { await test.stop() }
   })
 
@@ -2706,7 +2753,6 @@ describe("remote store integration", () => {
       expect(await test.store.setGoal("Ship the workspace")).toBe(true)
       await waitFor(() => test.store.state().drafts.ses_a === "/goal Ship the workspace")
       expect(test.store.state().mutations.find((mutation) => mutation.kind === "goal")).toMatchObject({ state: "unknown" })
-      expect(test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal" && toast.state === "sent")).toBe(false)
     } finally { await test.stop() }
   })
 
@@ -2794,7 +2840,7 @@ describe("remote store integration", () => {
       second.resolve()
       await waitFor(() => test.store.state().view?.autonomy?.goal?.text === "New connection objective")
       expect(test.store.state().mutations.some((mutation) => mutation.operation === "session.goal.set")).toBe(false)
-      expect(test.store.state().mutationToasts?.filter((toast) => toast.label === "Set goal")).toMatchObject([{ state: "sent" }])
+      expect(test.store.state().mutationToasts?.some((toast) => toast.label === "Set goal")).toBe(false)
     } finally { second.resolve(); await test.stop() }
   })
 
@@ -2909,13 +2955,13 @@ describe("remote store integration", () => {
       expect(view?.autonomy).toMatchObject({ mode: "goal", yolo: 2, goal: { iteration: 4 } })
       expect(view?.requests.map((request) => request.id)).toEqual(["per_1", "grq_mine", "grq_child", "frm_1"])
       const foreign = view?.requests.find((request) => request.id === "grq_child")
-      expect(foreign && canReplyToRequest(foreign, "ses_a")).toBe(false)
+      expect(foreign && canReplyToRequest(foreign, "ses_a")).toBe(true)
       const mine = view?.requests.find((request) => request.id === "grq_mine")
       expect(mine && canReplyToRequest(mine, "ses_a")).toBe(true)
 
       await test.store.replyGuardrail("grq_child", "reject")
-      expect(test.relay.requests.some((request) => request.operation === "session.guardrail.reply")).toBe(false)
-      expect(test.store.state().notice).toContain("another session")
+      expect(test.relay.requests.find((request) => request.operation === "session.guardrail.reply")).toMatchObject({ sessionID: "ses_a", input: { requestID: "grq_child", reply: "reject" } })
+      expect(test.store.state().view?.requests.some((request) => request.id === "grq_child")).toBe(false)
 
       await test.store.replyGuardrail("grq_mine", "once")
       await waitFor(() => test.relay.requests.some((request) => request.operation === "session.guardrail.reply"))

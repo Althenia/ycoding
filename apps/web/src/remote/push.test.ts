@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { PushCategories, PushSubscriptionInput } from "@ycoding-ai/remote"
-import { enablePush, disablePush, savePushCategories, sendPushTest, syncPushState, pushSupport, pushStatusView, type PushPlatform } from "./push"
+import { enablePush, disablePush, savePushCategories, syncPushState, pushSupport, pushStatusView, type PushPlatform } from "./push"
 
 const allOn: PushCategories = { "agent-completed": true, "approval-requested": true, "machine-offline": true }
 const quiet: PushCategories = { "agent-completed": false, "approval-requested": true, "machine-offline": false }
@@ -45,7 +45,6 @@ function fixture() {
   const http = {
     key: async () => ({ ok: true as const, value: { publicKey: "BA" + "A".repeat(85) } }),
     subscribe: async (input: PushSubscriptionInput) => { calls.push("register"); registered.push(input.endpoint); inputs.push(input); return { ok: true as const, value: undefined } },
-    test: async (endpoint: string) => { calls.push(`test ${endpoint}`); return { ok: true as const, value: { outcome: "accepted" as const, status: 201 } } },
     remove: async (endpoint: string) => { calls.push("remove"); removed.push(endpoint); return { ok: true as const, value: undefined } },
   }
   return { platform, http, calls, registered, removed, inputs, setPermission: (value: NotificationPermission) => { permission = value },
@@ -157,26 +156,6 @@ test("changing a System choice updates this device's subscription and never clai
   const failing = { ...h.http, subscribe: async () => ({ ok: false as const, status: 503, kind: "http" as const, message: "Web Push is unavailable" }) }
   expect(await savePushCategories(h.platform, failing, () => allOn)).toEqual({ status: "error",
     message: "Saved on this device only. Closed-app alerts still use the previous choice: Web Push is unavailable" })
-})
-
-test("a test alert reports the push service answer for this device only and says it does not prove display", async () => {
-  const h = fixture()
-  expect(await sendPushTest(h.platform, h.http)).toEqual({ status: "off", message: "This device has no push subscription. Turn on push first." })
-  h.setPermission("granted")
-  h.setSubscription(existingSubscription(h, serverKey()))
-  expect(await sendPushTest(h.platform, h.http)).toEqual({ status: "on",
-    message: "The push service accepted a test alert (HTTP 201). If none appears, check this device's notification settings for this browser or app." })
-  expect(h.calls).toEqual(["test https://fcm.googleapis.com/send/existing"])
-  for (const [answer, expected] of [
-    [{ ok: true as const, value: { outcome: "rejected" as const, status: 403 } }, { status: "error", message: "The push service refused the test alert (HTTP 403)." }],
-    [{ ok: true as const, value: { outcome: "unreachable" as const } }, { status: "on", message: "The relay could not reach the push service. Try again later." }],
-    [{ ok: false as const, status: 404, kind: "http" as const, message: "This device has no registered push subscription" }, { status: "needs-setup", message: "This device has no registered push subscription" }],
-    [{ ok: false as const, status: 429, kind: "http" as const, message: "Wait a minute before sending another test alert" }, { status: "on", message: "Wait a minute before sending another test alert" }],
-  ] as const) expect(await sendPushTest(h.platform, { ...h.http, test: async () => answer })).toEqual(expected)
-  const expired = { ok: true as const, value: { outcome: "expired" as const, status: 410 } }
-  expect(await sendPushTest(h.platform, { ...h.http, test: async () => expired })).toEqual({ status: "needs-setup",
-    message: "The push service reports this subscription expired. Use Re-enable to register this device again." })
-  expect(h.calls.at(-1)).toBe("unsubscribe-existing")
 })
 
 test("enabling reads this device's System choices when it writes them, after a slow permission prompt and key read", async () => {

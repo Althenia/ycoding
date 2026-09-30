@@ -295,6 +295,15 @@ export namespace Execution {
   export type Interrupted = typeof Interrupted.Type
 }
 
+export namespace Work {
+  export const Completed = Event.durable({
+    type: "session.work.completed",
+    ...options,
+    schema: { ...Base, inputID: SessionMessage.ID, assistantMessageID: SessionMessage.ID },
+  })
+  export type Completed = typeof Completed.Type
+}
+
 export const InstructionsUpdated = Event.durable({
   type: "session.instructions.updated",
   durable: {
@@ -818,6 +827,7 @@ export const Definitions = Event.inventory(
   Execution.Succeeded,
   Execution.Failed,
   Execution.Interrupted,
+  Work.Completed,
   InstructionsUpdated,
   ContextObserved,
   Task.Updated,

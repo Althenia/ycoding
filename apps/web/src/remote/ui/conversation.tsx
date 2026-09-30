@@ -4,6 +4,7 @@ import { catalogKey, modelDisplayLabel } from "../catalog"
 import { useRemote } from "../context"
 import {
   formatPartDuration,
+  guardrailContextAvailable,
   classifySyntheticNotice,
   noticeSummary,
   previewText,
@@ -348,6 +349,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
   const syntheticNotice = () => classifySyntheticNotice(props.message())
   const attachments = () => { const message = props.message(); return message.kind === "user" ? message.attachments ?? [] : [] }
   const promptMutation = () => remote.state().mutations.find((mutation) => mutation.kind === "prompt" && mutation.id === props.message().id && mutation.sessionID === remote.state().activeSessionID && mutation.state !== "sending")
+  const promptSending = () => remote.state().mutations.some((mutation) => mutation.kind === "prompt" && mutation.id === props.message().id && mutation.sessionID === remote.state().activeSessionID && mutation.state === "sending")
   const attachmentKeys = () => attachments().map(attachmentKey)
   const oversized = () => { const message = props.message(); return message.kind === "oversized" ? message : undefined }
   const fallbackText = () => {
@@ -362,7 +364,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
           <Show when={oversized()?.state === "error"}><button type="button" class="button button--ghost button--small" onClick={() => void remote.store.loadOversizedMessage(props.message().id)}>Retry full content</button></Show>
         </Show>
         <Show when={kind() === "user"}>
-          <Show when={userText(props.message()).trim() !== ""}><p class="transcript-message__bubble">{userText(props.message())}</p></Show>
+          <Show when={userText(props.message()).trim() !== ""}><p class="transcript-message__bubble">{userText(props.message())}<Show when={promptSending()}><span class="transcript-message__sending" role="status"><span class="visually-hidden">Sending prompt</span></span></Show></p></Show>
           <For each={attachmentKeys()}>{(key) => {
             const attachment = () => attachments()[Number(key.slice(0, key.indexOf(":")))]!
             const size = () => attachment().bytes < 1_024 ? `${attachment().bytes} B` : `${(attachment().bytes / 1_024).toFixed(1)} KB`
@@ -381,7 +383,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
         </Show>
 
         <Show when={kind() === "assistant"}>
-          <h3 class="transcript-message__agent">{agent()}</h3>
+          <Show when={assistantOf(props.message())?.parts.some((part) => part.kind === "text" && part.text.trim() !== "")}><h3 class="transcript-message__agent">{agent()}</h3></Show>
           <AssistantParts parts={() => assistantOf(props.message())?.parts ?? []} />
           <Show when={assistantOf(props.message())?.error}><p class="transcript-message__error" role="status">{assistantOf(props.message())?.error}</p></Show>
           <footer class="transcript-message__footer">{agent()}<Show when={assistantOf(props.message())?.model}>{(model) => <> · {modelDisplayLabel(model(), models())}<Show when={model().variant}> · {model().variant}</Show></>}</Show><Show when={assistantOf(props.message())?.completed}>{(end) => <> · {formatPartDuration(end() - (assistantOf(props.message())?.created ?? end()))}</>}</Show></footer>
@@ -428,8 +430,11 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
   const canReply = () => {
     const request = props.request()
     if (request.kind !== "guardrail") return true
-    return props.activeSessionID !== undefined && request.sessionID === props.activeSessionID
+    return props.activeSessionID !== undefined && remote.state().activeSessionID === props.activeSessionID && remote.state().view?.id === props.activeSessionID && remote.state().view?.requests.some((item) => item.kind === "guardrail" && item.id === request.id) === true
   }
+  const reply = () => remote.state().mutations.find((entry) => entry.kind === "guardrail" && entry.input.requestID === props.request().id)
+  const disabled = () => !canReply() || reply()?.state === "sending"
+  const review = () => { const request = props.request(); return request.kind === "guardrail" ? request : undefined }
 
   return (
     <article class={`request request--${props.request().kind}${isHardReview(props.request()) ? " request--hard" : ""}`} aria-live="polite">
@@ -481,14 +486,19 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
           <strong>{guardrailAction(props.request())}</strong>
           <span> — {guardrailReason(props.request())}</span>
         </p>
+        <p class="request__note">Owning Session: <code>{review()?.sessionID}</code></p>
+        <Show when={review()?.resources.length}><p class="request__body">Targets / command: <For each={review()?.resources}>{(resource) => <code>{resource}</code>}</For></p></Show>
+        <Show when={review()?.metadata}><details class="request__body"><summary>Review details</summary><pre class="output">{JSON.stringify(review()?.metadata, null, 2)}</pre></details></Show>
         <Show when={!canReply()}>
-          <p class="request__note">This review belongs to another session in the session family. Open that session to answer it here.</p>
+          <p class="request__note">This review is no longer pending in the selected Session's family. Reload before replying.</p>
         </Show>
+        <Show when={!guardrailContextAvailable(props.request())}><p class="request__note">No concrete targets or command are reported. Reject this review or reload before approving.</p></Show>
+        <Show when={reply()}><p class="request__note" role="status">{reply()?.state === "sending" ? "Sending human decision…" : reply()?.detail}</p></Show>
         <div class="request__actions">
           <button
             type="button"
             class="button button--primary button--small"
-            disabled={!canReply()}
+            disabled={disabled() || !guardrailContextAvailable(props.request())}
             onClick={() => void remote.store.replyGuardrail(props.request().id, "once")}
           >
             Approve once
@@ -497,7 +507,7 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
             <button
               type="button"
               class="button button--secondary button--small"
-              disabled={!canReply()}
+              disabled={disabled() || !guardrailContextAvailable(props.request())}
               onClick={() => void remote.store.replyGuardrail(props.request().id, "always")}
             >
               Always this process
@@ -506,7 +516,7 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
           <button
             type="button"
             class="button button--danger button--small"
-            disabled={!canReply()}
+            disabled={disabled()}
             onClick={() => void remote.store.replyGuardrail(props.request().id, "reject")}
           >
             Reject

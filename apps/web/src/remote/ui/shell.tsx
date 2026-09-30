@@ -1,5 +1,6 @@
 import { isSessionID } from "@ycoding-ai/remote"
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack, type JSX } from "solid-js"
+import { Portal } from "solid-js/web"
 import { Link, useRouter } from "../../router/router"
 import { browserStorage, readStored, writeStored } from "../../lib/storage"
 import { Chip } from "../../ui/chip"
@@ -55,14 +56,14 @@ import {
   moveRadio,
 } from "./settings"
 import { RequestCard } from "./conversation"
-import { TranscriptNavigation } from "./transcript-nav"
+import { JumpControls, TranscriptNavigation, jumpBehavior } from "./transcript-nav"
 import { NotificationCenter, ToastLayer } from "./notifications"
 import { TodoPanel } from "./todo-panel"
 import { RunningSessions } from "./running-sessions"
 import { LoadingPlaceholder } from "./loading"
 import { SubagentBar } from "./subagent-bar"
 import { TeamHeading, TeamView } from "./team-view"
-import { isManagedSubagent, siblingTargets, teamActiveCount } from "./team-model"
+import { isManagedSubagent, siblingTargets, teamActiveCount, teamActivityLabel } from "./team-model"
 
 const views = ["/remote", "/remote/sessions", "/remote/usage", "/remote/settings"] as const
 
@@ -135,6 +136,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const state = () => remote.state()
   const view = (): RemoteView => views.find((entry) => entry === props.path()) ?? "/remote"
   let scrollHost: HTMLDivElement | undefined
+  let jumpSlot: HTMLDivElement | undefined
   const anchors = new Map<string, number>()
   let restoringAnchor = false
   let anchorTimer: ReturnType<typeof setTimeout> | undefined
@@ -146,10 +148,12 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     if (route === previousScrollContext.route && sessionID === previousScrollContext.sessionID) return
     if (previousScrollContext.route === "/remote" && previousScrollContext.sessionID && scrollHost)
       anchors.set(previousScrollContext.sessionID, scrollHost.scrollTop)
+    const routeChanged = previousScrollContext.route !== route
     previousScrollContext = { route, sessionID }
+    if (routeChanged && route === "/remote/sessions" && scrollHost) scrollHost.scrollTop = 0
     restoringAnchor = false
     if (anchorTimer !== undefined) clearTimeout(anchorTimer)
-    if (route !== "/remote" || sessionID === undefined || !anchors.has(sessionID)) return
+    if (routeChanged || route !== "/remote" || sessionID === undefined || !anchors.has(sessionID)) return
     restoringAnchor = true
     const restore = () => {
       if (view() === "/remote" && state().activeSessionID === sessionID && scrollHost)
@@ -296,7 +300,8 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
           onOpenNav={openSessionsNavigation}
           onOpenSession={openSession}
           team={view() === "/remote" && selected() && !newSessionOpen() ? {
-            count: state().team === undefined ? 0 : teamActiveCount(state().team!),
+            count: state().team === undefined ? undefined : teamActiveCount(state().team!),
+            activity: state().team === undefined ? "Activity unreported" : teamActivityLabel(state().team!),
             expanded: teamOpen() && !teamClosing(),
             loading: selectedLoading(),
             ref: (element) => { teamTrigger = element },
@@ -359,7 +364,8 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                 </Show>
               </Show>
             </div>
-            <div class="conversation-jump-slot" />
+            <div class="conversation-jump-slot" ref={jumpSlot} />
+            <Show when={view() === "/remote/sessions" && jumpSlot}>{(slot) => <SessionsTopAnchor slot={slot()} scroll={() => scrollHost} />}</Show>
             <Show when={composition().showComposer && !officeShown() && !newSessionOpen()}>
               <TodoPanel todos={state().todos} />
             </Show>
@@ -375,6 +381,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                 /></RoutePanel>
                 <RoutePanel active={managedChild()} class="subagent-resident">
                   <SubagentBar
+                    sessionID={state().activeSessionID ?? ""}
                     parentTitle={state().sessions.find((item) => item.id === childParentID())?.title ?? "Main session"}
                     agent={activeSession()?.agent ?? currentTask()?.agent} description={currentTask()?.description ?? activeSession()?.title}
                     status={currentTask()?.state} modelLabel={activeSession()?.modelLabel ?? currentTask()?.modelLabel}
@@ -662,7 +669,8 @@ function RemoteHeader(props: {
   readonly onOpenNav: (trigger: HTMLButtonElement) => void
   readonly onOpenSession: (sessionID: string) => void
   readonly team?: {
-    readonly count: number
+    readonly count: number | undefined
+    readonly activity: string
     readonly expanded: boolean
     readonly loading: boolean
     readonly ref: (element: HTMLButtonElement) => void
@@ -725,14 +733,14 @@ function RemoteHeader(props: {
               type="button"
               class="button button--ghost app-header__team"
               aria-label="Open Team"
-              aria-description={`${team().count} active`}
+              aria-description={team().activity}
               aria-expanded={team().expanded}
               aria-hidden={team().loading ? "true" : undefined}
               inert={team().loading}
               onClick={team().onOpen}
             >
               <Icon name="team" />
-              <span class="app-header__team-count">{team().count}</span>
+              <span class="app-header__team-count">{team().activity.startsWith("At least") ? "≥" : ""}{team().count ?? "—"}</span>
             </button>
           )}</Show>
           <NotificationCenter onOpenSession={props.onOpenSession} />
@@ -1197,9 +1205,9 @@ function ConversationView(props: {
   )
 }
 
-const presentations: readonly { readonly id: WorkspacePresentation; readonly label: string }[] = [
-  { id: "conversation", label: "Conversation" },
-  { id: "office", label: "Office" },
+const presentations: readonly { readonly id: WorkspacePresentation; readonly label: string; readonly icon: IconName }[] = [
+  { id: "conversation", label: "Conversation", icon: "chat" },
+  { id: "office", label: "Office", icon: "office" },
 ]
 
 function PresentationSwitch(props: {
@@ -1245,6 +1253,7 @@ function PresentationSwitch(props: {
               if (selected) props.onChange(selected.id)
             })}
           >
+            <Icon name={option.icon} size={16} />
             {option.label}
             <AttentionMark show={flagged(option.id)} />
           </button>
@@ -1303,6 +1312,19 @@ function RequestCards(props: {
       {(id) => <RequestCard request={() => request(id)} activeSessionID={props.activeSessionID} />}
     </For>
   )
+}
+
+function SessionsTopAnchor(props: { readonly slot: HTMLElement; readonly scroll: () => HTMLElement | undefined }): JSX.Element {
+  const [scrolled, setScrolled] = createSignal(false)
+  createEffect(() => {
+    const root = props.scroll()
+    if (!root) return
+    const update = () => setScrolled(root.scrollTop > 8)
+    update()
+    root.addEventListener("scroll", update, { passive: true })
+    onCleanup(() => root.removeEventListener("scroll", update))
+  })
+  return <Portal mount={props.slot}><JumpControls onTop={scrolled() ? () => props.scroll()?.scrollTo({ top: 0, behavior: jumpBehavior() }) : undefined} /></Portal>
 }
 
 function SessionsPage(props: {

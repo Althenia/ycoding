@@ -6,7 +6,7 @@ import { useRemote } from "../context"
 import { defaultComposerModel, readPreferredModel, writePreferredModel } from "../preferences"
 import { contextWindowDisplay, generationSpeedDisplay } from "../projection"
 import type { ModelRefView } from "../projection"
-import { applyMention, autocompleteBound, optionsForTrigger, pairedFastModel, reconcileMentions, submission, suggestionTrigger, tokenKey, triggerAt, type MentionPart } from "./composer-logic"
+import { applyMention, autocompleteBound, modelSelection, optionsForTrigger, pairedFastModel, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, type MentionPart } from "./composer-logic"
 import { ComposerPicker } from "./composer-picker"
 import { attachmentLimit, encodeAttachment, type ComposerAttachment } from "./composer-attachment"
 import { ModelControl } from "./model-control"
@@ -30,6 +30,7 @@ export function MiniComposer(props: {
   const remote = useRemote()
   const [agent, setAgent] = createSignal<string>()
   const [model, setModel] = createSignal<ModelRefView>()
+  const rememberedVariants = new Map<string, string>()
   const [delivery, setDelivery] = createSignal<"steer" | "queue">("steer")
   const [attachments, setAttachments] = createSignal<readonly ComposerAttachment[]>([])
   const [attachmentError, setAttachmentError] = createSignal<string>()
@@ -60,19 +61,40 @@ export function MiniComposer(props: {
 
   const targetKey = createMemo(() => props.target ? catalogKey(props.target) : undefined)
   const catalog = (): CatalogView | undefined => targetKey() ? remote.state().catalogs[targetKey()!] : undefined
-  const current = () => "sessionID" in (props.target ?? {}) ? remote.state().selectedSessionInfo : undefined
+  const current = () => props.target && "sessionID" in props.target && remote.state().selectedSessionInfo?.id === props.target.sessionID ? remote.state().selectedSessionInfo : undefined
+  const sessionTarget = () => props.target !== undefined && "sessionID" in props.target
+  const currentModel = () => {
+    if (!current()) return undefined
+    if (current()?.model) return current()?.model
+    const fallback = catalog()?.defaultModel
+    return fallback ? { providerID: fallback.providerID, id: fallback.id } : undefined
+  }
   const selectedAgent = () => agent() ?? current()?.agent
-  const selectedModel = () => model() ?? current()?.model ?? defaultComposerModel(catalog(), readPreferredModel())
+  const requestedModel = () => model() ?? (sessionTarget() ? currentModel() : defaultComposerModel(catalog(), readPreferredModel()))
+  const modelChoice = createMemo<ReturnType<typeof modelSelection>>(() => {
+    if (sessionTarget() && !current()) return { model: model(), blocked: true, warning: "The Session model has not been read yet." }
+    if (sessionTarget() && requestedModel() === undefined) return { blocked: true, warning: "The machine's default model is unreported. Choose a model before sending." }
+    return catalog()?.status === "ready" ? modelSelection(catalog()!.models, requestedModel()) : { model: requestedModel() }
+  })
+  const selectedModel = () => modelChoice().model
+  const rememberedVariant = (chosen: ModelRefView) => rememberedVariants.get(JSON.stringify([chosen.providerID, chosen.id]))
+  const chooseModel = (chosen: ModelRefView) => {
+    if (chosen.variant !== undefined) rememberedVariants.set(JSON.stringify([chosen.providerID, chosen.id]), chosen.variant)
+    if (chosen.variant === undefined) rememberedVariants.delete(JSON.stringify([chosen.providerID, chosen.id]))
+    setModel(chosen)
+    writePreferredModel(undefined, chosen)
+  }
   const activeView = () => {
     const sessionID = props.target && "sessionID" in props.target ? props.target.sessionID : undefined
     const view = remote.state().view
     return sessionID && remote.state().activeSessionID === sessionID && view?.id === sessionID ? view : undefined
   }
-  const speed = () => generationSpeedDisplay(activeView(), selectedModel())
-  const contextWindow = () => contextWindowDisplay(activeView(), selectedModel())
+  const speed = () => generationSpeedDisplay(activeView(), diagnosticsModel())
+  const contextWindow = () => contextWindowDisplay(activeView(), diagnosticsModel())
   const primaryAgents = () => (catalog()?.agents ?? []).filter((item) => item.mode !== "subagent" && !item.hidden)
   const agentPending = () => !!current() && selectedAgent() !== current()?.agent
-  const modelPending = () => !!current() && !!selectedModel() && (selectedModel()?.providerID !== current()?.model?.providerID || selectedModel()?.id !== current()?.model?.id || selectedModel()?.variant !== current()?.model?.variant)
+  const modelPending = () => !modelChoice().blocked && current() !== undefined && selectedModel() !== undefined && model() !== undefined && !sameModel(selectedModel(), currentModel())
+  const diagnosticsModel = () => modelPending() ? selectedModel() : current()?.model ?? selectedModel()
   const mobileLabel = () => `${primaryAgents().find((item) => item.id === selectedAgent())?.name ?? selectedAgent() ?? "Default agent"} · ${pairedFastModel(catalog()?.models ?? [], selectedModel())?.base.name ?? catalog()?.models.find((item) => item.providerID === selectedModel()?.providerID && item.id === selectedModel()?.id)?.name ?? selectedModel()?.id ?? "Model"}${selectedModel()?.variant ? ` · ${selectedModel()?.variant}` : ""}`
   const contextLabel = () => {
     const value = contextWindow()
@@ -136,12 +158,19 @@ export function MiniComposer(props: {
     setParts([])
     setAgent(undefined)
     setModel(undefined)
+    rememberedVariants.clear()
     setFileResult([])
     setAttachments([])
     setAttachmentError(undefined)
     setMobileOpen(false)
     untrack(() => closeContext())
     onCleanup(() => { attachmentGeneration++ })
+  })
+  createEffect(() => {
+    const chosen = selectedModel()
+    if (catalog()?.status === "ready" && !modelChoice().blocked && chosen?.variant !== undefined && rememberedVariant(chosen) === undefined)
+      rememberedVariants.set(JSON.stringify([chosen.providerID, chosen.id]), chosen.variant)
+    if (model() !== undefined && !modelChoice().blocked && sameModel(chosen, currentModel())) setModel(undefined)
   })
   onMount(() => {
     if (!props.mobileMount) return
@@ -225,9 +254,10 @@ export function MiniComposer(props: {
     const chosenAgent = selectedAgent()
     const chosenModel = selectedModel()
     const pendingAgent = current()?.agent === chosenAgent ? undefined : chosenAgent
-    const pendingModel = current()?.model?.id === chosenModel?.id && current()?.model?.providerID === chosenModel?.providerID && current()?.model?.variant === chosenModel?.variant ? undefined : chosenModel
+    const pendingModel = current() === undefined || modelPending() ? chosenModel : undefined
     const requested = submission(props.text, parts(), catalog(), delivery(), pendingAgent, pendingModel)
     if (requested.kind === "invalid") { setAttachmentError(requested.message); return }
+    if ((requested.kind === "prompt" || requested.kind === "command") && modelChoice().blocked) { setAttachmentError(modelChoice().warning); return }
     if (requested.kind !== "prompt" && requested.kind !== "command" && (!props.target || !("sessionID" in props.target))) {
       setAttachmentError("Open a session to use this slash action.")
       return
@@ -236,7 +266,7 @@ export function MiniComposer(props: {
       setAttachmentError("Remove attachments and mentions before running this slash action.")
       return
     }
-    const files = [...("files" in requested.input ? requested.input.files ?? [] : []), ...attachments().map((item) => ({ uri: item.uri, name: item.name }))]
+    const files = [...(requested.input && "files" in requested.input ? requested.input.files ?? [] : []), ...attachments().map((item) => ({ uri: item.uri, name: item.name }))]
     if (files.length > 64) { setAttachmentError("A message can contain at most 64 files. Remove an attachment before sending."); return }
     const generation = attachmentGeneration
     setSending(true)
@@ -281,7 +311,7 @@ export function MiniComposer(props: {
     <Show when={props.mobileMount}><Portal mount={props.mobileMount}>
       <button ref={mobileTrigger} type="button" class="composer__mobile-trigger" classList={{ "composer__mobile-trigger--pending": agentPending() || modelPending() }} aria-label={`Agent and model: ${mobileLabel()}${contextWindow() ? `; ${contextAccessible()}` : ""}${speed() ? `; generation speed ${speed()!.label}` : ""}`} aria-description={agentPending() || modelPending() ? "applies with your next send" : undefined} aria-haspopup="dialog" aria-expanded={mobileOpen()} disabled={props.disabled || catalog()?.status !== "ready"} onClick={() => setMobileOpen(true)}><Show when={contextWindow()}><span class="composer__mobile-context-ring" aria-hidden="true">{ring()}</span></Show><span class="composer__mobile-label" title={mobileLabel()}>{mobileLabel()}</span><Show when={speed()}>{(value) => <span class="composer__mobile-speed">{value().label}</span>}</Show><Icon name="chevron-down" /></button>
       <Show when={mobileOpen()}><Portal>
-        <div class="mini-picker__scrim composer__selection-scrim" onClick={closeMobile} />
+        <div class="mini-picker__scrim composer__selection-scrim" data-cursor="action" onClick={closeMobile} />
         <section ref={mobileSheet} class="composer__selection-sheet" role="dialog" aria-modal="true" aria-label="Choose agent and model" tabindex="-1" onKeyDown={(event) => {
           if (event.key === "Escape") { event.preventDefault(); closeMobile() }
           if (event.key !== "Tab") return
@@ -291,7 +321,7 @@ export function MiniComposer(props: {
         }}>
           <div class="mini-picker__heading"><strong>Agent and model</strong><button type="button" aria-label="Close agent and model picker" onClick={closeMobile}><Icon name="close" /></button></div>
           <Show when={contextWindow()}>{(value) => <div class="composer__context-summary"><strong>Context window</strong><div class="composer__context-bar" aria-hidden="true"><span class="composer__context-bar-fill" style={{ width: `${Math.min(100, value().fraction * 100)}%` }} /></div><span>{contextLabel()}</span><span>{value().tokens}</span></div>}</Show>
-          <div class="composer__selection-options"><ComposerPicker label="Agent" icon="user" placeholder="Default agent" value={selectedAgent()} pending={agentPending()} options={primaryAgents().map((item) => ({ value: item.id, label: item.name, detail: item.description }))} disabled={props.disabled || catalog()?.status !== "ready"} onChange={setAgent} /><ModelControl models={catalog()?.models ?? []} selected={selectedModel()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready"} onChange={(chosen) => { setModel(chosen); writePreferredModel(undefined, chosen) }} /></div>
+          <div class="composer__selection-options"><ComposerPicker label="Agent" icon="user" placeholder="Default agent" value={selectedAgent()} pending={agentPending()} options={primaryAgents().map((item) => ({ value: item.id, label: item.name, detail: item.description }))} disabled={props.disabled || catalog()?.status !== "ready"} onChange={setAgent} /><ModelControl models={catalog()?.models ?? []} selected={selectedModel()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready" || sessionTarget() && current() === undefined} rememberedVariant={rememberedVariant} onChange={chooseModel} /></div>
         </section>
       </Portal></Show>
     </Portal></Show>
@@ -316,12 +346,13 @@ export function MiniComposer(props: {
       </div>
       <Show when={attachments().length}><div class="composer__attachments" aria-label="Attachments"><For each={attachments()}>{(item) => <div class="composer__attachment"><Show when={item.mime.startsWith("image/")}><img src={item.uri} alt="" /></Show><span class="composer__attachment-name" title={item.name}>{item.name}</span><span class="composer__attachment-size">{item.size < 1024 ? `${item.size} B` : `${(item.size / 1024).toFixed(1)} KiB`}</span><button type="button" aria-label={`Remove ${item.name}`} onClick={() => { setAttachments((items) => items.filter((entry) => entry.id !== item.id)); setAttachmentError(undefined) }}><Icon name="close" /></button></div>}</For></div></Show>
       <Show when={attachmentError()}><p class="composer__attachment-error" role="alert">{attachmentError()}</p></Show>
+      <Show when={modelChoice().warning}>{(warning) => <p class="field__hint composer__model-warning" role="status">{warning()}</p>}</Show>
       <Show when={remote.state().upload && attachments().length}><div class="composer__upload" role="status"><span>Uploading {remote.state().upload?.name} · {remote.state().upload?.percent}%</span><progress value={remote.state().upload?.percent ?? 0} max="100" /><button type="button" onClick={() => remote.store.cancelUpload()}>Cancel upload</button></div></Show>
       <Show when={!attachmentError() && attachments().length && remote.state().uploadError}><p class="composer__attachment-error" role="alert">{remote.state().uploadError}</p></Show>
       <div class="composer__controls">
         <ComposerPicker label="Agent" icon="user" placeholder="Default agent" value={selectedAgent()} pending={agentPending()} options={primaryAgents().map((item) => ({ value: item.id, label: item.name, detail: item.description }))} disabled={props.disabled || catalog()?.status !== "ready"} onChange={setAgent} />
         <Show when={contextWindow()}><div class="composer__context"><button ref={contextTrigger} type="button" class="composer__context-trigger" aria-label={contextAccessible()} aria-expanded={contextOpen() && !contextLeaving()} onMouseEnter={() => { if (window.matchMedia("(hover: hover)").matches) showContext() }} onMouseLeave={queueContextClose} onFocus={showContext} onBlur={() => { if (!contextPinned()) queueContextClose() }} onClick={() => { if (contextPinned()) closeContext(); else { setContextPinned(true); showContext() } }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeContext() } }}>{ring()}</button><Show when={contextOpen()}><div class="composer__context-popover" classList={{ "composer__context-popover--leaving": contextLeaving() }} role="tooltip" aria-hidden={contextLeaving()} inert={contextLeaving()} onMouseEnter={cancelContextClose} onMouseLeave={queueContextClose} onAnimationEnd={finishContext} onAnimationCancel={finishContext}><strong>Context window</strong><span>{contextLabel()}</span><span>{contextWindow()?.tokens}</span></div></Show></div></Show>
-        <ModelControl models={catalog()?.models ?? []} selected={selectedModel()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready"} onChange={(chosen) => { setModel(chosen); writePreferredModel(undefined, chosen) }} />
+        <ModelControl models={catalog()?.models ?? []} selected={selectedModel()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready" || sessionTarget() && current() === undefined} rememberedVariant={rememberedVariant} onChange={chooseModel} />
         <Show when={props.showStatus}><ComposerStatus /></Show>
         <Show when={speed()}>{(value) => <span class="composer__speed" title="Latest generation speed">{value().label}<Show when={value().trend}><span class="composer__speed-trend" aria-hidden="true"> {value().trend}</span></Show></span>}</Show>
         <span class="composer__spacer" />
@@ -341,14 +372,17 @@ export function Composer(props: { readonly sessionID?: string; readonly running:
   return <div class="mini-composer__mount">
     <div ref={setMobileMount} class="composer__mobile-identity" />
     <MiniComposer mobileMount={mobileMount()} target={props.sessionID ? { sessionID: props.sessionID } : undefined} text={text()} onText={(value) => { if (props.sessionID) remote.store.setDraft(props.sessionID, value) }} disabled={!props.canSend || !props.sessionID} running={props.running} showStatus onInterrupt={() => void remote.store.interrupt()} onSubmit={async (value) => {
-      if (!props.sessionID) return false
+      const sessionID = props.sessionID
+      const draft = text()
+      if (!sessionID) return false
       const result = value.kind === "command" ? await remote.store.runCommand(value.input)
         : value.kind === "prompt" ? await remote.store.sendPrompt(value.input)
+          : value.kind === "compact" ? await remote.store.compactSession()
           : value.kind === "goal" ? await remote.store.setGoal(value.input.goal)
             : value.kind === "skill" ? await remote.store.activateSkill(value.input.skill)
               : value.kind === "yolo" ? await remote.store.setYolo(value.input.level ?? ([1, 2, 3, 0] as const)[remote.state().view?.autonomy?.yolo ?? 0] ?? 1)
                 : false
-      if (result !== false) remote.store.setDraft(props.sessionID, "")
+      if (result !== false && remote.state().drafts[sessionID] === draft) remote.store.setDraft(sessionID, "")
       return result
     }} />
   </div>
