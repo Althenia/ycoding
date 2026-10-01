@@ -22,6 +22,17 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.8.3",
+    date: "2026-10-01",
+    title: "Cursor models and quotas",
+    tags: ["Added", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Report Cursor plan quotas on the Usage screen: the Included, Auto, and API share of the current billing period, when it resets, and the plan name beside the provider label." },
+      { tag: "Fixed", text: "List the models of a connected Cursor account even when it was connected by another YCoding process or before the provider started listening for connection changes." },
+      { tag: "Fixed", text: "Keep the Cursor models already published when a later model sync fails, and retry that sync, instead of emptying the model list until the next connection change." },
+    ],
+  },
+  {
     version: "0.8.2",
     date: "2026-10-01",
     title: "Cursor provider",
