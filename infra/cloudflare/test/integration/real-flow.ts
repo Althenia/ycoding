@@ -44,6 +44,7 @@ import { createPushHttp } from "../../../../apps/web/src/remote/http"
 import { generateVapidKeys } from "../../script/vapid-keys"
 import { deriveWebPushKeys } from "../../src/push/crypto"
 import { createRemoteStore } from "../../../../apps/web/src/remote/store"
+import { loadWorkspaces } from "../../../../apps/web/test/remote-queries"
 import { openChromePush } from "./chrome-push"
 import { parsePushDiagnostic, type PushDiagnostic } from "./push-diagnostic"
 import { createRemoteTransport, type RemoteTransportStatus } from "../../../../apps/web/src/remote/transport"
@@ -396,9 +397,9 @@ try {
             browserStatuses.push(status)
             handlers.onStatus?.(status)
           },
-          onEvent: (eventSessionID, event) => {
-            events.push({ sessionID: eventSessionID, event })
-            handlers.onEvent?.(eventSessionID, event)
+          onEvents: (eventSessionID, batch) => {
+            for (const event of batch) events.push({ sessionID: eventSessionID, event })
+            handlers.onEvents?.(eventSessionID, batch)
           },
         },
         createSocket: (url) => {
@@ -591,8 +592,7 @@ try {
   expect(hidden.status === "ok", `backend Session read failed: ${JSON.stringify(hidden)}`)
   checks.push("a backend Session needs no per-Session allow operation")
 
-  await store.loadWorkspaces()
-  const candidate = store.state().workspaces.find((item) => item.directory === openedWorkspace)
+  const candidate = (await loadWorkspaces(store)).find((item) => item.directory === openedWorkspace)
   if (!candidate) throw new Error("the previously opened directory with no Sessions was not listed")
   await Bun.sleep(RemoteLimits.clientRateWindowMs + 1)
   const familyStatus = await probeRequest("session.status")
@@ -1397,8 +1397,8 @@ try {
   const statusCount = browserStatuses.length
   const pacing = store.sendPrompt({ text: "Review paced binary", delivery: "steer", files: [{ uri: `data:application/octet-stream;base64,${pacedBytes.toString("base64")}`, name: "paced.bin" }] })
   await waitFor(() => store.state().upload?.percent ? true : undefined, 20_000, "the paced attachment never started uploading")
-  await store.loadWorkspaces()
-  expect(store.state().workspaceStatus === "ready" && store.state().upload !== undefined, "a concurrent store read stalled behind the paced upload")
+  const concurrentWorkspaces = await loadWorkspaces(store)
+  expect(concurrentWorkspaces.length > 0 && store.state().upload !== undefined, "a concurrent store read stalled behind the paced upload")
   const pacedSent = await pacing
   const pacedDurationMs = Math.round(performance.now() - pacedStart)
   expect(pacedSent === true, `paced upload failed: ${store.state().uploadError ?? "unknown"}`)
