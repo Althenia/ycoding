@@ -25,6 +25,7 @@ import { OpenAIUsage } from "./provider-usage/openai"
 import { OpenRouterUsage } from "./provider-usage/openrouter"
 import { GrokUsage } from "./provider-usage/grok"
 import { ZAIUsage } from "./provider-usage/zai"
+import { CursorUsage } from "./provider-usage/cursor"
 import { GoUsage } from "./provider-usage/go"
 import { ProviderUsageCache } from "./provider-usage/cache"
 import { Database } from "./database/database"
@@ -269,6 +270,7 @@ const layer = Layer.effect(
           xai: (input) => grok(http, input),
           zai: (input) => zai(http, input),
           "zai-coding-plan": (input) => zai(http, input),
+          cursor: (input) => cursor(http, input),
           "opencode-go": (input) => goUsage(http, input),
         },
         ttlMs: { anthropic: 5 * minute },
@@ -392,6 +394,45 @@ export const zai = (http: HttpClient.HttpClient, input: AdapterInput) =>
         : {}),
     })
   })
+
+export const cursor = (http: HttpClient.HttpClient, input: AdapterInput) =>
+  Effect.gen(function* () {
+    const credential = input.credential.value
+    if (credential.type !== "key" && credential.type !== "oauth")
+      return yield* Effect.fail(new Error("Cursor usage requires an API key or OAuth credential"))
+    const token = yield* Effect.tryPromise({
+      try: async () => {
+        const { resolveBearerToken } = await import("cursor-opencode-provider/auth")
+        return resolveBearerToken(credential.type === "key" ? { apiKey: credential.key } : { accessToken: credential.access })
+      },
+      catch: () => new RequestError({}),
+    })
+    const usage = yield* cursorRpc(http, "GetCurrentPeriodUsage", token)
+    const plan = yield* cursorRpc(http, "GetPlanInfo", token).pipe(Effect.option)
+    return CursorUsage.normalize({
+      ...input, label: "Cursor", usage,
+      ...(plan._tag === "Some" ? { plan: plan.value } : {}),
+    })
+  })
+
+const cursorRpc = Effect.fnUntraced(function* (http: HttpClient.HttpClient, method: string, token: string) {
+  const response = yield* http
+    .execute(
+      HttpClientRequest.post(`https://api2.cursor.sh/aiserver.v1.DashboardService/${method}`).pipe(
+        HttpClientRequest.acceptJson,
+        HttpClientRequest.bearerToken(token),
+        HttpClientRequest.setHeader("connect-protocol-version", "1"),
+        HttpClientRequest.bodyText("{}", "application/json"),
+      ),
+    )
+    .pipe(Effect.mapError(() => new RequestError({})))
+  if (response.status < 200 || response.status >= 300)
+    return yield* new RequestError({
+      status: response.status,
+      retryAfter: retryAfter(response.headers["retry-after"]),
+    })
+  return yield* response.json.pipe(Effect.mapError(() => new RequestError({ status: response.status })))
+})
 
 export const goUsage = (http: HttpClient.HttpClient, input: AdapterInput) =>
   Effect.gen(function* () {

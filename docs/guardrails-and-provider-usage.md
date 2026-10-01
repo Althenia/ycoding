@@ -247,6 +247,7 @@ For Meta Model API credentials, YCoding sums the USD cost buckets reported for t
 | Grok Build | Stored xAI OAuth login: shared weekly pool and pay-as-you-go cap | best-effort provider-internal API |
 | OpenCode Go | Stored Go key: Session, Weekly, Monthly account quotas | stable provider API |
 | Z.ai Coding Plan | Stored Z.ai key: Session, Weekly, Web Searches | best-effort provider-internal API |
+| Cursor | Stored Cursor key or OAuth account: Included, Auto, and API percent of the billing period used, with its reset time; plan name in the label | best-effort provider-internal API |
 | YCoding local Today spend | Retained priced provider requests for available Claude, OpenAI/Codex, Grok, OpenCode Go, and OpenCode Zen providers; separate from account quotas and credential profiles | stable local Session records |
 
 Provider results are cached by provider and credential identity. Credentials, account email addresses, key fragments, OAuth tokens, and provider response bodies are not returned through Protocol or rendered in the Usage screen.
