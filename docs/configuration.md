@@ -826,6 +826,22 @@ The Session header names the active profile as its own segment immediately after
 the plain `provider/model` label beside it. A provider with a single stored profile shows no profile
 segment. Context keeps the Provider and Model identity rows and never carries the profile.
 
+### Cursor
+
+The `cursor` provider runs models from a Cursor subscription through the bundled `cursor-opencode-provider` package, which speaks Cursor's private Connect-RPC agent protocol with a CLI-shaped client identity. Use it only with a Cursor account you own; Cursor may change or restrict that protocol without notice.
+
+Connect it with `ycoding auth login` (or `/connect`) and choose **Cursor**:
+
+- **Cursor account (browser login)** opens Cursor's PKCE sign-in page and stores the returned access and refresh tokens; YCoding refreshes the access token within five minutes of its expiry.
+- **Cursor API key (crsr_…)** stores a key from cursor.com settings; the package exchanges it for an access token and refreshes that token itself.
+- `CURSOR_API_KEY` in the environment is used as a connection without storing it.
+
+Credentials stay in YCoding's integration store; YCoding never writes them to Protocol, events, or logs. Model discovery, the model cache (`cursor-models.json`), Cursor project metadata (`projects/<slug>/`), and 24-hour conversation snapshots (`cursor-conversations/`) live under `$XDG_CACHE_HOME/ycoding/cursor`.
+
+YCoding discovers the account's models when the connection starts or changes; with no usable connection, or after failed discovery with no cached list, the provider has no models. Each Cursor model becomes one catalog entry whose variants are Cursor's parameter tuples (effort, thinking, fast, context tier), named by Cursor's sanitized display label. Selecting a variant sends exactly that tuple; a model without a selected variant uses Cursor's default tuple. Long-context tuples (`context=1m`) form a separate `<model>-1m` entry with a 1M context limit and a 128,000 output limit; base entries use Cursor's advertised context (200,000 when unpublished, 256,000 for `default`) and a 32,000 output limit. Models with a separately priced Fast rate (Composer, Grok) expose Fast tuples as `<model>-fast` (and `<model>-1m-fast`) with their own cost rows. Image input is advertised only when Cursor's model list reports image support. Costs are the package's published Cursor token rates; they are local estimates, not Cursor billing.
+
+Limits: Cursor-native interactions without a YCoding tool (interactive background-shell input, image generation, native web, pull-request, MCP-resource download, and source-control requests) are declined to Cursor and the Run continues. Web search and fetch reach Cursor only when the agent advertises `websearch` or `webfetch` as direct tools. A Run held open with no tool result for 10 minutes is closed and the next step rebuilds from history.
+
 Model entries support:
 
 - `modelID`, `family`, `name`, and `package`;

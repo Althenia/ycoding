@@ -13,6 +13,7 @@
     "test:unit:browser": "bun test --timeout 30000 test/browser/browser.test.ts test/browser/isolated-browser.test.ts test/browser/isolated-capture.test.ts test/browser/isolated-cdp.test.ts test/tool-browser.test.ts",
     "test:integration:computer": "bun test --timeout 60000 test-integration/computer-app.test.ts",
     "test:integration:browser": "bun test --timeout 120000 test-integration/browser/isolated-executor.test.ts test-integration/tool-browser-integration.test.ts",
+    "smoke:cursor": "bun script/cursor-smoke.ts",
     "typecheck": "tsgo --noEmit"
   },
   "exports": {
@@ -124,6 +125,7 @@
     "ai-gateway-provider": "3.1.2",
     "bun-pty": "0.4.8",
     "cross-spawn": "catalog:",
+    "cursor-opencode-provider": "0.7.4",
     "diff": "catalog:",
     "drizzle-orm": "catalog:",
     "effect": "catalog:",

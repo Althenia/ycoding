@@ -1,4 +1,5 @@
 import type {
+  JSONObject,
   JSONSchema7,
   LanguageModelV3,
   LanguageModelV3CallOptions,
@@ -1367,5 +1368,116 @@ it.effect("preserves missing AI SDK cache-write telemetry", () =>
       cacheReadInputTokens: 60,
     })
     expect(response.usage?.cacheWriteInputTokens).toBeUndefined()
+  }),
+)
+
+const cursorContext = (usedTokens: number, stale = false) => ({
+  contextUsageVersion: 2,
+  source: stale ? "checkpoint-previous-turn" : "checkpoint-current-run",
+  stale,
+  usedTokens,
+  maxTokens: 200_000,
+  remainingTokens: 200_000 - usedTokens,
+})
+
+const cursorFinish = (cursor: JSONObject): LanguageModelV3StreamPart => ({
+  type: "finish",
+  finishReason: { unified: "stop", raw: undefined },
+  usage: {
+    inputTokens: { total: 11_999, noCache: 1_999, cacheRead: 10_000, cacheWrite: 0 },
+    outputTokens: { total: 1, text: 1, reasoning: 0 },
+  },
+  providerMetadata: { copilot: { totalNanoAiu: 0 }, cursor },
+})
+
+const cursorUsage = (cursor: JSONObject) =>
+  Effect.gen(function* () {
+    const aisdk = yield* AISDK.Service
+    yield* aisdk.hook.sdk((event) => {
+      event.sdk = { languageModel: () => streamModel([cursorFinish(cursor)]) }
+    })
+    const resolved = yield* aisdk.model(model("cursor-opencode-provider"))
+    return (yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "Hello" })).pipe(Effect.provide(client)))
+      .usage
+  })
+
+it.effect("reports Cursor tool-step occupancy as input without fabricated output", () =>
+  Effect.gen(function* () {
+    const usage = yield* cursorUsage({ usageVersion: 3, occupancyOnly: true, context: cursorContext(12_000) })
+
+    expect(usage?.inputTokens).toBe(12_000)
+    expect(usage?.nonCachedInputTokens).toBe(12_000)
+    expect(usage?.cacheReadInputTokens).toBeUndefined()
+    expect(usage?.cacheWriteInputTokens).toBeUndefined()
+    expect(usage?.outputTokens).toBeUndefined()
+    expect(usage?.reasoningTokens).toBeUndefined()
+    expect(usage?.totalTokens).toBeUndefined()
+  }),
+)
+
+it.effect("reports Cursor turn-end generation counters with current occupancy", () =>
+  Effect.gen(function* () {
+    const usage = yield* cursorUsage({
+      usageVersion: 3,
+      inputTokensRaw: 50_000,
+      outputTokensRaw: 800,
+      cacheReadRaw: 40_000,
+      cacheWriteRaw: 0,
+      reasoningTokensRaw: 200,
+      context: cursorContext(12_000),
+    })
+
+    expect(usage).toMatchObject({
+      inputTokens: 12_000,
+      outputTokens: 800,
+      reasoningTokens: 200,
+      totalTokens: 12_800,
+    })
+    expect(usage?.cacheReadInputTokens).toBeUndefined()
+  }),
+)
+
+it.effect("leaves Cursor usage unreported when no current checkpoint or counters exist", () =>
+  Effect.gen(function* () {
+    expect(yield* cursorUsage({ usageVersion: 3, occupancyOnly: true })).toBeUndefined()
+    expect(
+      yield* cursorUsage({ usageVersion: 3, occupancyOnly: true, context: cursorContext(9_000, true) }),
+    ).toBeUndefined()
+    const turnEnd = yield* cursorUsage({
+      usageVersion: 3,
+      inputTokensRaw: 0,
+      outputTokensRaw: 0,
+      cacheReadRaw: 0,
+      cacheWriteRaw: 0,
+      reasoningTokensRaw: 0,
+    })
+    expect(turnEnd).toBeUndefined()
+  }),
+)
+
+it.effect("lowers tool errors as AI SDK error output on the Cursor route only", () =>
+  Effect.gen(function* () {
+    const aisdk = yield* AISDK.Service
+    yield* aisdk.hook.sdk((event) => {
+      event.sdk = { languageModel: () => ({ provider: event.model.providerID }) }
+    })
+    const messages = [
+      Message.assistant([{ type: "tool-call", id: "cursor_s_1", name: "edit", input: { path: "a.ts" } }]),
+      Message.tool({ id: "cursor_s_1", name: "edit", result: { type: "error", value: "Permission rejected" } }),
+    ]
+    const output = (packageName: string) =>
+      Effect.gen(function* () {
+        const prepared = yield* LLMClient.prepare<LanguageModelV3CallOptions>(
+          LLM.request({ model: yield* aisdk.model(model(packageName)), cache: "none", messages }),
+        )
+        const last = prepared.body.prompt.at(-1)
+        return last?.role === "tool" ? last.content[0] : undefined
+      })
+
+    expect(yield* output("cursor-opencode-provider")).toMatchObject({
+      toolCallId: "cursor_s_1",
+      output: { type: "error-text", value: "Permission rejected" },
+    })
+    expect(yield* output("@ai-sdk/mistral")).toMatchObject({ output: { type: "text", value: "Permission rejected" } })
   }),
 )

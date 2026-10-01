@@ -79,5 +79,11 @@ describe("YCoding rebrand policy", () => {
     expect(classifyLegacyReference("CONTRIBUTING.md", "OpenCode Zen is an external provider")).toBe("external")
     expect(classifyLegacyReference("packages/core/src/plugin/provider.ts", "OpencodePlugin,")).toBe("external")
     expect(classifyLegacyReference(".ycoding/command/commit.md", "model: opencode/kimi-k2.5")).toBe("external")
+    expect(
+      classifyLegacyReference("packages/core/package.json", '    "cursor-opencode-provider": "0.7.4",'),
+    ).toBe("external")
+    expect(rewriteBrandText("packages/core/src/aisdk.ts", 'const CURSOR_PACKAGE = "cursor-opencode-provider"')).toBe(
+      'const CURSOR_PACKAGE = "cursor-opencode-provider"',
+    )
   })
 })

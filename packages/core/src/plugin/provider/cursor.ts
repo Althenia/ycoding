@@ -1,0 +1,150 @@
+import path from "path"
+import type { IntegrationOAuthMethodRegistration } from "@ycoding-ai/plugin/effect/integration"
+import { define } from "@ycoding-ai/plugin/effect/plugin"
+import {
+  buildLoginUrl,
+  decodeJwtExpiryMs,
+  generatePkceChallenge,
+  generatePkceParams,
+  pollForTokens,
+  refreshAccessToken,
+  resolveBearerToken,
+  type TokenPair,
+} from "cursor-opencode-provider/auth"
+import { Effect, Semaphore, Stream } from "effect"
+import { Credential } from "../../credential"
+import { CursorModels } from "../../cursor/models"
+import { EventV2 } from "../../event"
+import { Global } from "../../global"
+import { Integration } from "../../integration"
+import { Location } from "../../location"
+import type { ModelV2 } from "../../model"
+import { ProviderV2 } from "../../provider"
+import type { PluginInternal } from "../internal"
+
+const integrationID = Integration.ID.make("cursor")
+const methodID = Integration.MethodID.make("browser")
+
+export const oauth = {
+  integrationID,
+  method: { id: methodID, type: "oauth", label: "Cursor account (browser login)" },
+  authorize: () =>
+    Effect.gen(function* () {
+      const pkce = generatePkceParams()
+      const challenge = yield* Effect.promise(() => generatePkceChallenge(pkce.verifier))
+      return {
+        mode: "auto" as const,
+        url: buildLoginUrl(challenge, pkce.uuid),
+        instructions: "Complete sign-in to Cursor in your browser.",
+        callback: Effect.tryPromise({
+          try: (signal) => pollForTokens(pkce.uuid, pkce.verifier, undefined, signal),
+          catch: (cause) => cause,
+        }).pipe(Effect.map(oauthCredential)),
+      }
+    }),
+  refresh: (credential) =>
+    Effect.tryPromise({
+      try: () => refreshAccessToken(credential.refresh),
+      catch: (cause) => cause,
+    }).pipe(Effect.map(oauthCredential)),
+} satisfies IntegrationOAuthMethodRegistration
+
+export const CursorPlugin = define({
+  id: "ycoding.provider.cursor",
+  effect: Effect.fn(function* (ctx) {
+    const events = yield* EventV2.Service
+    const global = yield* Global.Service
+    const location = yield* Location.Service
+    const cacheDir = path.join(global.cache, "cursor")
+    const loading = Semaphore.makeUnsafe(1)
+    const loaded: { models: readonly ModelV2.Info[] } = { models: [] }
+
+    const load = Effect.fn("CursorPlugin.load")(function* () {
+      const connection = yield* ctx.integration.connection.active(integrationID)
+      const credential = connection
+        ? yield* ctx.integration.connection.resolve(connection).pipe(Effect.catch(() => Effect.succeed(undefined)))
+        : undefined
+      const token = credential?.type === "key" ? credential.key : credential?.type === "oauth" ? credential.access : undefined
+      if (!token) {
+        loaded.models = []
+        return
+      }
+      loaded.models = yield* Effect.tryPromise({
+        try: async () => {
+          const { discoverModels } = await import("cursor-opencode-provider/models")
+          return CursorModels.fromCursor(await discoverModels(await resolveBearerToken({ apiKey: token }), cacheDir))
+        },
+        catch: (cause) => cause,
+      }).pipe(
+        Effect.catch((cause) => Effect.logWarning("failed to sync Cursor models", { cause }).pipe(Effect.as([]))),
+      )
+    })
+
+    yield* ctx.integration.transform((draft) => {
+      draft.update(integrationID, (integration) => (integration.name = "Cursor"))
+      draft.method.update(oauth)
+      draft.method.update({ integrationID, method: { type: "key", label: "Cursor API key (crsr_…)" } })
+      draft.method.update({ integrationID, method: { type: "env", names: ["CURSOR_API_KEY"] } })
+    })
+    yield* ctx.catalog.transform((draft) => syncCatalog(draft, loaded.models))
+    const refresh = () => loading.withPermit(load().pipe(Effect.andThen(ctx.catalog.reload())))
+    yield* events.subscribe(Integration.Event.ConnectionUpdated).pipe(
+      Stream.filter((event) => event.data.integrationID === integrationID),
+      Stream.runForEach(refresh),
+      Effect.forkScoped({ startImmediately: true }),
+    )
+    yield* refresh().pipe(Effect.forkScoped)
+    yield* ctx.aisdk.hook(
+      "sdk",
+      Effect.fn(function* (evt) {
+        if (evt.package !== CursorModels.packageName) return
+        const { createCursor } = yield* Effect.promise(() => import("cursor-opencode-provider"))
+        evt.sdk = createCursor({
+          name: CursorModels.providerID,
+          apiKey: typeof evt.options.apiKey === "string" ? evt.options.apiKey : undefined,
+          cacheDir,
+          workspaceRoot: location.directory,
+        })
+      }),
+    )
+  }),
+} satisfies PluginInternal.InternalPlugin)
+
+export function syncCatalog(catalog: CursorCatalog, models: readonly ModelV2.Info[]) {
+  catalog.provider.update(CursorModels.providerID, (provider) => {
+    provider.name = "Cursor"
+    provider.package = ProviderV2.aisdk(CursorModels.packageName)
+    provider.integrationID = integrationID
+  })
+  const discovered = new Set<string>(models.map((model) => model.id))
+  for (const id of catalog.provider.get(CursorModels.providerID)?.models.keys() ?? []) {
+    if (!discovered.has(id)) catalog.model.remove(CursorModels.providerID, id)
+  }
+  for (const model of models) {
+    catalog.model.update(CursorModels.providerID, model.id, (draft) => Object.assign(draft, structuredClone(model)))
+  }
+}
+
+type CursorCatalog = {
+  provider: {
+    get: (providerID: string) => { models: ReadonlyMap<string, unknown> } | undefined
+    update: (
+      providerID: string,
+      update: (provider: { name: string; package: string; integrationID?: string }) => void,
+    ) => void
+  }
+  model: {
+    remove: (providerID: string, modelID: string) => void
+    update: (providerID: string, modelID: string, update: (model: object) => void) => void
+  }
+}
+
+export function oauthCredential(tokens: TokenPair) {
+  return Credential.OAuth.make({
+    type: "oauth",
+    methodID,
+    access: tokens.accessToken,
+    refresh: tokens.refreshToken,
+    expires: decodeJwtExpiryMs(tokens.accessToken) ?? 0,
+  })
+}

@@ -9,6 +9,7 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventV2 } from "@ycoding-ai/core/event"
 import { FileSystem } from "@ycoding-ai/core/filesystem"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
+import { Global } from "@ycoding-ai/core/global"
 import { Integration } from "@ycoding-ai/core/integration"
 import { Location } from "@ycoding-ai/core/location"
 import { Npm } from "@ycoding-ai/core/npm"
@@ -45,6 +46,7 @@ export const PluginTestLayer = AppNodeBuilder.build(
   LayerNode.group([
     FileSystem.node,
     FSUtil.node,
+    Global.node,
     Location.node,
     Npm.node,
     Credential.node,

@@ -25,6 +25,7 @@ const externalPaths = [
 const externalLinePattern = new RegExp(
   [
     "opencode-go",
+    "cursor-opencode-provider",
     "OpencodePlugin",
     "provider/opencode",
     "console\\.opencode\\.ai",

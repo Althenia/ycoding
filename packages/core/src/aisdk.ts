@@ -381,7 +381,7 @@ function modelFromLanguage(info: ModelV2.Info, language: LanguageModelV3) {
     model: (input) => Model.make({ ...input, provider: "provider" in input ? input.provider : info.providerID, route }),
     prepareTransport: (body) => Effect.succeed(body),
     streamPrepared: (prepared) => streamLanguage(language, prepared as LanguageModelV3CallOptions,
-      defaultAnthropicThinking),
+      defaultAnthropicThinking, packageName === CURSOR_PACKAGE),
   }
   return Model.make({ id: info.modelID ?? info.id, provider: info.providerID, route })
 }
@@ -446,6 +446,7 @@ function mapBodyToProviderOptions(model: ModelV2.Info, packageName: string) {
 }
 
 const ANTHROPIC_MESSAGE_ROUTES = new Set(["ai-sdk:@ai-sdk/anthropic", "ai-sdk:@ai-sdk/google-vertex/anthropic"])
+const CURSOR_PACKAGE = "cursor-opencode-provider"
 
 function isAnthropicMessagesRoute(request: LLMRequest) {
   return ANTHROPIC_MESSAGE_ROUTES.has(request.model.route.id)
@@ -644,17 +645,19 @@ function toolResultPart(request: LLMRequest, part: ContentPart): ToolResultConte
       type: "tool-result",
       toolCallId: part.id,
       toolName: part.name,
-      output: toolOutput(part.result),
+      output: toolOutput(part.result, request.model.route.id === `ai-sdk:${CURSOR_PACKAGE}`),
       ...(options === undefined ? {} : { providerOptions: options }),
     },
   ]
 }
 
-function toolOutput(result: ToolResultValue) {
+function toolOutput(result: ToolResultValue, typedErrors: boolean) {
   switch (result.type) {
     case "text":
-    case "error":
       return { type: "text" as const, value: messageValue(result.value) }
+    case "error":
+      // Cursor derives its typed exec success or failure from this output type.
+      return { type: typedErrors ? ("error-text" as const) : ("text" as const), value: messageValue(result.value) }
     case "content":
       // Keep media as provider-native content; JSON-stringified base64 is billed as prompt text.
       return { type: "content" as const, value: result.value.map(toolContentPart) }
@@ -703,12 +706,18 @@ function providerOptions(input: LLMRequest["providerOptions"]): SharedV3Provider
   return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, jsonObject(value)]))
 }
 
-function streamLanguage(language: LanguageModelV3, options: LanguageModelV3CallOptions, defaultAnthropicThinking: boolean) {
+function streamLanguage(
+  language: LanguageModelV3,
+  options: LanguageModelV3CallOptions,
+  defaultAnthropicThinking: boolean,
+  cursor: boolean,
+) {
   const thinking = options.providerOptions?.anthropic?.thinking
   const reasoningConfig = options.providerOptions?.bedrock?.reasoningConfig
   const state = {
     step: 0,
     toolNames: {} as Record<string, string>,
+    cursor,
     outputMayIncludeUnreportedReasoning:
       (ProviderShared.isRecord(thinking)
         ? thinking.type === "enabled" || thinking.type === "adaptive"
@@ -737,7 +746,12 @@ function streamLanguage(language: LanguageModelV3, options: LanguageModelV3CallO
 }
 
 function streamPartEvents(
-  state: { step: number; toolNames: Record<string, string>; outputMayIncludeUnreportedReasoning: boolean },
+  state: {
+    step: number
+    toolNames: Record<string, string>
+    cursor: boolean
+    outputMayIncludeUnreportedReasoning: boolean
+  },
   event: LanguageModelV3StreamPart,
 ): Effect.Effect<ReadonlyArray<LLMEvent>, LLMError> {
   switch (event.type) {
@@ -837,20 +851,24 @@ function streamPartEvents(
           providerMetadata: providerMetadata(event.providerMetadata),
         }),
       ])
-    case "finish":
+    case "finish": {
+      const reported = state.cursor
+        ? cursorUsage(event.providerMetadata)
+        : usage(event.usage, event.providerMetadata, state.outputMayIncludeUnreportedReasoning)
       return Effect.succeed([
         LLMEvent.stepFinish({
           index: state.step++,
           reason: finishReason(event.finishReason),
-          usage: usage(event.usage, event.providerMetadata, state.outputMayIncludeUnreportedReasoning),
+          usage: reported,
           providerMetadata: providerMetadata(event.providerMetadata),
         }),
         LLMEvent.finish({
           reason: finishReason(event.finishReason),
-          usage: usage(event.usage, event.providerMetadata, state.outputMayIncludeUnreportedReasoning),
+          usage: reported,
           providerMetadata: providerMetadata(event.providerMetadata),
         }),
       ])
+    }
     case "error":
       return Effect.fail(llmError("stream", event.error))
   }
@@ -899,6 +917,32 @@ function usage(
         ...(Object.keys(cacheCreation).length > 0 ? { providerMetadata: { anthropic: { cache_creation: cacheCreation } } } : {}),
       }
     : undefined
+}
+
+// Cursor's stream usage is a display shape (occupancy split by heuristic, fabricated output on tool steps, zeros
+// when unknown); its metadata carries the current checkpoint occupancy and the turn-end generation counters.
+function cursorUsage(metadata: unknown): UsageInput | undefined {
+  const cursor = ProviderShared.isRecord(metadata) && ProviderShared.isRecord(metadata.cursor) ? metadata.cursor : {}
+  const context = ProviderShared.isRecord(cursor.context) ? cursor.context : {}
+  const input =
+    context.stale !== true && typeof context.usedTokens === "number" && context.usedTokens > 0
+      ? context.usedTokens
+      : undefined
+  const output =
+    cursor.occupancyOnly !== true && typeof cursor.outputTokensRaw === "number" && cursor.outputTokensRaw > 0
+      ? cursor.outputTokensRaw
+      : undefined
+  if (input === undefined && output === undefined) return undefined
+  return {
+    ...(input === undefined ? {} : { inputTokens: input, nonCachedInputTokens: input }),
+    ...(output === undefined
+      ? {}
+      : {
+          outputTokens: output,
+          reasoningTokens: typeof cursor.reasoningTokensRaw === "number" ? cursor.reasoningTokensRaw : undefined,
+        }),
+    ...(input === undefined || output === undefined ? {} : { totalTokens: input + output }),
+  }
 }
 
 function finishReason(value: LanguageModelV3FinishReason): FinishReason {

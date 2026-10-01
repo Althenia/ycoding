@@ -4486,6 +4486,25 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("ends a tool continuation request with the provider-issued tool result and session header", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* admit(session, "Read through a held provider run")
+      const callID = `cursor_${sessionID}_3`
+
+      responses = [reply.tool(callID, "echo", { text: "held" }), reply.text("Done", "text-held-done")]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.http?.headers?.["X-Session-Id"]).toBe(sessionID)
+      expect(requests[1]?.messages.at(-1)).toMatchObject({
+        role: "tool",
+        content: [{ type: "tool-result", id: callID, result: { type: "text", value: "held" } }],
+      })
+    }),
+  )
+
   it.effect("executes and carries each of several identical repeated tool calls into the next request", () =>
     Effect.gen(function* () {
       const session = yield* setup
