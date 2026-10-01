@@ -7,7 +7,7 @@ export type LegacyDisposition = "replace" | "compatibility" | "upstream" | "exte
 const legacyPattern =
   /@opencode-ai|\bOpenCode\b|\bOPENCODE_[A-Z0-9_]+\b|x-opencode-|\.opencode(?:\b|\/)|\bopencode(?:\.jsonc?|\b)/i
 
-const upstreamPaths = [/^patches\//, /^NOTICE$/]
+const upstreamPaths = [/^patches\//, /^NOTICE$/, /^packages\/core\/src\/cursor\/provider\//]
 
 const compatibilityPaths = [
   /^docs\/ycoding-migration\.md$/,
