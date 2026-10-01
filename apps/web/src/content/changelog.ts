@@ -22,6 +22,16 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.8.5",
+    date: "2026-10-01",
+    title: "Machine memory and steadier Session status",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Reconnect the workspace to the machine it last used after a reload, instead of asking again whenever more than one machine is online. An explicit disconnect or sign-out clears it." },
+      { tag: "Fixed", text: "Stop treating a connection heartbeat as a reconnect, so a Session's status dots and the running and recent lists are no longer cleared and re-read about twice a minute, and stored notices are not re-synced on each heartbeat." },
+    ],
+  },
+  {
     version: "0.8.4",
     date: "2026-10-01",
     title: "Forced update restarts and steadier Session catalogs",

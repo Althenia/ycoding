@@ -6,6 +6,22 @@ const TAGS = ["Added", "Changed", "Fixed"] as const
 describe("release entries", () => {
   test("includes the latest TUI release at the top of the public changelog", () => {
     expect(RELEASES[0]).toEqual({
+      version: "0.8.5",
+      date: "2026-10-01",
+      title: "Machine memory and steadier Session status",
+      tags: ["Fixed"],
+      changes: [
+        {
+          tag: "Fixed",
+          text: "Reconnect the workspace to the machine it last used after a reload, instead of asking again whenever more than one machine is online. An explicit disconnect or sign-out clears it.",
+        },
+        {
+          tag: "Fixed",
+          text: "Stop treating a connection heartbeat as a reconnect, so a Session's status dots and the running and recent lists are no longer cleared and re-read about twice a minute, and stored notices are not re-synced on each heartbeat.",
+        },
+      ],
+    })
+    expect(RELEASES[1]).toEqual({
       version: "0.8.4",
       date: "2026-10-01",
       title: "Forced update restarts and steadier Session catalogs",
@@ -29,7 +45,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[1]).toEqual({
+    expect(RELEASES[2]).toEqual({
       version: "0.8.3",
       date: "2026-10-01",
       title: "Cursor models and quotas",
@@ -53,7 +69,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[2]).toEqual({
+    expect(RELEASES[3]).toEqual({
       version: "0.8.2",
       date: "2026-10-01",
       title: "Cursor provider",
@@ -73,7 +89,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[3]).toEqual({
+    expect(RELEASES[4]).toEqual({
       version: "0.8.1",
       date: "2026-10-01",
       title: "Instant remote view transitions",
@@ -101,7 +117,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[4]).toEqual({
+    expect(RELEASES[5]).toEqual({
       version: "0.8.0",
       date: "2026-10-01",
       title: "Multiplexed remote delivery and windowed transcripts",
@@ -972,6 +988,7 @@ describe("release entries", () => {
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
     expect(versions.slice(0, 15)).toEqual([
+      "0.8.5",
       "0.8.4",
       "0.8.3",
       "0.8.2",
@@ -986,7 +1003,6 @@ describe("release entries", () => {
       "0.7.11",
       "0.7.10",
       "0.7.9",
-      "0.7.8",
     ])
     expect(new Set(versions).size).toBe(versions.length)
     const sorted = [...versions].sort((a, b) => compare(b, a))
