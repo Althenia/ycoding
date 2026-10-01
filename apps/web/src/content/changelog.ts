@@ -22,6 +22,17 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.8.2",
+    date: "2026-10-01",
+    title: "Cursor provider",
+    tags: ["Added"],
+    changes: [
+      { tag: "Added", text: "Run models from a Cursor subscription through the built-in cursor provider, connected by Cursor browser sign-in, a crsr_ API key, or CURSOR_API_KEY; use it only with a Cursor account you own." },
+      { tag: "Added", text: "Discover the account's Cursor models with effort, thinking, and Fast choices as variants, long-context models as separate 1M entries, and separately priced Fast entries for Composer and Grok." },
+      { tag: "Added", text: "Run Cursor models with YCoding's own tools, permissions, and guardrails, report failed or rejected tool results to Cursor as errors, and leave usage Cursor does not report unreported." },
+    ],
+  },
+  {
     version: "0.8.1",
     date: "2026-10-01",
     title: "Instant remote view transitions",

@@ -6,6 +6,26 @@ const TAGS = ["Added", "Changed", "Fixed"] as const
 describe("release entries", () => {
   test("includes the latest TUI release at the top of the public changelog", () => {
     expect(RELEASES[0]).toEqual({
+      version: "0.8.2",
+      date: "2026-10-01",
+      title: "Cursor provider",
+      tags: ["Added"],
+      changes: [
+        {
+          tag: "Added",
+          text: "Run models from a Cursor subscription through the built-in cursor provider, connected by Cursor browser sign-in, a crsr_ API key, or CURSOR_API_KEY; use it only with a Cursor account you own.",
+        },
+        {
+          tag: "Added",
+          text: "Discover the account's Cursor models with effort, thinking, and Fast choices as variants, long-context models as separate 1M entries, and separately priced Fast entries for Composer and Grok.",
+        },
+        {
+          tag: "Added",
+          text: "Run Cursor models with YCoding's own tools, permissions, and guardrails, report failed or rejected tool results to Cursor as errors, and leave usage Cursor does not report unreported.",
+        },
+      ],
+    })
+    expect(RELEASES[1]).toEqual({
       version: "0.8.1",
       date: "2026-10-01",
       title: "Instant remote view transitions",
@@ -33,7 +53,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[1]).toEqual({
+    expect(RELEASES[2]).toEqual({
       version: "0.8.0",
       date: "2026-10-01",
       title: "Multiplexed remote delivery and windowed transcripts",
@@ -93,7 +113,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[2]).toEqual({
+    expect(RELEASES[3]).toEqual({
       version: "0.7.18",
       date: "2026-09-30",
       title: "Stable model choices, recoverable changes, and Keep Awake",
@@ -900,7 +920,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 14)).toEqual([
+    expect(versions.slice(0, 15)).toEqual([
+      "0.8.2",
       "0.8.1",
       "0.8.0",
       "0.7.18",
