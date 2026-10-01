@@ -20,14 +20,14 @@ import {
   generatePkceParams,
   pollForTokens,
   refreshAccessToken,
-} from "cursor-opencode-provider/auth"
+} from "../../src/cursor/provider/auth"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
 
 const it = testEffect(PluginTestLayer)
 
 const bearerInputs: string[] = []
-void mock.module("cursor-opencode-provider/auth", () => ({
+void mock.module("../../src/cursor/provider/auth", () => ({
   buildLoginUrl,
   decodeJwtExpiryMs,
   generatePkceChallenge,
@@ -39,9 +39,9 @@ void mock.module("cursor-opencode-provider/auth", () => ({
     return "bearer"
   },
 }))
-const cursorModels = await import("cursor-opencode-provider/models")
+const cursorModels = await import("../../src/cursor/provider/models")
 const discovery = { failure: undefined as string | undefined }
-void mock.module("cursor-opencode-provider/models", () => ({
+void mock.module("../../src/cursor/provider/models", () => ({
   ...cursorModels,
   discoverModels: async (token: string) => {
     if (discovery.failure !== undefined) throw new Error(discovery.failure)

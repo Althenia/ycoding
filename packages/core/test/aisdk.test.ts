@@ -4,6 +4,7 @@ import type {
   LanguageModelV3,
   LanguageModelV3CallOptions,
   LanguageModelV3StreamPart,
+  LanguageModelV3Usage,
 } from "@ai-sdk/provider"
 import { AISDK } from "@ycoding-ai/core/aisdk"
 import { ModelV2 } from "@ycoding-ai/core/model"
@@ -1380,21 +1381,26 @@ const cursorContext = (usedTokens: number, stale = false) => ({
   remainingTokens: 200_000 - usedTokens,
 })
 
-const cursorFinish = (cursor: JSONObject): LanguageModelV3StreamPart => ({
+const defaultCursorStreamUsage = {
+  inputTokens: { total: 11_999, noCache: 1_999, cacheRead: 10_000, cacheWrite: 0 },
+  outputTokens: { total: 1, text: 1, reasoning: 0 },
+}
+
+const cursorFinish = (
+  cursor: JSONObject,
+  usage: LanguageModelV3Usage = defaultCursorStreamUsage,
+): LanguageModelV3StreamPart => ({
   type: "finish",
   finishReason: { unified: "stop", raw: undefined },
-  usage: {
-    inputTokens: { total: 11_999, noCache: 1_999, cacheRead: 10_000, cacheWrite: 0 },
-    outputTokens: { total: 1, text: 1, reasoning: 0 },
-  },
+  usage,
   providerMetadata: { copilot: { totalNanoAiu: 0 }, cursor },
 })
 
-const cursorUsage = (cursor: JSONObject) =>
+const cursorUsage = (cursor: JSONObject, usage?: Parameters<typeof cursorFinish>[1]) =>
   Effect.gen(function* () {
     const aisdk = yield* AISDK.Service
     yield* aisdk.hook.sdk((event) => {
-      event.sdk = { languageModel: () => streamModel([cursorFinish(cursor)]) }
+      event.sdk = { languageModel: () => streamModel([cursorFinish(cursor, usage)]) }
     })
     const resolved = yield* aisdk.model(model("cursor-opencode-provider"))
     return (yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "Hello" })).pipe(Effect.provide(client)))
@@ -1406,9 +1412,9 @@ it.effect("reports Cursor tool-step occupancy as input without fabricated output
     const usage = yield* cursorUsage({ usageVersion: 3, occupancyOnly: true, context: cursorContext(12_000) })
 
     expect(usage?.inputTokens).toBe(12_000)
-    expect(usage?.nonCachedInputTokens).toBe(12_000)
-    expect(usage?.cacheReadInputTokens).toBeUndefined()
-    expect(usage?.cacheWriteInputTokens).toBeUndefined()
+    expect(usage?.nonCachedInputTokens).toBe(2_000)
+    expect(usage?.cacheReadInputTokens).toBe(10_000)
+    expect(usage?.cacheWriteInputTokens).toBe(0)
     expect(usage?.outputTokens).toBeUndefined()
     expect(usage?.reasoningTokens).toBeUndefined()
     expect(usage?.totalTokens).toBeUndefined()
@@ -1429,11 +1435,42 @@ it.effect("reports Cursor turn-end generation counters with current occupancy", 
 
     expect(usage).toMatchObject({
       inputTokens: 12_000,
+      nonCachedInputTokens: 2_000,
+      cacheReadInputTokens: 10_000,
+      cacheWriteInputTokens: 0,
       outputTokens: 800,
       reasoningTokens: 200,
       totalTokens: 12_800,
     })
-    expect(usage?.cacheReadInputTokens).toBeUndefined()
+  }),
+)
+
+it.effect("projects oversized Cursor cache counters onto checkpoint occupancy", () =>
+  Effect.gen(function* () {
+    const usage = yield* cursorUsage(
+      {
+        usageVersion: 3,
+        inputTokensRaw: 50_000,
+        outputTokensRaw: 800,
+        cacheReadRaw: 40_000,
+        cacheWriteRaw: 5_000,
+        reasoningTokensRaw: 200,
+        context: cursorContext(12_000),
+      },
+      {
+        inputTokens: { total: 12_000, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: 1, text: 1, reasoning: undefined },
+      },
+    )
+
+    expect(usage).toMatchObject({
+      inputTokens: 12_000,
+      nonCachedInputTokens: 1_200,
+      cacheReadInputTokens: 9_600,
+      cacheWriteInputTokens: 1_200,
+      outputTokens: 800,
+      reasoningTokens: 200,
+    })
   }),
 )
 

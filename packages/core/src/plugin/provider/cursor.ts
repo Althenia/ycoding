@@ -10,7 +10,7 @@ import {
   refreshAccessToken,
   resolveBearerToken,
   type TokenPair,
-} from "cursor-opencode-provider/auth"
+} from "../../cursor/provider/auth"
 import { Effect, Schedule, Semaphore, Stream } from "effect"
 import { Credential } from "../../credential"
 import { CursorModels } from "../../cursor/models"
@@ -81,7 +81,7 @@ export const CursorPlugin = define({
       }
       const discovered = yield* Effect.tryPromise({
         try: async () => {
-          const { discoverModels } = await import("cursor-opencode-provider/models")
+          const { discoverModels } = await import("../../cursor/provider/models")
           return CursorModels.fromCursor(await discoverModels(await resolveBearerToken({ apiKey: token }), cacheDir))
         },
         catch: (cause) => cause,
@@ -123,7 +123,7 @@ export const CursorPlugin = define({
       "sdk",
       Effect.fn(function* (evt) {
         if (evt.package !== CursorModels.packageName) return
-        const { createCursor } = yield* Effect.promise(() => import("cursor-opencode-provider"))
+        const { createCursor } = yield* Effect.promise(() => import("../../cursor/provider"))
         evt.sdk = createCursor({
           name: CursorModels.providerID,
           apiKey: typeof evt.options.apiKey === "string" ? evt.options.apiKey : undefined,

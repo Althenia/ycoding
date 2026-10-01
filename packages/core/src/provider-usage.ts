@@ -402,7 +402,7 @@ export const cursor = (http: HttpClient.HttpClient, input: AdapterInput) =>
       return yield* Effect.fail(new Error("Cursor usage requires an API key or OAuth credential"))
     const token = yield* Effect.tryPromise({
       try: async () => {
-        const { resolveBearerToken } = await import("cursor-opencode-provider/auth")
+        const { resolveBearerToken } = await import("./cursor/provider/auth")
         return resolveBearerToken(credential.type === "key" ? { apiKey: credential.key } : { accessToken: credential.access })
       },
       catch: () => new RequestError({}),

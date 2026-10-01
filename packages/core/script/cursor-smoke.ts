@@ -1,19 +1,22 @@
 import { mkdtemp } from "fs/promises"
 import os from "os"
 import path from "path"
-import { createCursor } from "cursor-opencode-provider"
-import { resolveBearerToken } from "cursor-opencode-provider/auth"
-import { discoverModels } from "cursor-opencode-provider/models"
+import { createCursor } from "../src/cursor/provider"
+import { resolveBearerToken } from "../src/cursor/provider/auth"
+import { discoverModels } from "../src/cursor/provider/models"
 import { CursorModels } from "../src/cursor/models"
 
 const apiKey = process.env.CURSOR_API_KEY
-if (!apiKey) {
-  console.error("Set CURSOR_API_KEY to run the live Cursor smoke check.")
+const accessToken = process.env.CURSOR_ACCESS_TOKEN
+if (!apiKey && !accessToken) {
+  console.error("Set CURSOR_API_KEY or CURSOR_ACCESS_TOKEN to run the live Cursor smoke check.")
   process.exit(1)
 }
 
 const cacheDir = await mkdtemp(path.join(os.tmpdir(), "ycoding-cursor-smoke-"))
-const catalog = CursorModels.fromCursor(await discoverModels(await resolveBearerToken({ apiKey }), cacheDir))
+const catalog = CursorModels.fromCursor(
+  await discoverModels(await resolveBearerToken(accessToken ? { accessToken } : { apiKey }), cacheDir),
+)
 console.log(`catalog entries: ${catalog.length}`)
 catalog.forEach((model) =>
   console.log(`${model.id} -> ${model.modelID} context=${model.limit.context} variants=${model.variants.length}`),
@@ -27,7 +30,12 @@ if (!selected) {
   process.exit(1)
 }
 
-const result = await createCursor({ name: "cursor", apiKey, cacheDir, workspaceRoot: process.cwd() })
+const result = await createCursor({
+  name: "cursor",
+  ...(accessToken ? { accessToken } : { apiKey }),
+  cacheDir,
+  workspaceRoot: process.cwd(),
+})
   .languageModel(selected.modelID)
   .doStream({
     prompt: [{ role: "user", content: [{ type: "text", text: "Reply with the single word: pong" }] }],

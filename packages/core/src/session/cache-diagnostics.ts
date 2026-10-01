@@ -45,6 +45,7 @@ const ROUTE_MECHANISMS: Record<string, Session.CacheMechanism | undefined> = {
   "github-copilot-chat": "openai-prefix-cache",
   "github-copilot-responses": "openai-prefix-cache",
   "ai-sdk:@ai-sdk/github-copilot": "openai-prefix-cache",
+  "ai-sdk:cursor-opencode-provider": "provider-reported",
   [OpenAICodex.routeID]: "openai-prefix-cache",
   [OpenAICodex.webSocketRouteID]: "openai-prefix-cache",
   "openai-compatible-chat": "openai-prefix-cache",
@@ -89,6 +90,8 @@ export function mechanism(
       case "google":
       case "google-vertex":
         return "gemini-prefix-cache"
+      case "cursor":
+        return "provider-reported"
     }
   }
   return tokens.cache.read > 0 || tokens.cache.write > 0 ? "provider-reported" : "none"

@@ -1,8 +1,8 @@
 export * as CursorModels from "./models"
 
 import { Money } from "@ycoding-ai/schema/money"
-import type { ModelInfo, ModelParameterValue, ModelVariant } from "cursor-opencode-provider/models"
-import { getCursorModelCost, hasCursorFastPricing } from "cursor-opencode-provider/pricing"
+import type { ModelInfo, ModelParameterValue, ModelVariant } from "./provider/models"
+import { getCursorModelCost, hasCursorFastPricing } from "./provider/pricing"
 import { ModelV2 } from "../model"
 import { ProviderV2 } from "../provider"
 

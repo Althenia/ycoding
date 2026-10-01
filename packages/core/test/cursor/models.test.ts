@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { ModelInfo } from "cursor-opencode-provider/models"
+import type { ModelInfo } from "../../src/cursor/provider/models"
 import { CursorModels } from "@ycoding-ai/core/cursor/models"
 import { ModelV2 } from "@ycoding-ai/core/model"
 import { Money } from "@ycoding-ai/schema/money"

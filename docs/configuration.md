@@ -828,7 +828,7 @@ segment. Context keeps the Provider and Model identity rows and never carries th
 
 ### Cursor
 
-The `cursor` provider runs models from a Cursor subscription through the bundled `cursor-opencode-provider` package, which speaks Cursor's private Connect-RPC agent protocol with a CLI-shaped client identity. Use it only with a Cursor account you own; Cursor may change or restrict that protocol without notice.
+The `cursor` provider runs models from a Cursor subscription through YCoding's native Cursor client, which speaks Cursor's private Connect-RPC agent protocol with a CLI-shaped client identity. Use it only with a Cursor account you own; Cursor may change or restrict that protocol without notice.
 
 Connect it with `ycoding auth login` (or `/connect`) and choose **Cursor**:
 

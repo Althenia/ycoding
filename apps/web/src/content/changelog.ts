@@ -22,6 +22,18 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.8.7",
+    date: "2026-10-01",
+    title: "Cursor cache reporting",
+    tags: ["Fixed"],
+    changes: [
+      {
+        tag: "Fixed",
+        text: "Report Cursor's cache read and write as portions of the context total on the Usage rail, so a warm Cursor turn shows its cache hit percentage instead of leaving cache unreported. A real zero stays 0% and a step with no cache ratio stays unreported rather than showing zero.",
+      },
+    ],
+  },
+  {
     version: "0.8.6",
     date: "2026-10-01",
     title: "Quieter attention notifications",

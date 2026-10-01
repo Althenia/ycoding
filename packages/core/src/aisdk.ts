@@ -853,7 +853,7 @@ function streamPartEvents(
       ])
     case "finish": {
       const reported = state.cursor
-        ? cursorUsage(event.providerMetadata)
+        ? cursorUsage(event.providerMetadata, event.usage)
         : usage(event.usage, event.providerMetadata, state.outputMayIncludeUnreportedReasoning)
       return Effect.succeed([
         LLMEvent.stepFinish({
@@ -919,30 +919,94 @@ function usage(
     : undefined
 }
 
-// Cursor's stream usage is a display shape (occupancy split by heuristic, fabricated output on tool steps, zeros
-// when unknown); its metadata carries the current checkpoint occupancy and the turn-end generation counters.
-function cursorUsage(metadata: unknown): UsageInput | undefined {
+type AISDKFinishUsage = Extract<LanguageModelV3StreamPart, { type: "finish" }>["usage"]
+
+// Checkpoint occupancy stays the context total. Cursor's stream usage already carries the
+// provider's cache ratio (including a warm-prefix read when the prior checkpoint is covered);
+// TurnEnded raw counters are the fallback and can exceed that occupancy, so both are projected
+// onto usedTokens instead of replacing it. Tool steps still omit fabricated output.
+function cursorUsage(metadata: unknown, streamUsage?: AISDKFinishUsage): UsageInput | undefined {
   const cursor = ProviderShared.isRecord(metadata) && ProviderShared.isRecord(metadata.cursor) ? metadata.cursor : {}
   const context = ProviderShared.isRecord(cursor.context) ? cursor.context : {}
-  const input =
-    context.stale !== true && typeof context.usedTokens === "number" && context.usedTokens > 0
-      ? context.usedTokens
-      : undefined
-  const output =
-    cursor.occupancyOnly !== true && typeof cursor.outputTokensRaw === "number" && cursor.outputTokensRaw > 0
-      ? cursor.outputTokensRaw
-      : undefined
+  const input = freshCount(context.stale !== true ? context.usedTokens : undefined)
+  const output = cursor.occupancyOnly === true ? undefined : freshCount(cursor.outputTokensRaw)
   if (input === undefined && output === undefined) return undefined
+  const cache = input === undefined ? undefined : cursorCachePartition(input, streamUsage, cursor)
   return {
-    ...(input === undefined ? {} : { inputTokens: input, nonCachedInputTokens: input }),
+    ...(input === undefined
+      ? {}
+      : {
+          inputTokens: input,
+          nonCachedInputTokens: cache?.nonCached ?? input,
+          ...(cache === undefined
+            ? {}
+            : { cacheReadInputTokens: cache.cacheRead, cacheWriteInputTokens: cache.cacheWrite }),
+        }),
     ...(output === undefined
       ? {}
       : {
           outputTokens: output,
-          reasoningTokens: typeof cursor.reasoningTokensRaw === "number" ? cursor.reasoningTokensRaw : undefined,
+          reasoningTokens: nonNegativeCount(cursor.reasoningTokensRaw),
         }),
     ...(input === undefined || output === undefined ? {} : { totalTokens: input + output }),
   }
+}
+
+function cursorCachePartition(
+  occupancy: number,
+  streamUsage: AISDKFinishUsage | undefined,
+  cursor: Record<string, unknown>,
+) {
+  return projectCacheOntoOccupancy(occupancy, streamCacheParts(streamUsage) ?? rawCacheParts(cursor))
+}
+
+function streamCacheParts(streamUsage: AISDKFinishUsage | undefined) {
+  const input = streamUsage?.inputTokens
+  if (!input) return undefined
+  const cacheRead = nonNegativeCount(input.cacheRead)
+  const cacheWrite = nonNegativeCount(input.cacheWrite)
+  if (cacheRead === undefined && cacheWrite === undefined) return undefined
+  return { noCache: nonNegativeCount(input.noCache), cacheRead, cacheWrite }
+}
+
+function rawCacheParts(cursor: Record<string, unknown>) {
+  const input = nonNegativeCount(cursor.inputTokensRaw)
+  const cacheRead = nonNegativeCount(cursor.cacheReadRaw)
+  const cacheWrite = nonNegativeCount(cursor.cacheWriteRaw)
+  if (input === undefined || cacheRead === undefined || cacheWrite === undefined) return undefined
+  const read = Math.min(cacheRead, input)
+  const write = Math.min(cacheWrite, input - read)
+  return { noCache: input - read - write, cacheRead: read, cacheWrite: write }
+}
+
+function projectCacheOntoOccupancy(
+  occupancy: number,
+  parts: { noCache?: number; cacheRead?: number; cacheWrite?: number } | undefined,
+) {
+  if (!parts || (parts.cacheRead === undefined && parts.cacheWrite === undefined)) return undefined
+  const cacheRead = parts.cacheRead ?? 0
+  const cacheWrite = parts.cacheWrite ?? 0
+  const basis = (parts.noCache ?? 0) + cacheRead + cacheWrite
+  if (basis <= 0) return { nonCached: occupancy, cacheRead: 0, cacheWrite: 0 }
+  // Occupancy snapshots subtract one fabricated output token from the input side. Accept that
+  // one-token gap so a fitting split is kept instead of rounded again.
+  if (cacheRead + cacheWrite <= occupancy && basis <= occupancy + 1) {
+    const read = Math.min(occupancy, cacheRead)
+    const write = Math.min(occupancy - read, cacheWrite)
+    return { nonCached: occupancy - read - write, cacheRead: read, cacheWrite: write }
+  }
+  const read = Math.min(occupancy, Math.round((occupancy * cacheRead) / basis))
+  const write = Math.min(occupancy - read, Math.round((occupancy * cacheWrite) / basis))
+  return { nonCached: occupancy - read - write, cacheRead: read, cacheWrite: write }
+}
+
+function freshCount(value: unknown) {
+  const count = nonNegativeCount(value)
+  return count !== undefined && count > 0 ? count : undefined
+}
+
+function nonNegativeCount(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : undefined
 }
 
 function finishReason(value: LanguageModelV3FinishReason): FinishReason {

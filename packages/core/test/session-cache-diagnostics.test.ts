@@ -190,6 +190,10 @@ test("derives provider cache mechanisms from the executed route", () => {
   expect(SessionCacheDiagnostics.mechanism("ai-sdk:@ai-sdk/github-copilot", model("github-copilot"), tokens)).toBe(
     "openai-prefix-cache",
   )
+  expect(SessionCacheDiagnostics.mechanism("ai-sdk:cursor-opencode-provider", model("cursor"), tokens)).toBe(
+    "provider-reported",
+  )
+  expect(SessionCacheDiagnostics.mechanism("unknown", model("cursor"), tokens)).toBe("provider-reported")
   expect(SessionCacheDiagnostics.mechanism("gemini", model("google"), tokens)).toBe("gemini-prefix-cache")
 })
 
