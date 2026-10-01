@@ -23,6 +23,10 @@ describe("release entries", () => {
           tag: "Fixed",
           text: "Keep the Cursor models already published when a later model sync fails, and retry that sync, instead of emptying the model list until the next connection change.",
         },
+        {
+          tag: "Fixed",
+          text: "Keep the model and agent pickers usable for a Session whose catalog read failed, because the failed read is retried on the next selection instead of being kept as the answer.",
+        },
       ],
     })
     expect(RELEASES[1]).toEqual({
