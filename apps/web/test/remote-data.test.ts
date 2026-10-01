@@ -476,6 +476,23 @@ describe("remote data", () => {
       expect(test.relay.requests.filter((request) => request.operation === "session.catalog")).toHaveLength(1)
     } finally { await test.stop() }
   })
+  test("keeps the status dots and carousel when a heartbeat round trip is sampled, and rebuilds them on reopen", async () => {
+    const test = await setup(undefined, 30_000, 50)
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessionStatus !== undefined && test.store.state().carouselStatus === "ready")
+      const sessionStatus = test.store.state().sessionStatus
+      const carouselSessions = test.store.state().carouselSessions
+      const sampled = test.store.state().transport
+      await waitFor(() => test.store.state().transport !== sampled && test.store.state().transport.kind === "open")
+      expect(test.store.state().sessionStatus).toBe(sessionStatus)
+      expect(test.store.state().carouselSessions).toBe(carouselSessions)
+      expect(test.store.state().carouselStatus).toBe("ready")
+      test.relay.dropConnections(1012, "restart")
+      await waitFor(() => test.relay.connections === 2 && test.store.state().carouselSessions !== carouselSessions)
+      expect(test.store.state().sessionStatus).not.toBe(sessionStatus)
+    } finally { await test.stop() }
+  })
   test("drops the catalogs of a connection that closed and opened again", async () => {
     const test = await setup((request) => request.operation === "session.catalog"
       ? { ok: true, value: { agents: [], models: [], commands: [], skills: [], references: [], resources: [] } } : "default")

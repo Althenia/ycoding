@@ -1133,11 +1133,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     // replaced it: it must not overwrite the live transport, clear the live
     // subscription, raise or end the live alerts, or report a rejected credential.
     if (!isCurrentConnection(owner)) return
-    const reconnected = status.kind === "open" && connectionOpened
-    const reopened = reconnected && lastStatusKind !== "open"
+    const opened = status.kind === "open" && lastStatusKind !== "open"
+    const reopened = opened && connectionOpened
     if (status.kind === "open") connectionOpened = true
     if (status.kind === "closed" || status.kind === "reconnecting") cancelUpload("Attachment upload lost its machine connection. Files were not sent.")
-    if (status.kind === "open") {
+    if (opened) {
       cancelStatusReload?.()
       cancelStatusReload = undefined
       statusReloadLocal = false
@@ -1204,7 +1204,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       ...(status.kind === "closed" ? { lastRelayDrop: { code: status.code, reason: status.reason } } : {}) })
     if (status.kind === "open") void loadNotices(owner)
     if (status.kind === "open" && container.state.activeSessionID !== undefined) void readSessionStatus(owner)
-    if (reconnected) {
+    if (reopened) {
       signalRecovery()
       invalidateReads()
     }
