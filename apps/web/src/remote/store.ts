@@ -1202,7 +1202,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
     setState({ transport: status, connection: connectionFor(status, container.state.activeDeviceID), notifications: delivery.entries(),
       ...(status.kind === "closed" ? { lastRelayDrop: { code: status.code, reason: status.reason } } : {}) })
-    if (status.kind === "open") void loadNotices(owner)
+    if (opened) void loadNotices(owner)
     if (status.kind === "open" && container.state.activeSessionID !== undefined) void readSessionStatus(owner)
     if (reopened) {
       signalRecovery()

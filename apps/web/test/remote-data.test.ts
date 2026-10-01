@@ -493,6 +493,25 @@ describe("remote data", () => {
       expect(test.store.state().sessionStatus).not.toBe(sessionStatus)
     } finally { await test.stop() }
   })
+  test("reads notices and session status on connect and reopen but not on a heartbeat round trip", async () => {
+    const test = await setup(undefined, 30_000, 50)
+    const count = (operation: string) => [...test.relay.requests, ...test.relay.noticeRequests].filter((request) => request.operation === operation).length
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length === 2)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => count("notice.subscribe") === 1 && count("session.status") >= 1)
+      const status = count("session.status")
+      const first = test.store.state().transport
+      await waitFor(() => test.store.state().transport !== first && test.store.state().transport.kind === "open")
+      const second = test.store.state().transport
+      await waitFor(() => test.store.state().transport !== second && test.store.state().transport.kind === "open")
+      expect(count("notice.subscribe")).toBe(1)
+      expect(count("session.status")).toBe(status)
+      test.relay.dropConnections(1012, "restart")
+      await waitFor(() => test.relay.connections === 2 && count("notice.subscribe") === 2 && count("session.status") > status)
+    } finally { await test.stop() }
+  })
   test("drops the catalogs of a connection that closed and opened again", async () => {
     const test = await setup((request) => request.operation === "session.catalog"
       ? { ok: true, value: { agents: [], models: [], commands: [], skills: [], references: [], resources: [] } } : "default")
