@@ -3,7 +3,7 @@ import { Service, type Info } from "@ycoding-ai/client/effect/service"
 import { Database } from "@ycoding-ai/core/database/database"
 import { DatabaseFormat } from "@ycoding-ai/core/database/format"
 import { EventV2 } from "@ycoding-ai/core/event"
-import { EventTable } from "@ycoding-ai/core/event/sql"
+import { EventSequenceTable, EventTable } from "@ycoding-ai/core/event/sql"
 import { Global } from "@ycoding-ai/core/global"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { Project } from "@ycoding-ai/core/project"
@@ -345,6 +345,55 @@ test("concurrent service processes elect one server without resuming suspended S
   }
 }, 120_000)
 
+test("managed service startup settles an unterminated execution as a failed run without resuming it", async () => {
+  const sessionID = SessionV2.ID.make("ses_service_killed")
+  const startedType = EventV2.versionedType(
+    SessionEvent.Execution.Started.type,
+    SessionEvent.Execution.Started.durable.version,
+  )
+  const service = await startManagedService("ycoding-service-interrupted-", false, (database, root) =>
+    withDatabase(
+      database,
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* db
+          .insert(ProjectTable)
+          .values({ id: Project.ID.global, worktree: AbsolutePath.make(root), sandboxes: [] })
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .insert(SessionTable)
+          .values({ id: sessionID, project_id: Project.ID.global, directory: root, title: "killed" })
+          .run()
+          .pipe(Effect.orDie)
+        yield* db.insert(EventSequenceTable).values({ aggregate_id: sessionID, seq: 1 }).run().pipe(Effect.orDie)
+        yield* db
+          .insert(EventTable)
+          .values({
+            id: EventV2.ID.create(),
+            aggregate_id: sessionID,
+            seq: 1,
+            created: Date.now(),
+            type: startedType,
+            data: { sessionID },
+          })
+          .run()
+          .pipe(Effect.orDie)
+      }),
+    ),
+  )
+  try {
+    await waitForReady(service.info)
+    const outstanding = await fetch(new URL("/api/session/outstanding?failures=true", service.info.url), {
+      headers: { authorization: "Basic " + btoa(`ycoding:${service.info.password}`) },
+    }).then((response) => response.json())
+    expect(outstanding).toEqual({ data: [], running: [], failed: [sessionID] })
+    expect(await executionStarts(path.join(service.root, "ycoding.db"), sessionID)).toBe(1)
+  } finally {
+    await stopManagedService(service)
+  }
+}, 60_000)
+
 test("configured managed service port overrides the channel default", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-service-port-"))
   const port = await availablePort()
@@ -672,8 +721,9 @@ function serviceEnv(root: string) {
   }
 }
 
-async function startManagedService(prefix: string, failBoot = false) {
+async function startManagedService(prefix: string, failBoot = false, seed?: (database: string, root: string) => Promise<void>) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix))
+  await seed?.(path.join(root, "ycoding.db"), root)
   const port = await availablePort()
   const registration = path.join(root, "state", "ycoding", "service-local.json")
   await fs.mkdir(path.join(root, "config", "ycoding"), { recursive: true })

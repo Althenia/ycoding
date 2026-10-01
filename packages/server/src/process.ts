@@ -257,7 +257,9 @@ function unavailable(status: Status.State) {
 /**
  * The managed server marks its active Sessions as suspended on graceful shutdown. Startup never
  * replays suspended provider work; that needs explicit crash-recovery design and admission rules.
+ * It settles executions a dead process left unterminated before the server accepts work.
  */
 const installRestartContinuity = Effect.fnUntraced(function* (restart: SessionRestart.Interface) {
+  yield* restart.reconcileInterruptedExecutions
   yield* Effect.addFinalizer(() => restart.suspendActiveSessions)
 })

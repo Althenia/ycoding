@@ -2,8 +2,11 @@ export * as SessionRestart from "./restart"
 
 import { Context, Effect, Layer, Option } from "effect"
 import { makeGlobalNode } from "../../effect/app-node"
+import { Database } from "../../database/database"
+import { EventV2 } from "../../event"
 import { SessionOrchestration } from "../orchestration"
 import { SessionExecution } from "../execution"
+import { SessionInterruptedExecution } from "./interrupted"
 import { SessionStore } from "../store"
 
 export interface Interface {
@@ -12,6 +15,11 @@ export interface Interface {
    * Call once new work has stopped arriving and before teardown interrupts the drains.
    */
   readonly suspendActiveSessions: Effect.Effect<void>
+  /**
+   * Settles executions left unterminated by a process that died, so each surfaces as a failed run.
+   * Call once at managed startup before any execution begins; it never resumes work.
+   */
+  readonly reconcileInterruptedExecutions: Effect.Effect<void>
   /** Explicitly resumes suspended Sessions. Each suspension is consumed atomically, so a Session resumes at most once. */
   readonly resumeSuspendedSessions: Effect.Effect<void>
 }
@@ -25,6 +33,8 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
+    const db = (yield* Database.Service).db
+    const events = yield* EventV2.Service
     const store = yield* SessionStore.Service
     const execution = yield* SessionExecution.Service
     const orchestration = yield* Effect.serviceOption(SessionOrchestration.Service)
@@ -32,6 +42,7 @@ export const layer = Layer.effect(
       suspendActiveSessions: Effect.gen(function* () {
         yield* store.suspend(yield* execution.active)
       }),
+      reconcileInterruptedExecutions: SessionInterruptedExecution.reconcile(db, events),
       resumeSuspendedSessions: Effect.gen(function* () {
         if (Option.isSome(orchestration)) yield* orchestration.value.recover
         const sessions = yield* store.listSuspended()
@@ -55,5 +66,5 @@ export const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [SessionStore.node, SessionExecution.node, SessionOrchestration.node],
+  deps: [Database.node, EventV2.node, SessionStore.node, SessionExecution.node, SessionOrchestration.node],
 })

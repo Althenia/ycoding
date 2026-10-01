@@ -1,5 +1,7 @@
 import { expect } from "bun:test"
 import { Deferred, Effect, Layer } from "effect"
+import { Money } from "@ycoding-ai/schema/money"
+import { EventTable } from "@ycoding-ai/core/event/sql"
 import { adjust } from "effect/testing/TestClock"
 import { eq } from "drizzle-orm"
 import { Database } from "@ycoding-ai/core/database/database"
@@ -15,6 +17,7 @@ import { ProviderV2 } from "@ycoding-ai/core/provider"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionV2 } from "@ycoding-ai/core/session"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
+import { SessionInterruptedExecution } from "@ycoding-ai/core/session/execution/interrupted"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionStore } from "@ycoding-ai/core/session/store"
@@ -152,5 +155,60 @@ it.effect("rehydrates a failed family until any member starts a later execution"
     expect([...(yield* sessions.outstanding(true)).failed]).toEqual([parent])
     yield* events.publish(SessionEvent.Execution.Started, { sessionID: parent })
     expect([...(yield* sessions.outstanding(true)).failed]).toEqual([])
+  }),
+)
+
+it.effect("settles an execution that never reached a terminal event as failed, once, without resuming work", () =>
+  Effect.gen(function* () {
+    const sessions = yield* SessionV2.Service
+    const events = yield* EventV2.Service
+    const db = (yield* Database.Service).db
+    const store = yield* SessionStore.Service
+    const location = { directory: AbsolutePath.make("/project") }
+    const model = { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") }
+    const tokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+    const killedParent = SessionV2.ID.make("ses_killed_parent")
+    const killedChild = SessionV2.ID.make("ses_killed_child")
+    const killedIdle = SessionV2.ID.make("ses_killed_between_steps")
+    const retried = SessionV2.ID.make("ses_killed_after_failure")
+    const settled = ["ses_run_succeeded", "ses_run_interrupted", "ses_run_failed", "ses_never_ran"].map((id) => SessionV2.ID.make(id))
+    for (const id of [killedParent, killedIdle, retried, ...settled]) yield* sessions.create({ id, location })
+    yield* sessions.create({ id: killedChild, parentID: killedParent })
+    const openStep = SessionMessage.ID.make("msg_open_step")
+    const closedStep = SessionMessage.ID.make("msg_closed_step")
+    yield* events.publish(SessionEvent.Execution.Started, { sessionID: killedChild })
+    yield* events.publish(SessionEvent.Step.Started, { sessionID: killedChild, assistantMessageID: openStep, agent: AgentV2.defaultID, model })
+    yield* events.publish(SessionEvent.Execution.Started, { sessionID: killedIdle })
+    yield* events.publish(SessionEvent.Step.Started, { sessionID: killedIdle, assistantMessageID: closedStep, agent: AgentV2.defaultID, model })
+    yield* events.publish(SessionEvent.Step.Ended, { sessionID: killedIdle, assistantMessageID: closedStep, finish: "tool-calls", cost: Money.USD.zero, tokens })
+    yield* events.publish(SessionEvent.Execution.Failed, { sessionID: retried, error: { type: "unknown", message: "earlier failure" } })
+    yield* events.publish(SessionEvent.Execution.Started, { sessionID: retried })
+    for (const [id, end] of [[settled[0], SessionEvent.Execution.Succeeded], [settled[2], SessionEvent.Execution.Failed]] as const) {
+      yield* events.publish(SessionEvent.Execution.Started, { sessionID: id })
+      yield* events.publish(end, end === SessionEvent.Execution.Failed ? { sessionID: id, error: { type: "unknown", message: "failed" } } : { sessionID: id })
+    }
+    yield* events.publish(SessionEvent.Execution.Started, { sessionID: settled[1] })
+    yield* events.publish(SessionEvent.Execution.Interrupted, { sessionID: settled[1], reason: "shutdown" })
+    expect([...(yield* sessions.outstanding(true)).failed].toSorted()).toEqual([settled[2]])
+
+    yield* SessionInterruptedExecution.reconcile(db, events)
+
+    const history = (id: SessionV2.ID) => db.select({ type: EventTable.type, data: EventTable.data }).from(EventTable)
+      .where(eq(EventTable.aggregate_id, id)).orderBy(EventTable.seq).all().pipe(Effect.map((rows) => rows.map((row) => row.type).filter((type) => !type.startsWith("session.created"))))
+    expect((yield* history(killedChild))).toEqual(["session.execution.started.1", "session.step.started.1", "session.step.failed.1", "session.execution.failed.1"])
+    expect((yield* history(killedIdle)).slice(-2)).toEqual(["session.step.ended.1", "session.execution.failed.1"])
+    expect((yield* history(retried)).slice(-2)).toEqual(["session.execution.started.1", "session.execution.failed.1"])
+    expect(yield* history(settled[0])).toEqual(["session.execution.started.1", "session.execution.succeeded.1"])
+    expect(yield* history(settled[1])).toEqual(["session.execution.started.1", "session.execution.interrupted.1"])
+    expect(yield* history(settled[3])).toEqual([])
+    const assistant = (yield* store.context(killedChild)).findLast((message) => message.type === "assistant")
+    expect(assistant?.time.completed).toBeDefined()
+    expect(assistant?.error?.type).toBe("interrupted")
+    expect([...(yield* sessions.outstanding(true)).failed].toSorted()).toEqual([killedParent, killedIdle, retried, settled[2]].toSorted())
+    expect([...(yield* sessions.outstanding(true)).running]).toEqual([executing])
+
+    const before = yield* db.select({ id: EventTable.id }).from(EventTable).all()
+    yield* SessionInterruptedExecution.reconcile(db, events)
+    expect(yield* db.select({ id: EventTable.id }).from(EventTable).all()).toEqual(before)
   }),
 )
