@@ -27,14 +27,24 @@ function webSocketURL(deviceID: string): string {
   return `${protocol}//${window.location.host}${RemoteWebSocketPath.client}?device=${encodeURIComponent(deviceID)}`
 }
 
-export function RemoteProvider(props: { readonly children: JSX.Element; readonly createStore?: () => RemoteStore }) {
+/** One remote workspace lifetime: the store and the read options its routes and panels share. */
+export type RemoteSession = { readonly store: RemoteStore; readonly queries: RemoteQueries }
+
+export function createRemoteSession(createStore?: () => RemoteStore): RemoteSession {
   const store =
-    props.createStore?.() ??
+    createStore?.() ??
     createRemoteStore({
       http: createRemoteHttp(),
       createTransport: (deviceID, handlers) => createRemoteTransport({ url: webSocketURL(deviceID), handlers }),
       queryClient: createRemoteQueryClient(),
     })
+  return { store, queries: createRemoteQueries(store.link, store.queryClient) }
+}
+
+/** Owns the session it is given, or one it creates, until it unmounts. */
+export function RemoteProvider(props: { readonly children: JSX.Element; readonly createStore?: () => RemoteStore; readonly session?: RemoteSession }) {
+  const session = props.session ?? createRemoteSession(props.createStore)
+  const store = session.store
   const state = useStore(store.container)
   const scope = useStore(
     store.container,
@@ -56,7 +66,7 @@ export function RemoteProvider(props: { readonly children: JSX.Element; readonly
     state,
     select: (selector, compare) => useStore(store.container, selector, compare),
     scope,
-    queries: createRemoteQueries(store.link, store.queryClient),
+    queries: session.queries,
     // Return to the route the reader opened, so signing in from Settings lands on Settings.
     signIn: (provider) => window.location.assign(store.signInURL(provider, window.location.pathname)),
     authError,

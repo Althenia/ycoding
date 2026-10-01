@@ -79,18 +79,27 @@ test("a legacy event frame is delivered as a one-element batch", () => {
   } finally { f.transport.close() }
 })
 
+/** Sends `count` requests and answers each at once, so the rate window fills without holding in-flight slots. */
+async function fillWindow(f: ReturnType<typeof fixture>, count: number) {
+  for (let index = 0; index < count; index += 1) {
+    const outcome = f.transport.request("session.list", { timeoutMs: 0 })
+    const socket = f.sockets[0]!
+    socket.message({ type: "response", id: socket.frames().at(-1)!.id, ok: true, value: null })
+    await outcome
+  }
+}
+
 test("aborting a request still queued removes it without sending and resolves cancelled", async () => {
   const f = fixture()
   try {
     const controller = new AbortController()
-    const filler = Array.from({ length: RemoteLimits.maxClientRequestsPerWindow - 3 }, () => f.transport.request("session.list", { timeoutMs: 0 }))
+    await fillWindow(f, RemoteLimits.maxClientRequestsPerWindow - 3)
     const queued = f.transport.request("session.list", { timeoutMs: 0, signal: controller.signal })
     expect(f.sockets[0]!.frames()).toHaveLength(RemoteLimits.maxClientRequestsPerWindow - 3)
     controller.abort()
     expect(await queued).toEqual({ status: "unavailable", reason: "cancelled" })
     f.advance(RemoteLimits.clientRateWindowMs)
     expect(f.sockets[0]!.frames()).toHaveLength(RemoteLimits.maxClientRequestsPerWindow - 3)
-    expect(filler).toHaveLength(RemoteLimits.maxClientRequestsPerWindow - 3)
   } finally { f.transport.close() }
 })
 
@@ -116,7 +125,7 @@ test("a cancel frame waits behind the client rate window like any other frame", 
   try {
     const controller = new AbortController()
     const outcome = f.transport.request("session.list", { timeoutMs: 0, signal: controller.signal })
-    Array.from({ length: RemoteLimits.maxClientRequestsPerWindow - 4 }, () => f.transport.request("session.list", { timeoutMs: 0 }))
+    await fillWindow(f, RemoteLimits.maxClientRequestsPerWindow - 4)
     const sentBeforeCancel = f.sockets[0]!.frames().length
     controller.abort()
     expect(await outcome).toEqual({ status: "unavailable", reason: "cancelled" })

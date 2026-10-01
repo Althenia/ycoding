@@ -1,5 +1,5 @@
 import { isSessionID } from "@ycoding-ai/remote"
-import { For, Show, Suspense, createEffect, createMemo, createSignal, onCleanup, onMount, untrack, type JSX } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack, type JSX } from "solid-js"
 import { Portal } from "solid-js/web"
 import { createDebouncer, createThrottler } from "@tanstack/solid-pacer"
 import { useLocation, useNavigate } from "@tanstack/solid-router"
@@ -11,6 +11,7 @@ import { Modal } from "../../ui/modal"
 import { CustomSelect } from "../../ui/custom-select"
 import { BrandMark, ThemeToggle } from "../../ui/site"
 import { useRemote } from "../context"
+import { preloadKeepAwake, preloadUsage, preloadWorkspaces } from "../preload"
 import { SIGN_IN_PROVIDERS } from "../http"
 import { createInviteHttp } from "../http"
 import { normalizeAccessKey } from "../invite"
@@ -176,6 +177,21 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const selectedLoading = () => selected() && state().history === undefined && state().notice === undefined &&
     state().connection.kind === "connected" && state().transport.kind === "open"
   const managedChild = () => isManagedSubagent(activeSession())
+  const warmable = remote.select((current) => current.transport.kind === "open" && current.connection.kind === "connected" && current.sessionListStatus === "ready" ? current.generation : undefined)
+  let warmup: { readonly generation: number; readonly timer: ReturnType<typeof setTimeout> } | undefined
+  createEffect(() => {
+    const generation = warmable()
+    if (generation === undefined || selectedLoading() || warmup?.generation === generation) return
+    clearTimeout(warmup?.timer)
+    // Once the workspace settles, read what the other pages open with so their first visit paints at once.
+    warmup = { generation, timer: setTimeout(() => {
+      if (state().generation !== generation) return
+      preloadUsage(remote)
+      preloadKeepAwake(remote)
+      preloadWorkspaces(remote)
+    }, 1_500) }
+  })
+  onCleanup(() => clearTimeout(warmup?.timer))
   const childParentID = () => activeSession()?.parentID
   const composerSessionID = () => managedChild() ? childParentID() : state().activeSessionID
   const siblingTasks = () => state().team?.rootID === childParentID() ? state().team?.tasks ?? [] : []
@@ -478,7 +494,7 @@ function RoutePanel(props: { readonly active: boolean; readonly preserve?: boole
     if (exitTimer !== undefined) clearTimeout(exitTimer)
     if (entranceFrame !== undefined) cancelAnimationFrame(entranceFrame)
   })
-  return <Show when={mounted()}><div ref={host} class={`route-panel route-panel--${phase()}${props.class ? ` ${props.class}` : ""}`} aria-hidden={props.active ? undefined : "true"} inert={!props.active}><Suspense>{props.children}</Suspense></div></Show>
+  return <Show when={mounted()}><div ref={host} class={`route-panel route-panel--${phase()}${props.class ? ` ${props.class}` : ""}`} aria-hidden={props.active ? undefined : "true"} inert={!props.active}>{props.children}</div></Show>
 }
 
 /**
@@ -1096,6 +1112,11 @@ function ConversationView(props: {
   const availability = () => blocked()
     ? devices()
     : sessionAvailabilityView(state().connection, state().sessions.length, state().sessionListStatus)
+  // A connection's first session list decides whether a session opens, so the composer waits for it.
+  const [listedGeneration, setListedGeneration] = createSignal<number>()
+  createEffect(() => {
+    if (state().sessionListStatus === "ready" || state().sessionListStatus === "error") setListedGeneration(state().generation)
+  })
   return (
     <Show
       when={state().activeSessionID !== undefined}
@@ -1124,7 +1145,9 @@ function ConversationView(props: {
             </div>
           }
         >
-          <Suspense><NewSessionComposer onCreated={props.onCreated} /></Suspense>
+          <Show when={listedGeneration() === state().generation} fallback={<LoadingPlaceholder kind="screen" label="Loading sessions…" />}>
+            <NewSessionComposer onCreated={props.onCreated} />
+          </Show>
         </Show>
       }
     >

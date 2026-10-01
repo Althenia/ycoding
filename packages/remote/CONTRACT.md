@@ -909,7 +909,7 @@ rows, not an unreported backend total.
 | Agent frame | 262,144 chars (`message_too_large`) |
 | Chunks per response | 64 |
 | In-flight requests per client | 32 |
-| Client request rate | 30 per 10 s → close `1008` |
+| Client request rate | 120 per 10 s → close `1008` |
 | Agent message rate | 500 per 10 s → close `1008` |
 | Session-list page | 200 |
 | Subscriptions per client | 64 |

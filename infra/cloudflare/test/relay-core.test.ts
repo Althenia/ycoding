@@ -484,10 +484,13 @@ describe("relay core: request admission", () => {
   test("enforces the client request rate limit and admits requests after the window", async () => {
     const h = harness()
     await attachBoth(h)
-    for (let index = 0; index <= RemoteLimits.maxClientRequestsPerWindow; index += 1)
+    const admitted = RemoteLimits.maxPendingRequestsPerClient - 1
+    for (let index = 0; index < admitted; index += 1)
       await h.relay.handleClientMessage("client-1", request(String(index), "session.list"))
+    for (let index = admitted; index <= RemoteLimits.maxClientRequestsPerWindow; index += 1)
+      await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "cancel", id: `unknown-${index}` }))
     expect(h.closed).toEqual([{ connectionID: "client-1", code: 1008, reason: "Client request rate exceeded" }])
-    expect(h.requestsTo("agent-1")).toHaveLength(RemoteLimits.maxClientRequestsPerWindow)
+    expect(h.requestsTo("agent-1")).toHaveLength(admitted)
 
     h.reset()
     h.advance(RemoteLimits.clientRateWindowMs + 1)

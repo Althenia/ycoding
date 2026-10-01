@@ -149,6 +149,22 @@ export function usageBounds(now: number, timeZone?: string) {
   }
 }
 
+export const usageZoneKey = "ycoding.remote.usage.timeZone"
+
+export type UsageBreakdown = Pick<UsageReportInput, "offset" | "sort" | "order"> & { readonly group: "model" | "session" | "project" | "agent" }
+
+/** The report reads the Usage page opens with; the day boundary, not the clock, keys them so a revisit or preload reuses the same reads. */
+export function usageReportInputs(now: number, timeZone: string | undefined, breakdown: UsageBreakdown = { group: "model", offset: 0, sort: "cost", order: "desc" }) {
+  const bounds = usageBounds(now, timeZone)
+  const zone = timeZone === undefined ? {} : { timeZone }
+  const range = { from: bounds.from, to: bounds.to, ...zone }
+  return {
+    daily: { group: "day", ...range, limit: 30, sort: "key", order: "asc" } satisfies UsageReportInput,
+    monthly: { group: "model", from: bounds.monthFrom, to: bounds.to, ...zone, limit: 200, sort: "cost", order: "desc" } satisfies UsageReportInput,
+    breakdown: { group: breakdown.group, ...range, offset: breakdown.offset, limit: 25, sort: breakdown.sort, order: breakdown.order } satisfies UsageReportInput & UsageBreakdown,
+  }
+}
+
 export function dailySpend(report: UsageReport | undefined, now: number, timeZone?: string): SpendDay[] {
   const date = timeZone === undefined ? undefined : localDate(now, new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }))
   const today = date === undefined ? Math.floor(now / 86_400_000) * 86_400_000 : Date.UTC(date.year, date.month - 1, date.day)

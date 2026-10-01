@@ -22,6 +22,19 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.8.1",
+    date: "2026-10-01",
+    title: "Instant remote view transitions",
+    tags: ["Changed"],
+    changes: [
+      { tag: "Changed", text: "Admit 120 browser requests per 10 seconds on the relay so opening a Session and visiting Usage and Settings never queue behind the request window." },
+      { tag: "Changed", text: "Render Usage, Settings, and New session at once while their reads are in flight and keep the previous data visible during a refresh instead of showing a blank panel." },
+      { tag: "Changed", text: "Key Usage reads by day and time zone and keep them fresh for a minute, so returning to Usage shows the cached report immediately and refreshes it in the background." },
+      { tag: "Changed", text: "Preload a remote view's reads on hover, focus, or touch of its navigation link, and warm up Usage, keep-awake, and workspace reads once the selected Session is ready." },
+      { tag: "Changed", text: "Show the loading placeholder on a cold load until the Session list arrives instead of flashing the New session composer, and drop duplicate workspace and Session list reads." },
+    ],
+  },
+  {
     version: "0.8.0",
     date: "2026-10-01",
     title: "Multiplexed remote delivery and windowed transcripts",

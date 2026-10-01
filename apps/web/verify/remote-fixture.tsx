@@ -46,6 +46,9 @@ let devices: readonly RemoteDeviceInfo[] = [
 ]
 
 const accountParams = new URLSearchParams(window.location.search)
+const requestLatencyMs = Number(accountParams.get("latency") ?? 0)
+const requestLog: { readonly at: number; readonly operation: string; readonly input?: unknown }[] = []
+Object.assign(window, { requestLog })
 if (accountParams.get("presentation") !== "keep") {
   window.localStorage.setItem(WORKSPACE_PRESENTATION_KEY, accountParams.get("presentation") === "office" ? "office" : "conversation")
   window.localStorage.removeItem(OFFICE_PREFERENCES_KEY)
@@ -870,6 +873,8 @@ function createFixtureStore(): Fixture {
     status: (): RemoteTransportStatus => ({ kind: open ? "open" : "closed", code: open ? 1000 : 1006, reason: "", retryable: false }),
     request: async (operation, request) => {
       if (!open) return { status: "unavailable", reason: "not-connected" }
+      if (requestLatencyMs > 0) await new Promise((resolve) => setTimeout(resolve, requestLatencyMs))
+      requestLog.push({ at: Math.round(performance.now()), operation, ...(request?.input === undefined ? {} : { input: request.input }) })
       return outcome(operation, request?.input, request?.sessionID)
     },
   }

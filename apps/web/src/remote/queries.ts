@@ -39,16 +39,18 @@ export type UsageRead<T> = { readonly status: "idle" | "loading" | "ready" | "un
 
 type QueryView<T> = { readonly status: "pending" | "error" | "success"; readonly fetchStatus: "fetching" | "paused" | "idle"; readonly data: T | undefined; readonly error: Error | null }
 
+/** Reading `data` of a pending Solid query suspends its nearest boundary, so every read helper settles the status first. */
 export function usageRead<T>(query: QueryView<UsageResult<T>>): UsageRead<T> {
+  if (query.status === "pending") return { status: query.fetchStatus === "fetching" ? "loading" : "idle" }
   const data = query.data?.status === "ready" ? query.data.data : undefined
   const kept = data === undefined ? {} : { data }
   if (query.fetchStatus === "fetching") return { status: "loading", ...kept }
   if (query.status === "error") return { status: "error", ...kept, message: query.error?.message ?? "Usage could not be loaded." }
-  if (query.status === "pending") return { status: "idle" }
   return query.data?.status === "unsupported" ? { status: "unsupported" } : { status: "ready", ...kept }
 }
 
 export function keepAwakeState(query: QueryView<KeepAwakeState>): KeepAwakeState {
+  if (query.status === "pending") return { read: query.fetchStatus === "fetching" ? "loading" : "idle" }
   if (query.data?.read === "ready") return query.data
   if (query.fetchStatus === "fetching") return { read: "loading", ...(query.data?.change === undefined ? {} : { change: query.data.change }) }
   return query.data ?? { read: "idle" }
@@ -77,7 +79,7 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     return queryOptions({
       queryKey,
       enabled: input.scope !== undefined && input.enabled,
-      staleTime: Infinity,
+      staleTime: 60_000,
       retry: false,
       queryFn: async (): Promise<UsageResult<T>> => {
         const refresh = refreshing.delete(JSON.stringify(queryKey))
@@ -141,8 +143,8 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     return queryOptions({
       queryKey,
       enabled: scope !== undefined && enabled,
-      staleTime: Infinity,
-      refetchOnMount: "always" as const,
+      staleTime: 15_000,
+      refetchOnMount: "always",
       retry: false,
       queryFn: async (): Promise<KeepAwakeState> => {
         const prior = client.getQueryData<KeepAwakeState>(queryKey)
@@ -204,7 +206,7 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     return queryOptions({
       queryKey: remoteKeys.workspaces(current),
       enabled: scope !== undefined && enabled,
-      staleTime: Infinity,
+      staleTime: 60_000,
       retry: false,
       queryFn: async (): Promise<readonly RemoteWorkspaceInfo[]> => {
         const outcome = await link.request(current, "workspace.list")

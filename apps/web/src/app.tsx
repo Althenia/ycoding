@@ -4,7 +4,8 @@ import { useRouteMetadata } from "./seo/metadata"
 import { LandingPage, MarketingLayout, NotFoundPage } from "./ui/site"
 import { DocsIndexPage, DocsPage, useDocAnchor } from "./ui/docs"
 import { ChangelogPage } from "./ui/changelog"
-import { RemoteProvider } from "./remote/context"
+import { RemoteProvider, createRemoteSession, type RemoteSession } from "./remote/context"
+import { preloadKeepAwake, preloadUsage, preloadWorkspaces } from "./remote/preload"
 import type { RemoteStore } from "./remote/store"
 import { RemoteShell } from "./remote/ui/shell"
 import { InvitePage } from "./remote/ui/invite"
@@ -31,14 +32,25 @@ export function createAppRouter(options: { readonly createRemoteStore?: () => Re
     ),
   })
   const docsRoute = createRoute({ getParentRoute: () => marketingRoute, path: "/docs" })
+  // The remote session lives while the remote tree is mounted; a preload from outside it never creates one.
+  let session: RemoteSession | undefined
   const remoteRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/remote",
+    beforeLoad: ({ preload }) => {
+      if (session === undefined && !preload) session = createRemoteSession(options.createRemoteStore)
+      return { remote: session }
+    },
     component: () => {
       const pathname = useLocation({ select: (location) => location.pathname })
       const unknown = useChildMatches({ select: (matches) => matches.some((match) => match.fullPath === remoteUnknownPath) })
+      if (session === undefined) session = createRemoteSession(options.createRemoteStore)
+      const owned = session
+      onCleanup(() => {
+        if (session === owned) session = undefined
+      })
       return (
-        <RemoteProvider createStore={options.createRemoteStore}>
+        <RemoteProvider session={owned}>
           <Show when={!unknown()} fallback={<NotFoundPage />}>
             <RemoteShell path={pathname} />
           </Show>
@@ -46,9 +58,12 @@ export function createAppRouter(options: { readonly createRemoteStore?: () => Re
       )
     },
   })
+  const preloads = { usage: preloadUsage, settings: preloadKeepAwake, sessions: undefined }
   return createRouter({
     history: options.history,
     caseSensitive: true,
+    defaultPreload: "intent",
+    defaultPreloadStaleTime: 0,
     rewrite: {
       input: ({ url }) => {
         url.pathname = url.pathname.replace(/\/{2,}/g, "/").replace(/(.)\/$/, "$1")
@@ -72,8 +87,8 @@ export function createAppRouter(options: { readonly createRemoteStore?: () => Re
         createRoute({ getParentRoute: () => marketingRoute, path: "/changelog", component: ChangelogPage }),
       ]),
       remoteRoute.addChildren([
-        createRoute({ getParentRoute: () => remoteRoute, path: "/" }),
-        ...REMOTE_VIEWS.map((path) => createRoute({ getParentRoute: () => remoteRoute, path })),
+        createRoute({ getParentRoute: () => remoteRoute, path: "/", loader: ({ context }) => preloadWorkspaces(context.remote) }),
+        ...REMOTE_VIEWS.map((path) => createRoute({ getParentRoute: () => remoteRoute, path, loader: ({ context }) => preloads[path]?.(context.remote) })),
         createRoute({ getParentRoute: () => remoteRoute, path: "$" }),
       ]),
       createRoute({ getParentRoute: () => rootRoute, path: REMOTE_INVITE_PATH, component: InvitePage }),

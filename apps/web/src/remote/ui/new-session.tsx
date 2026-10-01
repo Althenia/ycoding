@@ -1,6 +1,6 @@
-import { createQuery } from "@tanstack/solid-query"
 import { Show, createEffect, createSignal, onCleanup, type JSX } from "solid-js"
 import { useRemote } from "../context"
+import { createRemoteQuery } from "../query"
 import { workspaceLabels } from "../view-model"
 import { MiniComposer, type ComposerSubmission } from "./composer"
 import { ComposerPicker } from "./composer-picker"
@@ -21,9 +21,9 @@ export function NewSessionComposer(props: { readonly onCreated: (sessionID: stri
   const state = () => remote.state()
   const creation = () => state().sessionCreation
   const connected = () => state().transport.kind === "open" && state().connection.kind === "connected"
-  const listed = createQuery(() => remote.queries.workspaces(remote.scope(), connected()))
-  const workspaces = () => listed.data ?? []
-  const workspaceStatus = () => listed.isFetching ? "loading" : listed.isError ? "error" : listed.isSuccess ? "ready" : "idle"
+  const listed = createRemoteQuery(remote.store.queryClient, () => remote.queries.workspaces(remote.scope(), connected()))
+  const workspaces = () => listed().data ?? []
+  const workspaceStatus = () => listed().isFetching ? "loading" : listed().isError ? "error" : listed().isSuccess ? "ready" : "idle"
   const workspace = () => workspaces().find((item) => item.id === workspaceID())
   const disabled = () => !connected() || workspaceStatus() !== "ready" || !workspace() || !!creation()
   const labels = () => workspaceLabels(workspaces())
@@ -48,10 +48,10 @@ export function NewSessionComposer(props: { readonly onCreated: (sessionID: stri
   return <section class="new-session-composer" aria-label="New session">
     <div class="new-session-composer__header"><h2 class="visually-hidden">New session</h2><div class="new-session-composer__brand"><BrandMark /></div></div>
     <Show when={!connected()}><p role="status">Connect to an online machine to create a session.</p></Show>
-    <Show when={workspaceStatus() === "error"}><p role="alert">{listed.error?.message ?? "Repositories could not be loaded."}</p></Show>
+    <Show when={workspaceStatus() === "error"}><p role="alert">{listed().error?.message ?? "Repositories could not be loaded."}</p></Show>
     <Show when={workspaceStatus() === "ready" && !workspaces().length}><p role="status">No previously opened repositories are available. Open a repository locally once, then refresh.</p></Show>
     <div class="new-session-composer__repository"><Show when={workspaceStatus() === "loading"} fallback={<ComposerPicker label="Repository" icon="folder" placeholder="Choose repository" value={workspaceID()} options={workspaces().map((item) => ({ value: item.id, label: labels().get(item.id) ?? item.name ?? "Repository" }))} disabled={!connected()} onChange={setWorkspaceID} />}><LoadingPlaceholder kind="repository" label="Loading previously opened repositories…" /></Show>
-      <button type="button" class="new-session-composer__refresh" aria-label="Refresh repositories" title="Refresh repositories" disabled={!connected() || workspaceStatus() === "loading"} onClick={() => void listed.refetch()}><Icon name="refresh" /></button>
+      <button type="button" class="new-session-composer__refresh" aria-label="Refresh repositories" title="Refresh repositories" disabled={!connected() || workspaceStatus() === "loading"} onClick={() => void listed().refetch()}><Icon name="refresh" /></button>
     </div>
     <Show when={creation()?.status === "creating"}><p role="status">Creating session…</p></Show>
     <Show when={creation()?.status === "unknown" || creation()?.status === "failed"}><div class="new-session__outcome" classList={{ "new-session__outcome--unknown": creation()?.status === "unknown" }} role="alert">

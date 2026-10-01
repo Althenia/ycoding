@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { dailySpend, donutGeometry, modelIdentity, providerDistribution, providerHeading, quotaWindow, relativeFreshness, reportKey, spendMetrics, tooltipPosition, usageBounds, visibleProviders, type UsageProvider } from "./usage-model"
+import { dailySpend, donutGeometry, modelIdentity, providerDistribution, providerHeading, quotaWindow, relativeFreshness, reportKey, spendMetrics, tooltipPosition, usageBounds, usageReportInputs, visibleProviders, type UsageProvider } from "./usage-model"
 
 const tokens = { input: 900, output: 100, reasoning: 20, cache: { read: 300, write: 40 } }
 const row = (label: string, cost?: number, costProvenance?: "recorded" | "current_catalog") => ({
@@ -127,4 +127,20 @@ test("local report bounds use exact DST and non-hour-offset midnights", () => {
   const report = { group: "day" as const, rows: [row("2026-03-07", 1, "recorded"), row("2026-03-08", 2, "recorded")], total: row("total"), rowCount: 2 }
   expect(dailySpend(report, now, "America/New_York").slice(-2).map((day) => [day.key, day.cost])).toEqual([["2026-03-07", 1], ["2026-03-08", 2]])
   expect(reportKey({ group: "day", timeZone: "America/New_York" })).not.toBe(reportKey({ group: "day" }))
+})
+
+test("usage report inputs stay identical within one day so revisits and preloads reuse the same reads", () => {
+  const morning = Date.UTC(2026, 8, 27, 1)
+  const evening = Date.UTC(2026, 8, 27, 22)
+  expect(usageReportInputs(evening, undefined)).toEqual(usageReportInputs(morning, undefined))
+  expect(usageReportInputs(morning, "Asia/Bangkok")).toEqual(usageReportInputs(Date.UTC(2026, 8, 27, 12), "Asia/Bangkok"))
+  expect(usageReportInputs(evening, "Asia/Bangkok"), "a new local day starts new reads").not.toEqual(usageReportInputs(morning, "Asia/Bangkok"))
+  const inputs = usageReportInputs(morning, "Asia/Bangkok")
+  const bounds = usageBounds(morning, "Asia/Bangkok")
+  expect(inputs.daily).toEqual({ group: "day", from: bounds.from, to: bounds.to, timeZone: "Asia/Bangkok", limit: 30, sort: "key", order: "asc" })
+  expect(inputs.monthly).toEqual({ group: "model", from: bounds.monthFrom, to: bounds.to, timeZone: "Asia/Bangkok", limit: 200, sort: "cost", order: "desc" })
+  expect(inputs.breakdown).toEqual({ group: "model", from: bounds.from, to: bounds.to, timeZone: "Asia/Bangkok", offset: 0, limit: 25, sort: "cost", order: "desc" })
+  expect(usageReportInputs(morning, undefined, { group: "agent", offset: 25, sort: "tokens", order: "asc" }).breakdown).toEqual({
+    group: "agent", from: usageBounds(morning).from, to: usageBounds(morning).to, offset: 25, limit: 25, sort: "tokens", order: "asc",
+  })
 })

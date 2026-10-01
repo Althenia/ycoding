@@ -1,4 +1,4 @@
-import { createMutation, createQuery } from "@tanstack/solid-query"
+import { createMutation } from "@tanstack/solid-query"
 import { useStore } from "@tanstack/solid-store"
 import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
@@ -9,6 +9,7 @@ import { InstallPWAButton } from "../../pwa/install-button"
 import { useTheme } from "../../theme/theme-store"
 import type { ThemePreference } from "../../theme/theme"
 import { useRemote } from "../context"
+import { createRemoteQuery } from "../query"
 import { keepAwakeView } from "../keep-awake"
 import { keepAwakeState } from "../queries"
 import { createPushHttp, createRemoteHttp } from "../http"
@@ -46,9 +47,9 @@ export function MachineSettings(): JSX.Element {
   const remote = useRemote()
   const state = () => remote.state()
   const reachable = () => state().activeDeviceID !== undefined && state().transport.kind === "open" && state().connection.kind === "connected"
-  const keepAwake = createQuery(() => remote.queries.keepAwake(remote.scope(), reachable()))
+  const keepAwake = createRemoteQuery(remote.store.queryClient, () => remote.queries.keepAwake(remote.scope(), reachable()))
   const setKeepAwake = createMutation(() => remote.queries.keepAwakeMutation(remote.scope()))
-  const awake = () => keepAwakeView({ keepAwake: keepAwakeState(keepAwake), reachable: reachable() })
+  const awake = () => keepAwakeView({ keepAwake: keepAwakeState(keepAwake()), reachable: reachable() })
   const availability = () => deviceAvailabilityView(accountReadState({ connection: state().connection, owner: state().owner }), state().devices.length, {
     devices: state().devices, activeDeviceID: state().activeDeviceID, sessionCount: state().sessions.length,
     unreachable: state().connection.kind === "offline",
@@ -74,7 +75,7 @@ export function MachineSettings(): JSX.Element {
         </label>
         <Show when={awake().retry}>
           <button type="button" class="button button--secondary button--small" aria-label="Retry Keep machine awake"
-            onClick={() => void keepAwake.refetch()}>Retry</button>
+            onClick={() => void keepAwake().refetch()}>Retry</button>
         </Show>
         <span id="machine-awake-status" class="field__hint machine-awake__status" data-tone={awake().tone} role="status" aria-live="polite">{awake().detail}</span>
         <span id="machine-awake-caveat" class="field__hint machine-awake__caveat">{awake().caveat}</span>

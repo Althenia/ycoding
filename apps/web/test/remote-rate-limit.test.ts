@@ -144,16 +144,16 @@ describe("remote request budget integration", () => {
         store.loadCatalog({ sessionID: "ses_2" }), store.loadCatalog({ workspaceID: "wsp_even" }),
         store.findFiles({ sessionID: "ses_2" }, "a"), store.findFiles({ workspaceID: "wsp_even" }, "a"),
       ])
-      for (let index = 0; index < 33; index += 1) await fixture.invalidate()
+      for (let index = 0; index < 123; index += 1) await fixture.invalidate()
       fixture.ping()
-      for (let index = 0; index < 31; index += 1)
+      for (let index = 0; index < 121; index += 1)
         expect((await store.findFiles({ sessionID: "ses_2" }, `query-${index}`)).status).toBe("ok")
       await waitFor(() => store.state().sessionListStatus === "ready" && store.state().catalogs["session:ses_2"]?.status === "ready", 30_000)
       expect(fixture.closed).toEqual([])
       expect(fixture.requests.length).toBeGreaterThan(RemoteLimits.maxClientRequestsPerWindow)
       expect(fixture.requests.filter((request) => request.operation === "session.status")).toHaveLength(1)
       expect(fixture.requests.filter((request) => request.operation === "session.catalog" || request.operation === "workspace.catalog")).toHaveLength(2)
-      expect(fixture.requests.filter((request) => request.operation === "session.file.find" || request.operation === "workspace.file.find")).toHaveLength(33)
+      expect(fixture.requests.filter((request) => request.operation === "session.file.find" || request.operation === "workspace.file.find")).toHaveLength(123)
       expect(store.state().connection.kind).toBe("connected")
     } finally { store.dispose(); await fixture.server.stop(true) }
   }, 60_000)
@@ -206,7 +206,7 @@ describe("remote request budget integration", () => {
   }, 60_000)
 
   test("bounds delayed requests, cancels unsent mutations on a drop, and never replays them", async () => {
-    const pacedBudget = 27
+    const pacedBudget = RemoteLimits.maxClientRequestsPerWindow - 3
     const fixture = await harness(0)
     const transport = createRemoteTransport({
       url: `ws://127.0.0.1:${fixture.server.port}`,

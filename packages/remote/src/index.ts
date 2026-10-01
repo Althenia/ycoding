@@ -213,7 +213,7 @@ export const RemoteLimits = {
   maxSessionIDChars: 128,
   maxErrorCodeChars: 64,
   maxErrorMessageChars: 512,
-  maxClientRequestsPerWindow: 30,
+  maxClientRequestsPerWindow: 120,
   clientRateWindowMs: 10_000,
   maxAgentMessagesPerWindow: 500,
   agentRateWindowMs: 10_000,

@@ -1,13 +1,13 @@
-import { createQuery } from "@tanstack/solid-query"
 import { batch, createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { useRemote } from "../context"
+import { createRemoteQuery } from "../query"
 import { usageRead } from "../queries"
 import { LoadingPlaceholder } from "./loading"
-import { dailySpend, donutGeometry, modelIdentity, money, providerDistribution, providerHeading, quotaWindow, relativeFreshness, spendMetrics, tokenCount, tooltipPosition, usageBounds, visibleProviders, type SpendDay, type UsageProvider, type UsageReport, type UsageReportInput, type UsageReportRow, type UsageWindow } from "./usage-model"
+import { dailySpend, donutGeometry, modelIdentity, money, providerDistribution, providerHeading, quotaWindow, relativeFreshness, spendMetrics, tokenCount, tooltipPosition, usageReportInputs, usageZoneKey, visibleProviders, type SpendDay, type UsageProvider, type UsageReport, type UsageReportInput, type UsageBreakdown, type UsageReportRow, type UsageWindow } from "./usage-model"
 import "./usage.css"
 
 const groups = ["model", "session", "project", "agent"] as const
-type BreakdownInput = UsageReportInput & { readonly group: (typeof groups)[number] }
+type BreakdownInput = UsageReportInput & UsageBreakdown
 const names = { model: "Model", session: "Session", project: "Project", agent: "Agent" }
 const columns = [
   { key: "steps", label: "Steps" }, { key: "tokens", label: "Tokens" }, { key: "input", label: "Input" },
@@ -24,7 +24,7 @@ export function UsagePage() {
   const openedAt = Date.now()
   const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone
   const [now, setNow] = createSignal(Date.now())
-  const [zoneMode, setZoneMode] = createSignal<"utc" | "local">(localStorage.getItem("ycoding.remote.usage.timeZone") === "local" ? "local" : "utc")
+  const [zoneMode, setZoneMode] = createSignal<"utc" | "local">(localStorage.getItem(usageZoneKey) === "local" ? "local" : "utc")
   const [group, setGroup] = createSignal<(typeof groups)[number]>("model")
   const [sort, setSort] = createSignal<UsageReportInput["sort"]>("cost")
   const [order, setOrder] = createSignal<UsageReportInput["order"]>("desc")
@@ -47,21 +47,19 @@ export function UsagePage() {
   const connected = createMemo(() => remote.state().transport.kind === "open")
   const selectedZone = () => zoneMode() === "local" ? localZone : undefined
   const zoneLabel = () => zoneMode() === "local" ? `Local · ${localZone}` : "UTC"
-  const zoneInput = () => selectedZone() === undefined ? {} : { timeZone: selectedZone() }
-  const bounds = createMemo(() => usageBounds(openedAt, selectedZone()))
-  const range = () => ({ from: bounds().from, to: bounds().to, ...zoneInput() })
-  const dailyInput = createMemo<UsageReportInput>(() => ({ group: "day", ...range(), limit: 30, sort: "key", order: "asc" }))
-  const monthlyInput = createMemo<UsageReportInput>(() => ({ group: "model", from: bounds().monthFrom, to: openedAt, ...zoneInput(), limit: 200, sort: "cost", order: "desc" }))
-  const breakdownInput = createMemo<BreakdownInput>(() => ({ group: group(), ...range(), offset: offset(), limit: 25, sort: sort(), order: order() }))
-  const providersQuery = createQuery(() => remote.queries.usageProviders(remote.scope(), connected()))
-  createQuery(() => remote.queries.usageSummary(remote.scope(), connected()))
-  const dailyQuery = createQuery(() => remote.queries.usageReport(remote.scope(), connected(), dailyInput()))
-  const monthlyQuery = createQuery(() => remote.queries.usageReport(remote.scope(), connected(), monthlyInput()))
-  const breakdownQuery = createQuery(() => remote.queries.usageReport(remote.scope(), connected(), breakdownInput()))
-  const providerRead = () => usageRead(providersQuery)
-  const daily = () => usageRead(dailyQuery)
-  const monthly = () => usageRead(monthlyQuery)
-  const breakdown = () => usageRead(breakdownQuery)
+  const reports = createMemo(() => usageReportInputs(openedAt, selectedZone(), { group: group(), offset: offset(), sort: sort(), order: order() }))
+  const dailyInput = createMemo<UsageReportInput>(() => reports().daily)
+  const monthlyInput = createMemo<UsageReportInput>(() => reports().monthly)
+  const breakdownInput = createMemo<BreakdownInput>(() => reports().breakdown)
+  const providersQuery = createRemoteQuery(remote.store.queryClient, () => remote.queries.usageProviders(remote.scope(), connected()))
+  createRemoteQuery(remote.store.queryClient, () => remote.queries.usageSummary(remote.scope(), connected()))
+  const dailyQuery = createRemoteQuery(remote.store.queryClient, () => remote.queries.usageReport(remote.scope(), connected(), dailyInput()))
+  const monthlyQuery = createRemoteQuery(remote.store.queryClient, () => remote.queries.usageReport(remote.scope(), connected(), monthlyInput()))
+  const breakdownQuery = createRemoteQuery(remote.store.queryClient, () => remote.queries.usageReport(remote.scope(), connected(), breakdownInput()))
+  const providerRead = () => usageRead(providersQuery())
+  const daily = () => usageRead(dailyQuery())
+  const monthly = () => usageRead(monthlyQuery())
+  const breakdown = () => usageRead(breakdownQuery())
   const retryReport = (input: UsageReportInput) => {
     const scope = remote.scope()
     if (scope !== undefined) void remote.queries.retryUsageReport(scope, input)
@@ -130,7 +128,7 @@ export function UsagePage() {
     const next = Math.max(0, (shownBreakdown()?.input.offset ?? 0) - 25)
     setOffset(next)
   }
-  createEffect(() => localStorage.setItem("ycoding.remote.usage.timeZone", zoneMode()))
+  createEffect(() => localStorage.setItem(usageZoneKey, zoneMode()))
   createEffect(() => {
     const current = remote.state().activeDeviceID
     if (current !== deviceID || current === undefined || remote.state().connection.kind === "signed-out") {

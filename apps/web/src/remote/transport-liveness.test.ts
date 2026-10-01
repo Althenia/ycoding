@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { RemoteLimits } from "@ycoding-ai/remote"
 import { parseClientMessage } from "@ycoding-ai/remote"
 import { createRemoteTransport, type RemoteTransportOptions } from "./transport"
 
@@ -74,14 +75,21 @@ function fixture() {
 test("a silent OPEN socket recovers without awaiting close or replaying sent and queued mutations", async () => {
   const f = fixture()
   try {
+    const budget = RemoteLimits.maxClientRequestsPerWindow - 3
+    for (let index = 0; index < budget - 2; index += 1) {
+      const outcome = f.transport.request("session.list", { timeoutMs: 0 })
+      const id = (JSON.parse(f.sockets[0]!.sent.at(-1)!) as { id: string }).id
+      f.sockets[0]!.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type: "response", id, ok: true, value: null }) }))
+      await outcome
+    }
     f.advance(30)
-    const mutations = Array.from({ length: 27 }, () => f.transport.request("session.interrupt", { sessionID: "ses_a", timeoutMs: 0 }))
-    expect(f.sockets[0]!.sent).toHaveLength(27)
+    const mutations = Array.from({ length: 2 }, () => f.transport.request("session.interrupt", { sessionID: "ses_a", timeoutMs: 0 }))
+    expect(f.sockets[0]!.sent).toHaveLength(budget)
     f.advance(10)
     expect(f.sockets[0]!.closes).toHaveLength(1)
     expect(f.transport.status().kind).toBe("reconnecting")
     expect(await mutations[0]).toMatchObject({ status: "unknown", error: { code: "outcome_unknown" } })
-    expect(await mutations[26]).toEqual({ status: "unavailable", reason: "not-connected" })
+    expect(await mutations[1]).toEqual({ status: "unavailable", reason: "not-connected" })
     f.advance(1)
     f.sockets[1]!.open()
     expect(f.sockets[1]!.sent).toEqual([])
