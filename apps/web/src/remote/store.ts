@@ -2595,7 +2595,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const owner = transport
       if (owner === undefined || container.state.transport.kind !== "open") return
       const key = catalogKey(target)
-      if (!options.refresh && container.state.catalogs[key] !== undefined) {
+      // A failed read is not a verdict: keeping it cached leaves the model and agent pickers
+      // disabled for the rest of the connection, so only a usable entry short-circuits.
+      const cached = container.state.catalogs[key]
+      if (!options.refresh && cached !== undefined && cached.status !== "error") {
         await catalogReads.get(key)
         return
       }

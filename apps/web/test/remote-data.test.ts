@@ -438,6 +438,28 @@ describe("remote data", () => {
       })
     } finally { await test.stop() }
   })
+  test("re-reads a catalog whose first read failed instead of caching the failure", async () => {
+    let failing = true
+    const test = await setup((request) => {
+      if (request.operation !== "session.catalog") return "default"
+      if (failing) return { ok: false, code: "internal_error", message: "Catalog read failed" }
+      return { ok: true, value: { agents: [], models: [], commands: [], skills: [], references: [], resources: [] } }
+    })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length === 2)
+      await test.store.selectSession("ses_a")
+      const target = { sessionID: "ses_a" }
+      await test.store.loadCatalog(target)
+      expect(test.store.state().catalogs["session:ses_a"]).toMatchObject({ status: "error" })
+      // A failed read must not become a cached verdict: the model picker stays disabled
+      // for as long as the catalog is not ready.
+      failing = false
+      await test.store.loadCatalog(target)
+      expect(test.store.state().catalogs["session:ses_a"]).toMatchObject({ status: "ready" })
+      expect(test.relay.requests.filter((request) => request.operation === "session.catalog")).toHaveLength(2)
+    } finally { await test.stop() }
+  })
   test("caches catalogs per target and connection, refreshes explicitly, and reads bounded file matches", async () => {
     const test = await setup((request) => {
       if (request.operation === "workspace.catalog" || request.operation === "session.catalog") return { ok: true, value: {
