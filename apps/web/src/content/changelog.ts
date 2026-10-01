@@ -22,6 +22,18 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.8.4",
+    date: "2026-10-01",
+    title: "Forced update restarts and steadier Session catalogs",
+    tags: ["Added", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Restart the background server while Sessions are running with `ycoding update --force` (`-f`), which reports how many running Sessions it interrupted." },
+      { tag: "Fixed", text: "Keep the composer's agent and model pickers usable: a connection heartbeat is no longer mistaken for a reconnect, so the Session catalog is kept while connected, and a missing catalog is requested again." },
+      { tag: "Fixed", text: "Report in `ycoding update` how many Sessions are actually running, instead of counting every Session with queued input, an undelivered subagent notice, or an active goal." },
+      { tag: "Fixed", text: "Settle a Session whose execution was ended by a stopped server as interrupted on the next start and raise attention, instead of leaving it silently reading as idle. It is never resumed or retried automatically." },
+    ],
+  },
+  {
     version: "0.8.3",
     date: "2026-10-01",
     title: "Cursor models and quotas",

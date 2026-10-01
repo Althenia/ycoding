@@ -6,6 +6,30 @@ const TAGS = ["Added", "Changed", "Fixed"] as const
 describe("release entries", () => {
   test("includes the latest TUI release at the top of the public changelog", () => {
     expect(RELEASES[0]).toEqual({
+      version: "0.8.4",
+      date: "2026-10-01",
+      title: "Forced update restarts and steadier Session catalogs",
+      tags: ["Added", "Fixed"],
+      changes: [
+        {
+          tag: "Added",
+          text: "Restart the background server while Sessions are running with `ycoding update --force` (`-f`), which reports how many running Sessions it interrupted.",
+        },
+        {
+          tag: "Fixed",
+          text: "Keep the composer's agent and model pickers usable: a connection heartbeat is no longer mistaken for a reconnect, so the Session catalog is kept while connected, and a missing catalog is requested again.",
+        },
+        {
+          tag: "Fixed",
+          text: "Report in `ycoding update` how many Sessions are actually running, instead of counting every Session with queued input, an undelivered subagent notice, or an active goal.",
+        },
+        {
+          tag: "Fixed",
+          text: "Settle a Session whose execution was ended by a stopped server as interrupted on the next start and raise attention, instead of leaving it silently reading as idle. It is never resumed or retried automatically.",
+        },
+      ],
+    })
+    expect(RELEASES[1]).toEqual({
       version: "0.8.3",
       date: "2026-10-01",
       title: "Cursor models and quotas",
@@ -29,7 +53,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[1]).toEqual({
+    expect(RELEASES[2]).toEqual({
       version: "0.8.2",
       date: "2026-10-01",
       title: "Cursor provider",
@@ -49,7 +73,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[2]).toEqual({
+    expect(RELEASES[3]).toEqual({
       version: "0.8.1",
       date: "2026-10-01",
       title: "Instant remote view transitions",
@@ -77,7 +101,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[3]).toEqual({
+    expect(RELEASES[4]).toEqual({
       version: "0.8.0",
       date: "2026-10-01",
       title: "Multiplexed remote delivery and windowed transcripts",
@@ -948,6 +972,7 @@ describe("release entries", () => {
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
     expect(versions.slice(0, 15)).toEqual([
+      "0.8.4",
       "0.8.3",
       "0.8.2",
       "0.8.1",
@@ -962,7 +987,6 @@ describe("release entries", () => {
       "0.7.10",
       "0.7.9",
       "0.7.8",
-      "0.7.7",
     ])
     expect(new Set(versions).size).toBe(versions.length)
     const sorted = [...versions].sort((a, b) => compare(b, a))
