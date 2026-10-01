@@ -40,12 +40,12 @@ export default Runtime.handler(UpdateCommand, (input) =>
       process.stderr.write(`ycoding update failed: ${message(error)}\n`)
       return undefined
     }
-  }).pipe(Effect.flatMap((installed) => (installed === undefined ? Effect.void : restartIdleServer(installed)))),
+  }).pipe(Effect.flatMap((installed) => (installed === undefined ? Effect.void : restartServer(installed, input.force)))),
 )
 
 const restartCommand = "`ycoding service restart`"
 
-function restartIdleServer(installed: string) {
+function restartServer(installed: string, force: boolean) {
   return Effect.gen(function* () {
     const options = yield* ServiceConfig.options()
     const endpoint = yield* Service.discover({ ...options, version: undefined })
@@ -66,14 +66,18 @@ function restartIdleServer(installed: string) {
       )
       return
     }
-    const running = outstanding.success.data.length
-    if (running > 0) {
+    const running = outstanding.success.running.length
+    if (running > 0 && !force) {
       process.stdout.write(
         `${running} ${running === 1 ? "Session has" : "Sessions have"} running work, so the background server was not restarted. Run ${restartCommand} to apply the update once they finish.\n`,
       )
       return
     }
-    process.stdout.write("Restarting the background server...\n")
+    if (running > 0)
+      process.stdout.write(
+        `Interrupting ${running} running ${running === 1 ? "Session" : "Sessions"} to restart the background server...\n`,
+      )
+    else process.stdout.write("Restarting the background server...\n")
     yield* ServerConnection.managedService(options).restart()
     process.stdout.write("Restarted the background server\n")
   }).pipe(

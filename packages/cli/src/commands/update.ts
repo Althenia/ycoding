@@ -8,5 +8,10 @@ export const UpdateCommand = Spec.make("update", {
       Flag.withDescription("Install a specific release version instead of the latest"),
       Flag.optional,
     ),
+    force: Flag.boolean("force").pipe(
+      Flag.withAlias("f"),
+      Flag.withDescription("Restart the background server even while Sessions are running, interrupting them"),
+      Flag.withDefault(false),
+    ),
   },
 })

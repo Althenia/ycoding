@@ -11,8 +11,9 @@ import { ServiceConfig } from "../src/services/service-config"
 const marker = "UPDATE_HANDLER_RESULT:"
 
 type Scenario = {
-  readonly server: "absent" | { readonly outstanding: ReadonlyArray<string> | "error" }
+  readonly server: "absent" | { readonly outstanding: ReadonlyArray<string> | "error"; readonly running?: ReadonlyArray<string> }
   readonly install?: "fails"
+  readonly force?: boolean
   readonly requested?: string
   readonly spawn?: "fails"
 }
@@ -49,7 +50,7 @@ else {
 
   test("a busy background server is left running and the manual command is printed", async () => {
     for (const sessions of [["ses_a"], ["ses_a", "ses_b"]]) {
-      const outcome = await run({ server: { outstanding: sessions } })
+      const outcome = await run({ server: { outstanding: [...sessions, "ses_notice", "ses_goal"], running: sessions } })
 
       expect(outcome.exitCode).toBe(0)
       expect(outcome.stderr).toBe("")
@@ -57,12 +58,60 @@ else {
       expect(outcome.stdout).toContain(
         sessions.length === 1 ? "1 Session has running work" : "2 Sessions have running work",
       )
+      expect(outcome.stdout).not.toContain("4 Sessions")
       expect(outcome.stdout).toContain("ycoding service restart")
       expect(outcome.stdout).not.toContain("Restarted the background server")
       expect(withoutHealth(outcome.oldRequests)).toEqual(outstandingOnly)
       expect(outcome.registration).toEqual({ id: "old-service", version: "1.0.0" })
       expect(outcome.newRequests).toEqual([])
     }
+  }, 30_000)
+
+  test("outstanding Sessions that are not running do not block the restart", async () => {
+    const outcome = await run({ server: { outstanding: ["ses_notice", "ses_goal"], running: [] } })
+
+    expect(outcome.stdout).toContain("Restarted the background server")
+    expect(outcome.stdout).not.toContain("running work")
+    expect(withoutHealth(outcome.oldRequests)).toEqual([...outstandingOnly, "POST /api/service/stop"])
+    expect(outcome.registration).toEqual({ id: "new-service", version: "2.0.0" })
+  }, 30_000)
+
+  test("a forced update restarts a busy background server and reports the interrupted Sessions", async () => {
+    for (const sessions of [["ses_a"], ["ses_a", "ses_b"]]) {
+      const outcome = await run({
+        server: { outstanding: [...sessions, "ses_notice", "ses_goal"], running: sessions },
+        force: true,
+      })
+
+      expect(outcome.exitCode).toBe(0)
+      expect(outcome.stderr).toBe("")
+      expect(outcome.stdout).toContain(
+        sessions.length === 1
+          ? "Interrupting 1 running Session to restart the background server"
+          : "Interrupting 2 running Sessions to restart the background server",
+      )
+      expect(outcome.stdout).not.toContain("4 ")
+      expect(outcome.stdout).toContain("Restarted the background server")
+      expect(outcome.stdout).not.toContain("was not restarted")
+      expect(withoutHealth(outcome.oldRequests)).toEqual([...outstandingOnly, "POST /api/service/stop"])
+      expect(outcome.registration).toEqual({ id: "new-service", version: "2.0.0" })
+    }
+  }, 30_000)
+
+  test("a forced update restarts an idle background server without reporting interrupted Sessions", async () => {
+    const outcome = await run({ server: { outstanding: ["ses_notice"], running: [] }, force: true })
+
+    expect(outcome.stdout).toContain("Restarted the background server")
+    expect(outcome.stdout).not.toContain("Interrupting")
+    expect(withoutHealth(outcome.oldRequests)).toEqual([...outstandingOnly, "POST /api/service/stop"])
+  }, 30_000)
+
+  test("a forced update does not restart a background server whose running work cannot be read", async () => {
+    const outcome = await run({ server: { outstanding: "error" }, force: true })
+
+    expect(outcome.stderr).toContain("Could not check the background server for running work")
+    expect(withoutHealth(outcome.oldRequests)).toEqual(outstandingOnly)
+    expect(outcome.registration).toEqual({ id: "old-service", version: "1.0.0" })
   }, 30_000)
 
   test("a background server whose running work cannot be read is treated as busy", async () => {
@@ -174,7 +223,7 @@ async function runHandler(scenario: Scenario) {
   const oldRequests: string[] = []
   const installs: string[] = []
   await fs.mkdir(path.dirname(registration), { recursive: true })
-  const old = scenario.server === "absent" ? undefined : await startOldServer(scenario.server.outstanding, registration, oldRequests)
+  const old = scenario.server === "absent" ? undefined : await startOldServer(scenario.server.outstanding, scenario.server.running ?? [], registration, oldRequests)
   const actual = await import("../src/update/update")
   await mock.module("../src/update/update", () => ({
     ...actual,
@@ -202,7 +251,7 @@ async function runHandler(scenario: Scenario) {
   })
   try {
     await Effect.runPromise(
-      update({ version: Option.some(scenario.requested ?? "2.0.0") }).pipe(
+      update({ version: Option.some(scenario.requested ?? "2.0.0"), force: scenario.force ?? false }).pipe(
         Effect.provide(layer),
         Effect.provide(NodeFileSystem.layer),
       ),
@@ -239,6 +288,7 @@ async function runHandler(scenario: Scenario) {
 
 async function startOldServer(
   outstanding: ReadonlyArray<string> | "error",
+  running: ReadonlyArray<string>,
   registration: string,
   requests: string[],
 ) {
@@ -254,7 +304,7 @@ async function startOldServer(
       if (url.pathname === "/api/session/outstanding")
         return outstanding === "error"
           ? new Response("unavailable", { status: 500 })
-          : Response.json({ data: outstanding, failed: [] })
+          : Response.json({ data: outstanding, running, failed: [] })
       if (url.pathname === "/api/service/stop") {
         rmSync(registration, { force: true })
         holder.kill()
