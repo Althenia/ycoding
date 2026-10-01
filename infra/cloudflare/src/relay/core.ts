@@ -179,18 +179,18 @@ export function createRelay(deps: RelayDeps) {
     }))
   }
 
-  const recordNotices = async (operation: () => { readonly notices: readonly RemoteNotice[]; readonly total: number }): Promise<readonly RemoteNotice[]> => {
+  const recordNotices = async (operation: () => { readonly notices: readonly RemoteNotice[]; readonly total: number }): Promise<readonly RemoteNotice[] | undefined> => {
     try {
       const recorded = operation()
       for (let start = 0; start < recorded.notices.length; start += RemoteLimits.maxNoticeBatch)
         await sendToClients(serializeNoticeFrame({ type: "notice.added", notices: recorded.notices.slice(start, start + RemoteLimits.maxNoticeBatch), total: recorded.total }), true)
       return recorded.notices
     } catch {
-      if (noticeFault) return []
+      if (noticeFault) return undefined
       noticeFault = true
       try { deps.notices.markUnavailable() } catch { console.warn("Notification sync failure marker could not be stored") }
       await sendToClients(serializeNoticeFrame({ type: "notice.unavailable" }), true)
-      return []
+      return undefined
     }
   }
 
@@ -589,7 +589,7 @@ export function createRelay(deps: RelayDeps) {
       }
       if (message.type === "completions") {
         const recorded = await recordNotices(() => deps.notices.complete(message.data, message.more))
-        await deliverAlerts(current.ownerID, recorded.map((notice) => ({ event: { category: "agent-completed", sessionID: notice.sessionID,
+        await deliverAlerts(current.ownerID, (recorded ?? []).map((notice) => ({ event: { category: "agent-completed", sessionID: notice.sessionID,
           deviceID: current.deviceID, noticeID: notice.id }, item: { kind: "notice", notice } })))
         return
       }
@@ -603,12 +603,10 @@ export function createRelay(deps: RelayDeps) {
           const oldAttention = new Set(before.attention)
           const events = message.attention.filter((sessionID) => !oldAttention.has(sessionID)).map((sessionID) => ({ category: "approval-requested" as const, sessionID }))
           const recorded = events.length === 0 ? [] : await recordNotices(() => deps.notices.append(events.map((event) => ({ ...event, createdAt: deps.now() }))))
-          await deliverAlerts(current.ownerID, events.map((event, index) => {
-            const notice = recorded[index]
-            return notice === undefined
-              ? { event: { ...event, deviceID: current.deviceID } }
-              : { event: { ...event, deviceID: current.deviceID, noticeID: notice.id }, item: { kind: "notice", notice } }
-          }))
+          await deliverAlerts(current.ownerID, recorded === undefined
+            ? events.map((event) => ({ event: { ...event, deviceID: current.deviceID } }))
+            : recorded.map((notice) => ({ event: { category: notice.category, sessionID: notice.sessionID,
+              deviceID: current.deviceID, noticeID: notice.id }, item: { kind: "notice", notice } })))
         }
         return
       }

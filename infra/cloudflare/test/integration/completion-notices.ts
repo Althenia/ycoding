@@ -70,7 +70,7 @@ export default {async fetch(request,env){
   const call = async (body: unknown) => {
     const response = await fetch(origin, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
     check(response.status === 200, `Completion fixture returned ${response.status}`)
-    return await response.json() as { page: { total: number; notices: { id: string; sessionID: string }[] }; frames: { type: string }[]; pushes: { noticeID: string }[] }
+    return await response.json() as { page: { total: number; notices: { id: string; sessionID: string }[] }; frames: { type: string }[]; pushes: { noticeID: string; sessionID: string }[] }
   }
   const receipt = (sessionID: string, seq: number) => ({ id: `evt_${sessionID}_${seq}`, sessionID, seq, created: 1000 + seq })
   const frame = (data: ReturnType<typeof receipt>[], more = false) => ({ type: "completions", data, more })
@@ -102,7 +102,35 @@ export default {async fetch(request,env){
   check(restored.page.total === 0 && restored.pushes.length === 0 && restored.frames.length === 0, "Restart or readAll erased completion dedup")
   const newer = await call({ frame: frame([receipt("ses_0", 13)]) })
   check(newer.page.total === 1 && newer.pushes.length === 1 && newer.pushes[0]?.noticeID === "ntc_4", "Restart lost initial-sync marker or notice sequence")
-  console.log("PASS: local workerd+D1 health, real Durable Object kv+SQL transaction rollback/retry, paged silent baseline, receipt-only notices, duplicate/older suppression, readAll and process restart; push dispatch captured locally")
+  const status = (attention: string[]) => ({ type: "status", running: attention.length === 0 ? ["ses_retry"] : [], attention, failed: attention })
+  await call({ frame: status([]) })
+  const attention = await call({ frame: status(["ses_retry"]) })
+  check(attention.page.total === 2 && attention.pushes.length === 1, "New attention did not notify")
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await call({ frame: status([]) })
+    const repeated = await call({ frame: status(["ses_retry"]) })
+    check(repeated.page.total === 2 && repeated.pushes.length === 0 && repeated.frames.every((item) => !item.type.startsWith("notice.")),
+      "Retry repeated an unread attention notice or alert")
+  }
+  await call({ frame: status([]) })
+  const another = await call({ frame: status(["ses_retry", "ses_other"]) })
+  check(another.page.total === 3 && another.pushes.length === 1 && another.pushes[0]?.sessionID === "ses_other" &&
+    another.page.notices.some((notice) => notice.id === another.pushes[0]?.noticeID && notice.sessionID === "ses_other"),
+    "Coalesced attention hid or mismatched another Session's alert")
+  worker?.kill()
+  if (worker) await worker.exited
+  worker = undefined
+  await start()
+  await call({ frame: status([]) })
+  const persistedAttention = await call({ frame: status(["ses_retry"]) })
+  check(persistedAttention.page.total === 3 && persistedAttention.pushes.length === 0 &&
+    persistedAttention.frames.every((item) => !item.type.startsWith("notice.")), "Restart replayed unread attention")
+  await call({ readAll: true })
+  await call({ frame: status([]) })
+  const afterRead = await call({ frame: status(["ses_retry"]) })
+  check(afterRead.page.total === 1 && afterRead.pushes.length === 1 && afterRead.pushes[0]?.sessionID === "ses_retry",
+    "Marking attention read did not permit a fresh alert")
+  console.log("PASS: local workerd+D1 health, real Durable Object kv+SQL transaction rollback/retry, paged silent baseline, receipt-only completions, unread attention coalescing, distinct Sessions, readAll and process restart; push dispatch captured locally")
 } finally {
   worker?.kill()
   if (worker) await worker.exited

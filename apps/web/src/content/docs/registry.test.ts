@@ -105,7 +105,7 @@ describe("page structure", () => {
     expect(section?.blocks.flatMap((block) => block.kind === "table" ? block.rows.map((row) => row[0]) : [])).toEqual(["Work finished", "Needs your attention", "Machine offline"])
     expect(section?.blocks.flatMap((block) => block.kind === "table" ? block.rows.map((row) => row[1]) : [])).toEqual([
       "Get notified after the agent declares its requested work finished and verified, its final reply settles, and no input, subagent, shell or goal work remains pending. An ordinary reply or idle status alone does not trigger an alert. Reconnecting does not repeat an accepted completion.",
-      "Get notified when a Session needs your decision, a guardrail blocks an action, or a run fails. A later run clears failure attention.",
+      "Get notified when a Session needs your decision, a guardrail blocks an action, or a run fails. Each Session keeps one unread stored attention notice; retries do not repeat its alert until you read it. A later run clears failure attention.",
       "Get notified when a paired machine stays disconnected from the relay for 40 seconds, so a routine reconnect raises no alert. An open workspace alerts for its selected machine, and Push to this device alerts a closed browser or app; each browser shows one System alert per outage. A browser-only relay disconnect does not establish that the machine is offline.",
     ])
     expect(text).toContain("System switch also decides whether Push to this device")

@@ -22,6 +22,15 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.8.6",
+    date: "2026-10-01",
+    title: "Quieter attention notifications",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Keep one unread Needs your attention notice per Session across retries, reconnects, and relay restarts, instead of repeating alerts. Marking it read allows a fresh alert the next time that Session needs attention; other Sessions and work-completion notices stay independent." },
+    ],
+  },
+  {
     version: "0.8.5",
     date: "2026-10-01",
     title: "Machine memory and steadier Session status",

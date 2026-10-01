@@ -6,6 +6,18 @@ const TAGS = ["Added", "Changed", "Fixed"] as const
 describe("release entries", () => {
   test("includes the latest TUI release at the top of the public changelog", () => {
     expect(RELEASES[0]).toEqual({
+      version: "0.8.6",
+      date: "2026-10-01",
+      title: "Quieter attention notifications",
+      tags: ["Fixed"],
+      changes: [
+        {
+          tag: "Fixed",
+          text: "Keep one unread Needs your attention notice per Session across retries, reconnects, and relay restarts, instead of repeating alerts. Marking it read allows a fresh alert the next time that Session needs attention; other Sessions and work-completion notices stay independent.",
+        },
+      ],
+    })
+    expect(RELEASES[1]).toEqual({
       version: "0.8.5",
       date: "2026-10-01",
       title: "Machine memory and steadier Session status",
@@ -21,7 +33,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[1]).toEqual({
+    expect(RELEASES[2]).toEqual({
       version: "0.8.4",
       date: "2026-10-01",
       title: "Forced update restarts and steadier Session catalogs",
@@ -45,7 +57,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[2]).toEqual({
+    expect(RELEASES[3]).toEqual({
       version: "0.8.3",
       date: "2026-10-01",
       title: "Cursor models and quotas",
@@ -69,7 +81,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[3]).toEqual({
+    expect(RELEASES[4]).toEqual({
       version: "0.8.2",
       date: "2026-10-01",
       title: "Cursor provider",
@@ -89,7 +101,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[4]).toEqual({
+    expect(RELEASES[5]).toEqual({
       version: "0.8.1",
       date: "2026-10-01",
       title: "Instant remote view transitions",
@@ -117,7 +129,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[5]).toEqual({
+    expect(RELEASES[6]).toEqual({
       version: "0.8.0",
       date: "2026-10-01",
       title: "Multiplexed remote delivery and windowed transcripts",
@@ -988,6 +1000,7 @@ describe("release entries", () => {
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
     expect(versions.slice(0, 15)).toEqual([
+      "0.8.6",
       "0.8.5",
       "0.8.4",
       "0.8.3",
@@ -1002,7 +1015,6 @@ describe("release entries", () => {
       "0.7.12",
       "0.7.11",
       "0.7.10",
-      "0.7.9",
     ])
     expect(new Set(versions).size).toBe(versions.length)
     const sorted = [...versions].sort((a, b) => compare(b, a))

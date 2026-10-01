@@ -58,7 +58,7 @@ export function createNoticeStore(storage: NoticeStorage): NoticeStore {
         if (events.length === 0) return { notices: [], total: count() }
         const before = count()
         const rows = sql.exec(
-          "INSERT INTO notice (category, session_id, created_at) SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]') FROM json_each(?) ORDER BY CAST(key AS INTEGER) RETURNING seq, category, session_id, created_at",
+          "INSERT INTO notice (category, session_id, created_at) SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]') FROM json_each(?) WHERE json_extract(value, '$[0]') != 'approval-requested' OR NOT EXISTS (SELECT 1 FROM notice WHERE category = 'approval-requested' AND session_id = json_extract(value, '$[1]')) ORDER BY CAST(key AS INTEGER) RETURNING seq, category, session_id, created_at",
           JSON.stringify(events.map((event) => [event.category, event.sessionID, event.createdAt])),
         ).toArray() as Row[]
         total = before + rows.length

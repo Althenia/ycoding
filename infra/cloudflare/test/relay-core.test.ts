@@ -1139,6 +1139,62 @@ describe("relay core: notice log", () => {
     h.noticeFramesTo(connectionID).filter((frame) => frame.type === "notice.added").flatMap((frame) => frame.notices as RemoteNotice[])
   const attention = (count: number, prefix = "ses_n") => Array.from({ length: count }, (_, index) => `${prefix}${index}`)
 
+  test("repeated failure and approval transitions keep one unread notice and alert until read", async () => {
+    const h = harness()
+    await attachBoth(h)
+    await subscribe(h, "client-1")
+    await status(h, ["ses_a"], [])
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await status(h, ["ses_a"], [])
+      await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: ["ses_a"], failed: ["ses_a"] }))
+    }
+    await h.relay.settleDeliveries()
+    expect(h.storedNotices()).toEqual([
+      { id: "ntc_1", category: "approval-requested", sessionID: "ses_a", createdAt: h.at() },
+    ])
+    expect(h.pushed).toEqual([
+      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_1" },
+    ])
+    expect(added(h, "client-1")).toEqual(h.storedNotices())
+    expect(h.presentedTo("client-1")).toEqual(["ntc_1"])
+
+    await status(h, ["ses_a"], [])
+    await status(h, [], ["ses_a", "ses_b"])
+    await h.relay.settleDeliveries()
+    expect(h.storedNotices().map((notice) => notice.sessionID)).toEqual(["ses_a", "ses_b"])
+    expect(h.pushed.at(-1)).toEqual({ accountID: "usr_1", category: "approval-requested", sessionID: "ses_b", deviceID: "dev_1", noticeID: "ntc_2" })
+    expect(h.pushed).toHaveLength(2)
+    expect(h.presentedTo("client-1")).toEqual(["ntc_1", "ntc_2"])
+
+    await readIDs(h, "client-1", ["ntc_1"])
+    await status(h, ["ses_a"], ["ses_b"])
+    await status(h, [], ["ses_a", "ses_b"])
+    await h.relay.settleDeliveries()
+    expect(h.pushed.at(-1)).toEqual({ accountID: "usr_1", category: "approval-requested", sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_3" })
+    expect(h.pushed).toHaveLength(3)
+    expect(h.presentedTo("client-1")).toEqual(["ntc_1", "ntc_2", "ntc_3"])
+  })
+
+  test("an unread attention notice prevents repeat alerts after a relay restart", async () => {
+    const database = new Database(":memory:")
+    const statusStore: { value?: RemoteStatus } = {}
+    const first = harness({ database, statusStore })
+    await attachBoth(first)
+    await status(first, ["ses_a"], [])
+    await status(first, [], ["ses_a"])
+    await status(first, ["ses_a"], [])
+    const restored = harness({ database, statusStore })
+    await attachBoth(restored)
+    await subscribe(restored, "client-1")
+    await status(restored, [], ["ses_a"])
+    await restored.relay.settleDeliveries()
+    expect(restored.storedNotices()).toEqual(first.storedNotices())
+    expect(restored.storedNotices()).toHaveLength(1)
+    expect(restored.pushed).toEqual([])
+    expect(restored.presentedTo("client-1")).toEqual([])
+    expect(added(restored, "client-1")).toEqual([])
+  })
+
   test("records attention transitions and explicit completions, broadcasting to subscribed clients only", async () => {
     const h = harness({ withoutPush: true })
     await attachBoth(h)
@@ -1354,7 +1410,10 @@ describe("relay core: notice log", () => {
     await status(h, [], [])
     expect(h.storedNotices()).toHaveLength(1)
     expect(h.noticeFramesTo("client-1")).toEqual([{ type: "notice.unavailable" }])
-    expect(h.pushed.length).toBeGreaterThan(0)
+    expect(h.pushed).toEqual([
+      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_b", deviceID: "dev_1", noticeID: "ntc_1" },
+      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_c", deviceID: "dev_1" },
+    ])
     await subscribe(h, "client-2")
     expect(pageOf(h, "client-2", "sub_client-2")).toMatchObject({ total: 1, unavailable: true })
     failing = false

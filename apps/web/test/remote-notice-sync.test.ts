@@ -203,6 +203,7 @@ async function relayHarness() {
   const complete = (sessionIDs: readonly string[]) => relay.handleAgentMessage("agent", JSON.stringify({ type: "completions", data: sessionIDs.map((sessionID) => ({ id: `evt_fixture_${++completionSeq}`, seq: completionSeq, created: Date.now(), sessionID })), more: false }))
   return {
     browser, status, complete, agentRequests,
+    settleDeliveries: relay.settleDeliveries,
     signIn: () => pushServer.signIn(), enablePush, renewPush, owners: () => pushServer.owners(),
     answerPush: (name: string, answer: PushServiceAnswer) => { const target = endpoints.get(endpointFor(name)); if (target) target.answer = answer },
     holdPush: () => {
@@ -518,6 +519,44 @@ describe("device-synced notices through the real relay core", () => {
 describe("one System alert per notice and browser through the real router, push store, sender, and relay core", () => {
   const tags = (alerts: readonly DesktopAlert[]) => alerts.map((alert) => alert.tag)
 
+  test("retries keep one unread attention notice across browsers and alert again after it is read", async () => {
+    const harness = await relayHarness()
+    try {
+      await harness.status([], [])
+      const first = await harness.browser()
+      const second = await harness.browser()
+      const shown = await harness.enablePush(first.session, "laptop")
+      await harness.status([], ["ses_a"])
+      await waitFor(() => shown.length === 1 && second.alerts.length === 1)
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        await harness.status(["ses_a"], [])
+        await harness.status([], ["ses_a"])
+      }
+      await harness.settleDeliveries()
+      await harness.status(["ses_marker"], [])
+      await waitFor(() => [first, second].every((browser) => browser.store.state().sessionStatus?.running.has("ses_marker")))
+      expect(harness.stored()).toHaveLength(1)
+      for (const browser of [first, second]) {
+        expect(entryIDs(browser.store)).toEqual(["ntc_1"])
+        expect(browser.store.state().noticeSync.total).toBe(1)
+      }
+      expect(shown).toEqual(["ycoding-dev_test-ntc_1"])
+      expect(first.alerts).toEqual([])
+      expect(tags(second.alerts)).toEqual(["ycoding-dev_test-ntc_1"])
+
+      await second.store.readNotification("ntc_1")
+      await waitFor(() => [first, second].every((browser) => browser.store.state().noticeSync.total === 0))
+      await harness.status([], ["ses_a"])
+      await harness.settleDeliveries()
+      await waitFor(() => shown.length === 2 && second.alerts.length === 2)
+      expect(shown).toEqual(["ycoding-dev_test-ntc_1", "ycoding-dev_test-ntc_2"])
+      expect(first.alerts).toEqual([])
+      expect(tags(second.alerts)).toEqual(shown)
+      first.store.dispose()
+      second.store.dispose()
+    } finally { await harness.stop() }
+  })
+
   test("a browser whose push the service accepted shows each notice once from its service worker and never from the open page", async () => {
     const harness = await relayHarness()
     try {
@@ -543,15 +582,15 @@ describe("one System alert per notice and browser through the real router, push 
       await waitFor(() => tab.alerts.length === 1)
       harness.answerPush("laptop", "expired")
       await harness.status([], [])
-      await harness.status([], ["ses_a"])
+      await harness.status([], ["ses_b"])
       await waitFor(() => tab.alerts.length === 2)
       expect(await harness.owners()).toEqual([])
       await harness.status([], [])
-      await harness.status([], ["ses_a"])
+      await harness.status([], ["ses_c"])
       await waitFor(() => tab.alerts.length === 3)
       await harness.enablePush(tab.session, "laptop-2", "unreachable")
       await harness.status([], [])
-      await harness.status([], ["ses_a"])
+      await harness.status([], ["ses_d"])
       await waitFor(() => tab.store.state().notifications.length === 4)
       await Bun.sleep(100)
       expect(tags(tab.alerts)).toEqual(["ycoding-dev_test-ntc_1", "ycoding-dev_test-ntc_2", "ycoding-dev_test-ntc_3"])
@@ -608,7 +647,7 @@ describe("the relay's presentation choice across page lifetimes", () => {
       await waitFor(() => tab.alerts.length === 1)
       const shown = await harness.enablePush(tab.session, "laptop")
       await harness.status([], [])
-      await harness.status([], ["ses_a"])
+      await harness.status([], ["ses_b"])
       await waitFor(() => shown.length === 1 && tab.store.state().notifications.length === 2)
       await Bun.sleep(100)
       expect(tags(tab.alerts)).toEqual(["ycoding-dev_test-ntc_1"])
@@ -657,7 +696,7 @@ describe("a service worker renewal of this browser's push subscription", () => {
       expect(renewal.statuses).toEqual([200])
       expect(await harness.owners()).toEqual([[endpointFor("new"), first.session.sessionID]])
       await harness.status([], [])
-      await harness.status([], ["ses_a"])
+      await harness.status([], ["ses_b"])
       await waitFor(() => renewal.shown.length === 2 && second.store.state().notifications.length === 2)
       await Bun.sleep(100)
       expect(renewal.shown).toEqual(["ycoding-dev_test-ntc_1", "ycoding-dev_test-ntc_2"])
@@ -714,7 +753,7 @@ describe("a service worker renewal of this browser's push subscription", () => {
       const renewal = await harness.renewPush(tab.session, "old", "new")
       expect(renewal.statuses).toEqual([404])
       await harness.status([], [])
-      await harness.status([], ["ses_a"])
+      await harness.status([], ["ses_b"])
       await waitFor(() => tab.alerts.length === 2)
       await Bun.sleep(100)
       expect(tab.alerts.map((alert) => alert.tag)).toEqual(["ycoding-dev_test-ntc_1", "ycoding-dev_test-ntc_2"])

@@ -94,6 +94,42 @@ describe("completion receipt SQLite and transactional KV", () => {
 const events = (count: number, offset = 0) => Array.from({ length: count }, (_, index) => event(offset + index))
 
 describe("per-notice SQLite store", () => {
+  test("coalesces unread attention per Session without coalescing work completions", () => {
+    const store = createNoticeStore(sqlPort(new Database(":memory:")))
+    expect(store.append([
+      event(1, "approval-requested"),
+      event(2, "approval-requested"),
+      event(1),
+      { ...event(1), createdAt: 2_002 },
+    ])).toEqual({
+      notices: [
+        { id: "ntc_1", category: "approval-requested", sessionID: "ses_1", createdAt: 1_001 },
+        { id: "ntc_2", category: "approval-requested", sessionID: "ses_2", createdAt: 1_002 },
+        { id: "ntc_3", category: "agent-completed", sessionID: "ses_1", createdAt: 1_001 },
+        { id: "ntc_4", category: "agent-completed", sessionID: "ses_1", createdAt: 2_002 },
+      ],
+      total: 4,
+    })
+    expect(store.append([event(1, "approval-requested"), event(3, "approval-requested")])).toEqual({
+      notices: [{ id: "ntc_5", category: "approval-requested", sessionID: "ses_3", createdAt: 1_003 }],
+      total: 5,
+    })
+  })
+
+  test("unread attention survives reopening and marking it read permits a fresh notice", () => {
+    const database = new Database(":memory:")
+    createNoticeStore(sqlPort(database)).append([event(1, "approval-requested")])
+    const reopened = createNoticeStore(sqlPort(database))
+    expect(reopened.append([event(1, "approval-requested")])).toEqual({ notices: [], total: 1 })
+    expect(reopened.page().notices).toEqual([
+      { id: "ntc_1", category: "approval-requested", sessionID: "ses_1", createdAt: 1_001 },
+    ])
+    reopened.remove([1])
+    expect(reopened.append([event(1, "approval-requested")]).notices[0]?.id).toBe("ntc_2")
+    reopened.clear()
+    expect(reopened.append([event(1, "approval-requested")]).notices[0]?.id).toBe("ntc_3")
+  })
+
   test("appends in arrival order with monotonic ids and counts every row", () => {
     const store = createNoticeStore(sqlPort(new Database(":memory:")))
     const added = store.append([event(1, "approval-requested"), event(2), event(3)])
