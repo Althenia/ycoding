@@ -11,7 +11,7 @@ import {
   resolveBearerToken,
   type TokenPair,
 } from "cursor-opencode-provider/auth"
-import { Effect, Semaphore, Stream } from "effect"
+import { Effect, Schedule, Semaphore, Stream } from "effect"
 import { Credential } from "../../credential"
 import { CursorModels } from "../../cursor/models"
 import { EventV2 } from "../../event"
@@ -24,6 +24,11 @@ import type { PluginInternal } from "../internal"
 
 const integrationID = Integration.ID.make("cursor")
 const methodID = Integration.MethodID.make("browser")
+
+// Connection events are process-local, so a credential stored by another process, or an event
+// published before this plugin subscribed, would otherwise leave a connected account with no
+// models until the next connection change. The reconcile also retries a failed sync.
+export const reconcileInterval = "60 seconds"
 
 export const oauth = {
   integrationID,
@@ -57,27 +62,39 @@ export const CursorPlugin = define({
     const location = yield* Location.Service
     const cacheDir = path.join(global.cache, "cursor")
     const loading = Semaphore.makeUnsafe(1)
-    const loaded: { models: readonly ModelV2.Info[] } = { models: [] }
+    const loaded: { models: readonly ModelV2.Info[]; source?: string } = { models: [] }
 
-    const load = Effect.fn("CursorPlugin.load")(function* () {
+    const activeToken = Effect.fn("CursorPlugin.activeToken")(function* () {
       const connection = yield* ctx.integration.connection.active(integrationID)
       const credential = connection
         ? yield* ctx.integration.connection.resolve(connection).pipe(Effect.catch(() => Effect.succeed(undefined)))
         : undefined
-      const token = credential?.type === "key" ? credential.key : credential?.type === "oauth" ? credential.access : undefined
+      return credential?.type === "key" ? credential.key : credential?.type === "oauth" ? credential.access : undefined
+    })
+
+    const load = Effect.fn("CursorPlugin.load")(function* () {
+      const token = yield* activeToken()
       if (!token) {
         loaded.models = []
+        loaded.source = undefined
         return
       }
-      loaded.models = yield* Effect.tryPromise({
+      const discovered = yield* Effect.tryPromise({
         try: async () => {
           const { discoverModels } = await import("cursor-opencode-provider/models")
           return CursorModels.fromCursor(await discoverModels(await resolveBearerToken({ apiKey: token }), cacheDir))
         },
         catch: (cause) => cause,
       }).pipe(
-        Effect.catch((cause) => Effect.logWarning("failed to sync Cursor models", { cause }).pipe(Effect.as([]))),
+        Effect.catch((cause) =>
+          Effect.logWarning("failed to sync Cursor models", { cause }).pipe(Effect.as(undefined)),
+        ),
       )
+      // A failed sync keeps the inventory an earlier sync published, so one timeout cannot empty a
+      // connected account's model list. Leaving the source unset makes the next reconcile retry.
+      if (discovered === undefined) return
+      loaded.models = discovered
+      loaded.source = token
     })
 
     yield* ctx.integration.transform((draft) => {
@@ -88,12 +105,20 @@ export const CursorPlugin = define({
     })
     yield* ctx.catalog.transform((draft) => syncCatalog(draft, loaded.models))
     const refresh = () => loading.withPermit(load().pipe(Effect.andThen(ctx.catalog.reload())))
+    const reconcile = () =>
+      activeToken().pipe(Effect.flatMap((token) => (token === loaded.source ? Effect.void : refresh())))
     yield* events.subscribe(Integration.Event.ConnectionUpdated).pipe(
       Stream.filter((event) => event.data.integrationID === integrationID),
       Stream.runForEach(refresh),
       Effect.forkScoped({ startImmediately: true }),
     )
-    yield* ctx.integration.reload().pipe(Effect.andThen(refresh()), Effect.forkScoped)
+    // Schedule.spaced runs the effect once, then waits between completions.
+    yield* ctx.integration
+      .reload()
+      .pipe(
+        Effect.andThen(reconcile().pipe(Effect.repeat(Schedule.spaced(reconcileInterval)), Effect.ignore)),
+        Effect.forkScoped,
+      )
     yield* ctx.aisdk.hook(
       "sdk",
       Effect.fn(function* (evt) {

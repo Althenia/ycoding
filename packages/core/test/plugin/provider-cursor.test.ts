@@ -1,16 +1,18 @@
 import { AISDK } from "@ycoding-ai/core/aisdk"
 import { Catalog } from "@ycoding-ai/core/catalog"
+import { Credential } from "@ycoding-ai/core/credential"
 import { CursorModels } from "@ycoding-ai/core/cursor/models"
 import { Integration } from "@ycoding-ai/core/integration"
 import { ModelV2 } from "@ycoding-ai/core/model"
 import { PluginV2 } from "@ycoding-ai/core/plugin"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
-import { CursorPlugin, oauth, oauthCredential, syncCatalog } from "@ycoding-ai/core/plugin/provider/cursor"
+import { CursorPlugin, oauth, oauthCredential, reconcileInterval, syncCatalog } from "@ycoding-ai/core/plugin/provider/cursor"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
 import type { LanguageModelV3 } from "@ai-sdk/provider"
-import { describe, expect, mock } from "bun:test"
+import { beforeEach, describe, expect, mock } from "bun:test"
 import { State } from "@ycoding-ai/core/state"
 import { Effect, Schedule } from "effect"
+import { TestClock } from "effect/testing"
 import {
   buildLoginUrl,
   decodeJwtExpiryMs,
@@ -38,11 +40,18 @@ void mock.module("cursor-opencode-provider/auth", () => ({
   },
 }))
 const cursorModels = await import("cursor-opencode-provider/models")
+const discovery = { failure: undefined as string | undefined }
 void mock.module("cursor-opencode-provider/models", () => ({
   ...cursorModels,
-  discoverModels: async (token: string) =>
-    token === "bearer" ? [{ id: "composer-2.5", displayName: "Composer 2.5", variants: [] }] : [],
+  discoverModels: async (token: string) => {
+    if (discovery.failure !== undefined) throw new Error(discovery.failure)
+    return token === "bearer" ? [{ id: "composer-2.5", displayName: "Composer 2.5", variants: [] }] : []
+  },
 }))
+
+beforeEach(() => {
+  discovery.failure = undefined
+})
 
 const addPlugin = Effect.fn(function* () {
   const plugin = yield* PluginV2.Service
@@ -52,6 +61,31 @@ const addPlugin = Effect.fn(function* () {
 
 const jwt = (payload: Record<string, unknown>) =>
   ["header", Buffer.from(JSON.stringify(payload)).toString("base64url"), "signature"].join(".")
+
+/** Drains the dynamic-import promises of a sync together with the catalog's reload debounce. */
+const settle = Effect.fn(function* () {
+  for (let step = 0; step < 12; step += 1) {
+    yield* Effect.yieldNow
+    yield* TestClock.adjust("500 millis")
+  }
+})
+
+const readCursorModelIDs = Effect.fn(function* (catalog: Catalog.Interface) {
+  return (yield* catalog.model.all())
+    .filter((model) => model.providerID === CursorModels.providerID)
+    .map((model) => String(model.id))
+})
+
+const cursorModelIDs = Effect.fn(function* (catalog: Catalog.Interface) {
+  return yield* Effect.gen(function* () {
+    const ids = yield* readCursorModelIDs(catalog)
+    if (ids.length === 0) return yield* Effect.fail("no Cursor models yet")
+    return ids
+  }).pipe(
+    Effect.retry({ times: 40, schedule: Schedule.spaced("100 millis") }),
+    Effect.catch(() => Effect.succeed([] as string[])),
+  )
+})
 
 const cursorModel = (id: string) =>
   ModelV2.Info.make({
@@ -109,6 +143,78 @@ describe("CursorPlugin", () => {
         ),
       ).toEqual(["composer-2.5"])
       expect(bearerInputs).toEqual(["crsr_env"])
+    }),
+  )
+
+  it.live("publishes Cursor models for an active OAuth connection that already exists at load", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      const credentials = yield* Credential.Service
+      yield* credentials.create({
+        integrationID: Integration.ID.make("cursor"),
+        value: Credential.OAuth.make({
+          type: "oauth",
+          methodID: Integration.MethodID.make("browser"),
+          access: "jwt-access",
+          refresh: "jwt-refresh",
+          expires: Date.now() + 86_400_000,
+        }),
+      })
+      yield* State.batch(addPlugin().pipe(Effect.andThen(Effect.sleep("100 millis"))))
+      expect(yield* cursorModelIDs(catalog)).toEqual(["composer-2.5"])
+    }),
+  )
+
+  it.live("publishes Cursor models when a connection is made after the plugin loaded", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      const integrations = yield* Integration.Service
+      yield* State.batch(addPlugin().pipe(Effect.andThen(Effect.sleep("100 millis"))))
+      expect(yield* readCursorModelIDs(catalog)).toEqual([])
+      yield* integrations.connection.key({ integrationID: Integration.ID.make("cursor"), key: "crsr_after_load" })
+      expect(yield* cursorModelIDs(catalog)).toEqual(["composer-2.5"])
+    }),
+  )
+
+  it.effect("publishes Cursor models for a credential stored without a connection event", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      const credentials = yield* Credential.Service
+      yield* State.batch(addPlugin())
+      yield* settle()
+      expect(yield* readCursorModelIDs(catalog)).toEqual([])
+      yield* credentials.create({
+        integrationID: Integration.ID.make("cursor"),
+        value: Credential.Key.make({ type: "key", key: "crsr_other_process" }),
+      })
+      yield* TestClock.adjust(reconcileInterval)
+      yield* settle()
+      expect(yield* readCursorModelIDs(catalog)).toEqual(["composer-2.5"])
+    }),
+  )
+
+  it.live("keeps the published Cursor models when a later sync fails", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      const integrations = yield* Integration.Service
+      const credentials = yield* Credential.Service
+      yield* credentials.create({
+        integrationID: Integration.ID.make("cursor"),
+        value: Credential.Key.make({ type: "key", key: "crsr_first" }),
+      })
+      yield* State.batch(addPlugin().pipe(Effect.andThen(Effect.sleep("100 millis"))))
+      expect(yield* cursorModelIDs(catalog)).toEqual(["composer-2.5"])
+
+      discovery.failure = "AvailableModels timed out after 5000ms"
+      bearerInputs.length = 0
+      yield* integrations.connection.key({ integrationID: Integration.ID.make("cursor"), key: "crsr_second" })
+      yield* Effect.gen(function* () {
+        yield* Effect.sleep("50 millis")
+        if (bearerInputs.includes("crsr_second")) return true
+        return yield* Effect.fail("sync not attempted")
+      }).pipe(Effect.retry({ times: 60 }))
+      yield* Effect.sleep("1 second")
+      expect(yield* readCursorModelIDs(catalog)).toEqual(["composer-2.5"])
     }),
   )
 
