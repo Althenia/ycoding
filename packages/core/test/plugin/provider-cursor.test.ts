@@ -8,12 +8,41 @@ import { PluginHost } from "@ycoding-ai/core/plugin/host"
 import { CursorPlugin, oauth, oauthCredential, syncCatalog } from "@ycoding-ai/core/plugin/provider/cursor"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
 import type { LanguageModelV3 } from "@ai-sdk/provider"
-import { describe, expect } from "bun:test"
-import { Effect } from "effect"
+import { describe, expect, mock } from "bun:test"
+import { State } from "@ycoding-ai/core/state"
+import { Effect, Schedule } from "effect"
+import {
+  buildLoginUrl,
+  decodeJwtExpiryMs,
+  generatePkceChallenge,
+  generatePkceParams,
+  pollForTokens,
+  refreshAccessToken,
+} from "cursor-opencode-provider/auth"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
 
 const it = testEffect(PluginTestLayer)
+
+const bearerInputs: string[] = []
+void mock.module("cursor-opencode-provider/auth", () => ({
+  buildLoginUrl,
+  decodeJwtExpiryMs,
+  generatePkceChallenge,
+  generatePkceParams,
+  pollForTokens,
+  refreshAccessToken,
+  resolveBearerToken: async (input: { apiKey: string }) => {
+    bearerInputs.push(input.apiKey)
+    return "bearer"
+  },
+}))
+const cursorModels = await import("cursor-opencode-provider/models")
+void mock.module("cursor-opencode-provider/models", () => ({
+  ...cursorModels,
+  discoverModels: async (token: string) =>
+    token === "bearer" ? [{ id: "composer-2.5", displayName: "Composer 2.5", variants: [] }] : [],
+}))
 
 const addPlugin = Effect.fn(function* () {
   const plugin = yield* PluginV2.Service
@@ -50,6 +79,36 @@ describe("CursorPlugin", () => {
         package: "aisdk:cursor-opencode-provider",
         integrationID: "cursor",
       })
+    }),
+  )
+
+  it.live("discovers models with CURSOR_API_KEY when the plugin loads inside a state batch", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      const previous = process.env.CURSOR_API_KEY
+      process.env.CURSOR_API_KEY = "crsr_env"
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (previous === undefined) delete process.env.CURSOR_API_KEY
+          else process.env.CURSOR_API_KEY = previous
+        }),
+      )
+      bearerInputs.length = 0
+      yield* State.batch(addPlugin().pipe(Effect.andThen(Effect.sleep("100 millis"))))
+      const discovered = Effect.gen(function* () {
+        const ids = (yield* catalog.model.all())
+          .filter((model) => model.providerID === CursorModels.providerID)
+          .map((model) => String(model.id))
+        if (ids.length === 0) return yield* Effect.fail("no Cursor models yet")
+        return ids
+      })
+      expect(
+        yield* discovered.pipe(
+          Effect.retry({ times: 40, schedule: Schedule.spaced("100 millis") }),
+          Effect.catch(() => Effect.succeed([])),
+        ),
+      ).toEqual(["composer-2.5"])
+      expect(bearerInputs).toEqual(["crsr_env"])
     }),
   )
 

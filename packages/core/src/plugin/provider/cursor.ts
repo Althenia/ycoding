@@ -93,7 +93,7 @@ export const CursorPlugin = define({
       Stream.runForEach(refresh),
       Effect.forkScoped({ startImmediately: true }),
     )
-    yield* refresh().pipe(Effect.forkScoped)
+    yield* ctx.integration.reload().pipe(Effect.andThen(refresh()), Effect.forkScoped)
     yield* ctx.aisdk.hook(
       "sdk",
       Effect.fn(function* (evt) {
