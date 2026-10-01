@@ -36,7 +36,6 @@ export function MiniComposer(props: {
   const [attachments, setAttachments] = createSignal<readonly ComposerAttachment[]>([])
   const [attachmentError, setAttachmentError] = createSignal<string>()
   const [reading, setReading] = createSignal(0)
-  const [sending, setSending] = createSignal(false)
   const [dragging, setDragging] = createSignal(false)
   const [parts, setParts] = createSignal<readonly MentionPart[]>([])
   const [cursor, setCursor] = createSignal(0)
@@ -234,7 +233,7 @@ export function MiniComposer(props: {
     queueMicrotask(() => { input?.focus(); input?.setSelectionRange(result.cursor, result.cursor) })
   }
   const addFiles = async (files: readonly File[]) => {
-    if (props.disabled || sending() || !files.length) return
+    if (props.disabled || !files.length) return
     const error = attachmentLimit([...attachments(), ...files])
     if (error) { setAttachmentError(error); return }
     const generation = attachmentGeneration
@@ -254,7 +253,7 @@ export function MiniComposer(props: {
     }
   }
   const send = async () => {
-    if (props.disabled || reading() || sending() || (!props.allowEmpty && !props.text.trim() && !attachments().length)) return
+    if (props.disabled || reading() || (!props.allowEmpty && !props.text.trim() && !attachments().length)) return
     const chosenAgent = selectedAgent()
     const chosenModel = selectedModel()
     const pendingAgent = current()?.agent === chosenAgent ? undefined : chosenAgent
@@ -273,7 +272,8 @@ export function MiniComposer(props: {
     const files = [...(requested.input && "files" in requested.input ? requested.input.files ?? [] : []), ...attachments().map((item) => ({ uri: item.uri, name: item.name }))]
     if (files.length > 64) { setAttachmentError("A message can contain at most 64 files. Remove an attachment before sending."); return }
     const generation = attachmentGeneration
-    setSending(true)
+    const submittedParts = parts()
+    const submittedAttachments = attachments()
     try {
       const accepted = requested.kind === "command"
         ? await props.onSubmit({ kind: "command", input: { ...requested.input, ...(files.length ? { files } : {}) } })
@@ -281,12 +281,14 @@ export function MiniComposer(props: {
           ? await props.onSubmit({ kind: "prompt", input: { ...requested.input, ...(files.length ? { files } : {}) } })
           : await props.onSubmit(requested)
       if (accepted === false || generation !== attachmentGeneration) return
-      setParts([])
-      setAttachments([])
-      setAttachmentError(undefined)
+      if (parts() === submittedParts) setParts([])
+      if (attachments() === submittedAttachments) {
+        setAttachments([])
+        setAttachmentError(undefined)
+      }
     } catch (cause) {
       if (generation === attachmentGeneration) setAttachmentError(cause instanceof Error ? cause.message : "The attachment could not be sent.")
-    } finally { setSending(false) }
+    }
   }
   const keyDown: JSX.EventHandler<HTMLTextAreaElement, KeyboardEvent> = (event) => {
     if (event.isComposing || event.keyCode === 229) return
@@ -333,7 +335,7 @@ export function MiniComposer(props: {
     <div class="composer__row" classList={{ "composer__row--dragging": dragging() }} onDragOver={(event) => { if (event.dataTransfer?.types.includes("Files")) { event.preventDefault(); setDragging(true) } }} onDragLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDragging(false) }} onDrop={(event) => { setDragging(false); if (!event.dataTransfer?.files.length) return; event.preventDefault(); void addFiles(Array.from(event.dataTransfer.files)) }}>
       <div ref={inputWrap} class="mini-composer__input-wrap">
         <textarea ref={input} class="composer__input" rows={1} aria-label="Message your agent" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded={options().length > 0} aria-controls="composer-autocomplete" aria-activedescendant={options().length ? `composer-option-${active()}` : undefined}
-          placeholder="Ask anything…" disabled={props.disabled || sending()} value={props.text}
+          placeholder="Ask anything…" disabled={props.disabled} value={props.text}
           onInput={(event) => edit(event.currentTarget.value, event.currentTarget.selectionStart)}
           onPaste={(event) => { const files = Array.from(event.clipboardData?.files ?? []); if (!files.length) return; event.preventDefault(); void addFiles(files) }}
           onClick={(event) => setCursor(event.currentTarget.selectionStart)}
@@ -350,6 +352,9 @@ export function MiniComposer(props: {
       </div>
       <Show when={attachments().length}><div class="composer__attachments" aria-label="Attachments"><For each={attachments()}>{(item) => <div class="composer__attachment"><Show when={item.mime.startsWith("image/")}><img src={item.uri} alt="" /></Show><span class="composer__attachment-name" title={item.name}>{item.name}</span><span class="composer__attachment-size">{item.size < 1024 ? `${item.size} B` : `${(item.size / 1024).toFixed(1)} KiB`}</span><button type="button" aria-label={`Remove ${item.name}`} onClick={() => { setAttachments((items) => items.filter((entry) => entry.id !== item.id)); setAttachmentError(undefined) }}><Icon name="close" /></button></div>}</For></div></Show>
       <Show when={attachmentError()}><p class="composer__attachment-error" role="alert">{attachmentError()}</p></Show>
+      <Show when={catalog()?.status === "error" || catalog()?.status === "unsupported"}>
+        <div class="composer__catalog-status" role="status"><p class="field__hint">{catalog()?.status === "unsupported" ? "Update YCoding on the connected machine to load agents and models." : catalog()?.message ?? "The agent and model catalog could not be loaded."}</p><button type="button" class="button button--secondary button--small" aria-label="Retry agent and model catalog" disabled={props.disabled} onClick={() => { if (props.target) void remote.store.loadCatalog(props.target, { refresh: true }) }}>Retry catalog</button></div>
+      </Show>
       <Show when={modelChoice().warning}>{(warning) => <p class="field__hint composer__model-warning" role="status">{warning()}</p>}</Show>
       <Show when={remote.state().upload && attachments().length}><div class="composer__upload" role="status"><span>Uploading {remote.state().upload?.name} · {remote.state().upload?.percent}%</span><progress value={remote.state().upload?.percent ?? 0} max="100" /><button type="button" onClick={() => remote.store.cancelUpload()}>Cancel upload</button></div></Show>
       <Show when={!attachmentError() && attachments().length && remote.state().uploadError}><p class="composer__attachment-error" role="alert">{remote.state().uploadError}</p></Show>
@@ -360,9 +365,9 @@ export function MiniComposer(props: {
         <Show when={props.showStatus}><ComposerStatus /></Show>
         <Show when={speed()}>{(value) => <span class="composer__speed" title="Latest generation speed">{value().label}<Show when={value().trend}><span class="composer__speed-trend" aria-hidden="true"> {value().trend}</span></Show></span>}</Show>
         <span class="composer__spacer" />
-        <div class="composer__actions"><input ref={fileInput} class="composer__file-input" type="file" multiple aria-label="Choose files" onChange={(event) => { void addFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = "" }} /><button type="button" class="composer__attach" aria-label="Attach files" title="Attach files" disabled={props.disabled || sending() || reading() > 0} onClick={() => fileInput?.click()}><Icon name="plus" /></button><Show when={!props.allowEmpty}><button type="button" class="composer__delivery-toggle" aria-label={delivery() === "steer" ? "Steer mode; switch to Queue" : "Queue mode; switch to Steer"} title={delivery() === "steer" ? "Steer: switch to Queue" : "Queue: switch to Steer"} aria-pressed={delivery() === "queue"} onClick={() => setDelivery(delivery() === "steer" ? "queue" : "steer")}><Icon name={delivery()} /></button></Show>
+        <div class="composer__actions"><input ref={fileInput} class="composer__file-input" type="file" multiple aria-label="Choose files" onChange={(event) => { void addFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = "" }} /><button type="button" class="composer__attach" aria-label="Attach files" title="Attach files" disabled={props.disabled || reading() > 0} onClick={() => fileInput?.click()}><Icon name="plus" /></button><Show when={!props.allowEmpty}><button type="button" class="composer__delivery-toggle" aria-label={delivery() === "steer" ? "Steer mode; switch to Queue" : "Queue mode; switch to Steer"} title={delivery() === "steer" ? "Steer: switch to Queue" : "Queue: switch to Steer"} aria-pressed={delivery() === "queue"} onClick={() => setDelivery(delivery() === "steer" ? "queue" : "steer")}><Icon name={delivery()} /></button></Show>
           <Show when={props.running && props.onInterrupt}><button type="button" class="mini-composer__interrupt" aria-label="Interrupt the running step" onClick={props.onInterrupt}><Icon name="stop" /></button></Show>
-          <button type="button" class="mini-composer__send" aria-label={props.allowEmpty ? "Create session" : "Send prompt"} disabled={props.disabled || sending() || reading() > 0 || (!props.allowEmpty && !props.text.trim() && !attachments().length)} onClick={() => void send()}><Icon name="send" /></button></div>
+          <button type="button" class="mini-composer__send" aria-label={props.allowEmpty ? "Create session" : "Send prompt"} disabled={props.disabled || reading() > 0 || (!props.allowEmpty && !props.text.trim() && !attachments().length)} onClick={() => void send()}><Icon name="send" /></button></div>
       </div>
     </div>
     </div>

@@ -314,6 +314,8 @@ YCoding metadata keys:
 
 A malformed `ycoding/conflicts` declaration causes that skill file to be skipped.
 
+Invoke a registered local skill with `$skill-id` at the start of a prompt or after whitespace, followed by whitespace, supported punctuation, or the end of the prompt. The runtime records the request and loads its instructions before model execution on every prompt-entry surface; this explicit invocation is independent of `ycoding/autoinvoke`. Existing active skills are not loaded twice. Unknown dollar tokens remain text. If an explicitly recorded skill becomes unavailable or permission-denied before execution, the input stays pending and the runtime reports the failure rather than asking the model to decide whether to load it.
+
 ### Loading and reload
 
 Directory skill files are read whenever the skill list is requested. This avoids stale skill content in ecosystem roots that are not watched.

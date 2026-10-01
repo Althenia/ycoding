@@ -19,6 +19,22 @@ import type { RemoteTransport, RemoteTransportHandlers } from "../../../apps/web
 
 type SentValue = { readonly type: string; readonly [key: string]: unknown }
 
+test("the real local adapter admits selected prompt skills as metadata without activating an admit-only queued input", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ycoding-prompt-skills-"))
+  const server = await startServer(directory)
+  try {
+    const sessionID = "ses_remote_selected_skills"
+    await createSession(server, sessionID, directory)
+    const local = createLocalServer({ url: server.base, auth: { type: "basic", username: "ycoding", password } })
+    await local.prompt(sessionID, { directory }, { id: "msg_remote_selected_skills", text: "Review later", delivery: "queue", resume: false,
+      metadata: { skills: [{ id: "audit" }, { id: "test" }] } })
+    expect(await local.pendingList(sessionID, { directory })).toMatchObject([{ id: "msg_remote_selected_skills", delivery: "queue", data: {
+      text: "Review later", metadata: { skills: [{ id: "audit" }, { id: "test" }] },
+    } }])
+    expect((await local.log(sessionID, { directory })).some((event) => typeof event === "object" && event !== null && Reflect.get(event, "type") === "session.skill.activated")).toBe(false)
+  } finally { await server.close(); await rm(directory, { recursive: true, force: true }) }
+}, 30_000)
+
 type Relay = {
   readonly input: () => ConnectionInput
   readonly sent: () => readonly SentValue[]

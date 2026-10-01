@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { createCliRenderer } from "@opentui/core"
+import { Readable, Writable } from "node:stream"
+import { createTuiAttention } from "../../../../src/attention"
 import Notifications, { createNotifications } from "../../../../src/feature-plugins/system/notifications"
 import { createBuiltinPlugins } from "../../../../src/feature-plugins/builtins"
 import { builtins } from "../../../../src/plugin/builtins"
@@ -9,7 +12,11 @@ import { createTuiPluginContext } from "../../../fixture/tui-plugin"
 
 type Session = NonNullable<ReturnType<Context["data"]["session"]["get"]>>
 
-async function setup(options: { rejectFirstNotification?: boolean } = {}) {
+async function setup(options: {
+  rejectFirstNotification?: boolean
+  notify?: Context["attention"]["notify"]
+  attention?: ReturnType<typeof createTuiAttention>
+} = {}) {
   const notifications: TuiAttentionNotifyInput[] = []
   const handlers = new Map<YCodingEvent["type"], ((event: YCodingEvent) => void)[]>()
   const scheduled: Array<{ cancelled: boolean; delay: number; run: () => Promise<void> }> = []
@@ -55,16 +62,20 @@ async function setup(options: { rejectFirstNotification?: boolean } = {}) {
       item.cancelled = true
     }
   })
-  const cleanup = await plugin.setup(
-    createTuiPluginContext({
-      attention: {
-        async notify(input) {
-          notificationAttempts += 1
-          notifications.push(input)
-          if (options.rejectFirstNotification && notificationAttempts === 1) throw new Error("notification failed")
-          return { ok: true, notification: true, sound: true }
-        },
-      },
+  const attention = options.attention ?? createTuiAttention({
+    renderer: { isDestroyed: false, on() {}, off() {}, triggerNotification: () => true },
+    config: { attention: { enabled: true, notifications: true, sound: false, volume: 0.4, sound_pack: "ycoding.default", sounds: {} } },
+  })
+  const notify = options.notify ?? attention.notify.bind(attention)
+  attention.notify = async (input) => {
+    notificationAttempts += 1
+    notifications.push(input)
+    if (options.rejectFirstNotification && notificationAttempts === 1) throw new Error("notification failed")
+    return notify(input)
+  }
+  const cleanup = await plugin.setup({
+    ...createTuiPluginContext({
+      attention,
       // The harness supplies only client methods exercised by this plugin.
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
       client: {
@@ -140,7 +151,8 @@ async function setup(options: { rejectFirstNotification?: boolean } = {}) {
         },
       },
     }),
-  )
+    attention,
+  })
 
   return {
     notifications,
@@ -151,6 +163,10 @@ async function setup(options: { rejectFirstNotification?: boolean } = {}) {
     autonomy,
     waits,
     scheduled,
+    resolvePending(kind: "permission" | "guardrail", id: string) {
+      if (kind === "permission") permissions.delete(id)
+      if (kind === "guardrail") guardrails.delete(id)
+    },
     async flush() {
       await Promise.all(
         scheduled
@@ -183,6 +199,41 @@ function question(id: string, sessionID = "session"): Extract<YCodingEvent, { ty
     id,
     sessionID,
     questions: [],
+  }
+}
+
+async function notificationTerminal() {
+  const chunks: Buffer[] = []
+  const stdin = Object.assign(new Readable({ read() {} }), { isTTY: true, setRawMode() {} })
+  const stdout = Object.assign(new Writable({
+    write(chunk: Buffer, _encoding, callback) {
+      chunks.push(Buffer.from(chunk))
+      callback()
+    },
+  }), { isTTY: true, columns: 80, rows: 24 })
+  const renderer = await createCliRenderer({
+    stdin: stdin as unknown as NodeJS.ReadStream,
+    stdout: stdout as unknown as NodeJS.WriteStream,
+    useThread: false,
+    useMouse: false,
+    consoleMode: "disabled",
+  })
+  const attention = createTuiAttention({
+    renderer,
+    config: { attention: {
+      enabled: true, notifications: true, sound: false, volume: 0.4,
+      sound_pack: "ycoding.default", sounds: {},
+    } },
+  })
+  return {
+    stdin,
+    attention,
+    output: () => Buffer.concat(chunks).toString(),
+    notifications: () => Buffer.concat(chunks).toString().match(/\u001b\]777;notify;/g) ?? [],
+    dispose() {
+      attention.dispose()
+      renderer.destroy()
+    },
   }
 }
 
@@ -338,6 +389,177 @@ const guardrailNotification: TuiAttentionNotifyInput = {
 }
 
 describe("internal notifications TUI plugin", () => {
+  for (const focus of ["unknown", "blurred", "focused"] as const) {
+    test(`approval events reach the real Ghostty renderer only when focus is ${focus}`, async () => {
+      const terminal = await notificationTerminal()
+      const harness = await setup({ attention: terminal.attention })
+      try {
+        terminal.stdin.emit("data", Buffer.from("\u001bP>|ghostty 1.1.3\u001b\\"))
+        if (focus !== "unknown") {
+          terminal.stdin.emit("data", Buffer.from("\u001b[?1004;1$y"))
+          terminal.stdin.emit("data", Buffer.from(focus === "focused" ? "\u001b[I" : "\u001b[O"))
+        }
+        harness.emit({ id: "permission-root", created: 0, type: "permission.v2.asked", data: permission("permission-root") })
+        harness.emit({ id: "permission-child", created: 0, type: "permission.v2.asked", data: permission("permission-child", "subagent") })
+        harness.emit({ id: "guardrail-child", created: 0, type: "guardrail.asked", data: guardrail("guardrail-child", "subagent", "session") })
+        await harness.flush()
+        expect(terminal.notifications()).toHaveLength(focus === "focused" ? 0 : 2)
+        if (focus !== "focused") {
+          expect(terminal.output()).toContain("\u001b]777;notify;Demo session;Permission needs input\u001b\\")
+          expect(terminal.output()).toContain("\u001b]777;notify;Demo session;Guardrail approval needed\u001b\\")
+        }
+        harness.emit({ id: "duplicate", created: 0, type: "permission.v2.asked", data: permission("permission-root") })
+        await harness.flush()
+        expect(terminal.notifications()).toHaveLength(focus === "focused" ? 0 : 2)
+      } finally {
+        await harness.cleanup()
+        terminal.dispose()
+      }
+    })
+  }
+
+  for (const kind of ["permission", "guardrail"] as const) {
+    test(`recovers pending ${kind} when Ghostty capability arrives on the same connection`, async () => {
+      const terminal = await notificationTerminal()
+      const harness = await setup({ attention: terminal.attention })
+      try {
+        harness.emit(kind === "permission"
+          ? { id: "asked", created: 0, type: "permission.v2.asked", data: permission("pending-1") }
+          : { id: "asked", created: 0, type: "guardrail.asked", data: guardrail("pending-1", "subagent", "session") })
+        await harness.flush()
+        expect(terminal.notifications()).toHaveLength(0)
+        terminal.stdin.emit("data", Buffer.from("\u001bP>|ghostty 1.1.3\u001b\\"))
+        await harness.flush()
+        expect(terminal.notifications()).toHaveLength(1)
+        terminal.stdin.emit("data", Buffer.from("\u001b[?1004;1$y"))
+        await harness.flush()
+        expect(terminal.notifications()).toHaveLength(1)
+      } finally {
+        await harness.cleanup()
+        terminal.dispose()
+      }
+    })
+
+    test(`recovers an undelivered ${kind} on reconnect without losing pending validation or replaying a delivered alert`, async () => {
+      const terminal = await notificationTerminal()
+      const harness = await setup({ attention: terminal.attention })
+      const asked: YCodingEvent = kind === "permission"
+        ? { id: "asked", created: 0, type: "permission.v2.asked", data: permission("request-1") }
+        : { id: "asked", created: 0, type: "guardrail.asked", data: guardrail("request-1", "subagent", "session") }
+      try {
+        harness.emit(asked)
+        await harness.flush()
+        expect(harness.notifications).toHaveLength(1)
+        expect(terminal.notifications()).toHaveLength(0)
+        terminal.stdin.emit("data", Buffer.from("\u001bP>|ghostty 1.1.3\u001b\\"))
+        harness.emit({ id: "connected", type: "server.connected", sourceEpoch: "epoch-reconnected", data: {} })
+        await harness.flush()
+        expect(terminal.notifications()).toHaveLength(1)
+        harness.emit(asked)
+        harness.emit({ id: "reconnected", type: "server.connected", sourceEpoch: "epoch-reconnected", data: {} })
+        await harness.flush()
+        expect(terminal.notifications()).toHaveLength(1)
+      } finally {
+        await harness.cleanup()
+        terminal.dispose()
+      }
+    })
+
+    test(`a reconnect does not alert a ${kind} already resolved while delivery was unavailable`, async () => {
+      const terminal = await notificationTerminal()
+      const harness = await setup({ attention: terminal.attention })
+      try {
+        harness.emit(kind === "permission"
+          ? { id: "asked", created: 0, type: "permission.v2.asked", data: permission("resolved-1") }
+          : { id: "asked", created: 0, type: "guardrail.asked", data: guardrail("resolved-1") })
+        await harness.flush()
+        expect(harness.notifications).toHaveLength(1)
+        harness.resolvePending(kind, "resolved-1")
+        terminal.stdin.emit("data", Buffer.from("\u001bP>|ghostty 1.1.3\u001b\\"))
+        harness.emit({ id: "connected", type: "server.connected", sourceEpoch: "epoch-reconnected", data: {} })
+        await harness.flush()
+        expect(terminal.notifications()).toHaveLength(0)
+        expect(harness.notifications).toHaveLength(1)
+      } finally {
+        await harness.cleanup()
+        terminal.dispose()
+      }
+    })
+  }
+
+  test("pending approvals suppressed while focused alert after blur", async () => {
+    const terminal = await notificationTerminal()
+    const harness = await setup({ attention: terminal.attention })
+    try {
+      terminal.stdin.emit("data", Buffer.from("\u001bP>|ghostty 1.1.3\u001b\\"))
+      terminal.stdin.emit("data", Buffer.from("\u001b[?1004;1$y"))
+      terminal.stdin.emit("data", Buffer.from("\u001b[I"))
+      harness.emit({ id: "asked", created: 0, type: "permission.v2.asked", data: permission("focused-1") })
+      await harness.flush()
+      expect(terminal.notifications()).toHaveLength(0)
+      terminal.stdin.emit("data", Buffer.from("\u001b[O"))
+      await harness.flush()
+      expect(terminal.notifications()).toHaveLength(1)
+    } finally {
+      await harness.cleanup()
+      terminal.dispose()
+    }
+  })
+
+  test("a successful sound cannot retire failed OS delivery and is not replayed during recovery", async () => {
+    let supported = false
+    const harness = await setup({ notify: async (input) => ({
+      ok: true, notification: supported, sound: input.sound !== false,
+    }) })
+    try {
+      const asked: YCodingEvent = { id: "asked", created: 0, type: "permission.v2.asked", data: permission("permission-1") }
+      harness.emit(asked)
+      await harness.flush()
+      supported = true
+      harness.emit(asked)
+      await harness.flush()
+      expect(harness.notifications).toEqual([permissionNotification, { ...permissionNotification, sound: false }])
+      harness.emit(asked)
+      await harness.flush()
+      expect(harness.notifications).toHaveLength(2)
+    } finally {
+      await harness.cleanup()
+    }
+  })
+
+  test("capability arrival during an outstanding attention settlement retains one pending recovery", async () => {
+    const terminal = await notificationTerminal()
+    const notify = terminal.attention.notify.bind(terminal.attention)
+    const started = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    let first = true
+    const harness = await setup({ attention: terminal.attention, notify: async (input) => {
+      const result = await notify(input)
+      if (first) {
+        first = false
+        started.resolve()
+        await release.promise
+      }
+      return result
+    } })
+    try {
+      harness.emit({ id: "asked", created: 0, type: "permission.v2.asked", data: permission("pending-1") })
+      const sending = harness.flush()
+      await started.promise
+      terminal.stdin.emit("data", Buffer.from("\u001bP>|ghostty 1.1.3\u001b\\"))
+      release.resolve()
+      await sending
+      expect(terminal.notifications()).toHaveLength(0)
+      expect(harness.scheduled).toHaveLength(1)
+      await harness.flush()
+      expect(terminal.notifications()).toHaveLength(1)
+      expect(harness.scheduled).toHaveLength(0)
+    } finally {
+      release.resolve()
+      await harness.cleanup()
+      terminal.dispose()
+    }
+  })
   test("uses only the V2 plugin runtime", () => {
     expect("setup" in Notifications).toBe(true)
     expect(createBuiltinPlugins().some((plugin) => plugin.id === "internal:notifications")).toBe(false)

@@ -166,6 +166,7 @@ export type PendingMutation = {
   readonly kind: "prompt" | "command" | "compact" | "skill" | "model" | "agent" | "interrupt" | "permission" | "guardrail" | "form" | "autonomy" | "goal"
   readonly label: string
   readonly state: "sending" | "unknown" | "failed"
+  readonly phase?: "preparing" | "admitting"
   readonly detail?: string
   readonly sessionID: string
   readonly operation: RemoteOperation
@@ -299,8 +300,8 @@ export type RemoteStore = {
   readonly loadOversizedMessage: (messageID: string) => Promise<void>
   readonly loadImageSource: (input: { readonly deviceID: string; readonly sessionID: string; readonly digest: string; readonly mime: string }) => Promise<string>
   readonly loadShellOutputPage: (shellID: string) => Promise<void>
-  readonly sendPrompt: (input: { readonly text: string; readonly delivery: "steer" | "queue"; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[]; readonly skills?: readonly string[]; readonly agent?: string; readonly model?: ModelRefView }) => Promise<void | boolean>
-  readonly runCommand: (input: { readonly command: string; readonly arguments?: string; readonly delivery: "steer" | "queue"; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[]; readonly agent?: string; readonly model?: ModelRefView }) => Promise<void | boolean>
+  readonly sendPrompt: (input: { readonly text: string; readonly delivery: "steer" | "queue"; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[]; readonly skills?: readonly string[]; readonly agent?: string; readonly model?: ModelRefView }) => Promise<boolean>
+  readonly runCommand: (input: { readonly command: string; readonly arguments?: string; readonly delivery: "steer" | "queue"; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[]; readonly agent?: string; readonly model?: ModelRefView }) => Promise<boolean>
   readonly activateSkill: (skill: string) => Promise<boolean>
   readonly compactSession: () => Promise<boolean>
   readonly cancelUpload: () => void
@@ -543,7 +544,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   /** Publishes the patch with the next generation, then discards the read resources of the connection it ends. */
   const endScope = (patch: Partial<RemoteStoreState>) => {
     const ended = currentScope()
-    setState({ ...patch, generation: container.state.generation + 1 })
+    sends.forEach((progress) => { if (progress.deviceID === ended?.deviceID && progress.files?.some((file) => file.uri.startsWith("data:"))) progress.uploadsReady = false })
+    const mutations = (patch.mutations ?? container.state.mutations).filter((mutation) => !sends.has(mutation.id) || sends.get(mutation.id)?.deviceID === patch.activeDeviceID)
+    setState({ ...patch, generation: container.state.generation + 1,
+      mutations: [...mutations, ...[...sends.values()].filter((progress) => progress.deviceID === patch.activeDeviceID && !mutations.some((mutation) => mutation.id === progress.mutation.id)).map((progress) => progress.mutation)],
+      mutationToasts: (patch.mutationToasts ?? container.state.mutationToasts)?.filter((toast) => !sends.has(toast.id) || sends.get(toast.id)?.deviceID === patch.activeDeviceID) })
     endQueries(ended)
   }
 
@@ -811,6 +816,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const next = applySessionEvent(view, item.event, at)
       const ended = type === "session.execution.succeeded" || type === "session.execution.failed" || type === "session.execution.interrupted"
       const eventData = typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "data") : undefined
+      if (type === "session.input.admitted" || type === "session.input.promoted") {
+        const inputID = eventData && typeof eventData === "object" ? Reflect.get(eventData, "inputID") : undefined
+        if (typeof inputID === "string" && confirmSend(inputID))
+          setState({ mutations: container.state.mutations.filter((mutation) => mutation.id !== inputID),
+            mutationToasts: container.state.mutationToasts?.filter((toast) => toast.id !== inputID) })
+      }
       const structured = eventData && typeof eventData === "object" ? Reflect.get(eventData, "structured") : undefined
       const metadata = eventData && typeof eventData === "object" ? Reflect.get(eventData, "metadata") : undefined
       if (ended || type === "session.tool.success" && structured && typeof structured === "object" && typeof Reflect.get(structured, "shellID") === "string" ||
@@ -1136,7 +1147,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const opened = status.kind === "open" && lastStatusKind !== "open"
     const reopened = opened && connectionOpened
     if (status.kind === "open") connectionOpened = true
-    if (status.kind === "closed" || status.kind === "reconnecting") cancelUpload("Attachment upload lost its machine connection. Files were not sent.")
+    if (status.kind === "closed" || status.kind === "reconnecting") {
+      cancelUpload("Attachment upload lost its machine connection. Files were not sent.")
+      sends.forEach((progress) => {
+        if (progress.files?.some((file) => file.uri.startsWith("data:"))) progress.uploadsReady = false
+      })
+    }
     if (opened) {
       cancelStatusReload?.()
       cancelStatusReload = undefined
@@ -1212,25 +1228,28 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
 
   const request = async (
     mutation: PendingMutation,
-    options: { readonly sessionID?: string } = {},
+    options: { readonly sessionID?: string; readonly operation?: RemoteOperation; readonly input?: Readonly<Record<string, unknown>>; readonly retain?: boolean } = {},
   ): Promise<RemoteRequestOutcome> => {
     const active = transport
     if (!active) {
       finishMutation(mutation.id, "failed", "The relay connection is not open")
       return { status: "unavailable", reason: "not-connected" }
     }
+    const progress = sends.get(mutation.id)
+    if (progress !== undefined) progress.mutation = mutation
     setState({ mutations: [...container.state.mutations.filter((entry) => entry.id !== mutation.id), mutation] })
     const jobID = mutation.kind === "compact" && typeof mutation.input.id === "string" ? mutation.input.id : undefined
     const jobSettled = jobID === undefined ? undefined : new Promise<RemoteRequestOutcome>((resolve) => compactionWaiters.set(jobID, resolve))
-    const answered = active.request(mutation.operation, { sessionID: options.sessionID, input: mutation.input,
+    const answered = active.request(options.operation ?? mutation.operation, { sessionID: options.sessionID, input: options.input ?? mutation.input,
       ...((mutation.operation === "session.goal.set" || mutation.operation === "session.autonomy.set" && typeof mutation.input.goal === "string")
         ? { timeoutMs: RemoteLimits.goalSetTimeoutMs } : mutation.operation === "session.compact"
           ? { timeoutMs: RemoteLimits.compactionTimeoutMs } : {}) })
     const outcome = await (jobSettled === undefined ? answered : Promise.race([answered, jobSettled]))
     if (outcome.status === "ok") {
       if (jobID !== undefined) compactionWaiters.delete(jobID)
-      setState({ mutations: container.state.mutations.filter((entry) => entry.id !== mutation.id),
+      setState({ ...(options.retain ? {} : { mutations: container.state.mutations.filter((entry) => entry.id !== mutation.id) }),
         mutationToasts: (container.state.mutationToasts ?? []).filter((entry) => entry.id !== mutation.id) })
+      if (!options.retain) sends.delete(mutation.id)
       return outcome
     }
     if (jobID !== undefined && jobSettled !== undefined && compactionWaiters.has(jobID)) {
@@ -1287,10 +1306,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
 
   const finishMutation = (id: string, mutationState: PendingMutation["state"], detail: string) => {
-    const mutation = container.state.mutations.find((entry) => entry.id === id)
+    const progress = sends.get(id)
+    const mutation = container.state.mutations.find((entry) => entry.id === id) ?? progress?.mutation
+    if (mutation === undefined) return
+    if (progress !== undefined) progress.mutation = { ...mutation, state: mutationState, detail }
+    if (progress !== undefined && progress.deviceID !== container.state.activeDeviceID) return
     setState({
       mutations: container.state.mutations.map((entry) => (entry.id === id ? { ...entry, state: mutationState, detail } : entry)),
-      ...(mutation === undefined ? {} : { mutationToasts: [...(container.state.mutationToasts ?? []).filter((entry) => entry.id !== id), { id, label: mutation.label, state: mutationState === "unknown" ? "unknown" as const : "failed" as const, detail, sessionID: mutation.sessionID }].slice(-3) }),
+      mutationToasts: [...(container.state.mutationToasts ?? []).filter((entry) => entry.id !== id), { id, label: mutation.label, state: mutationState === "unknown" ? "unknown" as const : "failed" as const, detail, sessionID: mutation.sessionID }].slice(-3),
     })
   }
 
@@ -1333,8 +1356,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       ...(snapshot.sourceEpoch === undefined ? {} : { sourceEpoch: snapshot.sourceEpoch }),
     }
     const unsynced = container.state.mutations.flatMap((mutation): RemoteMessageView[] => {
-      if (mutation.kind !== "prompt" || mutation.sessionID !== sessionID || projected.messages.some((message) => message.id === mutation.id) || typeof mutation.input.text !== "string") return []
-      return [{ kind: "user", id: mutation.id, text: mutation.input.text,
+      if (mutation.kind !== "prompt" && mutation.kind !== "command" || mutation.sessionID !== sessionID || projected.messages.some((message) => message.id === mutation.id)) return []
+      const text = mutationText(mutation)
+      if (typeof text !== "string") return []
+      return [{ kind: "user", id: mutation.id, text,
         delivery: mutation.input.delivery === "queue" ? "queue" : "steer", state: "pending", created: mutation.created ?? now() }]
     })
     const resident = unsynced.length === 0 ? projected : { ...projected, messages: visibleTranscript([...projected.messages, ...unsynced]) }
@@ -1385,10 +1410,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       }
       const pending = outcome.status === "ok" ? readPendingInputs(outcome.value, sessionID) : undefined
       if (pending === undefined) return
-      const retained = new Set(container.state.mutations.filter((mutation) => mutation.sessionID === sessionID && mutation.kind === "prompt").map((mutation) => mutation.id))
+      const retained = new Set(container.state.mutations.filter((mutation) => mutation.sessionID === sessionID && (mutation.kind === "prompt" || mutation.kind === "command")).map((mutation) => mutation.id))
       const confirmed = new Set([...pending.map((entry) => entry.id),
-        ...container.state.view.messages.flatMap((message) => message.kind === "user" && message.state !== "pending" ? [message.id] : [])])
-      const resolved = container.state.mutations.filter((mutation) => mutation.kind === "prompt" && mutation.sessionID === sessionID && confirmed.has(mutation.id))
+        ...container.state.view.messages.flatMap((message) => message.kind === "user" && message.state !== "pending" || message.kind === "synthetic" && !message.pending ? [message.id] : [])])
+      const resolved = container.state.mutations.filter((mutation) => (mutation.kind === "prompt" || mutation.kind === "command") && mutation.sessionID === sessionID && confirmed.has(mutation.id) &&
+        (!sends.has(mutation.id) || confirmSend(mutation.id)))
       setState({ view: reconcilePendingInputs(container.state.view, pending.filter((entry) => !read.promoted.has(entry.id)), retained),
         mutations: container.state.mutations.filter((mutation) => !resolved.includes(mutation)),
         mutationToasts: container.state.mutationToasts?.filter((toast) => !resolved.some((mutation) => mutation.id === toast.id)) })
@@ -2108,11 +2134,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           selectedSessionInfo: session })
       }
       await api.selectSession(session.id)
+      if (!owns() || container.state.activeSessionID !== session.id) return undefined
       if (attempt.prompt !== undefined) {
         const sent = "command" in attempt.prompt
           ? await api.runCommand({ ...attempt.prompt, delivery: "steer" })
           : await api.sendPrompt({ ...attempt.prompt, delivery: "steer" })
-        if (sent === false) {
+        if (!sent) {
           setState({ sessionCreation: { ...attempt, status: "failed", message: container.state.uploadError ?? "The first message could not be sent. Retry to submit it to this Session." } })
           return undefined
         }
@@ -2137,16 +2164,121 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     return undefined
   }
 
-  const prepareSelection = async (sessionID: string, token: number, input: { readonly agent?: string; readonly model?: ModelRefView }) => {
-    const view = container.state.view
-    if (input.agent !== undefined && input.agent !== view?.agent) {
-      if (!await api.switchAgent(input.agent)) return false
-      if (token !== selectionToken || container.state.activeSessionID !== sessionID) return false
+  type SendProgress = {
+    mutation: PendingMutation
+    readonly deviceID: string
+    readonly files?: readonly FileAttachmentInput[]
+    readonly prerequisites: readonly { readonly operation: RemoteOperation; readonly input: Readonly<Record<string, unknown>>; completed: boolean; attempted: boolean }[]
+    uploaded?: readonly FileAttachmentInput[]
+    uploadedAt?: number
+    uploadsReady: boolean
+    running?: Promise<void>
+  }
+  const sends = new Map<string, SendProgress>()
+  const sendPreparation = new Map<string, Promise<void>>()
+
+  const confirmSend = (id: string) => {
+    const progress = sends.get(id)
+    if (!progress || progress.deviceID !== container.state.activeDeviceID || progress.mutation.kind !== "prompt" && progress.mutation.kind !== "command" ||
+      !progress.prerequisites.every((step) => step.completed) || container.state.mutations.find((mutation) => mutation.id === id)?.phase === "preparing") return false
+    sends.delete(id)
+    return true
+  }
+
+  const progressSend = (progress: SendProgress): Promise<void> => {
+    if (progress.running) return progress.running
+    const sessionID = progress.mutation.sessionID
+    const token = selectionToken
+    const key = JSON.stringify([progress.deviceID, sessionID])
+    const previous = sendPreparation.get(key)
+    const prepared = Promise.withResolvers<void>()
+    sendPreparation.set(key, prepared.promise)
+    const owns = () => sends.get(progress.mutation.id) === progress && progress.deviceID === container.state.activeDeviceID &&
+      token === selectionToken && container.state.activeSessionID === sessionID && container.state.transport.kind === "open"
+    const run = (async () => {
+      try {
+        await previous
+        if (!owns()) {
+          finishMutation(progress.mutation.id, "failed", "Select this Session on the same connected machine before retrying the send.")
+          return
+        }
+        setState({ mutations: container.state.mutations.map((entry) => entry.id === progress.mutation.id ? { ...entry, state: "sending", detail: undefined } : entry) })
+        if (progress.uploadedAt !== undefined && now() - progress.uploadedAt >= RemoteLimits.attachmentTtlMs && progress.files?.some((file) => file.uri.startsWith("data:"))) progress.uploadsReady = false
+        if (!progress.uploadsReady) {
+          progress.uploaded = await prepareUploads(sessionID, progress.files, token)
+          if (progress.files !== undefined && progress.uploaded === undefined) {
+            finishMutation(progress.mutation.id, "failed", container.state.uploadError ?? "Attachments were not sent.")
+            return
+          }
+          progress.uploadsReady = true
+          progress.uploadedAt = now()
+        }
+        for (const prerequisite of progress.prerequisites) {
+          if (!owns()) {
+            finishMutation(progress.mutation.id, "failed", "The selected Session or machine changed before the send was admitted.")
+            return
+          }
+          const view = container.state.view
+          const model = readModelRef(prerequisite.input.model)
+          if ((prerequisite.completed || !prerequisite.attempted) &&
+            (prerequisite.operation === "session.switchAgent" && prerequisite.input.agent === view?.agent ||
+              prerequisite.operation === "session.switchModel" && model !== undefined && model.id === view?.model?.id &&
+              model.providerID === view.model.providerID && model.variant === view.model.variant)) {
+            prerequisite.completed = true
+            continue
+          }
+          prerequisite.completed = false
+          prerequisite.attempted = true
+          const outcome = await request({ ...progress.mutation, state: "sending", phase: "preparing" }, { sessionID, operation: prerequisite.operation, input: prerequisite.input, retain: true })
+          if (outcome.status !== "ok") return
+          prerequisite.completed = true
+          if (owns() && container.state.view) {
+            if (prerequisite.operation === "session.switchModel" && model !== undefined) setState({ view: { ...container.state.view, model } })
+            if (prerequisite.operation === "session.switchAgent" && typeof prerequisite.input.agent === "string") setState({ view: { ...container.state.view, agent: prerequisite.input.agent } })
+          }
+        }
+        if (!owns()) {
+          finishMutation(progress.mutation.id, "failed", "The selected Session or machine changed before the send was admitted.")
+          return
+        }
+        const input = { ...progress.mutation.input, ...(progress.files === undefined ? {} : { files: progress.uploaded }) }
+        if (progress.prerequisites.length === 0 && progress.mutation.kind !== "skill") prepared.resolve()
+        await request({ ...progress.mutation, state: "sending", phase: "admitting" }, { sessionID, input })
+      } catch (cause) {
+        finishMutation(progress.mutation.id, "failed", cause instanceof Error ? cause.message : "The send failed.")
+      } finally {
+        prepared.resolve()
+        if (sendPreparation.get(key) === prepared.promise) sendPreparation.delete(key)
+      }
+    })()
+    progress.running = run
+    void run.then(() => { progress.running = undefined })
+    return run
+  }
+
+  const acceptSend = (mutation: PendingMutation, input: { readonly files?: readonly FileAttachmentInput[]; readonly agent?: string; readonly model?: ModelRefView }) => {
+    const view = container.state.view ?? createSessionView(mutation.sessionID)
+    const progress: SendProgress = {
+      mutation,
+      deviceID: container.state.activeDeviceID!,
+      files: input.files,
+      prerequisites: [
+        ...(input.agent !== undefined ? [{ operation: "session.switchAgent" as const, input: { agent: input.agent } }] : []),
+        ...(input.model !== undefined
+          ? [{ operation: "session.switchModel" as const, input: { model: input.model } }] : []),
+      ].map((step) => ({ ...step, completed: false, attempted: false })),
+      uploadsReady: input.files === undefined,
     }
-    if (input.model !== undefined && (input.model.id !== view?.model?.id || input.model.providerID !== view.model?.providerID || input.model.variant !== view.model?.variant)) {
-      if (!await api.switchModel(input.model)) return false
-      if (token !== selectionToken || container.state.activeSessionID !== sessionID) return false
-    }
+    sends.set(mutation.id, progress)
+    setState({
+      mutations: [...container.state.mutations, mutation],
+      ...(mutation.kind !== "prompt" && mutation.kind !== "command" ? {} : { view: { ...view, messages: [...view.messages, {
+        kind: "user" as const, id: mutation.id, text: mutationText(mutation)!,
+        delivery: mutation.input.delivery === "queue" ? "queue" as const : "steer" as const,
+        state: "pending" as const, created: mutation.created ?? now(),
+      }] } }),
+    })
+    void progressSend(progress)
     return true
   }
 
@@ -2319,6 +2451,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       // The account answer this browser held is replaced by an explicit sign-out, so a
       // read that is still in flight must not restore it afterwards.
       accountToken += 1
+      const discarded = new Set(sends.keys())
+      sends.clear()
+      setState({ mutations: container.state.mutations.filter((mutation) => !discarded.has(mutation.id)),
+        mutationToasts: container.state.mutationToasts?.filter((toast) => !discarded.has(toast.id)) })
       clearCatalogs()
       endQueries(currentScope())
       await options.http.logout()
@@ -2733,95 +2869,38 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     },
     activateSkill: async (skill) => {
       const sessionID = container.state.activeSessionID
-      const token = selectionToken
-      if (sessionID === undefined || !skill.trim()) return false
+      if (sessionID === undefined || !skill.trim() || container.state.transport.kind !== "open" || container.state.connection.kind === "offline") return false
       const id = createMessageID()
-      const outcome = await request({ id, kind: "skill", label: `Load ${skill}`, state: "sending", sessionID,
-        operation: "session.skill", input: { id, skill } }, { sessionID })
-      return outcome.status === "ok" && token === selectionToken && container.state.activeSessionID === sessionID
+      return acceptSend({ id, kind: "skill", label: `Load ${skill}`, state: "sending", phase: "admitting", sessionID,
+        operation: "session.skill", input: { id, skill } }, {})
     },
     sendPrompt: async (input) => {
       const sessionID = container.state.activeSessionID
-      const token = selectionToken
       const text = input.text.trim()
       if (sessionID === undefined) {
         setState({ notice: "Select a session before sending a prompt." })
         return false
       }
+      if (container.state.transport.kind !== "open" || container.state.connection.kind === "offline") return false
       if (text.length === 0 && !input.files?.length && !input.agents?.length && !input.skills?.length) return false
-      if (!requestFits("session.prompt", sessionID, { text, delivery: input.delivery, agents: input.agents }, input.files)) return false
-      const files = await prepareUploads(sessionID, input.files, token)
-      if (input.files !== undefined && files === undefined) return false
-      if (!await prepareSelection(sessionID, token, input) || token !== selectionToken || container.state.activeSessionID !== sessionID) return false
-      for (const skill of input.skills ?? []) {
-        const id = createMessageID()
-        const outcome = await request({ id, kind: "skill", label: `Load ${skill}`, state: "sending", sessionID,
-          operation: "session.skill", input: { id, skill, resume: false } }, { sessionID })
-        if (outcome.status !== "ok" || token !== selectionToken || container.state.activeSessionID !== sessionID) return false
-      }
+      if (input.skills !== undefined && (input.skills.length > RemoteLimits.maxPromptSkills || input.skills.some((id) => !id.trim() || id.length > 128))) return false
+      if (!requestFits("session.prompt", sessionID, { text, delivery: input.delivery, agents: input.agents, skills: input.skills }, input.files)) return false
       const messageID = createMessageID()
-      const view = container.state.view ?? createSessionView(sessionID)
-      const optimistic: RemoteMessageView = {
-        kind: "user",
-        id: messageID,
-        text,
-        delivery: input.delivery,
-        state: "pending",
-        created: now(),
-      }
-      setState({
-        view: { ...view, messages: [...view.messages, optimistic] },
-        mutations: [
-          ...container.state.mutations,
-          {
-            id: messageID,
-            kind: "prompt",
-            label: input.delivery === "queue" ? "Queued prompt" : "Prompt",
-            state: "sending",
-            created: optimistic.created,
-            sessionID,
-            operation: "session.prompt",
-            input: { id: messageID, text, delivery: input.delivery,
-              ...(input.files === undefined ? {} : { files }), ...(input.agents === undefined ? {} : { agents: input.agents }),
-              ...(input.skills?.length ? { resume: false } : {}) },
-          },
-        ],
-      })
-      const promptInput = { id: messageID, text, delivery: input.delivery,
-        ...(input.files === undefined ? {} : { files }), ...(input.agents === undefined ? {} : { agents: input.agents }),
-        ...(input.skills?.length ? { resume: false } : {}) }
-      const outcome = await request(
-        {
-          id: messageID,
-          kind: "prompt",
-          label: input.delivery === "queue" ? "Queued prompt" : "Prompt",
-          state: "sending",
-          sessionID,
-          operation: "session.prompt",
-          input: promptInput,
-        },
-        { sessionID },
-      )
-      if (!input.skills?.length || outcome.status !== "ok" || token !== selectionToken || container.state.activeSessionID !== sessionID) return true
-      await request({ id: messageID, kind: "prompt", label: "Wake prompt", state: "sending", sessionID,
-        operation: "session.prompt", input: { ...promptInput, resume: true } }, { sessionID })
-      return true
+      return acceptSend({ id: messageID, kind: "prompt", label: input.delivery === "queue" ? "Queued prompt" : "Prompt", state: "sending", phase: "preparing",
+        created: now(), sessionID, operation: "session.prompt", input: { id: messageID, text, delivery: input.delivery,
+          ...(input.files === undefined ? {} : { files: input.files }), ...(input.agents === undefined ? {} : { agents: input.agents }),
+          ...(input.skills?.length ? { skills: input.skills } : {}) } }, input)
     },
     runCommand: async (input) => {
       const sessionID = container.state.activeSessionID
-      const token = selectionToken
-      if (sessionID === undefined || !input.command.trim()) return false
+      if (sessionID === undefined || !input.command.trim() || container.state.transport.kind !== "open" || container.state.connection.kind === "offline") return false
       if (!requestFits("session.command", sessionID, { command: input.command, arguments: input.arguments, delivery: input.delivery, agents: input.agents }, input.files)) return false
-      const files = await prepareUploads(sessionID, input.files, token)
-      if (input.files !== undefined && files === undefined) return false
-      if (!await prepareSelection(sessionID, token, input) || token !== selectionToken || container.state.activeSessionID !== sessionID) return false
       const id = createMessageID()
-      await request({ id, kind: "command", label: `/${input.command}`, state: "sending", sessionID, operation: "session.command",
+      return acceptSend({ id, kind: "command", label: `/${input.command}`, state: "sending", phase: "preparing", created: now(), sessionID, operation: "session.command",
         input: { id, command: input.command, delivery: input.delivery,
           ...(input.arguments === undefined ? {} : { arguments: input.arguments }),
-          ...(input.files === undefined ? {} : { files }), ...(input.agents === undefined ? {} : { agents: input.agents }) },
-      }, { sessionID })
-      return true
+          ...(input.files === undefined ? {} : { files: input.files }), ...(input.agents === undefined ? {} : { agents: input.agents }) },
+      }, input)
     },
     cancelUpload: () => cancelUpload(),
     compactSession: async () => {
@@ -2834,12 +2913,22 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return outcome.status === "ok"
     },
     retryMutation: async (id) => {
+      const progress = sends.get(id)
+      if (progress) {
+        if (progress.deviceID !== container.state.activeDeviceID || progress.mutation.sessionID !== container.state.activeSessionID || container.state.transport.kind !== "open") return
+        await progressSend(progress)
+        return
+      }
       const mutation = container.state.mutations.find((entry) => entry.id === id)
       if (!mutation) return
       await request({ ...mutation, state: "sending", detail: undefined }, { sessionID: mutation.sessionID })
     },
     dismissMutation: (id) => {
-      setState({ mutations: container.state.mutations.filter((entry) => entry.id !== id) })
+      const progress = sends.get(id)
+      sends.delete(id)
+      setState({ mutations: container.state.mutations.filter((entry) => entry.id !== id),
+        ...(progress === undefined || progress.deviceID !== container.state.activeDeviceID || container.state.view?.id !== progress.mutation.sessionID ? {} : { view: { ...container.state.view,
+          messages: container.state.view.messages.filter((message) => message.id !== id || message.kind !== "user" || message.state !== "pending") } }) })
     },
     dismissMutationToast: (id) => {
       setState({ mutationToasts: (container.state.mutationToasts ?? []).filter((entry) => entry.id !== id) })
@@ -3009,6 +3098,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     },
     dispose: () => {
       goalsInFlight.clear()
+      const abandoned = new Set(sends.keys())
+      sends.clear()
       clearImageSources()
       oversizedReads.forEach((controller) => controller.abort())
       oversizedReads.clear()
@@ -3034,8 +3125,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       transport = undefined
       subscribedSessionID = undefined
       setState({ drafts: {}, sessionCreation: undefined,
-        mutations: container.state.mutations.filter((mutation) => mutation.operation !== "session.goal.set"),
-        mutationToasts: (container.state.mutationToasts ?? []).filter((toast) => !container.state.mutations.some((mutation) => mutation.operation === "session.goal.set" && mutation.id === toast.id)),
+        mutations: container.state.mutations.filter((mutation) => mutation.operation !== "session.goal.set" && !abandoned.has(mutation.id)),
+        mutationToasts: (container.state.mutationToasts ?? []).filter((toast) => !abandoned.has(toast.id) && !container.state.mutations.some((mutation) => mutation.operation === "session.goal.set" && mutation.id === toast.id)),
         team: undefined, familyActivity: undefined, teamCues: [] })
       endAlerts()
       subscriptions.forEach((subscription) => subscription.unsubscribe())
@@ -3320,6 +3411,11 @@ function teamActionFailure(outcome: Exclude<RemoteRequestOutcome, { status: "ok"
 }
 
 function defaultMessageID(): string {
-  return `msg_${Date.now().toString(36)}${Math.floor(Math.random() * 1_000_000).toString(36)}`
+  return `msg_${crypto.randomUUID().replaceAll("-", "")}`
 }
 
+function mutationText(mutation: PendingMutation) {
+  if (mutation.kind !== "command") return typeof mutation.input.text === "string" ? mutation.input.text : undefined
+  if (typeof mutation.input.command !== "string") return undefined
+  return `/${mutation.input.command}${typeof mutation.input.arguments === "string" && mutation.input.arguments ? ` ${mutation.input.arguments}` : ""}`
+}

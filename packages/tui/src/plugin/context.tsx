@@ -92,7 +92,9 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver }>
         return location.current
       },
       attention,
-      client: client.api,
+      get client() {
+        return client.api
+      },
       data,
       keymap: {
         layer: Keymap.createLayer,

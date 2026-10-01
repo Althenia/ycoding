@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { createCliRenderer, type AudioSound, type AudioVoice } from "@opentui/core"
 import { Readable, Writable } from "node:stream"
-import { createTuiAttention } from "../src/attention"
+import { createTuiAttention, onTuiAttentionAvailable } from "../src/attention"
 
 test("delivers a blurred notification before focus is reported through Ghostty's renderer", async () => {
   const chunks: Buffer[] = []
@@ -22,6 +22,7 @@ test("delivers a blurred notification before focus is reported through Ghostty's
     useMouse: false,
     consoleMode: "disabled",
   })
+  const capabilityListeners = renderer.listenerCount("capabilities")
   const attention = createTuiAttention({
     renderer,
     config: {
@@ -35,8 +36,11 @@ test("delivers a blurred notification before focus is reported through Ghostty's
       },
     },
   })
+  let available = 0
+  const unsubscribe = onTuiAttentionAvailable(attention, () => { available += 1 })
   try {
     stdin.emit("data", Buffer.from("\u001bP>|ghostty 1.1.3\u001b\\"))
+    expect(available).toBe(1)
     expect(renderer.capabilities?.notifications).toBe(true)
     expect(await attention.notify({ message: "Session done", notification: { when: "blurred" }, sound: false })).toEqual({
       ok: true,
@@ -55,11 +59,14 @@ test("delivers a blurred notification before focus is reported through Ghostty's
       skipped: "focused",
     })
     stdin.emit("data", Buffer.from("\u001b[O"))
+    expect(available).toBe(3)
     expect(
       (await attention.notify({ message: "Session done", notification: { when: "blurred" }, sound: false })).notification,
     ).toBe(true)
   } finally {
+    unsubscribe()
     attention.dispose()
+    expect(renderer.listenerCount("capabilities")).toBe(capabilityListeners)
     renderer.destroy()
   }
 })

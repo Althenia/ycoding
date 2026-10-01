@@ -62,7 +62,7 @@ const maxPendingInputs = 200
 // remote reader pages explicitly instead of asking the device for unbounded output.
 const maxShellOutputPage = 65_536
 
-const catalogLimit = { agents: 100, models: 500, commands: 200, skills: 200, references: 200, resources: 200 }
+const catalogLimit = { agents: 100, commands: 200, skills: 200, references: 200, resources: 200 }
 type ModelSelection = NonNullable<Parameters<LocalServer["createSession"]>[3]>
 type CommandInput = Parameters<LocalServer["command"]>[2]
 
@@ -412,16 +412,15 @@ async function catalog(local: LocalServer, location: LocalLocation) {
     local.commandList(location), local.skillList(location), local.referenceList(location), local.resourceCatalog(location),
   ])
   for (const [items, limit] of [
-    [agents, catalogLimit.agents], [models, catalogLimit.models], [commands, catalogLimit.commands],
+    [agents, catalogLimit.agents], [commands, catalogLimit.commands],
     [skills, catalogLimit.skills], [references, catalogLimit.references], [resources.resources, catalogLimit.resources],
   ] as const) if (items.length > limit) throw new OperationError("message_too_large", "Catalog exceeds its bounded list size")
-  if (providers.length > 500 || models.some((item) => item.variants.length > 50))
-    throw new OperationError("message_too_large", "Catalog exceeds its bounded list size")
   const connected = new Map(providers.filter((provider) => provider.disabled !== true).map((provider) => [provider.id, provider.name]))
+  const offeredModels = models.filter((item) => connected.has(item.providerID) && item.enabled)
   return {
     agents: agents.map((agent) => ({ id: agent.id, name: agent.name, ...(agent.description === undefined ? {} : { description: agent.description }),
       mode: agent.mode, hidden: agent.hidden, ...(agent.model === undefined ? {} : { model: agent.model }) })),
-    models: models.filter((item) => connected.has(item.providerID) && item.enabled).map((item) => ({
+    models: offeredModels.map((item) => ({
       providerID: item.providerID, providerName: connected.get(item.providerID), id: item.id, name: item.name,
       variants: item.variants.map((variant) => variant.id),
     })),
@@ -1049,6 +1048,7 @@ function validate(request: RemoteRequest): Validated {
           text: requireString(fields.text, "text", 32_768, { allowEmpty: true }),
           ...(fields.files === undefined ? {} : { files: fileAttachments(fields.files) }),
           ...(fields.agents === undefined ? {} : { agents: agentAttachments(fields.agents) }),
+          ...(fields.skills === undefined ? {} : { metadata: { skills: promptSkills(fields.skills) } }),
           ...(fields.delivery === undefined ? {} : { delivery: delivery(fields.delivery) }),
           ...(fields.resume === undefined ? {} : { resume: requireBoolean(fields.resume, "resume") }),
         },
@@ -1523,7 +1523,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.shell.output": ["shellID", "cursor", "limit"],
   "session.subscribe": [],
   "session.unsubscribe": [],
-  "session.prompt": ["id", "text", "files", "agents", "delivery", "resume"],
+  "session.prompt": ["id", "text", "files", "agents", "delivery", "resume", "skills"],
   "session.interrupt": [],
   "session.permission.reply": ["requestID", "reply", "message"],
   "session.guardrail.reply": ["requestID", "reply"],
@@ -1683,6 +1683,16 @@ function agentAttachments(value: unknown) {
       name: requireString(record.name, "agents.name", 256),
       ...(record.mention === undefined ? {} : { mention: mention(record.mention) }),
     }
+  })
+}
+
+function promptSkills(value: unknown) {
+  if (!Array.isArray(value) || value.length > RemoteLimits.maxPromptSkills)
+    throw new OperationError("invalid_message", 'The "skills" field must be a bounded array of skill IDs')
+  return value.map((value: unknown) => {
+    const id = requireString(value, "skills", 128)
+    if (!id.trim()) throw new OperationError("invalid_message", 'The "skills" field requires nonempty skill IDs')
+    return { id }
   })
 }
 

@@ -61,7 +61,7 @@ async function harness(options: {
     http: createRemoteHttp({ baseURL: relay.httpURL }),
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
     createTransport: (deviceID, handlers) =>
-      createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, schedule,
+      createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, schedule, createSocket: relay.createSocket,
         ...(options.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: options.requestTimeoutMs }) }),
     schedule,
     batchMs: 20,
@@ -2181,6 +2181,7 @@ describe("remote store integration", () => {
       await waitFor(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
       await test.store.sendPrompt({ text: "Deploy", delivery: "steer" })
+      await waitFor(() => test.store.state().mutations[0]?.state === "unknown")
       const mutation = test.store.state().mutations[0]
       expect(mutation?.state).toBe("unknown")
       expect(mutation?.detail).toContain("Outcome unknown")
@@ -2276,7 +2277,11 @@ describe("remote store integration", () => {
     const test = await harness({ forms: [form] })
     try {
       await test.store.load()
-      await waitFor(() => test.store.state().sessions.length > 0)
+      await waitFor(() => test.store.state().sessions.length > 0).catch(async (cause: unknown) => {
+        console.error(JSON.stringify({ diagnostic: "form-inventory", transport: test.store.state().transport, connection: test.store.state().connection,
+          sessionListStatus: test.store.state().sessionListStatus, notice: test.store.state().notice, ...await test.relay.diagnostics() }))
+        throw cause
+      })
       await test.store.selectSession("ses_a")
       expect(test.store.state().view?.requests).toMatchObject([{ kind: "form", id: "frm_seed", form }])
 

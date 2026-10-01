@@ -17,6 +17,7 @@ import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { SkillV2 } from "@ycoding-ai/core/skill"
+import { PermissionV2 } from "@ycoding-ai/core/permission"
 import { Instruction } from "@ycoding-ai/schema/instruction"
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionEvent } from "@ycoding-ai/schema/session-event"
@@ -78,10 +79,10 @@ const locations = Layer.effect(
   LocationServiceMap.Service,
   LayerMap.make(
     () =>
-      // The skill endpoint only needs the location-scoped Skill service.
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
       Layer.mergeAll(
         skills,
+        Layer.mock(PermissionV2.Service, { evaluateEffective: () => Effect.succeed("allow") }),
         instructionDiscovery,
         sessionContext,
       ) as unknown as Layer.Layer<LocationServices>,
@@ -99,6 +100,23 @@ const it = testEffect(
 )
 
 describe("SessionV2.skill", () => {
+  it.effect("does not publish another activation for an already active skill", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionV2.Service
+      const session = yield* sessions.create({ location })
+      yield* Effect.all(
+        [
+          sessions.skill({ sessionID: session.id, skill: SkillV2.ID.make("effect"), resume: false }),
+          sessions.skill({ sessionID: session.id, skill: SkillV2.ID.make("effect"), resume: false }),
+        ],
+        { concurrency: "unbounded" },
+      )
+      expect(
+        (yield* sessions.messages({ sessionID: session.id })).filter((message) => message.type === "skill"),
+      ).toHaveLength(1)
+    }),
+  )
+
   it.effect("projects the caller-supplied message ID", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionV2.Service

@@ -66,13 +66,25 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
   init: () => {
     const paths = useTuiPaths()
     const historyPath = path.join(paths.state, "prompt-history.jsonl")
+    const loaded = readText(historyPath).catch(() => "")
+    let writes = loaded.then(() => {})
+    function persist(content: string, append = false) {
+      const next = writes
+        .catch(() => {})
+        .then(() => (append ? appendText(historyPath, content) : writeText(historyPath, content)))
+      writes = next
+      return next
+    }
     onMount(async () => {
-      const lines = parsePromptHistory(await readText(historyPath).catch(() => ""))
-      setStore("history", lines)
+      const lines = parsePromptHistory(await loaded)
+      setStore(
+        produce((draft) => {
+          draft.history = [...lines, ...draft.history].slice(-MAX_HISTORY_ENTRIES)
+        }),
+      )
 
       // Rewrite valid retained entries to self-heal corruption and enforce the limit.
-      if (lines.length > 0)
-        writeText(historyPath, lines.map((line) => JSON.stringify(line)).join("\n") + "\n").catch(() => {})
+      if (lines.length > 0) persist(store.history.map((line) => JSON.stringify(line)).join("\n") + "\n").catch(() => {})
     })
 
     const [store, setStore] = createStore({
@@ -99,6 +111,7 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
           setStore("index", 0)
           return
         }
+        const reserved = { entry }
         let trimmed = false
         setStore(
           produce((draft) => {
@@ -112,10 +125,27 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
         )
 
         if (trimmed) {
-          writeText(historyPath, store.history.map((line) => JSON.stringify(line)).join("\n") + "\n").catch(() => {})
-          return
+          persist(store.history.map((line) => JSON.stringify(line)).join("\n") + "\n").catch(() => {})
         }
-        appendText(historyPath, JSON.stringify(entry) + "\n").catch(() => {})
+        if (!trimmed) persist(JSON.stringify(entry) + "\n", true).catch(() => {})
+        return async (updated?: PromptInfo) => {
+          const index = store.history.findIndex((item) => unwrap(item) === reserved.entry)
+          if (index < 0) return
+          if (!updated) {
+            setStore("history", (current) => current.filter((_, position) => position !== index))
+            await persist(store.history.map((line) => JSON.stringify(line)).join("\n") + "\n")
+            return
+          }
+          const canonical = parsePromptInfo(structuredClone(unwrap(updated)))
+          if (!canonical) return
+          reserved.entry = canonical
+          setStore(
+            produce((draft) => {
+              draft.history[index] = canonical
+            }),
+          )
+          await persist(store.history.map((line) => JSON.stringify(line)).join("\n") + "\n")
+        }
       },
     }
   },

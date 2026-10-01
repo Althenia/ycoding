@@ -131,7 +131,7 @@ describe("remote shell layout", () => {
       const page = await browser!.openPage()
       try {
         await page.setViewport(width, height)
-        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=${view}&inventoryCount=80&sessionListDelay=8000`)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=${view}&inventoryCount=80&sessionListGate=1`)
         for (let attempt = 0; attempt < 100 && !await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector + ' .loading-placeholder--session')}) !== null`); attempt += 1) await Bun.sleep(50)
         expect(await page.evaluate<{ readonly count: number; readonly announcements: number; readonly busy: boolean; readonly table: boolean }>(`(() => { const root = document.querySelector(${JSON.stringify(selector)}); return {
           count: root?.querySelectorAll('.loading-placeholder--session').length ?? 0,
@@ -142,9 +142,11 @@ describe("remote shell layout", () => {
         expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector + ' .loading-placeholder--session')})?.getBoundingClientRect().height >= 64 && document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
         for (let attempt = 0; attempt < 20 && await page.evaluate<number>(`Number(getComputedStyle(document.querySelector(${JSON.stringify(selector + ' .loading-placeholder__shape')})).opacity)`) < 0.9; attempt += 1) await Bun.sleep(25)
         await Bun.write(new URL(`../../../.cache/tmp/shell-loading-${view}-${width}x${height}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        expect(await page.evaluate<number>(`window.remotePendingSessionLists()`)).toBe(1)
+        await page.evaluate(`window.remoteReleaseSessionList()`)
         const settled = `document.querySelector(${JSON.stringify(selector + ' .loading-placeholder--session')}) === null && document.querySelectorAll(${JSON.stringify(view === 'sessions' ? '.sessions-table__row' : '.workspace__rail .session-row')}).length > 0`
         for (let attempt = 0; attempt < 300 && !await page.evaluate<boolean>(settled); attempt += 1) await Bun.sleep(50)
-        expect(await page.evaluate<boolean>(settled)).toBe(true)
+        expect(await page.evaluate<boolean>(settled), JSON.stringify({ width, view, report: await page.evaluate(`window.remoteInventoryReport()`), held: await page.evaluate(`window.remotePendingSessionLists()`), panel: await page.evaluate(`document.querySelector(${JSON.stringify(selector)})?.textContent?.slice(0,200)`) })).toBe(true)
       } finally { await page.close() }
     }
   }, 60_000)
@@ -169,10 +171,14 @@ describe("remote shell layout", () => {
     const page = await browser!.openPage()
     try {
       await page.setViewport(1440, 900)
-      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&inventoryCount=80&sessionListDelay=3500`)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&inventoryCount=80&sessionListGate=1`)
+      for (let attempt = 0; attempt < 100 && !await page.evaluate<boolean>(`window.remotePendingSessionLists?.() === 1`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<number>(`window.remotePendingSessionLists()`)).toBe(1)
+      await page.evaluate(`window.remoteReleaseSessionList()`)
       for (let attempt = 0; attempt < 80 && await page.evaluate<number>(`(Number(document.querySelector('.sessions-table')?.getAttribute('aria-rowcount') ?? 1) - 1)`) < 25; attempt += 1) await Bun.sleep(50)
       const existing = await page.evaluate<number>(`(Number(document.querySelector('.sessions-table')?.getAttribute('aria-rowcount') ?? 1) - 1)`)
-      await page.evaluate(`(() => { const root = document.querySelector('.workspace__scroll'); root.tabIndex = 0; root.focus(); })()`)
+      expect(existing, JSON.stringify(await page.evaluate(`({ report: window.remoteInventoryReport(), held: window.remotePendingSessionLists(), panel:document.querySelector('.sessions-results')?.textContent?.slice(0,200) })`))).toBeGreaterThanOrEqual(25)
+      await page.evaluate(`(() => { window.remoteHoldSessionLists(); const root = document.querySelector('.workspace__scroll'); root.tabIndex = 0; root.focus(); })()`)
       await page.pressKey("End", "End", 35)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.sessions-page__content .loading-placeholder--session') !== null`); attempt += 1) await Bun.sleep(50)
       expect(await page.evaluate<{ readonly rows: number; readonly placeholders: number; readonly label: string }>(`(() => ({
@@ -181,6 +187,8 @@ describe("remote shell layout", () => {
         label: document.querySelector('.sessions-page__content .loading-placeholder--session')?.textContent?.trim() ?? '',
       }))()`)).toEqual({ rows: existing, placeholders: 1, label: "Loading more sessions…" })
       await Bun.write(new URL(`../../../.cache/tmp/shell-loading-next-page-1440x900.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      expect(await page.evaluate<number>(`window.remotePendingSessionLists()`)).toBe(1)
+      await page.evaluate(`window.remoteReleaseSessionList()`)
       for (let attempt = 0; attempt < 80 && await page.evaluate<boolean>(`document.querySelector('.sessions-page__content .loading-placeholder--session') !== null`); attempt += 1) await Bun.sleep(50)
       expect(await page.evaluate<boolean>(`(Number(document.querySelector('.sessions-table')?.getAttribute('aria-rowcount') ?? 1) - 1) > ${existing} && document.querySelector('.sessions-page__content .loading-placeholder--session') === null`)).toBe(true)
     } finally { await page.close() }
@@ -974,11 +982,55 @@ describe("remote shell layout", () => {
 
   const submitPrompt = (text: string) => `(() => {
         const input=document.querySelector('.composer__input');
+        input.focus();
         input.value=${JSON.stringify(text)};
         input.dispatchEvent(new InputEvent('input',{bubbles:true}));
         document.querySelector('button[aria-label="Send prompt"]')?.click();
       })()`
+
+  for (const width of [390, 1440] as const) test(`all 553 offered models remain selectable in Session and new-session composers at ${width}px`, async () => {
+    const page = await fixture("view=chat&largeCatalog=1", width, "Stream remote output safely")
+    try {
+      for (const creating of [false, true]) {
+        if (creating) await page.evaluate(`document.querySelector('[aria-label="New session"]').click()`)
+        const root = creating ? ".new-session-composer" : ".mini-composer__mount"
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('${root} .model-control__trigger')?.disabled === false`); attempt++) await Bun.sleep(25)
+        expect(await page.evaluate<boolean>(`document.querySelector('${root} .model-control__trigger')?.disabled`)).toBe(false)
+        if (!creating && width === 390) await page.evaluate(`document.querySelector('.composer__mobile-trigger').click()`)
+        const picker = !creating && width === 390 ? ".composer__selection-sheet" : root
+        await page.evaluate(`document.querySelector('${picker} .model-control__trigger').click(); document.querySelector('.model-control__switch').click()`)
+        expect(await page.evaluate<number>(`document.querySelectorAll('.model-control__model').length`)).toBe(553)
+        await page.evaluate(`(() => { const search=document.querySelector('[aria-label="Search models"]'); search.value='Catalog model 552'; search.dispatchEvent(new InputEvent('input',{bubbles:true})); })()`)
+        expect(await page.evaluate<number>(`document.querySelectorAll('.model-control__model').length`)).toBe(1)
+        await page.evaluate(`document.querySelector('.model-control__model').click()`)
+        expect(await page.evaluate<string>(`document.querySelector('${root} .model-control__name').textContent`)).toBe("Catalog model 552")
+        if (!creating && width === 390) await page.evaluate(`document.querySelector('[aria-label="Close agent and model picker"]').click()`)
+      }
+    } finally { await page.close() }
+  }, 30_000)
   const cleanFixture = `(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`
+
+  for (const width of [390, 1440] as const) test(`prompt acknowledgements never block the next draft or erase it at ${width}px`, async () => {
+    const page = await fixture("view=chat&promptOutcome=hold", width, "Stream remote output safely")
+    try {
+      await page.evaluate(cleanFixture)
+      await page.evaluate(submitPrompt("First delayed prompt"))
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.composer__input').value === '' && !document.querySelector('.composer__input').disabled`); attempt++) await Bun.sleep(25)
+      expect(await page.evaluate<boolean>(`document.querySelector('.composer__input').value === '' && !document.querySelector('.composer__input').disabled`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.composer__input')`)).toBe(true)
+      await page.evaluate(submitPrompt("Second delayed prompt"))
+      for (let attempt = 0; attempt < 40 && await page.evaluate<number>(`window.remoteMutationReport().filter(request => request.operation === 'session.prompt').length`) < 2; attempt++) await Bun.sleep(25)
+      const sent = await page.evaluate<readonly { id: string; text: string }[]>(`window.remoteMutationReport().filter(request => request.operation === 'session.prompt').map(request => request.input)`)
+      expect(sent.map((item) => item.text)).toEqual(["First delayed prompt", "Second delayed prompt"])
+      expect(new Set(sent.map((item) => item.id)).size).toBe(2)
+      await page.evaluate(`(() => { const input=document.querySelector('.composer__input'); input.focus(); input.value='Keep this newer draft'; input.dispatchEvent(new InputEvent('input',{bubbles:true})); window.remoteReleasePrompt('failed'); window.remoteReleasePrompt('ok'); })()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.transcript-message__send-error') !== null`); attempt++) await Bun.sleep(25)
+      expect(await page.evaluate<string>(`document.querySelector('.composer__input').value`)).toBe("Keep this newer draft")
+      expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.composer__input')`)).toBe(true)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.transcript-message__sending').length`)).toBe(0)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.transcript-message__send-error').length`)).toBe(1)
+    } finally { await page.close() }
+  }, 30_000)
 
   for (const width of [390, 1440] as const) test(`a successful send raises no popup and keeps its inline receipt at ${width}px`, async () => {
     const page = await fixture("view=chat&promptOutcome=hold", width, "Stream remote output safely")

@@ -86,6 +86,9 @@ try {
   const persist = join(home, "wrangler-state")
   await run("mkdir", ["-p", workspace, serverConfig, openedWorkspace])
   await Bun.write(join(openedWorkspace, "find-this.txt"), "Catalog file search")
+  await mkdir(join(serverConfig, "skills", "flow-explicit"), { recursive: true })
+  const skillInstructions = "Composed-flow explicit skill instructions must be present before the first reply."
+  await Bun.write(join(serverConfig, "skills", "flow-explicit", "SKILL.md"), `---\nname: Flow explicit\nmetadata:\n  ycoding/autoinvoke: false\n---\n${skillInstructions}\n`)
 
   /* -------------------------------------- deterministic local provider stand-in */
 
@@ -659,7 +662,7 @@ try {
   expect(store.state().view?.messages.length === 0, "the new Session was not an empty conversation")
   providerFollowUpText = "Reply in the remotely created Session."
   providerTurn = { text: providerFollowUpText }
-  await store.sendPrompt({ text: "Start in the previously opened workspace", delivery: "steer" })
+  await store.sendPrompt({ text: "Start in the previously opened workspace", delivery: "steer", skills: ["flow-explicit"] })
   await waitFor(async () => {
     const messages = await local.messages(createdID, { directory: openedWorkspace })
     return JSON.stringify(messages).includes(providerFollowUpText) ? true : undefined
@@ -667,6 +670,11 @@ try {
   await waitFor(() => JSON.stringify(store.state().view?.messages).includes(providerFollowUpText) ? true : undefined,
     20_000, "the new Session reply did not reach the browser store")
   checks.push("previously opened workspace without Sessions created an idle root, adopted an exact retry, and executed its first chat prompt")
+  const firstPromptRequest = providerRequests.slice(beforeCreate).find((body) => JSON.stringify(body).includes("Start in the previously opened workspace"))
+  expect(firstPromptRequest !== undefined && JSON.stringify(firstPromptRequest).includes(skillInstructions), "explicit remote skill content was absent from the first provider request")
+  expect((await local.messages(createdID, { directory: openedWorkspace })).filter((message) => message.type === "skill" && message.skill === "flow-explicit").length === 1,
+    "explicit remote skill did not produce exactly one durable activation")
+  checks.push("explicit skill selection crossed the browser, relay, and connector into the first provider request without a model tool decision")
 
   await Bun.sleep(RemoteLimits.clientRateWindowMs + 1)
   for (const level of [1, 2, 3, 0] as const) {
@@ -1400,8 +1408,12 @@ try {
   const concurrentWorkspaces = await loadWorkspaces(store)
   expect(concurrentWorkspaces.length > 0 && store.state().upload !== undefined, "a concurrent store read stalled behind the paced upload")
   const pacedSent = await pacing
+  expect(pacedSent === true, `paced upload was not accepted: ${store.state().uploadError ?? "unknown"}`)
+  const pacedMessage = await waitFor(async () => (await local.messages(sessionID, { directory: workspace })).find((message) => message.type === "user" && message.text === "Review paced binary"),
+    60_000, "the paced upload was accepted but never admitted into the local Session")
+  expect(pacedMessage.type === "user" && pacedMessage.files?.[0]?.content.bytes === pacedBytes.length &&
+    pacedMessage.files[0].content.digest === createHash("sha256").update(pacedBytes).digest("hex"), "the paced upload did not preserve its admitted bytes")
   const pacedDurationMs = Math.round(performance.now() - pacedStart)
-  expect(pacedSent === true, `paced upload failed: ${store.state().uploadError ?? "unknown"}`)
   expect(store.state().transport.kind === "open" && !browserStatuses.slice(statusCount).some((status) => status.kind === "closed" && status.code === 1008),
     "the paced upload tripped the relay request window")
   console.log(`upload-1mib-ms: ${pacedDurationMs}`)

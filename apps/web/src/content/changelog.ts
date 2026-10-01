@@ -22,6 +22,21 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.8.8",
+    date: "2026-10-01",
+    title: "Responsive prompts and reliable model selection",
+    tags: ["Changed", "Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Recover pending approval notifications when terminal notification support becomes ready, focus moves away, or the connection returns, without repeating a sound that already played." },
+      { tag: "Fixed", text: "Keep permission and guardrail decisions visible while reviewing large commands. Command details scroll inside a bounded terminal panel instead of pushing approval choices off-screen." },
+      { tag: "Fixed", text: "Choose agents and models on desktop and mobile even when the connected machine offers more than 500 models. Catalog failures show their reason and a Retry action." },
+      { tag: "Fixed", text: "Keep the web and terminal composers editable while prompts are sending. Delivery outcomes and safe retries stay with the submitted message without erasing a newer draft. Retrying an admitted command reuses its original input without rerunning its template." },
+      { tag: "Fixed", text: "Load explicitly invoked local $skill instructions in the runtime before the first model request across CLI, terminal, and web prompts, without relying on the model to choose a tool. Queued skills wait for their prompt, and configured permission denies stop activation." },
+      { tag: "Changed", text: "Show web prompt delivery through a static receipt beneath the message instead of a loading animation beside its text." },
+      { tag: "Changed", text: "Allow explicit shell timeouts up to one hour. The default remains ten minutes, and foreground commands still move to the background after five minutes." },
+    ],
+  },
+  {
     version: "0.8.7",
     date: "2026-10-01",
     title: "Cursor cache reporting",

@@ -68,6 +68,8 @@ export type RelayDouble = {
   readonly connections: number
   readonly closeEvents: readonly { readonly code: number; readonly reason: string }[]
   readonly rejectedFrames: readonly string[]
+  readonly createSocket: (url: string) => WebSocket
+  readonly diagnostics: () => Promise<Readonly<Record<string, unknown>>>
   setMe: (value: unknown, status?: number) => void
   pushEvent: (sessionID: string, event: unknown) => void
   pushSessions: (sessionIDs: readonly string[]) => void
@@ -109,6 +111,12 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
   let me: unknown = options.me ?? defaultMe
   let meStatus = options.meStatus ?? 200
   const sockets = new Set<{ send: (data: string) => void; close: (code?: number, reason?: string) => void }>()
+  const lifecycle: { readonly at: number; readonly kind: string; readonly path?: string; readonly accepted?: boolean; readonly code?: number }[] = []
+  const record = (entry: Omit<typeof lifecycle[number], "at">) => {
+    lifecycle.push({ at: performance.now(), ...entry })
+    if (lifecycle.length > 16) lifecycle.shift()
+  }
+  let startupProbe: Promise<void> | undefined
 
   const listedSessions = () => [
     {
@@ -251,9 +259,12 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
     port: 0,
     fetch(request, self) {
       const url = new URL(request.url)
+      record({ kind: "http", path: url.pathname })
       if (url.pathname === RemoteWebSocketPath.client) {
         const deviceID = url.searchParams.get("device") ?? ""
-        if (self.upgrade(request, { data: { deviceID } })) return undefined
+        const accepted = self.upgrade(request, { data: { deviceID } })
+        record({ kind: "upgrade", accepted })
+        if (accepted) return undefined
         return new Response("upgrade failed", { status: 400 })
       }
       if (url.pathname === "/api/me") {
@@ -279,9 +290,11 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
     },
     websocket: {
       close(_socket, code, reason) {
+        record({ kind: "close", code })
         closeEvents.push({ code, reason })
       },
       open(socket) {
+        record({ kind: "open" })
         connections += 1
         sockets.add(socket as unknown as { send: (data: string) => void; close: () => void })
         socket.send(serializeSessions({ type: "sessions" }))
@@ -351,11 +364,32 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
     },
   })
 
+  const diagnostics = async () => {
+    const snapshot = { listener: { hostname: server.hostname, port: server.port }, connections, pendingWebSockets: server.pendingWebSockets, pendingRequests: server.pendingRequests,
+      lifecycle: [...lifecycle], requests: requests.slice(-16).map((request) => request.operation), noticeRequests: noticeRequests.slice(-8).map((request) => request.operation), rejectedFrameCount: rejectedFrames.length }
+    const probes = await Promise.all(["127.0.0.1", "[::1]"].map(async (host) => {
+      const response = await fetch(`http://${host}:${server.port}/api/me`, { signal: AbortSignal.timeout(200) }).catch((cause: unknown) => cause)
+      if (response instanceof Response) { await response.body?.cancel(); return { host, status: response.status } }
+      return { host, error: response instanceof Error ? response.message : String(response) }
+    }))
+    return { ...snapshot, probes }
+  }
+
   return {
     httpURL: `http://127.0.0.1:${server.port}`,
     wsURL: (deviceID: string) => `ws://127.0.0.1:${server.port}${RemoteWebSocketPath.client}?device=${encodeURIComponent(deviceID)}`,
     requests,
     noticeRequests,
+    diagnostics,
+    createSocket: (url) => {
+      const socket = new WebSocket(url)
+      socket.addEventListener("error", (event) => {
+        if (connections > 0 || startupProbe !== undefined) return
+        const error = { message: String(Reflect.get(event, "message")), cause: String(Reflect.get(event, "error")), readyState: socket.readyState }
+        startupProbe = diagnostics().then((details) => { console.error(JSON.stringify({ diagnostic: "relay-startup", error, ...details })) })
+      })
+      return socket
+    },
     get pongs() {
       return pongs
     },
@@ -397,6 +431,7 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
       sockets.clear()
     },
     stop: async () => {
+      if (startupProbe !== undefined) await startupProbe
       sockets.clear()
       await server.stop(true)
     },

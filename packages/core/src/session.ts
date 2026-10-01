@@ -62,6 +62,8 @@ import { Instructions } from "./instructions"
 import { Mime } from "./mime"
 import type { EventLog } from "@ycoding-ai/schema/event-log"
 import { SkillV2 } from "./skill"
+import { SessionSkill } from "./session/skill"
+import { PermissionV2 } from "./permission"
 import { Job } from "./job"
 import { SessionCompletion } from "./session/completion"
 import { CommandV2 } from "./command"
@@ -577,6 +579,7 @@ const layer = Layer.effect(
     const scope = yield* Scope.Scope
     const activeShells = new Set<SessionSchema.ID>()
     const shellLocks = KeyedMutex.makeUnsafe<SessionSchema.ID>()
+    const commandLocks = KeyedMutex.makeUnsafe<SessionMessage.ID>()
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Info)
     const isPublicDurableSessionEvent = Schema.is(SessionEvent.PublicDurable)
     const projectArtifactSource = Effect.fnUntraced(function* (location: Location.Ref) {
@@ -1329,12 +1332,38 @@ const layer = Layer.effect(
                       attachments,
                       db,
                     ).pipe(Effect.provideService(FSUtil.Service, fs))
+                    const skillMentions = input.text.includes("$")
+                      ? yield* Effect.gen(function* () {
+                          const pluginModule = yield* Effect.promise<typeof import("./plugin/supervisor")>(
+                            () => import("./plugin/supervisor"),
+                          )
+                          const plugins = yield* pluginModule.PluginSupervisor.Service.pipe(
+                            Effect.provide(locations.get(session.location)),
+                          )
+                          yield* plugins.flush
+                          const skills = yield* SkillV2.Service.pipe(Effect.provide(locations.get(session.location)))
+                          return SessionSkill.mentions(input.text, yield* skills.list())
+                        })
+                      : []
                     const admitted = yield* SessionPending.admit(db, events, {
                       id: messageID,
                       sessionID: input.sessionID,
                       input: SessionPending.Message.make({
                         type: "user",
-                        data: { ...prompt, metadata: input.metadata },
+                        data: {
+                          ...prompt,
+                          metadata: skillMentions.length
+                            ? {
+                                ...input.metadata,
+                                skills: [
+                                  ...(Array.isArray(input.metadata?.skills) ? input.metadata.skills : []),
+                                  ...skillMentions.filter(
+                                    (skill) => !SessionSkill.selected(input.metadata).includes(SkillV2.ID.make(skill.id)),
+                                  ),
+                                ],
+                              }
+                            : input.metadata,
+                        },
                         delivery: input.delivery ?? "steer",
                       }),
                     }).pipe(
@@ -1371,6 +1400,21 @@ const layer = Layer.effect(
       }),
       command: Effect.fn("V2Session.command")(function* (input) {
         const session = yield* result.get(input.sessionID)
+        if (input.id !== undefined) {
+          const messageID = input.id
+          const prior = yield* SessionPending.lookup(db, input.sessionID, messageID).pipe(
+            Effect.catchDefect((defect) =>
+              defect instanceof SessionPending.LifecycleConflict
+                ? new PromptConflictError({ sessionID: input.sessionID, messageID })
+                : Effect.die(defect),
+            ),
+          )
+          if (prior) {
+            if (prior.type !== "user" || prior.sessionID !== input.sessionID)
+              return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
+            return yield* result.prompt({ sessionID: input.sessionID, id: prior.id, text: prior.data.text, resume: input.resume })
+          }
+        }
         const commands = yield* CommandV2.Service.pipe(Effect.provide(locations.get(session.location)))
         const source = yield* projectArtifactSource(session.location)
         const command = yield* commands.get(input.command)
@@ -1439,7 +1483,7 @@ const layer = Layer.effect(
               ),
             )
         return admitted
-      }),
+      }, (effect, input) => input.id === undefined ? effect : commandLocks.withLock(input.id)(effect)),
       shell: Effect.fn("V2Session.shell")(function* (input) {
         const session = yield* result.get(input.sessionID)
         yield* shellLocks.withLock(input.sessionID)(
@@ -1510,56 +1554,23 @@ const layer = Layer.effect(
       }),
       skill: Effect.fn("V2Session.skill")(function* (input) {
         const session = yield* result.get(input.sessionID)
+        const permission = yield* PermissionV2.Service.pipe(Effect.provide(locations.get(session.location)))
+        const access = yield* permission.evaluateEffective({
+          sessionID: session.id,
+          agent: session.agent,
+          action: "skill",
+          resource: input.skill,
+        })
+        if (access === "deny") return yield* new SkillNotFoundError({ skill: input.skill })
         const skills = yield* SkillV2.Service.pipe(Effect.provide(locations.get(session.location)))
         const source = yield* projectArtifactSource(session.location)
         const skill = (yield* skills.list()).find((item) => item.id === input.skill)
         if (!skill) return yield* new SkillNotFoundError({ skill: input.skill })
         const provenance = source ? yield* source.provenance("skill", skill.id) : undefined
-        yield* events.publish(
-          SessionEvent.Skill.Activated,
-          {
-            sessionID: input.sessionID,
-            id: skill.id,
-            name: skill.name,
-            text: skill.content,
-            conflicts: skill.conflicts,
-            artifact: provenance
-              ? {
-                  scopeID: provenance.scopeID,
-                  versionID: provenance.versionID,
-                  kind: provenance.kind,
-                  id: provenance.id,
-                  sourceScope: provenance.scope,
-                }
-              : undefined,
-          },
-          {
-            id: input.id ? EventV2.ID.make(input.id.replace(/^msg_/, "evt_")) : undefined,
-            commit: provenance
-              ? (seq) =>
-                  projectArtifactAccounting
-                    .activate(
-                      ProjectArtifact.Activation.make({
-                        id: ProjectArtifact.ActivationID.make(`paa_${randomUUID()}`),
-                        artifact: {
-                          scopeID: provenance.scopeID,
-                          kind: provenance.kind,
-                          id: provenance.id,
-                          versionID: provenance.versionID,
-                        },
-                        projectID: session.projectID,
-                        sessionID: input.sessionID,
-                        agentID: session.agent,
-                        source: "session-skill",
-                        messageID: input.id,
-                        boundarySeq: ProjectArtifact.Revision.make(seq),
-                        activatedAt: ProjectArtifact.TimestampMillis.make(Date.now()),
-                      }),
-                    )
-                    .pipe(Effect.asVoid, Effect.orDie)
-              : undefined,
-          },
-        )
+        yield* SessionSkill.activate(
+          { events, store, accounting: projectArtifactAccounting },
+          { session, skill, id: input.id, provenance },
+        ).pipe(Effect.orDie)
         if (input.resume !== false)
           yield* execution
             .resume(input.sessionID)

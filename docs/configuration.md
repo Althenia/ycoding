@@ -247,7 +247,7 @@ The MCP shape where server names appear directly under `mcp` is also rejected. U
 
 ### Shell memory limits
 
-The model-facing shell `timeout` input is not a configuration field. It accepts milliseconds up to 600,000; omission or `0` selects the finite 600,000 ms timeout. A foreground command that remains active after 300,000 ms is moved to the background without being terminated.
+The model-facing shell `timeout` input is not a configuration field. It accepts whole milliseconds up to 3,600,000 (one hour); omission or `0` selects the finite 600,000 ms default. Values above one hour are rejected. A foreground command that remains active after 300,000 ms is moved to the background without being terminated; its selected timeout still applies.
 
 `shell_memory_limit_mb` sets the Location-wide default for non-interactive shell commands. The shell tool's `memory_limit_mb` input overrides it for one command; zero explicitly selects unlimited memory. Omission uses the configured default, and omission with no default remains unlimited.
 

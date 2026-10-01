@@ -37,6 +37,7 @@ import { createStore, produce, reconcile } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 import { useClient } from "./client"
 import { batch, createEffect, createSignal, onCleanup } from "solid-js"
+import { createPromptSubmissions } from "../prompt/submission"
 
 export type DataSessionStatus = "idle" | "running"
 
@@ -563,6 +564,20 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     })
 
     const client = useClient()
+    const submissions = createPromptSubmissions({
+      api: () => client.api,
+      created: (session) => {
+        setStore("session", "info", session.id, session)
+        registerSession(session.id)
+      },
+      admitted: (pending) => {
+        addPending(pending)
+        if (!store.session.input[pending.sessionID]?.includes(pending.id))
+          setStore("session", "input", pending.sessionID, [...(store.session.input[pending.sessionID] ?? []), pending.id])
+        projectPending(pending)
+      },
+    })
+    onCleanup(() => submissions.dispose())
     const [defaultLocation, setDefaultLocation] = createSignal<LocationRef>({
       directory: process.cwd(),
     })
@@ -574,6 +589,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     const sync = createSync()
 
     function replaceMessages(sessionID: string, messages: SessionMessageInfo[]) {
+      submissions.reconcile(sessionID, messages, store.session.pending[sessionID] ?? [])
       const resident = compactResidentMessages(sessionID, messages)
       messageIndex.set(sessionID, new Map(resident.map((item, position) => [item.id, position])))
       const mutations = messageMutations.get(sessionID)
@@ -1601,6 +1617,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       on: client.event.on ?? (() => () => {}),
       listen: client.event.listen,
       session: {
+        submissions,
         list() {
           return Object.values(store.session.info).toSorted((a, b) => b.time.updated - a.time.updated)
         },
@@ -1645,6 +1662,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               setStore("session", "pending", sessionID, reconcile(pending))
               setStore("session", "input", sessionID, reconcile(pending.map((item) => item.id)))
               pending.forEach(projectPending)
+              submissions.reconcile(sessionID, store.session.message[sessionID] ?? [], pending)
             })
           },
           invalidate(sessionID: string) {
@@ -1744,7 +1762,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         },
         message: {
           list(sessionID: string) {
-            return store.session.message[sessionID] ?? []
+            const messages = store.session.message[sessionID] ?? []
+            return [...messages, ...submissions.list(sessionID).flatMap((entry) => {
+              if (messages.some((message) => message.id === entry.input.promptID)) return []
+              const message = submissions.message(sessionID, entry.input.promptID)
+              return message ? [message] : []
+            })]
           },
           memory(sessionID: string) {
             const memory = process.memoryUsage()
@@ -1757,7 +1780,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           get(sessionID: string, messageID: string) {
             const messages = store.session.message[sessionID]
             const position = messageIndex.get(sessionID)?.get(messageID)
-            return position === undefined ? undefined : messages?.[position]
+            return position === undefined ? submissions.message(sessionID, messageID) : messages?.[position]
           },
           sync(sessionID: string) {
             return sync.run(`session.message:${sessionID}`, () => syncMessages(sessionID))
@@ -2163,6 +2186,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
 
     onCleanup(
       client.event.listen(({ details }) => {
+        submissions.observe(details)
         if (details.type === "server.connected") {
           const mutations = new Map<string, DataSessionStatus>()
           activeSnapshot = mutations

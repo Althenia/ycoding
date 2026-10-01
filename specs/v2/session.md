@@ -22,7 +22,13 @@ State transitions publish version-1 `session.pinned` or `session.unpinned` event
 
 `SessionV2.prompt(...)` records one durable `session.input.admitted` fact and one `session_pending` row before advisory execution begins. Pending input remains outside model-visible Session History until promotion. The promotion transaction publishes `session.input.promoted`, projects the visible message, and consumes the pending row atomically.
 
+Known explicit local `$skill-id` references are captured in the existing prompt `metadata.skills` as requested IDs after discovery is ready. Explicit skill metadata supplied by clients has the same meaning. At the input's serialized promotion boundary, the runner verifies availability and effective denies, records missing active skill content through `session.skill.activated`, and only then promotes the input and assembles its model request. Queued skill requirements do not activate during an earlier input's steps. A denied or unavailable recorded requirement fails execution with the input still pending and no provider request. Active skill status remains derived from transcript history; repeated references and retries do not create duplicate active records. Direct `session.skill` activation also enforces effective denies before reading skill content, returning the existing unavailable-skill error on denial.
+
+The remote prompt operation exposes optional `skills` as a bounded array of at most 200 non-whitespace IDs of 1–128 characters. Its connector validates the closed input and maps IDs to the existing `metadata.skills: [{ id }]` field; it does not activate them before admission. The browser never supplies the execution Location.
+
 Reusing a Session ID adopts the existing Session. Reusing a prompt message ID returns the admitted durable record and wakes execution; the first admission wins and sending a prompt never fails on ID reuse. A prompt message ID belongs to one Session and one input kind, so reuse across Sessions or across input kinds is rejected. A retry of an already-promoted input reconciles against projected history and its durable admission event.
+
+A command carrying an existing input ID performs that reconciliation before command lookup, template evaluation, or agent/model selection. A valid retry returns the original admitted input and follows the requested admit-only or wake behavior; incompatible Session or input-kind reuse fails before template effects. Concurrent supplied command IDs are serialized independently of the nested prompt-admission lock. Effects performed before the original durable admission are not an exactly-once crash-recovery contract.
 
 `resume` controls scheduling, not durability:
 

@@ -197,10 +197,13 @@ describe("remote transport integration", () => {
         message: "Response exceeds the bounded chunk count; read again with after",
       }),
     })
-    const transport = createRemoteTransport({ url: relay.wsURL("dev_1"), resetDelayMs: 10 })
+    const transport = createRemoteTransport({ url: relay.wsURL("dev_1"), resetDelayMs: 10, createSocket: relay.createSocket })
     try {
       transport.connect()
-      await waitFor(() => transport.status().kind === "open")
+      await waitFor(() => transport.status().kind === "open").catch(async (cause: unknown) => {
+        console.error(JSON.stringify({ diagnostic: "chunk-budget-open", transport: transport.status(), ...await relay.diagnostics() }))
+        throw cause
+      })
       const response = await transport.request("session.messages", { sessionID: "ses_a" })
       expect(response.status).toBe("failed")
       if (response.status !== "failed") return

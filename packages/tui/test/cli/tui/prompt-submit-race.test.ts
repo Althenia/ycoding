@@ -3,8 +3,8 @@ import {
   confirmSessionCreation,
   restoreSessionSubmission,
   retainSessionSubmission,
-  submitSessionPrompt,
 } from "../../../src/util/session-autonomy"
+import { submitPrompt } from "../../../src/component/prompt/prompt-admission"
 
 // Regression test for the prompt submit race in
 // packages/tui/src/component/prompt/index.tsx (`submit`).
@@ -151,9 +151,8 @@ describe("Prompt.submit race", () => {
     expect(new Set(calls).size).toBe(1)
 
     const prompts: string[] = []
-    await submitSessionPrompt({
+    await submitPrompt({
       prompt: async (resume) => void prompts.push(`${submission.promptID}:${resume ? "wake" : "admit"}`),
-      skills: [],
     })
     expect(prompts).toEqual([`${submission.promptID}:admit`, `${submission.promptID}:wake`])
   })
@@ -232,13 +231,11 @@ describe("Prompt.submit race", () => {
     expect(unstashed).toEqual([])
 
     const calls: string[] = []
-    await submitSessionPrompt({
+    await submitPrompt({
       prompt: async (resume) => void calls.push(`${exact.sessionID}:${exact.promptID}:${resume ? "wake" : "admit"}`),
-      skills: [async () => void calls.push(`${exact.sessionID}:${exact.skillIDs[0]}:review`)],
     })
     expect(calls).toEqual([
       `${identity.sessionID}:${identity.promptID}:admit`,
-      `${identity.sessionID}:${identity.skillIDs[0]}:review`,
       `${identity.sessionID}:${identity.promptID}:wake`,
     ])
   })
@@ -264,7 +261,7 @@ describe("Prompt.submit race", () => {
     expect(restored.cursor).toBe(4)
   })
 
-  test("holds changed selected skills behind exact reconciliation of partial admission", async () => {
+  test("holds changed skill metadata behind the retained identity of an unresolved admission", async () => {
     const first = retainSessionSubmission(
       undefined,
       "first",
@@ -276,22 +273,17 @@ describe("Prompt.submit race", () => {
       "ses_1",
     )
     const calls: string[] = []
-    let failSecond = true
+    let failAdmission = true
     const run = (submission: typeof first) =>
-      import("../../../src/util/session-autonomy").then(({ submitSessionPrompt }) =>
-        submitSessionPrompt({
-          prompt: async (resume) => {
-            calls.push(`${submission.sessionID}:${submission.promptID}:${resume ? "wake" : "admit"}`)
-          },
-          skills: submission.payload.skills.map((skill, index) => async () => {
-            calls.push(`${submission.sessionID}:${submission.skillIDs[index]}:${skill}`)
-            if (index === 1 && failSecond) {
-              failSecond = false
-              throw new Error("lost response")
-            }
-          }),
-        }),
-      )
+      submitPrompt({
+        prompt: async (resume) => {
+          calls.push(`${submission.sessionID}:${submission.promptID}:${resume ? "wake" : "admit"}`)
+          if (!resume && failAdmission) {
+            failAdmission = false
+            throw new Error("lost response")
+          }
+        },
+      })
 
     await expect(run(first)).rejects.toThrow("lost response")
     const beforeChanged = calls.slice()

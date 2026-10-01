@@ -209,17 +209,20 @@ async function run(input: {
   pendingGuardrails?: GuardrailInfo[]
   attached?: boolean
   format?: "default" | "json"
+  close?: boolean
   cancel?: (input: { sessionID: string; formID: string }) => Promise<void>
   renderTool?: (part: SessionMessageAssistantTool) => Promise<void>
   renderToolError?: (part: SessionMessageAssistantTool) => Promise<void>
 }) {
   const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
   const values: V2Event[] = [{ id: "evt_connected", type: "server.connected", data: {}, sourceEpoch: "1" }]
+  let submitted = false
   let wake: (() => void) | undefined
   const stream = (async function* (): AsyncGenerator<V2Event, void, unknown> {
     while (true) {
       const value = values.shift()
       if (!value) {
+        if (input.close && submitted) return
         await new Promise<void>((resolve) => {
           wake = resolve
         })
@@ -248,6 +251,7 @@ async function run(input: {
   )
   spyOn(sdk.form, "cancel").mockImplementation((request) => (input.cancel?.(request) ?? ok(undefined)) as never)
   spyOn(sdk.session, "prompt").mockImplementation((request) => {
+    submitted = true
     const messageID = request.id ?? "msg_prompt"
     values.push(...input.turn(messageID))
     wake?.()
@@ -296,6 +300,38 @@ afterEach(() => {
 })
 
 describe("runNonInteractivePrompt", () => {
+  test("reports skill-load execution failure before prompt promotion instead of waiting for a model", async () => {
+    const output = await capture({
+      format: "json",
+      close: true,
+      turn: () => [
+        {
+          id: "evt_skill_failed",
+          created: 3,
+          type: "session.execution.failed",
+          durable: { aggregateID: "ses_1", seq: 3, version: 1 },
+          data: {
+            sessionID: "ses_1",
+            error: { type: "skill.unavailable", message: "Skill unavailable: explicit-audit" },
+          },
+        },
+      ],
+    })
+    expect(output.exitCode).toBe(1)
+    expect(
+      output.stdout
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line)),
+    ).toEqual([
+      expect.objectContaining({
+        type: "error",
+        error: { type: "skill.unavailable", message: "Skill unavailable: explicit-audit" },
+      }),
+    ])
+    expect(output.stderr).toBe("")
+  })
+
   test("forwards prepared file URIs without embedding file content in text", async () => {
     const files = [
       { url: "file:///tmp/note.txt", filename: "note.txt", mime: "text/plain" },

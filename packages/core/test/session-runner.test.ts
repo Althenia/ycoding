@@ -423,7 +423,7 @@ const permissionFail = Tool.make({
 const permission = Layer.succeed(
   PermissionV2.Service,
   PermissionV2.Service.of({
-    evaluateEffective: () => Effect.die(new Error("unused PermissionV2.evaluateEffective")),
+    evaluateEffective: () => Effect.sync(() => skillAccess),
     assert: () => Effect.die("unused"),
     ask: () => Effect.die("unused"),
     reply: () => Effect.die("unused"),
@@ -497,6 +497,32 @@ let systemRemoved = false
 let systemUnavailable = false
 let systemLoadHook = Effect.void
 const skillBaselines = new Map<AgentV2.ID, string>()
+let skillAccess: "allow" | "deny" = "allow"
+const registerExplicitSkill = (id: string, content: string) =>
+  Effect.gen(function* () {
+    const skills = yield* SkillV2.Service
+    const locations = yield* LocationServiceMap.Service
+    const local = yield* SkillV2.Service.pipe(
+      Effect.provide(locations.get(Location.Ref.make({ directory: runnerDirectory }))),
+    )
+    yield* Effect.forEach(
+      [skills, local],
+      (service) =>
+        service.transform((draft) =>
+          draft.source({
+            type: "embedded",
+            skill: SkillV2.Info.make({
+              id: SkillV2.ID.make(id),
+              name: SkillV2.Name.make(id),
+              autoinvoke: false,
+              location: AbsolutePath.make(`${runnerDirectory}/${id}.md`),
+              content,
+            }),
+          }),
+        ),
+      { discard: true },
+    )
+  })
 const systemContext = Layer.mock(InstructionBuiltIns.Service, {
   load: () =>
     Effect.sync(() =>
@@ -783,6 +809,8 @@ const it = testEffect(
       InstructionDiscovery.node,
       InstructionEntry.node,
       SkillInstructions.node,
+      SkillV2.node,
+      LocationServiceMap.node,
       ReferenceInstructions.node,
       Config.node,
       Snapshot.node,
@@ -865,6 +893,7 @@ const setup = Effect.gen(function* () {
   compactionWakeHook = Effect.void
   compactionSummary = false
   skillBaselines.clear()
+  skillAccess = "allow"
   responses = undefined
   streamFailure = undefined
   responseStream = undefined
@@ -1239,6 +1268,178 @@ const verifyPartialFlushOnInterruption = (kind: FragmentKind) =>
   })
 
 describe("SessionRunnerLLM", () => {
+  it.effect("loads explicit skill instructions before the first model request without a tool decision", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* registerExplicitSkill("explicit-audit", "Inspect every changed boundary before implementation.")
+      const input = yield* session.prompt({ sessionID, text: "Use $explicit-audit, then report", resume: false })
+      expect(input.data.metadata).toMatchObject({ skills: [{ id: "explicit-audit", name: "explicit-audit" }] })
+      yield* session.resume(sessionID)
+      expect(requests).toHaveLength(1)
+      expect(JSON.stringify(requests[0]!.messages)).toContain("Inspect every changed boundary before implementation.")
+      expect((yield* session.context(sessionID)).filter((message) => message.type === "skill")).toHaveLength(1)
+      yield* session.prompt({ sessionID, id: input.id, text: "A retry cannot replace $another-skill", resume: false })
+      yield* session.prompt({ sessionID, text: "$explicit-audit again", resume: false })
+      yield* session.resume(sessionID)
+      expect((yield* session.context(sessionID)).filter((message) => message.type === "skill")).toHaveLength(1)
+    }),
+  )
+
+  it.effect("does not duplicate client preactivation and reactivates after an agent switch", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* registerExplicitSkill("client-audit", "Client audit full instructions")
+      yield* session.skill({ sessionID, skill: SkillV2.ID.make("client-audit"), resume: false })
+      yield* session.prompt({ sessionID, text: "$client-audit", resume: false })
+      yield* session.resume(sessionID)
+      expect((yield* session.context(sessionID)).filter((message) => message.type === "skill")).toHaveLength(1)
+      yield* session.switchAgent({ sessionID, agent: AgentV2.ID.make("build") })
+      yield* session.prompt({ sessionID, text: "$client-audit", resume: false })
+      yield* session.resume(sessionID)
+      const messages = yield* session.context(sessionID)
+      expect(messages.filter((message) => message.type === "skill")).toHaveLength(2)
+      expect(messages.findLastIndex((message) => message.type === "skill")).toBeGreaterThan(
+        messages.findLastIndex((message) => message.type === "agent-switched"),
+      )
+      expect(JSON.stringify(requests.at(-1)!.messages)).toContain("Client audit full instructions")
+    }),
+  )
+
+  it.effect("rejects denied explicit skills without activating them or starting a model request", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* registerExplicitSkill("denied-audit", "Denied audit instructions")
+      skillAccess = "deny"
+      const input = yield* session.prompt({
+        sessionID,
+        text: "Audit this change",
+        resume: false,
+        metadata: { skills: [{ id: "denied-audit", name: "Denied audit" }] },
+      })
+      const error = yield* session.resume(sessionID).pipe(Effect.flip)
+      expect(error).toMatchObject({
+        error: { type: "permission.rejected", message: "Permission denied: skill (denied-audit)" },
+      })
+      expect(requests).toEqual([])
+      expect((yield* session.pending(sessionID)).map((pending) => pending.id)).toEqual([input.id])
+      expect((yield* session.context(sessionID)).filter((message) => message.type === "skill")).toEqual([])
+    }),
+  )
+
+  it.effect("reactivates a requested skill after completed compaction without restoring other skills", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* registerExplicitSkill("compacted-audit", "Compacted audit full instructions")
+      yield* registerExplicitSkill("other-audit", "Other audit instructions")
+      yield* session.prompt({ sessionID, text: "$compacted-audit $other-audit", resume: false })
+      yield* session.resume(sessionID)
+      compactionSummary = true
+      yield* session.compact({ sessionID })
+      yield* session.prompt({ sessionID, text: "$compacted-audit", resume: false })
+      yield* session.resume(sessionID)
+      const messages = yield* session.context(sessionID)
+      const compaction = messages.findLastIndex(
+        (message) => message.type === "compaction" && message.status === "completed",
+      )
+      expect(compaction).toBeGreaterThanOrEqual(0)
+      expect(
+        messages
+          .slice(compaction + 1)
+          .filter((message) => message.type === "skill")
+          .map((message) => message.skill),
+      ).toEqual([SkillV2.ID.make("compacted-audit")])
+      expect(JSON.stringify(requests.at(-1)!.messages)).toContain("Compacted audit full instructions")
+      expect(JSON.stringify(requests.at(-1)!.messages)).not.toContain("Other audit instructions")
+    }),
+  )
+
+  it.effect("keeps requested skill content in the first request after mandatory history compaction", () =>
+    Effect.gen(function* () {
+      const session = yield* setupOverflowRecovery
+      yield* registerExplicitSkill("mandatory-audit", "Mandatory audit full instructions")
+      currentModel = Model.make({
+        id: "history-recovery",
+        provider: "fake",
+        route: OpenAIChat.route.with({ limits: { context: 7_000, output: 500 } }),
+      })
+      compactionSummary = true
+      yield* session.prompt({ sessionID, text: "$mandatory-audit continue after history", resume: false })
+      yield* session.resume(sessionID)
+      expect(requests).toHaveLength(1)
+      expect(yield* recordedEventTypes(sessionID)).toContain("session.compaction.admitted.2")
+      expect(JSON.stringify(requests[0]!.messages)).toContain("Mandatory audit full instructions")
+    }),
+  )
+
+  it.effect("keeps queued skill activation at its own idle promotion boundary", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* registerExplicitSkill("queue-audit", "Queued audit instructions")
+      yield* session.prompt({
+        sessionID,
+        text: "Audit when idle",
+        delivery: "queue",
+        resume: false,
+        metadata: { skills: [{ id: "queue-audit", name: "Queued audit" }] },
+      })
+      yield* session.prompt({ sessionID, text: "Steer first", resume: false })
+      yield* session.resume(sessionID)
+      expect(requests).toHaveLength(2)
+      expect(JSON.stringify(requests[0]!.messages)).not.toContain("Queued audit instructions")
+      expect(JSON.stringify(requests[1]!.messages)).toContain("Queued audit instructions")
+    }),
+  )
+
+  it.effect("fails an unavailable explicitly selected skill before promotion or model execution", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const input = yield* session.prompt({
+        sessionID,
+        text: "Audit this change",
+        resume: false,
+        metadata: { skills: [{ id: "unavailable-audit", name: "Unavailable audit" }] },
+      })
+      const error = yield* session.resume(sessionID).pipe(Effect.flip)
+      expect(error.message).toContain("unavailable-audit")
+      expect(requests).toEqual([])
+      expect((yield* session.pending(sessionID)).map((pending) => pending.id)).toEqual([input.id])
+      expect((yield* session.context(sessionID)).filter((message) => message.type === "skill")).toEqual([])
+    }),
+  )
+
+  for (const delivery of ["steer", "queue"] as const)
+    it.effect(`loads a metadata-only skill ${delivery} only at its active drain promotion boundary`, () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        yield* registerExplicitSkill("safe-audit", "Safe boundary audit instructions")
+        yield* admit(session, "Start ordinary work")
+        responses = [
+          reply.tool("call-before-skill", "echo", { text: "ordinary work" }),
+          reply.text("Ordinary continuation", "text-ordinary"),
+          reply.text("Skill response", "text-skill"),
+        ]
+        streamGate = yield* Deferred.make<void>()
+        streamStarted = yield* Deferred.make<void>()
+        const running = yield* session.resume(sessionID).pipe(Effect.forkChild)
+        yield* Deferred.await(streamStarted)
+        yield* session.prompt({
+          sessionID,
+          text: "Audit this change",
+          delivery,
+          metadata: { skills: [{ id: "safe-audit", name: "Safe audit" }] },
+        })
+        expect((yield* session.context(sessionID)).filter((message) => message.type === "skill")).toEqual([])
+        expect(JSON.stringify(requests[0]!.messages)).not.toContain("Safe boundary audit instructions")
+        yield* Deferred.succeed(streamGate, undefined)
+        yield* Fiber.join(running)
+        expect(requests).toHaveLength(delivery === "queue" ? 3 : 2)
+        if (delivery === "queue")
+          expect(JSON.stringify(requests[1]!.messages)).not.toContain("Safe boundary audit instructions")
+        expect(JSON.stringify(requests.at(-1)!.messages)).toContain("Safe boundary audit instructions")
+        expect((yield* session.context(sessionID)).filter((message) => message.type === "skill")).toHaveLength(1)
+      }),
+    )
+
   it.effect("accepts verified work through the real runner, tool settlement and execution coordinator", () =>
     Effect.gen(function* () {
       const session = yield* setup

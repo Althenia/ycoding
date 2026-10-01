@@ -39,6 +39,7 @@ export type LocalPrompt = {
   readonly text: string
   readonly files?: readonly unknown[]
   readonly agents?: readonly unknown[]
+  readonly metadata?: { readonly skills: readonly { readonly id: string }[] }
   readonly delivery?: "steer" | "queue"
   readonly resume?: boolean
 }
@@ -308,6 +309,7 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
             text: input.text,
             ...(input.files === undefined ? {} : { files: input.files }),
             ...(input.agents === undefined ? {} : { agents: input.agents }),
+            ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
             ...(input.delivery === undefined ? {} : { delivery: input.delivery }),
             ...(input.resume === undefined ? {} : { resume: input.resume }),
           } as Parameters<YCodingClient["session"]["prompt"]>[0],

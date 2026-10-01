@@ -9,9 +9,19 @@
 
 import type { CreateEnrollmentResponse } from "@ycoding-ai/remote"
 import type { RemoteTransportStatus } from "./transport"
+import type { PendingMutation } from "./store"
 import type { FormAnswerView, FormFieldView, FormView, SessionView, ShellOutputFetch, ShellOutputView } from "./projection"
 
 export type FormDraft = Readonly<Record<string, FormAnswerView[string] | undefined>>
+
+export function promptReceipt(state: "pending" | "promoted" | "consumed" | undefined, delivery: "steer" | "queue" | undefined, mutation?: Pick<PendingMutation, "state">) {
+  if (state === "consumed") return { label: "Read by YCoding", text: "Read", mark: "✓✓" }
+  if (mutation?.state === "failed") return { label: "Send failed", text: "Send failed", mark: "!" }
+  if (mutation?.state === "unknown") return { label: "Outcome unknown", text: "Outcome unknown", mark: "!" }
+  if (mutation?.state === "sending") return { label: "Sending prompt", text: "Sending", mark: "◷" }
+  if (state === "pending") return { label: delivery === "queue" ? "Queued for processing" : "Processing prompt", text: delivery === "queue" ? "Queued" : "Processing · steer", mark: "◷" }
+  return { label: "Sent, not yet read", text: "Sent", mark: "✓" }
+}
 
 export function formInputState(form: FormView, draft: FormDraft) {
   return form.fields.reduce<{ fields: FormFieldView[]; answer: FormAnswerView; valid: boolean }>((state, field) => {

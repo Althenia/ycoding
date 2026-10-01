@@ -31,7 +31,6 @@ import { computePromptTraits } from "../../prompt/traits"
 import { expandPastedTextPlaceholders, expandTrackedPastedText } from "../../prompt/part"
 import { promptSkillMentions, promptSkillMetadata } from "../../prompt/skill"
 import { usePromptStash } from "../../prompt/stash"
-import { projectedPromptInput } from "../../prompt/codec"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, type JSX } from "@opentui/solid"
@@ -49,7 +48,7 @@ import { useArgs } from "../../context/args"
 import { useConfig } from "../../config"
 import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
-import { submitPromptWithSkills } from "./skill-submission"
+import type { PromptSubmissionPayload } from "../../prompt/submission"
 import { useData } from "../../context/data"
 import { useLocation } from "../../context/location"
 import { Keymap, type KeymapCommand } from "../../context/keymap"
@@ -133,29 +132,6 @@ export function PromptYoloHint() {
       </Show>
     </>
   )
-}
-
-type PromptSubmissionPayload = {
-  inputText: string
-  files: PromptInfo["files"]
-  agents: PromptInfo["agents"]
-  metadata: ReturnType<typeof promptSkillMetadata>
-  mode: NonNullable<PromptInfo["mode"]>
-  agentID: string
-  daybreak?: ModelDaybreak
-  autonomy?: { yolo: YoloLevel; goal?: string }
-  model: {
-    providerID: string
-    id: string
-    variant?: string
-  }
-  modelSelectionPending: boolean
-  editor?: {
-    key: string
-    text: string
-  }
-  history: PromptInfo
-  cursor: number
 }
 
 type PromptOperation = {
@@ -329,6 +305,7 @@ export function Prompt(props: PromptProps) {
   })
   const [auto, setAuto] = createSignal<AutocompleteRef>()
   const [retry, setRetry] = createSignal<SessionSubmissionRetry<PromptSubmissionPayload>>()
+  const [landingSubmissionSessionID, setLandingSubmissionSessionID] = createSignal<string>()
   const [operation, setOperation] = createSignal<PromptOperation>()
   const [feedback, setFeedback] = createSignal<PromptFeedback>()
   const [missingTemporaryAttachments, setMissingTemporaryAttachments] = createSignal<string[]>([])
@@ -344,7 +321,7 @@ export function Prompt(props: PromptProps) {
 
   const operationText = createMemo(() => {
     const current = operation()
-    if (!current) return feedback()?.message
+    if (!current) return feedback()?.message ?? data.session.submissions.list(props.sessionID ?? landingSubmissionSessionID() ?? "").find((entry) => entry.skillOnly)?.phase
     const elapsed = Math.floor((now() - current.startedAt) / 1_000)
     return elapsed >= 10 ? `${current.phase} · ${elapsed}s` : current.phase
   })
@@ -489,33 +466,6 @@ export function Prompt(props: PromptProps) {
 
   async function releaseTemporaryAttachments() {
     for (const uri of temporaryAttachments.keys()) await releaseTemporaryAttachment(uri)
-  }
-
-  async function retainManagedAttachments(
-    submission: SessionSubmissionRetry<PromptSubmissionPayload>,
-    files: PromptInfo["files"],
-  ) {
-    const original = submission.payload.files ?? []
-    const retainedFiles = files?.map((file, index) => ({
-      ...file,
-      mention: original[index]?.mention,
-    }))
-    const replacements = new Map(
-      original.flatMap((file, index) => {
-        const managed = retainedFiles?.[index]
-        return managed ? [[file.uri, managed] as const] : []
-      }),
-    )
-    setStore("prompt", "files", (current) =>
-      current?.map((file) => {
-        const managed = replacements.get(file.uri)
-        return managed ? { ...managed, mention: file.mention } : file
-      }),
-    )
-    submission.payload.files = retainedFiles
-    submission.payload.history.files = retainedFiles
-    submission.key = submissionKey(props.sessionID, submission.payload)
-    for (const uri of replacements.keys()) await releaseTemporaryAttachment(uri)
   }
 
   createEffect(
@@ -1273,6 +1223,28 @@ export function Prompt(props: PromptProps) {
 
   const stashCommands = createMemo(() =>
     [
+      ...data.session.submissions.list(props.sessionID ?? landingSubmissionSessionID() ?? "").filter((entry) => entry.state === "attention").flatMap((entry) => [{
+        title: `Retry send: ${entry.input.payload.inputText.slice(0, 40)}`,
+        description: entry.error,
+        name: `prompt.send.retry.${entry.input.promptID}`,
+        category: "Prompt",
+        enabled: true,
+        run: () => {
+          data.session.submissions.retry(entry.input.sessionID, entry.input.promptID)
+          dialog.clear()
+        },
+      }, {
+        title: `Discard previous submission recovery: ${entry.input.payload.inputText.slice(0, 40)}`,
+        description: "Remove local retry state only; this does not undo backend input.",
+        name: `prompt.send.discard.${entry.input.promptID}`,
+        category: "Prompt",
+        enabled: true,
+        run: () => {
+          data.session.submissions.discard(entry.input.sessionID, entry.input.promptID)
+          toast.show({ message: "Local recovery discarded · backend input is unchanged", variant: "warning" })
+          dialog.clear()
+        },
+      }]),
       ...(retry()
         ? [
             {
@@ -1566,6 +1538,11 @@ export function Prompt(props: PromptProps) {
 
   let submitting = false
   let landingTransferred = false
+  createEffect(() => {
+    const sessionID = landingSubmissionSessionID()
+    if (props.sessionID || !sessionID || !data.session.get(sessionID)) return
+    route.navigate({ type: "session", sessionID })
+  })
   async function submit(options?: { steerNow?: boolean }) {
     // Prevent overlapping invocations (e.g. a double-pressed Enter, or the
     // input's native onSubmit racing another dispatch). Without this guard,
@@ -1573,7 +1550,7 @@ export function Prompt(props: PromptProps) {
     // clears `store.prompt.text`, then awaits its own `session.create` and
     // ultimately reads the now-empty store — sending a phantom empty prompt
     // to a freshly created session.
-    if (submitting || operation() || (landingTransferred && !props.sessionID)) return false
+    if (submitting || operation() || (landingTransferred && !props.sessionID && !landingSubmissionSessionID())) return false
     submitting = true
     const current = beginOperation("submit", options?.steerNow ? "Preparing steer…" : "Preparing prompt…")
     if (!current) {
@@ -1749,7 +1726,8 @@ export function Prompt(props: PromptProps) {
       history: currentHistory,
       cursor: input.cursorOffset,
     }
-    const key = submissionKey(props.sessionID, payload)
+    const targetSessionID = props.sessionID ?? landingSubmissionSessionID()
+    const key = submissionKey(targetSessionID, payload)
     let retained = retry()
     if (retained && retained.key !== key) {
       const old = retained.payload.history
@@ -1764,7 +1742,55 @@ export function Prompt(props: PromptProps) {
       setRetry(undefined)
       retained = undefined
     }
-    const submission = retainSessionSubmission(retained, key, metadata?.skills.length ?? 0, payload, props.sessionID)
+    const slashSkill = store.mode === "normal" && inputText.startsWith("/")
+      ? data.location.skill.list(currentLocation.current)?.find((skill) => skill.slash === true && skill.id === inputText.split(/\s/)[0].slice(1))?.id
+      : undefined
+    const submission = retainSessionSubmission(retained, key, slashSkill ? 1 : 0, payload, targetSessionID)
+    if (targetSessionID) {
+      submission.payload.autonomy = undefined
+      submission.payload.daybreak = undefined
+    }
+    const command = inputText.startsWith("/") && data.location.command.list(currentLocation.current)?.some((command) => command.name === inputText.split(/\s/)[0].slice(1))
+    if (payload.mode === "normal") {
+      const directory = props.sessionID ? undefined : await move.getDirectory()
+      const temporary = (payload.files ?? []).flatMap((file) => {
+        const value = temporaryAttachments.get(file.uri)
+        if (!value) return []
+        temporaryAttachments.delete(file.uri)
+        return [value]
+      })
+      const firstLineEnd = payload.inputText.indexOf("\n")
+      const firstLine = firstLineEnd === -1 ? payload.inputText : payload.inputText.slice(0, firstLineEnd)
+      const [commandHead, ...firstLineArgs] = firstLine.split(" ")
+      const restOfInput = firstLineEnd === -1 ? "" : payload.inputText.slice(firstLineEnd + 1)
+      const reconcileHistory = history.append(submission.payload.history)
+      data.session.submissions.dispatch(submission, {
+        location: directory ? { directory } : data.location.default(),
+        skillOnly: command ? undefined : slashSkill,
+        command: command ? { name: commandHead.slice(1), arguments: firstLineArgs.join(" ") + (restOfInput ? "\n" + restOfInput : "") } : undefined,
+        steerNow: options?.steerNow,
+        cleanup: async () => {
+          for (const value of temporary) await value.cleanup()
+        },
+        onCommitted: slashSkill && !command ? undefined : () => local.model.commitPending(submission.sessionID, submission.payload.model),
+        onAdmitted: async (updated) => { await reconcileHistory?.(updated) },
+        onDiscarded: async () => { await reconcileHistory?.() },
+      })
+      setRetry(undefined)
+      setFeedback(undefined)
+      input.extmarks.clear()
+      setStore("prompt", emptyPrompt())
+      setStore("extmarkToPart", new Map())
+      setMissingTemporaryAttachments([])
+      input.clear()
+      if (payload.editor && !command && !slashSkill) editor.markSelectionSent()
+      props.onSubmit?.()
+      if (!props.sessionID) {
+        landingTransferred = true
+        setLandingSubmissionSessionID(submission.sessionID)
+      }
+      return true
+    }
     setRetry(submission)
     const submittedRevision = draftRevision
     const sessionID = submission.sessionID
@@ -1854,272 +1880,6 @@ export function Prompt(props: PromptProps) {
         requestOptions(currentOperation),
       )
       setStore("mode", "normal")
-    } else if (
-      submission.payload.inputText.startsWith("/") &&
-      (data.location.command.list(currentLocation.current) ?? []).some(
-        (command) => command.name === submission.payload.inputText.split("\n")[0].split(" ")[0].slice(1),
-      )
-    ) {
-      move.startSubmit()
-      // Parse command from first line, preserve multi-line content in arguments
-      const firstLineEnd = submission.payload.inputText.indexOf("\n")
-      const firstLine =
-        firstLineEnd === -1 ? submission.payload.inputText : submission.payload.inputText.slice(0, firstLineEnd)
-      const [command, ...firstLineArgs] = firstLine.split(" ")
-      const restOfInput = firstLineEnd === -1 ? "" : submission.payload.inputText.slice(firstLineEnd + 1)
-      const args = firstLineArgs.join(" ") + (restOfInput ? "\n" + restOfInput : "")
-
-      const result = await client.api.session
-        .command(
-          {
-            sessionID,
-            command: command.slice(1),
-            arguments: args,
-            agent: submission.payload.agentID,
-            ...(submission.payload.modelSelectionPending ? { model: submission.payload.model } : {}),
-            files: submission.payload.files,
-            agents: submission.payload.agents,
-          },
-          requestOptions(currentOperation),
-        )
-        .then(
-          (admitted) => ({ admitted }),
-          (error) => ({ error }),
-        )
-      if ("error" in result) {
-        toast.show({
-          title: "Failed to run command",
-          message: errorMessage(result.error),
-          variant: "error",
-        })
-        return false
-      }
-      const files = projectedPromptInput(result.admitted.data).files
-      await retainManagedAttachments(submission, files)
-    } else if (
-      submission.payload.inputText.startsWith("/") &&
-      (data.location.skill.list(currentLocation.current) ?? []).some(
-        (skill) =>
-          skill.slash === true && skill.id === submission.payload.inputText.split("\n")[0].split(" ")[0].slice(1),
-      )
-    ) {
-      move.startSubmit()
-      await client.api.session.skill(
-        {
-          id: submission.skillIDs[0],
-          sessionID,
-          skill: submission.payload.inputText.split("\n")[0].split(" ")[0].slice(1),
-        },
-        requestOptions(currentOperation),
-      )
-    } else {
-      move.startSubmit()
-      if (!session) {
-        await data.session.sync(sessionID)
-        session = data.session.get(sessionID)
-      }
-      if (session?.agent !== submission.payload.agentID) {
-        updateOperation(currentOperation.id, "Selecting agent…")
-        const error = await client.api.session
-          .switchAgent(
-            {
-              sessionID,
-              agent: submission.payload.agentID,
-            },
-            requestOptions(currentOperation),
-          )
-          .then(
-            () => undefined,
-            (error) => error,
-          )
-        if (error) {
-          finishOperation(currentOperation.id, {
-            message: "Agent selection failed · draft retained",
-            error: true,
-          })
-          return false
-        }
-      }
-      const switchRequired =
-        submission.payload.modelSelectionPending &&
-        (session?.model?.providerID !== submission.payload.model.providerID ||
-          session?.model?.id !== submission.payload.model.id ||
-          session?.model?.variant !== submission.payload.model.variant)
-      if (session?.revert) {
-        updateOperation(currentOperation.id, "Committing revert…")
-        const error = await client.api.session.revert.commit({ sessionID }, requestOptions(currentOperation)).then(
-          () => undefined,
-          (error) => error,
-        )
-        if (error) {
-          toast.show({
-            title: "Failed to commit revert",
-            message: errorMessage(error),
-            variant: "error",
-          })
-          return false
-        }
-      }
-      if (switchRequired) {
-        // Switch before admitting anything. The approved ordering is switch -> admit -> resume: a
-        // failed switch keeps the draft and attachments and performs no admission or wake, and a
-        // successful switch guarantees the admitted prompt runs on the selected model.
-        updateOperation(currentOperation.id, "Switching model…")
-        const error = await client.api.session
-          .switchModel({ sessionID, model: submission.payload.model }, requestOptions(currentOperation))
-          .then(
-            () => undefined,
-            (error) => error,
-          )
-        if (error) {
-          toast.show({
-            title: "Model switch needs attention",
-            message: errorMessage(error),
-            variant: "warning",
-          })
-          finishOperation(currentOperation.id, { message: "Model switch failed · draft retained", error: true })
-          return false
-        }
-      }
-      if (pendingEditorSelection) {
-        // Keep editor context hidden while admitting it before the corresponding user prompt.
-        updateOperation(currentOperation.id, "Sending editor context…")
-        const error = await client.api.session
-          .synthetic(
-            {
-              id: submission.syntheticID,
-              sessionID,
-              text: pendingEditorSelection.text,
-              resume: false,
-            },
-            requestOptions(currentOperation),
-          )
-          .then(
-            () => undefined,
-            (error) => error,
-          )
-        if (error) {
-          toast.show({
-            title: "Failed to send editor context",
-            message: errorMessage(error),
-            variant: "error",
-          })
-          return false
-        }
-      }
-      let phase: "skill" | "admission" | "wake" = "admission"
-      let admittedReceipt = false
-      const result = await submitPromptWithSkills({
-        prompt: async (resume) => {
-          if (resume && options?.steerNow && status() === "running") {
-            // End the active step so the admitted steer is promoted at the boundary it reaches now
-            // instead of waiting for a long-running step to finish on its own. An idle or locally
-            // unowned Session is already a no-op for interruption.
-            await client.api.session
-              .interrupt({ sessionID }, requestOptions(currentOperation))
-              .catch((error: unknown) => {
-                toast.show({
-                  title: "Steer needs attention",
-                  message: errorMessage(error),
-                  variant: "warning",
-                })
-              })
-          }
-          return client.api.session.prompt(
-            {
-              id: submission.promptID,
-              sessionID,
-              text: submission.payload.inputText,
-              files: submission.payload.files,
-              agents: submission.payload.agents,
-              metadata: submission.payload.metadata,
-              resume,
-            },
-            requestOptions(currentOperation),
-          )
-        },
-        skills: (submission.payload.metadata?.skills ?? []).map(
-          (skill, index) => () =>
-            client.api.session.skill(
-              {
-                id: submission.skillIDs[index],
-                sessionID,
-                skill: skill.id,
-                resume: false,
-              },
-              requestOptions(currentOperation),
-            ),
-        ),
-        onPhase: (next) => {
-          phase = next.type
-          updateOperation(
-            currentOperation.id,
-            next.type === "skill"
-              ? `Loading skill ${next.index}/${next.total}…`
-              : next.type === "admission"
-                ? "Preparing attachments / sending…"
-                : "Prompt admitted · waking session…",
-          )
-        },
-        onAdmitted: async (admitted) => {
-          admittedReceipt = true
-          await retainManagedAttachments(submission, projectedPromptInput(admitted.data).files)
-        },
-      }).then(
-        (result) => ({ result }) as const,
-        (error) => ({ error, phase }) as const,
-      )
-      if ("error" in result) {
-        const rejected =
-          result.phase === "admission" &&
-          !admittedReceipt &&
-          typeof result.error === "object" &&
-          result.error !== null &&
-          "_tag" in result.error
-            ? result.error
-            : undefined
-        const attachmentRejected =
-          rejected?._tag === "InvalidRequestError" && "field" in rejected && rejected.field === "files"
-        const message =
-          result.phase === "skill"
-            ? "Skill activation failed · draft retained"
-            : admittedReceipt && result.phase === "admission"
-              ? "Prompt admitted but attachment retention failed · draft retained"
-              : result.phase === "wake"
-                ? "Prompt admitted but the wake failed · retry keeps the same prompt ID"
-                : rejected?._tag === "ConflictError"
-                  ? "Prompt ID conflict · draft retained"
-                  : rejected?._tag === "InvalidRequestError"
-                    ? attachmentRejected
-                      ? "Attachment rejected · draft retained"
-                      : "Prompt rejected · draft retained"
-                    : "Checking whether sent · retry keeps the same prompt ID"
-        finishOperation(currentOperation.id, { message, error: true })
-        toast.show({
-          title: result.phase === "skill" ? "Failed to activate skill" : "Prompt needs attention",
-          message: attachmentRejected
-            ? `${errorMessage(result.error)}. Remove or re-paste the attachment before sending this draft again.`
-            : result.phase === "admission" && !rejected && !admittedReceipt
-              ? "Admission is unresolved. Retry this draft with the same prompt ID and attachments."
-              : errorMessage(result.error),
-          variant: "error",
-        })
-        return false
-      }
-      if (result.result.wakeError !== undefined) {
-        finishOperation(currentOperation.id, {
-          message: "Prompt admitted but the wake failed · retry keeps the same prompt ID",
-          error: true,
-        })
-        toast.show({
-          title: "Prompt admitted; wake needs attention",
-          message: "Retry uses the same prompt ID and managed attachments.",
-          variant: "error",
-        })
-        return false
-      }
-      if (pendingEditorSelection) editor.markSelectionSent()
-      local.model.commitPending(sessionID, submission.payload.model)
     }
     history.append({
       ...submission.payload.history,

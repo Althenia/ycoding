@@ -309,6 +309,7 @@ describe("remote account lifecycle", () => {
     try {
       await test.store.load()
       await waitFor(() => test.store.state().connection.kind === "connected")
+      await waitFor(() => test.store.state().sessions.length === 2)
       await test.store.load()
       expect(test.store.state().activeDeviceID).toBe("dev_studio")
       expect(test.store.state().connection).toEqual({ kind: "offline", deviceName: "Studio Mac" })

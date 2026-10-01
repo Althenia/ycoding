@@ -26,8 +26,8 @@ type FocusState = "unknown" | "focused" | "blurred"
 
 type AttentionRenderer = {
   readonly isDestroyed: boolean
-  on(event: "focus" | "blur", listener: () => void): unknown
-  off(event: "focus" | "blur", listener: () => void): unknown
+  on(event: "focus" | "blur" | "capabilities", listener: () => void): unknown
+  off(event: "focus" | "blur" | "capabilities", listener: () => void): unknown
   triggerNotification(message: string, title?: string): boolean
 }
 
@@ -37,6 +37,17 @@ type RegisteredSoundPack = TuiAttentionSoundPack & {
 
 type TuiAttentionHost = TuiAttention & {
   dispose(): void
+}
+
+const availabilityListeners = new WeakMap<TuiAttention, Set<() => void>>()
+
+export function onTuiAttentionAvailable(attention: TuiAttention, listener: () => void) {
+  const listeners = availabilityListeners.get(attention)
+  if (!listeners) throw new Error("TUI attention host unavailable")
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
 }
 
 const DEFAULT_TITLE = "YCoding"
@@ -137,16 +148,20 @@ export function createTuiAttention(input: {
   let activePackID: string | undefined
   const packs = new Map<string, RegisteredSoundPack>([[BUILTIN_PACK.id, BUILTIN_PACK]])
   const audio = input.audio ?? TuiAudio
+  const listeners = new Set<() => void>()
+  const available = () => listeners.forEach((listener) => listener())
 
   const onFocus = () => {
     focus = "focused"
   }
   const onBlur = () => {
     focus = "blurred"
+    available()
   }
 
   input.renderer.on("focus", onFocus)
   input.renderer.on("blur", onBlur)
+  input.renderer.on("capabilities", available)
 
   function configuredPackID() {
     return activePackID ?? input.config.attention.sound_pack
@@ -180,7 +195,7 @@ export function createTuiAttention(input: {
     }
   }
 
-  return {
+  const host: TuiAttentionHost = {
     async notify(request) {
       try {
         if (!input.config.attention.enabled) return skipped("attention_disabled")
@@ -274,6 +289,11 @@ export function createTuiAttention(input: {
       disposed = true
       input.renderer.off("focus", onFocus)
       input.renderer.off("blur", onBlur)
+      input.renderer.off("capabilities", available)
+      listeners.clear()
+      availabilityListeners.delete(host)
     },
   }
+  availabilityListeners.set(host, listeners)
+  return host
 }

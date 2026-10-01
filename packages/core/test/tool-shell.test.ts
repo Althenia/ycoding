@@ -2,7 +2,7 @@ import fs from "fs/promises"
 import { realpathSync } from "node:fs"
 import path from "path"
 import { describe, expect, test } from "bun:test"
-import { DateTime, Deferred, Duration, Effect, Fiber, Layer, Scope, Stream } from "effect"
+import { DateTime, Deferred, Duration, Effect, Fiber, Layer, Schema, Scope, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { ChildProcess } from "effect/unstable/process"
 import { Money } from "@ycoding-ai/schema/money"
@@ -422,6 +422,15 @@ const waitForJob = (jobs: Job.Interface, id: string): Effect.Effect<Job.Info> =>
     )
 
 describe("ShellTool", () => {
+  test("accepts process timeouts through one hour and rejects invalid values", () => {
+    const decode = Schema.decodeUnknownSync(ShellTool.Input)
+    expect(decode({ command: "true", timeout: 600_001 }).timeout).toBe(600_001)
+    expect(decode({ command: "true", timeout: 3_600_000 }).timeout).toBe(3_600_000)
+    expect(() => decode({ command: "true", timeout: 3_600_001 })).toThrow()
+    expect(() => decode({ command: "true", timeout: -1 })).toThrow()
+    expect(() => decode({ command: "true", timeout: 1.5 })).toThrow()
+  })
+
   it.live("fails closed before approval or spawn when sandboxing is required but unavailable", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
@@ -1196,7 +1205,7 @@ describe("ShellTool", () => {
                 yield* waitForJob(jobs, callID)
                 yield* Effect.yieldNow
                 expect(fakeShellState.prepared).toMatchObject([
-                  { timeout: ShellTool.MAX_TIMEOUT_MS, metadata: { sessionID: owner, toolCallID: callID } },
+                  { timeout: ShellTool.DEFAULT_TIMEOUT_MS, metadata: { sessionID: owner, toolCallID: callID } },
                 ])
                 expect(fakeShellState.creates).toBe(1)
 
@@ -1282,7 +1291,7 @@ describe("ShellTool", () => {
               call({ command: "fake explicit background", background: true }, "call-explicit-background"),
             )
             expect(settled.output?.structured).toMatchObject({ shellID: "sh_fake_1", truncated: false })
-            expect(fakeShellState.prepared).toMatchObject([{ timeout: ShellTool.MAX_TIMEOUT_MS }])
+            expect(fakeShellState.prepared).toMatchObject([{ timeout: ShellTool.DEFAULT_TIMEOUT_MS }])
 
             yield* TestClock.adjust(300_000)
             expect(admitted.pollUnsafe()).toBeUndefined()
@@ -1342,7 +1351,7 @@ describe("ShellTool", () => {
             const scope = yield* Scope.Scope
             const waiting = yield* settleTool(
               registry,
-              call({ command: "fake long timeout", timeout: 600_000 }, "call-long-timeout"),
+              call({ command: "fake long timeout", timeout: 3_600_000 }, "call-long-timeout"),
             ).pipe(Effect.forkIn(scope, { startImmediately: true }))
             yield* waitForJob(jobs, "call-long-timeout")
             yield* Effect.yieldNow
@@ -1352,9 +1361,13 @@ describe("ShellTool", () => {
             expect(exit).toBeDefined()
             if (!exit) return
             expect((yield* Fiber.join(waiting)).output?.structured).toMatchObject({ shellID: "sh_fake_1" })
-            expect(fakeShellState.prepared).toMatchObject([{ timeout: 600_000 }])
+            expect(fakeShellState.prepared).toMatchObject([{ timeout: 3_600_000 }])
             expect(fakeShellState.timeoutUpdates).toEqual([])
             expect(fakeShellState.info?.status).toBe("running")
+            yield* TestClock.adjust(3_299_999)
+            expect(fakeShellState.info?.status).toBe("running")
+            yield* TestClock.adjust(1)
+            expect(fakeShellState.info?.status).toBe("timeout")
           }),
         )
       },

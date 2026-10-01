@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { ShellOutputFetch, ShellOutputView } from "./projection"
 import {
+  promptReceipt,
   REMOTE_CAPABILITY_NAMES,
   accountReadState,
   accountSectionView,
@@ -25,6 +26,21 @@ import {
   type RemoteConnectionState,
   type RemoteSessionSummary,
 } from "./view-model"
+
+test("prompt receipts distinguish sending from failed and unknown delivery", () => {
+  expect(promptReceipt("pending", "steer", { state: "sending" }).label).toBe("Sending prompt")
+  expect(promptReceipt("pending", "queue", { state: "unknown" }).label).toBe("Outcome unknown")
+  expect(promptReceipt("pending", "queue", { state: "failed" }).label).toBe("Send failed")
+})
+
+test("prompt receipts preserve queue and read facts over late send outcomes", () => {
+  expect(promptReceipt("pending", "queue").text).toBe("Queued")
+  expect(promptReceipt("pending", "steer").text).toBe("Processing · steer")
+  expect(promptReceipt("promoted", "steer").label).toBe("Sent, not yet read")
+  for (const state of ["sending", "failed", "unknown"] as const) {
+    expect(promptReceipt("consumed", "steer", { state })).toEqual({ label: "Read by YCoding", text: "Read", mark: "✓✓" })
+  }
+})
 
 const connectionStates: readonly RemoteConnectionState[] = [
   { kind: "loading" },

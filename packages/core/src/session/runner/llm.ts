@@ -17,6 +17,10 @@ import { Database } from "../../database/database"
 import { EventV2 } from "../../event"
 import { EventTable } from "../../event/sql"
 import { PermissionV2 } from "../../permission"
+import { SkillV2 } from "../../skill"
+import { ProjectArtifactAccounting } from "../../project-artifact/accounting"
+import { ProjectArtifactSource } from "../../project-artifact/source"
+import { SessionSkill } from "../skill"
 import { QuestionTool } from "../../tool/question"
 import { ToolOutputStore } from "../../tool-output-store"
 import { InstructionState } from "../instruction-state"
@@ -63,6 +67,7 @@ type AttemptState = {
   attempts: number
   continuationFallback?: boolean
   overflowRecovery?: "pending" | "used"
+  skills?: ReadonlyArray<SkillV2.ID>
 }
 
 type RecoveryMode = "normal" | "terminal-response" | "provider"
@@ -97,6 +102,50 @@ const layer = Layer.effect(
     const providerRequests = yield* SessionProviderRequest.Service
     const continuation = yield* SessionContinuation.Service
     const liveState = yield* SessionLiveState.Service
+    const skills = yield* SkillV2.Service
+    const permission = yield* PermissionV2.Service
+    const accounting = yield* ProjectArtifactAccounting.Service
+    const artifactSource = yield* ProjectArtifactSource.Service
+    const activateRequestedSkills = Effect.fn("SessionRunner.activateRequestedSkills")(function* (
+      selected: SessionContext.Selection,
+      ids: ReadonlyArray<SkillV2.ID>,
+      catalog: ReadonlyArray<SkillV2.Info>,
+    ) {
+      const resolved = yield* Effect.forEach(ids, (id) =>
+        Effect.gen(function* () {
+          const skill = catalog.find((skill) => skill.id === id)
+          if (!skill)
+            return yield* new StepFailedError({
+              error: { type: "skill.unavailable", message: `Skill unavailable: ${id}` },
+            })
+          const access = yield* permission
+            .evaluateEffective({
+              sessionID: selected.session.id,
+              agent: selected.agent.id,
+              action: "skill",
+              resource: id,
+            })
+            .pipe(Effect.orDie)
+          if (access === "deny")
+            return yield* new StepFailedError({
+              error: { type: "permission.rejected", message: `Permission denied: skill (${id})` },
+            })
+          return skill
+        }),
+      )
+      yield* Effect.forEach(
+        resolved,
+        (skill) =>
+          Effect.gen(function* () {
+            const provenance = yield* artifactSource.provenance("skill", skill.id)
+            yield* SessionSkill.activate(
+              { events, store, accounting },
+              { session: selected.session, skill, provenance },
+            ).pipe(Effect.orDie)
+          }),
+        { discard: true },
+      )
+    })
     let executionGeneration = 0
     // Title generation is a side effect of the first step; it must not delay step continuation.
     // Tracked per process so repeated wakes before the second user message arrives don't
@@ -256,17 +305,34 @@ const layer = Layer.effect(
       yield* InstructionState.prepare(db, events, selected.instructions, selected.session.id)
       let currentStep = step
       let promoted = 0
+      const prepareInput = Effect.fn("SessionRunner.prepareInput")(function* (entry: SessionPending.Info) {
+        if (entry.type !== "user") return
+        const requested = SessionSkill.selected(entry.data.metadata)
+        if (!requested.length && !entry.data.text.includes("$")) return
+        const catalog = yield* skills.list()
+        const ids = [
+          ...new Set([
+            ...requested,
+            ...SessionSkill.mentions(entry.data.text, catalog).map((skill) => SkillV2.ID.make(skill.id)),
+          ]),
+        ]
+        yield* activateRequestedSkills(selected, ids, catalog)
+        requestTrackerState.skills = [...new Set([...(requestTrackerState.skills ?? []), ...ids])]
+      })
       if (promotion) {
-        if (promotion === "steer") promoted = yield* SessionPending.promoteSteers(db, events, selected.session.id)
+        if (promotion === "steer")
+          promoted = yield* SessionPending.promoteSteers(db, events, selected.session.id, prepareInput)
         if (promotion === "queue") {
-          promoted += Number(yield* SessionPending.promoteNextQueued(db, events, selected.session.id))
-          promoted += yield* SessionPending.promoteSteers(db, events, selected.session.id)
+          promoted += Number(yield* SessionPending.promoteNextQueued(db, events, selected.session.id, prepareInput))
+          promoted += yield* SessionPending.promoteSteers(db, events, selected.session.id, prepareInput)
         }
         if (promoted > 0) {
           currentStep = 1
           onPromotion?.()
         }
       }
+      if (!promotion && requestTrackerState.skills?.length)
+        yield* activateRequestedSkills(selected, requestTrackerState.skills, yield* skills.list())
       yield* appendContextObservations(selected, currentStep, recoveryMode === "terminal-response")
       const initialContext = yield* context.load(selected)
       const prepare = (loaded: SessionContext.Loaded, fullRebase = false) =>
@@ -327,6 +393,8 @@ const layer = Layer.effect(
                   if (fullRebase) yield* continuation.clear(sessionID)
                   const selected = yield* context.select(sessionID)
                   yield* InstructionState.prepare(db, events, selected.instructions, selected.session.id)
+                  if (requestTrackerState.skills?.length)
+                    yield* activateRequestedSkills(selected, requestTrackerState.skills, yield* skills.list())
                   yield* appendContextObservations(selected, currentStep, recoveryMode === "terminal-response")
                   const loaded = yield* context.load(selected)
                   return { context: loaded, prepared: yield* prepare(loaded, fullRebase) }
@@ -1104,6 +1172,10 @@ export const node = makeLocationNode({
     Config.node,
     Snapshot.node,
     Database.node,
+    SkillV2.node,
+    PermissionV2.node,
+    ProjectArtifactAccounting.node,
+    ProjectArtifactSource.node,
   ],
 })
 

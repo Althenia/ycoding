@@ -123,6 +123,7 @@ describe("remote data", () => {
       await test.store.selectSession("ses_a")
       const data = Buffer.alloc(120_000, 42).toString("base64")
       await test.store.sendPrompt({ text: "Review", delivery: "steer", files: [{ uri: `data:image/png;base64,${data}`, name: "capture.png" }] })
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.prompt"))
       expect(uploads.length).toBeGreaterThan(1)
       expect(uploads.map((chunk) => chunk.data).join("")).toBe(data)
       expect(uploads.every((chunk, index) => chunk.index === index)).toBe(true)
@@ -138,6 +139,7 @@ describe("remote data", () => {
       await waitFor(() => test.store.state().sessions.length === 2)
       await test.store.selectSession("ses_a")
       await test.store.runCommand({ command: "plan", delivery: "queue", files: [{ uri: "data:text/plain;base64,aGVsbG8=", name: "notes.txt" }] })
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.command"))
       const upload = test.relay.requests.find((request) => request.operation === "session.attachment.upload")
       expect(upload?.sessionID).toBe("ses_a")
       expect(test.relay.requests.find((request) => request.operation === "session.command")?.input).toMatchObject({ command: "plan", files: [{ uri: `ycoding-upload://${String(upload?.input?.uploadID)}`, name: "notes.txt" }] })
@@ -152,6 +154,7 @@ describe("remote data", () => {
       await waitFor(() => test.store.state().sessions.length === 2)
       await test.store.selectSession("ses_a")
       await test.store.sendPrompt({ text: "Review", delivery: "steer", files: [{ uri: "data:image/png;base64,AAAA", name: "capture.png" }] })
+      await waitFor(() => test.store.state().mutations.some((mutation) => mutation.state === "failed"))
       expect(test.relay.requests.some((request) => request.operation === "session.prompt")).toBe(false)
       expect(test.store.state().uploadError).toContain("Attachment rejected")
     } finally { await test.stop() }
@@ -178,8 +181,9 @@ describe("remote data", () => {
       await test.store.selectSession("ses_a")
       const unsubscribe = test.store.subscribe(() => { if (test.store.state().upload?.percent) test.store.cancelUpload() })
       const sent = await test.store.sendPrompt({ text: "Review", delivery: "steer", files: [{ uri: `data:image/png;base64,${Buffer.alloc(100_000, 42).toString("base64")}` }] })
+      await waitFor(() => test.store.state().mutations.some((mutation) => mutation.state === "failed"))
       unsubscribe()
-      expect(sent).toBe(false)
+      expect(sent).toBe(true)
       expect(test.relay.requests.filter((request) => request.operation === "session.attachment.upload")).toHaveLength(1)
       expect(test.relay.requests.some((request) => request.operation === "session.prompt")).toBe(false)
       expect(test.store.state().uploadError).toContain("cancelled")
@@ -218,6 +222,7 @@ describe("remote data", () => {
       await waitFor(() => test.store.state().sessions.length === 2)
       await test.store.selectSession("ses_a")
       await test.store.runCommand({ command: "build", delivery: "steer" })
+      await waitFor(() => test.store.state().mutations.some((mutation) => mutation.kind === "command" && mutation.state === "unknown"))
       expect(commands).toBe(1)
       const mutation = test.store.state().mutations.find((entry) => entry.kind === "command")
       expect(mutation).toMatchObject({ state: "unknown", operation: "session.command", input: { command: "build" } })
@@ -368,11 +373,13 @@ describe("remote data", () => {
       expect(test.relay.requests.find((request) => request.operation === "session.create")?.input).toMatchObject({
         id, workspace: "wsp_project", agent: "reviewer", model: { providerID: "openai", id: "gpt-6" },
       })
-      expect(test.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(2)
-      expect(test.relay.requests.filter((request) => request.operation === "session.skill")).toHaveLength(1)
+      await waitFor(() => test.store.state().mutations.length === 0)
+      expect(test.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(1)
+      expect(test.relay.requests.find((request) => request.operation === "session.prompt")?.input?.skills).toEqual(["audit"])
+      expect(test.relay.requests.filter((request) => request.operation === "session.skill")).toHaveLength(0)
     } finally { await test.stop() }
   })
-  test("switches only changed selections and admits skills before waking one prompt with attachments", async () => {
+  test("switches only changed selections and admits selected skills in one prompt with attachments", async () => {
     const test = await setup((request) => request.operation === "session.snapshot" ? { ok: true, value: {
       sourceEpoch: "epoch_1", session: { agent: "god", model: { providerID: "openai", id: "gpt-5" } }, messages: [],
       watermark: { type: "log.synced", aggregateID: request.sessionID, seq: 0 },
@@ -383,15 +390,14 @@ describe("remote data", () => {
       await test.store.selectSession("ses_a")
       await test.store.sendPrompt({ text: "Review", delivery: "steer", agent: "reviewer", model: { providerID: "openai", id: "gpt-6" },
         files: [{ uri: "file:///work/a.ts", name: "a.ts" }], agents: [{ name: "helper" }], skills: ["audit", "test"] })
+      await waitFor(() => test.store.state().mutations.length === 0)
       expect(test.relay.requests.filter((request) => ["session.switchAgent", "session.switchModel", "session.skill", "session.prompt"].includes(request.operation))
         .map((request) => [request.operation, request.input])).toMatchObject([
         ["session.switchAgent", { agent: "reviewer" }], ["session.switchModel", { model: { providerID: "openai", id: "gpt-6" } }],
-        ["session.skill", { skill: "audit", resume: false }], ["session.skill", { skill: "test", resume: false }],
-        ["session.prompt", { text: "Review", resume: false, files: [{ uri: "file:///work/a.ts", name: "a.ts" }], agents: [{ name: "helper" }] }],
-        ["session.prompt", { text: "Review", resume: true }],
+        ["session.prompt", { text: "Review", skills: ["audit", "test"], files: [{ uri: "file:///work/a.ts", name: "a.ts" }], agents: [{ name: "helper" }] }],
       ])
       const prompts = test.relay.requests.filter((request) => request.operation === "session.prompt")
-      expect(prompts[0]?.input?.id).toBe(prompts[1]?.input?.id)
+      expect(prompts).toHaveLength(1)
     } finally { await test.stop() }
   })
 
@@ -402,6 +408,7 @@ describe("remote data", () => {
       await waitFor(() => test.store.state().sessions.length === 2)
       await test.store.selectSession("ses_a")
       expect(await test.store.activateSkill("audit")).toBe(true)
+      await waitFor(() => test.store.state().mutations.length === 0)
       expect(test.relay.requests.filter((request) => request.operation === "session.skill").map((request) => request.input)).toMatchObject([{ skill: "audit" }])
       expect(test.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(0)
     } finally { await test.stop() }
@@ -414,7 +421,8 @@ describe("remote data", () => {
       await test.store.load()
       await waitFor(() => test.store.state().sessions.length === 2)
       await test.store.selectSession("ses_a")
-      expect(await test.store.activateSkill("audit")).toBe(false)
+      expect(await test.store.activateSkill("audit")).toBe(true)
+      await waitFor(() => test.store.state().mutations.some((mutation) => mutation.kind === "skill" && mutation.state === "failed"))
       expect(await test.store.setGoal("Finish safely")).toBe(true)
       await waitFor(() => test.store.state().mutations.some((item) => item.kind === "goal" && item.state === "failed"))
       expect(test.store.state().mutationToasts?.at(-1)).toMatchObject({ label: "Set goal", state: "failed", detail: "Unavailable" })
@@ -430,9 +438,11 @@ describe("remote data", () => {
       await waitFor(() => test.store.state().sessions.length === 2)
       await test.store.selectSession("ses_a")
       await test.store.sendPrompt({ text: "Do not send", delivery: "steer", model: { providerID: "openai", id: "unavailable" } })
+      await waitFor(() => test.store.state().mutations.some((mutation) => mutation.state === "failed"))
       expect(test.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(0)
-      expect(test.store.state().mutations.some((item) => item.kind === "model" && item.state === "failed")).toBe(true)
+      expect(test.store.state().mutations.some((item) => item.kind === "prompt" && item.phase === "preparing" && item.state === "failed")).toBe(true)
       await test.store.runCommand({ command: "build", arguments: "--fast", delivery: "queue", files: [{ uri: "file:///work/a.ts" }] })
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.command"))
       expect(test.relay.requests.find((request) => request.operation === "session.command")?.input).toMatchObject({
         command: "build", arguments: "--fast", delivery: "queue", files: [{ uri: "file:///work/a.ts" }], id: "msg_local_2",
       })

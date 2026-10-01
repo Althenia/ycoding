@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { parsePromptInfo } from "../../src/prompt/history"
 import { promptSkillMentions, promptSkillMetadata, segmentPromptSkills } from "../../src/prompt/skill"
-import { submitSessionPrompt } from "../../src/util/session-autonomy"
-import { submitPromptWithSkills } from "../../src/component/prompt/skill-submission"
+import { submitPrompt } from "../../src/component/prompt/prompt-admission"
 
 describe("prompt skills", () => {
   test("keeps only valid selected skill metadata", () => {
@@ -102,64 +101,33 @@ describe("prompt skills", () => {
     expect(parsePromptInfo({ text: "Existing prompt", pasted: [] })).toEqual({ text: "Existing prompt", pasted: [] })
   })
 
-  test("admits the prompt before skills and never wakes after a partial activation", async () => {
+  test("settles admission before waking the prompt", async () => {
     const calls: string[] = []
-    const durable = new Set<string>()
-    let failSecond = true
-    const run = () =>
-      submitSessionPrompt({
-        prompt: async (resume) => calls.push(resume ? "wake" : "admit"),
-        skills: ["msg_skill_1", "msg_skill_2"].map((id) => async () => {
-          calls.push(id)
-          durable.add(id)
-          if (id === "msg_skill_2" && failSecond) {
-            failSecond = false
-            throw new Error("lost response")
-          }
-        }),
-      })
+    let releaseAdmission!: () => void
+    const admitted = new Promise<void>((resolve) => (releaseAdmission = resolve))
 
-    await expect(run()).rejects.toThrow("lost response")
-    expect(calls).toEqual(["admit", "msg_skill_1", "msg_skill_2"])
-    await run()
-
-    expect(calls).toEqual(["admit", "msg_skill_1", "msg_skill_2", "admit", "msg_skill_1", "msg_skill_2", "wake"])
-    expect([...durable]).toEqual(["msg_skill_1", "msg_skill_2"])
-  })
-
-  test("settles mentioned skill activations before admitting and waking the prompt", async () => {
-    const calls: string[] = []
-    let releaseSkill!: () => void
-    const skillSettled = new Promise<void>((resolve) => (releaseSkill = resolve))
-
-    const submission = submitPromptWithSkills({
-      prompt: async (resume) => calls.push(resume ? "prompt:wake" : "prompt:admit"),
-      skills: [
-        async () => {
-          calls.push("skill:review")
-          await skillSettled
-          calls.push("skill:settled")
-        },
-      ],
+    const submission = submitPrompt({
+      prompt: async (resume) => {
+        calls.push(resume ? "prompt:wake" : "prompt:admit")
+        if (!resume) await admitted
+      },
     })
 
-    await Bun.sleep(0)
-    expect(calls).toEqual(["skill:review"])
-    releaseSkill()
+    expect(calls).toEqual(["prompt:admit"])
+    releaseAdmission()
     await submission
-    expect(calls).toEqual(["skill:review", "skill:settled", "prompt:admit", "prompt:wake"])
+    expect(calls).toEqual(["prompt:admit", "prompt:wake"])
   })
 
   test("returns the first durable admission and supplies it to the exact wake retry", async () => {
     const admitted = { files: [{ uri: `ycoding-attachment://sha256/${"a".repeat(64)}`, name: "clipboard.png" }] }
     const calls: Array<{ resume: boolean; admitted?: unknown }> = []
 
-    const result = await submitPromptWithSkills({
+    const result = await submitPrompt({
       prompt: async (resume, durable) => {
         calls.push({ resume, admitted: durable })
         return resume ? { ignored: true } : admitted
       },
-      skills: [],
     })
 
     expect(result).toEqual({ admitted })
@@ -173,12 +141,11 @@ describe("prompt skills", () => {
     const admitted = { files: [{ uri: `ycoding-attachment://sha256/${"b".repeat(64)}`, name: "clipboard.png" }] }
     const captured: (typeof admitted)[] = []
 
-    const result = await submitPromptWithSkills({
+    const result = await submitPrompt({
       prompt: async (resume) => {
         if (resume) throw new Error("wake disconnected")
         return admitted
       },
-      skills: [],
       onAdmitted: (receipt) => void captured.push(receipt),
     })
 

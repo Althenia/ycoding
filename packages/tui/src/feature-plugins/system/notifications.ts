@@ -1,6 +1,7 @@
 import type { LocationRef, SessionAutonomyState } from "@ycoding-ai/client"
 import type { TuiAttentionNotifyInput, TuiAttentionSoundName } from "../../plugin/host-api"
 import { Plugin } from "@ycoding-ai/plugin/tui"
+import { onTuiAttentionAvailable } from "../../attention"
 
 const id = "internal:notifications"
 const CHECKPOINT_MS = 500
@@ -15,6 +16,7 @@ type RequestEpisode = {
   readonly title?: string
   readonly location?: LocationRef
   state: "scheduled" | "querying" | "failed" | "notified"
+  soundDelivered?: boolean
   cancel?: () => void
   controller?: AbortController
 }
@@ -39,15 +41,16 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
       let disposed = false
       const requests = new Map<string, RequestEpisode>()
       const terminals = new Map<string, TerminalEpisode>()
+      let availabilityRevision = 0
 
       function requestKey(kind: RequestKind, sessionID: string, requestID: string, location?: LocationRef) {
         if (sessionID !== "global") return `${kind}:${sessionID}:${requestID}`
         return `${kind}:${sessionID}:${requestID}:${location?.directory ?? ""}:${location?.workspaceID ?? ""}`
       }
 
-      function send(input: TuiAttentionNotifyInput, current: () => boolean) {
-        if (disposed || !current()) return
-        void context.attention.notify(input).catch(() => {})
+      async function send(input: TuiAttentionNotifyInput, current: () => boolean) {
+        if (disposed || !current()) return undefined
+        return context.attention.notify(input).catch(() => undefined)
       }
 
       function removeRequest(episode: RequestEpisode) {
@@ -120,6 +123,7 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
         if (disposed || requests.get(episode.key) !== episode || episode.state !== "scheduled") return
         episode.cancel = undefined
         episode.state = "querying"
+        const availableAt = availabilityRevision
         const controller = new AbortController()
         episode.controller = controller
         const remains = await pending(episode, controller.signal).then(
@@ -129,23 +133,47 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
         if (disposed || requests.get(episode.key) !== episode || episode.controller !== controller) return
         episode.controller = undefined
         if (!remains.ok) {
-          if (!controller.signal.aborted) episode.state = "failed"
+          if (!controller.signal.aborted) {
+            episode.state = "failed"
+            if (availableAt !== availabilityRevision) scheduleRequest(episode)
+          }
           return
         }
         if (!remains.value) {
           requests.delete(episode.key)
           return
         }
-        episode.state = "notified"
-        send(requestNotification(episode), () => requests.get(episode.key) === episode && episode.state === "notified")
+        const notification = requestNotification(episode)
+        const result = await send(
+          { ...notification, ...(episode.soundDelivered ? { sound: false } : {}) },
+          () => requests.get(episode.key) === episode && episode.state === "querying",
+        )
+        if (disposed || requests.get(episode.key) !== episode) return
+        episode.soundDelivered ||= result?.sound === true
+        episode.state = (notification.notification === false ? result?.ok : result?.notification) ? "notified" : "failed"
+        if (episode.state === "failed" && availableAt !== availabilityRevision) scheduleRequest(episode)
+      }
+
+      function scheduleRequest(episode: RequestEpisode) {
+        episode.state = "scheduled"
+        episode.cancel = scheduleAttention(CHECKPOINT_MS, () => confirmRequest(episode))
+      }
+
+      function recoverRequests() {
+        availabilityRevision += 1
+        Array.from(requests.values()).filter((episode) => episode.state === "failed").forEach(scheduleRequest)
       }
 
       function addRequest(input: Omit<RequestEpisode, "key" | "state">) {
         const key = requestKey(input.kind, input.sessionID, input.id, input.location)
-        if (requests.has(key)) return
+        const existing = requests.get(key)
+        if (existing) {
+          if (existing.state === "failed") scheduleRequest(existing)
+          return
+        }
         const episode: RequestEpisode = { ...input, key, state: "scheduled" }
         requests.set(key, episode)
-        episode.cancel = scheduleAttention(CHECKPOINT_MS, () => confirmRequest(episode))
+        scheduleRequest(episode)
       }
 
       async function resolveSession(sessionID: string, signal: AbortSignal) {
@@ -222,7 +250,7 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
           initial.goal?.status === "active"
             ? goalNotification(final)
             : { message: "Session done", sound: { name: "done" as const, when: "always" as const } }
-        send(
+        await send(
           {
             title: session.title,
             message: output.message,
@@ -248,7 +276,7 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
         const controller = new AbortController()
         const session = await resolveSession(sessionID, controller.signal)
         if (!session || session.parentID || disposed || terminals.get(sessionID) !== episode) return
-        send(
+        await send(
           {
             title: session.title,
             message,
@@ -260,6 +288,8 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
       }
 
       const cleanups = [
+        onTuiAttentionAvailable(context.attention, recoverRequests),
+        context.data.on("server.connected", recoverRequests),
         context.data.on("form.created", (event) =>
           addRequest({
             kind: "form",

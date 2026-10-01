@@ -1108,7 +1108,7 @@ test("keeps non-subagent activity rows on one marker/label grid with symmetric c
     const running = lineOf("project_index")
 
     // Marker column 3 for every activity class.
-    expect(thought.indexOf("ok")).toBe(3)
+    expect(thought.indexOf("ok"), screen.frame()).toBe(3)
     expect(explored.indexOf("ok")).toBe(3)
     expect(tool.indexOf("ok")).toBe(3)
     expect(guardrail.indexOf("!!")).toBe(3)
@@ -1691,7 +1691,7 @@ test("caps large transcript at bounded mounted window", async () => {
 
 function bubbleBounds(lines: string[], text: string) {
   const bodyRow = lines.findIndex((line) => line.includes(text))
-  if (bodyRow === -1) throw new Error(`missing bubble text: ${text}`)
+  if (bodyRow === -1) throw new Error(`missing bubble text: ${text}\n${lines.join("\n")}`)
   const top = lines.findLastIndex((line, index) => index < bodyRow && line.includes("╭") && line.includes("╮"))
   const bottomOffset = lines.slice(bodyRow + 1).findIndex((line) => line.includes("╰") && line.includes("╯"))
   const bottom = bottomOffset === -1 ? -1 : bodyRow + bottomOffset + 1

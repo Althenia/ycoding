@@ -74,6 +74,9 @@ const goalGate = accountParams.get("goalGate") === "1"
 let releaseGoal: ((result: "ok" | "failed" | "unknown") => void) | undefined
 ;(window as typeof window & { remoteReleaseGoal?: (result: "ok" | "failed" | "unknown") => void }).remoteReleaseGoal = (result) => releaseGoal?.(result)
 const heldPrompts: ((result: "ok" | "failed" | "unknown") => void)[] = []
+const heldSessionLists: (() => void)[] = []
+let sessionListsHeld = true
+Object.assign(window, { remotePendingSessionLists: () => heldSessionLists.length, remoteHoldSessionLists: () => { sessionListsHeld = true }, remoteReleaseSessionList: () => { sessionListsHeld = false; heldSessionLists.splice(0).forEach((release) => release()) } })
 ;(window as typeof window & { remoteReleasePrompt?: (result?: "ok" | "failed" | "unknown") => void }).remoteReleasePrompt = (result = "ok") => heldPrompts.shift()?.(result)
 const deviceMode = accountParams.get("devices")
 const emptyBackend = remoteScenarioData?.emptyBackend ?? accountParams.get("sessions") === "empty"
@@ -441,6 +444,7 @@ const catalog = {
     { providerID: "openai", providerName: "OpenAI", id: "gpt-6-sol", name: "GPT-6 Sol", variants: ["low", "medium", "high", "xhigh"] },
     { providerID: "openai", providerName: "OpenAI", id: "gpt-6-luna", name: "GPT-6 Luna", variants: ["none", "low", "medium", "high"] },
     { providerID: "openrouter", providerName: "OpenRouter", id: "perceptron/perceptron-mk1.5", name: "Perceptron Mk1.5", variants: [] },
+    ...(accountParams.get("largeCatalog") === "1" ? Array.from({ length: 548 }, (_, index) => ({ providerID: "test", providerName: "Catalog test", id: `model-${index + 5}`, name: `Catalog model ${index + 5}`, variants: [] })) : []),
   ],
   defaultModel: { providerID: "anthropic", id: "claude-opus-5-5", variant: "high" },
   commands: [
@@ -730,6 +734,8 @@ function createFixtureStore(): Fixture {
         })
         const result = { status: "ok" as const, value: { data, cursor: { ...(offset > 0 ? { previous: String(Math.max(0, offset - limit)) } : {}),
           ...(offset + data.length < count ? { next: String(offset + data.length) } : {}) } } }
+        if (input?.workspace !== undefined && accountParams.get("sessionListGate") === "1" && sessionListsHeld)
+          return new Promise<RemoteRequestOutcome>((resolve) => heldSessionLists.push(() => resolve(result)))
         return input?.workspace !== undefined && sessionListDelayMs > 0
           ? new Promise<RemoteRequestOutcome>((resolve) => setTimeout(() => resolve(result), sessionListDelayMs)) : result
       }

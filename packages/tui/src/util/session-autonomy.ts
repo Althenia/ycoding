@@ -144,15 +144,6 @@ export function currentSessionAutonomy(
   return response.state
 }
 
-export async function submitSessionPrompt(input: {
-  prompt: (resume: boolean) => Promise<unknown>
-  skills: Array<() => Promise<unknown>>
-}) {
-  await input.prompt(false)
-  for (const skill of input.skills) await skill()
-  await input.prompt(true)
-}
-
 export type GoalToggleAction =
   | { readonly type: "stop" }
   | { readonly type: "resume"; readonly text: string }

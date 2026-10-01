@@ -94,6 +94,20 @@ test("manual compaction admits only a Session and a stable compaction ID", () =>
     expect(parseClientMessage(JSON.stringify({ ...frame, input })).ok).toBe(false)
 })
 
+test("prompt skills are optional bounded nonempty IDs inside the closed prompt input", () => {
+  const frame = { type: "request", id: "req_skills", operation: "session.prompt", sessionID: "ses_1", input: { id: "msg_1", text: "Review", delivery: "queue", skills: ["audit", "test"] } }
+  expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
+  expect(parseRelayToAgentMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
+  for (const skills of [[], ["x".repeat(128)], Array.from({ length: 200 }, (_, index) => `skill_${index}`)])
+    expect(parseClientMessage(JSON.stringify({ ...frame, input: { ...frame.input, skills } })).ok).toBe(true)
+  for (const skills of ["audit", null, [""], [" "], [1], [{ id: "audit" }], ["x".repeat(129)], Array.from({ length: 201 }, () => "audit")]) {
+    expect(parseClientMessage(JSON.stringify({ ...frame, input: { ...frame.input, skills } })).ok).toBe(false)
+    expect(parseRelayToAgentMessage(JSON.stringify({ ...frame, input: { ...frame.input, skills } })).ok).toBe(false)
+  }
+  expect(parseClientMessage(JSON.stringify({ ...frame, input: { ...frame.input, metadata: { skills: [{ id: "audit" }] } } })).ok).toBe(false)
+  expect(parseClientMessage(JSON.stringify({ ...frame, input: { text: "No skills" } })).ok).toBe(true)
+})
+
 test("machine keep-awake controls are global and accept only the explicit enabled flag", () => {
   const read = { type: "request", id: "req_awake", operation: "machine.keepAwake.get" }
   const write = { ...read, operation: "machine.keepAwake.set", input: { enabled: true } }

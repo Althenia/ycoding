@@ -1,7 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import { BoxRenderable, Renderable } from "@opentui/core"
+import { BoxRenderable, Renderable, ScrollBoxRenderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
+import { createSignal } from "solid-js"
+import type { GuardrailRequest } from "../../../src/routes/session/guardrail"
 import type { GuardrailStatusOutput } from "@ycoding-ai/client"
 import { ClientProvider } from "../../../src/context/client"
 import { ThemeProvider } from "../../../src/context/theme"
@@ -114,13 +116,14 @@ test("renders a warning-framed guardrail approval", async () => {
     expect(frame).not.toContain("!!")
     expect(frame).toContain("Destructive Git operation")
     expect(frame).toContain("guardrails apply even in YOLO mode.")
-    expect(frame).toContain("Action: shell")
     expect(frame).toContain("Blocked")
     expect(frame).toContain("git reset --hard")
     expect(frame).toContain("Allow once")
     expect(frame).toContain("Deny")
     expect(frame).toContain("Allow for this session")
     expect(frame).not.toContain("standard.review.git-destructive")
+    app.mockInput.pressKey("\u001b[6~")
+    await app.waitForFrame((frame) => frame.includes("Action: shell"))
     app.mockInput.pressArrow("left")
     app.mockInput.pressEnter()
     expect(await replyReceived.promise).toEqual({ reply: "always" })
@@ -294,4 +297,91 @@ function descendants(root: Renderable): BoxRenderable[] {
 function requireBoxRenderable(renderable: BoxRenderable | undefined, id: string): BoxRenderable {
   if (renderable) return renderable
   throw new Error(`expected a BoxRenderable with id ${id}`)
+}
+
+for (const decision of ["once", "reject"] as const) {
+  test(`replacing a scrolled review resets hard-review details and sends ${decision} once`, async () => {
+    const replies: { path: string; reply: unknown }[] = []
+    const settled = Promise.withResolvers<void>()
+    const transport = createFetch(async (url, request) => {
+      if (!url.pathname.endsWith("/reply")) return undefined
+      replies.push({ path: url.pathname, reply: await request.json() })
+      await settled.promise
+      return new Response(null, { status: 204 })
+    })
+    const long = [...Array.from({ length: 60 }, (_, index) => `display-only resource ${index}`), "FINAL_COMMAND_SENTINEL"].join("\n")
+    let replace!: (request: GuardrailRequest) => void
+    const app = await testRender(
+      () => {
+        const [request, setRequest] = createSignal<GuardrailRequest>({
+          id: "grq_first", rootSessionID: "ses_root", sessionID: "ses_root", action: "shell",
+          resources: [long], reason: "Review display-only details", ruleIDs: [], standard: true,
+        })
+        replace = setRequest
+        return (
+          <TestTuiContexts>
+            <ConfigProvider config={createTuiResolvedConfig()}>
+              <Keymap.Provider>
+                <ClientProvider api={createApi(transport.fetch)}>
+                  <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+                    <ToastProvider><prompt.GuardrailPrompt request={request()} /></ToastProvider>
+                  </ThemeProvider>
+                </ClientProvider>
+              </Keymap.Provider>
+            </ConfigProvider>
+          </TestTuiContexts>
+        )
+      },
+      { width: 80, height: 24, kittyKeyboard: true },
+    )
+    try {
+      await app.waitForFrame((frame) => frame.includes("Allow for this session"))
+      const details = descendants(app.renderer.root).find((item): item is ScrollBoxRenderable => item instanceof ScrollBoxRenderable)
+      if (!details) throw new Error("guardrail details did not render a scrollbox")
+      for (let page = 0; page < 100 && !app.captureCharFrame().includes("FINAL_COMMAND_SENTINEL"); page++) {
+        app.mockInput.pressKey("\u001b[6~")
+        await app.renderOnce()
+      }
+      expect(app.captureCharFrame()).toContain("FINAL_COMMAND_SENTINEL")
+      app.mockInput.pressArrow("left")
+      await app.renderOnce()
+      expect(descendants(app.renderer.root).some((item) => item.id === "session.guardrail.action.always.band")).toBe(true)
+      replace({
+        id: "grq_hard_replacement", rootSessionID: "ses_root", sessionID: "ses_root", action: "shell",
+        resources: [`NEW_COMMAND_START ${"display-only text ".repeat(200)} NEW_COMMAND_END`],
+        reason: "Hard display-only review", ruleIDs: [], standard: true, hardReview: true,
+      })
+      app.renderer.resize(50, 10)
+      await app.renderOnce()
+      expect(details.scrollTop).toBe(0)
+      const frame = app.captureCharFrame()
+      expect(frame).toContain("NEW_COMMAND_START")
+      expect(frame).toContain("Deny")
+      expect(frame).toContain("Allow once")
+      expect(frame).toContain("pgup/pgdn")
+      expect(frame).toContain("guardrails apply even in YOLO mode.")
+      expect(frame).not.toContain("Allow for this session")
+      expect(descendants(app.renderer.root).some((item) => item.id === "session.guardrail.action.reject.band")).toBe(true)
+      for (let page = 0; page < 200 && !app.captureCharFrame().includes("NEW_COMMAND_END"); page++) {
+        app.mockInput.pressKey("\u001b[6~")
+        await app.renderOnce()
+      }
+      expect(app.captureCharFrame()).toContain("NEW_COMMAND_END")
+      expect(replies).toEqual([])
+      if (decision === "once") {
+        app.mockInput.pressArrow("down")
+        app.mockInput.pressEnter()
+        app.mockInput.pressEnter()
+      }
+      if (decision === "reject") {
+        app.mockInput.pressEscape()
+        app.mockInput.pressEscape()
+      }
+      await app.waitForFrame(() => replies.length > 0)
+      expect(replies).toEqual([{ path: "/api/session/ses_root/guardrail/request/grq_hard_replacement/reply", reply: { reply: decision } }])
+    } finally {
+      settled.resolve()
+      app.renderer.destroy()
+    }
+  })
 }

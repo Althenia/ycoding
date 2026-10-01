@@ -69,7 +69,7 @@ const link: RemoteLink = {
 }
 const store: RemoteStore = {
   ...base, link,
-  load: async () => {}, dispose: () => {}, loadCatalog: async (target) => { await Promise.resolve(); if (state().catalogs[catalogKey(target)] === undefined) update({ ...state(), catalogs: { ...state().catalogs, [catalogKey(target)]: catalog } }) },
+  load: async () => {}, dispose: () => {}, loadCatalog: async (target, options) => { await Promise.resolve(); if (options?.refresh) requests.push({ operation: "catalog.refresh", input: target }); if (options?.refresh || state().catalogs[catalogKey(target)] === undefined) update({ ...state(), catalogs: { ...state().catalogs, [catalogKey(target)]: catalog } }) },
   findFiles: async (_target, query) => {
     if (query === "slow") {
       await new Promise((resolve) => setTimeout(resolve, 400))
@@ -79,9 +79,9 @@ const store: RemoteStore = {
     return { status: "ok", files: [{ path: "apps/web/src/remote/ui/composer.tsx", uri: "file:///workspace/ycoding/apps/web/src/remote/ui/composer.tsx", kind: "file" as const }].filter((item) => item.path.includes(query)) }
   },
   setDraft: (sessionID: string, text: string) => update({ ...state(), drafts: { ...state().drafts, [sessionID]: text } }),
-  sendPrompt: async (input: { readonly skills?: readonly string[] }) => { for (const skill of input.skills ?? []) requests.push({ operation: "session.skill", input: { skill, resume: false } }); requests.push({ operation: "session.prompt", input }) },
+  sendPrompt: async (input: { readonly skills?: readonly string[] }) => { requests.push({ operation: "session.prompt", input }); return true },
   activateSkill: async (skill: string) => { requests.push({ operation: "session.skill", input: { skill } }); return true },
-  runCommand: async (input: unknown) => { requests.push({ operation: "session.command", input }) },
+  runCommand: async (input: unknown) => { requests.push({ operation: "session.command", input }); return true },
   compactSession: async () => {
     requests.push({ operation: "session.compact", input: { id: "cmp_fixture" } })
     return new URLSearchParams(location.search).get("compactGate") === "1"
@@ -102,8 +102,10 @@ const store: RemoteStore = {
   setGoal: async (goal) => { requests.push({ operation: "session.goal.set", input: { goal } }); update({ ...state(), view: { ...state().view!, autonomy: { mode: "goal", yolo: state().view?.autonomy?.yolo ?? 0, goal: { text: goal, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } } } }); return true },
   stopGoal: async () => { requests.push({ operation: "session.goal.stop", input: { goal: null } }); update({ ...state(), view: { ...state().view!, autonomy: { mode: "normal", yolo: state().view?.autonomy?.yolo ?? 0 } } }) }, setAutonomy: () => {},
 }
+Object.assign(window, { composerUseCommandMutation: () => update({ ...state(), mutations: state().mutations.map((mutation) => ({ ...mutation, kind: "command", operation: "session.command", input: { id: mutation.id, command: "review" } })) }) })
 Object.assign(window, { composerRequests: () => requests, composerState: () => state(), composerSetMutation: (status: "sending" | "unknown" | "failed" | "sent" | null, sessionID = "ses_fixture") => update({ ...state(), mutations: status === null || status === "sent" ? [] : [{ id: "msg_fixture", kind: "prompt", label: "Prompt", state: status, sessionID, operation: "session.prompt", input: { text: "Review" }, detail: status === "failed" ? "Send failed" : status === "unknown" ? "The outcome is unknown" : undefined }], mutationToasts: status === "failed" || status === "unknown" ? [{ id: "msg_fixture", label: "Prompt", state: status, sessionID: "ses_fixture", detail: status === "failed" ? "Send failed" : "The outcome is unknown" }] : [] }), composerSetPending: (delivery: "steer" | "queue", text = "Review") => update({ ...state(), view: { ...state().view!, messages: [{ kind: "user", id: "msg_fixture", text, delivery, state: "pending", created: 1 }] } }), composerSetUpload: (percent: number) => update({ ...state(), upload: { sessionID: "ses_fixture", name: "capture.png", percent } }), composerSetStatus: (status: "idle" | "running" | "tool" | "tool-yolo" | "family-yolo" | "waiting" | "goal" | "goal-yolo" | "yolo") => update({ ...state(), view: { ...state().view!, status: status === "running" || status === "tool" || status === "tool-yolo" || status === "waiting" ? "running" : "idle", executionStarted: status === "running" ? Date.now() - 6000 : undefined, messages: status === "tool" || status === "tool-yolo" ? [{ kind: "assistant", id: "msg_tool", created: Date.now(), parts: [{ kind: "tool", callID: "call_tool", name: "shell", status: "running", content: [], started: Date.now() }] }] : [], requests: status === "waiting" ? [{ kind: "permission", id: "p", action: "read", resources: [], askedAt: Date.now() }] : [], autonomy: status === "goal" || status === "goal-yolo" ? { mode: "goal", yolo: status === "goal-yolo" ? 2 : 0, goal: { text: "Finish task", status: "active", iteration: 2, noProgress: 0, maxNoProgress: 3 } } : { mode: status === "yolo" || status === "tool-yolo" || status === "family-yolo" ? "yolo" : "normal", yolo: status === "yolo" ? 2 : status === "tool-yolo" || status === "family-yolo" ? 3 : 0 } }, sessionStatus: status === "family-yolo" ? { running: new Set(["ses_fixture"]), attention: new Set<string>(), outstanding: new Set<string>(), failed: new Set<string>() } : undefined }) })
 Object.assign(window, { composerClearCatalogs: () => update({ ...state(), catalogs: {} }) })
+Object.assign(window, { composerFailCatalogs: () => update({ ...state(), catalogs: Object.fromEntries(Object.keys(state().catalogs).map((key) => [key, { ...catalog, status: "error", message: "Catalog could not be loaded" }])) }) })
 Object.assign(window, { composerSwitchSession: () => update({ ...state(), activeSessionID: "ses_other", view: createSessionView("ses_other") }) })
 Object.assign(window, { composerResolveCompact: (accepted = true) => resolveCompact?.(accepted), composerSetDraft: store.setDraft })
 Object.assign(window, { composerClearAutonomy: () => update({ ...state(), view: { ...state().view!, autonomy: undefined } }) })

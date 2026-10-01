@@ -109,7 +109,7 @@ async function harness(options: {
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
     createTransport: (deviceID, handlers) =>
-      createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, schedule }),
+      createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, schedule, createSocket: relay.createSocket }),
     schedule,
     batchMs: 20,
     now: () => 1_000,
@@ -463,17 +463,28 @@ describe("remote notification delivery", () => {
 
   test("reads the stored channel preference when the notice arrives", async () => {
     const test = await harness()
+    let phase = "open-session"
+    let probing: Promise<void> | undefined
+    const watchdog = setTimeout(() => {
+      probing = test.relay.diagnostics().then((details) => { console.error(JSON.stringify({ diagnostic: "stored-channel", phase, transport: test.store.state().transport,
+        connection: test.store.state().connection, sessionListStatus: test.store.state().sessionListStatus, noticeSync: test.store.state().noticeSync,
+        notifications: test.store.state().notifications.map((entry) => entry.id), ...details })) })
+    }, 4_000)
     try {
       await test.openSession()
+      phase = "first-notice"
       test.togglePreference("agent-completed", "desktop")
       await raised(test, "agent-completed")
       expect(test.store.state().notifications.map((entry) => entry.category)).toEqual(["agent-completed"])
       expect(test.alerts).toHaveLength(0)
 
       test.togglePreference("agent-completed", "desktop")
+      phase = "second-notice"
       await raised(test, "agent-completed")
       expect(test.alerts).toHaveLength(1)
     } finally {
+      clearTimeout(watchdog)
+      if (probing !== undefined) await probing
       await test.stop()
     }
   })

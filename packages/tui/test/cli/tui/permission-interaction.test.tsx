@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import { BoxRenderable, MouseEvent, type Renderable } from "@opentui/core"
+import { BoxRenderable, MouseEvent, ScrollBoxRenderable, type Renderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { ConfigProvider } from "../../../src/config"
 import { Keymap } from "../../../src/context/keymap"
@@ -79,6 +79,88 @@ test("updates permission selection from vertical arrows and hover", async () => 
 
 function descendants(node: Renderable): Renderable[] {
   return [node, ...node.getChildren().flatMap(descendants)]
+}
+
+for (const kind of ["permission", "guardrail"] as const) {
+  test(`${kind} pins decisions while complete long details scroll at short heights and after resize`, async () => {
+    const decisions: string[] = []
+    const command = [...Array.from({ length: 80 }, (_, index) => `display-only review line ${index}: ${"detail ".repeat(12)}`), "FINAL_REVIEW_SENTINEL"].join("\n")
+    const app = await testRender(
+      () => (
+        <TestTuiContexts>
+          <ConfigProvider config={createTuiResolvedConfig()}>
+            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+              <Keymap.Provider>
+                <box height="100%">
+                  <box flexGrow={1}><text>Transcript remains visible</text></box>
+                  <Prompt
+                    kind={kind}
+                    title="Approval required"
+                    instance="bounded_approval"
+                    body={<text>{command}</text>}
+                    options={{ reject: "Deny", once: "Allow once", always: "Allow for this session" }}
+                    defaultOption="reject"
+                    escapeKey="reject"
+                    onSelect={(option) => decisions.push(option)}
+                  />
+                </box>
+              </Keymap.Provider>
+            </ThemeProvider>
+          </ConfigProvider>
+        </TestTuiContexts>
+      ),
+      { width: 80, height: 24, kittyKeyboard: true },
+    )
+    try {
+      await app.waitForFrame((frame) => frame.includes("Approval required"))
+      const assertVisible = () => {
+        const frame = app.captureCharFrame()
+        for (const label of ["Approval required", "Deny", "Allow once", "Allow for this session", "pgup/pgdn"])
+          expect(frame).toContain(label)
+        for (const option of ["reject", "once", "always"]) {
+          const row = descendants(app.renderer.root).find((item) => item.id === `session.${kind}.action.${option}`)!
+          expect(row.y).toBeGreaterThanOrEqual(0)
+          expect(row.y + row.height).toBeLessThanOrEqual(app.renderer.height)
+        }
+      }
+      assertVisible()
+      expect(app.captureCharFrame()).toContain("Transcript remains visible")
+      const scroll = descendants(app.renderer.root).find((item): item is ScrollBoxRenderable => item instanceof ScrollBoxRenderable)
+      expect(scroll).toBeDefined()
+      if (!scroll) throw new Error("review details did not render a scrollbox")
+      expect(scroll.viewport.height).toBeGreaterThanOrEqual(5)
+      for (let page = 0; page < 160 && !app.captureCharFrame().includes("FINAL_REVIEW_SENTINEL"); page++) {
+        app.mockInput.pressKey("\u001b[6~")
+        await app.renderOnce()
+      }
+      expect(app.captureCharFrame()).toContain("FINAL_REVIEW_SENTINEL")
+      expect(decisions).toEqual([])
+      expect(descendants(app.renderer.root).some((item) => item.id === `session.${kind}.action.reject.band`)).toBe(true)
+      app.mockInput.pressKey("\u001b[5~")
+      await app.renderOnce()
+      expect(app.captureCharFrame()).not.toContain("FINAL_REVIEW_SENTINEL")
+      for (let tick = 0; tick < 20 && !app.captureCharFrame().includes("FINAL_REVIEW_SENTINEL"); tick++) {
+        await app.mockMouse.scroll(scroll.x + 2, scroll.y, "down")
+        await app.renderOnce()
+      }
+      expect(app.captureCharFrame()).toContain("FINAL_REVIEW_SENTINEL")
+      expect(decisions).toEqual([])
+      app.mockInput.pressArrow("down")
+      await app.renderOnce()
+      app.renderer.resize(50, 10)
+      await app.renderOnce()
+      assertVisible()
+      expect(descendants(app.renderer.root).some((item) => item.id === `session.${kind}.action.once.band`)).toBe(true)
+      app.mockInput.pressEnter()
+      await app.renderOnce()
+      expect(decisions).toEqual(["once"])
+      app.mockInput.pressEscape()
+      await app.waitForFrame(() => decisions.length === 2)
+      expect(decisions).toEqual(["once", "reject"])
+    } finally {
+      app.renderer.destroy()
+    }
+  })
 }
 
 for (const kind of ["permission", "guardrail"] as const) {

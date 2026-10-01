@@ -2745,8 +2745,9 @@ function ShellMessage(props: { message: Extract<SessionMessageInfo, { type: "she
 function UserMessage(props: { message: SessionMessageUser }) {
   const ctx = use()
   const data = useData()
+  const send = createMemo(() => data.session.submissions.list(ctx.sessionID).find((entry) => entry.input.promptID === props.message.id), undefined, { equals: false })
   const files = createMemo(() =>
-    (projectedPromptInput(props.message).files ?? []).map((file, index) => ({
+    (send()?.admitted ? projectedPromptInput(props.message).files ?? [] : send()?.input.payload.files ?? projectedPromptInput(props.message).files ?? []).map((file, index) => ({
       ...file,
       mime: props.message.files?.[index]?.mime,
     })),
@@ -2773,6 +2774,9 @@ function UserMessage(props: { message: SessionMessageUser }) {
   })
   const content = createMemo(() => segmentPromptSkills(props.message.text, skills()))
   const receipt = createMemo(() => {
+    const current = send()
+    if (current?.consumed && current.state !== "attention") return { glyph: "✓✓", read: true }
+    if (current) return { glyph: current.state === "attention" ? current.phase : "◷", read: false, retry: current.state === "attention" }
     if (data.session.input.has(ctx.sessionID, props.message.id)) return { glyph: "◷", read: false }
     if (props.message.time.consumed !== undefined) return { glyph: "✓✓", read: true }
     return { glyph: "✓", read: false }
@@ -2790,6 +2794,7 @@ function UserMessage(props: { message: SessionMessageUser }) {
           }}
           onMouseUp={() => {
             if (renderer.getSelection()?.getSelectedText()) return
+            if (send() && !send()?.admitted) return
             dialog.replace(() => (
               <DialogMessage
                 messageID={props.message.id}
@@ -2854,9 +2859,16 @@ function UserMessage(props: { message: SessionMessageUser }) {
         <text
           id={`session.user-message.receipt.${props.message.id}`}
           wrapMode="none"
-          fg={receipt().read ? themeV2.text.feedback.info.default : themeV2.text.subdued}
+          fg={receipt().retry ? themeV2.text.feedback.error.default : receipt().read ? themeV2.text.feedback.info.default : themeV2.text.subdued}
+          onMouseUp={() => {
+            if (renderer.getSelection()?.getSelectedText()) return
+            data.session.submissions.retry(ctx.sessionID, props.message.id)
+          }}
         >
-          {receipt().glyph}
+          <Show when={receipt().retry} fallback={receipt().glyph}>
+            {receipt().glyph.replace(" · Retry send", "")}
+            <span style={{ fg: themeV2.text.action.primary.default }}> · Retry send</span>
+          </Show>
         </text>
       </box>
     </Show>

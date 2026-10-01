@@ -32,6 +32,21 @@ test("reads admitted pending prompts at their verified Session Location", async 
   expect(fixture.calls.filter((call) => call.method === "pendingList")).toHaveLength(1)
 })
 
+test("prompt skills are admitted as metadata without activating queued instructions in the connector", async () => {
+  const test = await harness({ results: { prompt: { id: "msg_1" } } })
+  const outcome = await executeRemoteOperation({ request: request("session.prompt", { id: "msg_1", text: "Review later", delivery: "queue", skills: ["audit", "test"] }),
+    local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
+  expect(valueOf(outcome)).toEqual({ data: { id: "msg_1" } })
+  expect(test.calls.filter((call) => call.method === "prompt" || call.method === "skill")).toEqual([{ method: "prompt", args: ["ses_1", { directory: "/work" }, {
+    id: "msg_1", text: "Review later", delivery: "queue", metadata: { skills: [{ id: "audit" }, { id: "test" }] },
+  }] }])
+  for (const skills of ["audit", [""], [" "], ["x".repeat(129)], Array.from({ length: 201 }, () => "audit")]) {
+    const invalid = await executeRemoteOperation({ request: request("session.prompt", { text: "Invalid skills", skills }), local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
+    expect(errorOf(invalid).code).toBe("invalid_message")
+  }
+  expect(test.calls.filter((call) => call.method === "prompt")).toHaveLength(1)
+})
+
 test("manual compaction uses only the backend's verified Session Location and stable ID", async () => {
   const result = { id: "cmp_web_1", sessionID: "ses_1", trigger: "manual", status: "ended", requestedThrough: { messageID: "msg_1", seq: 1 }, timeCreated: 100 }
   const fixture = await harness({ results: { compact: result } })
@@ -890,16 +905,28 @@ describe("operation mapping", () => {
     expect(errorOf(await executeRemoteOperation({ request: request("workspace.catalog", { workspace: "wsp_missing" }), local, sessions: registry, subscriptions })).code).toBe("invalid_message")
   })
 
-  test("fails a catalog read on a missing source or oversized list instead of publishing partial or sensitive data", async () => {
+  test("fails a catalog read on a missing source instead of publishing partial or sensitive data", async () => {
     const results: Partial<Record<keyof LocalServer, unknown>> = {
-      agentList: [], modelList: [], modelDefault: null, providerList: [], commandList: [], skillList: [],
+      agentList: [], modelList: [], modelDefault: null, providerList: [{ id: "test", name: "Test" }], commandList: [], skillList: [],
       referenceList: [], resourceCatalog: { resources: [], templates: [] },
     }
     const test = await harness({ results })
     results.modelList = new LocalFailureClass("server", "Provider unavailable")
     expect(errorOf(await executeRemoteOperation({ request: request("session.catalog"), local: test.local,
       sessions: test.registry, subscriptions: test.subscriptions })).code).toBe("internal_error")
-    results.modelList = Array.from({ length: 501 }, (_, index) => ({ id: `m${index}`, providerID: "test", name: "Model", variants: [] }))
+  })
+
+  test("returns all 553 offered models without a count-based catalog rejection", async () => {
+    const results: Partial<Record<keyof LocalServer, unknown>> = {
+      agentList: [], modelList: Array.from({ length: 553 }, (_, index) => ({ providerID: "test", id: `model-${index}`, name: `Model ${index}`, enabled: true, variants: [] })),
+      modelDefault: null, providerList: [{ id: "test", name: "Test" }],
+      commandList: [], skillList: [], referenceList: [], resourceCatalog: { resources: [], templates: [] },
+    }
+    const test = await harness({ results })
+    const catalog = valueOf(await executeRemoteOperation({ request: request("session.catalog"), local: test.local,
+      sessions: test.registry, subscriptions: test.subscriptions })) as { models: unknown[] }
+    expect(catalog.models).toHaveLength(553)
+    results.modelList = [{ providerID: "test", id: "large", name: "x".repeat(RemoteLimits.maxAgentMessageChars * RemoteLimits.maxChunksPerResponse + 1), enabled: true, variants: [] }]
     expect(errorOf(await executeRemoteOperation({ request: request("session.catalog"), local: test.local,
       sessions: test.registry, subscriptions: test.subscriptions })).code).toBe("message_too_large")
   })

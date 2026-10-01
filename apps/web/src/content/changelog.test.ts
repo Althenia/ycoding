@@ -6,6 +6,21 @@ const TAGS = ["Added", "Changed", "Fixed"] as const
 describe("release entries", () => {
   test("includes the latest TUI release at the top of the public changelog", () => {
     expect(RELEASES[0]).toEqual({
+      version: "0.8.8",
+      date: "2026-10-01",
+      title: "Responsive prompts and reliable model selection",
+      tags: ["Changed", "Fixed"],
+      changes: [
+        { tag: "Fixed", text: "Recover pending approval notifications when terminal notification support becomes ready, focus moves away, or the connection returns, without repeating a sound that already played." },
+        { tag: "Fixed", text: "Keep permission and guardrail decisions visible while reviewing large commands. Command details scroll inside a bounded terminal panel instead of pushing approval choices off-screen." },
+        { tag: "Fixed", text: "Choose agents and models on desktop and mobile even when the connected machine offers more than 500 models. Catalog failures show their reason and a Retry action." },
+        { tag: "Fixed", text: "Keep the web and terminal composers editable while prompts are sending. Delivery outcomes and safe retries stay with the submitted message without erasing a newer draft. Retrying an admitted command reuses its original input without rerunning its template." },
+        { tag: "Fixed", text: "Load explicitly invoked local $skill instructions in the runtime before the first model request across CLI, terminal, and web prompts, without relying on the model to choose a tool. Queued skills wait for their prompt, and configured permission denies stop activation." },
+        { tag: "Changed", text: "Show web prompt delivery through a static receipt beneath the message instead of a loading animation beside its text." },
+        { tag: "Changed", text: "Allow explicit shell timeouts up to one hour. The default remains ten minutes, and foreground commands still move to the background after five minutes." },
+      ],
+    })
+    expect(RELEASES[1]).toEqual({
       version: "0.8.7",
       date: "2026-10-01",
       title: "Cursor cache reporting",
@@ -17,7 +32,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[1]).toEqual({
+    expect(RELEASES[2]).toEqual({
       version: "0.8.6",
       date: "2026-10-01",
       title: "Quieter attention notifications",
@@ -29,7 +44,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[2]).toEqual({
+    expect(RELEASES[3]).toEqual({
       version: "0.8.5",
       date: "2026-10-01",
       title: "Machine memory and steadier Session status",
@@ -45,7 +60,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[3]).toEqual({
+    expect(RELEASES[4]).toEqual({
       version: "0.8.4",
       date: "2026-10-01",
       title: "Forced update restarts and steadier Session catalogs",
@@ -69,7 +84,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[4]).toEqual({
+    expect(RELEASES[5]).toEqual({
       version: "0.8.3",
       date: "2026-10-01",
       title: "Cursor models and quotas",
@@ -93,7 +108,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[5]).toEqual({
+    expect(RELEASES[6]).toEqual({
       version: "0.8.2",
       date: "2026-10-01",
       title: "Cursor provider",
@@ -113,7 +128,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[6]).toEqual({
+    expect(RELEASES[7]).toEqual({
       version: "0.8.1",
       date: "2026-10-01",
       title: "Instant remote view transitions",
@@ -141,7 +156,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[7]).toEqual({
+    expect(RELEASES[8]).toEqual({
       version: "0.8.0",
       date: "2026-10-01",
       title: "Multiplexed remote delivery and windowed transcripts",
@@ -1011,7 +1026,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 15)).toEqual([
+    expect(versions.slice(0, 16)).toEqual([
+      "0.8.8",
       "0.8.7",
       "0.8.6",
       "0.8.5",

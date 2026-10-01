@@ -21,7 +21,7 @@ import {
   type ShellOutputView,
   type ToolContentBlock,
 } from "../projection"
-import { capturedChangesVisible, shellOutputPaging } from "../view-model"
+import { capturedChangesVisible, promptReceipt, shellOutputPaging } from "../view-model"
 import { FormRequest } from "./form-request"
 import { Markdown } from "./markdown"
 import { DotTrail } from "./dot-trail"
@@ -350,8 +350,9 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
   }
   const syntheticNotice = () => classifySyntheticNotice(props.message())
   const attachments = () => { const message = props.message(); return message.kind === "user" ? message.attachments ?? [] : [] }
-  const promptMutation = () => remote.state().mutations.find((mutation) => mutation.kind === "prompt" && mutation.id === props.message().id && mutation.sessionID === remote.state().activeSessionID && mutation.state !== "sending")
-  const promptSending = () => remote.state().mutations.some((mutation) => mutation.kind === "prompt" && mutation.id === props.message().id && mutation.sessionID === remote.state().activeSessionID && mutation.state === "sending")
+  const sendMutation = () => remote.state().mutations.find((mutation) => (mutation.kind === "prompt" || mutation.kind === "command") && mutation.id === props.message().id && mutation.sessionID === remote.state().activeSessionID)
+  const promptMutation = () => sendMutation()?.state !== "sending" ? sendMutation() : undefined
+  const receipt = () => promptReceipt(userState(props.message()), userDelivery(props.message()), sendMutation())
   const attachmentKeys = () => attachments().map(attachmentKey)
   const oversized = () => { const message = props.message(); return message.kind === "oversized" ? message : undefined }
   const fallbackText = () => {
@@ -366,7 +367,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
           <Show when={oversized()?.state === "error"}><button type="button" class="button button--ghost button--small" onClick={() => void remote.store.loadOversizedMessage(props.message().id)}>Retry full content</button></Show>
         </Show>
         <Show when={kind() === "user"}>
-          <Show when={userText(props.message()).trim() !== ""}><p class="transcript-message__bubble">{userText(props.message())}<Show when={promptSending()}><span class="transcript-message__sending" role="status"><span class="visually-hidden">Sending prompt</span></span></Show></p></Show>
+          <Show when={userText(props.message()).trim() !== ""}><p class="transcript-message__bubble">{userText(props.message())}</p></Show>
           <For each={attachmentKeys()}>{(key) => {
             const attachment = () => attachments()[Number(key.slice(0, key.indexOf(":")))]!
             const size = () => attachment().bytes < 1_024 ? `${attachment().bytes} B` : `${(attachment().bytes / 1_024).toFixed(1)} KB`
@@ -374,9 +375,8 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
               ? <UserImage name={attachment().name} mime={attachment().mime} digest={attachment().digest} deviceID={remote.state().activeDeviceID ?? ""} sessionID={remote.state().activeSessionID ?? ""} />
               : <span class="transcript-file">{attachment().name} · {size()}</span>
           }}</For>
-          <span class="transcript-message__receipt" aria-label={userState(props.message()) === "consumed" ? "Read by YCoding" : userState(props.message()) === "pending" ? userDelivery(props.message()) === "queue" ? "Queued for processing" : "Processing prompt" : "Sent, not yet read"}>
-            <Show when={userState(props.message()) === "consumed"} fallback={<Show when={userState(props.message()) === "pending"} fallback={<Icon name="check" size={14} />}><span aria-hidden="true">◷</span></Show>}><span aria-hidden="true">✓✓</span></Show>
-            {userState(props.message()) === "consumed" ? "Read" : userState(props.message()) === "pending" ? userDelivery(props.message()) === "queue" ? "Queued" : "Processing · steer" : "Sent"}
+          <span class="transcript-message__receipt" role="status" aria-label={receipt().label}>
+            <Show when={receipt().mark === "✓"} fallback={<span aria-hidden="true">{receipt().mark}</span>}><Icon name="check" size={14} /></Show>{receipt().text}
           </span>
           <Show when={promptMutation()}>{(mutation) => <div class="transcript-message__send-error" role={mutation().state === "failed" ? "alert" : "status"}>
             <span>{mutation().state === "unknown" ? "Outcome unknown" : "Send failed"}: {mutation().detail}</span>

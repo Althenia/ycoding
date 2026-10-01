@@ -71,12 +71,14 @@ export function GuardrailPrompt(props: { request: GuardrailRequest }) {
           <box paddingLeft={3} paddingRight={3}>
             <text fg={themeV2.text.feedback.info.default}>{presentation().reason}</text>
           </box>
-          <box paddingLeft={3} paddingRight={3} flexDirection="row">
+          <box paddingLeft={3} paddingRight={3} flexDirection="row" flexShrink={0}>
             <text fg={themeV2.text.feedback.warning.default}>!</text>
             <box width={2} flexShrink={0} />
-            <text fg={themeV2.text.feedback.warning.default}>{resource()}</text>
+            <text flexGrow={1} flexShrink={1} fg={themeV2.text.feedback.warning.default}>
+              {resource()}
+            </text>
             <box flexGrow={1} />
-            <text fg={themeV2.text.feedback.warning.default}>Blocked</text>
+            <text flexShrink={0} fg={themeV2.text.feedback.warning.default}>Blocked</text>
           </box>
           <Show when={needsContext()}>
             <box paddingLeft={6} paddingRight={3} flexDirection="column">

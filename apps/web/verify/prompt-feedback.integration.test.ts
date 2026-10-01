@@ -16,25 +16,21 @@ beforeAll(async () => {
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
 type Page = Awaited<ReturnType<NonNullable<typeof browser>["openPage"]>>
-type Geometry = { readonly bubble: readonly number[]; readonly ring: readonly number[] | null; readonly lastLine: readonly number[]; readonly status: string; readonly focused: boolean; readonly animation: string; readonly toasts: number }
+type Geometry = { readonly bubble: readonly number[]; readonly inline: boolean; readonly receipt: readonly number[]; readonly status: string; readonly focused: boolean; readonly animation: string; readonly toasts: number }
 
 const long = "Please review the release workflow, the installer contract, and every notification surface before the next tag so nothing regresses"
 
 const geometry = `(() => {
   const bubble = document.querySelector('.transcript-message__bubble');
   const box = (rect) => [rect.left, rect.top, rect.width, rect.height].map((value) => Math.round(value * 10) / 10);
-  const range = document.createRange(); range.selectNodeContents(bubble.firstChild);
-  const lines = [...range.getClientRects()];
-  const anchor = bubble.querySelector('.transcript-message__sending');
-  const ring = anchor ? getComputedStyle(anchor, '::after') : null;
-  const anchorBox = anchor?.getBoundingClientRect();
+  const receipt = document.querySelector('.transcript-message__receipt');
   return {
     bubble: box(bubble.getBoundingClientRect()),
-    ring: anchor ? [anchorBox.left + parseFloat(ring.left), anchorBox.top + parseFloat(ring.top), parseFloat(ring.width), parseFloat(ring.height)].map((value) => Math.round(value * 10) / 10) : null,
-    lastLine: box(lines.at(-1)),
-    status: anchor?.getAttribute('role') === 'status' ? anchor.textContent : '',
+    inline: bubble.querySelector('.transcript-message__sending') !== null,
+    receipt: box(receipt.getBoundingClientRect()),
+    status: receipt.getAttribute('aria-label'),
     focused: document.activeElement === document.querySelector('.mini-composer__mount .composer__input'),
-    animation: ring?.animationName ?? '',
+    animation: getComputedStyle(receipt).animationName,
     toasts: document.querySelectorAll('.mutation-toast').length,
   };
 })()`
@@ -51,28 +47,23 @@ async function open(width: number, text: string, reducedMotion = false): Promise
   return page
 }
 
-for (const [width, text] of [[390, "Review"], [390, long], [1440, long]] as const) test(`the submitted prompt shows a sending ring right after its last character without moving the bubble at ${width}px (${text.length} chars)`, async () => {
+for (const [width, text] of [[390, "Review"], [390, long], [1440, long]] as const) test(`the submitted prompt uses one static receipt beneath its bubble at ${width}px (${text.length} chars)`, async () => {
   const page = await open(width, text)
   try {
     const before = await page.evaluate<Geometry>(geometry)
-    expect(before.ring).toBeNull()
+    expect(before.inline).toBe(false)
     await page.evaluate(`window.composerSetMutation('sending')`)
-    await wait(page, `document.querySelector('.transcript-message__sending') !== null`)
     const sending = await page.evaluate<Geometry>(geometry)
     expect(sending.bubble).toEqual(before.bubble)
-    expect(sending.lastLine).toEqual(before.lastLine)
+    expect(sending.inline).toBe(false)
     expect(sending.status).toBe("Sending prompt")
     expect(sending.focused).toBe(true)
     expect(sending.toasts).toBe(0)
-    expect(sending.animation).toBe("transcript-sending")
-    const [ringLeft, ringTop, ringWidth, ringHeight] = sending.ring!
-    const [lineLeft, lineTop, lineWidth, lineHeight] = sending.lastLine
-    expect(ringLeft).toBeGreaterThanOrEqual(lineLeft! + lineWidth!)
-    expect(ringLeft! - (lineLeft! + lineWidth!)).toBeLessThan(ringWidth!)
-    expect(ringTop).toBeGreaterThanOrEqual(lineTop!)
-    expect(ringTop! + ringHeight!).toBeLessThanOrEqual(lineTop! + lineHeight! + 1)
+    expect(sending.animation).toBe("none")
+    expect(sending.receipt[1]).toBeGreaterThanOrEqual(sending.bubble[1]! + sending.bubble[3]!)
+    expect(sending.receipt[3]).toEqual(before.receipt[3])
     await page.evaluate(`window.composerSetMutation('sent')`)
-    await wait(page, `document.querySelector('.transcript-message__sending') === null`)
+    await wait(page, `document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') !== 'Sending prompt'`)
     const accepted = await page.evaluate<Geometry>(geometry)
     expect(accepted.bubble).toEqual(before.bubble)
     expect(accepted.toasts).toBe(0)
@@ -80,42 +71,60 @@ for (const [width, text] of [[390, "Review"], [390, long], [1440, long]] as cons
   } finally { await page.close() }
 })
 
-test("a failed or unknown send removes the ring and raises its error toast with Retry send", async () => {
+test("a failed or unknown send replaces the sending receipt and raises its error toast with Retry send", async () => {
   const page = await open(390, "Review")
   try {
     for (const status of ["failed", "unknown"] as const) {
       await page.evaluate(`window.composerSetMutation('sending')`)
-      await wait(page, `document.querySelector('.transcript-message__sending') !== null`)
+      await wait(page, `document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') === 'Sending prompt'`)
       await page.evaluate(`window.composerSetMutation(${JSON.stringify(status)})`)
       await wait(page, `document.querySelector('.mutation-toast--${status}') !== null`)
       expect(await page.evaluate<{ ring: boolean; retry: number }>(`({ ring: document.querySelector('.transcript-message__sending') !== null, retry: document.querySelectorAll('.transcript-message__send-error button').length })`))
         .toEqual({ ring: false, retry: 1 })
+      expect(await page.evaluate<string>(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label')`)).toBe(status === "failed" ? "Send failed" : "Outcome unknown")
       await page.evaluate(`window.composerSetMutation(null)`)
     }
   } finally { await page.close() }
 })
 
-test("a send in flight for another Session never rings on this Session's message", async () => {
+test("configured commands show sending and failure receipts with a correlated retry beneath their bubble", async () => {
+  const page = await open(390, "/review")
+  try {
+    await page.evaluate(`window.composerSetMutation('sending'); window.composerUseCommandMutation()`)
+    expect(await page.evaluate<string>(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label')`)).toBe("Sending prompt")
+    for (const status of ["failed", "unknown"] as const) {
+      await page.evaluate(`window.composerSetMutation(${JSON.stringify(status)}); window.composerUseCommandMutation()`)
+      expect(await page.evaluate<string>(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label')`)).toBe(status === "failed" ? "Send failed" : "Outcome unknown")
+      await page.evaluate(`document.querySelector('.transcript-message__send-error button').click()`)
+    }
+    expect(await page.evaluate<{ operation: string; input: { id: string } }[]>(`window.composerRequests()`)).toEqual([
+      { operation: "retry", input: { id: "msg_fixture" } },
+      { operation: "retry", input: { id: "msg_fixture" } },
+    ])
+  } finally { await page.close() }
+})
+
+test("a send in flight for another Session never changes this Session's receipt", async () => {
   const page = await open(390, "Review")
   try {
     await page.evaluate(`window.composerSetMutation('sending', 'ses_other')`)
     await Bun.sleep(150)
-    expect(await page.evaluate<boolean>(`document.querySelector('.transcript-message__sending') !== null`)).toBe(false)
+    expect(await page.evaluate<string>(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label')`)).not.toBe("Sending prompt")
     await page.evaluate(`window.composerSetMutation('sending')`)
-    await wait(page, `document.querySelector('.transcript-message__sending') !== null`)
+    await wait(page, `document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') === 'Sending prompt'`)
     await page.evaluate(`window.composerSwitchSession()`)
     await wait(page, `document.querySelector('.transcript-message__bubble') === null`)
     expect(await page.evaluate<number>(`document.querySelectorAll('.transcript-message__sending').length`)).toBe(0)
   } finally { await page.close() }
 })
 
-test("reduced motion shows the same ring without rotation", async () => {
+test("reduced motion keeps the same static sending receipt", async () => {
   const page = await open(390, "Review", true)
   try {
     await page.evaluate(`window.composerSetMutation('sending')`)
-    await wait(page, `document.querySelector('.transcript-message__sending') !== null`)
+    await wait(page, `document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') === 'Sending prompt'`)
     const reduced = await page.evaluate<Geometry>(geometry)
-    expect(reduced.ring).not.toBeNull()
+    expect(reduced.inline).toBe(false)
     expect(reduced.animation).toBe("none")
     expect(reduced.status).toBe("Sending prompt")
   } finally { await page.close() }

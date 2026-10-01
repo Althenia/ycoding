@@ -198,6 +198,7 @@ export const RemoteLimits = {
   maxAttachmentBytes: 20 * 1024 * 1024,
   maxConnectionAttachmentBytes: 40 * 1024 * 1024,
   maxAttachmentUploads: 64,
+  maxPromptSkills: 200,
   attachmentTtlMs: 10 * 60_000,
   maxAgentMessageChars: 262_144,
   maxPendingRequestsPerClient: 32,
@@ -672,6 +673,10 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
     (input.id === undefined || (typeof input.id === "string" && /^msg_[A-Za-z0-9_-]+$/.test(input.id) && input.id.length <= 128)) &&
     (input.resume === undefined || typeof input.resume === "boolean") &&
     Object.keys(input).every((key) => key === "skill" || key === "id" || key === "resume")
+  if (operation === "session.prompt") return input === undefined || isRecord(input) &&
+    Object.keys(input).every((key) => ["id", "text", "files", "agents", "delivery", "resume", "skills"].includes(key)) &&
+    (input.skills === undefined || Array.isArray(input.skills) && input.skills.length <= RemoteLimits.maxPromptSkills &&
+      input.skills.every((id: unknown) => validName(id) && typeof id === "string" && id.trim().length > 0))
   if (operation === "session.command") return isRecord(input) && typeof input.command === "string" && input.command.length > 0 &&
     Object.keys(input).every((key) => ["id", "command", "arguments", "files", "agents", "delivery"].includes(key))
   if (operation !== "session.create") return true

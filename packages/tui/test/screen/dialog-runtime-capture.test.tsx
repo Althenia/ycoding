@@ -2,7 +2,7 @@
 import type { ProviderUsageListOutput } from "@ycoding-ai/client"
 import { testRender } from "@opentui/solid"
 import { expect, test } from "bun:test"
-import { BoxRenderable, type Renderable } from "@opentui/core"
+import { BoxRenderable, ScrollBoxRenderable, type Renderable } from "@opentui/core"
 import path from "node:path"
 import type { JSX } from "solid-js"
 import { ClientProvider } from "../../src/context/client"
@@ -79,6 +79,52 @@ test("captures runtime dialog frames at reference dimensions", async () => {
     ))
   }
 }, 120_000)
+
+test("captures complete bounded command and edit reviews without nested scroll owners", async () => {
+  for (const action of ["shell", "edit", "guardrail"] as const) {
+    const lines = [...Array.from({ length: 60 }, (_, index) => `display-only review line ${index}`), "FINAL_DETAILS_SENTINEL"]
+    const height = action === "guardrail" ? 24 : 12
+    const app = await testRender(
+      () => (
+        <RuntimeProviders>
+          {action === "guardrail" ? <GuardrailPrompt request={{
+            id: "guardrail_long", rootSessionID: "session_capture", sessionID: "session_capture", action: "shell",
+            resources: [lines.join("\n")], reason: "Review complete display-only command", ruleIDs: [], standard: true,
+          }} /> : <PermissionPrompt request={{
+            id: `permission_long_${action}`, sessionID: "session_capture", action,
+            resources: [action === "shell" ? lines.join("\n") : "display-only.txt"],
+            metadata: action === "edit" ? { diff: ["--- a/display-only.txt", "+++ b/display-only.txt", `@@ -0,0 +1,${lines.length} @@`, ...lines.map((line) => `+${line}`)].join("\n") } : {},
+            save: ["workspace"],
+          }} />}
+        </RuntimeProviders>
+      ),
+      { width: 80, height, kittyKeyboard: true },
+    )
+    try {
+      await app.waitForFrame((frame) => frame.includes("Allow for this session"))
+      expect(app.captureCharFrame()).toContain(action === "guardrail" ? "Guardrail blocked" : "Permission required")
+      expect(app.captureCharFrame()).toContain("Deny")
+      expect(app.captureCharFrame()).toContain("pgup/pgdn")
+      const scrolls = descendants(app.renderer.root).filter((item) => item instanceof ScrollBoxRenderable)
+      expect(scrolls).toHaveLength(1)
+      if (action === "guardrail") {
+        expect(scrolls[0].height).toBeGreaterThanOrEqual(5)
+        expect(app.captureCharFrame()).toContain("display-only review line 4")
+      }
+      await Bun.write(path.join(output, `dialog-runtime-review-long-${action}-80x${height}.txt`), app.captureCharFrame())
+      for (let page = 0; page < 100 && !app.captureCharFrame().includes("FINAL_DETAILS_SENTINEL"); page++) {
+        app.mockInput.pressKey("\u001b[6~")
+        await app.renderOnce()
+      }
+      expect(app.captureCharFrame()).toContain("FINAL_DETAILS_SENTINEL")
+      expect(app.captureCharFrame()).toContain("Allow once")
+      expect(app.captureCharFrame()).toContain("Deny")
+      await Bun.write(path.join(output, `dialog-runtime-review-long-${action}-end-80x${height}.txt`), app.captureCharFrame())
+    } finally {
+      app.renderer.destroy()
+    }
+  }
+})
 
 function ProviderUsageFixture(props: { tab: "overview" | "usage" }) {
   return (
@@ -184,14 +230,17 @@ function assertPermissionGrammar(root: Renderable, rows: string[], width: number
   const title = origin(rows, "Permission required")
   expect(panel.width).toBe(width)
   expectAt(rows, title.row, width - 7, "esc")
-  expectAt(rows, title.row + 3, title.column + 3, "S")
-  expectAt(rows, title.row + 3, title.column + 4, "earch")
-  expectAt(rows, title.row + 6, title.column, "bash wants to run")
-  expectAt(rows, title.row + 7, title.column + 3, "rm -rf packages/tui/dist")
-  expectAt(rows, title.row + 10, title.column, "Choose")
-  expectAt(rows, title.row + 11, title.column + 3, "Allow once")
-  expectAt(rows, title.row + 13, title.column + 3, "Allow for this session")
-  expectAt(rows, title.row + 15, title.column + 3, "Deny")
+  expectAt(rows, title.row + 1, title.column, "bash wants to run")
+  expectAt(rows, title.row + 2, title.column + 3, "rm -rf packages/tui/dist")
+  const details = requireDialog(root, "session.permission.details")
+  const choose = origin(rows, "Choose")
+  expect(choose.row).toBe(details.y + details.height + 1)
+  expect(choose.column).toBe(title.column)
+  expectAt(rows, choose.row + 1, title.column + 3, "Allow once")
+  expectAt(rows, choose.row + 3, title.column + 3, "Allow for this session")
+  expectAt(rows, choose.row + 5, title.column + 3, "Deny")
+  expectAt(rows, choose.row + 8, title.column + 3, "pgup/pgdn review")
+  expect(choose.row + 8).toBeLessThan(rows.length)
   expectCenteredSelectionBand(panel, root, "session.permission.action.once")
 }
 
@@ -200,17 +249,20 @@ function assertGuardrailGrammar(root: Renderable, rows: string[], width: number)
   const title = origin(rows, "Guardrail blocked")
   expect(panel.width).toBe(width)
   expectAt(rows, title.row, width - 7, "esc")
-  expectAt(rows, title.row + 3, title.column + 3, "S")
-  expectAt(rows, title.row + 3, title.column + 4, "earch")
-  expectAt(rows, title.row + 6, title.column, "bash wants to write outside the workspace")
-  expectAt(rows, title.row + 7, title.column, "!")
-  expectAt(rows, title.row + 7, title.column + 3, "rm -rf ~/Downloads/cache-dump")
-  expectAt(rows, title.row + 7, width - 11, "Blocked")
-  expectAt(rows, title.row + 10, title.column, "Choose")
-  expectAt(rows, title.row + 11, title.column + 3, "Deny")
-  expectAt(rows, title.row + 13, title.column + 3, "Allow once")
-  expectAt(rows, title.row + 15, title.column + 3, "Allow for this session")
-  expectAt(rows, title.row + 18, title.column + 3, "guardrails apply even in YOLO")
+  expectAt(rows, title.row + 1, title.column, "bash wants to write outside the workspace")
+  expectAt(rows, title.row + 2, title.column, "!")
+  expectAt(rows, title.row + 2, title.column + 3, "rm -rf ~/Downloads/cache-dump")
+  expectAt(rows, title.row + 2, width - 11, "Blocked")
+  const details = requireDialog(root, "session.guardrail.details")
+  const choose = origin(rows, "Choose")
+  expect(choose.row).toBe(details.y + details.height + 1)
+  expect(choose.column).toBe(title.column)
+  expectAt(rows, choose.row + 1, title.column + 3, "Deny")
+  expectAt(rows, choose.row + 3, title.column + 3, "Allow once")
+  expectAt(rows, choose.row + 5, title.column + 3, "Allow for this session")
+  expectAt(rows, choose.row + 8, title.column + 3, "pgup/pgdn review")
+  expectAt(rows, choose.row + 9, title.column + 3, "guardrails apply even in YOLO")
+  expect(choose.row + 9).toBeLessThan(rows.length)
   expectCenteredSelectionBand(panel, root, "session.guardrail.action.reject")
 }
 

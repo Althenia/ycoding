@@ -1686,7 +1686,7 @@ Confirm the account, cluster, namespace, and change plan.`,
           {
             kind: "list",
             items: [
-              "The shell tool's `timeout` input is capped at 600,000 ms; omission or `0` selects 600,000 ms. A foreground command still running after 300,000 ms moves to the background instead of being stopped.",
+              "The shell tool's `timeout` input accepts up to 3,600,000 ms (one hour); omission or `0` selects the 600,000 ms default. A foreground command still running after 300,000 ms moves to the background with its selected timeout preserved.",
               "A finite memory limit sets `GOMEMLIMIT=<limit>MiB`, appends `--max-old-space-size=<limit>` to `NODE_OPTIONS`, and samples the command's process group every 250 ms on macOS and Linux, ending it with status `memory-limit`. It is resource control, not a security boundary.",
               "Windows rejects a finite shell memory limit.",
               "Truncated output keeps the head and tail around a marker; the full output is saved under `tool-output/` in the YCoding data directory.",

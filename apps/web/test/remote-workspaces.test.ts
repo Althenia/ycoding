@@ -54,6 +54,7 @@ describe("remote workspace session creation", () => {
     try {
       await loadWorkspaces(h.store)
       expect(await h.store.createSession({ workspaceID: workspace.id, prompt: { text: "Inspect screenshot", files: [{ uri: "data:image/png;base64,AAAA", name: "capture.png" }] } })).toBe(created.id)
+      await waitFor(() => h.relay.requests.some((request) => request.operation === "session.prompt"))
       const operations = h.relay.requests.filter((request) => ["session.create", "session.attachment.upload", "session.prompt"].includes(request.operation))
       expect(operations.map((request) => request.operation)).toEqual(["session.create", "session.attachment.upload", "session.prompt"])
       expect(operations[1]?.sessionID).toBe(created.id)
@@ -68,11 +69,16 @@ describe("remote workspace session creation", () => {
       : request.operation === "session.get" && request.sessionID === created.id ? { ok: true, value: { data: created } } : "default")
     try {
       await loadWorkspaces(h.store)
-      expect(await h.store.createSession({ workspaceID: workspace.id, prompt: { text: "Inspect", files: [{ uri: "data:image/png;base64,AAAA", name: "capture.png" }] } })).toBeUndefined()
-      expect(h.store.state().sessionCreation).toMatchObject({ id: created.id, status: "failed", message: "Upload failed" })
+      const files = [{ uri: "data:image/png;base64,AAAA", name: "capture.png" }]
+      expect(await h.store.createSession({ workspaceID: workspace.id, prompt: { text: "Inspect", files } })).toBe(created.id)
+      await waitFor(() => h.store.state().mutations[0]?.state === "failed")
+      const mutation = h.store.state().mutations[0]!
+      expect(mutation).toMatchObject({ sessionID: created.id, detail: "Upload failed", input: { files } })
+      expect(h.store.state().sessionCreation).toBeUndefined()
       expect(h.relay.requests.some((request) => request.operation === "session.prompt")).toBe(false)
       failed = false
-      expect(await h.store.retrySessionCreation()).toBe(created.id)
+      await h.store.retryMutation(mutation.id)
+      expect(h.store.state().mutations).toEqual([])
       expect(h.relay.requests.filter((request) => request.operation === "session.create")).toHaveLength(1)
       expect(h.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(1)
     } finally { await h.stop() }
@@ -116,6 +122,7 @@ describe("remote workspace session creation", () => {
       expect(h.store.state().sessions[0]?.directory).toBe(workspace.directory)
       expect(h.store.state().activeSessionID).toBe(created.id)
       await h.store.sendPrompt({ text: "Continue on the selected repository", delivery: "steer" })
+      await waitFor(() => h.relay.requests.some((request) => request.operation === "session.prompt"))
       expect(h.relay.requests.find((request) => request.operation === "session.prompt")?.sessionID).toBe(created.id)
     } finally { await h.stop() }
   }, pacedFlowTimeoutMs)

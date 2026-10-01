@@ -1,7 +1,7 @@
 import { createStore } from "solid-js/store"
-import { createMemo, For, Match, Show, Switch } from "solid-js"
+import { createEffect, createMemo, For, Match, on, Show, Switch } from "solid-js"
 import { useTerminalDimensions, type JSX } from "@opentui/solid"
-import type { TextareaRenderable } from "@opentui/core"
+import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
 import { useTheme } from "../../context/theme"
 import type { PermissionV2Request } from "@ycoding-ai/client"
 import { useClient } from "../../context/client"
@@ -35,41 +35,28 @@ function EditBody(props: { file?: string; diff?: string; patch?: string }) {
   })
 
   const ft = createMemo(() => filetype(filepath()))
-  const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
-
   return (
     <box flexDirection="column" gap={1}>
       <Show when={diff()}>
-        <scrollbox
-          height="100%"
-          scrollAcceleration={scrollAcceleration()}
-          verticalScrollbarOptions={{
-            trackOptions: {
-              backgroundColor: themeV2.background.default,
-              foregroundColor: themeV2.scrollbar.default,
-            },
-          }}
-        >
-          <diff
-            diff={diff()}
-            view={view()}
-            filetype={ft()}
-            syntaxStyle={syntax()}
-            showLineNumbers={true}
-            width="100%"
-            wrapMode="word"
-            fg={themeV2.text.default}
-            addedBg={themeV2.diff.background.added}
-            removedBg={themeV2.diff.background.removed}
-            contextBg={themeV2.diff.background.context}
-            addedSignColor={themeV2.diff.highlight.added}
-            removedSignColor={themeV2.diff.highlight.removed}
-            lineNumberFg={themeV2.diff.lineNumber.text}
-            lineNumberBg={themeV2.diff.background.context}
-            addedLineNumberBg={themeV2.diff.lineNumber.background.added}
-            removedLineNumberBg={themeV2.diff.lineNumber.background.removed}
-          />
-        </scrollbox>
+        <diff
+          diff={diff()}
+          view={view()}
+          filetype={ft()}
+          syntaxStyle={syntax()}
+          showLineNumbers={true}
+          width="100%"
+          wrapMode="word"
+          fg={themeV2.text.default}
+          addedBg={themeV2.diff.background.added}
+          removedBg={themeV2.diff.background.removed}
+          contextBg={themeV2.diff.background.context}
+          addedSignColor={themeV2.diff.highlight.added}
+          removedSignColor={themeV2.diff.highlight.removed}
+          lineNumberFg={themeV2.diff.lineNumber.text}
+          lineNumberBg={themeV2.diff.background.context}
+          addedLineNumberBg={themeV2.diff.lineNumber.background.added}
+          removedLineNumberBg={themeV2.diff.lineNumber.background.removed}
+        />
       </Show>
       <Show when={!diff()}>
         <Show
@@ -81,25 +68,14 @@ function EditBody(props: { file?: string; diff?: string; patch?: string }) {
           }
         >
           {(patch) => (
-            <scrollbox
-              height="100%"
-              scrollAcceleration={scrollAcceleration()}
-              verticalScrollbarOptions={{
-                trackOptions: {
-                  backgroundColor: themeV2.background.default,
-                  foregroundColor: themeV2.scrollbar.default,
-                },
-              }}
-            >
-              <code
-                filetype="diff"
-                drawUnstyledText={false}
-                streaming={true}
-                syntaxStyle={syntax()}
-                content={patch()}
-                fg={themeV2.text.subdued}
-              />
-            </scrollbox>
+            <code
+              filetype="diff"
+              drawUnstyledText={false}
+              streaming={true}
+              syntaxStyle={syntax()}
+              content={patch()}
+              fg={themeV2.text.subdued}
+            />
           )}
         </Show>
       </Show>
@@ -422,22 +398,54 @@ export function Prompt<const T extends Record<string, string>>(props: {
   onSelect: (option: keyof T) => void
 }) {
   const { themeV2 } = useTheme().contextual("elevated")
+  const dimensions = useTerminalDimensions()
+  const config = useConfig().data
+  let details: ScrollBoxRenderable | undefined
   const kind = props.kind ?? "permission"
-  const keys = Object.keys(props.options) as (keyof T)[]
+  const keys = createMemo(() => Object.keys(props.options) as (keyof T)[])
   const [store, setStore] = createStore({
-    selected: props.defaultOption ?? keys[0],
+    selected: props.defaultOption ?? keys()[0],
   })
   const footer = () =>
     props.footer ??
     (kind === "guardrail" ? <text fg={themeV2.text.subdued}>guardrails apply even in YOLO mode.</text> : undefined)
+  const compact = () => dimensions().height < 30
+  const chromeHeight = () =>
+    3 + keys().length * (compact() ? 1 : 2) + Number(props.footer !== undefined || kind === "guardrail") + (compact() ? 0 : 3)
+  const detailsHeight = () =>
+    Math.max(
+      1,
+      Math.min(dimensions().height - 1, Math.max(chromeHeight() + 2, Math.floor(dimensions().height * 0.65))) - chromeHeight(),
+    )
   const move = (direction: -1 | 1) => {
-    const index = keys.indexOf(store.selected)
-    setStore("selected", keys[(index + direction + keys.length) % keys.length])
+    const index = keys().indexOf(store.selected)
+    setStore("selected", keys()[(index + direction + keys().length) % keys().length])
   }
+  createEffect(
+    on(
+      () => props.instance,
+      () => {
+        setStore("selected", props.defaultOption ?? keys()[0])
+        details?.scrollTo(0)
+      },
+    ),
+  )
 
   Keymap.createLayer(() => ({
     mode: "base",
     commands: [
+      {
+        bind: "pageup",
+        title: "Previous approval details page",
+        group: "Permission",
+        run: () => details?.scrollBy(-Math.max(1, details.viewport.height)),
+      },
+      {
+        bind: "pagedown",
+        title: "Next approval details page",
+        group: "Permission",
+        run: () => details?.scrollBy(Math.max(1, details.viewport.height)),
+      },
       {
         id: "app.exit",
         title: "Reject permission",
@@ -513,33 +521,47 @@ export function Prompt<const T extends Record<string, string>>(props: {
         label: props.semanticLabel ?? props.title,
       }))}
       width="100%"
+      maxHeight={dimensions().height - 1}
+      flexShrink={0}
       backgroundColor={themeV2.background.surface.offset}
-      paddingTop={1}
+      paddingTop={compact() ? 0 : 1}
       paddingRight={1}
     >
-      <box width="100%" paddingLeft={3} paddingRight={3} flexDirection="row" justifyContent="space-between">
+      <box
+        width="100%"
+        height={1}
+        flexShrink={0}
+        paddingLeft={3}
+        paddingRight={3}
+        flexDirection="row"
+        justifyContent="space-between"
+      >
         <text fg={themeV2.text.default}>{props.title}</text>
         <box flexGrow={1} />
         <box width={3} flexShrink={0}>
-          <text fg={themeV2.text.subdued} onMouseUp={() => props.onSelect(props.escapeKey ?? keys[keys.length - 1])}>
+          <text fg={themeV2.text.subdued} onMouseUp={() => props.onSelect(props.escapeKey ?? keys()[keys().length - 1])}>
             esc
           </text>
         </box>
       </box>
-      <box width="100%" paddingTop={2} paddingLeft={6} paddingRight={3}>
-        <text>
-          <span style={{ fg: themeV2.text.action.primary.focused, bg: themeV2.background.action.primary.focused }}>
-            S
-          </span>
-          <span style={{ fg: themeV2.text.subdued }}>earch</span>
-        </text>
-      </box>
-      <box height={2} flexShrink={0} />
-      <box width="100%" flexDirection="column" flexShrink={0}>
-        {props.body}
-      </box>
-      <box height={2} flexShrink={0} />
-      <box width="100%" paddingLeft={3} flexShrink={0}>
+      <scrollbox
+        id={`session.${kind}.details`}
+        ref={(value: ScrollBoxRenderable) => {
+          details = value
+        }}
+        width="100%"
+        maxHeight={detailsHeight()}
+        minHeight={1}
+        scrollX={false}
+        scrollAcceleration={getScrollAcceleration(config)}
+        contentOptions={{ flexShrink: 0, minHeight: 0 }}
+        scrollbarOptions={{ visible: false }}
+      >
+        <box width="100%" flexDirection="column" flexShrink={0}>
+          {props.body}
+        </box>
+      </scrollbox>
+      <box width="100%" paddingTop={compact() ? 0 : 1} paddingLeft={3} flexShrink={0}>
         <text fg={themeV2.text.feedback.info.default}>Choose</text>
       </box>
       <box
@@ -553,7 +575,7 @@ export function Prompt<const T extends Record<string, string>>(props: {
         flexDirection="column"
         flexShrink={0}
       >
-        <For each={keys}>
+        <For each={keys()}>
           {(option) => (
             <box
               id={`session.${kind}.action.${String(option)}`}
@@ -566,7 +588,7 @@ export function Prompt<const T extends Record<string, string>>(props: {
                 disabled: false,
               }))}
               width="100%"
-              height={2}
+              height={compact() ? 1 : 2}
               flexDirection="column"
               onMouseOver={() => setStore("selected", option)}
               onMouseUp={() => {
@@ -598,20 +620,30 @@ export function Prompt<const T extends Record<string, string>>(props: {
                   {props.options[option]}
                 </text>
               </box>
-              <box
-                id={`session.${kind}.action.${String(option)}.spacer`}
-                height={1}
-                backgroundColor={themeV2.background.surface.offset}
-              />
+              <Show when={!compact()}>
+                <box
+                  id={`session.${kind}.action.${String(option)}.spacer`}
+                  height={1}
+                  backgroundColor={themeV2.background.surface.offset}
+                />
+              </Show>
             </box>
           )}
         </For>
       </box>
-      <Show when={footer()}>
-        <box width="100%" height={2} paddingTop={1} paddingLeft={6} paddingRight={3} flexShrink={0}>
-          {footer()}
-        </box>
-      </Show>
+      <box
+        id={`session.${kind}.footer`}
+        width="100%"
+        paddingTop={compact() ? 0 : 1}
+        paddingLeft={6}
+        paddingRight={3}
+        flexShrink={0}
+      >
+        <text fg={themeV2.text.subdued} wrapMode="none">
+          {dimensions().width < 60 ? "pgup/pgdn review · enter/esc" : "pgup/pgdn review · ↑↓ choose · enter select · esc"}
+        </text>
+        <Show when={footer()}>{footer()}</Show>
+      </box>
     </box>
   )
 

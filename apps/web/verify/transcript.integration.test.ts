@@ -434,7 +434,7 @@ describe("transcript rendering", () => {
     try {
       for (const [width, height] of [[390, 844], [820, 1180]]) {
         await page.setViewport(width!, height!)
-        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=light&promptOutcome=unknown`)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=light`)
         for (let i = 0; i < 80 && !await page.evaluate(`document.querySelector('.composer__input') && document.querySelector('.mini-composer__send')`); i++) await Bun.sleep(50)
         await page.evaluate(`(() => { const input = document.querySelector('.composer__input'); input.value = 'Inspect the running Session and keep this prompt pending while I review the transcript.'; input.dispatchEvent(new InputEvent('input', { bubbles: true })); document.querySelector('.mini-composer__send').click() })()`)
         for (let i = 0; i < 40 && !await page.evaluate(`document.querySelector('.transcript-message--user .transcript-message__receipt[aria-label="Processing prompt"]')`); i++) await Bun.sleep(50)

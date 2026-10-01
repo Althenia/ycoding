@@ -179,7 +179,7 @@ test("explicit landing goal creates a Session with the displayed YOLO level befo
   }
 }, 30_000)
 
-test("an autonomy-set failure retains the landing draft and prevents the first drain", async () => {
+test("an autonomy-set failure retains the submitted input for receipt retry and prevents the first drain", async () => {
   const state = await mkdtemp(path.join(os.tmpdir(), "ycoding-landing-autonomy-"))
   const backend = fixture()
   backend.failNextAutonomy()
@@ -193,10 +193,12 @@ test("an autonomy-set failure retains the landing draft and prevents the first d
     await screen.input.typeText("Needs durable autonomy")
     screen.input.pressEnter()
     await waitFor(() => backend.mutations.includes("autonomy"), "rejected autonomy set")
+    await waitFor(() => screen.frame().includes("Setting autonomy unresolved · Retry send"), "retained submission receipt")
     expect(backend.mutations).toEqual(["create", "autonomy"])
     expect(backend.admissionStates).toEqual([])
     expect(screen.frame()).toContain("Needs durable autonomy")
-    screen.input.pressEnter()
+    const retryRow = screen.lines().findIndex((line) => line.includes("Retry send"))
+    await screen.mouse.click(screen.lines()[retryRow].indexOf("Retry send"), retryRow)
     await waitFor(() => backend.admissionStates.length > 0, "retried prompt admission")
     expect(backend.mutations.slice(0, 4)).toEqual(["create", "autonomy", "autonomy", "admit"])
     expect(backend.admissionStates[0]).toMatchObject({ yolo: 2 })

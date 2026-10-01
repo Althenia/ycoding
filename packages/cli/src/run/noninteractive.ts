@@ -214,7 +214,7 @@ export async function runNonInteractivePrompt(input: Input) {
       ) {
         return
       }
-      if (!promoted) continue
+      if (!promoted && event.type !== "session.execution.failed") continue
 
       if (event.type === "session.step.started") {
         const part = {
