@@ -1,4 +1,4 @@
-import { type AgentAttachmentInput, type CatalogView, type FileAttachmentInput, type FileOption, type ModelOption } from "../catalog"
+import { type AgentAttachmentInput, type CatalogTarget, type CatalogView, type FileAttachmentInput, type FileOption, type ModelOption } from "../catalog"
 import type { ModelRefView } from "../projection"
 
 export type Trigger = "/" | "@" | "$" | "#"
@@ -94,6 +94,10 @@ function fuzzy(value: string, query: string): number {
     score -= index
   }
   return score
+}
+
+export function needsCatalogRead(target: CatalogTarget | undefined, catalog: CatalogView | undefined, transportOpen: boolean) {
+  return target !== undefined && transportOpen && catalog === undefined
 }
 
 export function optionsForTrigger(trigger: Trigger, query: string, catalog: CatalogView | undefined, files: readonly FileOption[], sessionActions = true): ComposerOption[] {

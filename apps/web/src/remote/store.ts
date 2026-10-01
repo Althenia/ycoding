@@ -1129,8 +1129,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     // replaced it: it must not overwrite the live transport, clear the live
     // subscription, raise or end the live alerts, or report a rejected credential.
     if (!isCurrentConnection(owner)) return
-    const reopened = status.kind === "open" && lastStatusKind !== "idle" && lastStatusKind !== "connecting"
     const reconnected = status.kind === "open" && connectionOpened
+    const reopened = reconnected && lastStatusKind !== "open"
     if (status.kind === "open") connectionOpened = true
     if (status.kind === "closed" || status.kind === "reconnecting") cancelUpload("Attachment upload lost its machine connection. Files were not sent.")
     if (status.kind === "open") {

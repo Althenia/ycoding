@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { autocompleteBound, modelSelection, optionsForTrigger, applyMention, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, orderedVariants, visibleModels, pairedFastModel, switchFastModel, effortLevel } from "./composer-logic"
+import { autocompleteBound, modelSelection, optionsForTrigger, applyMention, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, orderedVariants, visibleModels, pairedFastModel, switchFastModel, effortLevel, needsCatalogRead } from "./composer-logic"
 import type { CatalogView, ModelOption } from "../catalog"
 
 const models: ModelOption[] = [
@@ -121,4 +121,17 @@ test("a dismissed suggestion token stays closed until the token changes or anoth
   expect(suggestionTrigger("hello @re", 9, dismissed)).toEqual({ trigger: "@", start: 6, query: "re" })
   expect(suggestionTrigger("@a hello @rev", 2, dismissed)).toEqual({ trigger: "@", start: 0, query: "a" })
   expect(suggestionTrigger("no token", 8, dismissed)).toBeUndefined()
+})
+
+describe("catalog reads", () => {
+  const target = { sessionID: "ses_1" }
+  const entry = (status: CatalogView["status"]): CatalogView => ({ ...catalog, status })
+  test("requests a missing catalog only for a target and only while the connection is open", () => {
+    expect(needsCatalogRead(target, undefined, true)).toBe(true)
+    expect(needsCatalogRead(target, undefined, false)).toBe(false)
+    expect(needsCatalogRead(undefined, undefined, true)).toBe(false)
+  })
+  test("never re-requests an entry that already exists, so a failed read cannot loop", () => {
+    expect((["loading", "ready", "unsupported", "error"] as const).map((status) => needsCatalogRead(target, entry(status), true))).toEqual([false, false, false, false])
+  })
 })

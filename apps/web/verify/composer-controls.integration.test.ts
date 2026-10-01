@@ -1152,6 +1152,18 @@ test("compact autocomplete dispatches its action, rejects arguments and attachme
   }
 }, 30_000)
 
+test("a catalog the store dropped is requested again so the agent and model pickers re-enable", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(1440, 900)
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    const pickersEnabled = `document.querySelector('.mini-composer__mount .model-control__trigger')?.disabled === false`
+    await wait(page, pickersEnabled)
+    await page.evaluate(`window.composerClearCatalogs()`)
+    await wait(page, pickersEnabled)
+  } finally { await page.close() }
+}, 30_000)
+
 async function wait(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, expression: string) {
   for (let index = 0; index < 50; index++) {
     if (await page.evaluate<boolean>(expression)) return

@@ -5,12 +5,12 @@ import { createRemoteTransport } from "../src/remote/transport"
 import { loadWorkspaces } from "./remote-queries"
 import { startRelayDouble, waitFor, type RelayHandlerResult } from "./relay-double"
 
-async function setup(handler?: (request: { operation: string; input?: Readonly<Record<string, unknown>>; sessionID?: string }) => RelayHandlerResult, requestTimeoutMs = 30_000) {
+async function setup(handler?: (request: { operation: string; input?: Readonly<Record<string, unknown>>; sessionID?: string }) => RelayHandlerResult, requestTimeoutMs = 30_000, pingIntervalMs?: number) {
   const relay = await startRelayDouble({ handler })
   let nextMessage = 0
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, requestTimeoutMs }),
+    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, requestTimeoutMs, pingIntervalMs }),
     now: () => 1_000,
     createMessageID: () => `msg_local_${++nextMessage}`,
     createSessionID: () => "ses_created",
@@ -458,6 +458,35 @@ describe("remote data", () => {
       await test.store.loadCatalog(target)
       expect(test.store.state().catalogs["session:ses_a"]).toMatchObject({ status: "ready" })
       expect(test.relay.requests.filter((request) => request.operation === "session.catalog")).toHaveLength(2)
+    } finally { await test.stop() }
+  })
+  test("keeps a read catalog when a heartbeat round trip is sampled", async () => {
+    const test = await setup((request) => request.operation === "session.catalog"
+      ? { ok: true, value: { agents: [], models: [], commands: [], skills: [], references: [], resources: [] } } : "default", 30_000, 50)
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length === 2)
+      await test.store.selectSession("ses_a")
+      await test.store.loadCatalog({ sessionID: "ses_a" })
+      await waitFor(() => {
+        const transport = test.store.state().transport
+        return transport.kind === "open" && transport.rttMs !== undefined
+      })
+      expect(test.store.state().catalogs["session:ses_a"]).toMatchObject({ status: "ready" })
+      expect(test.relay.requests.filter((request) => request.operation === "session.catalog")).toHaveLength(1)
+    } finally { await test.stop() }
+  })
+  test("drops the catalogs of a connection that closed and opened again", async () => {
+    const test = await setup((request) => request.operation === "session.catalog"
+      ? { ok: true, value: { agents: [], models: [], commands: [], skills: [], references: [], resources: [] } } : "default")
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length === 2)
+      await test.store.selectSession("ses_a")
+      await test.store.loadCatalog({ sessionID: "ses_a" })
+      test.relay.dropConnections(1012, "restart")
+      await waitFor(() => test.relay.connections === 2 && test.store.state().transport.kind === "open")
+      expect(test.store.state().catalogs).toEqual({})
     } finally { await test.stop() }
   })
   test("caches catalogs per target and connection, refreshes explicitly, and reads bounded file matches", async () => {

@@ -7,7 +7,7 @@ import { useRemote } from "../context"
 import { defaultComposerModel, readPreferredModel, writePreferredModel } from "../preferences"
 import { contextWindowDisplay, generationSpeedDisplay } from "../projection"
 import type { ModelRefView } from "../projection"
-import { applyMention, autocompleteBound, modelSelection, optionsForTrigger, pairedFastModel, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, type MentionPart } from "./composer-logic"
+import { applyMention, autocompleteBound, modelSelection, needsCatalogRead, optionsForTrigger, pairedFastModel, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, type MentionPart } from "./composer-logic"
 import { ComposerPicker } from "./composer-picker"
 import { attachmentLimit, encodeAttachment, type ComposerAttachment } from "./composer-attachment"
 import { ModelControl } from "./model-control"
@@ -164,6 +164,10 @@ export function MiniComposer(props: {
     setMobileOpen(false)
     untrack(() => closeContext())
     onCleanup(() => { attachmentGeneration++ })
+  })
+  createEffect(() => {
+    const target = props.target
+    if (needsCatalogRead(target, catalog(), remote.state().transport.kind === "open")) untrack(() => void remote.store.loadCatalog(target!))
   })
   createEffect(() => {
     const chosen = selectedModel()
