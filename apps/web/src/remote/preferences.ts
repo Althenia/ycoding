@@ -5,6 +5,15 @@ import type { CatalogView } from "./catalog"
 import type { ModelRefView } from "./projection"
 
 const PREFERRED_MODEL_KEY = "ycoding.remote.preferred-model"
+const REMEMBERED_MACHINE_KEY = "ycoding.remote.machine"
+
+export function readRememberedMachine(storage: StorageLike | null | undefined = browserStorage()): string | undefined {
+  return readStored(storage, REMEMBERED_MACHINE_KEY, (raw) => raw || undefined)
+}
+
+export function writeRememberedMachine(storage: StorageLike | null | undefined = browserStorage(), deviceID: string): boolean {
+  return writeStored(storage, REMEMBERED_MACHINE_KEY, deviceID)
+}
 
 export function readPreferredModel(storage: StorageLike | null | undefined = browserStorage()): ModelRefView | undefined {
   const value = readStored(storage, PREFERRED_MODEL_KEY, (raw) => {

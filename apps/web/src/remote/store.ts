@@ -7,7 +7,8 @@ import {
   type NotificationDelivery,
   type RemoteNotificationView,
 } from "./notifications"
-import type { NotificationCategory } from "./preferences"
+import { readRememberedMachine, writeRememberedMachine, type NotificationCategory } from "./preferences"
+import { browserStorage, type StorageLike } from "../lib/storage"
 import {
   applySessionEvent,
   clearAssistantRetry,
@@ -245,6 +246,8 @@ export type RemoteStoreOptions = {
   readonly createTransport: (deviceID: string, handlers: RemoteTransportHandlers) => RemoteTransport
   readonly schedule?: (callback: () => void, ms: number) => () => void
   readonly now?: () => number
+  /** Holds the remembered machine; defaults to browser storage. */
+  readonly storage?: StorageLike
   /** Coalesces stream deltas into one state notification. */
   readonly batchMs?: number
   readonly createMessageID?: () => string
@@ -364,6 +367,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     return () => clearTimeout(handle)
   })
   const now = options.now ?? (() => Date.now())
+  const storage = options.storage ?? browserStorage()
   const batchMs = options.batchMs ?? defaultBatchMs
   const createMessageID = options.createMessageID ?? defaultMessageID
   const deviceName = options.deviceName ?? ((deviceID: string) => deviceID)
@@ -2297,17 +2301,18 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const activeDevices = devices.filter((device) => device.status === "active" && device.online)
       const first = activeDevices[0]
       const stillPresent = activeDevices.some((device) => device.id === container.state.activeDeviceID)
-      const adoptOnlyDevice = !stillPresent && first !== undefined && activeDevices.length === 1
+      const remembered = activeDevices.find((device) => device.id === readRememberedMachine(storage))
+      const adopted = stillPresent ? undefined : remembered ?? (activeDevices.length === 1 ? first : undefined)
       setState({
         owner: { id: me.value.user.id, expiresAt: me.value.session.expiresAt },
         devices,
         connection: stillPresent
           ? container.state.connection
-          : adoptOnlyDevice
+          : adopted
             ? { kind: "connecting" }
             : deviceConnection(devices.filter((device) => device.status === "active").length),
       })
-      if (adoptOnlyDevice && first !== undefined) api.connect(first.id)
+      if (adopted !== undefined) api.connect(adopted.id)
       else if (!stillPresent && container.state.activeDeviceID !== undefined) api.disconnect()
     },
     logout: async () => {
@@ -2330,6 +2335,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return result
     },
     connect: (deviceID) => {
+      writeRememberedMachine(storage, deviceID)
       goalsInFlight.clear()
       capturedUnsupported = false
       cancelCapturedRefresh?.()
@@ -2406,7 +2412,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       transport = created
       created.connect()
     },
-    disconnect: () => disconnectDevice(),
+    disconnect: () => {
+      writeRememberedMachine(storage, "")
+      disconnectDevice()
+    },
     selectSession,
     watchTeam: (enabled) => {
       if (teamWatching === enabled) return
