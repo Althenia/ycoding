@@ -316,5 +316,3 @@ export const node = makeLocationNode({
   layer,
   deps: [llmClient, Catalog.node, Config.node, Integration.node, Credential.node],
 })
-
-export const detectMultimodal = isMultimodal

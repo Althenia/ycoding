@@ -235,8 +235,6 @@ export const layer = Layer.effect(
   }),
 )
 
-export const locationLayer = layer
-
 export const node = makeLocationNode({ service: Service, layer, deps: [EventV2.node, SessionAutonomy.node] })
 
 function automaticAnswer(form: Info): Answer | undefined {

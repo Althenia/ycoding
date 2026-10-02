@@ -12,5 +12,3 @@ export class Info extends Schema.Class<Info>("ConfigExperimental.Info")({
     description: "Ordered policies controlling access to configured resources",
   }),
 }) {}
-
-export const Experimental = Info
