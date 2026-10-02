@@ -86,6 +86,10 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
       toAuthority(await this.#service.authorizeClientCommand(sessionID, deviceID)),
     authorizeAgentCommand: async (deviceID) => toAuthority(await this.#service.authorizeAgentCommand(deviceID)),
     authorityTtlMs: authorityTtlMs,
+    agentHeartbeatAt: (connectionID) => {
+      const socket = this.#socketFor(connectionID)
+      return socket === undefined ? undefined : this.ctx.getWebSocketAutoResponseTimestamp(socket)?.getTime()
+    },
     notifyPush: (accountID, event) => {
       const publicKey = this.env.VAPID_PUBLIC_KEY
       const privateKey = this.env.VAPID_PRIVATE_KEY

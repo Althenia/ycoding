@@ -82,6 +82,7 @@ export type RelayDeps = {
    */
   readonly authorityTtlMs: number
   readonly notifyPush?: (accountID: string, event: PushEvent) => Promise<readonly PushOutcome[]>
+  readonly agentHeartbeatAt?: (connectionID: string) => number | undefined
 }
 
 export type Relay = ReturnType<typeof createRelay>
@@ -107,6 +108,7 @@ type AgentState = {
   violations: number
   windowStart: number
   windowCount: number
+  seenAt: number
 }
 
 type PendingRequest = {
@@ -132,6 +134,7 @@ function closeReasonFor(reason: string): string {
 }
 const sessionUnauthorizedMessage = "Session is no longer authorized"
 const deviceUnauthorizedMessage = "Device is no longer authorized"
+const agentConflictMessage = "Another YCoding connector is connected for this device"
 const forbiddenMessage = "Connection is not permitted"
 const noticeStorageMessage = "Notification storage is unavailable"
 const invalidFrameMessage = "Frame is not valid for this connection"
@@ -237,7 +240,7 @@ export function createRelay(deps: RelayDeps) {
       const settle = async (outcomes: readonly PushOutcome[]) => {
         if (items.length === 0) return
         await Promise.all(browsers.filter((browserSessionID) => !outcomes.some((entry) => entry.owner === browserSessionID &&
-          (entry.outcome === "accepted" || entry.outcome === "unreachable"))).map((browserSessionID) => present(browserSessionID, items)))
+          entry.outcome === "accepted")).map((browserSessionID) => present(browserSessionID, items)))
       }
       const delivery: Promise<void> = Promise.resolve().then(() => send(ownerID, event)).then(settle, () => settle([]))
         .finally(() => { deliveries.delete(delivery) })
@@ -324,6 +327,9 @@ export function createRelay(deps: RelayDeps) {
     deps.close(connectionID, code, reason)
   }
 
+  const agentLive = (current: AgentState) =>
+    Math.max(current.seenAt, deps.agentHeartbeatAt?.(current.connectionID) ?? 0) > deps.now() - RemoteLimits.agentOfflineConfirmMs
+
   const detachAgent = (code: number, reason: string) => {
     if (!agent) return
     const connectionID = agent.connectionID
@@ -394,8 +400,10 @@ export function createRelay(deps: RelayDeps) {
 
     async restore(connections: readonly RelayConnection[]) {
       await readOfflineCheck()
-      for (const connection of connections.toSorted((a, b) => Number(b.role === "agent") - Number(a.role === "agent")))
+      for (const connection of connections.toSorted((a, b) => Number(b.role === "agent") - Number(a.role === "agent"))) {
         await relay.attach(connection)
+        if (agent?.connectionID === connection.connectionID) agent.seenAt = 0
+      }
     },
 
     nextDeadline: () => {
@@ -421,7 +429,13 @@ export function createRelay(deps: RelayDeps) {
           deps.close(connection.connectionID, RemoteCloseCode.unauthorized, deviceUnauthorizedMessage)
           return
         }
-        if (agent && agent.connectionID !== connection.connectionID) detachAgent(RemoteCloseCode.serviceRestart, "Agent connection replaced")
+        if (agent && agent.connectionID !== connection.connectionID) {
+          if (agentLive(agent)) {
+            deps.close(connection.connectionID, RemoteCloseCode.agentConflict, agentConflictMessage)
+            return
+          }
+          detachAgent(RemoteCloseCode.serviceRestart, "Agent connection replaced")
+        }
         agent = {
           connectionID: connection.connectionID,
           ownerID: connection.ownerID,
@@ -430,6 +444,7 @@ export function createRelay(deps: RelayDeps) {
           violations: 0,
           windowStart: deps.now(),
           windowCount: 0,
+          seenAt: deps.now(),
         }
         latestStatus = undefined
         if (await readOfflineCheck() !== undefined && agent?.connectionID === connection.connectionID) await writeOfflineCheck(undefined)
@@ -588,6 +603,7 @@ export function createRelay(deps: RelayDeps) {
         deps.close(connectionID, RemoteCloseCode.unsupported, invalidFrameMessage)
         return
       }
+      current.seenAt = deps.now()
       if (!allow(current, RemoteLimits.maxAgentMessagesPerWindow, RemoteLimits.agentRateWindowMs)) {
         detachAgent(RemoteCloseCode.policyViolation, "Agent message rate exceeded")
         return
@@ -623,6 +639,22 @@ export function createRelay(deps: RelayDeps) {
         }))
         return
       }
+      if (message.type === "blocked") {
+        const event = { category: "approval-requested" as const, sessionID: message.sessionID, createdAt: deps.now(), need: "blocked" as const }
+        const appended = await recordNotices(() => deps.notices.append([event]))
+        const detail = { ...(message.title === undefined ? {} : { title: message.title }), need: "blocked" as const }
+        if (appended === undefined) {
+          await deliverAlerts(current.ownerID, [{ event: { category: event.category, sessionID: event.sessionID, deviceID: current.deviceID, ...detail } }])
+          return
+        }
+        const repeated = appended.length === 0 ? repeatNotices([event]) : []
+        await deliverAlerts(current.ownerID, [...appended, ...repeated].map((notice) => {
+          const alert = { ...detail, ...(repeated.includes(notice) ? { repeat: true as const } : {}) }
+          return { event: { category: notice.category, sessionID: notice.sessionID, deviceID: current.deviceID, noticeID: notice.id, ...alert },
+            item: { kind: "notice", notice, detail: alert } }
+        }))
+        return
+      }
       if (message.type === "status") {
         const before = previousStatus
         await deps.saveStatus(message)
@@ -639,12 +671,12 @@ export function createRelay(deps: RelayDeps) {
           const events = message.attention.filter((sessionID) => !oldAttention.has(sessionID))
             .map((sessionID) => ({ category: "approval-requested" as const, sessionID, createdAt: deps.now(), need: detailOf(sessionID).need }))
           const appended = events.length === 0 ? [] : await recordNotices(() => deps.notices.append(events))
-          const recorded = appended === undefined ? undefined
-            : [...appended, ...repeatNotices(events.filter((event) => !appended.some((notice) => notice.sessionID === event.sessionID)))]
+          const repeated = appended === undefined ? [] : repeatNotices(events.filter((event) => !appended.some((notice) => notice.sessionID === event.sessionID)))
+          const recorded = appended === undefined ? undefined : [...appended, ...repeated]
           await deliverAlerts(current.ownerID, recorded === undefined
             ? events.map((event) => ({ event: { category: event.category, sessionID: event.sessionID, deviceID: current.deviceID, ...detailOf(event.sessionID) } }))
             : recorded.map((notice) => {
-              const detail = detailOf(notice.sessionID)
+              const detail = { ...detailOf(notice.sessionID), ...(repeated.includes(notice) ? { repeat: true as const } : {}) }
               return { event: { category: notice.category, sessionID: notice.sessionID, deviceID: current.deviceID, noticeID: notice.id, ...detail },
                 item: { kind: "notice", notice, ...(Object.keys(detail).length === 0 ? {} : { detail }) } }
             }))

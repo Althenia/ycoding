@@ -93,9 +93,9 @@ scope.addEventListener("notificationclick", (event: { notification: { data?: unk
 scope.addEventListener("pushsubscriptionchange", (event: { newSubscription?: { endpoint: string; getKey: (name: "p256dh" | "auth") => ArrayBuffer | null };
   oldSubscription?: { endpoint: string }; waitUntil: (promise: Promise<unknown>) => void }) => {
   event.waitUntil((async () => {
-    const replaces = event.oldSubscription?.endpoint
-    if (replaces === undefined) return
-    try {
+    const renewed = await (async () => {
+      const replaces = event.oldSubscription?.endpoint
+      if (replaces === undefined) return false
       const key: unknown = event.newSubscription ? undefined
         : await fetch("/api/push/key", { credentials: "same-origin" }).then((response) => response.ok ? response.json() : undefined)
       const applicationServerKey = isRecord(key) && typeof key.publicKey === "string" ? decodeKey(key.publicKey) : undefined
@@ -103,11 +103,15 @@ scope.addEventListener("pushsubscriptionchange", (event: { newSubscription?: { e
         (applicationServerKey ? await scope.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey }) : undefined)
       const p256dh = subscription?.getKey("p256dh")
       const auth = subscription?.getKey("auth")
-      if (!subscription || !p256dh || !auth) return
-      await fetch("/api/push/subscriptions", { method: "POST", credentials: "same-origin",
+      if (!subscription || !p256dh || !auth) return false
+      const response = await fetch("/api/push/subscriptions", { method: "POST", credentials: "same-origin",
         headers: { "content-type": "application/json" }, body: JSON.stringify({ endpoint: subscription.endpoint,
           keys: { p256dh: encodeKey(new Uint8Array(p256dh)), auth: encodeKey(new Uint8Array(auth)) }, replaces }) })
-    } catch { return }
+      return response.ok
+    })().catch(() => false)
+    if (renewed) return
+    await scope.registration.showNotification("YCoding — alerts paused", { body: "Push alerts to this device stopped. Open YCoding to turn them back on.",
+      tag: "ycoding-push-renewal", icon: "/icons/icon-256.png", badge: "/icons/icon-256.png" }).catch(() => undefined)
   })())
 })
 
@@ -133,12 +137,12 @@ function pushAlert(value: unknown): { readonly title: string; readonly options: 
     !isAlertDeviceID(value.deviceID) || (value.noticeID !== undefined && !isNoticeID(value.noticeID)))
     return { title: "YCoding — update", options: { body: "Open YCoding to check your work.", tag: "ycoding-update" } }
   const title = isAlertTitle(value.title) ? value.title : undefined
-  const need = value.need === "permission" || value.need === "question" || value.need === "review" || value.need === "failed" ? value.need : undefined
+  const need = value.need === "permission" || value.need === "question" || value.need === "review" || value.need === "failed" || value.need === "blocked" ? value.need : undefined
   const copy = alertCopy(value.category, { ...(title === undefined ? {} : { title }), ...(need === undefined ? {} : { need }) })
   return { title: copy.title, options: {
     body: copy.body,
     tag: value.noticeID === undefined ? `ycoding-${value.sessionID}-${value.category}` : `ycoding-${value.deviceID}-${value.noticeID}`,
-    renotify: true,
+    ...(value.repeat === true ? { renotify: true } : {}),
     data: { sessionID: value.sessionID, ...(value.noticeID === undefined ? {} : { deviceID: value.deviceID, noticeID: value.noticeID }) },
   } }
 }

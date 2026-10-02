@@ -572,7 +572,7 @@ describe("one System alert per notice and browser through the real router, push 
     } finally { await harness.stop() }
   })
 
-  test("an open page presents what its browser's push definitely did not deliver, and stays silent when delivery is unknown", async () => {
+  test("an open page presents what its browser's push did not confirm, including when delivery is unknown", async () => {
     const harness = await relayHarness()
     try {
       await harness.status([], [])
@@ -591,9 +591,9 @@ describe("one System alert per notice and browser through the real router, push 
       await harness.enablePush(tab.session, "laptop-2", "unreachable")
       await harness.status([], [])
       await harness.status([], ["ses_d"])
-      await waitFor(() => tab.store.state().notifications.length === 4)
+      await waitFor(() => tab.alerts.length === 4)
       await Bun.sleep(100)
-      expect(tags(tab.alerts)).toEqual(["ycoding-dev_test-ntc_1", "ycoding-dev_test-ntc_2", "ycoding-dev_test-ntc_3"])
+      expect(tags(tab.alerts)).toEqual(["ycoding-dev_test-ntc_1", "ycoding-dev_test-ntc_2", "ycoding-dev_test-ntc_3", "ycoding-dev_test-ntc_4"])
       tab.store.dispose()
     } finally { await harness.stop() }
   })

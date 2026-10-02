@@ -113,6 +113,20 @@
 }
 .yc-notification-panel__error span { flex: 1; }
 
+.yc-notification-panel__alerts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--yc-space-2) var(--yc-space-3);
+  padding: var(--yc-space-3) var(--yc-space-4);
+  border-block-end: var(--yc-border-width) solid var(--yc-border);
+  background: var(--yc-surface);
+  color: var(--yc-text);
+  font: var(--yc-weight-regular) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono);
+}
+.yc-notification-panel__alerts-text { flex: 1 1 14em; min-inline-size: 0; }
+.yc-notification-panel__alerts .button { flex: none; }
+
 .yc-notification-panel__retry,
 .yc-notification-panel__more {
   min-block-size: 32px;

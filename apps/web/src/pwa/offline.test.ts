@@ -143,7 +143,7 @@ describe("service worker source", () => {
     expect(source.includes("TimestampTrigger")).toBe(false)
     const pushHandler = source.split('scope.addEventListener("push"')[1]?.split('scope.addEventListener("notificationclick"')[0] ?? ""
     expect(pushHandler).toContain("scope.registration.showNotification(")
-    expect(source.match(/scope\.registration\.showNotification\(/g)).toHaveLength(1)
+    expect(source.match(/scope\.registration\.showNotification\(/g)).toHaveLength(2)
     const clickHandler = source.split('scope.addEventListener("notificationclick"')[1]?.split('scope.addEventListener("pushsubscriptionchange"')[0] ?? ""
     expect(clickHandler).toContain("current.focus()")
     expect(clickHandler).toContain("scope.clients.openWindow(`/remote#${alertHash(")
@@ -154,6 +154,7 @@ describe("service worker source", () => {
     expect(changeHandler).toContain('fetch("/api/push/subscriptions", { method: "POST", credentials: "same-origin"')
     expect(changeHandler).toContain("replaces }")
     expect(changeHandler).not.toContain('method: "DELETE"')
+    expect(changeHandler).toContain("scope.registration.showNotification(\"YCoding — alerts paused\"")
     expect(source.replace(changeHandler, "")).not.toContain("/api")
     expect(source).not.toContain("/auth")
     expect(source).not.toContain("/ws/")

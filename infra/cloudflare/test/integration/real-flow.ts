@@ -1219,7 +1219,7 @@ try {
   const finishedPush = await waitFor(async () => {
     const payloads = await Promise.all(pushRequests.slice(pushesBeforeFinish).map(async (request) =>
       ({ method: request.method, ttl: request.ttl, payload: await decryptPush(request) })))
-    return payloads.find((item) => item.method === "POST" && item.ttl === "600" &&
+    return payloads.find((item) => item.method === "POST" && item.ttl === "3600" &&
       item.payload.category === "agent-completed" && item.payload.sessionID === guardSessionID &&
       item.payload.deviceID === enrolled.deviceID && typeof item.payload.noticeID === "string")
   }, 30_000, "the hibernatable Durable Object did not complete the declared Session's encrypted push POST with its notice id")

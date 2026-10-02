@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite"
 import { describe, expect, test } from "bun:test"
-import { RemoteLimits, RemoteProtocolVersion, parseNoticePage, type RemoteNotice, type RemoteStatus } from "../../../packages/remote/src/index"
+import { RemoteCloseCode, RemoteLimits, RemoteProtocolVersion, parseNoticePage, type RemoteNotice, type RemoteStatus } from "../../../packages/remote/src/index"
 import { createRelay, type OfflineCheck, type RelayConnection, type RelayDeps } from "../src/relay/core"
 import type { PushEvent, PushOutcome } from "../src/push/send"
 import { attentionRepeatMs, createNoticeStore, type NoticeStore } from "../src/relay/notice-store"
@@ -14,7 +14,7 @@ type Sent = { readonly connectionID: string; readonly message: string }
 type Closed = { readonly connectionID: string; readonly code: number; readonly reason: string }
 type Authority = { ok: true } | { ok: false; reason: string }
 
-function harness(options: { readonly sessions?: readonly string[]; readonly authorityTtlMs?: number; readonly statusStore?: { value?: RemoteStatus }; readonly database?: Database; readonly noticeStore?: (store: NoticeStore) => NoticeStore; readonly withoutPush?: boolean; readonly offlineStore?: { value?: OfflineCheck }; readonly beforeCommit?: () => void; readonly pushOutcomes?: (event: PushEvent) => Promise<readonly PushOutcome[]> } = {}) {
+function harness(options: { readonly sessions?: readonly string[]; readonly authorityTtlMs?: number; readonly statusStore?: { value?: RemoteStatus }; readonly database?: Database; readonly noticeStore?: (store: NoticeStore) => NoticeStore; readonly withoutPush?: boolean; readonly offlineStore?: { value?: OfflineCheck }; readonly beforeCommit?: () => void; readonly pushOutcomes?: (event: PushEvent) => Promise<readonly PushOutcome[]>; readonly agentHeartbeatAt?: () => number | undefined } = {}) {
   let now = 1_000_000
   let idSequence = 0
   const sent: Sent[] = []
@@ -61,6 +61,7 @@ function harness(options: { readonly sessions?: readonly string[]; readonly auth
     },
     authorizeAgentCommand: () => readAgentAuthority(),
     authorityTtlMs: options.authorityTtlMs ?? 0,
+    ...(options.agentHeartbeatAt === undefined ? {} : { agentHeartbeatAt: options.agentHeartbeatAt }),
     ...(options.withoutPush ? {} : { notifyPush: (accountID: string, event: PushEvent) => {
       pushed.push({ accountID, ...event } as { accountID: string } & Record<string, string>)
       return options.pushOutcomes?.(event) ?? Promise.resolve([])
@@ -321,6 +322,24 @@ describe("relay core: role separation", () => {
     }
   })
 
+  test("a guardrail block from the agent stores one attention notice and alerts with its Session title, re-alerting an unread notice only for a new need", async () => {
+    const h = harness()
+    await attachBoth(h)
+    await h.relay.handleClientMessage("client-1", request("sub", "notice.subscribe"))
+    const blocked = (sessionID: string) => h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "blocked", sessionID, title: "Fix login" }))
+    await blocked("ses_a")
+    await blocked("ses_a")
+    await h.relay.settleDeliveries()
+    expect(h.storedNotices().map((notice) => [notice.id, notice.category, notice.sessionID])).toEqual([["ntc_1", "approval-requested", "ses_a"]])
+    expect(h.pushed).toEqual([{ accountID: "usr_1", category: "approval-requested", sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_1", title: "Fix login", need: "blocked" }])
+    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: [] }))
+    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: ["ses_a"], details: [{ sessionID: "ses_a", need: "permission" }] }))
+    await blocked("ses_a")
+    expect(h.pushed.map((event) => [event.noticeID, event.need, event.repeat])).toEqual([["ntc_1", "blocked", undefined], ["ntc_1", "permission", true], ["ntc_1", "blocked", true]])
+    expect(h.storedNotices()).toHaveLength(1)
+    expect(h.relay.agentConnected()).toBe(true)
+  })
+
   test("a Session that needs attention again while its notice is unread alerts again on a new need or after the repeat interval, without a second row", async () => {
     const h = harness()
     await attachBoth(h)
@@ -343,6 +362,7 @@ describe("relay core: role separation", () => {
     await status([])
     await status(["ses_a"], [], ["ses_a"])
     expect(h.pushed.map((event) => event.noticeID)).toEqual(["ntc_1", "ntc_1", "ntc_1", "ntc_1"])
+    expect(h.pushed.map((event) => event.repeat)).toEqual([undefined, true, true, true])
     expect(h.storedNotices().map((notice) => notice.id)).toEqual(["ntc_1"])
   })
 
@@ -657,6 +677,7 @@ describe("relay core: subscriptions and events", () => {
         { type: "subscriptions", clientID: "client-retained", sessionIDs: ["ses_a", "ses_b"] },
       ])
       expect(h.closed.map((entry) => entry.connectionID)).toEqual(["client-rejected"])
+      h.advance(RemoteLimits.agentOfflineConfirmMs)
       await h.relay.attach(agent("agent-2"))
       expect(h.closed.map((entry) => entry.connectionID)).toEqual(["client-rejected", "agent-1"])
       expect(h.messagesTo("agent-2")).toEqual([
@@ -708,6 +729,7 @@ describe("relay core: subscriptions and events", () => {
     })
     const attaching = test.relay.attach(agent("agent-1"))
     await entered.promise
+    test.advance(RemoteLimits.agentOfflineConfirmMs)
     await test.relay.attach(agent("agent-2"))
     gate.resolve()
     await attaching
@@ -893,6 +915,7 @@ describe("relay core: disconnects, revocation, and expiry", () => {
     const h = harness()
     await attachBoth(h)
     await h.relay.handleClientMessage("client-1", request("1", "session.prompt", "ses_a", { id: "msg_1" }))
+    h.advance(RemoteLimits.agentOfflineConfirmMs)
     await h.relay.attach(agent("agent-2"))
     expect(h.closed).toEqual([{ connectionID: "agent-1", code: 1012, reason: "Agent connection replaced" }])
     expect(h.messagesTo("client-1")[0]).toMatchObject({ ok: false, error: { code: "outcome_unknown" } })
@@ -1233,7 +1256,7 @@ describe("relay core: notice log", () => {
     expect(h.storedNotices().map((notice) => notice.sessionID)).toEqual(["ses_a", "ses_b"])
     expect(h.pushed.slice(1)).toEqual([
       { accountID: "usr_1", category: "approval-requested", sessionID: "ses_b", deviceID: "dev_1", noticeID: "ntc_2" },
-      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_1" },
+      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_1", repeat: true },
     ])
     expect(h.presentedTo("client-1")).toEqual(["ntc_1", "ntc_2", "ntc_1"])
 
@@ -1690,9 +1713,47 @@ describe("relay core: machine offline confirmation", () => {
     expect(h.pushed).toEqual([])
   })
 
+  test("a second connector cannot take over a device whose connector is live, and takes over once the first goes silent", async () => {
+    let heartbeat: number | undefined
+    const h = harness({ agentHeartbeatAt: () => heartbeat })
+    await attachBoth(h)
+    await h.relay.attach(agent("agent-2"))
+    expect(h.closed).toEqual([{ connectionID: "agent-2", code: RemoteCloseCode.agentConflict, reason: "Another YCoding connector is connected for this device" }])
+    await h.relay.agentClosed(agent("agent-2"))
+    expect(h.storedOffline()).toBeUndefined()
+    await h.relay.handleClientMessage("client-1", request("1", "session.list"))
+    expect(h.requestsTo("agent-1")).toHaveLength(1)
+    h.advance(RemoteLimits.agentOfflineConfirmMs - 1)
+    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: [] }))
+    h.advance(RemoteLimits.agentOfflineConfirmMs - 1)
+    heartbeat = h.at()
+    h.advance(RemoteLimits.agentOfflineConfirmMs - 1)
+    await h.relay.attach(agent("agent-3"))
+    expect(h.closed.at(-1)).toEqual({ connectionID: "agent-3", code: RemoteCloseCode.agentConflict, reason: "Another YCoding connector is connected for this device" })
+    h.advance(1)
+    await h.relay.attach(agent("agent-4"))
+    expect(h.closed.at(-1)).toEqual({ connectionID: "agent-1", code: RemoteCloseCode.serviceRestart, reason: "Agent connection replaced" })
+    await h.relay.handleClientMessage("client-1", request("2", "session.list"))
+    expect(h.requestsTo("agent-4")).toHaveLength(1)
+  })
+
+  test("after a wake, a restored agent socket counts as live only from its own heartbeat", async () => {
+    let heartbeat: number | undefined
+    const silent = harness({ agentHeartbeatAt: () => heartbeat })
+    await silent.relay.restore([agent("agent-1")])
+    await silent.relay.attach(agent("agent-2"))
+    expect(silent.closed).toEqual([{ connectionID: "agent-1", code: RemoteCloseCode.serviceRestart, reason: "Agent connection replaced" }])
+    const pinging = harness({ agentHeartbeatAt: () => heartbeat })
+    heartbeat = pinging.at()
+    await pinging.relay.restore([agent("agent-1")])
+    await pinging.relay.attach(agent("agent-2"))
+    expect(pinging.closed).toEqual([{ connectionID: "agent-2", code: RemoteCloseCode.agentConflict, reason: "Another YCoding connector is connected for this device" }])
+  })
+
   test("a replaced agent's late close never counts as the machine going offline", async () => {
     const h = harness()
     await h.relay.attach(agent("agent-1"))
+    h.advance(RemoteLimits.agentOfflineConfirmMs)
     await h.relay.attach(agent("agent-2"))
     await h.relay.agentClosed(agent("agent-1"))
     expect(h.storedOffline()).toBeUndefined()
@@ -1965,7 +2026,7 @@ describe("relay core: one System alert owner per browser", () => {
     expect(h.noticeFramesTo("tab-2").filter((frame) => frame.type === "notice.added")).toHaveLength(1)
   })
 
-  test("each browser is judged only by the push outcomes of the subscriptions it owns", async () => {
+  test("each browser is judged only by the push outcomes of the subscriptions it owns, and only an accepted push spares its page", async () => {
     const answers: (readonly PushOutcome[])[] = [
       [{ owner: "browser-1", outcome: "accepted" }, { owner: "browser-2", outcome: "rejected" }],
       [{ owner: "browser-1", outcome: "unreachable" }, { owner: "browser-2", outcome: "expired" }, { owner: "browser-2", outcome: "accepted" }],
@@ -1976,7 +2037,7 @@ describe("relay core: one System alert owner per browser", () => {
     await status(h, ["ses_a", "ses_b"])
     await settle()
     expect(h.pushed.map((event) => event.noticeID)).toEqual(["ntc_1", "ntc_2"])
-    expect([h.presentedTo("tab-1"), h.presentedTo("tab-2"), h.presentedTo("tab-3"), h.presentedTo("tab-4")]).toEqual([[], [], ["ntc_1"], ["ntc_1", "ntc_2"]])
+    expect([h.presentedTo("tab-1"), h.presentedTo("tab-2"), h.presentedTo("tab-3"), h.presentedTo("tab-4")]).toEqual([["ntc_2"], [], ["ntc_1"], ["ntc_1", "ntc_2"]])
   })
 
   test("a push the browser's subscriptions definitely did not deliver hands the alert to its page once", async () => {

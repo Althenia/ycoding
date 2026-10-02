@@ -254,7 +254,7 @@ test("a push to its owner fails only before any push request is sent, so a failu
   }
 })
 
-test("a push service that never answers is abandoned at the delivery deadline as unreachable, once, while other browsers' definite outcomes still reach their pages", async () => {
+test("a push service that never answers is abandoned at the delivery deadline as unreachable, once, and every open browser's page still presents the alert", async () => {
   const hung = await receiverFor("https://fcm.googleapis.com/fcm/send/hung", allOn, "bs_hung")
   const refused = await receiverFor("https://fcm.googleapis.com/fcm/send/refused", allOn, "bs_refused")
   const keys = await vapidKeys()
@@ -298,7 +298,7 @@ test("a push service that never answers is abandoned at the delivery deadline as
     expect(aborts).toEqual(["TimeoutError", "TimeoutError"])
     expect(calls.sort()).toEqual(["https://fcm.googleapis.com/fcm/send/hung", "https://fcm.googleapis.com/fcm/send/hung", "https://fcm.googleapis.com/fcm/send/refused"])
     const presented = (connectionID: string) => frames.filter((entry) => entry.connectionID === connectionID && entry.frame.includes('"type":"notice.present"')).length
-    expect([presented("tab-hung"), presented("tab-refused"), presented("tab-none")]).toEqual([0, 1, 1])
+    expect([presented("tab-hung"), presented("tab-refused"), presented("tab-none")]).toEqual([1, 1, 1])
     expect(failures.filter(([endpoint]) => endpoint.endsWith("/hung"))).toEqual([["https://fcm.googleapis.com/fcm/send/hung", false], ["https://fcm.googleapis.com/fcm/send/hung", false]])
   } finally { info.mockRestore() }
 }, 20_000)

@@ -22,6 +22,26 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.8.11",
+    date: "2026-10-02",
+    title: "Specific and reliable System alerts",
+    tags: ["Added", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Turn on System alerts from the notification center. When alerts cannot reach this device, the bell panel says why and offers Turn on System alerts or Re-enable." },
+      { tag: "Fixed", text: "Reopen a Session whose edited-file changes are still loaded without crashing the terminal app." },
+      { tag: "Fixed", text: "Name the Session and what it needs in every System alert, such as \"YCoding — approval needed\" with the Session title. Alerts cover permission requests, questions, guardrail reviews, guardrail blocks, failed runs, and finished work. Update the connected machine to include Session titles." },
+      { tag: "Fixed", text: "Mark a notice read when you open its System alert." },
+      { tag: "Fixed", text: "Stop a remote reconnect from alerting every failed Session again at once." },
+      { tag: "Fixed", text: "Send one summary alert when more than 20 alerts arrive in a minute, instead of dropping the rest." },
+      { tag: "Fixed", text: "Alert again when a Session with an unread notice needs something new, or at least 10 minutes after its last alert." },
+      { tag: "Fixed", text: "Keep push alerts working after occasional delivery failures, and hold a work-finished push for up to an hour while the device is asleep." },
+      { tag: "Fixed", text: "Show the alert from an open page when push does not confirm delivery, and keep shown alerts when the workspace reconnects to the same machine or closes." },
+      { tag: "Fixed", text: "Alert on guardrail blocks while YCoding is closed." },
+      { tag: "Fixed", text: "Keep a second YCoding connector on the same machine from repeatedly taking over the remote connection." },
+      { tag: "Fixed", text: "Show \"YCoding — alerts paused\" when the browser drops push alerts for this device and they cannot be renewed." },
+    ],
+  },
+  {
     version: "0.8.10",
     date: "2026-10-02",
     title: "Keep working while background tasks run",

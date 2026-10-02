@@ -383,6 +383,66 @@ describe("notification center and live toasts", () => {
     } finally { await page.close() }
   })
 
+  test("offers System alerts in the panel while permission is undecided, requests it on click, then confirms and stops offering", async () => {
+    if (!browser) throw new Error("Browser not started")
+    for (const [width, theme] of [[390, "light"], [1440, "dark"]] as const) {
+      const page = await browser.openPage()
+      try {
+        await page.injectOnNewDocument(`(() => {
+          window.__pushCalls = []; window.__permissionRequests = 0;
+          let permission = 'default';
+          Object.defineProperty(Notification, 'permission', { configurable: true, get: () => permission });
+          Notification.requestPermission = async () => { window.__permissionRequests += 1; permission = 'granted'; return permission; };
+          const key = new Uint8Array(65); key[0] = 4;
+          let subscription = null;
+          const created = { endpoint: 'https://fcm.googleapis.com/send/new', options: { applicationServerKey: key.buffer },
+            getKey: (name) => new Uint8Array(name === 'p256dh' ? 65 : 16).buffer, unsubscribe: async () => true };
+          const registration = { pushManager: { getSubscription: async () => subscription, subscribe: async () => (subscription = created) } };
+          Object.defineProperty(ServiceWorkerContainer.prototype, 'ready', { configurable: true, get: () => Promise.resolve(registration) });
+          const network = window.fetch.bind(window);
+          window.fetch = async (input, init) => {
+            const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+            if (url.pathname === '/api/push/key') return Response.json({ publicKey: 'BA' + 'A'.repeat(85) });
+            if (url.pathname === '/api/push/subscriptions') {
+              window.__pushCalls.push({ method: init && init.method, body: init && init.body ? JSON.parse(init.body) : undefined });
+              return Response.json({ subscribed: true });
+            }
+            return network(input, init);
+          };
+        })()`)
+        await page.setViewport(width, 844)
+        await page.navigate(`http://127.0.0.1:${port}/verify/notifications-fixture.html?theme=${theme}`)
+        for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.yc-notification-center__trigger') !== null`); attempt += 1) await Bun.sleep(50)
+        await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
+        for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel__alerts button') !== null`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<{ text: string; button: string; live: string | null; requests: number; fits: boolean }>(`(() => {
+          const strip = document.querySelector('.yc-notification-panel__alerts'); const panel = document.querySelector('.yc-notification-panel');
+          return { text: strip.querySelector('[role=status]').textContent, button: strip.querySelector('button').textContent, live: strip.querySelector('[role=status]').getAttribute('aria-live'),
+            requests: window.__permissionRequests, fits: strip.scrollWidth <= panel.clientWidth && strip.getBoundingClientRect().right <= panel.getBoundingClientRect().right + 1 }
+        })()`)).toEqual({ text: "System alerts are off. Turn them on to hear about finished work and approvals when YCoding is closed.", button: "Turn on System alerts", live: "polite", requests: 0, fits: true })
+        await page.evaluate(`document.querySelector('.yc-notification-panel__alerts button').click()`)
+        for (let attempt = 0; attempt < 60 && await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel__alerts button') !== null`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<{ text: string; requests: number; calls: number; endpoint: string }>(`({ text: document.querySelector('.yc-notification-panel__alerts [role=status]').textContent, requests: window.__permissionRequests, calls: window.__pushCalls.length, endpoint: window.__pushCalls[0].body.endpoint })`))
+          .toEqual({ text: "System alerts are on for this device.", requests: 1, calls: 1, endpoint: "https://fcm.googleapis.com/send/new" })
+      } finally { await page.close() }
+    }
+  }, 15_000)
+
+  test("explains blocked System alerts in the panel without offering an action", async () => {
+    if (!browser) throw new Error("Browser not started")
+    const page = await browser.openPage()
+    try {
+      await page.injectOnNewDocument(`Object.defineProperty(Notification, 'permission', { configurable: true, get: () => 'denied' })`)
+      await page.setViewport(1440, 844)
+      await page.navigate(`http://127.0.0.1:${port}/verify/notifications-fixture.html?theme=light`)
+      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.yc-notification-center__trigger') !== null`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
+      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel__alerts') !== null`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<{ text: string; buttons: number }>(`({ text: document.querySelector('.yc-notification-panel__alerts').textContent, buttons: document.querySelectorAll('.yc-notification-panel__alerts button').length })`))
+        .toEqual({ text: "System alerts are blocked. Allow notifications for this site in your browser settings.", buttons: 0 })
+    } finally { await page.close() }
+  })
+
   test("aligns notification rows with the panel heading and its trailing actions", async () => {
     for (const width of [390, 1440]) {
       const page = await open(width, "dark")

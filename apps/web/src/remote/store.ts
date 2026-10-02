@@ -559,8 +559,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     void queryClient.invalidateQueries({ queryKey: remoteKeys.keepAwake(scope) }, { cancelRefetch: false })
   }
 
-  const endAlerts = (retainMachineOffline = false) => {
-    delivery.dispose(retainMachineOffline)
+  const endAlerts = (retainMachineOffline = false, closeSystemAlerts = true) => {
+    delivery.dispose(retainMachineOffline, closeSystemAlerts)
     noticeFault = false
     if (!retainMachineOffline) notificationTitles.clear()
     activeNoticeTitleReads.clear()
@@ -631,7 +631,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
 
   const noticeStatus = () => noticeFault ? "error" : "ready"
 
-  const applyNotices = (owner: RemoteTransport, frame: RemoteNoticeFrame) => {
+  const applyNotices = (owner: RemoteTransport, frame: RemoteNoticeFrame, ownerDeviceID: string) => {
+    if (frame.type === "notice.present" && ownerDeviceID === container.state.activeDeviceID) {
+      delivery.present(frame.items, ownerDeviceID)
+      return
+    }
     if (!isCurrentConnection(owner)) return
     if (frame.type === "notice.unavailable") {
       noticeFault = true
@@ -645,10 +649,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       setState({ notifications: delivery.entries() })
       return
     }
-    if (frame.type === "notice.present") {
-      if (container.state.activeDeviceID !== undefined) delivery.present(frame.items, container.state.activeDeviceID)
-      return
-    }
+    if (frame.type === "notice.present") return
     if (frame.type === "notice.cleared") {
       delivery.clearSynced()
       noticeFault = false
@@ -2478,7 +2479,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       cancelCapturedRefresh = undefined
       capturedRead = undefined
       lastCapturedRead = -Infinity
-      if (container.state.activeDeviceID !== deviceID) offlineDeviceID = undefined
+      const switching = container.state.activeDeviceID !== deviceID
+      if (switching) offlineDeviceID = undefined
       clearImageSources()
       cancelFamilyRefresh?.()
       cancelFamilyRefresh = undefined
@@ -2516,11 +2518,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         sessionListStatus: "idle", sessionRowsStale: false, sessionPageLoading: false, sessionHasNext: false, sessionHasPrevious: false,
         sessionCreation: creation?.status === "creating" ? { ...creation, status: "unknown", message: "The connection changed before creation settled. Check or retry this session explicitly." } : creation,
       })
-      endAlerts()
+      endAlerts(false, switching)
       const created = options.createTransport(deviceID, {
         onStatus: (status) => handleStatus(created, status),
         onSessionStatus: (status) => applyStatusFrame(created, status),
-        onNotices: (frame) => applyNotices(created, frame),
+        onNotices: (frame) => applyNotices(created, frame, deviceID),
         onSessions: () => {
           if (!isCurrentConnection(created)) return
           scheduleCapturedRefresh()
@@ -3128,7 +3130,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         mutations: container.state.mutations.filter((mutation) => mutation.operation !== "session.goal.set" && !abandoned.has(mutation.id)),
         mutationToasts: (container.state.mutationToasts ?? []).filter((toast) => !abandoned.has(toast.id) && !container.state.mutations.some((mutation) => mutation.operation === "session.goal.set" && mutation.id === toast.id)),
         team: undefined, familyActivity: undefined, teamCues: [] })
-      endAlerts()
+      endAlerts(false, false)
       subscriptions.forEach((subscription) => subscription.unsubscribe())
       subscriptions.clear()
     },

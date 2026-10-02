@@ -812,7 +812,7 @@ describe("notice log contract", () => {
       { type: "notice.offline", at: 1_790_000_000_000 },
       { type: "notice.present", items: [{ kind: "notice", notice }, { kind: "notice", notice: { ...notice, id: "ntc_2" } }, { kind: "offline", at: 1_790_000_000_000 }] },
       { type: "notice.present", items: [{ kind: "notice", notice, detail: { title: "Fix login", need: "failed" } },
-        { kind: "notice", notice: { ...notice, id: "ntc_2" }, detail: { need: "question" } }, { kind: "notice", notice: { ...notice, id: "ntc_3" }, detail: {} }] },
+        { kind: "notice", notice: { ...notice, id: "ntc_2" }, detail: { need: "question", repeat: true } }, { kind: "notice", notice: { ...notice, id: "ntc_3" }, detail: {} }] },
     ]
     for (const frame of frames) {
       expect(parseRelayToClientMessage(JSON.stringify(frame))).toEqual({ ok: true, value: frame })
@@ -862,6 +862,7 @@ describe("notice log contract", () => {
       { type: "notice.present", items: [{ kind: "notice", notice, detail: { title: "two\nlines" } }] },
       { type: "notice.present", items: [{ kind: "notice", notice, detail: { title: "Fix", prompt: "private" } }] },
       { type: "notice.present", items: [{ kind: "notice", notice, detail: "Fix" }] },
+      { type: "notice.present", items: [{ kind: "notice", notice, detail: { repeat: false } }] },
       { type: "notice.present", items: [] },
       { type: "notice.present" },
       { type: "notice.present", items: [{ kind: "notice", notice }, { kind: "notice", notice }] },

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { parseAgentMessage, parseClientMessage, parseRelayToClientMessage, serializeCompletions } from "../src/index"
+import { parseAgentMessage, parseClientMessage, parseRelayToClientMessage, serializeBlocked, serializeCompletions } from "../src/index"
 
 const receipt = { id: "evt_complete", seq: 12, created: 1_000, sessionID: "ses_root" }
 const frame = { type: "completions", data: [receipt], more: false } as const
@@ -36,4 +36,14 @@ test("carries an optional bounded Session title for the completion alert", () =>
   expect(parseAgentMessage(serializeCompletions(titled))).toEqual({ ok: true, value: titled })
   for (const title of ["", " padded", "two\nlines", "x".repeat(121), 7])
     expect(parseAgentMessage(JSON.stringify({ ...frame, data: [{ ...receipt, title }] })).ok).toBe(false)
+})
+
+test("a guardrail block frame names one root Session and an optional bounded title, only from the local agent", () => {
+  const frame = { type: "blocked", sessionID: "ses_root", title: "Fix login" } as const
+  expect(parseAgentMessage(serializeBlocked(frame))).toEqual({ ok: true, value: frame })
+  expect(parseAgentMessage(serializeBlocked({ type: "blocked", sessionID: "ses_root" }))).toEqual({ ok: true, value: { type: "blocked", sessionID: "ses_root" } })
+  expect(parseRelayToClientMessage(JSON.stringify(frame)).ok).toBe(false)
+  expect(parseClientMessage(JSON.stringify(frame)).ok).toBe(false)
+  for (const change of [{ sessionID: "wrong" }, { title: "" }, { title: "two\nlines" }, { action: "shell" }])
+    expect(parseAgentMessage(JSON.stringify({ ...frame, ...change })).ok).toBe(false)
 })

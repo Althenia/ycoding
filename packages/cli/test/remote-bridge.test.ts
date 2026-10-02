@@ -143,6 +143,7 @@ function harness(options: {
       }
     },
     refreshIntervalMs: 3_600_000,
+    conflictRetryMs: 300,
     eventRetryInitialMs: 5,
     eventRetryMaxMs: 10,
     now: () => clock,
@@ -316,6 +317,33 @@ describe("remote bridge", () => {
       persistedFailure = true
       test.streams[0].stream.onEvent({ type: "session.execution.failed.1", data: { sessionID: "ses_1" } })
       await waitFor(() => sentFrames(test.records[0]).filter((frame) => frame.type === "status" && frame.attention.includes("ses_1")).length > 2 ? true : undefined)
+    } finally { await test.bridge.close() }
+  })
+
+  test("a guardrail block in a Session family reports its root with the root's title, and an allowed action reports nothing", async () => {
+    const child = { ...sessionInfo("ses_child"), parentID: "ses_1" } as SessionInfo
+    const test = harness({ results: { listPage: async () => ({ data: [sessionInfo("ses_1", { title: "One" }), child] }) } })
+    await test.bridge.connect()
+    try {
+      await waitFor(() => test.streams[0])
+      test.streams[0].stream.onEvent({ type: "guardrail.decided", data: { rootSessionID: "ses_1", sessionID: "ses_child", decision: "allow" } })
+      test.streams[0].stream.onEvent({ type: "guardrail.decided", data: { rootSessionID: "ses_1", sessionID: "ses_child", decision: "deny" } })
+      await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "blocked"))
+      expect(sentFrames(test.records[0]).filter((frame) => frame.type === "blocked")).toEqual([{ type: "blocked", sessionID: "ses_1", title: "One" }])
+    } finally { await test.bridge.close() }
+  })
+
+  test("a connector refused because another connector is live backs off instead of reconnecting at once", async () => {
+    const test = harness({})
+    await test.bridge.connect()
+    try {
+      test.records[0].input.onClose(RemoteCloseCode.agentConflict, "Another YCoding connector is connected for this device")
+      await waitFor(() => test.records[0].disconnected ? true : undefined)
+      await Bun.sleep(100)
+      expect(test.records).toHaveLength(1)
+      expect(test.diagnostics.at(-1)).toContain("another connector is live for this device; retrying in 0 s")
+      await waitFor(() => test.records.length === 2 ? true : undefined, 2_000)
+      expect(test.bridge.currentState).toBe("live")
     } finally { await test.bridge.close() }
   })
 

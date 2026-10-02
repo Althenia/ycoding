@@ -10,6 +10,7 @@ import {
   serializeResponse,
   serializeSessions,
   serializeStatus,
+  serializeBlocked,
   serializeCompletions,
 } from "@ycoding-ai/remote"
 import { DeviceAuthorizationError } from "./remote-credentials"
@@ -68,6 +69,7 @@ export type RemoteBridgeOptions = {
   readonly eventRetryInitialMs?: number
   readonly eventRetryMaxMs?: number
   readonly authRetryWindowMs?: number
+  readonly conflictRetryMs?: number
   readonly now?: () => number
   readonly onDiagnostic?: (message: string) => void
   readonly onTerminal?: (message: string) => void
@@ -78,6 +80,7 @@ const defaults = {
   eventRetryInitialMs: 1_000,
   eventRetryMaxMs: 30_000,
   authRetryWindowMs: 30_000,
+  conflictRetryMs: 60_000,
   rotateBeforeExpiryMs: 60_000,
 }
 
@@ -111,6 +114,7 @@ export class RemoteAgent {
   private statusRetryAttempt = 0
   private statusDirty = false
   private completionTimer?: ReturnType<typeof setTimeout>
+  private conflictTimer?: ReturnType<typeof setTimeout>
   private completionReading?: object
   private completionDirty = false
   private completionRetryAttempt = 0
@@ -551,6 +555,7 @@ export class RemoteAgent {
           this.attentionStatus = undefined
           this.attentionGeneration++
         }
+        if (type.startsWith("guardrail.decided")) this.reportBlock(Reflect.get(event, "data"))
         this.scheduleStatus()
       }
       if (typeof type === "string" && (type.startsWith("session.step.ended") || type.startsWith("session.step.failed") ||
@@ -607,14 +612,44 @@ export class RemoteAgent {
     this.statusOwner = undefined
     this.resetStatusRetry()
     this.resetCompletionRetry()
+    const conflict = code === RemoteCloseCode.agentConflict
     const reconnect = code === undefined || !terminalCloseCodes.includes(code) ||
       this.now() - this.lastAuthAttempt >= this.authRetryWindowMs
-    this.diagnostic(`relay connection closed (code ${code ?? "unreported"}${reason ? `, reason: ${reason}` : ""}); ${reconnect ? "reconnecting" : "not reconnecting"}`)
+    this.diagnostic(`relay connection closed (code ${code ?? "unreported"}${reason ? `, reason: ${reason}` : ""}); ${conflict
+      ? `another connector is live for this device; retrying in ${Math.round((this.options.conflictRetryMs ?? defaults.conflictRetryMs) / 1_000)} s`
+      : reconnect ? "reconnecting" : "not reconnecting"}`)
     this.subscriptions.clear()
     this.scheduler.reset()
     this.uploads.clear()
     this.abortRequests()
     if (code !== undefined && terminalCloseCodes.includes(code)) void this.rotateConnection()
+    if (conflict) void this.deferConnection()
+  }
+
+  private reportBlock(data: unknown) {
+    if (typeof data !== "object" || data === null || Reflect.get(data, "decision") !== "deny") return
+    const sessionID = Reflect.get(data, "sessionID")
+    const root = typeof sessionID === "string" ? this.registry.root(sessionID) : undefined
+    if (root === undefined) return
+    const title = alertTitle(this.registry.snapshot().find((session) => session.id === root)?.title ?? "")
+    void this.send(serializeBlocked({ type: "blocked", sessionID: root, ...(title === undefined ? {} : { title }) }))
+  }
+
+  private async deferConnection() {
+    if (this.state !== "live") return
+    const previous = this.connection
+    this.connection = undefined
+    try {
+      await previous?.disconnect(RemoteCloseCode.normal, "Another connector is live")
+    } catch (error) {
+      this.diagnostic(`could not close the conflicting relay connection: ${describe(error)}`)
+    }
+    if (this.conflictTimer !== undefined) return
+    this.conflictTimer = setTimeout(() => {
+      this.conflictTimer = undefined
+      if (this.state !== "live" || this.connection !== undefined) return
+      void this.openConnection().catch((error: unknown) => this.diagnostic(`could not reconnect to the relay: ${describe(error)}`))
+    }, this.options.conflictRetryMs ?? defaults.conflictRetryMs)
   }
 
   /**
@@ -705,6 +740,8 @@ export class RemoteAgent {
 
   private clearTimers() {
     if (this.refreshTimer) clearTimeout(this.refreshTimer)
+    if (this.conflictTimer) clearTimeout(this.conflictTimer)
+    this.conflictTimer = undefined
     if (this.retryTimer) clearTimeout(this.retryTimer)
     this.statusOwner = undefined
     this.resetStatusRetry()

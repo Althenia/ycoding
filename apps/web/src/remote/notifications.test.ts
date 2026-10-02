@@ -187,14 +187,23 @@ describe("createNotificationDelivery", () => {
     expect(test.recorder.alerts.every((alert) => !alert.body.includes("Named work"))).toBe(true)
   })
 
-  test("raises one in-app notice and one desktop alert for one event", () => {
+  test("raises one in-app notice and leaves the System alert to the relay for one local event", () => {
     const test = deliveryWith({})
     test.delivery.deliver("agent-completed")
     expect(test.delivery.entries()).toMatchObject([{ category: "agent-completed", ...NOTIFICATION_TEXT["agent-completed"], at: 1_001, synced: false, live: true }])
-    expect(test.recorder.alerts).toHaveLength(1)
-    expect(test.recorder.alerts[0]?.title).toBe(NOTIFICATION_TEXT["agent-completed"].title)
-    expect(test.recorder.alerts[0]?.body).toBe(NOTIFICATION_TEXT["agent-completed"].body)
-    expect(test.recorder.alerts[0]?.tag.length).toBeGreaterThan(0)
+    expect(test.recorder.alerts).toEqual([])
+  })
+
+  test("a local guardrail-block notice and the relay notice for the same Session keep one row", () => {
+    const later = deliveryWith({})
+    later.delivery.deliver("approval-requested", { sessionID: "ses_a" })
+    later.delivery.receive({ id: "ntc_3", category: "approval-requested", at: 2, sessionID: "ses_a" }, "dev_1")
+    expect(later.delivery.entries().map((entry) => entry.id)).toEqual(["ntc_3"])
+    const earlier = deliveryWith({})
+    earlier.delivery.receive({ id: "ntc_3", category: "approval-requested", at: 2, sessionID: "ses_a" }, "dev_1")
+    earlier.delivery.deliver("approval-requested", { sessionID: "ses_a" })
+    earlier.delivery.deliver("approval-requested", { sessionID: "ses_b" })
+    expect(earlier.delivery.entries().map((entry) => entry.sessionID)).toEqual(["ses_b", "ses_a"])
   })
 
   test("each confirmed machine outage adds one fixed in-app notice, and only a relay directive raises its System alert", () => {
@@ -218,7 +227,7 @@ describe("createNotificationDelivery", () => {
     const inAppMuted = deliveryWith({ preferences: () => mute("approval-requested", "in-app") })
     inAppMuted.delivery.deliver("approval-requested")
     expect(inAppMuted.delivery.entries()).toHaveLength(0)
-    expect(inAppMuted.recorder.alerts).toHaveLength(1)
+    expect(inAppMuted.recorder.alerts).toHaveLength(0)
 
     const desktopMuted = deliveryWith({ preferences: () => mute("approval-requested", "desktop") })
     desktopMuted.delivery.deliver("approval-requested")
@@ -241,17 +250,15 @@ describe("createNotificationDelivery", () => {
     expect(test.delivery.entries()).toHaveLength(1)
   })
 
-  test("never copies event payload content into an alert", () => {
+  test("never copies event payload content into a notice", () => {
     const test = deliveryWith({})
     const payload = { type: "guardrail.decided", data: { decision: "deny", error: { code: "secret_code", message: "leaked-token-abc" } } }
     const category = notificationCategory(payload)
     expect(category).toBe("approval-requested")
     if (category === undefined) return
     test.delivery.deliver(category)
-    const alert = test.recorder.alerts[0]
-    expect(alert?.body).toBe(NOTIFICATION_TEXT["approval-requested"].body)
-    expect(alert?.title).not.toContain("secret_code")
-    expect(alert?.body).not.toContain("leaked-token-abc")
+    expect(test.delivery.entries()[0]?.body).toBe(NOTIFICATION_TEXT["approval-requested"].body)
+    expect(test.delivery.entries()[0]?.title).not.toContain("secret_code")
     expect(test.delivery.entries()[0]?.body).not.toContain("leaked-token-abc")
   })
 
@@ -264,7 +271,6 @@ describe("createNotificationDelivery", () => {
     expect(test.delivery.entries()).toHaveLength(50)
     expect(test.delivery.entries()[0]).toMatchObject({ category: "approval-requested", sessionID: "ses_51", sessionTitle: "Session 51" })
     expect(test.delivery.entries().at(-1)?.sessionID).toBe("ses_2")
-    expect(test.recorder.alerts.at(-1)?.body).toBe(NOTIFICATION_TEXT["approval-requested"].body)
   })
 
   test("removes notices by id without touching the others", () => {
@@ -445,34 +451,34 @@ describe("createNotificationDelivery", () => {
     expect(test.delivery.entries()).toHaveLength(0)
 
     test.delivery.deliver("approval-requested")
+    test.delivery.present([{ kind: "offline", at: 1_000 }], "dev_1")
     expect(test.delivery.entries().map((entry) => entry.category)).toEqual(["approval-requested"])
-    expect(test.recorder.alerts).toHaveLength(2)
+    expect(test.recorder.alerts).toHaveLength(1)
     expect(test.recorder.disposals()).toBe(1)
   })
 })
 
 describe("createDesktopNotifier", () => {
-  test("shows each alert through the service worker, keyed like the push alert for the same Session", async () => {
+  test("shows each presented alert through the service worker, keyed like the push alert for the same notice", async () => {
     await withFakeNotificationAsync("granted", async () => {
       const worker = fakeWorkerRegistration()
       const delivery = createNotificationDelivery({
         preferences: () => normalizeNotificationPreferences(undefined), desktop: createDesktopNotifier(async () => worker.registration),
       })
       delivery.deliver("approval-requested", { sessionID: "ses_a", sessionTitle: "Private Session" })
-      delivery.deliver("approval-requested")
       await Bun.sleep(0)
-      expect(worker.shown.map((item) => [item.title, item.options.tag, item.options.data])).toEqual([
-        [NOTIFICATION_TEXT["approval-requested"].title, "ycoding-ses_a-approval-requested", { sessionID: "ses_a" }],
-        [NOTIFICATION_TEXT["approval-requested"].title, "ycoding-remote-approval-requested", undefined],
-      ])
-      expect(worker.shown[0]?.options.body).toBe(NOTIFICATION_TEXT["approval-requested"].body)
-      expect(worker.shown[0]?.options.body).not.toContain("Private Session")
+      expect(worker.shown).toEqual([])
       expect(FakeNotification.instances).toHaveLength(0)
       delivery.present([{ kind: "notice", notice: { id: "ntc_4", category: "approval-requested", sessionID: "ses_a", createdAt: 1 },
         detail: { title: "Fix login", need: "question" } }], "dev_1")
       await Bun.sleep(0)
       expect(worker.shown.at(-1)).toMatchObject({ title: "YCoding — question for you",
-        options: { body: "“Fix login” is waiting for your answer.", tag: "ycoding-dev_1-ntc_4", renotify: true, data: { sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_4" } } })
+        options: { body: "“Fix login” is waiting for your answer.", tag: "ycoding-dev_1-ntc_4", data: { sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_4" } } })
+      expect(worker.shown.at(-1)?.options).not.toHaveProperty("renotify")
+      delivery.present([{ kind: "notice", notice: { id: "ntc_4", category: "approval-requested", sessionID: "ses_a", createdAt: 1 },
+        detail: { title: "Fix login", need: "failed", repeat: true } }], "dev_1")
+      await Bun.sleep(0)
+      expect(worker.shown.at(-1)).toMatchObject({ title: "YCoding — session failed", options: { tag: "ycoding-dev_1-ntc_4", renotify: true } })
       delivery.dispose()
     })
   })
@@ -485,6 +491,7 @@ describe("createDesktopNotifier", () => {
         desktop: createDesktopNotifier(async () => worker.registration),
       })
       for (const category of NOTIFICATION_CATEGORIES) delivery.deliver(category.id)
+      delivery.present([{ kind: "notice", notice: { id: "ntc_1", category: "agent-completed", sessionID: "ses_a", createdAt: 1 } }, { kind: "offline", at: 1_000 }], "dev_1")
       await Bun.sleep(0)
       expect(delivery.entries()).toHaveLength(NOTIFICATION_CATEGORIES.length)
       expect(worker.shown).toHaveLength(0)

@@ -2,7 +2,7 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, 
 import { Icon, type IconName } from "../../ui/icon"
 import { useRemote } from "../context"
 import { createPushHttp } from "../http"
-import { browserPushPlatform, syncPushState } from "../push"
+import { browserPushPlatform, enablePush, syncPushState, type PushStatus } from "../push"
 import { NOTICE_WINDOW, type RemoteNotificationView } from "../notifications"
 import type { MutationToast, NoticeSyncState } from "../store"
 import { pushCategoriesFor, readNotificationPreferences, type NotificationCategory } from "../preferences"
@@ -61,16 +61,44 @@ export function noticeCenterView(sync: NoticeSyncState, entries: readonly Remote
   }
 }
 
+export function systemAlertsView(status: PushStatus | undefined, enabled: boolean, detail: string) {
+  switch (status) {
+    case undefined: return undefined
+    case "on": return enabled ? { text: "System alerts are on for this device." } : undefined
+    case "off": return { text: "System alerts are off. Turn them on to hear about finished work and approvals when YCoding is closed.", action: "Turn on System alerts" }
+    case "needs-setup": return { text: "System alerts are off for closed-app use: this device has no active push subscription.", action: "Re-enable" }
+    case "error": return { text: detail ? `System alerts could not be turned on: ${detail}` : "System alerts could not be set up on this device.", action: "Try again" }
+    case "blocked": return { text: "System alerts are blocked. Allow notifications for this site in your browser settings." }
+    case "unavailable": return { text: "This server has not enabled System alerts." }
+    case "unsupported": return { text: "System alerts are unavailable in this browser. On iPhone or iPad, install YCoding to your Home Screen." }
+  }
+}
+
 export function NotificationCenter(props: { readonly onOpenSession: (sessionID: string) => void }): JSX.Element {
   const remote = useRemote()
   const [open, setOpen] = createSignal(false)
   const [leaving, setLeaving] = createSignal(false)
   const [newCount, setNewCount] = createSignal(0)
   const [clock, setClock] = createSignal(Date.now())
+  const [push, setPush] = createSignal<PushStatus>()
+  const [pushBusy, setPushBusy] = createSignal(false)
+  const [pushEnabled, setPushEnabled] = createSignal(false)
+  const [pushDetail, setPushDetail] = createSignal("")
   onMount(() => {
-    if (typeof Notification === "undefined" || Notification.permission !== "granted") return
-    void syncPushState(browserPushPlatform(), createPushHttp(), () => pushCategoriesFor(readNotificationPreferences()))
+    void syncPushState(browserPushPlatform(), createPushHttp(), () => pushCategoriesFor(readNotificationPreferences())).then(setPush)
   })
+  const alerts = () => systemAlertsView(push(), pushEnabled(), pushDetail())
+  const enableAlerts = async (event: MouseEvent) => {
+    if (pushBusy()) return
+    const focused = document.activeElement === event.currentTarget
+    setPushBusy(true)
+    const result = await enablePush(browserPushPlatform(), createPushHttp(), () => pushCategoriesFor(readNotificationPreferences()))
+    setPushDetail(result.message ?? "")
+    setPushEnabled(result.status === "on")
+    setPush(result.status)
+    setPushBusy(false)
+    if (focused && !alerts()?.action) trigger?.focus()
+  }
   const notifications = () => remote.state().notifications
   const sync = () => remote.state().noticeSync
   const view = createMemo(() => noticeCenterView(sync(), notifications()))
@@ -148,6 +176,12 @@ export function NotificationCenter(props: { readonly onOpenSession: (sessionID: 
               <button type="button" class="yc-notification-panel__retry" onClick={() => void remote.store.reloadNotifications()}>Retry</button>
             </div>
           </Show>
+          <Show when={alerts()}>{(view) => (
+            <div class="yc-notification-panel__alerts">
+              <span class="yc-notification-panel__alerts-text" role="status" aria-live="polite">{view().text}</span>
+              <Show when={view().action}>{(action) => <button type="button" class="button button--secondary button--small" aria-busy={pushBusy()} onClick={(event) => void enableAlerts(event)}>{pushBusy() ? "Turning on…" : action()}</button>}</Show>
+            </div>
+          )}</Show>
           <div class="yc-notification-panel__scroll">
             <Show when={notifications().length > 0} fallback={<div class="yc-notification-panel__empty">
               <Icon name={sync().status === "ready" && sync().total === 0 ? "check" : "bell"} size={22} />

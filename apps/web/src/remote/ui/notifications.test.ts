@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { NOTICE_WINDOW } from "../notifications"
-import { enqueueToasts, groupNotifications, noticeCenterView, notificationAge, newlyAddedNotifications } from "./notifications"
+import { enqueueToasts, groupNotifications, noticeCenterView, notificationAge, newlyAddedNotifications, systemAlertsView } from "./notifications"
 import type { RemoteNotificationView } from "../notifications"
 
 const today = new Date(2026, 8, 27, 12).getTime()
@@ -89,5 +89,28 @@ describe("notification presentation", () => {
     const reduced = base.slice(base.indexOf("@media (prefers-reduced-motion: reduce)"))
     expect(reduced).toContain("animation-name: none !important")
     expect(reduced).toContain("transition-duration: 0s !important")
+  })
+})
+
+describe("system alerts prompt", () => {
+  test("offers an action only where the device can still be enabled", () => {
+    expect(systemAlertsView("off", false, "")?.action).toBe("Turn on System alerts")
+    expect(systemAlertsView("needs-setup", false, "")?.action).toBe("Re-enable")
+    expect(systemAlertsView("error", false, "")?.action).toBe("Try again")
+    for (const status of ["blocked", "unavailable", "unsupported"] as const) {
+      const view = systemAlertsView(status, false, "")
+      expect(view?.text).toBeTruthy()
+      expect(view?.action).toBeUndefined()
+    }
+  })
+
+  test("stays absent while checking and once Push is on, except to confirm a requested turn-on", () => {
+    expect(systemAlertsView(undefined, false, "")).toBeUndefined()
+    expect(systemAlertsView("on", false, "")).toBeUndefined()
+    expect(systemAlertsView("on", true, "")).toEqual({ text: "System alerts are on for this device." })
+  })
+
+  test("reports the setup failure message", () => {
+    expect(systemAlertsView("error", false, "Relay unreachable")?.text).toBe("System alerts could not be turned on: Relay unreachable")
   })
 })

@@ -250,6 +250,7 @@ export const RemoteCloseCode = {
   serviceRestart: 1012,
   unauthorized: 4401,
   forbidden: 4403,
+  agentConflict: 4409,
 } as const
 
 export type RemoteErrorCode =
@@ -330,7 +331,8 @@ export type RemoteAttentionDetail = { readonly sessionID: string; readonly title
 export type RemoteStatus = { readonly type: "status"; readonly running: readonly string[]; readonly attention: readonly string[]; readonly outstanding?: readonly string[]; readonly failed?: readonly string[];
   readonly details?: readonly RemoteAttentionDetail[] }
 export type RemoteWorkCompletion = { readonly id: string; readonly seq: number; readonly created: number; readonly sessionID: string; readonly title?: string }
-export type RemoteAlertDetail = { readonly title?: string; readonly need?: RemoteAttentionNeed | "failed" }
+export type RemoteAlertDetail = { readonly title?: string; readonly need?: RemoteAttentionNeed | "failed" | "blocked"; readonly repeat?: true }
+export type RemoteBlocked = { readonly type: "blocked"; readonly sessionID: string; readonly title?: string }
 export type RemoteCompletions = { readonly type: "completions"; readonly data: readonly RemoteWorkCompletion[]; readonly more: boolean }
 export type RemoteSubscriptions = {
   readonly type: "subscriptions"
@@ -374,7 +376,7 @@ export type RemoteNoticePresentation = { readonly kind: "notice"; readonly notic
 /** Frames accepted from a browser connection. */
 export type RemoteClientMessage = RemoteRequest | RemoteNoticeRequest | RemoteHeartbeat | RemoteCancel | RemotePriorityHint
 /** Frames accepted from a local agent connection. */
-export type RemoteAgentMessage = RemoteResponse | RemoteEvent | RemoteEventBatch | RemoteSessions | RemoteStatus | RemoteCompletions | RemoteHeartbeat
+export type RemoteAgentMessage = RemoteResponse | RemoteEvent | RemoteEventBatch | RemoteSessions | RemoteStatus | RemoteCompletions | RemoteBlocked | RemoteHeartbeat
 /** Frames the relay sends to a browser connection. */
 export type RemoteRelayToClient = RemoteResponse | RemoteEvent | RemoteEventBatch | RemoteSessions | RemoteStatus | RemoteHeartbeat | RemoteNoticeFrame
 /** Frames the relay sends to a local agent connection. */
@@ -429,6 +431,10 @@ export function serializePriority(frame: RemotePriorityHint | RemotePriority): s
 
 export function serializeStatus(status: RemoteStatus): string {
   return JSON.stringify(status)
+}
+
+export function serializeBlocked(frame: RemoteBlocked): string {
+  return JSON.stringify({ type: frame.type, sessionID: frame.sessionID, ...(frame.title === undefined ? {} : { title: frame.title }) })
 }
 
 export function serializeCompletions(frame: RemoteCompletions): string {
@@ -499,7 +505,7 @@ export function parseRelayToClientMessage(raw: string): ParseResult<RemoteRelayT
   if (isRecord(frame.value) && typeof frame.value.type === "string" && frame.value.type.startsWith("notice.")) return parseNoticeFrame(frame.value)
   const parsed = parseAgentFrame(frame.value)
   if (!parsed.ok) return parsed
-  if (parsed.value.type === "completions") return invalid()
+  if (parsed.value.type === "completions" || parsed.value.type === "blocked") return invalid()
   return { ok: true, value: parsed.value }
 }
 
@@ -561,6 +567,7 @@ function parseAgentFrame(frame: unknown): ParseResult<RemoteAgentMessage> {
   if (frame.type === "sessions") return parseSessions(frame)
   if (frame.type === "status") return parseStatus(frame)
   if (frame.type === "completions") return parseCompletions(frame)
+  if (frame.type === "blocked") return parseBlocked(frame)
   return invalid()
 }
 
@@ -580,6 +587,14 @@ function parseCompletions(frame: Record<string, unknown>): ParseResult<RemoteCom
   }
   if (new Set(data.map((item) => item.sessionID)).size !== data.length) return invalid()
   return { ok: true, value: { type: "completions", data, more: frame.more } }
+}
+
+function parseBlocked(frame: Record<string, unknown>): ParseResult<RemoteBlocked> {
+  const keys = withOnlyKeys(frame, ["type", "sessionID", "title"], frame.type)
+  if (!keys.ok) return keys
+  const sessionID = frame.sessionID
+  if (!isSessionID(sessionID) || sessionID.length > RemoteLimits.maxSessionIDChars || (frame.title !== undefined && !isAlertTitle(frame.title))) return invalid()
+  return { ok: true, value: { type: "blocked", sessionID, ...(isAlertTitle(frame.title) ? { title: frame.title } : {}) } }
 }
 
 function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest> {
@@ -817,15 +832,16 @@ function parseAttentionDetails(value: unknown, attention: readonly string[]): re
 }
 
 function parseAlertDetail(value: unknown): RemoteAlertDetail | undefined {
-  if (!isRecord(value) || !withOnlyKeys(value, ["title", "need"], value).ok) return undefined
+  if (!isRecord(value) || !withOnlyKeys(value, ["title", "need", "repeat"], value).ok) return undefined
   const title = isAlertTitle(value.title) ? value.title : undefined
-  const need = value.need === "failed" || isAttentionNeed(value.need) ? value.need : undefined
-  if ((value.title !== undefined && title === undefined) || (value.need !== undefined && need === undefined)) return undefined
-  return alertDetailWire({ title, need })
+  const need = value.need === "failed" || value.need === "blocked" || isAttentionNeed(value.need) ? value.need : undefined
+  if ((value.title !== undefined && title === undefined) || (value.need !== undefined && need === undefined) || (value.repeat !== undefined && value.repeat !== true)) return undefined
+  return alertDetailWire({ title, need, ...(value.repeat === true ? { repeat: true } : {}) })
 }
 
 function alertDetailWire(detail: RemoteAlertDetail): RemoteAlertDetail {
-  return { ...(detail.title === undefined ? {} : { title: detail.title }), ...(detail.need === undefined ? {} : { need: detail.need }) }
+  return { ...(detail.title === undefined ? {} : { title: detail.title }), ...(detail.need === undefined ? {} : { need: detail.need }),
+    ...(detail.repeat === true ? { repeat: true } : {}) }
 }
 
 function isAttentionNeed(value: unknown): value is RemoteAttentionNeed {

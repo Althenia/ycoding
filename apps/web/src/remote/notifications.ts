@@ -52,7 +52,7 @@ export function notificationCategory(payload: unknown): NotificationCategory | u
   }
 }
 
-export type DesktopAlert = { readonly title: string; readonly body: string; readonly tag: string; readonly sessionID?: string; readonly notice?: AlertNotice }
+export type DesktopAlert = { readonly title: string; readonly body: string; readonly tag: string; readonly sessionID?: string; readonly notice?: AlertNotice; readonly renotify?: true }
 
 export type DesktopNotifier = {
   readonly show: (alert: DesktopAlert) => void
@@ -77,7 +77,7 @@ export function createDesktopNotifier(registration: () => Promise<DesktopRegistr
       if (typeof Notification === "undefined" || Notification.permission !== "granted") return
       raised.add(alert.tag)
       void registration().then((worker) => worker?.showNotification(alert.title, {
-        body: alert.body, tag: alert.tag, renotify: true, icon: "/icons/icon-256.png", badge: "/icons/icon-256.png",
+        body: alert.body, tag: alert.tag, ...(alert.renotify ? { renotify: true } : {}), icon: "/icons/icon-256.png", badge: "/icons/icon-256.png",
         ...(alert.sessionID === undefined ? {} : { data: { sessionID: alert.sessionID, ...alert.notice } }),
       })).catch(() => undefined)
     },
@@ -120,7 +120,7 @@ export type NotificationDelivery = {
   readonly setSessionTitle: (sessionID: string, title: string) => boolean
   readonly remove: (ids: readonly string[]) => void
   readonly clearSynced: () => void
-  readonly dispose: (retainMachineOffline?: boolean) => void
+  readonly dispose: (retainMachineOffline?: boolean, closeSystemAlerts?: boolean) => void
 }
 
 export function createNotificationDelivery(options: NotificationDeliveryOptions = {}): NotificationDelivery {
@@ -164,7 +164,7 @@ export function createNotificationDelivery(options: NotificationDeliveryOptions 
 
   return {
     deliver: (category, context) => {
-      alert(category, context?.sessionID)
+      if (context?.sessionID !== undefined && entries.some((entry) => entry.synced && entry.sessionID === context.sessionID && entry.category === category)) return
       if (listed(category)) bounded([...entries, view({ id: `notice_${++nextID}`, category, at: now(), ...context }, false, true)])
     },
     offline: (deviceID, at) => {
@@ -177,13 +177,14 @@ export function createNotificationDelivery(options: NotificationDeliveryOptions 
         if (item.kind === "offline") alert("machine-offline", undefined, `ycoding-${deviceID}-offline-${item.at}`)
         else if (preferences()[item.notice.category].desktop)
           desktop.show({ ...alertCopy(item.notice.category, item.detail), tag: `ycoding-${deviceID}-${item.notice.id}`,
-            sessionID: item.notice.sessionID, notice: { deviceID, noticeID: item.notice.id } })
+            sessionID: item.notice.sessionID, notice: { deviceID, noticeID: item.notice.id }, ...(item.detail?.repeat ? { renotify: true } : {}) })
       }
     },
     receive: (notice, deviceID) => {
       if (known(notice.id)) return
       const entry = admit(notice, true)
-      bounded(entry === undefined ? entries : [...entries, entry])
+      const local = entries.filter((item) => item.synced || item.sessionID !== notice.sessionID || item.category !== notice.category)
+      bounded(entry === undefined ? local : [...local, entry])
     },
     replaceSynced: (notices) => {
       hidden = new Set()
@@ -213,8 +214,8 @@ export function createNotificationDelivery(options: NotificationDeliveryOptions 
       entries = entries.filter((entry) => !entry.synced)
       hidden = new Set()
     },
-    dispose: (retainMachineOffline = false) => {
-      desktop.dispose(retainMachineOffline)
+    dispose: (retainMachineOffline = false, closeSystemAlerts = true) => {
+      if (closeSystemAlerts) desktop.dispose(retainMachineOffline)
       entries = retainMachineOffline ? entries.filter((entry) => entry.category === "machine-offline") : []
       hidden = new Set()
     },

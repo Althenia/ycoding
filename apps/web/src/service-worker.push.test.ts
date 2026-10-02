@@ -8,6 +8,7 @@ test("service worker shows one notification per push including malformed and foc
   const posted: unknown[] = []
   const calls: Request[] = []
   let focusFails = false
+  let renewalStatus = 200
   let focused = 0
   const windowClient = { visibilityState: "visible", focused: true, url: "https://relay.test/remote", focus: async () => {
     if (focusFails) throw new Error("window closed")
@@ -26,7 +27,8 @@ test("service worker shows one notification per push including malformed and foc
   Reflect.set(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(new URL(input instanceof Request ? input.url : input instanceof URL ? input.href : input, "https://relay.test"), init)
     calls.push(request)
-    return Response.json(new URL(request.url).pathname === "/api/push/key" ? { publicKey: "BA" + "A".repeat(85) } : { subscribed: true })
+    return new URL(request.url).pathname === "/api/push/key" ? Response.json({ publicKey: "BA" + "A".repeat(85) })
+      : Response.json({ subscribed: renewalStatus === 200 }, { status: renewalStatus })
   })
   try {
     await import("./service-worker")
@@ -78,7 +80,7 @@ test("service worker shows one notification per push including malformed and foc
     await emit("notificationclick", { notification: { data: { sessionID: "ses_1" }, close: () => undefined } })
     expect(opened).toBe("/remote#session=ses_1")
     const specific = shown.length
-    for (const need of ["permission", "question", "review", "failed", undefined])
+    for (const need of ["permission", "question", "review", "failed", "blocked", undefined])
       await emit("push", { data: { json: () => ({ category: "approval-requested", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_9", title: "Fix login", need }) } })
     await emit("push", { data: { json: () => ({ category: "agent-completed", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_10", title: "Fix login" }) } })
     await emit("push", { data: { json: () => ({ category: "approval-requested", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_11", title: "two\nlines", need: "unknown" }) } })
@@ -87,11 +89,14 @@ test("service worker shows one notification per push including malformed and foc
       ["YCoding — question for you", "“Fix login” is waiting for your answer."],
       ["YCoding — guardrail review", "“Fix login” is waiting for you to approve or reject a guarded action."],
       ["YCoding — session failed", "“Fix login” stopped with an error. Open it to review and retry."],
+      ["YCoding — action blocked", "A guardrail blocked an action in “Fix login”. Open it to review."],
       ["YCoding — needs your attention", "“Fix login” is waiting for you."],
       ["YCoding — work finished", "“Fix login” finished all its work."],
       ["YCoding — needs your attention", "A session is waiting for you."],
     ])
-    expect(shown.slice(specific).every((entry) => entry.options.renotify === true)).toBe(true)
+    expect(shown.slice(specific).some((entry) => "renotify" in entry.options)).toBe(false)
+    await emit("push", { data: { json: () => ({ category: "approval-requested", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_9", need: "failed", repeat: true }) } })
+    expect(shown.pop()).toMatchObject({ title: "YCoding — session failed", options: { tag: "ycoding-dev_1-ntc_9", renotify: true } })
     const noticeData = shown.at(-2)?.options.data
     expect(noticeData).toEqual({ sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_10" })
     await emit("notificationclick", { notification: { data: noticeData, close: () => undefined } })
@@ -123,8 +128,12 @@ test("service worker shows one notification per push including malformed and foc
     await emit("notificationclick", { notification: { data: { sessionID: "ses_1" }, close: () => undefined } })
     expect(posted).toEqual([])
     expect(opened).toBe("/remote#session=ses_1")
+    const paused = { title: "YCoding — alerts paused", options: { body: "Push alerts to this device stopped. Open YCoding to turn them back on.",
+      tag: "ycoding-push-renewal", icon: "/icons/icon-256.png", badge: "/icons/icon-256.png" } }
+    const beforeChange = shown.length
     await emit("pushsubscriptionchange", {})
     expect(calls).toEqual([])
+    expect(shown.slice(beforeChange)).toEqual([paused])
     await emit("pushsubscriptionchange", { oldSubscription: { endpoint: "https://fcm.googleapis.com/send/original" } })
     expect(calls.map((call) => [call.method, new URL(call.url).pathname])).toEqual([["GET", "/api/push/key"], ["POST", "/api/push/subscriptions"]])
     expect(await calls[1]?.json()).toEqual({ endpoint: "https://fcm.googleapis.com/send/replacement",
@@ -135,6 +144,12 @@ test("service worker shows one notification per push including malformed and foc
     expect(calls.slice(2).map((call) => [call.method, new URL(call.url).pathname])).toEqual([["POST", "/api/push/subscriptions"]])
     expect(await calls[2]?.json()).toEqual({ endpoint: "https://fcm.googleapis.com/send/replacement2",
       keys: { p256dh: expect.any(String), auth: expect.any(String) }, replaces: "https://fcm.googleapis.com/send/replacement" })
+    expect(shown.slice(beforeChange)).toEqual([paused])
+    renewalStatus = 401
+    await emit("pushsubscriptionchange", { oldSubscription: { endpoint: "https://fcm.googleapis.com/send/replacement2" },
+      newSubscription: { endpoint: "https://fcm.googleapis.com/send/replacement3",
+        getKey: (name: string) => new Uint8Array(name === "p256dh" ? 65 : 16).buffer } })
+    expect(shown.slice(beforeChange)).toEqual([paused, paused])
   } finally {
     for (const [key, value] of Object.entries(previous)) Reflect.set(globalThis, key, value)
   }

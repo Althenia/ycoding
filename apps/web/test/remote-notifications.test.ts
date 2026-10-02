@@ -22,6 +22,7 @@ type Harness = {
   readonly alerts: readonly DesktopAlert[]
   /** Alerts the notifier still holds open on screen. */
   readonly openAlerts: () => readonly DesktopAlert[]
+  readonly transports: readonly Parameters<Parameters<typeof createRemoteStore>[0]["createTransport"]>[1][]
   /** Times the store released the desktop notifier. */
   readonly disposals: () => number
   readonly flush: () => Promise<void>
@@ -90,6 +91,7 @@ async function harness(options: {
   })
   const preferences = mutedStorage(options.muted ?? [])
   const alerts: DesktopAlert[] = []
+  const transports: Parameters<Parameters<typeof createRemoteStore>[0]["createTransport"]>[1][] = []
   const openAlerts = new Set<DesktopAlert>()
   let disposals = 0
   const timers: (() => void)[] = []
@@ -108,8 +110,10 @@ async function harness(options: {
   }
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) =>
-      createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, schedule, createSocket: relay.createSocket }),
+    createTransport: (deviceID, handlers) => {
+      transports.push(handlers)
+      return createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, schedule, createSocket: relay.createSocket })
+    },
     schedule,
     batchMs: 20,
     now: () => 1_000,
@@ -151,6 +155,7 @@ async function harness(options: {
     relay,
     alerts,
     openAlerts: () => [...openAlerts],
+    transports,
     disposals: () => disposals,
     flush,
     runUntil,
@@ -286,7 +291,7 @@ describe("remote notification delivery", () => {
         ["ntc_50", true, false], [expect.stringMatching(/^notice_/), false, true],
       ])
       expect(test.store.state().noticeSync).toEqual({ status: "ready", total: 3, loaded: 1, hidden: 0, loadingMore: false, message: undefined })
-      expect(test.alerts).toHaveLength(1)
+      expect(test.alerts).toHaveLength(0)
       test.relay.setNoticePage({ notices: [], total: 0, unavailable: false })
       test.relay.dropConnections(1006, "")
       await test.runUntil(() => test.relay.noticeRequests.length === 2 && test.store.state().notifications.length === 1)
@@ -411,7 +416,7 @@ describe("remote notification delivery", () => {
     } finally { await test.stop() }
   })
 
-  test("raises a synced attention notice and a local guardrail-block notice, while a failed step adds none", async () => {
+  test("raises a synced attention notice and a local guardrail-block notice without its own System alert, while a failed step adds none", async () => {
     const test = await harness()
     try {
       await test.openSession()
@@ -419,7 +424,7 @@ describe("remote notification delivery", () => {
       await test.flush()
       test.relay.pushEvent("ses_a", { id: "evt_21", type: "guardrail.asked", data: { id: "grq_1", hardReview: true } })
       await test.flush()
-      await raised(test, "approval-requested")
+      await raised(test, "approval-requested", "ses_b")
       test.relay.pushEvent("ses_a", { id: "evt_denied", type: "guardrail.decided", data: { decision: "deny" } })
       await test.runUntil(() => test.store.state().notifications.length === 2)
       test.relay.pushEvent("ses_a", { id: "evt_22", type: "session.step.failed", durable: { aggregateID: "ses_a", seq: 6, version: 1 }, data: {} })
@@ -429,10 +434,7 @@ describe("remote notification delivery", () => {
         ["approval-requested", true],
         ["approval-requested", false],
       ])
-      expect(test.alerts.map((alert) => alert.title)).toEqual([
-        "YCoding — needs your attention",
-        "YCoding — needs your attention",
-      ])
+      expect(test.alerts.map((alert) => alert.title)).toEqual(["YCoding — needs your attention"])
       expect(test.alerts.every((alert) => !alert.body.includes("per_1") && !alert.body.includes("grq_1"))).toBe(true)
     } finally {
       await test.stop()
@@ -650,6 +652,41 @@ describe("remote notification delivery", () => {
       await raised(test, "agent-completed")
       expect(test.openAlerts()).toHaveLength(1)
       expect(test.alerts).toHaveLength(2)
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("keeps raised System alerts when the same machine reconnects or the workspace unmounts", async () => {
+    const test = await harness()
+    try {
+      await test.openSession()
+      await raised(test, "approval-requested")
+      expect(test.openAlerts()).toHaveLength(1)
+      const disposals = test.disposals()
+
+      await test.connect("dev_1")
+      expect(test.openAlerts()).toHaveLength(1)
+      expect(test.disposals()).toBe(disposals)
+
+      test.store.dispose()
+      expect(test.openAlerts()).toHaveLength(1)
+      expect(test.disposals()).toBe(disposals)
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("a presentation request that reaches the replaced connection of the same machine still raises its System alert", async () => {
+    const test = await harness()
+    try {
+      await test.openSession()
+      await test.connect("dev_1")
+      const before = test.alerts.length
+      test.transports[0]?.onNotices?.({ type: "notice.present", items: [{ kind: "notice", notice: { id: "ntc_41", category: "approval-requested", sessionID: "ses_a", createdAt: 1 },
+        detail: { title: "Fix login", need: "review" } }] })
+      expect(test.alerts.slice(before)).toEqual([{ title: "YCoding — guardrail review", body: "“Fix login” is waiting for you to approve or reject a guarded action.",
+        tag: "ycoding-dev_1-ntc_41", sessionID: "ses_a", notice: { deviceID: "dev_1", noticeID: "ntc_41" } }])
     } finally {
       await test.stop()
     }

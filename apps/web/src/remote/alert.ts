@@ -8,6 +8,7 @@ export function alertCopy(category: RemoteNoticeCategory, detail: RemoteAlertDet
   if (detail.need === "permission") return { title: "YCoding — approval needed", body: `${subject} is waiting for you to allow or deny a tool request.` }
   if (detail.need === "question") return { title: "YCoding — question for you", body: `${subject} is waiting for your answer.` }
   if (detail.need === "review") return { title: "YCoding — guardrail review", body: `${subject} is waiting for you to approve or reject a guarded action.` }
+  if (detail.need === "blocked") return { title: "YCoding — action blocked", body: `A guardrail blocked an action in ${detail.title === undefined ? "a session" : subject}. Open it to review.` }
   if (detail.need === "failed") return { title: "YCoding — session failed", body: `${subject} stopped with an error. Open it to review and retry.` }
   return { title: "YCoding — needs your attention", body: `${subject} is waiting for you.` }
 }
