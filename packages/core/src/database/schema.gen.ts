@@ -24,39 +24,6 @@ export default {
         );
       `)
       yield* tx.run(`
-        CREATE TABLE \`account_state\` (
-          \`id\` integer PRIMARY KEY,
-          \`active_account_id\` text,
-          \`active_org_id\` text,
-          CONSTRAINT \`fk_account_state_active_account_id_account_id_fk\` FOREIGN KEY (\`active_account_id\`) REFERENCES \`account\`(\`id\`) ON DELETE SET NULL
-        );
-      `)
-      yield* tx.run(`
-        CREATE TABLE \`account\` (
-          \`id\` text PRIMARY KEY,
-          \`email\` text NOT NULL,
-          \`url\` text NOT NULL,
-          \`access_token\` text NOT NULL,
-          \`refresh_token\` text NOT NULL,
-          \`token_expiry\` integer,
-          \`time_created\` integer NOT NULL,
-          \`time_updated\` integer NOT NULL
-        );
-      `)
-      yield* tx.run(`
-        CREATE TABLE \`control_account\` (
-          \`email\` text NOT NULL,
-          \`url\` text NOT NULL,
-          \`access_token\` text NOT NULL,
-          \`refresh_token\` text NOT NULL,
-          \`token_expiry\` integer,
-          \`active\` integer NOT NULL,
-          \`time_created\` integer NOT NULL,
-          \`time_updated\` integer NOT NULL,
-          CONSTRAINT \`control_account_pk\` PRIMARY KEY(\`email\`, \`url\`)
-        );
-      `)
-      yield* tx.run(`
         CREATE TABLE \`credential\` (
           \`id\` text PRIMARY KEY,
           \`integration_id\` text,
@@ -848,17 +815,6 @@ export default {
           \`cache_write\` integer NOT NULL,
           CONSTRAINT \`session_usage_pk\` PRIMARY KEY(\`session_id\`, \`model_key\`),
           CONSTRAINT \`fk_session_usage_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
-        );
-      `)
-      yield* tx.run(`
-        CREATE TABLE \`session_share\` (
-          \`session_id\` text PRIMARY KEY,
-          \`id\` text NOT NULL,
-          \`secret\` text NOT NULL,
-          \`url\` text NOT NULL,
-          \`time_created\` integer NOT NULL,
-          \`time_updated\` integer NOT NULL,
-          CONSTRAINT \`fk_session_share_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
         );
       `)
       yield* tx.run(`CREATE UNIQUE INDEX \`event_aggregate_seq_idx\` ON \`event\` (\`aggregate_id\`,\`seq\`);`)
