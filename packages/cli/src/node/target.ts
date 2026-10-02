@@ -26,9 +26,9 @@ export const photonWasmAsset = "@silvia-odwyer/photon-node/photon_rs_bg.wasm"
 export const nodeExecArgv = ["--experimental-ffi", "--use-system-ca", "--disable-warning=ExperimentalWarning"] as const
 
 export const attentionSoundAssets = [
-  "@ycoding-ai/ui/audio/bip-bop-01.mp3",
-  "@ycoding-ai/ui/audio/bip-bop-03.mp3",
-  "@ycoding-ai/ui/audio/staplebops-06.mp3",
-  "@ycoding-ai/ui/audio/nope-03.mp3",
-  "@ycoding-ai/ui/audio/yup-01.mp3",
+  "@ycoding-ai/tui/audio/bip-bop-01.mp3",
+  "@ycoding-ai/tui/audio/bip-bop-03.mp3",
+  "@ycoding-ai/tui/audio/staplebops-06.mp3",
+  "@ycoding-ai/tui/audio/nope-03.mp3",
+  "@ycoding-ai/tui/audio/yup-01.mp3",
 ] as const

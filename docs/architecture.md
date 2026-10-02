@@ -23,7 +23,6 @@ The active package set is explicit and enforced by `script/ycoding-workspace.ts`
 - `server`
 - `simulation`
 - `tui`
-- `ui`
 - `apps/web` (`@ycoding-ai/web`)
 
 The terminal application and the SolidJS browser client share one local execution runtime. Console, statistics, hosted-agent execution, and legacy SDK packages are outside the product boundary.
@@ -38,8 +37,6 @@ schema ───────────────┐
 schema ─> protocol ───┘               ├─> server ─> client ─> cli ─> tui
                                       │
 ai / plugin / database support ───────┘
-
-ui ───────────────────────────────────────────────────────────────> tui
 ```
 
 Rules:
@@ -142,7 +139,6 @@ The TUI keeps bounded read models. It does not own canonical Session state.
 
 ### Supporting packages
 
-- `packages/ui`: reusable theme and visual primitives.
 - `packages/codemode`: code-mode parsing and support behavior.
 - `packages/httpapi-codegen`: Client code generation.
 - `packages/http-recorder`: deterministic provider and HTTP fixtures.

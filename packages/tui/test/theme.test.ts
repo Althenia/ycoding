@@ -2,16 +2,15 @@ import { expect, test } from "bun:test"
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type { TerminalColors } from "@opentui/core"
-import { DEFAULT_THEMES as SHARED_THEMES } from "@ycoding-ai/ui/theme/default-themes"
 import { DEFAULT_THEMES, addTheme, allThemes, hasTheme, resolveTheme } from "../src/theme"
 import { discoverThemes, themeDirectories } from "../src/theme/discovery"
 import { terminalMode } from "../src/theme/system"
 import type { ThemeFile } from "../src/theme/v2"
 import { tmpdir } from "./fixture/fixture"
 
-test("shared themes export YC-2 without inherited OC theme identifiers", () => {
-  expect(SHARED_THEMES["yc-2"]?.id).toBe("yc-2")
-  expect(SHARED_THEMES["oc-2"]).toBeUndefined()
+test("default themes export ycoding without inherited OC theme identifiers", () => {
+  expect(DEFAULT_THEMES.ycoding).toBeDefined()
+  expect(DEFAULT_THEMES["oc-2"]).toBeUndefined()
 })
 
 test("addTheme writes into module theme store", () => {

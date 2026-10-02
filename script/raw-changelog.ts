@@ -118,7 +118,7 @@ async function commits(from: string, to: string) {
   }
 
   const log =
-    await $`git log ${base}..${head} --format=%H -- packages/cli packages/tui packages/core packages/server packages/client packages/protocol packages/plugin packages/ui`.text()
+    await $`git log ${base}..${head} --format=%H -- packages/cli packages/tui packages/core packages/server packages/client packages/protocol packages/plugin`.text()
 
   const list: Commit[] = []
   for (const hash of log.split("\n").filter(Boolean)) {
@@ -134,7 +134,6 @@ async function commits(from: string, to: string) {
       else if (file.startsWith("packages/core/") || file.startsWith("packages/server/")) areas.add("runtime")
       else if (file.startsWith("packages/client/") || file.startsWith("packages/protocol/")) areas.add("api")
       else if (file.startsWith("packages/plugin/")) areas.add("plugins")
-      else if (file.startsWith("packages/ui/")) areas.add("ui")
     }
 
     if (areas.size === 0) continue

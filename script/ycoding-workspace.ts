@@ -19,7 +19,6 @@ export const approvedPackageNames = new Set([
   "@ycoding-ai/server",
   "@ycoding-ai/simulation",
   "@ycoding-ai/tui",
-  "@ycoding-ai/ui",
   "@ycoding-ai/web",
 ])
 

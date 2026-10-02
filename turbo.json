@@ -46,10 +46,6 @@
     "@ycoding-ai/tui#test": {
       "dependsOn": ["^build"],
       "outputs": []
-    },
-    "@ycoding-ai/ui#test": {
-      "dependsOn": ["^build"],
-      "outputs": []
     }
   }
 }

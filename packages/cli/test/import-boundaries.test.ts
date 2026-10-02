@@ -80,7 +80,6 @@ describe("CLI frontend import boundaries", () => {
       "server",
       "simulation",
       "tui",
-      "ui",
     ])
     expect(
       graph.filter((file) => {
