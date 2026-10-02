@@ -1,6 +1,6 @@
 import path from "node:path"
 
-export const root = path.resolve(import.meta.dir, "../../..")
+const root = path.resolve(import.meta.dir, "../../..")
 export const licenseSource = "assets/brand/fonts/OFL.txt"
 export const sources = {
   sans: "assets/brand/fonts/Geist.woff2",

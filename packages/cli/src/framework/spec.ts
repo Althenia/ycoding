@@ -18,7 +18,7 @@ export interface Node<
 }
 
 export type Any = Node<string, Command.Command<any, any, any, any, any>, Children>
-export type Children = Readonly<Record<string, Any>>
+type Children = Readonly<Record<string, Any>>
 
 export function make<
   const Name extends string,
