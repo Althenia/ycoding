@@ -24,7 +24,7 @@ import { Permission } from "@ycoding-ai/schema/permission"
 import { Pty } from "@ycoding-ai/schema/pty"
 import { Reference } from "@ycoding-ai/schema/reference"
 import { Skill } from "@ycoding-ai/schema/skill"
-import { AbsolutePath, DateTimeUtcFromMillis, optional, statics } from "@ycoding-ai/schema/schema"
+import { AbsolutePath, optional, statics } from "@ycoding-ai/schema/schema"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
 
 test("Core reuses the canonical shared schemas", async () => {
@@ -44,7 +44,6 @@ test("Core reuses the canonical shared schemas", async () => {
     coreSessionPending,
     coreSessionMessage,
     coreSkill,
-    coreV2Schema,
     coreSchema,
     coreWorkspace,
   ] = await Promise.all([
@@ -63,7 +62,6 @@ test("Core reuses the canonical shared schemas", async () => {
     import("@ycoding-ai/core/session/pending"),
     import("@ycoding-ai/core/session/message"),
     import("@ycoding-ai/core/skill"),
-    import("@ycoding-ai/core/v2-schema"),
     import("@ycoding-ai/core/schema"),
     import("@ycoding-ai/core/workspace"),
   ])
@@ -158,7 +156,6 @@ test("Core reuses the canonical shared schemas", async () => {
     [coreSkill.EmbeddedSource, Skill.EmbeddedSource],
     [coreSkill.Source, Skill.Source],
     [coreSkill.Info, Skill.Info],
-    [coreV2Schema.DateTimeUtcFromMillis, DateTimeUtcFromMillis],
     [coreSchema.optional, optional],
     [coreSchema.statics, statics],
     [coreWorkspace.ID, Workspace.ID],
