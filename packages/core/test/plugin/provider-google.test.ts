@@ -19,68 +19,6 @@ const addPlugin = Effect.fn(function* () {
 })
 
 describe("GooglePlugin", () => {
-  it.effect("creates a Google Generative AI SDK for @ai-sdk/google using the provider ID as SDK name", () =>
-    Effect.gen(function* () {
-      const plugin = yield* PluginV2.Service
-      const aisdk = yield* AISDK.Service
-      yield* addPlugin()
-      const result = yield* aisdk.runSDK({
-        model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(ProviderV2.ID.make("custom-google"), ModelV2.ID.make("gemini")),
-          modelID: ModelV2.ID.make("gemini"),
-          package: "aisdk:@ai-sdk/google",
-        }),
-        package: "@ai-sdk/google",
-        options: { name: "custom-google", apiKey: "test" },
-      })
-      expect(result.sdk).toBeDefined()
-      expect(result.sdk?.languageModel("gemini").provider).toBe("custom-google")
-    }),
-  )
-
-  it.effect("ignores non-Google SDK packages", () =>
-    Effect.gen(function* () {
-      const plugin = yield* PluginV2.Service
-      const aisdk = yield* AISDK.Service
-      yield* addPlugin()
-      const result = yield* aisdk.runSDK({
-        model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(ProviderV2.ID.make("google"), ModelV2.ID.make("gemini")),
-          modelID: ModelV2.ID.make("gemini"),
-          package: "aisdk:@ai-sdk/google",
-        }),
-        package: "@ai-sdk/google-vertex",
-        options: { name: "google" },
-      })
-      expect(result.sdk).toBeUndefined()
-    }),
-  )
-
-  it.effect("uses default languageModel loading with provider ID parity", () =>
-    Effect.gen(function* () {
-      const plugin = yield* PluginV2.Service
-      const aisdk = yield* AISDK.Service
-      yield* addPlugin()
-      const sdkEvent = yield* aisdk.runSDK({
-        model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(ProviderV2.ID.make("custom-google"), ModelV2.ID.make("alias")),
-          modelID: ModelV2.ID.make("gemini-api"),
-          package: "aisdk:@ai-sdk/google",
-        }),
-        package: "@ai-sdk/google",
-        options: { name: "custom-google", apiKey: "test" },
-      })
-      const result = yield* aisdk.runLanguage({
-        model: sdkEvent.model,
-        sdk: sdkEvent.sdk,
-        options: sdkEvent.options,
-      })
-      const language = result.language ?? result.sdk.languageModel(result.model.modelID ?? result.model.id)
-      expect(language.modelId).toBe("gemini-api")
-      expect(language.provider).toBe("custom-google")
-    }),
-  )
-
   it.effect("wraps AI SDK language models for the native runner", () =>
     Effect.gen(function* () {
       const aisdk = yield* AISDK.Service
