@@ -16,10 +16,6 @@ export const ActionState = Schema.Literals(["disabled", "pressed", "focused", "s
 export type ActionState = Schema.Schema.Type<typeof ActionState>
 export type ActionStateKey = `$${ActionState}`
 
-export const FormfieldState = ActionState
-export type FormfieldState = ActionState
-export type FormfieldStateKey = `$${FormfieldState}`
-
 export const FeedbackKind = Schema.Literals(["error", "warning", "success", "info"])
 export type FeedbackKind = Schema.Schema.Type<typeof FeedbackKind>
 
@@ -36,8 +32,8 @@ const ColorValue = Schema.Union([
 
 export const HueName = Schema.Union([BaseHue, HueAlias])
 export type HueName = Schema.Schema.Type<typeof HueName>
-export const CategoricalDefinition = Schema.Array(HueName).check(Schema.isMinLength(1))
-export type CategoricalDefinition = Schema.Schema.Type<typeof CategoricalDefinition>
+const CategoricalDefinition = Schema.Array(HueName).check(Schema.isMinLength(1))
+type CategoricalDefinition = Schema.Schema.Type<typeof CategoricalDefinition>
 const HueColorValue = Schema.Union([HexColor, Schema.TemplateLiteral(["$hue.", HueName, ".", HueStep])])
 
 const ContextKey = Schema.Literals(["@context:elevated", "@context:overlay"])
@@ -74,7 +70,7 @@ const HueOverrideDefinition = Schema.Struct({
   interactive: Schema.optional(HueValueDefinition),
   neutral: Schema.optional(HueValueDefinition),
 })
-export type HueOverrideDefinition = Schema.Schema.Type<typeof HueOverrideDefinition>
+type HueOverrideDefinition = Schema.Schema.Type<typeof HueOverrideDefinition>
 
 const StatefulColorDefinition = Schema.Struct({
   default: Schema.optional(ColorValue),
@@ -85,8 +81,6 @@ const StatefulColorDefinition = Schema.Struct({
   $disabled: Schema.optional(ColorValue),
 })
 export type StatefulColorDefinition = Schema.Schema.Type<typeof StatefulColorDefinition>
-
-export type FormfieldColorDefinition = StatefulColorDefinition
 
 const ActionColorDefinition = Schema.Struct({
   primary: Schema.optional(StatefulColorDefinition),
@@ -155,8 +149,8 @@ export const SyntaxToken = Schema.Literals([
   "punctuation",
 ])
 export type SyntaxToken = Schema.Schema.Type<typeof SyntaxToken>
-export const SyntaxDefinition = Schema.Record(SyntaxToken, Schema.optionalKey(HueColorValue))
-export type SyntaxDefinition = Schema.Schema.Type<typeof SyntaxDefinition>
+const SyntaxDefinition = Schema.Record(SyntaxToken, Schema.optionalKey(HueColorValue))
+type SyntaxDefinition = Schema.Schema.Type<typeof SyntaxDefinition>
 
 export const MarkdownToken = Schema.Literals([
   "text",
@@ -175,8 +169,8 @@ export const MarkdownToken = Schema.Literals([
   "codeBlock",
 ])
 export type MarkdownToken = Schema.Schema.Type<typeof MarkdownToken>
-export const MarkdownDefinition = Schema.Record(MarkdownToken, Schema.optionalKey(HueColorValue))
-export type MarkdownDefinition = Schema.Schema.Type<typeof MarkdownDefinition>
+const MarkdownDefinition = Schema.Record(MarkdownToken, Schema.optionalKey(HueColorValue))
+type MarkdownDefinition = Schema.Schema.Type<typeof MarkdownDefinition>
 
 const DiffDefinition = Schema.Struct({
   text: Schema.optional(
@@ -206,7 +200,7 @@ const DiffDefinition = Schema.Struct({
     }),
   ),
 })
-export type DiffDefinition = Schema.Schema.Type<typeof DiffDefinition>
+type DiffDefinition = Schema.Schema.Type<typeof DiffDefinition>
 
 const ThemeTokensDefinition = Schema.Struct({
   text: Schema.optional(TextDefinition),

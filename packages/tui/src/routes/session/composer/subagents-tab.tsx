@@ -142,7 +142,7 @@ const COMPOSER_INSET = 8
  * terminal minus the rail and the composer insets. Trailing fields drop whole rather than collide,
  * and the model truncates only when it cannot fit on its own.
  */
-export function subagentMetadata(input: {
+function subagentMetadata(input: {
   width: number
   model?: string
   status?: string

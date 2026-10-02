@@ -1,6 +1,6 @@
 import type { EditorTraits } from "@opentui/core"
 
-export type PromptMode = "normal" | "shell"
+type PromptMode = "normal" | "shell"
 
 export interface PromptTraitsInput {
   mode: PromptMode

@@ -80,7 +80,7 @@ export type GoUpsellArtRenderOptions = {
 const CACHE_FRAME_COUNT = Math.round(PERIOD / (1000 / 30))
 const CACHE_FRAMES_PER_RENDER = 1
 
-export function toRgb(color: RGBA): Rgb {
+function toRgb(color: RGBA): Rgb {
   const [r, g, b] = color.toInts()
   return [r, g, b]
 }

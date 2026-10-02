@@ -11,7 +11,7 @@ const PROGRAMS: Record<string, ModelDaybreak> = {
   daybreak_red: "daybreak_red",
 }
 
-export function daybreakStateLabel(daybreak?: ModelDaybreak) {
+function daybreakStateLabel(daybreak?: ModelDaybreak) {
   if (daybreak === "daybreak_blue") return "blue"
   if (daybreak === "daybreak_red") return "red"
   return "off"

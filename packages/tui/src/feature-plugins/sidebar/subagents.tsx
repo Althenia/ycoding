@@ -10,7 +10,7 @@ import { Locale } from "../../util/locale"
 import { isActiveSubagent } from "../../util/subagent"
 import { formatSubagentElapsed } from "../../util/time"
 
-export function SubagentRail(props: { sessionID: string }) {
+function SubagentRail(props: { sessionID: string }) {
   const route = useRoute()
   const data = useData()
   const page = createMemo(() => data.session.subagent.page(props.sessionID))

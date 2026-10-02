@@ -24,16 +24,6 @@ import { useRoute } from "./route"
 import { useData } from "./data"
 import { useLocation } from "./location"
 
-export type LocalTheme = {
-  secondary: RGBA
-  accent: RGBA
-  success: RGBA
-  warning: RGBA
-  primary: RGBA
-  error: RGBA
-  info: RGBA
-}
-
 export function parseModel(model: string) {
   const [providerID, ...rest] = model.split("/")
   return {

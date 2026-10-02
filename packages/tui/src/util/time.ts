@@ -2,7 +2,7 @@ import type { SessionOrchestrationTask } from "@ycoding-ai/client"
 import { formatDuration } from "./format"
 import { isActiveSubagent } from "./subagent"
 
-export function subagentElapsedSeconds(
+function subagentElapsedSeconds(
   task: Pick<SessionOrchestrationTask, "state" | "time">,
   now = Date.now(),
 ) {

@@ -63,7 +63,7 @@ export function LandingMark(props: { overlay: boolean; children: JSX.Element }) 
   return <Show when={!props.overlay}>{props.children}</Show>
 }
 
-export function LandingFooter(props: { autonomy?: SessionAutonomyState }) {
+function LandingFooter(props: { autonomy?: SessionAutonomyState }) {
   const { themeV2 } = useTheme()
   const shortcut = Keymap.useShortcut("command.palette.show")
   const usageShortcut = Keymap.useShortcut("home.provider-usage.open")

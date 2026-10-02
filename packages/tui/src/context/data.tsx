@@ -136,7 +136,7 @@ function mergeCompactionLifecycle(
 // until MCP elicitations carry session ownership.
 export type FormWithLocation = FormInfo & { readonly location?: LocationRef }
 
-export type SubagentPage = SessionOrchestrationPage & {
+type SubagentPage = SessionOrchestrationPage & {
   readonly offset: number
   readonly position: "top" | "older"
 }
@@ -194,7 +194,7 @@ function locationQuery(ref?: LocationRef) {
   return ref ? { directory: ref.directory, workspace: ref.workspaceID } : undefined
 }
 
-export function isMessageComplete(message: SessionMessageInfo) {
+function isMessageComplete(message: SessionMessageInfo) {
   if (message.type === "shell") return message.status !== "running"
   if (message.type === "compaction") {
     if (currentCompaction(message)) return message.status === "completed" || message.status === "failed"
@@ -295,7 +295,7 @@ function sameRevision(left: unknown[] | undefined, right: unknown[]) {
   return left?.length === right.length && right.every((value, index) => Object.is(value, left[index]))
 }
 
-export function reconcileCanonicalMessages(
+function reconcileCanonicalMessages(
   api: SessionMessageInfo[],
   current: SessionMessageInfo[],
   touched: ReadonlySet<string>,

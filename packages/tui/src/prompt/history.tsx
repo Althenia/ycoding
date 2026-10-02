@@ -8,7 +8,7 @@ import { useTuiPaths } from "../context/runtime"
 import { appendText, readText, writeText } from "../util/persistence"
 import type { PromptSkill } from "./skill"
 
-export type PastedText = {
+type PastedText = {
   text: string
   source: {
     start: number
