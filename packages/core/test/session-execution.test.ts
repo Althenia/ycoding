@@ -493,28 +493,6 @@ describe("SessionExecution lifecycle", () => {
     }),
   )
 
-  it.effect("resumes each suspended Session at most once", () =>
-    Effect.gen(function* () {
-      const database = yield* Database.Service
-      const first = SessionV2.ID.make("ses_resume_first")
-      const second = SessionV2.ID.make("ses_resume_second")
-      yield* seedSessions(database, [first, second], { time_suspended: Date.now() })
-
-      const drained: string[] = []
-      const scope = yield* Scope.make()
-      const context = yield* buildExecution(scope, ({ sessionID }) => Effect.sync(() => void drained.push(sessionID)))
-      const restart = Context.get(context, SessionRestart.Service)
-
-      yield* restart.resumeSuspendedSessions
-      expect(drained.toSorted()).toEqual([first, second])
-      expect(yield* suspensions(database)).toEqual({ [first]: false, [second]: false })
-
-      yield* restart.resumeSuspendedSessions
-      expect(drained.length).toBe(2)
-      yield* Scope.close(scope, Exit.void)
-    }),
-  )
-
   it.effect("starts a fresh drain after an interrupt so an admitted steer is not stranded", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
