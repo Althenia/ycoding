@@ -378,3 +378,22 @@ test.each(["root", "child"] as const)(
   },
   30_000,
 )
+
+test("reopens a Session whose captured transcript is still resident without crashing", async () => {
+  const state = fixture()
+  const screen = await mount(state)
+  try {
+    await text(screen, "Captured changes")
+    screen.input.pressKey("x", { ctrl: true })
+    screen.input.pressKey("n")
+    await Bun.sleep(500)
+    screen.input.pressKey("x", { ctrl: true })
+    screen.input.pressKey("l")
+    await Bun.sleep(500)
+    screen.input.pressEnter()
+    await text(screen, "Captured changes")
+    expect(screen.frame()).not.toContain("YCoding crashed")
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)

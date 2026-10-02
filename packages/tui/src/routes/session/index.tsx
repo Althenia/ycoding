@@ -237,37 +237,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       (assistantMessageID, callID) => SessionOrchestrationIdentity.send(route.sessionID, assistantMessageID, callID),
     ),
   )
-  const capturedAnchors = createMemo(() => {
-    const anchors = new Map<
-      SessionRow,
-      { files: InlineDiffFile[]; hydration: ReturnType<typeof capturedChildren.status>; children: string[] }
-    >()
-    const units = new Map(capturedUnits().map((unit) => [unit.placementMessageID, unit]))
-    const groups = messages().reduce<SessionMessageInfo[][]>((groups, message) => {
-      if (message.type === "user" || groups.length === 0) {
-        groups.push([message])
-        return groups
-      }
-      groups.at(-1)!.push(message)
-      return groups
-    }, [])
-    groups.forEach((group) => {
-      const assistants = group.filter((message) => message.type === "assistant")
-      const placement = assistants.at(-1)?.id
-      if (!placement || !data.session.message.get(route.sessionID, placement)) return
-      const children = capturedChildSessionIDs(group)
-      const hydration = capturedChildren.status(children)
-      const unit = units.get(placement)
-      if (!unit && !hydration) return
-      const anchor = rows.findLast(
-        (row) =>
-          (row.type === "part" || row.type === "group" || row.type === "assistant-footer") &&
-          assistants.some((assistant) => assistant.id === sessionRowMessageID(row)),
-      )
-      if (anchor) anchors.set(anchor, { files: unit?.files.flatMap((file) => file.files) ?? [], hydration, children })
-    })
-    return anchors
-  })
   const location = createMemo(() => session()?.location)
   const currentLocation = useLocation()
 
@@ -655,6 +624,37 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const blockedActivity = createMemo(() => currentTask()?.description)
   const editor = useEditorContext()
   const rows = createSessionRows(() => route.sessionID)
+  const capturedAnchors = createMemo(() => {
+    const anchors = new Map<
+      SessionRow,
+      { files: InlineDiffFile[]; hydration: ReturnType<typeof capturedChildren.status>; children: string[] }
+    >()
+    const units = new Map(capturedUnits().map((unit) => [unit.placementMessageID, unit]))
+    const groups = messages().reduce<SessionMessageInfo[][]>((groups, message) => {
+      if (message.type === "user" || groups.length === 0) {
+        groups.push([message])
+        return groups
+      }
+      groups.at(-1)!.push(message)
+      return groups
+    }, [])
+    groups.forEach((group) => {
+      const assistants = group.filter((message) => message.type === "assistant")
+      const placement = assistants.at(-1)?.id
+      if (!placement || !data.session.message.get(route.sessionID, placement)) return
+      const children = capturedChildSessionIDs(group)
+      const hydration = capturedChildren.status(children)
+      const unit = units.get(placement)
+      if (!unit && !hydration) return
+      const anchor = rows.findLast(
+        (row) =>
+          (row.type === "part" || row.type === "group" || row.type === "assistant-footer") &&
+          assistants.some((assistant) => assistant.id === sessionRowMessageID(row)),
+      )
+      if (anchor) anchors.set(anchor, { files: unit?.files.flatMap((file) => file.files) ?? [], hydration, children })
+    })
+    return anchors
+  })
   const boundaries = createMemo(() => messageBoundaryIDs(rows, messages()))
   const MAX_MOUNTED_ROWS = 400
   const mountedRows = createMemo(() =>
