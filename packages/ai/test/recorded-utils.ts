@@ -8,7 +8,7 @@ export const kebab = (value: string) =>
 
 export const missingEnv = (names: ReadonlyArray<string>) => names.filter((name) => !process.env[name])
 
-export const envList = (name: string) =>
+const envList = (name: string) =>
   (process.env[name] ?? "")
     .split(",")
     .map((item) => item.trim().toLowerCase())

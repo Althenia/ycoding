@@ -1,10 +1,10 @@
 import { LLM, Message, ToolCallPart, ToolDefinition, ToolResultPart, type ContentPart, type Model } from "../src"
 
-export const basicContinuation = ["system", "user-text", "assistant-text", "user-follow-up"] as const
-export const toolContinuation = ["tool-call", "tool-result"] as const
-export const reasoningContinuation = ["assistant-reasoning", "encrypted-reasoning"] as const
-export const mediaContinuation = ["user-image"] as const
-export const maximalContinuation = [
+const basicContinuation = ["system", "user-text", "assistant-text", "user-follow-up"] as const
+const toolContinuation = ["tool-call", "tool-result"] as const
+const reasoningContinuation = ["assistant-reasoning", "encrypted-reasoning"] as const
+const mediaContinuation = ["user-image"] as const
+const maximalContinuation = [
   ...basicContinuation,
   ...toolContinuation,
   ...reasoningContinuation,
