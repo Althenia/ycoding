@@ -18,6 +18,7 @@ import { EventV2 } from "../../event"
 import { EventTable } from "../../event/sql"
 import { PermissionV2 } from "../../permission"
 import { SkillV2 } from "../../skill"
+import { FSUtil } from "../../fs-util"
 import { ProjectArtifactAccounting } from "../../project-artifact/accounting"
 import { ProjectArtifactSource } from "../../project-artifact/source"
 import { SessionSkill } from "../skill"
@@ -103,15 +104,16 @@ const layer = Layer.effect(
     const continuation = yield* SessionContinuation.Service
     const liveState = yield* SessionLiveState.Service
     const skills = yield* SkillV2.Service
+    const fs = yield* FSUtil.Service
     const permission = yield* PermissionV2.Service
     const accounting = yield* ProjectArtifactAccounting.Service
     const artifactSource = yield* ProjectArtifactSource.Service
-    const activateRequestedSkills = Effect.fn("SessionRunner.activateRequestedSkills")(function* (
+    const resolveRequestedSkills = Effect.fn("SessionRunner.resolveRequestedSkills")(function* (
       selected: SessionContext.Selection,
       ids: ReadonlyArray<SkillV2.ID>,
       catalog: ReadonlyArray<SkillV2.Info>,
     ) {
-      const resolved = yield* Effect.forEach(ids, (id) =>
+      return yield* Effect.forEach(ids, (id) =>
         Effect.gen(function* () {
           const skill = catalog.find((skill) => skill.id === id)
           if (!skill)
@@ -133,18 +135,30 @@ const layer = Layer.effect(
           return skill
         }),
       )
+    })
+    const activateSkills = Effect.fn("SessionRunner.activateSkills")(function* (
+      selected: SessionContext.Selection,
+      resolved: ReadonlyArray<SkillV2.Info>,
+    ) {
       yield* Effect.forEach(
         resolved,
         (skill) =>
           Effect.gen(function* () {
             const provenance = yield* artifactSource.provenance("skill", skill.id)
             yield* SessionSkill.activate(
-              { events, store, accounting },
+              { events, store, accounting, fs },
               { session: selected.session, skill, provenance },
             ).pipe(Effect.orDie)
           }),
         { discard: true },
       )
+    })
+    const activateRequestedSkills = Effect.fn("SessionRunner.activateRequestedSkills")(function* (
+      selected: SessionContext.Selection,
+      ids: ReadonlyArray<SkillV2.ID>,
+      catalog: ReadonlyArray<SkillV2.Info>,
+    ) {
+      yield* activateSkills(selected, yield* resolveRequestedSkills(selected, ids, catalog))
     })
     let executionGeneration = 0
     // Title generation is a side effect of the first step; it must not delay step continuation.
@@ -305,6 +319,7 @@ const layer = Layer.effect(
       yield* InstructionState.prepare(db, events, selected.instructions, selected.session.id)
       let currentStep = step
       let promoted = 0
+      const inputSkills = new Map<string, ReadonlyArray<SkillV2.Info>>()
       const prepareInput = Effect.fn("SessionRunner.prepareInput")(function* (entry: SessionPending.Info) {
         if (entry.type !== "user") return
         const requested = SessionSkill.selected(entry.data.metadata)
@@ -316,15 +331,35 @@ const layer = Layer.effect(
             ...SessionSkill.mentions(entry.data.text, catalog).map((skill) => SkillV2.ID.make(skill.id)),
           ]),
         ]
-        yield* activateRequestedSkills(selected, ids, catalog)
+        inputSkills.set(entry.id, yield* resolveRequestedSkills(selected, ids, catalog))
         requestTrackerState.skills = [...new Set([...(requestTrackerState.skills ?? []), ...ids])]
+      })
+      const activateInputSkills = Effect.fn("SessionRunner.activateInputSkills")(function* (
+        entry: SessionPending.Info,
+      ) {
+        const resolved = inputSkills.get(entry.id)
+        if (resolved) yield* activateSkills(selected, resolved)
       })
       if (promotion) {
         if (promotion === "steer")
-          promoted = yield* SessionPending.promoteSteers(db, events, selected.session.id, prepareInput)
+          promoted = yield* SessionPending.promoteSteers(
+            db,
+            events,
+            selected.session.id,
+            prepareInput,
+            activateInputSkills,
+          )
         if (promotion === "queue") {
-          promoted += Number(yield* SessionPending.promoteNextQueued(db, events, selected.session.id, prepareInput))
-          promoted += yield* SessionPending.promoteSteers(db, events, selected.session.id, prepareInput)
+          promoted += Number(
+            yield* SessionPending.promoteNextQueued(db, events, selected.session.id, prepareInput, activateInputSkills),
+          )
+          promoted += yield* SessionPending.promoteSteers(
+            db,
+            events,
+            selected.session.id,
+            prepareInput,
+            activateInputSkills,
+          )
         }
         if (promoted > 0) {
           currentStep = 1
@@ -1173,6 +1208,7 @@ export const node = makeLocationNode({
     Snapshot.node,
     Database.node,
     SkillV2.node,
+    FSUtil.node,
     PermissionV2.node,
     ProjectArtifactAccounting.node,
     ProjectArtifactSource.node,

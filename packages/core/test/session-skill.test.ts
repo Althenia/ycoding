@@ -131,13 +131,18 @@ describe("SessionV2.skill", () => {
           type: "skill",
           skill: "effect",
           name: "Effect",
-          text: "Use Effect",
+          text: expect.stringContaining('<skill_content name="Effect">'),
           conflicts: {
             skills: [SkillV2.ID.make("other")],
             instructions: [Instruction.Key.make("core/instructions")],
           },
         }),
       )
+      const text = (yield* sessions.messages({ sessionID: session.id })).flatMap((message) =>
+        message.type === "skill" ? [message.text] : [],
+      )[0]
+      expect(text).toContain("Use Effect")
+      expect(text).toContain(`Base directory for this skill: ${path.resolve("/skills/effect")}`)
     }),
   )
 

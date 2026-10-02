@@ -5,9 +5,11 @@ import { Effect } from "effect"
 import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
 import { KeyedMutex } from "../effect/keyed-mutex"
 import { EventV2 } from "../event"
+import type { FSUtil } from "../fs-util"
 import { ProjectArtifactAccounting } from "../project-artifact/accounting"
 import type { ProjectArtifactSource } from "../project-artifact/source"
 import { SkillV2 } from "../skill"
+import { SkillTool } from "../tool/skill"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
@@ -43,6 +45,7 @@ export const activate = Effect.fn("SessionSkill.activate")(function* (
     events: EventV2.Interface
     store: SessionStore.Interface
     accounting: ProjectArtifactAccounting.Interface
+    fs: FSUtil.Interface
   },
   input: {
     session: SessionSchema.Info
@@ -57,6 +60,7 @@ export const activate = Effect.fn("SessionSkill.activate")(function* (
         (status) => status.id === input.skill.id && status.state === "active",
       )
       if (active) return
+      const text = yield* SkillTool.instructions(services.fs, input.skill)
       const provenance = input.provenance
       yield* services.events.publish(
         SessionEvent.Skill.Activated,
@@ -64,7 +68,7 @@ export const activate = Effect.fn("SessionSkill.activate")(function* (
           sessionID: input.session.id,
           id: input.skill.id,
           name: input.skill.name,
-          text: input.skill.content,
+          text,
           conflicts: input.skill.conflicts,
           artifact: provenance
             ? {

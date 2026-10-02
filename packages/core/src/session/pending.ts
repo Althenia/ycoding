@@ -393,6 +393,7 @@ const publish = Effect.fn("SessionPending.publish")(function* <E = never>(
   sessionID: SessionSchema.ID,
   rows: ReadonlyArray<typeof SessionPendingTable.$inferSelect>,
   prepare?: (entry: Info) => Effect.Effect<void, E>,
+  promoted?: (entry: Info) => Effect.Effect<void, E>,
 ) {
   return yield* inboxLocks.withLock(sessionID)(
     Effect.gen(function* () {
@@ -404,7 +405,7 @@ const publish = Effect.fn("SessionPending.publish")(function* <E = never>(
             const entry = fromRow(row)
             if (entry.type === "compaction") return yield* Effect.die(new LifecycleConflict({ id: entry.id }))
             if (prepare) yield* prepare(entry)
-            return yield* events
+            yield* events
               .publish(SessionEvent.InputPromoted, {
                 sessionID,
                 inputID: entry.id,
@@ -418,6 +419,7 @@ const publish = Effect.fn("SessionPending.publish")(function* <E = never>(
                     : Effect.die(defect),
                 ),
               )
+            return yield* (promoted ? promoted(entry) : Effect.void)
           }),
         { discard: true },
       )
@@ -431,6 +433,7 @@ export const promoteSteers = Effect.fn("SessionPending.promoteSteers")(function*
   events: EventV2.Interface,
   sessionID: SessionSchema.ID,
   prepare?: (entry: Info) => Effect.Effect<void, E>,
+  promoted?: (entry: Info) => Effect.Effect<void, E>,
 ) {
   if (yield* compaction(db, sessionID)) return 0
   const rows = yield* db
@@ -440,7 +443,7 @@ export const promoteSteers = Effect.fn("SessionPending.promoteSteers")(function*
     .orderBy(asc(SessionPendingTable.admitted_seq))
     .all()
     .pipe(Effect.orDie)
-  return yield* publish(db, events, sessionID, rows, prepare)
+  return yield* publish(db, events, sessionID, rows, prepare, promoted)
 })
 
 export const promoteNextQueued = Effect.fn("SessionPending.promoteNextQueued")(function* <E = never>(
@@ -448,6 +451,7 @@ export const promoteNextQueued = Effect.fn("SessionPending.promoteNextQueued")(f
   events: EventV2.Interface,
   sessionID: SessionSchema.ID,
   prepare?: (entry: Info) => Effect.Effect<void, E>,
+  promoted?: (entry: Info) => Effect.Effect<void, E>,
 ) {
   if (yield* compaction(db, sessionID)) return false
   const row = yield* db
@@ -458,5 +462,5 @@ export const promoteNextQueued = Effect.fn("SessionPending.promoteNextQueued")(f
     .limit(1)
     .get()
     .pipe(Effect.orDie)
-  return row === undefined ? false : yield* publish(db, events, sessionID, [row], prepare).pipe(Effect.as(true))
+  return row === undefined ? false : yield* publish(db, events, sessionID, [row], prepare, promoted).pipe(Effect.as(true))
 })

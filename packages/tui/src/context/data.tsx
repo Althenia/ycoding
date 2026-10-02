@@ -1179,6 +1179,32 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             })
           })
           break
+        case "session.skill.activated":
+          message.update(event.data.sessionID, (draft, index) => {
+            message.append(draft, index, {
+              id: messageIDFromEvent(event.id),
+              type: "skill",
+              skill: event.data.id,
+              name: event.data.name,
+              text: event.data.text,
+              conflicts: event.data.conflicts ?? { skills: [], instructions: [] },
+              artifact: event.data.artifact,
+              metadata: event.metadata,
+              time: { created: event.created },
+            })
+          })
+          break
+        case "session.skill.deactivated":
+          message.update(event.data.sessionID, (draft, index) => {
+            const position = index.get(event.data.activationMessageID)
+            const activation = position === undefined ? undefined : draft[position]
+            if (activation?.type !== "skill" && activation?.type !== "assistant") return
+            activation.skillDeactivations = [
+              ...(activation.skillDeactivations ?? []),
+              { skill: event.data.id, reason: event.data.reason },
+            ]
+          })
+          break
         case "session.shell.started":
           message.update(event.data.sessionID, (draft, index) => {
             message.append(draft, index, {

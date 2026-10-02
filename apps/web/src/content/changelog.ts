@@ -22,6 +22,17 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.8.9",
+    date: "2026-10-02",
+    title: "Skills follow the prompt that invokes them",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Show a skill invoked with $skill directly after the prompt that requested it, from the landing screen and inside a Session, in the terminal, web, and model history. Update the connected machine to use this behavior remotely." },
+      { tag: "Fixed", text: "Give an explicitly invoked skill the same content as a skill the agent loads itself: its name, instructions, base directory, and supporting files, so the agent can use the skill's references without loading it again." },
+      { tag: "Fixed", text: "Show an invoked skill's Loaded row in the terminal transcript as soon as the skill activates." },
+    ],
+  },
+  {
     version: "0.8.8",
     date: "2026-10-01",
     title: "Responsive prompts and reliable model selection",

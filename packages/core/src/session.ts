@@ -1568,7 +1568,7 @@ const layer = Layer.effect(
         if (!skill) return yield* new SkillNotFoundError({ skill: input.skill })
         const provenance = source ? yield* source.provenance("skill", skill.id) : undefined
         yield* SessionSkill.activate(
-          { events, store, accounting: projectArtifactAccounting },
+          { events, store, accounting: projectArtifactAccounting, fs },
           { session, skill, id: input.id, provenance },
         ).pipe(Effect.orDie)
         if (input.resume !== false)

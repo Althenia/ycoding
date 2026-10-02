@@ -1177,3 +1177,81 @@ test("an active subagent does not create a transcript row", async () => {
     mounted.destroy()
   }
 })
+
+test("shows an invoked skill block live, directly after the prompt that requested it", async () => {
+  const sessionID = "ses_live_skill_invocation"
+  const mounted = await mountRows(sessionID)
+  try {
+    mounted.events.emit({
+      id: "evt_skill_prompt_admitted",
+      created: 1,
+      type: "session.input.admitted",
+      location: { directory },
+      durable: durable(sessionID, 1),
+      data: {
+        sessionID,
+        inputID: "msg_skill_prompt",
+        input: {
+          type: "user",
+          data: { text: "$performance-optimization profile startup", metadata: { skills: [{ id: "performance-optimization" }] } },
+          delivery: "steer",
+        },
+      },
+    } as unknown as YCodingEvent)
+    mounted.events.emit({
+      id: "evt_skill_prompt_promoted",
+      created: 2,
+      type: "session.input.promoted",
+      location: { directory },
+      durable: durable(sessionID, 2),
+      data: { sessionID, inputID: "msg_skill_prompt" },
+    } as unknown as YCodingEvent)
+    mounted.events.emit({
+      id: "evt_skill_block",
+      created: 3,
+      type: "session.skill.activated",
+      location: { directory },
+      durable: durable(sessionID, 3),
+      data: {
+        sessionID,
+        id: "performance-optimization",
+        name: "performance-optimization",
+        text: '<skill_content name="performance-optimization">\n# Skill: performance-optimization\n</skill_content>',
+      },
+    } as unknown as YCodingEvent)
+    await wait(() => mounted.rows.some((row) => row.type === "message" && row.messageID === "msg_skill_block"))
+    expect(mounted.data.session.message.get(sessionID, "msg_skill_block")).toMatchObject({
+      type: "skill",
+      skill: "performance-optimization",
+      name: "performance-optimization",
+    })
+    expect(
+      mounted.rows
+        .filter((row) => row.type === "message")
+        .map((row) => row.messageID)
+        .filter((id) => id === "msg_skill_prompt" || id === "msg_skill_block"),
+    ).toEqual(["msg_skill_prompt", "msg_skill_block"])
+    mounted.events.emit({
+      id: "evt_skill_block_deactivated",
+      created: 4,
+      type: "session.skill.deactivated",
+      location: { directory },
+      durable: durable(sessionID, 4),
+      data: {
+        sessionID,
+        id: "performance-optimization",
+        activationMessageID: "msg_skill_block",
+        reason: "conflict_resolved",
+      },
+    } as unknown as YCodingEvent)
+    await wait(() => {
+      const block = mounted.data.session.message.get(sessionID, "msg_skill_block")
+      return block?.type === "skill" && block.skillDeactivations !== undefined
+    })
+    expect(JSON.parse(JSON.stringify(mounted.data.session.message.get(sessionID, "msg_skill_block")))).toMatchObject({
+      skillDeactivations: [{ skill: "performance-optimization", reason: "conflict_resolved" }],
+    })
+  } finally {
+    mounted.destroy()
+  }
+})

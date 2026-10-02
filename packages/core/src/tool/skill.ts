@@ -74,6 +74,18 @@ export const toModelOutput = (skill: SkillV2.Info, files: ReadonlyArray<string>)
   ].join("\n")
 }
 
+export const instructions = Effect.fn("SkillTool.instructions")(function* (fs: FSUtil.Interface, skill: SkillV2.Info) {
+  const directory = path.dirname(skill.location)
+  const files =
+    path.basename(skill.location) === "SKILL.md"
+      ? (yield* fs.scan("**/*", { cwd: directory, absolute: true, include: "file", dot: true }))
+          .filter((file) => path.basename(file) !== "SKILL.md")
+          .toSorted()
+          .slice(0, FILE_LIMIT)
+      : []
+  return toModelOutput(skill, files)
+})
+
 const unableToLoad = (name: string, error?: unknown) =>
   new ToolFailure({ message: `Unable to load skill ${name}`, error })
 
@@ -336,14 +348,7 @@ export const Plugin = {
                     agent: context.agent,
                     source: { type: "tool", messageID: context.messageID, callID: context.callID },
                   })
-                  const directory = path.dirname(skill.location)
-                  const files =
-                    path.basename(skill.location) === "SKILL.md"
-                      ? (yield* fs.scan("**/*", { cwd: directory, absolute: true, include: "file", dot: true }))
-                          .filter((file) => path.basename(file) !== "SKILL.md")
-                          .toSorted()
-                          .slice(0, FILE_LIMIT)
-                      : []
+                  const output = yield* instructions(fs, skill)
                   if (Option.isSome(projectArtifactSource))
                     yield* projectArtifactSource.value
                       .activate({
@@ -365,8 +370,8 @@ export const Plugin = {
                       )
                   return {
                     name: skill.name,
-                    directory,
-                    output: toModelOutput(skill, files),
+                    directory: path.dirname(skill.location),
+                    output,
                     conflicts: skill.conflicts,
                   }
                 }).pipe(Effect.mapError((error) => unableToLoad(input.id, error)))

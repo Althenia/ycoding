@@ -107,7 +107,9 @@ import { ProviderV2 } from "@ycoding-ai/core/provider"
 import { Cause, Clock, Context, DateTime, Deferred, Duration, Effect, Exit, Fiber, Layer, LayerMap, Schema, Scope, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { and, asc, eq, lte } from "drizzle-orm"
-import { chmod, writeFile } from "fs/promises"
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "fs/promises"
+import { tmpdir } from "os"
+import path from "path"
 import { AttachmentStore } from "@ycoding-ai/core/attachment-store"
 import { testEffect } from "./lib/effect"
 import { registerToolPlugin } from "./lib/tool"
@@ -498,7 +500,7 @@ let systemUnavailable = false
 let systemLoadHook = Effect.void
 const skillBaselines = new Map<AgentV2.ID, string>()
 let skillAccess: "allow" | "deny" = "allow"
-const registerExplicitSkill = (id: string, content: string) =>
+const registerExplicitSkill = (id: string, content: string, location = `${runnerDirectory}/${id}.md`) =>
   Effect.gen(function* () {
     const skills = yield* SkillV2.Service
     const locations = yield* LocationServiceMap.Service
@@ -515,7 +517,7 @@ const registerExplicitSkill = (id: string, content: string) =>
               id: SkillV2.ID.make(id),
               name: SkillV2.Name.make(id),
               autoinvoke: false,
-              location: AbsolutePath.make(`${runnerDirectory}/${id}.md`),
+              location: AbsolutePath.make(location),
               content,
             }),
           }),
@@ -1282,6 +1284,44 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, text: "$explicit-audit again", resume: false })
       yield* session.resume(sessionID)
       expect((yield* session.context(sessionID)).filter((message) => message.type === "skill")).toHaveLength(1)
+    }),
+  )
+
+  it.effect("loads an explicit skill with its identity, base directory, and supporting files", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const directory = yield* Effect.acquireRelease(
+        Effect.promise(() => mkdtemp(path.join(tmpdir(), "ycoding-explicit-skill-"))),
+        (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
+      )
+      const checklist = path.join(directory, "references", "checklist.md")
+      yield* Effect.promise(async () => {
+        await mkdir(path.dirname(checklist))
+        await writeFile(path.join(directory, "SKILL.md"), "---\nname: directory-audit\n---\nRead references/checklist.md first.\n")
+        await writeFile(checklist, "1. Measure before changing code.\n")
+      })
+      yield* registerExplicitSkill(
+        "directory-audit",
+        "Read references/checklist.md first.",
+        path.join(directory, "SKILL.md"),
+      )
+      yield* session.prompt({ sessionID, text: "Use $directory-audit now", resume: false })
+      yield* session.resume(sessionID)
+      const skill = (yield* session.context(sessionID)).find(
+        (message): message is Extract<SessionMessage.Info, { type: "skill" }> => message.type === "skill",
+      )
+      expect(skill?.text).toContain('<skill_content name="directory-audit">')
+      expect(skill?.text).toContain("Read references/checklist.md first.")
+      expect(skill?.text).toContain(`Base directory for this skill: ${directory}`)
+      expect(skill?.text).toContain(`<file>${checklist}</file>`)
+      expect(requests).toHaveLength(1)
+      expect(JSON.stringify(requests[0]!.messages)).toContain(`Base directory for this skill: ${directory}`)
+      const order = (messages: ReadonlyArray<SessionMessage.Info>) =>
+        messages.flatMap((message) => (message.type === "user" || message.type === "skill" ? [message.type] : []))
+      expect(order(yield* session.context(sessionID))).toEqual(["user", "skill"])
+      expect(order(yield* session.messages({ sessionID, order: "asc" }))).toEqual(["user", "skill"])
+      const prompt = JSON.stringify(requests[0]!.messages)
+      expect(prompt.indexOf("Use $directory-audit now")).toBeLessThan(prompt.indexOf('<skill_content name=\\"directory-audit\\">'))
     }),
   )
 
