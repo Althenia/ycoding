@@ -22,6 +22,16 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.8.10",
+    date: "2026-10-02",
+    title: "Keep working while background tasks run",
+    tags: ["Changed"],
+    changes: [
+      { tag: "Changed", text: "Keep working on the remaining tasks in the main session while a subagent or background shell is still running, instead of waiting idle until it finishes. Background work still notifies you when it completes." },
+      { tag: "Changed", text: "Always choose a model variant when starting a subagent if that model offers variants. Match the variant to the task, and use a stronger variant only when the task needs it." },
+    ],
+  },
+  {
     version: "0.8.9",
     date: "2026-10-02",
     title: "Skills follow the prompt that invokes them",

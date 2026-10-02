@@ -6,6 +6,16 @@ const TAGS = ["Added", "Changed", "Fixed"] as const
 describe("release entries", () => {
   test("includes the latest TUI release at the top of the public changelog", () => {
     expect(RELEASES[0]).toEqual({
+      version: "0.8.10",
+      date: "2026-10-02",
+      title: "Keep working while background tasks run",
+      tags: ["Changed"],
+      changes: [
+        { tag: "Changed", text: "Keep working on the remaining tasks in the main session while a subagent or background shell is still running, instead of waiting idle until it finishes. Background work still notifies you when it completes." },
+        { tag: "Changed", text: "Always choose a model variant when starting a subagent if that model offers variants. Match the variant to the task, and use a stronger variant only when the task needs it." },
+      ],
+    })
+    expect(RELEASES[1]).toEqual({
       version: "0.8.9",
       date: "2026-10-02",
       title: "Skills follow the prompt that invokes them",
@@ -16,7 +26,7 @@ describe("release entries", () => {
         { tag: "Fixed", text: "Show an invoked skill's Loaded row in the terminal transcript as soon as the skill activates." },
       ],
     })
-    expect(RELEASES[1]).toEqual({
+    expect(RELEASES[2]).toEqual({
       version: "0.8.8",
       date: "2026-10-01",
       title: "Responsive prompts and reliable model selection",
@@ -31,7 +41,7 @@ describe("release entries", () => {
         { tag: "Changed", text: "Allow explicit shell timeouts up to one hour. The default remains ten minutes, and foreground commands still move to the background after five minutes." },
       ],
     })
-    expect(RELEASES[2]).toEqual({
+    expect(RELEASES[3]).toEqual({
       version: "0.8.7",
       date: "2026-10-01",
       title: "Cursor cache reporting",
@@ -43,7 +53,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[3]).toEqual({
+    expect(RELEASES[4]).toEqual({
       version: "0.8.6",
       date: "2026-10-01",
       title: "Quieter attention notifications",
@@ -55,7 +65,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[4]).toEqual({
+    expect(RELEASES[5]).toEqual({
       version: "0.8.5",
       date: "2026-10-01",
       title: "Machine memory and steadier Session status",
@@ -71,7 +81,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[5]).toEqual({
+    expect(RELEASES[6]).toEqual({
       version: "0.8.4",
       date: "2026-10-01",
       title: "Forced update restarts and steadier Session catalogs",
@@ -95,7 +105,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[6]).toEqual({
+    expect(RELEASES[7]).toEqual({
       version: "0.8.3",
       date: "2026-10-01",
       title: "Cursor models and quotas",
@@ -119,7 +129,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[7]).toEqual({
+    expect(RELEASES[8]).toEqual({
       version: "0.8.2",
       date: "2026-10-01",
       title: "Cursor provider",
@@ -139,7 +149,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[8]).toEqual({
+    expect(RELEASES[9]).toEqual({
       version: "0.8.1",
       date: "2026-10-01",
       title: "Instant remote view transitions",
@@ -167,7 +177,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[9]).toEqual({
+    expect(RELEASES[10]).toEqual({
       version: "0.8.0",
       date: "2026-10-01",
       title: "Multiplexed remote delivery and windowed transcripts",
@@ -1038,6 +1048,7 @@ describe("release entries", () => {
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
     expect(versions.slice(0, 17)).toEqual([
+      "0.8.10",
       "0.8.9",
       "0.8.8",
       "0.8.7",
@@ -1054,7 +1065,6 @@ describe("release entries", () => {
       "0.7.14",
       "0.7.13",
       "0.7.12",
-      "0.7.11",
     ])
     expect(new Set(versions).size).toBe(versions.length)
     const sorted = [...versions].sort((a, b) => compare(b, a))

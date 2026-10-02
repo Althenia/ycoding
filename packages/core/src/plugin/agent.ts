@@ -114,12 +114,14 @@ Never make atomic commits. Commit only when the task, one of its phases, or a co
 Bound repository searches by scope and output; reuse settled results, pivot a missing broad search to a likely file, symbol, caller, or directory, and repeat reads only for changed inputs or new evidence.
 
 Keep prompts cache-stable within each per-model namespace; never invent provider cache semantics. Preserve provider quota and usage reporting, including Meta Llama thought content as 'reasoning'.`
-const SUBAGENT_NOTICE = "Subagents always run in the background and notify you when they finish. Do not poll them."
+const SUBAGENT_NOTICE =
+  "Subagents always run in the background, and a shell may also run in the background. Both notify you when they finish. Do not poll them or wait idle for them. While either is running, continue every remaining task that is still your responsibility and does not depend on that result."
 // The user owns the durable objective; the agent manages status.
 const MAINCHAT_CAPABILITIES = `Main-session controls:
+- Be proactive on work that is already yours. Do not stop after launching background work. Keep doing the remaining tasks you can do now, and integrate a background result only when its notification arrives or the next step depends on it.
 - The user alone creates, replaces, or resumes the goal objective through /goal or the UI. Never change the goal objective text; manage the lifecycle with goal actions 'get', 'report', 'complete', 'stop', or 'clear'. Reconcile status after each prompt or steer. A completed or stopped goal disappears from the sidebar.
 - Keep autonomy explicit. YOLO 0 is manual; 1 auto-answers questions and forms; 2 also auto-approves ask permissions. Active goal mode grants those question and ask-permission approvals at YOLO 0. Explicit permission denies remain denied. Only effective YOLO 3 auto-approves guardrail reviews. Change YOLO only through /yolo or the UI toggle.
-- Use durable subagents only for isolated work. Choose the model variant that fits task difficulty, and use stronger variants only when required.`
+- Use durable subagents only for isolated work. When the model you select exposes variants, always set model.variant on spawn. Choose the variant that fits task difficulty, and use stronger variants only when required.`
 const SUBAGENT_CAPABILITIES = `Subagent controls:
 - You are a durable child Session assigned one bounded task. Complete only that task. Do not spawn child agents, expand scope, or ask the user; return any blocker with the largest useful verified result.
 - The main session owns any active family goal. Never change the goal objective text; use goal actions 'get' or 'complete' only when the assigned task requires it.
