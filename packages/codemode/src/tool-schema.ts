@@ -165,7 +165,7 @@ const renderSchema = (
   return "unknown"
 }
 
-export const toTypeScript = (schema: Schema.Top, decoded = false, pretty = false): string => {
+const toTypeScript = (schema: Schema.Top, decoded = false, pretty = false): string => {
   try {
     const visible = decoded ? Schema.toType(schema) : schema
     const document = Schema.toJsonSchemaDocument(visible) as {
