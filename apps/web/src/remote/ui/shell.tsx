@@ -1,4 +1,4 @@
-import { isSessionID } from "@ycoding-ai/remote"
+import { isSessionID, noticeSequence } from "@ycoding-ai/remote"
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack, type JSX } from "solid-js"
 import { Portal } from "solid-js/web"
 import { createDebouncer, createThrottler } from "@tanstack/solid-pacer"
@@ -10,6 +10,7 @@ import { Icon, type IconName } from "../../ui/icon"
 import { Modal } from "../../ui/modal"
 import { CustomSelect } from "../../ui/custom-select"
 import { BrandMark, ThemeToggle } from "../../ui/site"
+import { alertHash, isAlertDeviceID, readAlertHash } from "../alert"
 import { useRemote } from "../context"
 import { preloadKeepAwake, preloadUsage, preloadWorkspaces } from "../preload"
 import { SIGN_IN_PROVIDERS } from "../http"
@@ -71,7 +72,6 @@ import {
 } from "./shell-model"
 
 const newSessionHash = "new-session"
-const sessionHashPrefix = "session="
 const sessionRailKey = "ycoding.remote.desktopRailCollapsed"
 
 const settingsSupport = "Machine, account, devices, app, appearance, office view, and notifications for this workspace."
@@ -247,15 +247,17 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     })
   })
   const openFromTeam = (sessionID: string) => { closeTeam(); openSession(sessionID) }
-  const requestedSession = () => {
-    const fragment = hash()
-    const sessionID = fragment.startsWith(sessionHashPrefix) ? fragment.slice(sessionHashPrefix.length) : undefined
-    return view() === "/remote" && sessionID !== undefined && isSessionID(sessionID) ? sessionID : undefined
-  }
+  const requested = () => view() === "/remote" ? readAlertHash(hash()) : undefined
+  let readAlert: string | undefined
   createEffect(() => {
-    const sessionID = requestedSession()
-    if (sessionID === undefined || state().transport.kind !== "open" || state().connection.kind !== "connected") return
-    untrack(() => openSession(sessionID))
+    const target = requested()
+    if (target === undefined || state().transport.kind !== "open" || state().connection.kind !== "connected") return
+    const notice = target.notice
+    if (notice !== undefined && notice.deviceID === state().activeDeviceID && readAlert !== `${notice.deviceID}:${notice.noticeID}`) {
+      readAlert = `${notice.deviceID}:${notice.noticeID}`
+      void remote.store.readNotification(notice.noticeID)
+    }
+    untrack(() => openSession(target.sessionID))
   })
   createEffect(() => {
     if (managedChild() && state().team?.status === "ready" && currentTask()?.tokens === undefined) void remote.store.loadSelectedSubagentEconomics()
@@ -294,12 +296,17 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     teamLayer?.getBoundingClientRect()
     teamFrame = requestAnimationFrame(() => setTeamEntering(false))
   }
-  const openFromAlert = (sessionID: unknown) => {
-    if (typeof sessionID === "string" && isSessionID(sessionID)) navigate({ to: "/remote", hash: `${sessionHashPrefix}${sessionID}` })
+  const openFromAlert = (value: unknown) => {
+    const sessionID = Reflect.get(Object(value), "sessionID")
+    const deviceID = Reflect.get(Object(value), "deviceID")
+    const noticeID = Reflect.get(Object(value), "noticeID")
+    if (typeof sessionID !== "string" || !isSessionID(sessionID)) return
+    const notice = isAlertDeviceID(deviceID) && typeof noticeID === "string" && noticeSequence(noticeID) !== undefined ? { deviceID, noticeID } : undefined
+    navigate({ to: "/remote", hash: alertHash(sessionID, notice) })
   }
-  const alertEvent = (event: Event) => openFromAlert(event instanceof CustomEvent ? Reflect.get(Object(event.detail), "sessionID") : undefined)
+  const alertEvent = (event: Event) => openFromAlert(event instanceof CustomEvent ? event.detail : undefined)
   const workerMessage = (event: MessageEvent) => {
-    if (Reflect.get(Object(event.data), "type") === "ycoding:open-session") openFromAlert(Reflect.get(Object(event.data), "sessionID"))
+    if (Reflect.get(Object(event.data), "type") === "ycoding:open-session") openFromAlert(event.data)
   }
   window.addEventListener("ycoding:open-session", alertEvent)
   navigator.serviceWorker?.addEventListener("message", workerMessage)

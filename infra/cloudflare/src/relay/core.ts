@@ -29,8 +29,10 @@ import {
   serializePriority,
   serializeSessions,
   serializeSubscriptions,
+  type RemoteAlertDetail,
   type RemoteErrorCode,
   type RemoteNotice,
+  type RemoteNoticeCategory,
   type RemoteNoticePresentation,
   type RemoteNoticeRequest,
   type RemotePriorityMode,
@@ -38,7 +40,7 @@ import {
   type RemoteResponse,
   type RemoteStatus,
 } from "../../../../packages/remote/src/index"
-import type { NoticeStore } from "./notice-store"
+import type { NoticeEvent, NoticeStore } from "./notice-store"
 import type { PushEvent, PushOutcome } from "../push/send"
 export type RelayConnection = {
   readonly connectionID: string
@@ -142,6 +144,7 @@ export function createRelay(deps: RelayDeps) {
   let previousStatus: RemoteStatus | undefined
   let pushWindowStart = deps.now()
   let pushWindowCount = 0
+  const summarized = new Set<RemoteNoticeCategory>()
   let noticeFault = deps.notices.unavailable()
   let offlineCheck: OfflineCheck | undefined
   let offlineLoaded = false
@@ -194,6 +197,16 @@ export function createRelay(deps: RelayDeps) {
     }
   }
 
+  const repeatNotices = (events: readonly NoticeEvent[]): readonly RemoteNotice[] => {
+    if (events.length === 0) return []
+    try {
+      return deps.notices.repeat(events)
+    } catch {
+      console.warn("Repeated attention alert could not be recorded")
+      return []
+    }
+  }
+
   const presenters = () => {
     const chosen = new Map<string, ClientState>()
     for (const client of clients.values()) if (client.noticesSubscribed && !chosen.has(client.browserSessionID)) chosen.set(client.browserSessionID, client)
@@ -214,27 +227,40 @@ export function createRelay(deps: RelayDeps) {
   const deliveries = new Set<Promise<void>>()
 
   const deliverAlerts = async (ownerID: string, alerts: readonly { readonly event: PushEvent; readonly item?: RemoteNoticePresentation }[]) => {
-    if (deps.now() - pushWindowStart >= 60_000) { pushWindowStart = deps.now(); pushWindowCount = 0 }
+    if (deps.now() - pushWindowStart >= 60_000) { pushWindowStart = deps.now(); pushWindowCount = 0; summarized.clear() }
     const admitted = Math.max(0, 20 - pushWindowCount)
     const notify = deps.notifyPush
     const immediate = new Map<string, RemoteNoticePresentation[]>()
-    alerts.forEach((alert, index) => {
-      const item = alert.item
-      if (notify === undefined || index >= admitted) {
-        if (item !== undefined) for (const browserSessionID of presenters().keys()) immediate.set(browserSessionID, [...immediate.get(browserSessionID) ?? [], item])
-        return
-      }
-      pushWindowCount += 1
+    const overflow = new Map<RemoteNoticeCategory, { readonly deviceID: string; readonly items: readonly RemoteNoticePresentation[] }>()
+    const dispatch = (send: NonNullable<RelayDeps["notifyPush"]>, event: PushEvent, items: readonly RemoteNoticePresentation[]) => {
       const browsers = Array.from(presenters().keys())
       const settle = async (outcomes: readonly PushOutcome[]) => {
-        if (item === undefined) return
+        if (items.length === 0) return
         await Promise.all(browsers.filter((browserSessionID) => !outcomes.some((entry) => entry.owner === browserSessionID &&
-          (entry.outcome === "accepted" || entry.outcome === "unreachable"))).map((browserSessionID) => present(browserSessionID, [item])))
+          (entry.outcome === "accepted" || entry.outcome === "unreachable"))).map((browserSessionID) => present(browserSessionID, items)))
       }
-      const delivery: Promise<void> = Promise.resolve().then(() => notify(ownerID, alert.event)).then(settle, () => settle([]))
+      const delivery: Promise<void> = Promise.resolve().then(() => send(ownerID, event)).then(settle, () => settle([]))
         .finally(() => { deliveries.delete(delivery) })
       deliveries.add(delivery)
+    }
+    alerts.forEach((alert, index) => {
+      const item = alert.item
+      const category = alert.event.category
+      if (notify !== undefined && index < admitted) {
+        pushWindowCount += 1
+        dispatch(notify, alert.event, item === undefined ? [] : [item])
+        return
+      }
+      if (notify !== undefined && item !== undefined && category !== "machine-offline" && !summarized.has(category)) {
+        overflow.set(category, { deviceID: alert.event.deviceID, items: [...overflow.get(category)?.items ?? [], item] })
+        return
+      }
+      if (item !== undefined) for (const browserSessionID of presenters().keys()) immediate.set(browserSessionID, [...immediate.get(browserSessionID) ?? [], item])
     })
+    for (const [category, entry] of overflow) {
+      summarized.add(category)
+      if (notify !== undefined) dispatch(notify, { category, deviceID: entry.deviceID, overflow: entry.items.length }, entry.items)
+    }
     await Promise.all(Array.from(immediate, ([browserSessionID, items]) => present(browserSessionID, items)))
   }
 
@@ -589,8 +615,12 @@ export function createRelay(deps: RelayDeps) {
       }
       if (message.type === "completions") {
         const recorded = await recordNotices(() => deps.notices.complete(message.data, message.more))
-        await deliverAlerts(current.ownerID, (recorded ?? []).map((notice) => ({ event: { category: "agent-completed", sessionID: notice.sessionID,
-          deviceID: current.deviceID, noticeID: notice.id }, item: { kind: "notice", notice } })))
+        await deliverAlerts(current.ownerID, (recorded ?? []).map((notice) => {
+          const title = message.data.find((item) => item.sessionID === notice.sessionID)?.title
+          const detail = title === undefined ? {} : { title }
+          return { event: { category: "agent-completed", sessionID: notice.sessionID, deviceID: current.deviceID, noticeID: notice.id, ...detail },
+            item: { kind: "notice", notice, ...(title === undefined ? {} : { detail }) } }
+        }))
         return
       }
       if (message.type === "status") {
@@ -601,12 +631,23 @@ export function createRelay(deps: RelayDeps) {
         previousStatus = message
         if (before !== undefined) {
           const oldAttention = new Set(before.attention)
-          const events = message.attention.filter((sessionID) => !oldAttention.has(sessionID)).map((sessionID) => ({ category: "approval-requested" as const, sessionID }))
-          const recorded = events.length === 0 ? [] : await recordNotices(() => deps.notices.append(events.map((event) => ({ ...event, createdAt: deps.now() }))))
+          const detailOf = (sessionID: string): RemoteAlertDetail => {
+            const detail = message.details?.find((item) => item.sessionID === sessionID)
+            const need = message.failed?.includes(sessionID) ? "failed" : detail?.need
+            return { ...(detail?.title === undefined ? {} : { title: detail.title }), ...(need === undefined ? {} : { need }) }
+          }
+          const events = message.attention.filter((sessionID) => !oldAttention.has(sessionID))
+            .map((sessionID) => ({ category: "approval-requested" as const, sessionID, createdAt: deps.now(), need: detailOf(sessionID).need }))
+          const appended = events.length === 0 ? [] : await recordNotices(() => deps.notices.append(events))
+          const recorded = appended === undefined ? undefined
+            : [...appended, ...repeatNotices(events.filter((event) => !appended.some((notice) => notice.sessionID === event.sessionID)))]
           await deliverAlerts(current.ownerID, recorded === undefined
-            ? events.map((event) => ({ event: { ...event, deviceID: current.deviceID } }))
-            : recorded.map((notice) => ({ event: { category: notice.category, sessionID: notice.sessionID,
-              deviceID: current.deviceID, noticeID: notice.id }, item: { kind: "notice", notice } })))
+            ? events.map((event) => ({ event: { category: event.category, sessionID: event.sessionID, deviceID: current.deviceID, ...detailOf(event.sessionID) } }))
+            : recorded.map((notice) => {
+              const detail = detailOf(notice.sessionID)
+              return { event: { category: notice.category, sessionID: notice.sessionID, deviceID: current.deviceID, noticeID: notice.id, ...detail },
+                item: { kind: "notice", notice, ...(Object.keys(detail).length === 0 ? {} : { detail }) } }
+            }))
         }
         return
       }

@@ -191,7 +191,7 @@ test("pages explicit completion receipts without a browser subscription and refr
     await test.bridge.connect()
     await waitFor(() => sentFrames(test.records[0]).filter((frame) => frame.type === "completions").length >= 2 ? true : undefined)
     expect(sentFrames(test.records[0]).filter((frame) => frame.type === "completions").slice(0, 2)).toEqual([
-      { type: "completions", data: [{ id: "evt_ses_1_12", seq: 12, created: 1_000, sessionID: "ses_1" }], more: true },
+      { type: "completions", data: [{ id: "evt_ses_1_12", seq: 12, created: 1_000, sessionID: "ses_1", title: "One" }], more: true },
       { type: "completions", data: [{ id: "evt_ses_2_12", seq: 12, created: 1_000, sessionID: "ses_2" }], more: false },
     ])
     expect(test.calls.filter((call) => call.method === "completions").slice(0, 2).map((call) => call.args)).toEqual([
@@ -319,6 +319,30 @@ describe("remote bridge", () => {
     } finally { await test.bridge.close() }
   })
 
+  test("a request event during the reconnect failure read never drops a failed family from attention", async () => {
+    let held: { resolve: (value: unknown) => void } | undefined
+    const test = harness({ results: { outstandingSessions: () => held === undefined
+      ? { data: [], running: [], failed: ["ses_1"] }
+      : new Promise((resolve) => { held!.resolve = resolve }) } })
+    await test.bridge.connect()
+    try {
+      await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status" && frame.attention.includes("ses_1")))
+      const before = sentFrames(test.records[0]).length
+      held = { resolve: () => undefined }
+      test.records[0].input.onClose(1000)
+      test.records[0].input.onOpen()
+      await waitFor(() => test.calls.filter((call) => call.method === "outstandingSessions").length > 1 ? true : undefined)
+      test.streams[0].stream.onEvent({ type: "guardrail.decided", data: { sessionID: "ses_1", decision: "allow" } })
+      held.resolve({ data: [], running: [], failed: ["ses_1"] })
+      held = undefined
+      await waitFor(() => sentFrames(test.records[0]).slice(before).find((frame) => frame.type === "status"))
+      await Bun.sleep(400)
+      const statuses = sentFrames(test.records[0]).slice(before).filter((frame) => frame.type === "status")
+      expect(statuses.length).toBeGreaterThan(0)
+      expect(statuses.every((frame) => frame.attention.includes("ses_1"))).toBe(true)
+    } finally { held?.resolve({ data: [], running: [], failed: ["ses_1"] }); await test.bridge.close() }
+  })
+
   test("a failure-only family is in attention and failed, a family with a pending request too is in attention only, and the next execution clears both", async () => {
     let requests: unknown[] = []
     const test = harness({ sessions: [entry, second], results: {
@@ -328,11 +352,13 @@ describe("remote bridge", () => {
     await test.bridge.connect()
     try {
       await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status"))
-      expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status").at(-1)).toEqual({ type: "status", running: ["ses_2"], attention: ["ses_1", "ses_2"], failed: ["ses_1", "ses_2"] })
+      expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status").at(-1)).toEqual({ type: "status", running: ["ses_2"], attention: ["ses_1", "ses_2"], failed: ["ses_1", "ses_2"],
+        details: [{ sessionID: "ses_1", title: "One" }, { sessionID: "ses_2", title: "Two" }] })
       requests = [{ id: "per_1", sessionID: "ses_2" }]
       test.streams[0].stream.onEvent({ type: "permission.v2.asked", data: { sessionID: "ses_2" } })
       await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status" && frame.failed?.join() === "ses_1"))
-      expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status").at(-1)).toEqual({ type: "status", running: ["ses_2"], attention: ["ses_1", "ses_2"], failed: ["ses_1"] })
+      expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status").at(-1)).toEqual({ type: "status", running: ["ses_2"], attention: ["ses_1", "ses_2"], failed: ["ses_1"],
+        details: [{ sessionID: "ses_1", title: "One" }, { sessionID: "ses_2", title: "Two", need: "permission" }] })
       test.streams[0].stream.onEvent({ type: "session.execution.started.1", data: { sessionID: "ses_1" } })
       test.streams[0].stream.onEvent({ type: "session.execution.started.1", data: { sessionID: "ses_2" } })
       await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status" && frame.failed === undefined && frame.attention.join() === "ses_2"))
@@ -592,7 +618,7 @@ describe("remote bridge", () => {
       await waitFor(() => sentFrames(test.records[0]).filter((frame) => frame.type === "status").length === 2 ? true : undefined, 1_000)
       expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status")).toEqual([
         { type: "status", running: [], attention: [] },
-        { type: "status", running: ["ses_1"], attention: ["ses_1"] },
+        { type: "status", running: ["ses_1"], attention: ["ses_1"], details: [{ sessionID: "ses_1", title: "One", need: "permission" }] },
       ])
     } finally { await test.bridge.close() }
   })

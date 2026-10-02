@@ -38,9 +38,10 @@ async function vapidKeys() {
     privateKey: (await crypto.subtle.exportKey("jwk", vapid.privateKey)).d ?? "", subject: "mailto:push@example.invalid", now: () => 1_700_000_000_000 }
 }
 
-function memoryStore(rows: readonly PushSubscription[], failures: [string, boolean][] = []): PushStore {
+function memoryStore(rows: readonly PushSubscription[], failures: [string, boolean][] = [], successes: string[] = []): PushStore {
   return { list: async () => rows, upsert: async () => true, renew: async () => "missing", remove: async () => undefined,
-    claimTest: async () => ({ status: "missing" }), recordFailure: async (row, permanent) => { failures.push([row.endpoint, permanent]) } }
+    claimTest: async () => ({ status: "missing" }), recordFailure: async (row, permanent) => { failures.push([row.endpoint, permanent]) },
+    recordSuccess: async (row) => { successes.push(row.endpoint) } }
 }
 
 test("Web Push sends a decryptable minimal payload with VAPID and bounded headers, tracking endpoint failure", async () => {
@@ -79,7 +80,7 @@ test("each subscription receives only the categories its device turned on as Sys
     { owner: "bs_iphone", outcome: "unsent" }, { owner: "bs_windows", outcome: "accepted" },
   ])
   expect(requests.map((request) => request.url)).toEqual(["https://fcm.googleapis.com/fcm/send/windows"])
-  expect(requests[0]?.headers.get("ttl")).toBe("600")
+  expect(requests[0]?.headers.get("ttl")).toBe("3600")
   await deliver({ category: "approval-requested", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_2" })
   expect(requests.slice(1).map((request) => request.url).sort()).toEqual(["https://fcm.googleapis.com/fcm/send/windows", "https://web.push.apple.com/iphone"])
   await deliver({ category: "machine-offline", deviceID: "dev_1", offlineAt: 1_790_000_000_000 })
@@ -96,6 +97,25 @@ test("each subscription receives only the categories its device turned on as Sys
       { component: "web-push", category: "machine-offline", host: "none", targetCount: 0, errorClass: "category_off" },
     ])
   } finally { info.mockRestore() }
+})
+
+test("an accepted push clears earlier transient failures, and an overflow summary shares one push-service topic per device and category", async () => {
+  const receiver = await receiverFor("https://fcm.googleapis.com/fcm/send/flaky")
+  const keys = await vapidKeys()
+  const successes: string[] = []
+  const requests: Request[] = []
+  const deliver = (subscription: PushSubscription, event: Parameters<typeof sendPushToOwner>[0]["event"]) => sendPushToOwner({
+    store: memoryStore([subscription], [], successes), accountID: "usr_1", event, ...keys,
+    fetch: async (input, init) => { requests.push(new Request(input, init)); return new Response(null, { status: 201 }) } })
+  await deliver(receiver.subscription, { category: "approval-requested", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_1" })
+  expect(successes).toEqual([])
+  await deliver({ ...receiver.subscription, failures: 3 }, { category: "approval-requested", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_2" })
+  expect(successes).toEqual(["https://fcm.googleapis.com/fcm/send/flaky"])
+  await deliver(receiver.subscription, { category: "approval-requested", deviceID: "dev_1", overflow: 5 })
+  await deliver(receiver.subscription, { category: "approval-requested", deviceID: "dev_1", overflow: 2 })
+  expect(await receiver.decrypt(requests[2] as Request)).toEqual({ category: "approval-requested", deviceID: "dev_1", overflow: 5 })
+  expect(requests[2]?.headers.get("topic")).toBe(requests[3]?.headers.get("topic") ?? "")
+  expect(requests[2]?.headers.get("topic")).not.toBe(requests[1]?.headers.get("topic") ?? "")
 })
 
 test("a test alert goes only to the claimed subscription and reports the push service answer, never OS display", async () => {

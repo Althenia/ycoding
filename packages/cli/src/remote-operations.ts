@@ -11,6 +11,7 @@ import { capturedChildSessionIDs, summarizeCapturedChanges } from "@ycoding-ai/c
 import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
 import {
   RemoteLimits,
+  alertTitle,
   isSessionID,
   remoteError,
   requireSession,
@@ -24,6 +25,8 @@ import {
   type RemoteFamilyActivity,
   type RemoteUsageReportInput,
   type RemoteCapturedChangesPage,
+  type RemoteAttentionDetail,
+  type RemoteAttentionNeed,
 } from "@ycoding-ai/remote"
 import {
   LocalFailure,
@@ -1280,7 +1283,7 @@ function boundedActivity(value: string, limit = 80): string {
   return points.length <= limit ? clean : `${points.slice(0, limit - 1).join("")}…`
 }
 
-export async function sessionStatus(local: LocalServer, sessions: readonly SessionInfo[], knownAttention?: readonly string[], knownFailures?: ReadonlySet<string>) {
+export async function sessionStatus(local: LocalServer, sessions: readonly SessionInfo[], knownAttention?: Readonly<Record<string, RemoteAttentionNeed>>, knownFailures?: ReadonlySet<string>) {
   const byID = new Map(sessions.map((session) => [session.id, session]))
   const rootOf = (sessionID: unknown) => {
     const session = typeof sessionID === "string" ? byID.get(sessionID) : undefined
@@ -1291,11 +1294,14 @@ export async function sessionStatus(local: LocalServer, sessions: readonly Sessi
   const running = new Set(executing.flatMap((session) => rootSessionID(session, byID) ?? []))
   const outstanding = new Set(work.data.flatMap((id) => rootOf(id) ?? []).filter((id) => !running.has(id)))
   const failed = knownFailures ?? new Set(work.failed.flatMap((id) => rootOf(id) ?? []))
-  if (running.size > RemoteLimits.maxStatusSessions || (knownAttention !== undefined && knownAttention.length > RemoteLimits.maxStatusSessions))
+  if (running.size > RemoteLimits.maxStatusSessions || (knownAttention !== undefined && Object.keys(knownAttention).length > RemoteLimits.maxStatusSessions))
     throw new OperationError("message_too_large", "Session status exceeds the bounded root count")
   if (outstanding.size > RemoteLimits.maxStatusSessions) throw new OperationError("message_too_large", "Session status exceeds the bounded root count")
-  const attention = new Set<string>()
-  if (knownAttention !== undefined) for (const id of knownAttention) attention.add(id)
+  const attention = new Map<string, RemoteAttentionNeed>(Object.entries(knownAttention ?? {}))
+  const need = (rootID: string | undefined, kind: RemoteAttentionNeed) => {
+    const current = rootID === undefined ? undefined : attention.get(rootID)
+    if (rootID !== undefined && (current === undefined || attentionNeeds.indexOf(kind) < attentionNeeds.indexOf(current))) attention.set(rootID, kind)
+  }
   const executingLocations = knownAttention === undefined
     ? [...new Map(executing.map((session) => [JSON.stringify([session.location.directory, session.location.workspaceID ?? null]), locationInfo(session)])).values()]
     : []
@@ -1304,10 +1310,8 @@ export async function sessionStatus(local: LocalServer, sessions: readonly Sessi
       const [permissions, forms] = await Promise.all([local.permissionRequests(location), local.formRequests(location)])
       if (!Array.isArray(permissions) || !Array.isArray(forms))
         throw new OperationError("internal_error", "The local Session request listing was unreadable")
-      for (const item of [...permissions, ...forms]) {
-        const rootID = rootOf(typeof item === "object" && item !== null ? Reflect.get(item, "sessionID") : undefined)
-        if (rootID !== undefined) attention.add(rootID)
-      }
+      for (const item of permissions) need(rootOf(typeof item === "object" && item !== null ? Reflect.get(item, "sessionID") : undefined), "permission")
+      for (const item of forms) need(rootOf(typeof item === "object" && item !== null ? Reflect.get(item, "sessionID") : undefined), "question")
     }))
   }
   const families = knownAttention === undefined ? [...running].flatMap((id) => byID.get(id) ?? []) : []
@@ -1316,16 +1320,29 @@ export async function sessionStatus(local: LocalServer, sessions: readonly Sessi
       const reviews = await local.guardrailRequestList(root.id, locationInfo(root))
       if (!Array.isArray(reviews)) throw new OperationError("internal_error", "The local Session request listing was unreadable")
       if (reviews.some((item) => rootOf(typeof item === "object" && item !== null ? Reflect.get(item, "sessionID") : undefined) === root.id))
-        attention.add(root.id)
+        need(root.id, "review")
     }))
   }
   if (attention.size > RemoteLimits.maxStatusSessions)
     throw new OperationError("message_too_large", "Session status exceeds the bounded root count")
-  const requestAttention = [...attention].sort()
-  const combined = [...new Set([...attention, ...failed])].sort()
+  const requestAttention = [...attention.keys()].sort()
+  const combined = [...new Set([...requestAttention, ...failed])].sort()
   if (combined.length > RemoteLimits.maxStatusSessions) throw new OperationError("message_too_large", "Session status exceeds the bounded root count")
-  return { running: [...running].sort(), attention: combined, requestAttention, failed: [...failed],
+  return { running: [...running].sort(), attention: combined, requestAttention, requestNeeds: Object.fromEntries(attention), failed: [...failed],
     ...(outstanding.size === 0 ? {} : { outstanding: [...outstanding].sort() }) }
+}
+
+const attentionNeeds: readonly RemoteAttentionNeed[] = ["permission", "question", "review"]
+
+export function attentionDetails(sessions: readonly SessionInfo[], attention: readonly string[], needs: Readonly<Record<string, RemoteAttentionNeed>>): RemoteAttentionDetail[] {
+  const byID = new Map(sessions.map((session) => [session.id, session]))
+  return attention.flatMap((sessionID) => {
+    const session = byID.get(sessionID)
+    const title = session === undefined ? undefined : alertTitle(session.title)
+    const kind = needs[sessionID]
+    if (title === undefined && kind === undefined) return []
+    return [{ sessionID, ...(title === undefined ? {} : { title }), ...(kind === undefined ? {} : { need: kind }) }]
+  })
 }
 
 function rootSessionID(session: SessionInfo, byID: ReadonlyMap<string, SessionInfo>): string | undefined {

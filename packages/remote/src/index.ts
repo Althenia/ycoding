@@ -205,6 +205,7 @@ export const RemoteLimits = {
   maxSessionListPage: 200,
   maxCompletionBatch: 200,
   maxStatusSessions: 500,
+  maxAlertTitleChars: 120,
   maxFamilyMembers: 16,
   maxCompactionHistory: 100,
   maxSubscriptionsPerClient: 64,
@@ -324,8 +325,12 @@ export type RemotePriorityHint = { readonly type: "priority"; readonly mode: Rem
 export type RemotePriority = { readonly type: "priority"; readonly clientID: string; readonly mode: RemotePriorityMode }
 /** Bounded invalidation: clients page the authoritative backend list after receipt. */
 export type RemoteSessions = { readonly type: "sessions" }
-export type RemoteStatus = { readonly type: "status"; readonly running: readonly string[]; readonly attention: readonly string[]; readonly outstanding?: readonly string[]; readonly failed?: readonly string[] }
-export type RemoteWorkCompletion = { readonly id: string; readonly seq: number; readonly created: number; readonly sessionID: string }
+export type RemoteAttentionNeed = "permission" | "question" | "review"
+export type RemoteAttentionDetail = { readonly sessionID: string; readonly title?: string; readonly need?: RemoteAttentionNeed }
+export type RemoteStatus = { readonly type: "status"; readonly running: readonly string[]; readonly attention: readonly string[]; readonly outstanding?: readonly string[]; readonly failed?: readonly string[];
+  readonly details?: readonly RemoteAttentionDetail[] }
+export type RemoteWorkCompletion = { readonly id: string; readonly seq: number; readonly created: number; readonly sessionID: string; readonly title?: string }
+export type RemoteAlertDetail = { readonly title?: string; readonly need?: RemoteAttentionNeed | "failed" }
 export type RemoteCompletions = { readonly type: "completions"; readonly data: readonly RemoteWorkCompletion[]; readonly more: boolean }
 export type RemoteSubscriptions = {
   readonly type: "subscriptions"
@@ -364,7 +369,7 @@ export type RemoteNoticeFrame =
   | { readonly type: "notice.offline"; readonly at: number }
   | { readonly type: "notice.present"; readonly items: readonly RemoteNoticePresentation[] }
 
-export type RemoteNoticePresentation = { readonly kind: "notice"; readonly notice: RemoteNotice } | { readonly kind: "offline"; readonly at: number }
+export type RemoteNoticePresentation = { readonly kind: "notice"; readonly notice: RemoteNotice; readonly detail?: RemoteAlertDetail } | { readonly kind: "offline"; readonly at: number }
 
 /** Frames accepted from a browser connection. */
 export type RemoteClientMessage = RemoteRequest | RemoteNoticeRequest | RemoteHeartbeat | RemoteCancel | RemotePriorityHint
@@ -429,7 +434,7 @@ export function serializeStatus(status: RemoteStatus): string {
 export function serializeCompletions(frame: RemoteCompletions): string {
   return JSON.stringify({
     type: frame.type,
-    data: frame.data.map((item) => ({ id: item.id, seq: item.seq, created: item.created, sessionID: item.sessionID })),
+    data: frame.data.map((item) => ({ id: item.id, seq: item.seq, created: item.created, sessionID: item.sessionID, ...(item.title === undefined ? {} : { title: item.title }) })),
     more: frame.more,
   })
 }
@@ -443,7 +448,9 @@ export function serializeNoticeFrame(frame: RemoteNoticeFrame): string {
   if (frame.type === "notice.added") return JSON.stringify({ type: frame.type, notices: frame.notices.map(noticeWire), total: frame.total })
   if (frame.type === "notice.offline") return JSON.stringify({ type: frame.type, at: frame.at })
   if (frame.type === "notice.present")
-    return JSON.stringify({ type: frame.type, items: frame.items.map((item) => item.kind === "notice" ? { kind: item.kind, notice: noticeWire(item.notice) } : { kind: item.kind, at: item.at }) })
+    return JSON.stringify({ type: frame.type, items: frame.items.map((item) => item.kind === "notice"
+      ? { kind: item.kind, notice: noticeWire(item.notice), ...(item.detail === undefined ? {} : { detail: alertDetailWire(item.detail) }) }
+      : { kind: item.kind, at: item.at }) })
   return JSON.stringify({ type: frame.type })
 }
 
@@ -563,12 +570,13 @@ function parseCompletions(frame: Record<string, unknown>): ParseResult<RemoteCom
   if (!Array.isArray(frame.data) || frame.data.length > RemoteLimits.maxCompletionBatch || typeof frame.more !== "boolean") return invalid()
   const data: RemoteWorkCompletion[] = []
   for (const item of frame.data) {
-    if (!isRecord(item) || Object.keys(item).some((key) => !["id", "seq", "created", "sessionID"].includes(key)) ||
+    if (!isRecord(item) || Object.keys(item).some((key) => !["id", "seq", "created", "sessionID", "title"].includes(key)) ||
       typeof item.id !== "string" || !/^evt_[A-Za-z0-9_-]+$/.test(item.id) || item.id.length > 128 ||
       typeof item.seq !== "number" || !Number.isSafeInteger(item.seq) || item.seq < 1 ||
       typeof item.created !== "number" || !Number.isSafeInteger(item.created) || item.created < 0 ||
-      !isSessionID(item.sessionID) || item.sessionID.length > RemoteLimits.maxSessionIDChars) return invalid()
-    data.push({ id: item.id, seq: item.seq, created: item.created, sessionID: item.sessionID })
+      !isSessionID(item.sessionID) || item.sessionID.length > RemoteLimits.maxSessionIDChars ||
+      (item.title !== undefined && !isAlertTitle(item.title))) return invalid()
+    data.push({ id: item.id, seq: item.seq, created: item.created, sessionID: item.sessionID, ...(isAlertTitle(item.title) ? { title: item.title } : {}) })
   }
   if (new Set(data.map((item) => item.sessionID)).size !== data.length) return invalid()
   return { ok: true, value: { type: "completions", data, more: frame.more } }
@@ -773,7 +781,7 @@ function parseSessions(frame: Record<string, unknown>): ParseResult<RemoteSessio
 }
 
 function parseStatus(frame: Record<string, unknown>): ParseResult<RemoteStatus> {
-  const keys = withOnlyKeys(frame, ["type", "running", "attention", "outstanding", "failed"], frame.type)
+  const keys = withOnlyKeys(frame, ["type", "running", "attention", "outstanding", "failed", "details"], frame.type)
   if (!keys.ok) return keys
   if (!Array.isArray(frame.running) || !Array.isArray(frame.attention) ||
     frame.running.length > RemoteLimits.maxStatusSessions || frame.attention.length > RemoteLimits.maxStatusSessions ||
@@ -785,9 +793,55 @@ function parseStatus(frame: Record<string, unknown>): ParseResult<RemoteStatus> 
   if (frame.failed !== undefined && (!Array.isArray(frame.failed) || frame.failed.length > RemoteLimits.maxStatusSessions ||
     !frame.failed.every(isSessionID) || new Set(frame.failed).size !== frame.failed.length ||
     !frame.failed.every((id) => attention.includes(id)))) return invalid()
+  const details = frame.details === undefined ? undefined : parseAttentionDetails(frame.details, attention)
+  if (details === null) return invalid()
   return { ok: true, value: { type: "status", running: frame.running, attention: frame.attention,
     ...(frame.outstanding === undefined ? {} : { outstanding: frame.outstanding }),
-    ...(frame.failed === undefined ? {} : { failed: frame.failed }) } }
+    ...(frame.failed === undefined ? {} : { failed: frame.failed }),
+    ...(details === undefined ? {} : { details }) } }
+}
+
+function parseAttentionDetails(value: unknown, attention: readonly string[]): readonly RemoteAttentionDetail[] | null {
+  if (!Array.isArray(value) || value.length > attention.length) return null
+  const details: RemoteAttentionDetail[] = []
+  for (const item of value) {
+    if (!isRecord(item) || !withOnlyKeys(item, ["sessionID", "title", "need"], item).ok) return null
+    const sessionID = item.sessionID
+    const title = isAlertTitle(item.title) ? item.title : undefined
+    const need = isAttentionNeed(item.need) ? item.need : undefined
+    if (!isSessionID(sessionID) || !attention.includes(sessionID) || details.some((detail) => detail.sessionID === sessionID) ||
+      (item.title !== undefined && title === undefined) || (item.need !== undefined && need === undefined)) return null
+    details.push({ sessionID, ...(title === undefined ? {} : { title }), ...(need === undefined ? {} : { need }) })
+  }
+  return details
+}
+
+function parseAlertDetail(value: unknown): RemoteAlertDetail | undefined {
+  if (!isRecord(value) || !withOnlyKeys(value, ["title", "need"], value).ok) return undefined
+  const title = isAlertTitle(value.title) ? value.title : undefined
+  const need = value.need === "failed" || isAttentionNeed(value.need) ? value.need : undefined
+  if ((value.title !== undefined && title === undefined) || (value.need !== undefined && need === undefined)) return undefined
+  return alertDetailWire({ title, need })
+}
+
+function alertDetailWire(detail: RemoteAlertDetail): RemoteAlertDetail {
+  return { ...(detail.title === undefined ? {} : { title: detail.title }), ...(detail.need === undefined ? {} : { need: detail.need }) }
+}
+
+function isAttentionNeed(value: unknown): value is RemoteAttentionNeed {
+  return value === "permission" || value === "question" || value === "review"
+}
+
+export function isAlertTitle(value: unknown): value is string {
+  return typeof value === "string" && value.trim() === value && value.length > 0 &&
+    Array.from(value).length <= RemoteLimits.maxAlertTitleChars && !/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/.test(value)
+}
+
+export function alertTitle(value: string): string | undefined {
+  const clean = value.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, " ").replace(/\s+/g, " ").trim()
+  const points = Array.from(clean)
+  const bounded = points.length <= RemoteLimits.maxAlertTitleChars ? clean : `${points.slice(0, RemoteLimits.maxAlertTitleChars - 1).join("").trimEnd()}…`
+  return bounded.length === 0 ? undefined : bounded
 }
 
 const noticeIDPattern = /^ntc_[1-9][0-9]{0,14}$/
@@ -858,10 +912,12 @@ function parsePresentations(values: unknown): ParseResult<RemoteNoticeFrame> {
       items.push({ kind: "offline", at })
       continue
     }
-    if (value.kind !== "notice" || !withOnlyKeys(value, ["kind", "notice"], value).ok) return invalid()
+    if (value.kind !== "notice" || !withOnlyKeys(value, ["kind", "notice", "detail"], value).ok) return invalid()
     const notice = parseNotice(value.notice)
-    if (!notice.ok || items.some((item) => item.kind === "notice" && item.notice.id === notice.value.id)) return invalid()
-    items.push({ kind: "notice", notice: notice.value })
+    const detail = value.detail === undefined ? undefined : parseAlertDetail(value.detail)
+    if (!notice.ok || (value.detail !== undefined && detail === undefined) ||
+      items.some((item) => item.kind === "notice" && item.notice.id === notice.value.id)) return invalid()
+    items.push({ kind: "notice", notice: notice.value, ...(detail === undefined ? {} : { detail }) })
   }
   return { ok: true, value: { type: "notice.present", items } }
 }

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import type { RemoteAlertDetail } from "@ycoding-ai/remote"
 import {
   NOTIFICATION_CATEGORIES,
   normalizeNotificationPreferences,
@@ -291,8 +292,29 @@ describe("createNotificationDelivery", () => {
     const notice = (id: string) => ({ kind: "notice" as const, notice: { id, category: "agent-completed" as const, sessionID: "ses_a", createdAt: 1 } })
     test.delivery.present([notice("ntc_8"), notice("ntc_9")], "dev_1")
     expect(test.recorder.alerts).toEqual([
-      { ...NOTIFICATION_TEXT["agent-completed"], tag: "ycoding-dev_1-ntc_8", sessionID: "ses_a" },
-      { ...NOTIFICATION_TEXT["agent-completed"], tag: "ycoding-dev_1-ntc_9", sessionID: "ses_a" },
+      { ...NOTIFICATION_TEXT["agent-completed"], tag: "ycoding-dev_1-ntc_8", sessionID: "ses_a", notice: { deviceID: "dev_1", noticeID: "ntc_8" } },
+      { ...NOTIFICATION_TEXT["agent-completed"], tag: "ycoding-dev_1-ntc_9", sessionID: "ses_a", notice: { deviceID: "dev_1", noticeID: "ntc_9" } },
+    ])
+  })
+
+  test("a presented notice names its Session and what the Session needs", () => {
+    const test = deliveryWith({})
+    const attention = (id: string, detail: RemoteAlertDetail) =>
+      ({ kind: "notice" as const, notice: { id, category: "approval-requested" as const, sessionID: "ses_a", createdAt: 1 }, detail })
+    test.delivery.present([
+      attention("ntc_1", { title: "Fix login", need: "permission" }), attention("ntc_2", { title: "Fix login", need: "question" }),
+      attention("ntc_3", { title: "Fix login", need: "review" }), attention("ntc_4", { title: "Fix login", need: "failed" }),
+      attention("ntc_5", { title: "Fix login" }), attention("ntc_6", { need: "failed" }),
+      { kind: "notice", notice: { id: "ntc_7", category: "agent-completed", sessionID: "ses_a", createdAt: 1 }, detail: { title: "Fix login" } },
+    ], "dev_1")
+    expect(test.recorder.alerts.map((alert) => [alert.title, alert.body])).toEqual([
+      ["YCoding — approval needed", "“Fix login” is waiting for you to allow or deny a tool request."],
+      ["YCoding — question for you", "“Fix login” is waiting for your answer."],
+      ["YCoding — guardrail review", "“Fix login” is waiting for you to approve or reject a guarded action."],
+      ["YCoding — session failed", "“Fix login” stopped with an error. Open it to review and retry."],
+      ["YCoding — needs your attention", "“Fix login” is waiting for you."],
+      ["YCoding — session failed", "A session stopped with an error. Open it to review and retry."],
+      ["YCoding — work finished", "“Fix login” finished all its work."],
     ])
   })
 
@@ -446,6 +468,11 @@ describe("createDesktopNotifier", () => {
       expect(worker.shown[0]?.options.body).toBe(NOTIFICATION_TEXT["approval-requested"].body)
       expect(worker.shown[0]?.options.body).not.toContain("Private Session")
       expect(FakeNotification.instances).toHaveLength(0)
+      delivery.present([{ kind: "notice", notice: { id: "ntc_4", category: "approval-requested", sessionID: "ses_a", createdAt: 1 },
+        detail: { title: "Fix login", need: "question" } }], "dev_1")
+      await Bun.sleep(0)
+      expect(worker.shown.at(-1)).toMatchObject({ title: "YCoding — question for you",
+        options: { body: "“Fix login” is waiting for your answer.", tag: "ycoding-dev_1-ntc_4", renotify: true, data: { sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_4" } } })
       delivery.dispose()
     })
   })

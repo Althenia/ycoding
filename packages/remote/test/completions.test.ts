@@ -30,3 +30,10 @@ test("serializes only the completion identity needed by the relay", () => {
   const data = [{ ...receipt, inputID: "msg_input", assistantMessageID: "msg_final", transcript: "not transmitted" }]
   expect(JSON.parse(serializeCompletions({ type: "completions", data, more: false }))).toEqual(frame)
 })
+
+test("carries an optional bounded Session title for the completion alert", () => {
+  const titled = { ...frame, data: [{ ...receipt, title: "Ship the release" }] }
+  expect(parseAgentMessage(serializeCompletions(titled))).toEqual({ ok: true, value: titled })
+  for (const title of ["", " padded", "two\nlines", "x".repeat(121), 7])
+    expect(parseAgentMessage(JSON.stringify({ ...frame, data: [{ ...receipt, title }] })).ok).toBe(false)
+})

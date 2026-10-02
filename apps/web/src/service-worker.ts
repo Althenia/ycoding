@@ -1,4 +1,6 @@
+import { isAlertTitle } from "@ycoding-ai/remote"
 import { CACHE_NAME, CACHE_PREFIX, OFFLINE_FALLBACK_URL, PRECACHE_URLS, shouldCacheStaticAsset, shouldHandleNavigation } from "./pwa/offline"
+import { alertCopy, alertHash, isAlertDeviceID, overflowCopy } from "./remote/alert"
 
 /**
  * Static shell service worker.
@@ -76,14 +78,15 @@ scope.addEventListener("notificationclick", (event: { notification: { data?: unk
       await scope.clients.openWindow("/remote")
       return
     }
+    const notice = isAlertDeviceID(data.deviceID) && isNoticeID(data.noticeID) ? { deviceID: data.deviceID, noticeID: data.noticeID } : undefined
     if (current) {
       const delivered = await current.focus().then(() => {
-        current.postMessage({ type: "ycoding:open-session", sessionID: data.sessionID })
+        current.postMessage({ type: "ycoding:open-session", sessionID: data.sessionID, ...notice })
         return true
       }).catch(() => false)
       if (delivered) return
     }
-    await scope.clients.openWindow(`/remote#session=${encodeURIComponent(data.sessionID)}`)
+    await scope.clients.openWindow(`/remote#${alertHash(data.sessionID, notice)}`)
   })())
 })
 
@@ -119,22 +122,25 @@ function isSessionID(value: unknown): value is string {
 function pushAlert(value: unknown): { readonly title: string; readonly options: Record<string, unknown> } {
   if (isRecord(value) && value.category === "test" && Object.keys(value).length === 1)
     return { title: "YCoding — test alert", options: { body: "Push alerts reach this device." } }
-  if (isRecord(value) && value.category === "machine-offline" && isDeviceID(value.deviceID) &&
+  if (isRecord(value) && value.category === "machine-offline" && isAlertDeviceID(value.deviceID) &&
     typeof value.offlineAt === "number" && Number.isSafeInteger(value.offlineAt) && value.offlineAt > 0)
     return { title: "YCoding — machine offline", options: { body: "The connected machine stopped reporting.", tag: `ycoding-${value.deviceID}-offline-${value.offlineAt}` } }
+  if (isRecord(value) && (value.category === "approval-requested" || value.category === "agent-completed") && isAlertDeviceID(value.deviceID) &&
+    typeof value.overflow === "number" && Number.isSafeInteger(value.overflow) && value.overflow > 0 && Object.keys(value).length === 3)
+    return { title: overflowCopy(value.category, value.overflow).title, options: { body: overflowCopy(value.category, value.overflow).body,
+      tag: `ycoding-${value.deviceID}-overflow-${value.category}`, renotify: true } }
   if (!isRecord(value) || (value.category !== "approval-requested" && value.category !== "agent-completed") || !isSessionID(value.sessionID) ||
-    !isDeviceID(value.deviceID) || (value.noticeID !== undefined && !isNoticeID(value.noticeID)))
+    !isAlertDeviceID(value.deviceID) || (value.noticeID !== undefined && !isNoticeID(value.noticeID)))
     return { title: "YCoding — update", options: { body: "Open YCoding to check your work.", tag: "ycoding-update" } }
-  const attention = value.category === "approval-requested"
-  return { title: attention ? "YCoding — needs your attention" : "YCoding — work finished", options: {
-    body: attention ? "A session is waiting for you." : "A session finished all its work.",
+  const title = isAlertTitle(value.title) ? value.title : undefined
+  const need = value.need === "permission" || value.need === "question" || value.need === "review" || value.need === "failed" ? value.need : undefined
+  const copy = alertCopy(value.category, { ...(title === undefined ? {} : { title }), ...(need === undefined ? {} : { need }) })
+  return { title: copy.title, options: {
+    body: copy.body,
     tag: value.noticeID === undefined ? `ycoding-${value.sessionID}-${value.category}` : `ycoding-${value.deviceID}-${value.noticeID}`,
-    data: { sessionID: value.sessionID },
+    renotify: true,
+    data: { sessionID: value.sessionID, ...(value.noticeID === undefined ? {} : { deviceID: value.deviceID, noticeID: value.noticeID }) },
   } }
-}
-
-function isDeviceID(value: unknown): value is string {
-  return typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value)
 }
 
 function isNoticeID(value: unknown): value is string {

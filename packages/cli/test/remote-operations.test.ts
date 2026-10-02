@@ -15,6 +15,7 @@ import {
   executeRemoteOperation,
   listPage,
   parseListQuery,
+  attentionDetails,
   sessionStatus,
   successFrames,
 } from "../src/remote-operations"
@@ -807,7 +808,7 @@ describe("operation mapping", () => {
   test("a cached-attention status still refuses more than 500 running roots", async () => {
     const sessions = Array.from({ length: RemoteLimits.maxStatusSessions + 1 }, (_, index) => sessionInfo(`ses_${index}`, { updated: index }))
     const { local } = fakeLocal({ outstandingSessions: { data: sessions.map((session) => session.id), running: sessions.map((session) => session.id), failed: [] } })
-    const failure = await sessionStatus(local, sessions, []).then(() => undefined, (cause: unknown) => cause)
+    const failure = await sessionStatus(local, sessions, {}).then(() => undefined, (cause: unknown) => cause)
     expect(failure instanceof Error ? failure.message : undefined).toBe("Session status exceeds the bounded root count")
   })
 
@@ -829,18 +830,38 @@ describe("operation mapping", () => {
       guardrailRequestList: async () => [],
     })
     expect(await sessionStatus(local, sessions)).toEqual({ running: ["ses_root"], attention: ["ses_idle", "ses_root"],
-      requestAttention: ["ses_idle", "ses_root"], failed: [] })
+      requestAttention: ["ses_idle", "ses_root"], requestNeeds: { ses_idle: "question", ses_root: "permission" }, failed: [] })
     expect(calls.filter((call) => call.method === "permissionRequests").map((call) => call.args[0])).toEqual([{ directory }])
     expect(calls.filter((call) => call.method === "formRequests").map((call) => call.args[0])).toEqual([{ directory }])
     expect(calls.filter((call) => call.method === "guardrailRequestList").map((call) => call.args[0])).toEqual(["ses_root"])
     expect(calls.some((call) => call.method === "permissionList" || call.method === "formList")).toBe(false)
   })
 
+  test("status names what each attention root waits for, preferring a permission over a question over a review", async () => {
+    const directory = process.cwd()
+    const sessions = [sessionInfo("ses_a", { updated: 1, directory }), sessionInfo("ses_b", { updated: 2, directory }),
+      sessionInfo("ses_c", { updated: 3, directory }), sessionInfo("ses_c_child", { updated: 4, directory, parentID: "ses_c" })]
+    const { local } = fakeLocal({
+      outstandingSessions: { data: [], running: ["ses_a", "ses_b", "ses_c"], failed: [] },
+      permissionRequests: [{ id: "per_1", sessionID: "ses_c_child" }],
+      formRequests: [formInfo("frm_1", "ses_b"), formInfo("frm_2", "ses_c")],
+      guardrailRequestList: async (rootID: string) => [{ id: "grq_1", sessionID: rootID }],
+    })
+    const status = await sessionStatus(local, sessions)
+    expect(status.requestNeeds).toEqual({ ses_a: "review", ses_b: "question", ses_c: "permission" })
+    expect(attentionDetails(sessions, status.attention, status.requestNeeds)).toEqual([
+      { sessionID: "ses_a", title: "ses_a", need: "review" },
+      { sessionID: "ses_b", title: "ses_b", need: "question" },
+      { sessionID: "ses_c", title: "ses_c", need: "permission" },
+    ])
+    expect(await sessionStatus(local, sessions, status.requestNeeds)).toMatchObject({ requestNeeds: status.requestNeeds })
+  })
+
   test("maps the one process-wide outstanding read to non-executing family roots without per-root work reads", async () => {
     const sessions = [sessionInfo("ses_parent", { updated: 1 }),
       sessionInfo("ses_child", { updated: 2, parentID: "ses_parent" }), sessionInfo("ses_other", { updated: 3 })]
     const { local, calls } = fakeLocal({ outstandingSessions: { data: ["ses_child", "ses_other"], running: ["ses_other"], failed: [] } })
-    expect(await sessionStatus(local, sessions, [])).toMatchObject({ running: ["ses_other"], outstanding: ["ses_parent"] })
+    expect(await sessionStatus(local, sessions, {})).toMatchObject({ running: ["ses_other"], outstanding: ["ses_parent"] })
     expect(calls.map((call) => call.method)).toEqual(["outstandingSessions"])
   })
 
@@ -1829,11 +1850,11 @@ describe("session list paging", () => {
     const h = await harness({ sessions: [root, child], results: { activeSessions: {}, outstandingSessions: () => work } })
     const list = async (status: "running" | "idle") => valueOf(await executeRemoteOperation({ request: request("session.list", { status, parentID: null, order: "active" }),
       local: h.local, sessions: h.registry, subscriptions: h.subscriptions }))
-    expect(await sessionStatus(h.local, h.registry.snapshot(), [], new Set())).toMatchObject({ running: ["ses_root"] })
+    expect(await sessionStatus(h.local, h.registry.snapshot(), {}, new Set())).toMatchObject({ running: ["ses_root"] })
     expect(recordOf(await list("running")).data).toEqual([root])
     expect(recordOf(await list("idle")).data).toEqual([])
     work = { ...work, running: [] }
-    expect(await sessionStatus(h.local, h.registry.snapshot(), [], new Set())).toMatchObject({ running: [], outstanding: ["ses_root"] })
+    expect(await sessionStatus(h.local, h.registry.snapshot(), {}, new Set())).toMatchObject({ running: [], outstanding: ["ses_root"] })
     expect(recordOf(await list("running")).data).toEqual([])
     expect(recordOf(await list("idle")).data).toEqual([root])
   })

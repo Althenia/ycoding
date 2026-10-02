@@ -1,11 +1,12 @@
-import { parsePushEndpoint, type PushTestResponse, type RemoteNoticeCategory } from "../../../../packages/remote/src/index"
+import { parsePushEndpoint, type PushTestResponse, type RemoteAlertDetail, type RemoteNoticeCategory } from "../../../../packages/remote/src/index"
 import { base64UrlEncode, cryptoBytes } from "../auth/crypto"
 import { encryptWebPushPayload, vapidJwt } from "./crypto"
 import type { PushStore, PushSubscription } from "./store"
 
 export type PushEvent =
-  | { readonly category: RemoteNoticeCategory; readonly sessionID: string; readonly deviceID: string; readonly noticeID?: string }
+  | ({ readonly category: RemoteNoticeCategory; readonly sessionID: string; readonly deviceID: string; readonly noticeID?: string } & RemoteAlertDetail)
   | { readonly category: "machine-offline"; readonly deviceID: string; readonly offlineAt: number }
+  | { readonly category: RemoteNoticeCategory; readonly deviceID: string; readonly overflow: number }
 
 export const pushDeliveryTimeoutMs = 10_000
 
@@ -38,11 +39,12 @@ export async function sendPushToOwner(input: PushSender & { readonly store: Push
       errorClass: subscriptions.length === 0 ? "no_subscriptions" : "category_off" }))
     return unsent
   }
-  const scope = input.event.category === "machine-offline" ? `${input.event.deviceID}:${input.event.offlineAt}` : `${input.event.deviceID}:${input.event.noticeID ?? input.event.sessionID}`
+  const scope = "offlineAt" in input.event ? `${input.event.deviceID}:${input.event.offlineAt}`
+    : "overflow" in input.event ? `${input.event.deviceID}:overflow` : `${input.event.deviceID}:${input.event.noticeID ?? input.event.sessionID}`
   const message: PushMessage = {
     category: input.event.category,
     payload: new TextEncoder().encode(JSON.stringify(input.event)),
-    ttl: input.event.category === "agent-completed" ? "600" : "3600",
+    ttl: "3600",
     urgency: input.event.category === "approval-requested" ? "high" : "normal",
     topic: base64UrlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${scope}:${input.event.category}`)))).slice(0, 32),
     targetCount: targets.length,
@@ -92,5 +94,6 @@ async function deliver(sender: PushSender, store: PushStore, subscription: PushS
     await store.recordFailure(subscription, false)
     return { outcome: "rejected", status: response.status }
   }
+  if (subscription.failures > 0) await store.recordSuccess(subscription)
   return { outcome: "accepted", status: response.status }
 }

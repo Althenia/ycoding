@@ -77,7 +77,39 @@ test("service worker shows one notification per push including malformed and foc
     expect(shown.slice(9).map((entry) => entry.title)).toEqual(["YCoding — update", "YCoding — update"])
     await emit("notificationclick", { notification: { data: { sessionID: "ses_1" }, close: () => undefined } })
     expect(opened).toBe("/remote#session=ses_1")
+    const specific = shown.length
+    for (const need of ["permission", "question", "review", "failed", undefined])
+      await emit("push", { data: { json: () => ({ category: "approval-requested", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_9", title: "Fix login", need }) } })
+    await emit("push", { data: { json: () => ({ category: "agent-completed", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_10", title: "Fix login" }) } })
+    await emit("push", { data: { json: () => ({ category: "approval-requested", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_11", title: "two\nlines", need: "unknown" }) } })
+    expect(shown.slice(specific).map((entry) => [entry.title, entry.options.body])).toEqual([
+      ["YCoding — approval needed", "“Fix login” is waiting for you to allow or deny a tool request."],
+      ["YCoding — question for you", "“Fix login” is waiting for your answer."],
+      ["YCoding — guardrail review", "“Fix login” is waiting for you to approve or reject a guarded action."],
+      ["YCoding — session failed", "“Fix login” stopped with an error. Open it to review and retry."],
+      ["YCoding — needs your attention", "“Fix login” is waiting for you."],
+      ["YCoding — work finished", "“Fix login” finished all its work."],
+      ["YCoding — needs your attention", "A session is waiting for you."],
+    ])
+    expect(shown.slice(specific).every((entry) => entry.options.renotify === true)).toBe(true)
+    const noticeData = shown.at(-2)?.options.data
+    expect(noticeData).toEqual({ sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_10" })
+    await emit("notificationclick", { notification: { data: noticeData, close: () => undefined } })
+    expect(opened).toBe("/remote#session=ses_1&device=dev_1&notice=ntc_10")
     windowClients.push(windowClient)
+    await emit("notificationclick", { notification: { data: noticeData, close: () => undefined } })
+    expect(posted.at(-1)).toEqual({ type: "ycoding:open-session", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_10" })
+    posted.length = 0
+    const overflowStart = shown.length
+    await emit("push", { data: { json: () => ({ category: "approval-requested", deviceID: "dev_1", overflow: 5 }) } })
+    await emit("push", { data: { json: () => ({ category: "agent-completed", deviceID: "dev_1", overflow: 1 }) } })
+    await emit("push", { data: { json: () => ({ category: "approval-requested", deviceID: "dev_1", overflow: 0 }) } })
+    expect(shown.slice(overflowStart).map((entry) => [entry.title, entry.options.body, entry.options.tag, entry.options.renotify])).toEqual([
+      ["YCoding — more sessions need you", "5 more sessions are waiting for you. Open YCoding to see them.", "ycoding-dev_1-overflow-approval-requested", true],
+      ["YCoding — more work finished", "1 more session finished its work. Open YCoding to see them.", "ycoding-dev_1-overflow-agent-completed", true],
+      ["YCoding — update", "Open YCoding to check your work.", "ycoding-update", undefined],
+    ])
+    shown.splice(overflowStart)
     await emit("notificationclick", { notification: { data: { sessionID: "ses_1" }, close: () => undefined } })
     expect(posted).toEqual([{ type: "ycoding:open-session", sessionID: "ses_1" }])
     focusFails = true

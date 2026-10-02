@@ -70,7 +70,7 @@ test("a fast 2355-delta provider stream preserves explicit completion push witho
       pushes.push(event.category)
       const sent = sendPushToOwner({
         store: { list: async () => [subscription], upsert: async () => true, renew: async () => "missing", remove: async () => {},
-          claimTest: async () => ({ status: "missing" }), recordFailure: async () => {} },
+          claimTest: async () => ({ status: "missing" }), recordFailure: async () => {}, recordSuccess: async () => {} },
         accountID, event, publicKey, privateKey, subject: "mailto:push@example.invalid", now: Date.now,
         fetch: Object.assign(async (url: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {
           pushRequests.push(new Request(url, init))
@@ -143,7 +143,7 @@ test("a fast 2355-delta provider stream preserves explicit completion push witho
     expect(pushes).toEqual(["approval-requested", "agent-completed"])
     await Promise.all(pushSends)
     expect(pushRequests).toHaveLength(2)
-    expect(pushRequests.map((request) => request.headers.get("ttl")).sort((a, b) => String(a).localeCompare(String(b)))).toEqual(["3600", "600"])
+    expect(pushRequests.map((request) => request.headers.get("ttl")).sort((a, b) => String(a).localeCompare(String(b)))).toEqual(["3600", "3600"])
   } finally {
     await bridge.close()
     database.close()

@@ -1,4 +1,5 @@
 import { noticeSequence, type RemoteNoticePresentation } from "@ycoding-ai/remote"
+import { alertCopy, type AlertNotice } from "./alert"
 import { readNotificationPreferences, type NotificationCategory, type NotificationPreferences } from "./preferences"
 
 export type RemoteNotificationView = {
@@ -25,8 +26,8 @@ export type SyncedNotice = {
 }
 
 /**
- * Fixed copy per category. A desktop alert can surface on a locked screen, so it
- * never carries a session title, tool name, path, command, or error message.
+ * Fixed in-app copy per category. System alerts for relay notices use `alertCopy`,
+ * which adds the Session title and what the Session needs.
  */
 export const NOTIFICATION_TEXT: Record<NotificationCategory, { readonly title: string; readonly body: string }> = {
   "agent-completed": { title: "YCoding — work finished", body: "A session finished all its work." },
@@ -51,7 +52,7 @@ export function notificationCategory(payload: unknown): NotificationCategory | u
   }
 }
 
-export type DesktopAlert = { readonly title: string; readonly body: string; readonly tag: string; readonly sessionID?: string }
+export type DesktopAlert = { readonly title: string; readonly body: string; readonly tag: string; readonly sessionID?: string; readonly notice?: AlertNotice }
 
 export type DesktopNotifier = {
   readonly show: (alert: DesktopAlert) => void
@@ -59,7 +60,7 @@ export type DesktopNotifier = {
 }
 
 export type DesktopRegistration = {
-  readonly showNotification: (title: string, options?: NotificationOptions) => Promise<void>
+  readonly showNotification: (title: string, options?: NotificationOptions & { readonly renotify?: boolean }) => Promise<void>
   readonly getNotifications: () => Promise<readonly { readonly tag: string; close: () => void }[]>
 }
 
@@ -76,8 +77,8 @@ export function createDesktopNotifier(registration: () => Promise<DesktopRegistr
       if (typeof Notification === "undefined" || Notification.permission !== "granted") return
       raised.add(alert.tag)
       void registration().then((worker) => worker?.showNotification(alert.title, {
-        body: alert.body, tag: alert.tag, icon: "/icons/icon-256.png", badge: "/icons/icon-256.png",
-        ...(alert.sessionID === undefined ? {} : { data: { sessionID: alert.sessionID } }),
+        body: alert.body, tag: alert.tag, renotify: true, icon: "/icons/icon-256.png", badge: "/icons/icon-256.png",
+        ...(alert.sessionID === undefined ? {} : { data: { sessionID: alert.sessionID, ...alert.notice } }),
       })).catch(() => undefined)
     },
     dispose: (retainMachineOffline = false) => {
@@ -174,7 +175,9 @@ export function createNotificationDelivery(options: NotificationDeliveryOptions 
     present: (items, deviceID) => {
       for (const item of items) {
         if (item.kind === "offline") alert("machine-offline", undefined, `ycoding-${deviceID}-offline-${item.at}`)
-        else alert(item.notice.category, item.notice.sessionID, `ycoding-${deviceID}-${item.notice.id}`)
+        else if (preferences()[item.notice.category].desktop)
+          desktop.show({ ...alertCopy(item.notice.category, item.detail), tag: `ycoding-${deviceID}-${item.notice.id}`,
+            sessionID: item.notice.sessionID, notice: { deviceID, noticeID: item.notice.id } })
       }
     },
     receive: (notice, deviceID) => {

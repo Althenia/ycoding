@@ -19,4 +19,5 @@ export type PushStore = {
   readonly list: (accountID: string) => Promise<readonly PushSubscription[]>
   readonly claimTest: (accountID: string, endpoint: string, now: number) => Promise<PushTestClaim>
   readonly recordFailure: (subscription: PushSubscription, permanent: boolean) => Promise<void>
+  readonly recordSuccess: (subscription: PushSubscription) => Promise<void>
 }

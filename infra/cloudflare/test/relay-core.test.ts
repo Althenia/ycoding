@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test"
 import { RemoteLimits, RemoteProtocolVersion, parseNoticePage, type RemoteNotice, type RemoteStatus } from "../../../packages/remote/src/index"
 import { createRelay, type OfflineCheck, type RelayConnection, type RelayDeps } from "../src/relay/core"
 import type { PushEvent, PushOutcome } from "../src/push/send"
-import { createNoticeStore, type NoticeStore } from "../src/relay/notice-store"
+import { attentionRepeatMs, createNoticeStore, type NoticeStore } from "../src/relay/notice-store"
 import { createNoticeStorage } from "./notice-storage"
 import { createD1AuthStore } from "../src/auth/d1-store"
 import { createAuthService } from "../src/auth/service"
@@ -223,7 +223,8 @@ describe("relay core: explicit completion receipts", () => {
     await completions(h, Array.from({ length: 200 }, (_, index) => receipt(`ses_${index}`, index + 1)))
     expect(h.storedNotices()).toHaveLength(200)
     expect(h.noticeFramesTo("client-1").filter((frame) => frame.type === "notice.added").map((frame) => (frame.notices as RemoteNotice[]).length)).toEqual([100, 100])
-    expect(h.pushed).toHaveLength(20)
+    expect(h.pushed.filter((event) => "noticeID" in event)).toHaveLength(20)
+    expect(h.pushed.filter((event) => "overflow" in event)).toEqual([{ accountID: "usr_1", category: "agent-completed", deviceID: "dev_1", overflow: 180 }])
     await h.relay.handleClientMessage("client-1", request("read", "notice.read", undefined, { ids: ["ntc_1"] }))
     await h.relay.handleClientMessage("client-1", request("all", "notice.readAll"))
     await h.relay.agentClosed(agent("agent-1"))
@@ -296,10 +297,53 @@ describe("relay core: role separation", () => {
     expect(h.pushed).toHaveLength(1)
     for (let index = 0; index < 30; index += 1)
       await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: ["ses_b", `ses_${index}`] }))
-    expect(h.pushed).toHaveLength(20)
+    expect(h.pushed).toHaveLength(21)
+    expect(h.pushed.at(-1)).toEqual({ accountID: "usr_1", category: "approval-requested", deviceID: "dev_1", overflow: 1 })
     h.advance(60_001)
     await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: ["ses_new"] }))
-    expect(h.pushed).toHaveLength(21)
+    expect(h.pushed).toHaveLength(22)
+  })
+
+  test("a burst beyond the push budget sends one overflow summary instead of dropping it, and only a browser the summary missed presents each overflowed notice", async () => {
+    for (const accepted of [false, true]) {
+      const h = harness({ pushOutcomes: async (event) => accepted && "overflow" in event ? [{ owner: "sess-1", outcome: "accepted" }] : [] })
+      await attachBoth(h)
+      await h.relay.handleClientMessage("client-1", request("sub", "notice.subscribe"))
+      await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: [] }))
+      const burst = Array.from({ length: 25 }, (_, index) => `ses_${String(index).padStart(2, "0")}`)
+      await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: burst }))
+      await h.relay.settleDeliveries()
+      expect(h.storedNotices()).toHaveLength(25)
+      expect(h.pushed.filter((event) => "noticeID" in event).map((event) => event.noticeID)).toEqual(Array.from({ length: 20 }, (_, index) => `ntc_${index + 1}`))
+      expect(h.pushed.filter((event) => "overflow" in event)).toEqual([{ accountID: "usr_1", category: "approval-requested", deviceID: "dev_1", overflow: 5 }])
+      const overflowed = Array.from({ length: 5 }, (_, index) => `ntc_${index + 21}`)
+      expect(h.presentedTo("client-1").filter((id) => overflowed.includes(id))).toEqual(accepted ? [] : overflowed)
+    }
+  })
+
+  test("a Session that needs attention again while its notice is unread alerts again on a new need or after the repeat interval, without a second row", async () => {
+    const h = harness()
+    await attachBoth(h)
+    const status = (attention: string[], details: unknown[] = [], failed?: string[]) =>
+      h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention, details, ...(failed === undefined ? {} : { failed }) }))
+    await status([])
+    await status(["ses_a"], [{ sessionID: "ses_a", need: "permission" }])
+    await status([])
+    await status(["ses_a"], [{ sessionID: "ses_a", need: "permission" }])
+    expect(h.pushed.map((event) => [event.noticeID, event.need])).toEqual([["ntc_1", "permission"]])
+    await status([])
+    await status(["ses_a"], [{ sessionID: "ses_a", need: "question" }])
+    await status([])
+    await status(["ses_a"], [], ["ses_a"])
+    expect(h.pushed.map((event) => [event.noticeID, event.need])).toEqual([["ntc_1", "permission"], ["ntc_1", "question"], ["ntc_1", "failed"]])
+    await status([])
+    await status(["ses_a"], [], ["ses_a"])
+    expect(h.pushed).toHaveLength(3)
+    h.advance(attentionRepeatMs)
+    await status([])
+    await status(["ses_a"], [], ["ses_a"])
+    expect(h.pushed.map((event) => event.noticeID)).toEqual(["ntc_1", "ntc_1", "ntc_1", "ntc_1"])
+    expect(h.storedNotices().map((notice) => notice.id)).toEqual(["ntc_1"])
   })
 
   test("a status frame with failed roots is stored and broadcast unchanged and a newly failed root still pushes approval-requested", async () => {
@@ -312,8 +356,33 @@ describe("relay core: role separation", () => {
     expect(h.storedStatus()).toEqual(frame)
     expect(h.pushed).toEqual([
       { accountID: "usr_1", category: "approval-requested", sessionID: "ses_b", deviceID: "dev_1", noticeID: "ntc_1" },
-      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_c", deviceID: "dev_1", noticeID: "ntc_2" },
+      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_c", deviceID: "dev_1", noticeID: "ntc_2", need: "failed" },
     ])
+  })
+
+  test("alerts carry the Session title and what each Session needs from the frame that admitted them", async () => {
+    const h = harness({ withoutPush: true })
+    await attachBoth(h)
+    await h.relay.handleClientMessage("client-1", request("sub", "notice.subscribe"))
+    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: [] }))
+    await completions(h, [])
+    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: ["ses_a", "ses_b", "ses_c"], failed: ["ses_c"],
+      details: [{ sessionID: "ses_a", title: "Fix login", need: "question" }, { sessionID: "ses_c", title: "Ship release" }] }))
+    await completions(h, [{ ...receipt("ses_d", 1), title: "Write docs" }, receipt("ses_e", 1)])
+    expect(h.sent.filter((entry) => entry.connectionID === "client-1").map((entry) => JSON.parse(entry.message) as { type: string; items?: unknown[] })
+      .filter((message) => message.type === "notice.present").flatMap((message) => message.items ?? [])).toEqual([
+      { kind: "notice", notice: { id: "ntc_1", category: "approval-requested", sessionID: "ses_a", createdAt: expect.any(Number) }, detail: { title: "Fix login", need: "question" } },
+      { kind: "notice", notice: { id: "ntc_2", category: "approval-requested", sessionID: "ses_b", createdAt: expect.any(Number) } },
+      { kind: "notice", notice: { id: "ntc_3", category: "approval-requested", sessionID: "ses_c", createdAt: expect.any(Number) }, detail: { title: "Ship release", need: "failed" } },
+      { kind: "notice", notice: { id: "ntc_4", category: "agent-completed", sessionID: "ses_d", createdAt: 20_001 }, detail: { title: "Write docs" } },
+      { kind: "notice", notice: { id: "ntc_5", category: "agent-completed", sessionID: "ses_e", createdAt: 20_001 } },
+    ])
+    const pushed = harness()
+    await attachBoth(pushed)
+    await pushed.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: [] }))
+    await pushed.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: ["ses_a"],
+      details: [{ sessionID: "ses_a", title: "Fix login", need: "review" }] }))
+    expect(pushed.pushed).toEqual([{ accountID: "usr_1", category: "approval-requested", sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_1", title: "Fix login", need: "review" }])
   })
 
   test("clearing outstanding work never implies completion and new attention still notifies", async () => {
@@ -1139,7 +1208,7 @@ describe("relay core: notice log", () => {
     h.noticeFramesTo(connectionID).filter((frame) => frame.type === "notice.added").flatMap((frame) => frame.notices as RemoteNotice[])
   const attention = (count: number, prefix = "ses_n") => Array.from({ length: count }, (_, index) => `${prefix}${index}`)
 
-  test("repeated failure and approval transitions keep one unread notice and alert until read", async () => {
+  test("repeated failure transitions keep one unread notice and one alert, while a changed need alerts again on the same notice", async () => {
     const h = harness()
     await attachBoth(h)
     await subscribe(h, "client-1")
@@ -1153,7 +1222,7 @@ describe("relay core: notice log", () => {
       { id: "ntc_1", category: "approval-requested", sessionID: "ses_a", createdAt: h.at() },
     ])
     expect(h.pushed).toEqual([
-      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_1" },
+      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_1", need: "failed" },
     ])
     expect(added(h, "client-1")).toEqual(h.storedNotices())
     expect(h.presentedTo("client-1")).toEqual(["ntc_1"])
@@ -1162,17 +1231,19 @@ describe("relay core: notice log", () => {
     await status(h, [], ["ses_a", "ses_b"])
     await h.relay.settleDeliveries()
     expect(h.storedNotices().map((notice) => notice.sessionID)).toEqual(["ses_a", "ses_b"])
-    expect(h.pushed.at(-1)).toEqual({ accountID: "usr_1", category: "approval-requested", sessionID: "ses_b", deviceID: "dev_1", noticeID: "ntc_2" })
-    expect(h.pushed).toHaveLength(2)
-    expect(h.presentedTo("client-1")).toEqual(["ntc_1", "ntc_2"])
+    expect(h.pushed.slice(1)).toEqual([
+      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_b", deviceID: "dev_1", noticeID: "ntc_2" },
+      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_1" },
+    ])
+    expect(h.presentedTo("client-1")).toEqual(["ntc_1", "ntc_2", "ntc_1"])
 
     await readIDs(h, "client-1", ["ntc_1"])
     await status(h, ["ses_a"], ["ses_b"])
     await status(h, [], ["ses_a", "ses_b"])
     await h.relay.settleDeliveries()
     expect(h.pushed.at(-1)).toEqual({ accountID: "usr_1", category: "approval-requested", sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_3" })
-    expect(h.pushed).toHaveLength(3)
-    expect(h.presentedTo("client-1")).toEqual(["ntc_1", "ntc_2", "ntc_3"])
+    expect(h.pushed).toHaveLength(4)
+    expect(h.presentedTo("client-1")).toEqual(["ntc_1", "ntc_2", "ntc_1", "ntc_3"])
   })
 
   test("an unread attention notice prevents repeat alerts after a relay restart", async () => {
@@ -1269,7 +1340,8 @@ describe("relay core: notice log", () => {
     await status(h, [], [])
     h.reset()
     await status(h, [], attention(300))
-    expect(h.pushed).toHaveLength(20)
+    expect(h.pushed.filter((event) => "noticeID" in event)).toHaveLength(20)
+    expect(h.pushed.filter((event) => "overflow" in event)).toEqual([{ accountID: "usr_1", category: "approval-requested", deviceID: "dev_1", overflow: 280 }])
     expect(h.storedNotices()).toHaveLength(300)
     const frames = h.noticeFramesTo("client-1")
     expect(frames.map((frame) => (frame.notices as RemoteNotice[]).length)).toEqual([100, 100, 100])
@@ -1280,7 +1352,7 @@ describe("relay core: notice log", () => {
       await status(h, [], [])
     }
     expect(h.storedNotices().length).toBeGreaterThanOrEqual(300)
-    expect(h.pushed.length).toBeGreaterThan(20)
+    expect(h.pushed.length).toBeGreaterThan(21)
   })
 
   test("push stays limited to twenty a minute while every transition is recorded", async () => {
@@ -1288,11 +1360,12 @@ describe("relay core: notice log", () => {
     await attachBoth(h)
     await status(h, [], [])
     for (let index = 0; index < 30; index += 1) await status(h, [], attention(index + 1))
-    expect(h.pushed).toHaveLength(20)
+    expect(h.pushed.filter((event) => "noticeID" in event)).toHaveLength(20)
+    expect(h.pushed.filter((event) => "overflow" in event)).toEqual([{ accountID: "usr_1", category: "approval-requested", deviceID: "dev_1", overflow: 1 }])
     expect(h.storedNotices()).toHaveLength(30)
     h.advance(60_001)
     await status(h, [], attention(31))
-    expect(h.pushed).toHaveLength(21)
+    expect(h.pushed).toHaveLength(22)
     expect(h.storedNotices()).toHaveLength(31)
   })
 
@@ -1921,13 +1994,18 @@ describe("relay core: one System alert owner per browser", () => {
     expect(h.presentedTo("tab-1")).toEqual(["ntc_1", "ntc_2", "ntc_3", "ntc_4", "ntc_5"])
   })
 
-  test("notices beyond the push window are presented at once even for a browser with push", async () => {
+  test("notices beyond the push window reach a browser with push as one summary, and any later overflow in that window is presented at once", async () => {
     const h = harness({ pushOutcomes: async () => [{ owner: "browser-1", outcome: "accepted" }] })
     await open(h, [["tab-1", "browser-1"]])
     await status(h, Array.from({ length: 22 }, (_, index) => `ses_${index}`))
     await settle()
-    expect(h.pushed).toHaveLength(20)
-    expect(h.presentedTo("tab-1")).toEqual(["ntc_21", "ntc_22"])
+    expect(h.pushed).toHaveLength(21)
+    expect(h.pushed.at(-1)).toEqual({ accountID: "usr_1", category: "approval-requested", deviceID: "dev_1", overflow: 2 })
+    expect(h.presentedTo("tab-1")).toEqual([])
+    await status(h, Array.from({ length: 23 }, (_, index) => `ses_${index}`))
+    await settle()
+    expect(h.pushed).toHaveLength(21)
+    expect(h.presentedTo("tab-1")).toEqual(["ntc_23"])
   })
 
   test("a late push failure goes to the browser's current presenter, never to a closed tab or one opened after every tab closed", async () => {

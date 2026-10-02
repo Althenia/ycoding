@@ -59,6 +59,10 @@ export function createD1PushStore(db: D1Database): PushStore {
       const existing = await db.prepare("SELECT endpoint FROM push_subscription WHERE account_id = ? AND endpoint = ?").bind(accountID, endpoint).all()
       return existing.results.length > 0 ? { status: "limited" } : { status: "missing" }
     },
+    async recordSuccess(subscription: PushSubscription) {
+      await db.prepare("UPDATE push_subscription SET failures = 0 WHERE account_id = ? AND endpoint = ? AND p256dh = ? AND auth = ?")
+        .bind(subscription.accountID, subscription.endpoint, subscription.keys.p256dh, subscription.keys.auth).run()
+    },
     async recordFailure(subscription: PushSubscription, permanent: boolean) {
       if (permanent) {
         await db.prepare("DELETE FROM push_subscription WHERE account_id = ? AND endpoint = ? AND p256dh = ? AND auth = ?")

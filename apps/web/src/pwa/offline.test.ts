@@ -146,7 +146,7 @@ describe("service worker source", () => {
     expect(source.match(/scope\.registration\.showNotification\(/g)).toHaveLength(1)
     const clickHandler = source.split('scope.addEventListener("notificationclick"')[1]?.split('scope.addEventListener("pushsubscriptionchange"')[0] ?? ""
     expect(clickHandler).toContain("current.focus()")
-    expect(clickHandler).toContain("scope.clients.openWindow(`/remote#session=")
+    expect(clickHandler).toContain("scope.clients.openWindow(`/remote#${alertHash(")
     expect(clickHandler).not.toContain("showNotification(")
     expect(clickHandler).not.toContain("fetch(")
     const changeHandler = source.split('scope.addEventListener("pushsubscriptionchange"')[1]?.split("function isRecord")[0] ?? ""

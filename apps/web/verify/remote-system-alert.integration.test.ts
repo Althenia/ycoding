@@ -82,4 +82,22 @@ describe("System alerts in the remote workspace", () => {
       expect(await pushed.evaluate<number>(`window.__systemAlerts.length`)).toBe(0)
     } finally { await pushed.close() }
   }, 30_000)
+
+  test("opening a System alert marks its notice read and opens its Session", async () => {
+    const page = await openWorkspace("theme=dark")
+    const unread = `Number(document.querySelector('.yc-notification-center__badge')?.textContent ?? 0)`
+    try {
+      await page.evaluate(`window.remoteStatus([], []); window.remoteStatus([], ['ses_fixture'])`)
+      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`window.__systemAlerts.length > 0`); attempt += 1) await Bun.sleep(50)
+      await Bun.sleep(300)
+      const before = await page.evaluate<number>(unread)
+      const match = /^ycoding-(dev_[a-z]+)-(ntc_\d+)$/.exec(await page.evaluate<string>(`window.__systemAlerts.at(-1).tag`))
+      expect(match).not.toBeNull()
+      expect(before).toBeGreaterThan(0)
+      await page.evaluate(`window.dispatchEvent(new CustomEvent('ycoding:open-session', { detail: { sessionID: 'ses_fixture', deviceID: '${match?.[1]}', noticeID: '${match?.[2]}' } }))`)
+      for (let attempt = 0; attempt < 60 && await page.evaluate<number>(unread) === before; attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<number>(unread)).toBe(before - 1)
+      expect(await page.evaluate<string>(`location.pathname`)).toBe("/remote")
+    } finally { await page.close() }
+  }, 30_000)
 })

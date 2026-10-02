@@ -3,7 +3,9 @@ import {
   RemoteLimits,
   RemoteProtocolVersion,
   RemoteWebSocketPath,
+  alertTitle,
   deviceSignaturePayload,
+  isAlertTitle,
   parseAgentMessage,
   parseChallengeRequest,
   parseClientMessage,
@@ -30,6 +32,7 @@ import {
   serializeRequest,
   serializeResponse,
   serializeSessions,
+  serializeStatus,
   type RemoteNoticeFrame,
   type RemoteOperation,
 } from "../src/index"
@@ -617,6 +620,35 @@ describe("remote operations", () => {
     ]) expect(parseAgentMessage(JSON.stringify(frame)).ok).toBe(false)
   })
 
+  test("carries bounded alert details only for attention roots", () => {
+    const status = { type: "status" as const, running: [], attention: ["ses_b", "ses_c"], failed: ["ses_c"],
+      details: [{ sessionID: "ses_b", title: "Fix login", need: "permission" as const }, { sessionID: "ses_c", title: "Ship release" }] }
+    expect(parseAgentMessage(serializeStatus(status))).toEqual({ ok: true, value: status })
+    expect(parseRelayToClientMessage(serializeStatus(status))).toEqual({ ok: true, value: status })
+    for (const need of ["permission", "question", "review"] as const)
+      expect(parseAgentMessage(JSON.stringify({ ...status, details: [{ sessionID: "ses_b", need }] })).ok).toBe(true)
+    for (const details of [
+      [{ sessionID: "ses_a", title: "Not in attention" }],
+      [{ sessionID: "ses_b" }, { sessionID: "ses_b" }],
+      [{ sessionID: "ses_b", need: "failed" }],
+      [{ sessionID: "ses_b", title: "" }],
+      [{ sessionID: "ses_b", title: " padded " }],
+      [{ sessionID: "ses_b", title: "line\nbreak" }],
+      [{ sessionID: "ses_b", title: "x".repeat(RemoteLimits.maxAlertTitleChars + 1) }],
+      [{ sessionID: "ses_b", prompt: "private" }],
+      { sessionID: "ses_b" },
+    ]) expect(parseAgentMessage(JSON.stringify({ ...status, details })).ok).toBe(false)
+    expect(parseAgentMessage(JSON.stringify({ ...status, details: [{ sessionID: "ses_b", title: "😀".repeat(RemoteLimits.maxAlertTitleChars) }] })).ok).toBe(true)
+  })
+
+  test("bounds a Session title for an alert", () => {
+    expect(alertTitle("  Fix\n  the\tlogin  ")).toBe("Fix the login")
+    expect(alertTitle(" \n ")).toBeUndefined()
+    const long = alertTitle("word ".repeat(100))
+    expect(long !== undefined && isAlertTitle(long) && long.endsWith("…")).toBe(true)
+    expect(Array.from(long ?? "").length).toBe(RemoteLimits.maxAlertTitleChars)
+  })
+
   test("admits every reconnect read operation and requires a session for it", () => {
     expect(parseClientMessage('{"type":"request","id":"r","operation":"session.active"}')).toEqual({
       ok: true,
@@ -779,6 +811,8 @@ describe("notice log contract", () => {
       { type: "notice.unavailable" },
       { type: "notice.offline", at: 1_790_000_000_000 },
       { type: "notice.present", items: [{ kind: "notice", notice }, { kind: "notice", notice: { ...notice, id: "ntc_2" } }, { kind: "offline", at: 1_790_000_000_000 }] },
+      { type: "notice.present", items: [{ kind: "notice", notice, detail: { title: "Fix login", need: "failed" } },
+        { kind: "notice", notice: { ...notice, id: "ntc_2" }, detail: { need: "question" } }, { kind: "notice", notice: { ...notice, id: "ntc_3" }, detail: {} }] },
     ]
     for (const frame of frames) {
       expect(parseRelayToClientMessage(JSON.stringify(frame))).toEqual({ ok: true, value: frame })
@@ -824,6 +858,10 @@ describe("notice log contract", () => {
       { type: "notice.offline", at: 1.5 },
       { type: "notice.offline", at: "1790000000000" },
       { type: "notice.offline", at: 1, deviceID: "dev_1" },
+      { type: "notice.present", items: [{ kind: "notice", notice, detail: { need: "finished" } }] },
+      { type: "notice.present", items: [{ kind: "notice", notice, detail: { title: "two\nlines" } }] },
+      { type: "notice.present", items: [{ kind: "notice", notice, detail: { title: "Fix", prompt: "private" } }] },
+      { type: "notice.present", items: [{ kind: "notice", notice, detail: "Fix" }] },
       { type: "notice.present", items: [] },
       { type: "notice.present" },
       { type: "notice.present", items: [{ kind: "notice", notice }, { kind: "notice", notice }] },

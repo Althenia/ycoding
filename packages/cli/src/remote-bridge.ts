@@ -4,6 +4,8 @@ import {
   RemoteCloseCode,
   RemoteLimits,
   parseRelayToAgentMessage,
+  alertTitle,
+  type RemoteAttentionNeed,
   type RemoteRequest,
   serializeResponse,
   serializeSessions,
@@ -15,6 +17,7 @@ import { agentURL } from "./remote-config"
 import {
   createSessionRegistry,
   createAttachmentUploads,
+  attentionDetails,
   createSubscriptions,
   executeRemoteOperation,
   sessionStatus,
@@ -112,11 +115,12 @@ export class RemoteAgent {
   private completionDirty = false
   private completionRetryAttempt = 0
   private lastStatus?: string
-  private attentionStatus?: readonly string[]
+  private attentionStatus?: Readonly<Record<string, RemoteAttentionNeed>>
   private attentionGeneration = 0
   private failedRoots = new Set<string>()
   private failureChanges = new Map<string, boolean>()
   private failuresHydrated = false
+  private failureGeneration = 0
   private eventStop?: () => Promise<void>
   private eventStarting = false
   private eventStreamGeneration = 0
@@ -133,7 +137,7 @@ export class RemoteAgent {
     this.authRetryWindowMs = options.authRetryWindowMs ?? defaults.authRetryWindowMs
     this.registry = createSessionRegistry({
       local: options.local,
-      onChange: () => { void this.advertise(); this.attentionStatus = undefined; this.attentionGeneration++; this.failuresHydrated = false; this.scheduleStatus() },
+      onChange: () => { void this.advertise(); this.attentionStatus = undefined; this.attentionGeneration++; this.failuresHydrated = false; this.failureGeneration++; this.scheduleStatus() },
     })
     this.subscriptions = createSubscriptions()
     this.scheduler = new RemoteScheduler.Scheduler({
@@ -204,6 +208,7 @@ export class RemoteAgent {
         this.failedRoots.clear()
         this.failureChanges.clear()
         this.failuresHydrated = false
+        this.failureGeneration++
         this.statusReading = undefined
         this.statusDirty = false
         this.completionReading = undefined
@@ -349,27 +354,33 @@ export class RemoteAgent {
     }
     this.statusReading = connection
     const generation = this.attentionGeneration
+    const hydration = this.failuresHydrated ? undefined : this.failureGeneration
     try {
-      const status = await sessionStatus(this.options.local, this.registry.snapshot(), this.attentionStatus,
-        this.failuresHydrated ? this.failedRoots : undefined)
+      const sessions = this.registry.snapshot()
+      const status = await sessionStatus(this.options.local, sessions, this.attentionStatus,
+        hydration === undefined ? this.failedRoots : undefined)
       if (this.connection !== connection || this.statusOwner !== owner || this.state !== "live") return
       this.statusRetryAttempt = 0
-      if (!this.failuresHydrated && generation === this.attentionGeneration) {
+      if (hydration !== undefined) {
         this.failedRoots = new Set(status.failed)
         for (const [root, failed] of this.failureChanges) {
           if (failed) this.failedRoots.add(root)
           else this.failedRoots.delete(root)
         }
-        this.failureChanges.clear()
-        this.failuresHydrated = true
+        if (hydration === this.failureGeneration) {
+          this.failureChanges.clear()
+          this.failuresHydrated = true
+        }
       }
-      if (generation === this.attentionGeneration) this.attentionStatus = status.requestAttention
+      if (generation === this.attentionGeneration) this.attentionStatus = status.requestNeeds
       const attention = [...new Set([...status.requestAttention, ...this.failedRoots])].sort()
       if (attention.length > RemoteLimits.maxStatusSessions) throw new Error("Session status exceeds the bounded root count")
       const failed = [...this.failedRoots].filter((root) => !status.requestAttention.includes(root)).sort()
+      const details = attentionDetails(sessions, attention, status.requestNeeds)
       const frame = serializeStatus({ type: "status", running: status.running, attention,
         ...(status.outstanding === undefined ? {} : { outstanding: status.outstanding }),
-        ...(failed.length === 0 ? {} : { failed }) })
+        ...(failed.length === 0 ? {} : { failed }),
+        ...(details.length === 0 ? {} : { details }) })
       if (frame !== this.lastStatus) {
         if (await this.send(frame, connection)) this.lastStatus = frame
       }
@@ -425,7 +436,12 @@ export class RemoteAgent {
         if (this.connection !== connection || this.statusOwner !== owner || this.state !== "live") return
         if (page.next !== undefined && (page.next !== page.data.at(-1)?.sessionID || (after !== undefined && page.next <= after)))
           throw new Error("Completion pagination did not advance")
-        if (!await this.send(serializeCompletions({ type: "completions", data: page.data, more: page.next !== undefined }), connection))
+        const titles = new Map(this.registry.snapshot().map((session) => [session.id, session.title]))
+        const data = page.data.map((item) => {
+          const title = alertTitle(titles.get(item.sessionID) ?? "")
+          return title === undefined ? item : { ...item, title }
+        })
+        if (!await this.send(serializeCompletions({ type: "completions", data, more: page.next !== undefined }), connection))
           throw new Error("Completion receipt delivery interrupted")
         if (page.next === undefined) break
         after = page.next
