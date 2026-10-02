@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url"
 
 const dir = fileURLToPath(new URL("..", import.meta.url))
 
-export const pack = async () => {
+const pack = async () => {
   process.chdir(dir)
   await $`bun run build`
   const original = await Bun.file("package.json").text()

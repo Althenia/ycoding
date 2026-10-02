@@ -15,8 +15,7 @@ import { httpInteractions, type CassetteMetadata } from "../cassette/model.js"
 import { defaultMatcher, selectFirstMatching, type RequestMatcher } from "./matching.js"
 import type { HttpInteraction, ResponseSnapshot } from "./model.js"
 
-export { defaultMatcher }
-export type RecordReplayMode = "auto" | "record" | "replay" | "passthrough"
+type RecordReplayMode = "auto" | "record" | "replay" | "passthrough"
 export interface RecordReplayOptions {
   readonly mode?: RecordReplayMode
   readonly directory?: string
@@ -75,7 +74,7 @@ const transportError = (request: HttpClientRequest.HttpClientRequest, descriptio
     reason: new HttpClientError.TransportError({ request: redactedErrorRequest(request, redactedUrl), description }),
   })
 
-export const recordingLayer = (
+const recordingLayer = (
   name: string,
   options: Omit<RecordReplayOptions, "directory"> = {},
 ): Layer.Layer<HttpClient.HttpClient, never, HttpClient.HttpClient | Service> =>

@@ -23,7 +23,7 @@ export class InvalidCassetteError extends Schema.TaggedErrorClass<InvalidCassett
   }
 }
 
-export class UnsafeCassetteError extends Schema.TaggedErrorClass<UnsafeCassetteError>()("UnsafeCassetteError", {
+class UnsafeCassetteError extends Schema.TaggedErrorClass<UnsafeCassetteError>()("UnsafeCassetteError", {
   cassetteName: Schema.String,
   findings: Schema.Array(SecretFindingSchema),
 }) {
