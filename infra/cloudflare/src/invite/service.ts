@@ -4,11 +4,11 @@ import type { InviteStore } from "./store"
 
 const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
-export function formatAccessKey(value: string): string {
+function formatAccessKey(value: string): string {
   return value.match(/.{4}/g)?.join("-") ?? value
 }
 
-export function normalizeAccessKey(value: unknown): string | undefined {
+function normalizeAccessKey(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined
   const normalized = value.toUpperCase().replace(/[\s-]/g, "").replaceAll("O", "0").replaceAll("I", "1").replaceAll("L", "1")
   return /^[0-9A-HJKMNP-TV-Z]{32}$/.test(normalized) ? normalized : undefined

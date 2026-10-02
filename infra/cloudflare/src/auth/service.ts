@@ -18,12 +18,12 @@ import { constantTimeEqual, randomToken, sha256Base64Url, sha256Hex, verifyP256S
 import type { AuthStore, BrowserSessionRow, CredentialKind, CredentialRow, DeviceRow } from "./store"
 
 export const browserSessionTtlMs = 30 * 24 * 60 * 60 * 1000
-export const browserSessionRotationMs = browserSessionTtlMs / 2
+const browserSessionRotationMs = browserSessionTtlMs / 2
 export const oauthTransactionTtlMs = 10 * 60 * 1000
-export const enrollmentTtlMs = 10 * 60 * 1000
-export const challengeTtlMs = 2 * 60 * 1000
-export const accessCredentialTtlMs = 10 * 60 * 1000
-export const refreshCredentialTtlMs = 30 * 24 * 60 * 60 * 1000
+const enrollmentTtlMs = 10 * 60 * 1000
+const challengeTtlMs = 2 * 60 * 1000
+const accessCredentialTtlMs = 10 * 60 * 1000
+const refreshCredentialTtlMs = 30 * 24 * 60 * 60 * 1000
 
 /**
  * Retained after expiry so an operator can still see a recent credential or
@@ -65,7 +65,7 @@ const enrollmentAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 const remotePathPrefix = "/remote"
 
 /** Keeps the post-login redirect on this origin under the remote app prefix. */
-export function safeRedirectAfter(value: unknown): string {
+function safeRedirectAfter(value: unknown): string {
   const fallback = "/remote/"
   if (typeof value !== "string" || value.length === 0 || value.length > 512) return fallback
   if (!value.startsWith(remotePathPrefix)) return fallback

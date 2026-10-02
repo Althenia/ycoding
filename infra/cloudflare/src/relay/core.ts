@@ -85,7 +85,7 @@ export type RelayDeps = {
   readonly agentHeartbeatAt?: (connectionID: string) => number | undefined
 }
 
-export type Relay = ReturnType<typeof createRelay>
+type Relay = ReturnType<typeof createRelay>
 
 type ClientState = {
   readonly connectionID: string

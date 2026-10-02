@@ -3,7 +3,7 @@ import { readdirSync } from "node:fs"
 
 const migrations = new URL("../../migrations/", import.meta.url)
 
-export function migrationNames(): readonly string[] {
+function migrationNames(): readonly string[] {
   return readdirSync(migrations).filter((name) => name.endsWith(".sql")).sort()
 }
 

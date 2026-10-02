@@ -1,6 +1,6 @@
 import { RemoteLimits, type RemoteAlertDetail, type RemoteNotice, type RemoteNoticeCategory, type RemoteWorkCompletion } from "../../../../packages/remote/src/index"
 
-export type NoticeSql = {
+type NoticeSql = {
   readonly exec: (query: string, ...bindings: unknown[]) => { readonly toArray: () => unknown[] }
 }
 
@@ -19,7 +19,7 @@ export type NoticeEvent = {
 
 export const attentionRepeatMs = 10 * 60_000
 
-export type NoticePage = {
+type NoticePage = {
   readonly notices: readonly RemoteNotice[]
   readonly next?: string
   readonly total: number

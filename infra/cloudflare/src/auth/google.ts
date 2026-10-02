@@ -34,7 +34,7 @@ export type GoogleIdentity = {
   readonly emailVerified: boolean
 }
 
-export type AuthFailureReason =
+type AuthFailureReason =
   | "malformed_token"
   | "unsupported_algorithm"
   | "unknown_key"
@@ -67,10 +67,6 @@ export function googleEndpoints(env: GoogleEnv): GoogleEndpoints {
     clientId: env.GOOGLE_CLIENT_ID ?? "",
     clientSecret: env.GOOGLE_CLIENT_SECRET ?? "",
   }
-}
-
-export function googleConfigured(env: GoogleEnv): boolean {
-  return (env.GOOGLE_CLIENT_ID?.length ?? 0) > 0 && (env.GOOGLE_CLIENT_SECRET?.length ?? 0) > 0
 }
 
 export function authorizationUrl(
