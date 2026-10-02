@@ -8,7 +8,7 @@ import { Modal } from "./modal"
 import { Icon } from "./icon"
 import { inlineSegments } from "../content/docs/inline"
 
-export function DocsNav(props: { readonly onNavigate?: () => void }): JSX.Element {
+function DocsNav(props: { readonly onNavigate?: () => void }): JSX.Element {
   const groups = docsByGroup()
   const current = useLocation({ select: (location) => location.pathname })
   return (

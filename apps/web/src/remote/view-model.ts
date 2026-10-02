@@ -101,10 +101,10 @@ export const REMOTE_CAPABILITY_NAMES = [
   "notifications",
 ] as const
 
-export type RemoteCapabilityName = (typeof REMOTE_CAPABILITY_NAMES)[number]
-export type RemoteCapabilities = Readonly<Record<RemoteCapabilityName, boolean>>
+type RemoteCapabilityName = (typeof REMOTE_CAPABILITY_NAMES)[number]
+type RemoteCapabilities = Readonly<Record<RemoteCapabilityName, boolean>>
 
-export type RemoteDevice = {
+type RemoteDevice = {
   readonly id: string
   readonly name: string
   readonly platform: string
@@ -112,7 +112,7 @@ export type RemoteDevice = {
   readonly lastSeen?: string
 }
 
-export type RemoteAutonomyMode = "normal" | "yolo" | "goal"
+type RemoteAutonomyMode = "normal" | "yolo" | "goal"
 export type RemoteSessionStatus = "running" | "idle" | "blocked" | "archived" | "failed"
 
 export type RemoteSessionSummary = {
@@ -128,9 +128,9 @@ export type RemoteSessionSummary = {
   readonly updatedAt?: string
 }
 
-export type RemoteToolStatus = "pending" | "running" | "completed" | "failed"
+type RemoteToolStatus = "pending" | "running" | "completed" | "failed"
 
-export type RemoteMessagePart =
+type RemoteMessagePart =
   | { readonly kind: "text"; readonly text: string }
   | {
       readonly kind: "tool"
@@ -147,32 +147,32 @@ export type RemoteMessagePart =
       readonly risk?: string
     }
 
-export type RemoteMessage =
+type RemoteMessage =
   | { readonly kind: "user"; readonly id: string; readonly text: string }
   | { readonly kind: "assistant"; readonly id: string; readonly parts: readonly RemoteMessagePart[] }
   | { readonly kind: "system"; readonly id: string; readonly text: string }
 
-export type RemoteApproval = {
+type RemoteApproval = {
   readonly id: string
   readonly tool: string
   readonly action: string
   readonly risk?: string
 }
 
-export type RemotePromptInput = {
+type RemotePromptInput = {
   readonly text: string
   readonly delivery: "steer" | "queue"
 }
 
-export type RemoteActionFailureReason =
+type RemoteActionFailureReason =
   | RemoteUnavailableReason
   | "empty-prompt"
   | "no-active-device"
   | "no-active-session"
 
-export type RemoteActionResult = { readonly ok: true } | { readonly ok: false; readonly reason: RemoteActionFailureReason }
+type RemoteActionResult = { readonly ok: true } | { readonly ok: false; readonly reason: RemoteActionFailureReason }
 
-export type RemoteActions = {
+type RemoteActions = {
   readonly signIn: () => RemoteActionResult
   readonly reconnect: () => RemoteActionResult
   readonly selectDevice: (deviceId: string) => RemoteActionResult
@@ -425,7 +425,7 @@ export function remoteEntryView(read: AccountReadState): "sign-in" | "workspace"
   return read.kind === "signed-out" ? "sign-in" : "workspace"
 }
 
-export type AccountAction = "retry"
+type AccountAction = "retry"
 
 /** The account section either shows the account it knows or one message about why it cannot. */
 export type AccountSectionView =
@@ -651,7 +651,7 @@ export function enrollmentInstructions(enrollment: CreateEnrollmentResponse, rel
  * What the last explicit page request did, shown beside the page control. It is display
  * state only: the device's own bytes always come from `ShellOutputView`.
  */
-export type ShellOutputStatus =
+type ShellOutputStatus =
   | { readonly kind: "idle" }
   | { readonly kind: "loading"; readonly label: string }
   | { readonly kind: "stalled"; readonly label: string }

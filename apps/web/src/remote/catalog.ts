@@ -2,9 +2,9 @@ import { readModelRef, type ModelRefView } from "./projection"
 
 export type CatalogTarget = { readonly sessionID: string } | { readonly workspaceID: string }
 
-export type PromptMentionInput = { readonly start: number; readonly end: number; readonly text: string }
+type PromptMentionInput = { readonly start: number; readonly end: number; readonly text: string }
 
-export type AgentOption = {
+type AgentOption = {
   readonly id: string
   readonly name: string
   readonly description?: string
@@ -21,16 +21,16 @@ export type ModelOption = {
   readonly variants: readonly string[]
 }
 
-export type CommandOption = { readonly name: string; readonly description?: string }
+type CommandOption = { readonly name: string; readonly description?: string }
 
-export type SkillOption = {
+type SkillOption = {
   readonly id: string
   readonly name: string
   readonly description?: string
   readonly slash: boolean
 }
 
-export type ResourceOption = { readonly name: string; readonly uri: string; readonly description?: string }
+type ResourceOption = { readonly name: string; readonly uri: string; readonly description?: string }
 
 export type FileOption = { readonly path: string; readonly uri: string; readonly kind: "file" | "directory" }
 

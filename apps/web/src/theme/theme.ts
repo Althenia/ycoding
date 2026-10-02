@@ -1,12 +1,12 @@
 import { browserStorage, readStored, writeStored, type StorageLike } from "../lib/storage"
 
 export const THEME_STORAGE_KEY = "ycoding.theme"
-export const THEME_PREFERENCES = ["light", "dark", "system"] as const
+const THEME_PREFERENCES = ["light", "dark", "system"] as const
 
 export type ThemePreference = (typeof THEME_PREFERENCES)[number]
 export type ResolvedTheme = "light" | "dark"
 
-export function isThemePreference(value: unknown): value is ThemePreference {
+function isThemePreference(value: unknown): value is ThemePreference {
   return typeof value === "string" && (THEME_PREFERENCES as readonly string[]).includes(value)
 }
 

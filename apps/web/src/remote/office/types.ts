@@ -22,7 +22,7 @@ export type SessionSummary = {
 
 export type OfficeRoomID = "block" | "lounge" | "hall"
 export type OfficeActivity = "research" | "implement" | "coordinate" | "verify" | "hold"
-export type Direction = "down" | "left" | "right" | "up"
+type Direction = "down" | "left" | "right" | "up"
 
 export type SelectedSession = {
   readonly id: string
@@ -37,7 +37,7 @@ export type SelectedSession = {
   readonly unknownOutcome: boolean
 }
 
-export type TaskState = "starting" | "running" | "waiting" | "cancelling" | "cancelled" | "completed" | "failed" | "lost"
+type TaskState = "starting" | "running" | "waiting" | "cancelling" | "cancelled" | "completed" | "failed" | "lost"
 
 export type TeamMember = {
   readonly sessionID: string
@@ -47,7 +47,7 @@ export type TeamMember = {
   readonly state: TaskState
 }
 
-export type TeamCueInput =
+type TeamCueInput =
   | { readonly id: string; readonly kind: "delegated"; readonly childID: string }
   | { readonly id: string; readonly kind: "reported"; readonly childID: string; readonly outcome: "completed" | "failed" | "cancelled" | "lost" }
 
@@ -129,7 +129,7 @@ export type OfficeLayout = {
   readonly roomAt: (cell: Point) => OfficeRoomID | undefined
 }
 
-export type ActorPose = "stand" | "walk" | "sit" | "type" | "talk" | "wave" | "play"
+type ActorPose = "stand" | "walk" | "sit" | "type" | "talk" | "wave" | "play"
 export type ActorSpeech = "chat" | "delegate" | "report"
 
 export type ActorFrame = {

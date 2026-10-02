@@ -137,7 +137,7 @@ export type TeamTaskView = {
   readonly tokens?: number
 }
 
-export type TeamView = {
+type TeamView = {
   readonly rootID: string
   readonly status: "loading" | "ready" | "unsupported" | "error"
   readonly tasks: readonly TeamTaskView[]
@@ -176,7 +176,7 @@ export type PendingMutation = {
 
 export type MutationToast = { readonly id: string; readonly label: string; readonly state: "failed" | "unknown"; readonly detail?: string; readonly sessionID: string }
 
-export type SessionCreation = {
+type SessionCreation = {
   readonly id: string
   readonly deviceID: string
   readonly workspace: RemoteWorkspaceInfo
@@ -3392,7 +3392,7 @@ export function parseSessionStatus(payload: unknown): RemoteStoreState["sessionS
   return { running: new Set(running), attention: new Set(attention), outstanding: new Set(outstanding ?? []), failed: new Set(failed ?? []) }
 }
 
-export function readAutonomyFromResponse(value: unknown): SessionAutonomyView | undefined {
+function readAutonomyFromResponse(value: unknown): SessionAutonomyView | undefined {
   return readAutonomy(value)
 }
 

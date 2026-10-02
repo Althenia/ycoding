@@ -223,7 +223,7 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
 
 export type RemoteQueries = ReturnType<typeof createRemoteQueries>
 
-export function readUsageProviders(value: unknown): readonly UsageProvider[] | undefined {
+function readUsageProviders(value: unknown): readonly UsageProvider[] | undefined {
   if (!Array.isArray(value)) return undefined
   const statuses = ["available", "stale", "unsupported", "unauthorized", "error"]
   const units = ["percent", "usd", "requests", "tokens", "count"]
@@ -238,7 +238,7 @@ export function readUsageProviders(value: unknown): readonly UsageProvider[] | u
   return value as UsageProvider[]
 }
 
-export function readUsageMetrics(value: unknown): UsageSummary | undefined {
+function readUsageMetrics(value: unknown): UsageSummary | undefined {
   if (typeof value !== "object" || value === null) return undefined
   const fields = ["logical", "physical", "helpers", "continued", "fallback"]
   const tokens = Reflect.get(value, "tokens")
@@ -252,7 +252,7 @@ export function readUsageMetrics(value: unknown): UsageSummary | undefined {
   return value as UsageSummary
 }
 
-export function readUsageReport(value: unknown, group: UsageReportInput["group"]): UsageReport | undefined {
+function readUsageReport(value: unknown, group: UsageReportInput["group"]): UsageReport | undefined {
   if (typeof value !== "object" || value === null || Reflect.get(value, "group") !== group || !Array.isArray(Reflect.get(value, "rows")) ||
     !Number.isInteger(Reflect.get(value, "rowCount")) || Reflect.get(value, "rowCount") < 0 ||
     (Reflect.get(value, "nextOffset") !== undefined && (!Number.isInteger(Reflect.get(value, "nextOffset")) || Reflect.get(value, "nextOffset") < 0)) ||

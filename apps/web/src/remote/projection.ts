@@ -33,19 +33,19 @@ export function modelLabel(model: ModelRefView | undefined): string | undefined 
   return `${model.providerID}/${model.id}${model.variant === undefined ? "" : `#${model.variant}`}`
 }
 
-export type GenerationSpeedSampleView = {
+type GenerationSpeedSampleView = {
   readonly model: ModelRefView
   readonly tokens: number
   readonly durationNs: number
   readonly tokensPerSecond: number
 }
 
-export type GenerationSpeedHistoryView = {
+type GenerationSpeedHistoryView = {
   readonly latest?: GenerationSpeedSampleView
   readonly recent: readonly GenerationSpeedSampleView[]
 }
 
-export type ContextWindowView = { readonly model: ModelRefView; readonly used: number; readonly limit: number }
+type ContextWindowView = { readonly model: ModelRefView; readonly used: number; readonly limit: number }
 
 const positiveInteger = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined
 
@@ -262,7 +262,7 @@ export type RemoteMessageView =
     }
 
 export type FormFieldView = Form.Field
-export type FormWhenView = Form.When
+type FormWhenView = Form.When
 export type FormAnswerView = Form.Answer
 export type FormView = Omit<Form.Info, "id" | "fields"> & { readonly id: string; readonly fields: readonly FormFieldView[] }
 
@@ -367,7 +367,7 @@ export function isGoalSteerAdmission(payload: unknown): boolean {
 }
 
 /** Caps a derived summary (compaction, non-text tool content) so it cannot dominate the page. */
-export const messageTextLimit = 4_000
+const messageTextLimit = 4_000
 
 /**
  * Events the client receives but does not project: they carry no user-visible
@@ -398,7 +398,7 @@ export function createSessionView(id: string): SessionView {
   return { id, status: "idle", messages: [], requests: [], unhandledEvents: 0 }
 }
 
-export function formatElapsed(ms: number): string {
+function formatElapsed(ms: number): string {
   const seconds = Math.max(0, ms) / 1_000
   if (seconds < 60) return `${seconds.toFixed(1)}s`
   const minutes = Math.floor(seconds / 60)
@@ -764,7 +764,7 @@ function updateShellOutput(
 }
 
 /** Reads a Protocol response envelope: the JSON body is `{ data: [...] }`. */
-export function readDataList(payload: unknown): readonly unknown[] {
+function readDataList(payload: unknown): readonly unknown[] {
   if (!isRecord(payload) || !Array.isArray(payload.data)) return []
   return payload.data
 }
@@ -1158,7 +1158,7 @@ function readFormField(value: unknown): readonly FormFieldView[] {
 function readFormOptions(value: unknown) { return Array.isArray(value) ? value.flatMap((option) => isRecord(option) && stringField(option.value) !== undefined && stringField(option.label) !== undefined ? [{ value: stringField(option.value) ?? "", label: stringField(option.label) ?? "", ...(stringField(option.description) === undefined ? {} : { description: stringField(option.description) }) }] : []) : [] }
 function readFormWhen(value: unknown): readonly FormWhenView[] { return Array.isArray(value) ? value.flatMap((when) => isRecord(when) && stringField(when.key) !== undefined && (when.op === "eq" || when.op === "neq") && (typeof when.value === "string" || typeof when.value === "number" || typeof when.value === "boolean") ? [{ key: stringField(when.key) ?? "", op: when.op, value: when.value }] : []) : [] }
 
-export function readError(
+function readError(
   value: unknown,
 ): { readonly code: string; readonly message: string } | undefined {
   if (!isRecord(value)) return undefined

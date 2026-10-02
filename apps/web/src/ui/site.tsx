@@ -42,7 +42,7 @@ export function ThemeToggle(): JSX.Element {
   )
 }
 
-export function OfflineBanner(): JSX.Element {
+function OfflineBanner(): JSX.Element {
   const online = useOnlineStatus()
   return (
     <Show when={shouldShowOfflineNotice(online())}>

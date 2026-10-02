@@ -1,8 +1,8 @@
 import type { RemoteDeviceInfo } from "@ycoding-ai/remote"
 
-export type RemoteScenarioName = "conversation-workspace" | "session-list" | "conversation-tool-terminal-output" | "permission-guardrail-hard-review-form-requests" | "empty-backend" | "selected-machine-offline" | "signed-out" | "devices-enrollment" | "autonomy-goal-notification-settings" | "usage-quotas"
-export type RemoteScenarioViewport = 1440 | 768 | 390
-export type RemoteScenarioView = "chat" | "sessions" | "usage" | "settings"
+type RemoteScenarioName = "conversation-workspace" | "session-list" | "conversation-tool-terminal-output" | "permission-guardrail-hard-review-form-requests" | "empty-backend" | "selected-machine-offline" | "signed-out" | "devices-enrollment" | "autonomy-goal-notification-settings" | "usage-quotas"
+type RemoteScenarioViewport = 1440 | 768 | 390
+type RemoteScenarioView = "chat" | "sessions" | "usage" | "settings"
 
 type WireSession = {
   readonly id: string
