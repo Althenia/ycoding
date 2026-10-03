@@ -3,20 +3,17 @@ import { PUBLIC_DOC_PATHS } from "./registry"
 import { searchDocs } from "./search"
 
 describe("searchDocs", () => {
-  test("returns nothing for an empty or blank query", () => {
-    expect(searchDocs("")).toHaveLength(0)
-    expect(searchDocs("   ")).toHaveLength(0)
+  test.each(["", "   ", "zzzz-unfindable-term"])("returns nothing for %p", (query) => {
+    expect(searchDocs(query)).toHaveLength(0)
   })
 
-  test("finds configuration domains by name", () => {
-    const hits = searchDocs("guardrails")
-    expect(hits.length).toBeGreaterThan(0)
-    expect(hits[0]?.page.slug).toBe("configuration/guardrails")
-  })
-
-  test("is case insensitive", () => {
-    expect(searchDocs("GUARDRAILS")[0]?.page.slug).toBe("configuration/guardrails")
-    expect(searchDocs("Notifications")[0]?.page.slug).toBe("configuration/notifications")
+  test.each([
+    ["guardrails", "configuration/guardrails"],
+    ["GUARDRAILS", "configuration/guardrails"],
+    ["Notifications", "configuration/notifications"],
+    ["models", "configuration/models"],
+  ])("ranks the page titled by %s first, ignoring case", (query, slug) => {
+    expect(searchDocs(query)[0]?.page.slug).toBe(slug)
   })
 
   test("matches section headings and reports them for deep linking", () => {
@@ -30,15 +27,6 @@ describe("searchDocs", () => {
     expect(hits.length).toBeGreaterThan(0)
     expect(hits[0]?.page.slug).toBe("configuration")
     expect(hits[0]?.matchedHeading).toBeUndefined()
-  })
-
-  test("returns nothing for unknown terms", () => {
-    expect(searchDocs("zzzz-unfindable-term")).toHaveLength(0)
-  })
-
-  test("ranks title matches above heading and body matches", () => {
-    const hits = searchDocs("models")
-    expect(hits[0]?.page.slug).toBe("configuration/models")
   })
 
   test("limits results and only ever returns allowlisted pages", () => {

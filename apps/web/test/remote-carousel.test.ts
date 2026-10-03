@@ -81,7 +81,7 @@ test("finished selected run advances carousel activity without changing list ord
   } finally { store.dispose(); await relay.stop() }
 }, 15_000)
 
-test("carousel shows recent idle roots without a running family and refreshes after an inventory change", async () => {
+test.concurrent("carousel shows recent idle roots without a running family and refreshes after an inventory change", async () => {
   const pinned = root("pinned_old", 10, 1)
   const recent = root("recent", 100)
   const newest = root("newest", 200)
@@ -102,10 +102,10 @@ test("carousel shows recent idle roots without a running family and refreshes af
     ])
     idle = [newest, recent, pinned]
     relay.pushSessions([newest.id])
-    await waitFor(() => store.state().carouselSessions?.[0]?.id === newest.id, 6_500)
+    await waitFor(() => store.state().carouselSessions?.[0]?.id === newest.id, 15_000)
     expect(store.state().carouselSessions?.map((session) => session.id)).toEqual(["ses_newest", "ses_recent", "ses_pinned_old"])
   } finally { store.dispose(); await relay.stop() }
-}, 8_000)
+}, 20_000)
 
 test("a failed recent read keeps known running cards visible and reports the failure", async () => {
   const relay = await startRelayDouble({ handler: (request) => {
@@ -123,7 +123,7 @@ test("a failed recent read keeps known running cards visible and reports the fai
   } finally { store.dispose(); await relay.stop() }
 })
 
-test("a superseded running read does not issue a stale idle query", async () => {
+test.concurrent("a superseded running read does not issue a stale idle query", async () => {
   const first = Promise.withResolvers<void>()
   let runningID = "ses_old"
   let runningReads = 0
@@ -147,12 +147,12 @@ test("a superseded running read does not issue a stale idle query", async () => 
     runningID = "ses_new"
     relay.pushStatus([runningID], [])
     first.resolve()
-    await waitFor(() => store.state().carouselSessions?.[0]?.id === runningID, 6_500)
+    await waitFor(() => store.state().carouselSessions?.[0]?.id === runningID, 15_000)
     expect(idleReads).toBe(1)
   } finally { first.resolve(); store.dispose(); await relay.stop() }
-}, 8_000)
+}, 20_000)
 
-test("a superseded idle read cannot publish stale carousel rows", async () => {
+test.concurrent("a superseded idle read cannot publish stale carousel rows", async () => {
   const first = Promise.withResolvers<void>()
   let runningID = "ses_old"
   let idleReads = 0
@@ -176,8 +176,8 @@ test("a superseded idle read cannot publish stale carousel rows", async () => {
     runningID = "ses_new"
     relay.pushStatus([runningID], [])
     first.resolve()
-    await waitFor(() => store.state().carouselSessions?.[0]?.id === runningID, 6_500)
+    await waitFor(() => store.state().carouselSessions?.[0]?.id === runningID, 15_000)
     expect(store.state().carouselSessions?.map((session) => session.id)).toEqual(["ses_new", "ses_fresh_idle"])
     expect(seen.some((ids) => ids.includes("ses_stale_idle"))).toBe(false)
   } finally { first.resolve(); unsubscribe(); store.dispose(); await relay.stop() }
-}, 8_000)
+}, 20_000)

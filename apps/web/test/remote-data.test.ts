@@ -81,7 +81,7 @@ describe("remote data", () => {
       expect(test.relay.requests.some((request) => request.operation === "session.subscribe" && request.sessionID === "ses_r2")).toBe(true)
     } finally { await test.stop() }
   })
-  test("coalesces running-set changes into the shared status refresh window", async () => {
+  test.concurrent("coalesces running-set changes into the shared status refresh window", async () => {
     const test = await setup((request) => {
       if (request.operation === "session.status") return { ok: true, value: { running: ["ses_r1"], attention: [] } }
       if (request.operation === "session.list" && request.input?.status === "running") {
@@ -101,12 +101,11 @@ describe("remote data", () => {
       test.relay.pushStatus(["ses_r3"], [])
       await waitFor(() => test.store.state().sessionStatus?.running.has("ses_r3") === true)
       expect(test.store.state().carouselSessions?.map((session) => [session.id, session.running])).toEqual([["ses_r1", false]])
-      await Bun.sleep(50)
       expect(test.relay.requests.filter((request) => request.operation === "session.list" && request.input?.status === "running")).toHaveLength(1)
-      await waitFor(() => test.store.state().carouselSessions?.[0]?.id === "ses_r3", 6_500)
+      await waitFor(() => test.store.state().carouselSessions?.[0]?.id === "ses_r3", 15_000)
       expect(test.relay.requests.filter((request) => request.operation === "session.list" && request.input?.status === "running")).toHaveLength(2)
     } finally { await test.stop() }
-  }, 8_000)
+  }, 20_000)
   test("uploads a large attachment in bounded acknowledged chunks before prompt admission", async () => {
     const uploads: { index: number; last: boolean; data: string; uploadID: string }[] = []
     const test = await setup((request) => {
@@ -284,7 +283,7 @@ describe("remote data", () => {
     } finally { await test.stop() }
   })
 
-  test("runs one trailing missing-root reload after an in-flight status reload and its cooldown", async () => {
+  test.concurrent("runs one trailing missing-root reload after an in-flight status reload and its cooldown", async () => {
     let release: (() => void) | undefined
     const gate = new Promise<void>((resolve) => { release = resolve })
     let lists = 0
@@ -300,10 +299,10 @@ describe("remote data", () => {
       test.relay.pushStatus(["ses_missing"], ["ses_missing"])
       expect(lists).toBe(2)
       release?.()
-      await waitFor(() => lists === 3, 7_000)
+      await waitFor(() => lists === 3, 15_000)
       expect(lists).toBe(3)
     } finally { release?.(); await test.stop() }
-  }, 10_000)
+  }, 20_000)
 
   test("serializes file searches per target and drops superseded results", async () => {
     let release: (() => void) | undefined

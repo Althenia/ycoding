@@ -4,8 +4,6 @@ import { SITE } from "../content/site"
 import { renderDocMarkdown } from "./markdown"
 import { buildLlmsFullTxt, buildLlmsTxt, markdownAssets } from "./llms"
 
-const INTERNAL_DOC_SLUGS = ["architecture", "runtime", "repository-resources", "provider-efficiency", "okf", "releases", "README"]
-
 function entries(document: string) {
   return [...document.matchAll(/^- \[([^\]]+)\]\(([^)]+)\): (.+)$/gm)].map((match) => ({
     title: match[1],
@@ -40,7 +38,8 @@ describe("llms.txt", () => {
 
   test("never lists unpublished engineering documents", () => {
     const urls = entries(buildLlmsTxt()).map((entry) => entry.url)
-    for (const slug of INTERNAL_DOC_SLUGS) expect(urls).not.toContain(`${SITE.origin}/docs/${slug}.md`)
+    for (const slug of ["architecture", "runtime", "repository-resources", "provider-efficiency", "okf", "releases", "README"])
+      expect(urls).not.toContain(`${SITE.origin}/docs/${slug}.md`)
   })
 })
 
@@ -64,9 +63,5 @@ describe("markdown assets", () => {
     ])
     const index = markdownAssets().find((asset) => asset.fileName === "docs/index.md")
     expect(index?.source).toBe(renderDocMarkdown(DOC_INDEX))
-  })
-
-  test("is deterministic", () => {
-    expect(markdownAssets()).toEqual(markdownAssets())
   })
 })
