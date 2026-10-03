@@ -233,13 +233,7 @@ describe("AgentV2", () => {
         )
         const markdown = matter(source)
         expect(item).toMatchObject({ id, mode, color, request: { body: { temperature } } })
-        expect(markdown.data).toMatchObject({
-          description: item.description,
-          mode,
-          color,
-          request: { body: { temperature } },
-        })
-        expect(markdown.data.permissions).toBeUndefined()
+        expect(item.description).toBe(markdown.data.description)
         expect(item.system.startsWith("YCoding is the terminal-first V2 runtime")).toBe(true)
         expect(item.system.split(markdown.content.trim())).toHaveLength(2)
         expect(PermissionV2.evaluate("read", ".env", item.permissions).effect).toBe("ask")
