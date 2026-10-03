@@ -1,52 +1,20 @@
 import { expect, test } from "bun:test"
 import { SessionV2 } from "@ycoding-ai/core/session"
-import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { Integration } from "@ycoding-ai/core/integration"
 import { ModelV2 } from "@ycoding-ai/core/model"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
-import { Context, Deferred, Effect, Layer, Schema } from "effect"
-import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi"
-import { HttpRouter, HttpServer } from "effect/unstable/http"
-import { Authorization } from "@ycoding-ai/protocol/middleware/authorization"
-import { SchemaErrorMiddleware } from "@ycoding-ai/protocol/middleware/schema-error"
-import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
-import { Api } from "../src/api"
-import { SessionHandler } from "../src/handlers/session"
-import { SessionLocationMiddleware } from "../src/middleware/session-location"
-import { LocationMiddleware, type LocationServices } from "../src/location"
-import { processIdentityLayer } from "../src/process-identity"
+import { Deferred, Effect, Schema } from "effect"
+import { sessionHttp } from "./session-http"
 
 const sessionID = SessionV2.ID.make("ses_switch_http")
 const model = ModelV2.Ref.make({ id: ModelV2.ID.make("target"), providerID: ProviderV2.ID.make("test") })
 
 function fixture(switchModel: SessionV2.Interface["switchModel"]) {
-  // The handler captures Core services; Location/auth lookup is outside this HTTP mapping boundary.
-  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
-  const location = Context.empty() as Context.Context<LocationServices>
-  const services = Layer.mergeAll(
-    Layer.mock(SessionV2.Service, {
-      switchModel,
-      autonomy: { get: () => Effect.die("unused"), set: () => Effect.die("unused") },
-      daybreak: { set: () => Effect.die("unused") },
-      revert: { stage: () => Effect.die("unused"), clear: () => Effect.die("unused"), commit: () => Effect.die("unused") },
-    }),
-    Layer.mock(SessionOrchestration.Service, {}),
-    processIdentityLayer(ServiceStatus.Epoch.make("epoch_switch_test")),
-    Layer.succeed(SessionLocationMiddleware, effect => Effect.provide(effect, location)),
-    Layer.succeed(LocationMiddleware, effect => Effect.provide(effect, location)),
-    Layer.succeed(Authorization, effect => effect),
-    Layer.succeed(SchemaErrorMiddleware, effect => effect),
-  )
-  const handler = HttpRouter.toWebHandler(HttpApiBuilder.layer(HttpApi.make("server").add(Api.groups["server.session"])).pipe(
-    Layer.provide(SessionHandler.pipe(Layer.provide(services))),
-    Layer.provide(HttpServer.layerServices),
-  ))
+  const http = sessionHttp({ switchModel })
   return {
-    request: () => handler.handler(new Request(`http://localhost/api/session/${sessionID}/model`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model }),
-    })),
-    [Symbol.asyncDispose]: () => handler.dispose(),
+    request: () => http.json(`/api/session/${sessionID}/model`, "POST", { model }),
+    [Symbol.asyncDispose]: http[Symbol.asyncDispose],
   }
 }
 

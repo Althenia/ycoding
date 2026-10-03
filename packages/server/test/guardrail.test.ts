@@ -2,7 +2,8 @@ import { expect, test } from "bun:test"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { SessionV2 } from "@ycoding-ai/core/session"
 import { Effect } from "effect"
-import { GuardrailHandler, guardrailRequests, guardrailStatus, replyGuardrail } from "../src/handlers/guardrail"
+import { sessionHttp } from "./session-http"
+import { Guardrail } from "../../schema/src/guardrail"
 
 const parentID = SessionV2.ID.make("ses_guardrail_parent")
 const childID = SessionV2.ID.make("ses_guardrail_child")
@@ -12,17 +13,17 @@ const requestID = SessionGuardrail.RequestID.create("grq_guardrail_test")
 type GuardrailStatus = Effect.Success<ReturnType<SessionGuardrail.Interface["status"]>>
 type GuardrailRequest = Effect.Success<ReturnType<SessionGuardrail.Interface["forSession"]>>[number]
 
-const status: GuardrailStatus = {
+const status: GuardrailStatus = new Guardrail.Status({
   rootSessionID: parentID,
   profile: "standard",
   customRules: 1,
   approvals: 2,
   blocked: 3,
-  counters: [{ id: "shell", current: 1, limit: 8, scope: "family" as const }],
+  counters: [new Guardrail.Counter({ id: "shell", current: 1, limit: 8, scope: "family" })],
   invalidFiles: [],
-}
+})
 
-const request: GuardrailRequest = {
+const request: GuardrailRequest = new Guardrail.Request({
   id: requestID,
   rootSessionID: parentID,
   sessionID: childID,
@@ -31,9 +32,9 @@ const request: GuardrailRequest = {
   ruleIDs: ["standard.git.destructive"],
   reason: "Destructive Git operation",
   standard: true,
-}
+})
 
-test("guardrail handlers preserve family ownership and normalized output", async () => {
+test("guardrail HTTP routes preserve family ownership, normalized output, and typed failures", async () => {
   const calls: unknown[] = []
   const snapshot = (sessionID: SessionV2.ID) =>
     Effect.succeed({ sequence: 0, digest: sessionID === childID ? parentID : sessionID })
@@ -42,7 +43,9 @@ test("guardrail handlers preserve family ownership and normalized output", async
     assert: () => Effect.die("unused"),
     snapshot,
     withSnapshot: (sessionID, use) => snapshot(sessionID).pipe(Effect.flatMap(use)),
-    status: (sessionID) =>
+    status: (sessionID) => sessionID === unrelatedID
+      ? Effect.fail(new SessionV2.NotFoundError({ sessionID }))
+      :
       Effect.sync(() => {
         calls.push(["status", sessionID])
         return status
@@ -62,25 +65,24 @@ test("guardrail handlers preserve family ownership and normalized output", async
       ),
   })
 
-  expect(await Effect.runPromise(guardrailStatus(service, childID))).toEqual(status)
-  expect(await Effect.runPromise(guardrailRequests(service, parentID))).toEqual([request])
-  await Effect.runPromise(replyGuardrail(service, { sessionID: parentID, requestID, reply: "always" }))
-
-  await expect(
-    Effect.runPromise(replyGuardrail(service, { sessionID: unrelatedID, requestID, reply: "reject" })),
-  ).rejects.toMatchObject({ _tag: "GuardrailRequestNotFoundError", requestID })
+  await using http = sessionHttp({}, { guardrail: service })
+  const current = await http.request(`/api/session/${childID}/guardrail`)
+  expect(current.status).toBe(200)
+  expect(await current.json()).toEqual({ data: status })
+  const reviews = await http.request(`/api/session/${parentID}/guardrail/request`)
+  expect(reviews.status).toBe(200)
+  expect(await reviews.json()).toEqual({ data: [request] })
+  expect((await http.json(`/api/session/${parentID}/guardrail/request/${requestID}/reply`, "POST", { reply: "always" })).status).toBe(204)
+  const denied = await http.json(`/api/session/${unrelatedID}/guardrail/request/${requestID}/reply`, "POST", { reply: "reject" })
+  expect(denied.status).toBe(404)
+  expect(await denied.json()).toMatchObject({ _tag: "GuardrailRequestNotFoundError", requestID })
+  const missing = await http.request(`/api/session/${unrelatedID}/guardrail`)
+  expect(missing.status).toBe(404)
+  expect(await missing.json()).toMatchObject({ _tag: "SessionNotFoundError", sessionID: unrelatedID })
   expect(calls).toEqual([
     ["status", childID],
     ["list", parentID],
     ["reply", { sessionID: parentID, requestID, reply: "always" }],
     ["reply", { sessionID: unrelatedID, requestID, reply: "reject" }],
   ])
-  expect(GuardrailHandler).toBeDefined()
-})
-
-test("guardrail handler registers every Session route", async () => {
-  const source = await Bun.file(new URL("../src/handlers/guardrail.ts", import.meta.url)).text()
-  expect(source).toContain('"session.guardrail.status"')
-  expect(source).toContain('"session.guardrail.request.list"')
-  expect(source).toContain('"session.guardrail.request.reply"')
 })

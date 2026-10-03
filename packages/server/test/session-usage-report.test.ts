@@ -1,17 +1,7 @@
 import { expect, test } from "bun:test"
 import { SessionV2 } from "@ycoding-ai/core/session"
-import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
-import { Context, Effect, Layer } from "effect"
-import { HttpRouter, HttpServer } from "effect/unstable/http"
-import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi"
-import { Authorization } from "@ycoding-ai/protocol/middleware/authorization"
-import { SchemaErrorMiddleware } from "@ycoding-ai/protocol/middleware/schema-error"
-import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
-import { Api } from "../src/api"
-import { SessionHandler } from "../src/handlers/session"
-import { SessionLocationMiddleware } from "../src/middleware/session-location"
-import { LocationMiddleware, type LocationServices } from "../src/location"
-import { processIdentityLayer } from "../src/process-identity"
+import { Effect } from "effect"
+import { sessionHttp } from "./session-http"
 
 const sessionID = SessionV2.ID.make("ses_usage_report_http")
 const metrics = {
@@ -25,39 +15,12 @@ const metrics = {
 }
 
 function fixture(usageReport: SessionV2.Interface["usageReport"]) {
-  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
-  const location = Context.empty() as Context.Context<LocationServices>
   const locationCalls = { value: 0 }
-  const services = Layer.mergeAll(
-    Layer.mock(SessionV2.Service, {
-      usageReport,
-      autonomy: { get: () => Effect.die("unused"), set: () => Effect.die("unused") },
-      daybreak: { set: () => Effect.die("unused") },
-      revert: { stage: () => Effect.die("unused"), clear: () => Effect.die("unused"), commit: () => Effect.die("unused") },
-    }),
-    Layer.mock(SessionOrchestration.Service, {}),
-    processIdentityLayer(ServiceStatus.Epoch.make("epoch_usage_report_test")),
-    Layer.succeed(
-      SessionLocationMiddleware,
-      SessionLocationMiddleware.of((effect) =>
-        Effect.sync(() => locationCalls.value++).pipe(Effect.andThen(Effect.provide(effect, location))),
-      ),
-    ),
-    Layer.succeed(LocationMiddleware, effect => Effect.provide(effect, location)),
-    Layer.succeed(Authorization, effect => effect),
-    Layer.succeed(SchemaErrorMiddleware, effect => effect),
-  )
-  const handler = HttpRouter.toWebHandler(
-    HttpApiBuilder.layer(HttpApi.make("server").add(Api.groups["server.session"])).pipe(
-      Layer.provide(SessionHandler.pipe(Layer.provide(services))),
-      Layer.provide(HttpServer.layerServices),
-    ),
-  )
+  const http = sessionHttp({ usageReport }, { onLocation: () => void locationCalls.value++ })
   return {
-    request: (query: string) =>
-      handler.handler(new Request(`http://localhost/api/session/${sessionID}/usage/report?${query}`)),
+    request: (query: string) => http.request(`/api/session/${sessionID}/usage/report?${query}`),
     locationCalls,
-    [Symbol.asyncDispose]: () => handler.dispose(),
+    [Symbol.asyncDispose]: http[Symbol.asyncDispose],
   }
 }
 

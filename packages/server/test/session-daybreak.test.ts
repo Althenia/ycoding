@@ -1,20 +1,10 @@
 import { expect, test } from "bun:test"
 import { SessionV2 } from "@ycoding-ai/core/session"
-import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import { ProjectV2 } from "@ycoding-ai/core/project"
 import { Location } from "@ycoding-ai/core/location"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { Context, DateTime, Effect, Layer, Schema } from "effect"
-import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi"
-import { HttpRouter, HttpServer } from "effect/unstable/http"
-import { Authorization } from "@ycoding-ai/protocol/middleware/authorization"
-import { SchemaErrorMiddleware } from "@ycoding-ai/protocol/middleware/schema-error"
-import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
-import { Api } from "../src/api"
-import { SessionHandler } from "../src/handlers/session"
-import { SessionLocationMiddleware } from "../src/middleware/session-location"
-import { LocationMiddleware, type LocationServices } from "../src/location"
-import { processIdentityLayer } from "../src/process-identity"
+import { DateTime, Effect, Schema } from "effect"
+import { sessionHttp } from "./session-http"
 
 const sessionID = SessionV2.ID.make("ses_daybreak_http")
 
@@ -32,31 +22,10 @@ function info(daybreak: SessionV2.Info["daybreak"]) {
 }
 
 function fixture(set: SessionV2.Interface["daybreak"]["set"]) {
-  // Core outcomes are controlled; this boundary verifies decoding, forwarding, and HTTP settlement.
-  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
-  const location = Context.empty() as Context.Context<LocationServices>
-  const services = Layer.mergeAll(
-    Layer.mock(SessionV2.Service, {
-      daybreak: { set },
-      autonomy: { get: () => Effect.die("unused"), set: () => Effect.die("unused") },
-      revert: { stage: () => Effect.die("unused"), clear: () => Effect.die("unused"), commit: () => Effect.die("unused") },
-    }),
-    Layer.mock(SessionOrchestration.Service, {}),
-    processIdentityLayer(ServiceStatus.Epoch.make("epoch_daybreak_test")),
-    Layer.succeed(SessionLocationMiddleware, effect => Effect.provide(effect, location)),
-    Layer.succeed(LocationMiddleware, effect => Effect.provide(effect, location)),
-    Layer.succeed(Authorization, effect => effect),
-    Layer.succeed(SchemaErrorMiddleware, effect => effect),
-  )
-  const handler = HttpRouter.toWebHandler(HttpApiBuilder.layer(HttpApi.make("server").add(Api.groups["server.session"])).pipe(
-    Layer.provide(SessionHandler.pipe(Layer.provide(services))),
-    Layer.provide(HttpServer.layerServices),
-  ))
+  const http = sessionHttp({ daybreak: { set } })
   return {
-    request: (payload: Record<string, unknown>) => handler.handler(new Request(`http://localhost/api/session/${sessionID}/daybreak`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
-    })),
-    [Symbol.asyncDispose]: () => handler.dispose(),
+    request: (payload: Record<string, unknown>) => http.json(`/api/session/${sessionID}/daybreak`, "POST", payload),
+    [Symbol.asyncDispose]: http[Symbol.asyncDispose],
   }
 }
 
