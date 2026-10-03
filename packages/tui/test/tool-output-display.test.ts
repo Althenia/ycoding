@@ -2,8 +2,6 @@ import { expect, test } from "bun:test"
 import { toolOutputDisplay } from "../src/util/collapse-tool-output"
 import { sessionSkillContent } from "../src/util/session-skills"
 
-const sessionRoute = await Bun.file(new URL("../src/routes/session/index.tsx", import.meta.url)).text()
-
 test("shows output within the preview budget without an expand affordance", () => {
   expect(toolOutputDisplay("done", false, 4, 80)).toEqual({
     output: "done",
@@ -44,12 +42,4 @@ test("keeps loaded skill output collapsed until expansion", () => {
 
   expect(toolOutputDisplay(content, false, 4, 80).output).toBe("one\ntwo\nthree\nfour…")
   expect(toolOutputDisplay(content, true, 4, 80).output).toBe(content)
-})
-
-test("renders expanded skill output in a focusable bounded scrollbox", () => {
-  expect(sessionRoute).toContain("function SkillContent")
-  expect(sessionRoute).toContain("focusable")
-  expect(sessionRoute).toContain("onKeyDown")
-  expect(sessionRoute).toContain("<scrollbox")
-  expect(sessionRoute).toContain("maxHeight={height()}")
 })

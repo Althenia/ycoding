@@ -1,5 +1,15 @@
 import { useRenderer, useTerminalDimensions } from "@opentui/solid"
-import { batch, createContext, createEffect, onCleanup, Show, useContext, type JSX, type ParentProps } from "solid-js"
+import {
+  batch,
+  createContext,
+  createEffect,
+  onCleanup,
+  Show,
+  untrack,
+  useContext,
+  type JSX,
+  type ParentProps,
+} from "solid-js"
 import { Keymap } from "../context/keymap"
 import { useTheme } from "../context/theme"
 import { MouseButton, Renderable, RGBA, TextAttributes } from "@opentui/core"
@@ -152,7 +162,7 @@ export function dialogMessageLines(message: string, maxWidth = 52) {
 function init() {
   const [store, setStore] = createStore({
     stack: [] as {
-      element: JSX.Element
+      element: JSX.Element | (() => JSX.Element)
       onClose?: () => void
     }[],
     size: "large" as "medium" | "large" | "xlarge" | "command-palette",
@@ -310,7 +320,9 @@ export function DialogProvider(props: ParentProps) {
       >
         <Show when={value.stack.length}>
           <Dialog onClose={() => value.clear()} size={value.size} centered={value.centered}>
-            {value.stack.at(-1)!.element}
+            <Show keyed when={value.stack.at(-1)}>
+              {(item) => untrack(() => (typeof item.element === "function" ? item.element() : item.element))}
+            </Show>
           </Dialog>
         </Show>
       </box>

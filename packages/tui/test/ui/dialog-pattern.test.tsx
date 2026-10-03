@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/solid */
-import { BoxRenderable, Renderable, RGBA } from "@opentui/core"
+import { BoxRenderable, InputRenderable, Renderable, RGBA } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { expect, test } from "bun:test"
-import { onMount, type JSX } from "solid-js"
+import { createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { ConfigProvider } from "../../src/config"
 import { Keymap } from "../../src/context/keymap"
 import { ThemeProvider } from "../../src/context/theme"
@@ -14,6 +14,84 @@ import { Toast, ToastProvider, useToast } from "../../src/ui/toast"
 import { RouteProvider } from "../../src/context/route"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
+
+test.each(["jsx", "factory"] as const)(
+  "keeps %s dialog input resident until entry replacement and restores focus on close",
+  async (kind) => {
+    let dialog!: ReturnType<typeof useDialog>
+    let background!: InputRenderable
+    let change!: (text: string) => void
+    let mounts = 0
+    let cleanups = 0
+
+    function Resident() {
+      const [text, setText] = createSignal("first")
+      change = setText
+      onMount(() => mounts++)
+      onCleanup(() => cleanups++)
+      return <text>Resident {text()}</text>
+    }
+
+    function Fixture() {
+      dialog = useDialog()
+      const view = kind === "jsx" ? <Resident /> : () => <Resident />
+      onMount(() => {
+        background.focus()
+        dialog.replace(view)
+      })
+      return (
+        <input
+          ref={(node) => {
+            background = node
+          }}
+        />
+      )
+    }
+
+    const app = await testRender(
+      () => (
+        <TestTuiContexts>
+          <ConfigProvider config={createTuiResolvedConfig()}>
+            <Keymap.Provider>
+              <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+                <RouteProvider initialRoute={{ type: "home" }}>
+                  <ToastProvider>
+                    <DialogProvider>
+                      <Fixture />
+                    </DialogProvider>
+                  </ToastProvider>
+                </RouteProvider>
+              </ThemeProvider>
+            </Keymap.Provider>
+          </ConfigProvider>
+        </TestTuiContexts>
+      ),
+      { width: 80, height: 24 },
+    )
+    app.renderer.start()
+    try {
+      await app.waitForFrame((frame) => frame.includes("Resident first"))
+      expect(mounts).toBe(1)
+      change("second")
+      await app.waitForFrame((frame) => frame.includes("Resident second"))
+      expect(app.captureCharFrame()).not.toContain("Resident first")
+      expect(mounts).toBe(1)
+      expect(cleanups).toBe(0)
+      dialog.replace(() => <text>Replacement dialog</text>)
+      await app.waitForFrame((frame) => frame.includes("Replacement dialog"))
+      expect(app.captureCharFrame()).not.toContain("Resident second")
+      if (kind === "factory") expect(cleanups).toBe(1)
+      app.mockInput.pressEscape()
+      await app.waitFor(() => dialog.stack.length === 0 && background.focused)
+      await app.renderOnce()
+      expect(app.captureCharFrame()).not.toContain("Replacement dialog")
+      expect(background.focused).toBe(true)
+    } finally {
+      app.renderer.destroy()
+    }
+    expect(cleanups).toBe(1)
+  },
+)
 
 test("clamps the 98-column dialog panel across responsive widths", async () => {
   for (const size of ["medium", "large", "xlarge"] as const) {
@@ -149,11 +227,13 @@ test("renders a full dialog panel with its selected model", async () => {
         <ConfigProvider config={createTuiResolvedConfig()}>
           <Keymap.Provider>
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-              <RouteProvider initialRoute={{ type: "home" }}><ToastProvider>
-                <DialogProvider>
-                  <DialogFixture />
-                </DialogProvider>
-              </ToastProvider></RouteProvider>
+              <RouteProvider initialRoute={{ type: "home" }}>
+                <ToastProvider>
+                  <DialogProvider>
+                    <DialogFixture />
+                  </DialogProvider>
+                </ToastProvider>
+              </RouteProvider>
             </ThemeProvider>
           </Keymap.Provider>
         </ConfigProvider>
@@ -186,9 +266,11 @@ test("renders the variant glyph and label in toast titles", async () => {
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>
           <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-            <RouteProvider initialRoute={{ type: "home" }}><ToastProvider>
-              <ToastFixture />
-            </ToastProvider></RouteProvider>
+            <RouteProvider initialRoute={{ type: "home" }}>
+              <ToastProvider>
+                <ToastFixture />
+              </ToastProvider>
+            </RouteProvider>
           </ThemeProvider>
         </ConfigProvider>
       </TestTuiContexts>
@@ -207,11 +289,13 @@ test("renders the variant glyph and label in toast titles", async () => {
   }
 })
 
-async function renderDialogPanel(
-  dimensions: { width: number; height: number },
-  size: "medium" | "large" | "xlarge",
-) {
-  const result = await renderDialogView(dimensions, () => <text>Dialog width fixture</text>, "Dialog width fixture", size)
+async function renderDialogPanel(dimensions: { width: number; height: number }, size: "medium" | "large" | "xlarge") {
+  const result = await renderDialogView(
+    dimensions,
+    () => <text>Dialog width fixture</text>,
+    "Dialog width fixture",
+    size,
+  )
   return result.panel
 }
 
@@ -236,11 +320,13 @@ async function renderDialogView(
         <ConfigProvider config={createTuiResolvedConfig()}>
           <Keymap.Provider>
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-              <RouteProvider initialRoute={{ type: "home" }}><ToastProvider>
-                <DialogProvider>
-                  <DialogFixture />
-                </DialogProvider>
-              </ToastProvider></RouteProvider>
+              <RouteProvider initialRoute={{ type: "home" }}>
+                <ToastProvider>
+                  <DialogProvider>
+                    <DialogFixture />
+                  </DialogProvider>
+                </ToastProvider>
+              </RouteProvider>
             </ThemeProvider>
           </Keymap.Provider>
         </ConfigProvider>
@@ -290,7 +376,9 @@ function expectOneRowSelection(
   colors: { surface: number[]; selected: number[] },
 ) {
   const line = requireLine(snapshot, text)
-  expect(snapshot.lines.filter((row) => panelCells(snapshot, row).every((cell) => sameColor(cell.bg, colors.selected)))).toHaveLength(1)
+  expect(
+    snapshot.lines.filter((row) => panelCells(snapshot, row).every((cell) => sameColor(cell.bg, colors.selected))),
+  ).toHaveLength(1)
   expect(panelCells(snapshot, line).every((cell) => sameColor(cell.bg, colors.selected))).toBe(true)
 }
 
@@ -302,17 +390,28 @@ function expectSearchFocusMark(
   const searchColumn = cells(line).findIndex((cell) => cell.text === "S")
   expect(searchColumn).toBe(snapshot.panel.x + 6)
   expect(sameColor(cells(line)[searchColumn]?.bg, colors.selected)).toBe(true)
-  expect(cells(line).slice(searchColumn + 1, snapshot.panel.x + snapshot.panel.width).every((cell) => sameColor(cell.bg, colors.surface))).toBe(true)
+  expect(
+    cells(line)
+      .slice(searchColumn + 1, snapshot.panel.x + snapshot.panel.width)
+      .every((cell) => sameColor(cell.bg, colors.surface)),
+  ).toBe(true)
 }
 
 function requireLine(snapshot: Awaited<ReturnType<typeof renderDialogView>>, text: string) {
-  const line = snapshot.lines.findLast((line) => line.map((span) => span.text).join("").includes(text))
+  const line = snapshot.lines.findLast((line) =>
+    line
+      .map((span) => span.text)
+      .join("")
+      .includes(text),
+  )
   if (!line) throw new Error(`Missing rendered line: ${text}`)
   return line
 }
 
 function cells(line: { text: string; width: number; bg?: number[] }[]) {
-  return line.flatMap((span) => Array.from({ length: span.width }, (_, index) => ({ text: span.text[index] ?? " ", bg: span.bg })))
+  return line.flatMap((span) =>
+    Array.from({ length: span.width }, (_, index) => ({ text: span.text[index] ?? " ", bg: span.bg })),
+  )
 }
 
 function panelCells(
