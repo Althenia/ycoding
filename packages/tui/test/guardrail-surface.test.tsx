@@ -70,7 +70,10 @@ async function route(url: URL, init?: Request) {
     return json({ data: [], cursor: {} })
   if (url.pathname === `/api/session/${childID}/guardrail/request`) return json({ data: listed })
   if (url.pathname === `/api/session/${parentID}/guardrail/request`) return json({ data: listed })
-  if (url.pathname.endsWith("/guardrail/request/grq_surface/reply") || url.pathname.endsWith("/guardrail/request/grq_child_surface/reply")) {
+  if (
+    url.pathname.endsWith("/guardrail/request/grq_surface/reply") ||
+    url.pathname.endsWith("/guardrail/request/grq_child_surface/reply")
+  ) {
     repliedTo.push(url.pathname)
     replies.push(await init?.json())
     return new Response(null, { status: 204 })
@@ -89,7 +92,15 @@ async function route(url: URL, init?: Request) {
     })
   if (url.pathname === `/api/session/${parentID}/guardrail` || url.pathname === `/api/session/${childID}/guardrail`)
     return json({
-      data: { rootSessionID: parentID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] },
+      data: {
+        rootSessionID: parentID,
+        profile: "standard",
+        customRules: 0,
+        approvals: 0,
+        blocked: 0,
+        counters: [],
+        invalidFiles: [],
+      },
     })
   if (url.pathname === "/api/model") return json({ location, data: [model] })
   if (url.pathname === "/api/provider") return json({ location, data: [{ id: "openai", name: "OpenAI" }] })
@@ -97,14 +108,29 @@ async function route(url: URL, init?: Request) {
     return json({
       location,
       data: [
-        { id: "build", name: "Build", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] },
-        { id: "general", name: "General", request: { headers: {}, body: {} }, mode: "subagent", hidden: false, permissions: [] },
+        {
+          id: "build",
+          name: "Build",
+          request: { headers: {}, body: {} },
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+        },
+        {
+          id: "general",
+          name: "General",
+          request: { headers: {}, body: {} },
+          mode: "subagent",
+          hidden: false,
+          permissions: [],
+        },
       ],
     })
   if (url.pathname === "/api/skill") return json({ location, data: [] })
   if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
   if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main", default: "main" } })
-  if (url.pathname === "/path") return json({ home: process.env.HOME, state: "", config: "", worktree: directory, directory })
+  if (url.pathname === "/path")
+    return json({ home: process.env.HOME, state: "", config: "", worktree: directory, directory })
   if (
     [
       `/api/session/${parentID}/pending`,
@@ -132,11 +158,17 @@ async function settle(text: string, sessionID: string) {
   return renderScreen({ width: 120, height: 40, args: { sessionID }, route, settle: text })
 }
 
-async function waitForFrameText(screen: { frame(): string }, text: string) {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    if (screen.frame().includes(text)) return
-    await Bun.sleep(20)
+async function until(predicate: () => boolean) {
+  const deadline = Date.now() + 5000
+  while (Date.now() < deadline) {
+    if (predicate()) return
+    await new Promise<void>((resolve) => setImmediate(resolve))
   }
+  throw new Error("Expected guardrail transition did not occur")
+}
+
+async function waitForFrameText(screen: { frame(): string }, text: string) {
+  await until(() => screen.frame().includes(text))
   expect(screen.frame()).toContain(text)
 }
 
@@ -153,6 +185,9 @@ test("surfaces a pending root guardrail review from the durable list", async () 
   const screen = await settle("Guardrail blocked", parentID)
   try {
     expect(screen.frame()).toContain("Guardrail blocked")
+    expect(screen.frame()).toContain("Composer paused: guardrail review")
+    expect(screen.frame()).not.toContain("Message YCoding…")
+    expect(screen.frame()).toContain("Allow for this session")
     expect(screen.frame()).toContain("rm -rf packages/one packages/two")
   } finally {
     await screen.dispose()
@@ -204,12 +239,13 @@ test("renders a transcript row for a subagent review and replies against the roo
   try {
     await waitForFrameText(screen, "Guardrail blocked")
     expect(screen.frame()).toContain("rm -rf packages/one packages/two")
+    expect(screen.frame()).toContain("needs approval")
     // The only surface for a subagent review is the transcript row plus this prompt; without it the
     // subagent blocks invisibly until the Session is interrupted. Option selection itself is covered
     // by the component suites, so this asserts the default reply and its root-Session address.
     await waitForFrameText(screen, "Allow for this session")
     screen.input.pressEnter()
-    for (let attempt = 0; attempt < 100 && replies.length === 0; attempt++) await Bun.sleep(20)
+    await until(() => replies.length > 0)
     expect(replies).toHaveLength(1)
     expect(replies[0]).toMatchObject({ reply: "reject" })
     expect(repliedTo).toEqual([`/api/session/${parentID}/guardrail/request/grq_child_surface/reply`])

@@ -24,22 +24,3 @@ describe("activeGuardrail", () => {
     expect(activeGuardrail([], "grq_missing")).toBeUndefined()
   })
 })
-
-describe("session index guardrail autosurface wiring", () => {
-  test("index.tsx auto-surfaces pending guardrails at composer", async () => {
-    const source = await Bun.file(
-      new URL("../../../src/routes/session/index.tsx", import.meta.url),
-    ).text()
-    expect(source).toContain("activeGuardrail")
-    expect(source).toContain("guardrails().length > 0")
-    expect(source).toContain("Composer paused: guardrail review")
-  })
-})
-
-describe("session rows guardrail visibility wiring", () => {
-  test("rows.ts mounts pending guardrails without a compaction boundary", async () => {
-    const source = await Bun.file(new URL("../../../src/routes/session/rows.ts", import.meta.url)).text()
-    expect(source).toContain("activityRows()")
-    expect(source).not.toContain("activityBoundary !== -1")
-  })
-})
