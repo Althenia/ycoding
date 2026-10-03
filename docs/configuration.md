@@ -389,7 +389,7 @@ or an explicit object:
 }
 ```
 
-The variant is optional. `default` always selects the base model. `none` selects the model's catalog `none` variant when the model defines one (for example reasoning effort `none` on OpenAI models or thinking disabled on DeepSeek); on a model without that variant it selects the base model. The TUI variant cycle includes an offered `none` variant.
+The variant is optional; omit it to select the base model. Every explicit variant ID must be offered by the selected model, or model resolution fails with `VariantUnavailableError`. `default` and `none` are ordinary variant IDs. An offered `none` variant can select reasoning effort `none` on OpenAI models or disable thinking on DeepSeek. The TUI variant cycle includes an offered `none` variant.
 
 Catalog reasoning variants reach the provider request in each provider's own format: DeepSeek variants send `thinking: { type: "enabled" | "disabled" }` and the requested `reasoning_effort`, which DeepSeek maps server-side; native OpenRouter variants send their `reasoning` object (`effort`, `enabled`, or `max_tokens`), merged with any configured OpenRouter reasoning options.
 
