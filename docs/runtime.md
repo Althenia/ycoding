@@ -398,7 +398,7 @@ Confirmed attachment receipts update the reserved prompt-history entry to manage
 
 Retrying an already-admitted command ID returns its original pending or projected admission before command lookup, template evaluation, or selection changes. Concurrent calls with that command ID serialize at the command boundary. This protects admitted lost-response retries from repeating template effects; it does not promise crash-safe exactly-once effects before durable admission.
 
-The full composer ranks matching agent and reference candidates together for `@` autocomplete; backend file-search results remain in backend ranking order and are not scored against those candidates. Mini `@` mentions likewise rank agents and references together while keeping files in their backend order. Mini model startup drops a stored session or saved variant when the resolved model offers no variants, but retains stored variants while the model catalog is unresolved. An explicit CLI variant remains selected even when the catalog has no variant data.
+The full composer ranks matching agent and reference candidates together for `@` autocomplete. Its separate directory and file searches retain limits of eight directories and twenty files. Within file-search results, the strongest fuzzy-match score group for the normalized query and paths comes first, followed by remaining directories and remaining files; ties and each group's backend order are preserved. Empty or unmatched queries keep directories first. These rows are not scored against agent/reference candidates. Mini `@` mentions likewise rank agents and references together while keeping files in their backend order. Mini model startup drops a stored session or saved variant when the resolved model offers no variants, but retains stored variants while the model catalog is unresolved. An explicit CLI variant remains selected even when the catalog has no variant data.
 
 ### Durable runtime observations
 
@@ -587,6 +587,8 @@ Session skill status derives from the durable transcript and instruction state:
 Clients invoke the durable operation with `POST /api/session/:sessionID/skill/resolve` and JSON payload `{ winner, loser }`. Success returns no content. A missing active conflict returns the stable public `SkillConflictNotFoundError` response without exposing the internal Core error or either skill identifier.
 
 The TUI provides a session-skills dialog, expandable skill content, conflict details, and transcript rows for loaded skills. A completed skill's `Loaded` badge uses the skill accent color; inactive or unavailable state remains visually subdued.
+
+Opening skill details retains the dialog's selection and controller. Content paging uses the modal keymap's navigation bindings, and closing or replacing the dialog disposes its content and restores the invoking focus.
 
 ## Instructions
 
