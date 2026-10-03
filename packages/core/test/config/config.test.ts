@@ -321,7 +321,7 @@ describe("Config", () => {
             await fs.mkdir(project, { recursive: true })
             await fs.writeFile(file, JSON.stringify({ shell: "first" }))
           })
-          const updates = yield* PubSub.unbounded<Watcher.Update>()
+          const updates = yield* PubSub.unbounded<Watcher.Update>({ replay: 8 })
           const watcher = Layer.succeed(
             Watcher.Service,
             Watcher.Service.of({
@@ -366,7 +366,7 @@ describe("Config", () => {
             await fs.mkdir(project, { recursive: true })
             await fs.writeFile(command, "review")
           })
-          const updates = yield* PubSub.unbounded<Watcher.Update>()
+          const updates = yield* PubSub.unbounded<Watcher.Update>({ replay: 8 })
           const watcher = Layer.succeed(
             Watcher.Service,
             Watcher.Service.of({
