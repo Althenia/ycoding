@@ -264,6 +264,9 @@ describe("AgentV2", () => {
         "Bound repository searches by scope and output; reuse settled results, pivot a missing broad search to a likely file, symbol, caller, or directory, and repeat reads only for changed inputs or new evidence.",
         "Never make atomic commits. Commit only when the task, one of its phases, or a complete piece of functionality is finished.",
         "For requests to change, build, or fix, make the requested in-scope local changes and run relevant non-destructive checks without asking first.",
+        "For requests to answer, explain, review, diagnose, or plan, inspect the relevant material and report. Do not make changes unless the request also asks for them.",
+        "Require confirmation before external writes, purchases, destructive or irreversible actions, dependency changes, data or schema migrations, CI/CD changes, public-contract breaks, or material scope expansion.",
+        "If your permission ceiling prevents asking for confirmation, do not act; report the blocker.",
       ]
       for (const id of ["zeus", "GSD", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein"]) {
         const item = yield* agent.get(AgentV2.ID.make(id))
@@ -273,6 +276,46 @@ describe("AgentV2", () => {
           expect(item.system.indexOf(paragraph)).toBeLessThan(item.system.indexOf("You are "))
         }
       }
+
+      const god = yield* agent.get(AgentV2.ID.make("god"))
+      const zeus = yield* agent.get(AgentV2.ID.make("zeus"))
+      const title = yield* agent.get(AgentV2.ID.make("title"))
+      const compaction = yield* agent.get(AgentV2.ID.make("compaction"))
+      const goal = yield* agent.get(AgentV2.ID.make("goal"))
+      const summary = yield* agent.get(AgentV2.ID.make("summary"))
+      const btw = yield* agent.get(AgentV2.ID.make("btw"))
+      if (
+        !god?.system ||
+        !zeus?.system ||
+        !title?.system ||
+        !compaction?.system ||
+        !goal?.system ||
+        !summary?.system ||
+        !btw?.system
+      ) {
+        throw new Error("expected maintained built-in prompts")
+      }
+      expect(god.system).toContain("Explicit permission denies remain denied.")
+      expect(god.system).toContain("Only effective YOLO 3 auto-approves guardrail reviews.")
+      expect(zeus.system).toContain("You are a durable child Session")
+      expect(zeus.system).toContain("Do not spawn child agents")
+      expect(title.system).toContain("Output exactly one natural thread title")
+      expect(title.system).toContain("Use one line of at most 50 characters.")
+      expect(title.system).toContain("Preserve exact technical terms, numbers, filenames, and HTTP status codes.")
+      expect(title.system).toContain("Output only the title.")
+      expect(compaction.system).toContain("previous conversation_memory")
+      expect(compaction.system).toContain("Keep active work in in_progress")
+      expect(compaction.system).toContain("Record durable choices in decision")
+      expect(compaction.system).toContain("only currently active skills")
+      expect(compaction.system).toContain("Do not answer the conversation")
+      expect(goal.system).toContain("observable completion condition")
+      expect(goal.system).toContain("For a user-proxy steer, preserve the active goal exactly.")
+      expect(goal.system).toContain("Never grant or imply human approval")
+      expect(goal.system).toContain("Output exactly one concise imperative sentence")
+      expect(summary.system).toContain("two or three first-person sentences")
+      expect(summary.system).toContain("preserve it verbatim")
+      expect(btw.system).toContain("read-only advisor")
+      expect(btw.system).toContain("Do not mutate files, state, or external systems")
     }),
   )
 
