@@ -349,10 +349,8 @@ export function Autocomplete(props: {
       const result = matches ?? directories
       if (!result) return { options: [], failed: true }
 
-      // Trust the order returned by fff within each group (frecency, fuzzy score,
-      // filename bonus, etc. are already factored in); only folders are hoisted.
       const width = props.anchor().width - 4
-      const options = mergeFileSearchEntries(directories?.data ?? [], matches?.data ?? []).map(
+      const options = mergeFileSearchEntries(directories?.data ?? [], matches?.data ?? [], base).map(
         (item): AutocompleteOption => {
           const { filename, part } = createFilePart(item, path.join(result.location.directory, item.path), lineRange)
           return {
@@ -543,8 +541,6 @@ export function Autocomplete(props: {
       return referenceAliasesValue.filter((item) => item.display === `@${referenceMatchValue.name}`)
     }
 
-    // Files come from fff already fuzzy ranked, filtered and grouped folders-first,
-    // so they must not be re-sorted by fuzzysort as it would lose the results.
     // The previous results stay on screen while the next query is in flight; blanking
     // them on every keystroke made the menu look empty for files that do exist.
     const fileOptions: AutocompleteOption[] = store.visible === "@" ? fileSearch.options : []

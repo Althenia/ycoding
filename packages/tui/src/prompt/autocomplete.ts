@@ -2,10 +2,10 @@
 // Kept out of the component so they can be tested without a terminal renderer.
 
 import { displaySlice, promptOffsetWidth } from "./display"
+import fuzzysort from "fuzzysort"
 
 export type MentionEntry = { path: string; type: "file" | "directory" }
 
-/** Leading rows reserved for folders so a flood of file hits can never hide them. */
 export const MENTION_DIRECTORY_LIMIT = 8
 
 export const MENTION_RESULT_LIMIT = 20
@@ -15,16 +15,22 @@ function mentionKey(entry: MentionEntry) {
   return entry.path.replaceAll("\\", "/").replace(/\/+$/, "")
 }
 
-/**
- * Folders and files are searched separately because a single mixed search lets file hits
- * take every slot, which is why existing folders never reached the menu. Folders keep the
- * leading rows, both groups keep their backend ranking, and a path returned by both
- * searches is listed once.
- */
-export function mergeFileSearchEntries<T extends MentionEntry>(directories: readonly T[], files: readonly T[]): T[] {
+export function mergeFileSearchEntries<T extends MentionEntry>(
+  directories: readonly T[],
+  files: readonly T[],
+  query = "",
+): T[] {
+  const entries = [...directories.slice(0, MENTION_DIRECTORY_LIMIT), ...files]
+  const matches = query.trim() ? fuzzysort.go(query.trim().replaceAll("\\", "/"), entries, { key: mentionKey }) : []
+  const best = new Set(
+    matches.filter((match) => match.score === matches[0]?.score).map((match) => mentionKey(match.obj)),
+  )
   const seen = new Set<string>()
   const result: T[] = []
-  for (const entry of [...directories.slice(0, MENTION_DIRECTORY_LIMIT), ...files]) {
+  for (const entry of [
+    ...entries.filter((entry) => best.has(mentionKey(entry))),
+    ...entries.filter((entry) => !best.has(mentionKey(entry))),
+  ]) {
     const key = mentionKey(entry)
     if (seen.has(key)) continue
     seen.add(key)
