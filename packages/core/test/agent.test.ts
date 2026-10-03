@@ -262,6 +262,7 @@ describe("AgentV2", () => {
 
       const shared = [
         "Keep the todo list up to date.",
+        "Use the supplied tool schema or discovered signature, not capability prose, to construct a call. After invalid input, inspect the returned field or path and correct the request only when the previous call is known not to have mutated state. Treat denial, unavailability, and invalid input as distinct outcomes; never replay an uncertain mutation automatically.",
         "Bound repository searches by scope and output; reuse settled results, pivot a missing broad search to a likely file, symbol, caller, or directory, and repeat reads only for changed inputs or new evidence.",
         "Never make atomic commits. Commit only when the task, one of its phases, or a complete piece of functionality is finished.",
         "For requests to change, build, or fix, make the requested in-scope local changes and run relevant non-destructive checks without asking first.",
