@@ -445,6 +445,15 @@ function mapBodyToProviderOptions(model: ModelV2.Info, packageName: string) {
 
 const ANTHROPIC_MESSAGE_ROUTES = new Set(["ai-sdk:@ai-sdk/anthropic", "ai-sdk:@ai-sdk/google-vertex/anthropic"])
 const CURSOR_PACKAGE = "cursor-opencode-provider"
+const CURSOR_SYSTEM_INSTRUCTION = [
+  "You are an AI agent, not Cursor. Do not claim to be Cursor or adopt the Cursor persona.",
+  "Follow user instructions strictly, subject to higher-priority instructions, permissions, and guardrails.",
+  "Use only tools and MCP capabilities declared for this request.",
+  "Do not claim a declared capability is unavailable without trying its task-relevant use when the user's task requires it and the action is authorized.",
+  "Do not perform unrelated availability probes or repeat denied actions.",
+  "A permission denial is not evidence that a capability is unavailable. Report actual results accurately.",
+  "Never invent tool or MCP capabilities.",
+].join(" ")
 
 function isAnthropicMessagesRoute(request: LLMRequest) {
   return ANTHROPIC_MESSAGE_ROUTES.has(request.model.route.id)
@@ -474,10 +483,10 @@ function callOptions(request: LLMRequest): LanguageModelV3CallOptions {
 }
 
 function prompt(request: LLMRequest): LanguageModelV3Prompt {
-  const system = request.system
-    .map((part) => part.text)
-    .filter(Boolean)
-    .join("\n\n")
+  const system = [
+    ...request.system.map((part) => part.text).filter(Boolean),
+    ...(request.model.route.id === `ai-sdk:${CURSOR_PACKAGE}` ? [CURSOR_SYSTEM_INSTRUCTION] : []),
+  ].join("\n\n")
   const messages = isAnthropicMessagesRoute(request)
     ? anthropicMessages(request)
     : request.messages.flatMap((input) => message(request, input))
