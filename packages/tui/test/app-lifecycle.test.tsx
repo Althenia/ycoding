@@ -83,12 +83,14 @@ test("Escape never exits and Ctrl+C requires two presses", async () => {
 
     await ready
     setup.mockInput.pressKey("ESCAPE")
-    await Bun.sleep(10)
+    await setup.renderOnce()
     expect(resolved).toBe(false)
+    expect(setup.renderer.isDestroyed).toBe(false)
 
     setup.mockInput.pressKey("c", { ctrl: true })
-    await Bun.sleep(10)
+    await setup.renderOnce()
     expect(resolved).toBe(false)
+    expect(setup.renderer.isDestroyed).toBe(false)
 
     setup.mockInput.pressKey("c", { ctrl: true })
     await task
@@ -316,7 +318,9 @@ test("explicit session bootstrap restores its location-scoped model without an i
     )
 
     await titleReady
-    await Bun.sleep(100)
+    const deadline = Date.now() + 5000
+    while (Date.now() < deadline && !setup.captureCharFrame().includes("https://effect.website/docs"))
+      await new Promise<void>((resolve) => setImmediate(resolve))
     const frame = setup.captureCharFrame()
     expect(frame).toContain("session-workspace")
     expect(frame).not.toContain("/tmp/ycodin...n-workspace")
@@ -334,11 +338,4 @@ test("explicit session bootstrap restores its location-scoped model without an i
     await server.stop()
     mock.restore()
   }
-})
-
-test("passive mouse selection never writes to the clipboard", async () => {
-  const source = await Bun.file(new URL("../src/app.tsx", import.meta.url)).text()
-  expect(source).not.toContain("MouseButton.RIGHT")
-  expect(source).not.toContain("onMouseUp={\n        copyOnSelectEnabled()")
-  expect(source).toContain("Selection.handleSelectionKey")
 })

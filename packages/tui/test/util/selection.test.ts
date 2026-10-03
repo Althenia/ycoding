@@ -35,32 +35,27 @@ function harness(input: { selected?: string; platform: NodeJS.Platform; event: R
   return { writes, cleared, prevented, stopped }
 }
 
-test("Cmd+C copies an active selection on macOS", async () => {
+test("Cmd+C copies an active selection on macOS", () => {
   const result = harness({ selected: "selected", platform: "darwin", event: { name: "c", meta: true } })
-  await Bun.sleep(0)
   expect(result).toEqual({ writes: ["selected"], cleared: 1, prevented: 1, stopped: 1 })
 })
 
-test("Ctrl+C copies an active selection outside macOS", async () => {
+test("Ctrl+C copies an active selection outside macOS", () => {
   const result = harness({ selected: "selected", platform: "linux", event: { name: "c", ctrl: true } })
-  await Bun.sleep(0)
   expect(result).toEqual({ writes: ["selected"], cleared: 1, prevented: 1, stopped: 1 })
 })
 
-test("Ctrl+C copies an active selection on macOS instead of reaching app exit", async () => {
+test("Ctrl+C copies an active selection on macOS instead of reaching app exit", () => {
   const result = harness({ selected: "selected", platform: "darwin", event: { name: "c", ctrl: true } })
-  await Bun.sleep(0)
   expect(result).toEqual({ writes: ["selected"], cleared: 1, prevented: 1, stopped: 1 })
 })
 
-test("Escape clears an active selection without copying", async () => {
+test("Escape clears an active selection without copying", () => {
   const result = harness({ selected: "selected", platform: "linux", event: { name: "escape" } })
-  await Bun.sleep(0)
   expect(result).toEqual({ writes: [], cleared: 1, prevented: 1, stopped: 1 })
 })
 
-test("selection handling ignores copy keys when no selection exists", async () => {
+test("selection handling ignores copy keys when no selection exists", () => {
   const result = harness({ platform: "linux", event: { name: "c", ctrl: true } })
-  await Bun.sleep(0)
   expect(result).toEqual({ writes: [], cleared: 0, prevented: 0, stopped: 0 })
 })

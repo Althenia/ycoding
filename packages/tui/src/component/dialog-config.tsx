@@ -200,7 +200,7 @@ const settings: Setting[] = [
     labels: ["off", "on"],
   },
   {
-    title: "Copy on select",
+    title: "Dialog copy on select",
     category: "Terminal",
     path: ["terminal", "copy_on_select"],
     default: process.platform !== "win32",
