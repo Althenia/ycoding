@@ -31,7 +31,6 @@ describe("PluginV2", () => {
         Stream.runHead,
         Effect.forkScoped({ startImmediately: true }),
       )
-      yield* Effect.sleep("10 millis")
 
       yield* events.publish(ConfigSchema.Event.Updated, {})
 

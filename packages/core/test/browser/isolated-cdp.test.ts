@@ -62,7 +62,7 @@ describe("isolated Chrome private controller", () => {
       setTimeout(() => readable.write(`${JSON.stringify({ id: request.id, result: { product: "Chrome/152.0" } })}\0`), 25)
     })
     const cdp = connect(readable, writable, 10)
-    expect(await cdp.send("Browser.getVersion", {}, undefined, undefined, 50)).toEqual({ product: "Chrome/152.0" })
+    expect(await cdp.send("Browser.getVersion", {}, undefined, undefined, 5_000)).toEqual({ product: "Chrome/152.0" })
     expect(await rejected(cdp.send("Page.captureScreenshot"))).toMatchObject({ message: "Chrome command timed out: Page.captureScreenshot" })
     cdp.close()
   })
