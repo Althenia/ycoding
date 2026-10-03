@@ -37,3 +37,24 @@ The `HttpRecorder.layer` test used the provided-client public export but discard
 Baseline file: 18 pass, exit 0. Revised `bun test --cwd packages/http-recorder test/http.test.ts --reporter=junit --reporter-outfile=<temporary-output>`: exit 0, 18 pass, 35 assertions, 0.104 s. Touched-file oxlint: exit 0, zero warnings/errors.
 
 Discrimination probe: temporarily return a wrong response body from `responseFromSnapshot`; `bun test --cwd packages/http-recorder test/http.test.ts -t 'decorates a provided'` exits 1 with the exact two-body mismatch (1 fail, 17 filtered). Restore exact production expression. Remaining stability/typecheck checks are pending; no completion claim for this rewritten group yet.
+
+## AC15 pass (lane `ai-contracts`, base `d30e97bf`)
+
+Live per-file JUnit at `d30e97bf` reproduces every row above: 21 files, 240 cases, 0 failures (summed JUnit seconds: remote 0.029, http-recorder 0.401, httpapi-codegen 0.657, effect-drizzle-sqlite 0.223, simulation 2.781). `packages/effect-sqlite-node` has no tests. No file in these packages changed in this pass, so no probe or stability run was required; the G14 supplied-client rewrite is already on the base and its file passed (18 cases).
+
+Previously unclassified files in scope, all `keep`:
+
+| File / case group | Cases | Class / retained behavior | Layer | JUnit s |
+|---|---:|---|---|---:|
+| script/build-web-assets.test.ts | 6 | keep: release contract; public installer/config/font-license publication, no internal docs, unsafe-path and missing-input refusal, owner build step | build script integration | 1.871 |
+| script/chrome-for-testing.test.ts | 10 | keep: release contract; Stable mac-arm64 provisioning, minimum major, corrupt/mismatched archive refusal, HTTPS-only, CLI argument failure | provisioning script with fixture transport | 0.062 |
+| script/install.test.ts | 46 (10 macOS-only skips) | keep: release contract; installer PATH/profile rules, checksum and rollback, archive entry limits and unknown-entry skipping, updater-accepted layout, extension install, argument refusal (including removed `--office`) | real shell installer against fixture releases | 2.660 |
+| script/release.test.ts | 35 | keep: release contract; workflow ordering, signing, archive layout, notes, deployment gating, cache policy | workflow contract | 0.490 |
+| script/typecheck-cache.integration.test.ts | 3 | keep: required AGENTS gate for Turbo typecheck inputs | Turbo integration | 2.352 |
+| script/ycoding-package-identity.test.ts | 3 | keep: package scope and published executable identity | workspace contract | 0.011 |
+| script/ycoding-rebrand.test.ts | 3 | keep: rebrand policy rewrite/preserve/classify rules | brand trust boundary | 0.003 |
+| script/ycoding-residuals.test.ts | 3 | keep: brand residual scanner, including the removed office client path | brand gate | 0.002 |
+| script/ycoding-workspace.test.ts | 2 | keep: approved workspace package set | workspace contract | 0.010 |
+| packages/script/test/preview-build.test.ts | 2 | keep: preview build numbering uniqueness and stability | release versioning | 0.001 |
+
+`script/*.test.ts` totals 9 files, 111 cases (101 pass, 10 skipped because the host is not macOS), 1,873 lines, 7.461 summed JUnit seconds. These are always-kept release contracts; no deduplication was justified (the two `test.each` groups already table their rows). Their workflow and installer text assertions are the release contract itself, not production-source inspection.
