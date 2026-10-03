@@ -250,3 +250,107 @@ Each of the ten current changed test files passed three sequential isolated focu
 | Test lines | 66,272 → 64,830 |
 
 The before totals combine the unchanged 195-file inventory with the pre-lean changed groups; current cases settle as 1,926 pass, 8 environment-gated skip, 0 fail. The 8 skips are the recorded Anthropic OAuth/cache case without a cassette or recording credential, one Mercurial-dependent project case, and six Mercurial VCS cases because `hg` is unavailable. All 205 test files were run individually, sequentially, using `bun test --cwd packages/core <relative path>`; the sum of Bun per-file wall times is 142.302 seconds and the serialized shell interval was `2026-10-03T03:23:17Z`–`2026-10-03T03:25:41Z`. No before-run timing evidence exists.
+
+## Core completion pass (AC15, lane `core`, base `d30e97bf`)
+
+Verified on Linux x64 (4 CPU, uid 0) with Bun 1.4.2; one Bun process per file (`bun test <file> --timeout 30000 --reporter=junit`), serialized through the shared SL runner. Loaded runs executed while a forced root `bun run typecheck` loaded the host. Raw JUnit and logs stay in lane scratch.
+
+### Classification gaps filled
+
+| File | Cases | Layer | Classification |
+|---|---:|---|---|
+| `test/cursor/system-prompt.test.ts` | 3 | wire (SDK and seed request) | keep all: the Cursor SYSTEM instruction is appended once on the real SDK and seed wires, is supplied without an existing system, and is not added for another package named Cursor. Reproduced regression (`97c8d605`) |
+| `test/tool-shell.test.ts` | 34 | component/process | keep all: timeout bounds; sandbox fail-closed, warn, delegate, disabled, and forged-command cases; spawn-failure settlement; catastrophic-command refusal; memory limit, default, hints, and tree kill; Location and workdir resolution; external-directory approval and denial; exit, stderr, overflow, progress, and timeout output; background id and durable completion; timeout update and clear; signal and automatic backgrounding (3 owners, one table); explicit timeout interplay; interruption ownership. The spawn-failure case is rewritten (below) |
+| `test/plugin/provider-bundled-sdk.test.ts` | 24 | component + SDK wire | keep (12 plugins × 2): exact package, canonical and custom provider identity, **credential forwarding (added)**, lookalike rejection |
+| `test/plugin/provider-google.test.ts` | 1 | component | keep: the native runner wraps AI SDK models |
+| `test/plugin/provider-vercel.test.ts` | 3 | component | keep: lower-case referer, no upper-case referer, non-Vercel isolation |
+| `test/plugin/provider-xai.test.ts` | 3 | component | keep: OAuth and key registration, responses by `modelID`, non-xAI isolation |
+| `test/plugin/models-dev.test.ts` | 11 (was 6) | component/wire | keep: the new `6fd02e1c` cases are already table-driven (DeepSeek efforts ×3, pinned toggles ×2) and guard upstream variant identity |
+| `test/database-migration.test.ts` | 20 (was 19) | DB integration | keep: migration gate (always kept) |
+| `test/tool-project-artifact.test.ts` | 8 (was 7) | wire/component | keep: `cd9b745b` required insight keys on provider wires |
+| `test-integration/browser/isolated-executor.test.ts` | 12 | real Chrome integration | keep (release `verify-source` leg): private pipe and boundaries, downloads, popups, child frames, process and resource bounds, crash/hang/exit cleanup, capture limits. Requires macOS arm64 and Chrome 152; not runnable on this host |
+| `test-integration/tool-browser-integration.test.ts` | 1 | real Chrome integration | keep (release leg): semantic operations through the real isolated service. Not runnable here |
+| `test-integration/computer-app.test.ts` | 2 | macOS app integration | keep (required after computer-use app changes): off-Space listing and click without changing the frontmost app. Not runnable here |
+
+Every other non-Session file keeps the classification in the table above, and its current JUnit count matches it.
+
+### Source-text assertions
+
+| Case | Action | Surviving assertion |
+|---|---|---|
+| `plugin/system-prompt` "uses V2 vocabulary in the Meta prompt" (asserted on the imported `meta.txt`) | rewrite to runtime: the Meta plugin is applied through the session `context` hook for `meta/muse-spark-1.1` | the same 7 contains assertions and 1 forbidden-vocabulary assertion, on the composed system |
+| `agent` "loads each built-in's static metadata and prompt from its Markdown": `markdown.data` mode/color/temperature and `markdown.data.permissions` undefined | delete the source-only assertions (the runtime agent is already asserted against the explicit catalog, and effective permissions are asserted) | runtime `item` id, mode, color, and temperature; loader fidelity kept: `item.description` equals the Markdown description and the system contains the Markdown body once |
+
+The remaining file reads are data oracles, not source-text checks: the agent Markdown (loader fidelity), the brand SVG in `oauth-page`, and Drizzle-generated SQL in `project-artifact-accounting`.
+
+### G10 timing-dependent tests
+
+Scan: 44 Core test files contain `sleep`, `setTimeout`, polling, or wall-clock bounds. All 43 non-platform files ran under host load first; all passed except the uid-0 permission cases (below). Rewritten success-path waits:
+
+| File / case | Was | Now |
+|---|---|---|
+| `location-layer` keeps flush pending while startup updates continue | 5 live 50 ms sleeps against a 100 ms debounce | `TestClock.adjust` |
+| `location-layer` reloads the plugin generation after config updates | 3 polls of 100 × 20 ms | subscribe to `Plugin.Event.Updated` before writing; wait for the expected generation |
+| `location-layer` routes located events only to their location | 10 ms sleeps around publish | each subscriber takes one event; publishing to both Locations proves each received only its own |
+| `filesystem/watcher` recursive fallback | 50 ms readiness sleep | sentinel-file readiness handshake on the same subscription |
+| `browser/isolated-browser` stop, caller cancel, spontaneous close | 5–10 ms sleeps for in-flight work and cleanup | the executor signals action entry and cleanup start |
+| `browser/isolated-cdp` slower startup response | 25 ms response against a 50 ms override | 5 s override (still above the 10 ms ordinary timeout) |
+| `tool-shell` spawn failure settles | 250 ms hang race | await settlement (the test timeout detects a hang) |
+| `config/config` (3 cases), `plugin` (1 case) | 10 ms sleep before publish | immediate subscription; the fake watcher `PubSub` replays updates. Removing the sleeps alone hung under load because the sleep hid a lost-update race; replay fixes it |
+| `config/command` | 10 ms sleep before the fake update | replaying `PubSub` |
+
+Retained on purpose:
+- Negative-window waits, which cannot fail from contention: the `tool-shell` still-running checks, `project-artifact-package` not-yet-reserved checks, `browser` lease and outbox checks, `location-layer` unchanged-config reload, `isolated-browser` late result ignored, and `provider-cursor` retained models.
+- Child-process and fixture delays that model slow work.
+- Deadline-bounded state polls: flock, keep-awake, shell output, PTY, and process lock.
+
+Residual risk: `effect-flock` (a < 1 s timeout bound) and `cross-spawn-spawner` (a < 1 s forced kill) assert wall-clock upper bounds. Both passed under load.
+
+### Hermeticity fixes (pre-existing failures on this host)
+
+- `location-layer` "does not reload plugins when config updates leave plugin operations unchanged" failed on every run at `d30e97bf`. The layer used the default `ModelsDev.node`, which fetched `https://models.dev/api.json` (HTTP 403 here). `ycoding.models-dev` therefore failed to load, so every config update re-activated the generation. The test now provides the fixture with `fetch: false` (17/17 pass; the file went from 10.1 s to 5.1 s).
+- `test/preload.ts` sets `YCODING_MODELS_PATH` and `YCODING_DISABLE_MODELS_FETCH`, but no Core source reads either variable. Other tests that build the default `ModelsDev.node` still reach the network; they do not assert on it.
+- `provider-anthropic-claude-code` and its integration file failed when the host exports `CLAUDE_CODE_ENTRYPOINT`, as Claude Code does. `test/preload.ts` now clears it.
+
+### Pre-existing environment failures (unchanged, not defects)
+
+- `computer.test.ts`: 22/41 fail on Linux ("Native computer use has no provider for linux"); it is macOS-only.
+- uid 0 ignores `chmod`: `project-artifact-package` "restores the old complete version when archiving fails", `util/effect-flock` "fails on unwritable lock roots", and `util/flock` "fails clearly on unwritable lock roots".
+
+### Mutation probes (this pass)
+
+Each production line was restored with `git checkout`, and `git status` was clean afterwards.
+
+| Guarded group | Mutation | Failing retained test |
+|---|---|---|
+| bundled credential forwarding (lost when the per-provider option mocks were merged) | `deepinfra.ts:11` `createDeepInfra({ name })`, then `{ ...options, apiKey: "other" }` | the bundled-sdk deepinfra case (no request; key absent) |
+| Google and xAI exact package (merged into the table) | `google.ts:10` `includes`, `xai.ts:168` `startsWith` | both "ignores other and lookalike packages" cases |
+| watcher fallback (source inspection removed) | `watcher.ts` drops the fallback `change` publish | the recursive fallback case (5 s timeout) |
+| agent loader | `agent.ts` truncates the description | the Markdown loader case |
+| Meta prompt vocabulary | Meta prompt `webfetch` → `WebFetch` | the Meta runtime case |
+| Zeus child limit; compaction output-only (prompt groups from `dcd261f5`) | each sentence removed separately | the shared-guidance and output-contract case |
+| startup flush debounce | `supervisor.ts:352` 100 ms → 10 ms | the flush-pending case (fails by the 30 s test timeout) |
+| located routing | `event.ts` directory comparison removed | the routing case (wrong directory) |
+| config-driven reload | `supervisor.ts` drops the `Config` update subscription | the reload case (30 s test timeout) |
+
+### Stability (touched files)
+
+- **12 touched or env-affected files:** each of 3 isolated rounds passed 198/198 (45.8–46.3 s summed).
+- **First loaded round:** 2 `config/config` cases failed (the subscriber race above).
+- **After the replay fix:** `config/config` and `config/command` passed 3 isolated rounds and a loaded round (25/25), and the other 10 files passed their loaded round.
+- **Repeat runs:** each probed and rewritten case also passed `--rerun-each 10` (location-layer flush, isolated-browser, config, plugin, isolated-cdp).
+
+### Core totals
+
+| Measure | Historical before (`ecfaff06^`) | `d30e97bf` | Lane head |
+|---|---:|---:|---:|
+| Unit test files (`test/**`) | 278 | 271 | 271 |
+| Integration test files (`test-integration/**`) | 3 | 3 | 3 |
+| Cases (JUnit, unit) | 2,977 (lane inventories: Session 1,010 + rest 1,967) | 2,937 | 2,937 |
+| Test lines (unit + integration) | 102,922 | 101,431 | 101,467 |
+| Failures on this host | n/a | 28 | 25 (all environment) |
+| Summed per-file wall, this host | n/a | 517.6 s | 506.1 s |
+
+- **Historical before:** not re-run on this host. `git grep -c ''` gives its line count, and the lane inventories give its case count.
+- **Tracking baseline:** its 280 files, ~2,444 static cases, and 102,731 lines used a different count.
+- **Where the reduction comes from:** this pass removed no cases. The reduction comes from the integrated Session and non-Session lanes.
