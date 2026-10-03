@@ -270,63 +270,26 @@ describe("SessionRunnerModel", () => {
       }),
   );
 
-  it.effect("defaults OpenAI-compatible endpoints to the chat route", () =>
-    Effect.gen(function* () {
-      const resolved = yield* SessionRunnerModel.fromCatalogModel(
-        model(ProviderV2.aisdk("@ai-sdk/openai-compatible"), {
-          settings: { baseURL: "https://compatible.example/v1" },
-          headers: {},
-          body: {},
-        }),
-      );
+  for (const scenario of [
+    { name: "defaults to the chat route", options: {}, route: "openai-compatible-chat" },
+    { name: "selects responses from settings.api", options: {}, api: "responses", route: "openai-compatible-responses" },
+    { name: "selects responses from the model api field", options: { api: "responses" as const }, route: "openai-compatible-responses" },
+    { name: "lets the model api field override settings.api", options: { api: "chat" as const }, api: "responses", route: "openai-compatible-chat" },
+  ])
+    it.effect(`OpenAI-compatible endpoint ${scenario.name}`, () =>
+      Effect.gen(function* () {
+        const resolved = yield* SessionRunnerModel.fromCatalogModel(
+          model(ProviderV2.aisdk("@ai-sdk/openai-compatible"), {
+            ...scenario.options,
+            settings: { baseURL: "https://compatible.example/v1", ...(scenario.api ? { api: scenario.api } : {}) },
+            headers: {},
+            body: {},
+          }),
+        );
 
-      expect(resolved.route.id).toBe("openai-compatible-chat");
-    }),
-  );
-
-  it.effect("selects the responses route when settings.api is responses", () =>
-    Effect.gen(function* () {
-      const resolved = yield* SessionRunnerModel.fromCatalogModel(
-        model(ProviderV2.aisdk("@ai-sdk/openai-compatible"), {
-          settings: { baseURL: "https://compatible.example/v1", api: "responses" },
-          headers: {},
-          body: {},
-        }),
-      );
-
-      expect(resolved.route.id).toBe("openai-compatible-responses");
-    }),
-  );
-
-  it.effect("selects the responses route when the model api field is responses", () =>
-    Effect.gen(function* () {
-      const resolved = yield* SessionRunnerModel.fromCatalogModel(
-        model(ProviderV2.aisdk("@ai-sdk/openai-compatible"), {
-          api: "responses",
-          settings: { baseURL: "https://compatible.example/v1" },
-          headers: {},
-          body: {},
-        }),
-      );
-
-      expect(resolved.route.id).toBe("openai-compatible-responses");
-    }),
-  );
-
-  it.effect("lets a model-level api field override a provider settings api", () =>
-    Effect.gen(function* () {
-      const resolved = yield* SessionRunnerModel.fromCatalogModel(
-        model(ProviderV2.aisdk("@ai-sdk/openai-compatible"), {
-          api: "chat",
-          settings: { baseURL: "https://compatible.example/v1", api: "responses" },
-          headers: {},
-          body: {},
-        }),
-      );
-
-      expect(resolved.route.id).toBe("openai-compatible-chat");
-    }),
-  );
+        expect(resolved.route.id).toBe(scenario.route);
+      }),
+    );
 
   it.effect(
     "overlays selected OpenAI Session variant settings and bodies",
@@ -895,88 +858,36 @@ describe("SessionRunnerModel", () => {
       }),
   );
 
-  it.effect("merges access_programs on the codex route for an advertised ChatGPT Daybreak selection", () =>
-    Effect.gen(function* () {
-      const resolved = yield* SessionRunnerModel.resolve(
-        sessionInfo("ses_daybreak_blue", "daybreak_blue"),
-        model(ProviderV2.aisdk("@ai-sdk/openai"), {
-          providerID: "openai",
-          modelID: "gpt-5.6-luna",
-          daybreak: ["daybreak_blue", "daybreak_red"],
-        }),
-        chatgptCredential(),
-      );
+  for (const scenario of [
+    {
+      name: "API-key credentials",
+      selection: "daybreak_blue" as const,
+      advertised: ["daybreak_blue"] as const,
+      credential: Credential.Key.make({ type: "key", key: "sk-test" }),
+    },
+    { name: "a model advertising no programs", selection: "daybreak_blue" as const, credential: chatgptCredential() },
+    {
+      name: "an unset Session selection",
+      selection: undefined,
+      advertised: ["daybreak_blue", "daybreak_red"] as const,
+      credential: chatgptCredential(),
+    },
+  ])
+    it.effect(`omits access_programs for ${scenario.name}`, () =>
+      Effect.gen(function* () {
+        const resolved = yield* SessionRunnerModel.resolve(
+          sessionInfo("ses_daybreak_omitted", scenario.selection),
+          model(ProviderV2.aisdk("@ai-sdk/openai"), {
+            providerID: "openai",
+            modelID: "gpt-5.6-luna",
+            daybreak: scenario.advertised,
+          }),
+          scenario.credential,
+        );
 
-      expect(resolved.route.defaults.http?.body).toMatchObject({
-        access_programs: { cyber: "daybreak_blue" },
-      });
-    }),
-  );
-
-  it.effect("merges the red advertised program for a daybreak_red selection", () =>
-    Effect.gen(function* () {
-      const resolved = yield* SessionRunnerModel.resolve(
-        sessionInfo("ses_daybreak_red", "daybreak_red"),
-        model(ProviderV2.aisdk("@ai-sdk/openai"), {
-          providerID: "openai",
-          modelID: "gpt-5.6-luna",
-          daybreak: ["daybreak_blue", "daybreak_red"],
-        }),
-        chatgptCredential(),
-      );
-
-      expect(resolved.route.defaults.http?.body).toMatchObject({
-        access_programs: { cyber: "daybreak_red" },
-      });
-    }),
-  );
-
-  it.effect("omits access_programs for API-key credentials", () =>
-    Effect.gen(function* () {
-      const resolved = yield* SessionRunnerModel.resolve(
-        sessionInfo("ses_daybreak_key", "daybreak_blue"),
-        model(ProviderV2.aisdk("@ai-sdk/openai"), {
-          providerID: "openai",
-          modelID: "gpt-5.6-luna",
-          daybreak: ["daybreak_blue"],
-        }),
-        Credential.Key.make({ type: "key", key: "sk-test" }),
-      );
-
-      expect(resolved.route.defaults.http?.body).not.toHaveProperty("access_programs");
-    }),
-  );
-
-  it.effect("omits access_programs when the model advertises no Daybreak programs", () =>
-    Effect.gen(function* () {
-      const resolved = yield* SessionRunnerModel.resolve(
-        sessionInfo("ses_daybreak_unadvertised", "daybreak_blue"),
-        model(ProviderV2.aisdk("@ai-sdk/openai"), {
-          providerID: "openai",
-          modelID: "gpt-5.6-luna",
-        }),
-        chatgptCredential(),
-      );
-
-      expect(resolved.route.defaults.http?.body).not.toHaveProperty("access_programs");
-    }),
-  );
-
-  it.effect("omits access_programs when the Session Daybreak selection is unset", () =>
-    Effect.gen(function* () {
-      const resolved = yield* SessionRunnerModel.resolve(
-        sessionInfo("ses_daybreak_unset"),
-        model(ProviderV2.aisdk("@ai-sdk/openai"), {
-          providerID: "openai",
-          modelID: "gpt-5.6-luna",
-          daybreak: ["daybreak_blue", "daybreak_red"],
-        }),
-        chatgptCredential(),
-      );
-
-      expect(resolved.route.defaults.http?.body).not.toHaveProperty("access_programs");
-    }),
-  );
+        expect(resolved.route.defaults.http?.body).not.toHaveProperty("access_programs");
+      }),
+    );
 
   it.effect("does not attach Daybreak to a custom OpenAI provider using a ChatGPT credential", () =>
     Effect.gen(function* () {

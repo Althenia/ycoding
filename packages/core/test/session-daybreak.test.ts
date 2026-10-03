@@ -80,6 +80,12 @@ describe("SessionV2.daybreak.set", () => {
         EventV2.versionedType(SessionEvent.Created.type, SessionEvent.Created.durable.version),
         EventV2.versionedType(SessionEvent.DaybreakSet.type, SessionEvent.DaybreakSet.durable.version),
       ])
+      expect(
+        yield* db.select().from(SessionMessageTable).where(eq(SessionMessageTable.session_id, created.id)).all().pipe(Effect.orDie),
+      ).toHaveLength(0)
+      expect(
+        yield* db.select().from(SessionPendingTable).where(eq(SessionPendingTable.session_id, created.id)).all().pipe(Effect.orDie),
+      ).toHaveLength(0)
     }),
   )
 
@@ -112,35 +118,6 @@ describe("SessionV2.daybreak.set", () => {
       expect(
         yield* session.daybreak.set({ sessionID: missing, daybreak: "daybreak_red" }).pipe(Effect.flip),
       ).toEqual(new SessionV2.NotFoundError({ sessionID: missing }))
-    }),
-  )
-
-  it.effect("publishes only the Daybreak event without transcript or pending rows", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const { db } = yield* Database.Service
-      const created = yield* session.create({ location })
-
-      yield* session.daybreak.set({ sessionID: created.id, daybreak: "daybreak_red" })
-
-      expect(yield* aggregateTypes(created.id)).toEqual([
-        EventV2.versionedType(SessionEvent.Created.type, SessionEvent.Created.durable.version),
-        EventV2.versionedType(SessionEvent.DaybreakSet.type, SessionEvent.DaybreakSet.durable.version),
-      ])
-      const messages = yield* db
-        .select()
-        .from(SessionMessageTable)
-        .where(eq(SessionMessageTable.session_id, created.id))
-        .all()
-        .pipe(Effect.orDie)
-      expect(messages).toHaveLength(0)
-      const pending = yield* db
-        .select()
-        .from(SessionPendingTable)
-        .where(eq(SessionPendingTable.session_id, created.id))
-        .all()
-        .pipe(Effect.orDie)
-      expect(pending).toHaveLength(0)
     }),
   )
 })

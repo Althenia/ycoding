@@ -194,6 +194,12 @@ test("isolates every cache sharing dimension", () => {
   expect(SessionRunnerCache.promptCacheNamespace({ ...base, workspaceID: undefined })).not.toBe(baseline)
 })
 
+test("hashes an absent variant as absent, never as a named variant", () => {
+  expect(SessionRunnerCache.promptCacheNamespace(base)).not.toBe(
+    SessionRunnerCache.promptCacheNamespace({ ...base, variant: "default" }),
+  )
+})
+
 test("keeps the CodeMode execute namespace stable across dynamic catalogs", () => {
   const registered = (namespace: string, name: string, description: string) => {
     const child = Tool.make({

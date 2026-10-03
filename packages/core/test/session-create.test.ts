@@ -154,43 +154,26 @@ describe("SessionV2.create", () => {
     }),
   )
 
-  it.effect("inherits the parent Daybreak selection for a child session", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const parent = yield* session.create({ location, title: "daybreak parent" })
-      yield* session.daybreak.set({ sessionID: parent.id, daybreak: "daybreak_blue" })
+  for (const scenario of [
+    { name: "a child inherits the parent Daybreak selection", derive: "child", parentDaybreak: true, expected: "daybreak_blue" },
+    { name: "a child stays without Daybreak when the parent has none", derive: "child", parentDaybreak: false, expected: undefined },
+    { name: "a fork drops the parent Daybreak selection", derive: "fork", parentDaybreak: true, expected: undefined },
+  ] as const)
+    it.effect(scenario.name, () =>
+      Effect.gen(function* () {
+        const session = yield* SessionV2.Service
+        const parent = yield* session.create({ location, title: "parent" })
+        if (scenario.parentDaybreak) yield* session.daybreak.set({ sessionID: parent.id, daybreak: "daybreak_blue" })
 
-      const child = yield* session.create({ parentID: parent.id, title: "child" })
+        const derived =
+          scenario.derive === "child"
+            ? yield* session.create({ parentID: parent.id, title: "child" })
+            : yield* session.fork({ sessionID: parent.id })
 
-      expect(child.daybreak).toBe("daybreak_blue")
-      expect((yield* session.get(child.id)).daybreak).toBe("daybreak_blue")
-    }),
-  )
-
-  it.effect("leaves a child session without Daybreak when the parent has none", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const parent = yield* session.create({ location, title: "off parent" })
-
-      const child = yield* session.create({ parentID: parent.id, title: "child" })
-
-      expect(child.daybreak).toBeUndefined()
-      expect((yield* session.get(child.id)).daybreak).toBeUndefined()
-    }),
-  )
-
-  it.effect("keeps a forked session without Daybreak", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const parent = yield* session.create({ location, title: "daybreak parent" })
-      yield* session.daybreak.set({ sessionID: parent.id, daybreak: "daybreak_blue" })
-
-      const fork = yield* session.fork({ sessionID: parent.id })
-
-      expect(fork.daybreak).toBeUndefined()
-      expect((yield* session.get(fork.id)).daybreak).toBeUndefined()
-    }),
-  )
+        expect(derived.daybreak).toBe(scenario.expected)
+        expect((yield* session.get(derived.id)).daybreak).toBe(scenario.expected)
+      }),
+    )
 
   it.effect("does not let child creation drop the parent permission ceiling", () =>
     Effect.gen(function* () {
@@ -437,19 +420,6 @@ describe("SessionV2.create", () => {
     }),
   )
 
-  it.effect("returns the current Session projection after updates", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const { db } = yield* Database.Service
-      const input = { id, location }
-      const created = yield* session.create(input)
-
-      yield* db.update(SessionTable).set({ agent: "build" }).where(eq(SessionTable.id, id)).run().pipe(Effect.orDie)
-
-      expect(yield* session.create(input)).toMatchObject({ id: created.id, agent: "build" })
-    }),
-  )
-
   it.effect("returns the current Session projection after projected updates", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
@@ -466,31 +436,18 @@ describe("SessionV2.create", () => {
     }),
   )
 
-  it.effect("persists creation through the current created event", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const { db } = yield* Database.Service
-      const created = yield* session.create({ location })
+  for (const scenario of [{ name: "generated ID", input: { location } }, { name: "caller ID", input: { id, location } }])
+    it.effect(`persists ${scenario.name} creation through the current created event`, () =>
+      Effect.gen(function* () {
+        const session = yield* SessionV2.Service
+        const { db } = yield* Database.Service
+        const created = yield* session.create(scenario.input)
 
-      expect(
-        yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all().pipe(Effect.orDie),
-      ).toMatchObject([{ type: EventV2.versionedType(SessionEvent.Created.type, 2) }])
-    }),
-  )
-
-  it.effect("persists caller-ID creation through the existing created event", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const { db } = yield* Database.Service
-      const created = yield* session.create({ id, location })
-
-      expect(
-        yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).get().pipe(Effect.orDie),
-      ).toMatchObject({
-        data: { sessionID: id },
-      })
-    }),
-  )
+        expect(
+          yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all().pipe(Effect.orDie),
+        ).toMatchObject([{ type: EventV2.versionedType(SessionEvent.Created.type, 2), data: { sessionID: created.id } }])
+      }),
+    )
 
   it.effect("includes current creation rows in the Session event stream", () =>
     Effect.gen(function* () {

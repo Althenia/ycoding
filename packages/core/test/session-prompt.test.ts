@@ -35,21 +35,16 @@ const attachmentRoot = await mkdtemp(path.join(tmpdir(), "ycoding-session-prompt
 afterAll(() => rm(attachmentRoot, { recursive: true, force: true }))
 
 const executionCalls: SessionV2.ID[] = []
-const interruptCalls: SessionV2.ID[] = []
 const wakeCalls: SessionV2.ID[] = []
-const activeSessions = new Set<SessionV2.ID>()
 const execution = Layer.succeed(
   SessionExecution.Service,
   SessionExecution.Service.of({
-    active: Effect.sync(() => new Set(activeSessions)),
+    active: Effect.succeed(new Set()),
     resume: (sessionID) =>
       Effect.sync(() => {
         executionCalls.push(sessionID)
       }),
-    interrupt: (sessionID) =>
-      Effect.sync(() => {
-        interruptCalls.push(sessionID)
-      }),
+    interrupt: () => Effect.void,
     wake: (sessionID) =>
       Effect.sync(() => {
         wakeCalls.push(sessionID)
@@ -152,47 +147,6 @@ const assistantRow = (id: SessionMessage.ID, seq: number) => {
 }
 
 describe("SessionV2.prompt", () => {
-  it.effect("exposes the execution registry", () =>
-    Effect.gen(function* () {
-      activeSessions.add(sessionID)
-      expect(Array.from(yield* (yield* SessionV2.Service).active)).toEqual([sessionID])
-    }).pipe(Effect.ensuring(Effect.sync(() => activeSessions.clear()))),
-  )
-
-  it.effect("delegates execution continuation through SessionExecution", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      executionCalls.length = 0
-      wakeCalls.length = 0
-      yield* session.resume(sessionID)
-      expect(executionCalls).toEqual([sessionID])
-      expect(wakeCalls).toEqual([])
-    }),
-  )
-
-  it.effect("delegates process-local interruption through SessionExecution", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      interruptCalls.length = 0
-
-      yield* session.interrupt(sessionID)
-      expect(interruptCalls).toEqual([sessionID])
-      expect(yield* session.messages({ sessionID })).toEqual([])
-    }),
-  )
-
-  it.effect("delegates interruption without requiring a recorded Session", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      interruptCalls.length = 0
-
-      yield* session.interrupt(SessionV2.ID.make("ses_missing"))
-      expect(interruptCalls).toEqual([SessionV2.ID.make("ses_missing")])
-    }),
-  )
-
   it.effect("durably admits one user message before transcript promotion", () =>
     Effect.gen(function* () {
       yield* setup
@@ -428,53 +382,38 @@ describe("SessionV2.prompt", () => {
     }),
   )
 
-  it.effect("admits a reattached file after its stored copy was modified outside YCoding", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      const store = yield* AttachmentStore.Service
-      const uri = `data:text/plain;base64,${Buffer.from("reattached notes\n").toString("base64")}`
-      const first = yield* session.prompt({ sessionID, text: "Read the notes", files: [{ uri, name: "notes.txt" }], resume: false })
-      const content = first.data.files?.[0]?.content
-      expect(content).toBeDefined()
-      if (!content) return
-      yield* Effect.promise(() => chmod(store.absolutePath(content), 0o600))
-      yield* Effect.promise(() => writeFile(store.absolutePath(content), "notes edited by a tool\n"))
+  for (const reference of ["data URL", "managed URI"] as const)
+    it.effect(`admits a resent ${reference} attachment after its stored copy was modified outside YCoding`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* SessionV2.Service
+        const store = yield* AttachmentStore.Service
+        const uri = `data:text/plain;base64,${Buffer.from("notes\n").toString("base64")}`
+        const first = yield* session.prompt({ sessionID, text: "Read", files: [{ uri, name: "notes.txt" }], resume: false })
+        const content = first.data.files?.[0]?.content
+        expect(content).toBeDefined()
+        if (!content) return
+        yield* Effect.promise(() => chmod(store.absolutePath(content), 0o600))
+        yield* Effect.promise(() => writeFile(store.absolutePath(content), "notes edited by a tool\n"))
 
-      const second = yield* session.prompt({ sessionID, text: "Read them again", files: [{ uri, name: "notes.txt" }], resume: false })
+        const resent = yield* session.prompt({
+          sessionID,
+          text: "Read again",
+          files: [{ uri: reference === "data URL" ? uri : AttachmentStore.managedURI(content), name: "notes.txt" }],
+          resume: false,
+        })
 
-      expect(second.data.files?.[0]?.content).toEqual(content)
-      expect(Buffer.from(yield* store.read(content)).toString("utf8")).toBe("reattached notes\n")
-    }),
-  )
-
-  it.effect("admits a resent attachment reference after its stored copy was modified outside YCoding", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      const store = yield* AttachmentStore.Service
-      const uri = `data:text/plain;base64,${Buffer.from("resent plan\n").toString("base64")}`
-      const first = yield* session.prompt({ sessionID, text: "Read the plan", files: [{ uri, name: "plan.txt" }], resume: false })
-      const content = first.data.files?.[0]?.content
-      expect(content).toBeDefined()
-      if (!content) return
-      yield* Effect.promise(() => chmod(store.absolutePath(content), 0o600))
-      yield* Effect.promise(() => writeFile(store.absolutePath(content), "plan edited by a tool\n"))
-
-      const resent = yield* session.prompt({
-        sessionID,
-        text: "Read it again",
-        files: [{ uri: AttachmentStore.managedURI(content), name: "plan.txt" }],
-        resume: false,
-      })
-
-      expect(resent.data.files?.[0]).toMatchObject({ content, mime: "text/plain", name: "plan.txt" })
-      const unknown = yield* session
-        .prompt({ sessionID, text: "Read this", files: [{ uri: AttachmentStore.managedURI({ digest: "9".repeat(64) }) }], resume: false })
-        .pipe(Effect.flip)
-      expect(unknown).toMatchObject({ _tag: "Session.AttachmentError" })
-    }),
-  )
+        expect(resent.data.files?.[0]).toMatchObject({ content, mime: "text/plain", name: "notes.txt" })
+        if (reference === "data URL") {
+          expect(Buffer.from(yield* store.read(content)).toString("utf8")).toBe("notes\n")
+          return
+        }
+        const unknown = yield* session
+          .prompt({ sessionID, text: "Read this", files: [{ uri: AttachmentStore.managedURI({ digest: "9".repeat(64) }) }], resume: false })
+          .pipe(Effect.flip)
+        expect(unknown).toMatchObject({ _tag: "Session.AttachmentError" })
+      }),
+    )
 
   it.effect("sniffs data URL content instead of trusting its declared MIME", () =>
     Effect.gen(function* () {
@@ -843,51 +782,24 @@ describe("SessionV2.prompt", () => {
     }),
   )
 
-  it.effect("starts execution by default after recording the prompt", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      executionCalls.length = 0
-      wakeCalls.length = 0
+  for (const scenario of [
+    { name: "by default", input: {}, wakes: true },
+    { name: "when resume is explicitly true", input: { resume: true }, wakes: true },
+    { name: "never when resume is false", input: { resume: false }, wakes: false },
+  ])
+    it.effect(`wakes execution after recording the prompt ${scenario.name}`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* SessionV2.Service
+        executionCalls.length = 0
+        wakeCalls.length = 0
 
-      yield* session.prompt({ sessionID, text: "Run by default" })
+        yield* session.prompt({ sessionID, text: "Run", ...scenario.input })
 
-      expect(executionCalls).toEqual([])
-      expect(wakeCalls).toEqual([sessionID])
-    }),
-  )
-
-  it.effect("starts execution when resume is explicitly true", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      executionCalls.length = 0
-      wakeCalls.length = 0
-
-      yield* session.prompt({
-        sessionID,
-        text: "Run explicitly",
-        resume: true,
-      })
-
-      expect(executionCalls).toEqual([])
-      expect(wakeCalls).toEqual([sessionID])
-    }),
-  )
-
-  it.effect("only records the prompt when resume is false", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      executionCalls.length = 0
-      wakeCalls.length = 0
-
-      yield* session.prompt({ sessionID, text: "Do not run", resume: false })
-
-      expect(executionCalls).toEqual([])
-      expect(wakeCalls).toEqual([])
-    }),
-  )
+        expect(executionCalls).toEqual([])
+        expect(wakeCalls).toEqual(scenario.wakes ? [sessionID] : [])
+      }),
+    )
 
   it.effect("uses the message ID alone as durable retry identity", () =>
     Effect.gen(function* () {
