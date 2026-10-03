@@ -247,6 +247,7 @@ export type RemoteStoreOptions = {
   readonly createTransport: (deviceID: string, handlers: RemoteTransportHandlers) => RemoteTransport
   readonly schedule?: (callback: () => void, ms: number) => () => void
   readonly now?: () => number
+  readonly monotonicNow?: () => number
   /** Holds the remembered machine; defaults to browser storage. */
   readonly storage?: StorageLike
   /** Coalesces stream deltas into one state notification. */
@@ -368,6 +369,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     return () => clearTimeout(handle)
   })
   const now = options.now ?? (() => Date.now())
+  const monotonicNow = options.monotonicNow ?? (() => performance.now())
   const storage = options.storage ?? browserStorage()
   const batchMs = options.batchMs ?? defaultBatchMs
   const createMessageID = options.createMessageID ?? defaultMessageID
@@ -1785,7 +1787,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (!isCurrentConnection(owner) || (!statusReloadLocal && !carouselRefreshPending)) return
     if (container.state.selectedWorkspaceID === undefined && !carouselRefreshPending) return
     if (statusReloading) return
-    const now = performance.now()
+    const now = monotonicNow()
     const loadLocal = statusReloadLocal && container.state.selectedWorkspaceID !== undefined && loadingPageToken !== sessionsToken && now - lastStatusReload >= 5_000
     const loadCarousel = carouselRefreshPending && now - lastCarouselReload >= 5_000
     if (!loadLocal && !loadCarousel) {

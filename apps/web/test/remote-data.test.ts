@@ -3,15 +3,17 @@ import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
 import { loadWorkspaces } from "./remote-queries"
+import { createRemoteStoreClock } from "./remote-store-clock"
 import { startRelayDouble, waitFor, type RelayHandlerResult } from "./relay-double"
 
-async function setup(handler?: (request: { operation: string; input?: Readonly<Record<string, unknown>>; sessionID?: string }) => RelayHandlerResult, requestTimeoutMs = 30_000, pingIntervalMs?: number) {
+async function setup(handler?: (request: { operation: string; input?: Readonly<Record<string, unknown>>; sessionID?: string }) => RelayHandlerResult, requestTimeoutMs = 30_000, pingIntervalMs?: number, storeClock?: ReturnType<typeof createRemoteStoreClock>) {
   const relay = await startRelayDouble({ handler })
   let nextMessage = 0
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
     createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, requestTimeoutMs, pingIntervalMs }),
     now: () => 1_000,
+    ...(storeClock === undefined ? {} : { schedule: storeClock.schedule, monotonicNow: storeClock.now }),
     createMessageID: () => `msg_local_${++nextMessage}`,
     createSessionID: () => "ses_created",
   })
@@ -81,31 +83,47 @@ describe("remote data", () => {
       expect(test.relay.requests.some((request) => request.operation === "session.subscribe" && request.sessionID === "ses_r2")).toBe(true)
     } finally { await test.stop() }
   })
-  test.concurrent("coalesces running-set changes into the shared status refresh window", async () => {
+  test("coalesces running-set changes until the shared status refresh boundary", async () => {
+    const clock = createRemoteStoreClock()
+    const refreshed = Promise.withResolvers<void>()
+    let current = ["ses_r1"]
+    let runningReads = 0
+    const sessions = ["ses_r1", "ses_r2", "ses_r3"].map((id) => ({ id, title: id, projectID: "prj_default", location: { directory: "/work" }, time: { created: 1, updated: 2 } }))
     const test = await setup((request) => {
       if (request.operation === "session.status") return { ok: true, value: { running: ["ses_r1"], attention: [] } }
+      if (request.operation === "session.list" && request.input?.workspace !== undefined) return { ok: true, value: { data: sessions } }
       if (request.operation === "session.list" && request.input?.status === "running") {
+        runningReads += 1
+        if (runningReads === 2) refreshed.resolve()
         const running = request.input.cursor === undefined ? current : []
         return { ok: true, value: { data: running.map((id) => ({ id, title: id, projectID: "prj_a", location: { directory: "/work/a" }, time: { created: 1, updated: 2 } })) } }
       }
       if (request.operation === "session.list" && request.input?.status === "idle") return { ok: true, value: { data: [] } }
       return "default"
-    })
-    let current = ["ses_r1"]
+    }, 30_000, undefined, clock)
     try {
       await test.store.load()
       await waitFor(() => test.store.state().carouselSessions?.[0]?.id === "ses_r1")
+      await waitFor(() => test.store.state().sessions.length === 3 && test.store.state().sessionListStatus === "ready")
+      expect(runningReads).toBe(1)
       current = ["ses_r2"]
       test.relay.pushStatus(["ses_r2"], [])
       current = ["ses_r3"]
       test.relay.pushStatus(["ses_r3"], [])
       await waitFor(() => test.store.state().sessionStatus?.running.has("ses_r3") === true)
       expect(test.store.state().carouselSessions?.map((session) => [session.id, session.running])).toEqual([["ses_r1", false]])
-      expect(test.relay.requests.filter((request) => request.operation === "session.list" && request.input?.status === "running")).toHaveLength(1)
-      await waitFor(() => test.store.state().carouselSessions?.[0]?.id === "ses_r3", 15_000)
-      expect(test.relay.requests.filter((request) => request.operation === "session.list" && request.input?.status === "running")).toHaveLength(2)
+      expect(runningReads).toBe(1)
+      await waitFor(() => clock.pendingDelays().some((delay) => delay > 4_900))
+      await clock.advanceBy(4_999)
+      expect(runningReads).toBe(1)
+      expect(test.store.state().carouselSessions?.[0]?.id).toBe("ses_r1")
+      await clock.advanceBy(1)
+      await waitFor(() => runningReads === 2, 250)
+      await refreshed.promise
+      await waitFor(() => test.store.state().carouselSessions?.[0]?.id === "ses_r3")
+      expect(runningReads).toBe(2)
     } finally { await test.stop() }
-  }, 20_000)
+  })
   test("uploads a large attachment in bounded acknowledged chunks before prompt admission", async () => {
     const uploads: { index: number; last: boolean; data: string; uploadID: string }[] = []
     const test = await setup((request) => {
@@ -283,14 +301,23 @@ describe("remote data", () => {
     } finally { await test.stop() }
   })
 
-  test.concurrent("runs one trailing missing-root reload after an in-flight status reload and its cooldown", async () => {
+  test("runs one trailing missing-root reload at its cooldown boundary", async () => {
+    const clock = createRemoteStoreClock()
     let release: (() => void) | undefined
     const gate = new Promise<void>((resolve) => { release = resolve })
+    const thirdList = Promise.withResolvers<void>()
     let lists = 0
     const test = await setup(async (request) => {
-      if (request.operation === "session.list" && request.input?.workspace !== undefined && ++lists === 2) await gate
+      if (request.operation === "session.list" && request.input?.workspace !== undefined) {
+        lists += 1
+        if (lists === 2) await gate
+        if (lists === 3) {
+          thirdList.resolve()
+          return { ok: true, value: { data: [{ id: "ses_missing", title: "Missing root", projectID: "prj_default", location: { directory: "/work" }, time: { created: 1, updated: 2 } }] } }
+        }
+      }
       return "default" as const
-    })
+    }, 30_000, undefined, clock)
     try {
       await test.store.load()
       await waitFor(() => test.store.state().sessions.length === 2)
@@ -298,11 +325,17 @@ describe("remote data", () => {
       await waitFor(() => lists === 2)
       test.relay.pushStatus(["ses_missing"], ["ses_missing"])
       expect(lists).toBe(2)
+      test.relay.pushStatus(["ses_missing"], [])
       release?.()
-      await waitFor(() => lists === 3, 15_000)
+      await waitFor(() => clock.pendingDelays().some((delay) => delay >= 4_900))
+      await clock.advanceBy(4_999)
+      expect(lists).toBe(2)
+      await clock.advanceBy(1)
+      await thirdList.promise
+      await waitFor(() => test.store.state().sessions.some((session) => session.id === "ses_missing"))
       expect(lists).toBe(3)
     } finally { release?.(); await test.stop() }
-  }, 20_000)
+  })
 
   test("serializes file searches per target and drops superseded results", async () => {
     let release: (() => void) | undefined

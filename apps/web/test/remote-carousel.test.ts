@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
+import { createRemoteStoreClock } from "./remote-store-clock"
 import { startRelayDouble, waitFor } from "./relay-double"
 
 const root = (id: string, updated: number, pinned?: number) => ({
@@ -81,31 +82,51 @@ test("finished selected run advances carousel activity without changing list ord
   } finally { store.dispose(); await relay.stop() }
 }, 15_000)
 
-test.concurrent("carousel shows recent idle roots without a running family and refreshes after an inventory change", async () => {
+test("carousel refreshes recent idle roots at the cooldown boundary", async () => {
+  const clock = createRemoteStoreClock()
+  const refreshed = Promise.withResolvers<void>()
   const pinned = root("pinned_old", 10, 1)
   const recent = root("recent", 100)
   const newest = root("newest", 200)
   let idle = [recent, pinned]
+  let idleReads = 0
   const relay = await startRelayDouble({ handler: (request) => {
     if (request.operation === "session.status") return { ok: true, value: { running: [], attention: [] } }
     if (request.operation === "session.list" && request.input?.status === "running") return { ok: true, value: { data: [] } }
-    if (request.operation === "session.list" && request.input?.status === "idle") return { ok: true, value: { data: idle } }
+    if (request.operation === "session.list" && request.input?.status === "idle") {
+      idleReads += 1
+      if (idleReads === 2) refreshed.resolve()
+      return { ok: true, value: { data: idle } }
+    }
     return "default"
   } })
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }) })
+  const store = createRemoteStore({
+    http: createRemoteHttp({ baseURL: relay.httpURL }),
+    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }),
+    schedule: clock.schedule,
+    monotonicNow: clock.now,
+  })
   try {
     await store.load()
     await waitFor(() => store.state().carouselSessions?.length === 2)
+    expect(idleReads).toBe(1)
     expect(store.state().carouselSessions?.map((session) => [session.id, session.running])).toEqual([
       ["ses_recent", false], ["ses_pinned_old", false],
     ])
     idle = [newest, recent, pinned]
     relay.pushSessions([newest.id])
-    await waitFor(() => store.state().carouselSessions?.[0]?.id === newest.id, 15_000)
+    await waitFor(() => clock.pendingDelays().some((delay) => delay >= 4_900))
+    await clock.advanceBy(4_999)
+    expect(idleReads).toBe(1)
+    expect(store.state().carouselSessions?.[0]?.id).toBe(recent.id)
+    await clock.advanceBy(1)
+    await waitFor(() => idleReads === 2, 250)
+    await refreshed.promise
+    await waitFor(() => store.state().carouselSessions?.[0]?.id === newest.id)
+    expect(idleReads).toBe(2)
     expect(store.state().carouselSessions?.map((session) => session.id)).toEqual(["ses_newest", "ses_recent", "ses_pinned_old"])
   } finally { store.dispose(); await relay.stop() }
-}, 20_000)
+})
 
 test("a failed recent read keeps known running cards visible and reports the failure", async () => {
   const relay = await startRelayDouble({ handler: (request) => {
@@ -123,8 +144,11 @@ test("a failed recent read keeps known running cards visible and reports the fai
   } finally { store.dispose(); await relay.stop() }
 })
 
-test.concurrent("a superseded running read does not issue a stale idle query", async () => {
+test("a superseded running read does not issue a stale idle query", async () => {
+  const clock = createRemoteStoreClock()
   const first = Promise.withResolvers<void>()
+  const firstSettled = Promise.withResolvers<void>()
+  const refreshed = Promise.withResolvers<void>()
   let runningID = "ses_old"
   let runningReads = 0
   let idleReads = 0
@@ -134,40 +158,71 @@ test.concurrent("a superseded running read does not issue a stale idle query", a
       const id = runningID
       runningReads += 1
       if (runningReads === 1) await first.promise
+      if (runningReads === 1) firstSettled.resolve()
+      if (runningReads === 2) refreshed.resolve()
       return { ok: true, value: { data: [root(id.slice(4), 100)] } }
     }
     if (request.operation === "session.list" && request.input?.status === "idle") { idleReads += 1; return { ok: true, value: { data: [] } } }
     return "default" as const
   } })
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }) })
+  const store = createRemoteStore({
+    http: createRemoteHttp({ baseURL: relay.httpURL }),
+    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }),
+    schedule: clock.schedule,
+    monotonicNow: clock.now,
+  })
   try {
     await store.load()
     await waitFor(() => runningReads === 1)
     runningID = "ses_new"
     relay.pushStatus([runningID], [])
     first.resolve()
-    await waitFor(() => store.state().carouselSessions?.[0]?.id === runningID, 15_000)
+    await firstSettled.promise
+    await waitFor(() => clock.pendingDelays().some((delay) => delay >= 4_900))
+    expect(idleReads).toBe(0)
+    await clock.advanceBy(4_999)
+    expect(runningReads).toBe(1)
+    expect(idleReads).toBe(0)
+    expect(store.state().carouselSessions?.some((session) => session.id === "ses_old")).toBe(false)
+    await clock.advanceBy(1)
+    await waitFor(() => runningReads === 2, 250)
+    await refreshed.promise
+    await waitFor(() => store.state().carouselSessions?.[0]?.id === runningID)
+    expect(runningReads).toBe(2)
     expect(idleReads).toBe(1)
   } finally { first.resolve(); store.dispose(); await relay.stop() }
-}, 20_000)
+})
 
-test.concurrent("a superseded idle read cannot publish stale carousel rows", async () => {
+test("a superseded idle read cannot publish stale carousel rows", async () => {
+  const clock = createRemoteStoreClock()
   const first = Promise.withResolvers<void>()
+  const firstSettled = Promise.withResolvers<void>()
+  const refreshedRunning = Promise.withResolvers<void>()
+  const refreshedIdle = Promise.withResolvers<void>()
   let runningID = "ses_old"
+  let runningReads = 0
   let idleReads = 0
   const relay = await startRelayDouble({ handler: async (request) => {
     if (request.operation === "session.status") return { ok: true, value: { running: [runningID], attention: [] } }
-    if (request.operation === "session.list" && request.input?.status === "running") return { ok: true, value: { data: [root(runningID.slice(4), 100)] } }
+    if (request.operation === "session.list" && request.input?.status === "running") {
+      runningReads += 1
+      if (runningReads === 2) refreshedRunning.resolve()
+      return { ok: true, value: { data: [root(runningID.slice(4), 100)] } }
+    }
     if (request.operation === "session.list" && request.input?.status === "idle") {
       idleReads += 1
-      if (idleReads === 1) { await first.promise; return { ok: true, value: { data: [root("stale_idle", 90)] } } }
+      if (idleReads === 1) { await first.promise; firstSettled.resolve(); return { ok: true, value: { data: [root("stale_idle", 90)] } } }
+      if (idleReads === 2) refreshedIdle.resolve()
       return { ok: true, value: { data: [root("fresh_idle", 110)] } }
     }
     return "default" as const
   } })
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }) })
+  const store = createRemoteStore({
+    http: createRemoteHttp({ baseURL: relay.httpURL }),
+    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }),
+    schedule: clock.schedule,
+    monotonicNow: clock.now,
+  })
   const seen: string[][] = []
   const unsubscribe = store.subscribe(() => seen.push(store.state().carouselSessions?.map((session) => session.id) ?? []))
   try {
@@ -176,8 +231,20 @@ test.concurrent("a superseded idle read cannot publish stale carousel rows", asy
     runningID = "ses_new"
     relay.pushStatus([runningID], [])
     first.resolve()
-    await waitFor(() => store.state().carouselSessions?.[0]?.id === runningID, 15_000)
+    await firstSettled.promise
+    await waitFor(() => clock.pendingDelays().some((delay) => delay >= 4_900))
+    expect(runningReads).toBe(1)
+    expect(idleReads).toBe(1)
+    expect(seen.some((ids) => ids.includes("ses_stale_idle"))).toBe(false)
+    await clock.advanceBy(4_999)
+    expect(runningReads).toBe(1)
+    expect(idleReads).toBe(1)
+    expect(seen.some((ids) => ids.includes("ses_stale_idle"))).toBe(false)
+    await clock.advanceBy(1)
+    await waitFor(() => runningReads === 2 && idleReads === 2, 250)
+    await Promise.all([refreshedRunning.promise, refreshedIdle.promise])
+    await waitFor(() => store.state().carouselSessions?.[0]?.id === runningID)
     expect(store.state().carouselSessions?.map((session) => session.id)).toEqual(["ses_new", "ses_fresh_idle"])
     expect(seen.some((ids) => ids.includes("ses_stale_idle"))).toBe(false)
   } finally { first.resolve(); unsubscribe(); store.dispose(); await relay.stop() }
-}, 20_000)
+})
