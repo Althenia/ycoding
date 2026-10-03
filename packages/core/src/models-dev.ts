@@ -441,8 +441,7 @@ function reasoningVariants(provider: SourceProvider, model: SourceModel): NonNul
     const variants = [
       ...off,
       ...effort.values.flatMap((value) => {
-        const raw: unknown = value
-        const id = typeof raw === "string" && raw !== "null" ? raw : undefined
+        const id = value === null ? "none" : value === "null" ? undefined : value
         if (id === undefined) return []
         if (id === "none" && off.length > 0) return []
         const settings = settingsForEffort(npm, model.id, id)
@@ -461,14 +460,7 @@ function reasoningVariants(provider: SourceProvider, model: SourceModel): NonNul
   return []
 }
 
-function normalizeDeepseekEffort(effort: string): string {
-  if (effort === "xhigh") return "max"
-  if (effort === "low" || effort === "medium") return "high"
-  return effort
-}
-
 function settingsForEffort(npm: string, modelID: string, effort: string): ProviderV2.Settings | undefined {
-  const normalized = modelID.includes("deepseek") ? normalizeDeepseekEffort(effort) : effort
   // DeepSeek's OpenAI-format API accepts the requested effort and maps it
   // server-side; Chat lowering reads `reasoningEffort` and `thinking`.
   if (npm === "@ai-sdk/openai-compatible" && modelID.includes("deepseek")) {
@@ -476,7 +468,6 @@ function settingsForEffort(npm: string, modelID: string, effort: string): Provid
     return { reasoningEffort: effort, thinking: { type: "enabled" } }
   }
   if (npm === "@openrouter/ai-sdk-provider") {
-    if (modelID.includes("deepseek")) return { reasoning: { effort: normalized } }
     return { reasoning: { effort } }
   }
   if (npm === "@ai-sdk/anthropic" || npm === "@ai-sdk/google-vertex/anthropic") {
@@ -632,12 +623,12 @@ function toggleVariants(npm: string, modelID: string): NonNullable<ModelV2.Info[
   if (npm === "@ai-sdk/alibaba")
     return [
       { id: ModelV2.VariantID.make("none"), settings: { enableThinking: false } },
-      { id: ModelV2.VariantID.make("thinking"), settings: { enableThinking: true } },
+      { id: ModelV2.VariantID.make("high"), settings: { enableThinking: true } },
     ]
   if (npm === "@ai-sdk/cohere")
     return [
       { id: ModelV2.VariantID.make("none"), settings: { thinking: { type: "disabled" } } },
-      { id: ModelV2.VariantID.make("thinking"), settings: { thinking: { type: "enabled" } } },
+      { id: ModelV2.VariantID.make("high"), settings: { thinking: { type: "enabled" } } },
     ]
   if (npm === "@jerome-benoit/sap-ai-provider-v2") {
     if (modelID.includes("gemini"))
