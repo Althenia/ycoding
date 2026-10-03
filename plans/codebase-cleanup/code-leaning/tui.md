@@ -12,3 +12,5 @@ At `96c6b644`: 321 tracked paths; 280 eligible operational source files, 64,649 
 | S1 anchor | `mini/demo.ts` | 1,073 × 1 = 1,073 | unchanged | `mini/runtime.ts:719` dynamically imports demo helpers when demo mode is selected. |
 
 Method: tracked operational `.ts/.tsx/.js/.jsx/.css` in `src`, excluding tests, generated files, fixtures and declarations; physical lines × commit-path touches in `git log --no-renames --since=2026-07-20T00:00:00Z --until=2026-10-04T00:00:00Z`. Classes use the current fork classifier and verified snapshot. The S1 anchor is separate from score order. D14 duplication results and the required TUI-visible render/lean-suite gates are not measured by this ranking; no visual or public-contract change is authorized by it.
+
+S1 hand-off (E78): no product caller — `component/dialog-tag.tsx` (test-only), `util/revert-diff.ts`. Dead-code candidates for SC-tui.

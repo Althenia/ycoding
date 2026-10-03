@@ -12,3 +12,5 @@ At `96c6b644`: 91 tracked paths; 91 eligible operational source files, 15,369 ph
 | S1 anchor | `protocols/google-images.ts` | 314 × 1 = 314 | unchanged | `providers/google.ts:7` imports `GoogleImages`. |
 
 Method: tracked operational `.ts/.tsx/.js/.jsx/.css` in `src`, excluding tests, generated files, fixtures and declarations; physical lines × commit-path touches in `git log --no-renames --since=2026-07-20T00:00:00Z --until=2026-10-04T00:00:00Z`. Classes are exact current classifier/snapshot results; S1 anchor is not promoted above higher scores. D14 duplication and provider wire/cache/reasoning behavior are not verified by this inventory; preserve provider-visible prefixes and errors.
+
+S1 hand-off (E78): the 17 previously unresolved `src/` paths are public API (documented subpaths/barrels of the non-private package); keep unless a public-contract change is approved. `script/recording-cost-report.ts` has no caller; dead-code candidate for SC-ai.

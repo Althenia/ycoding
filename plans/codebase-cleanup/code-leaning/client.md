@@ -12,3 +12,5 @@ At `96c6b644`: 20 tracked paths; 9 eligible hand-authored operational source fil
 | S1 anchor | `promise/index.ts` | 16 × 1 = 16 | unchanged | The package root and `./promise` exports map here; CLI and TUI use the Promise Client. |
 
 Method: tracked operational `.ts/.tsx/.js/.jsx/.css` in `src`, excluding generated clients/API declarations, tests, fixtures and declarations; physical lines × commit-path touches in `git log --no-renames --since=2026-07-20T00:00:00Z --until=2026-10-04T00:00:00Z`. Current classifier/snapshot supplies classes; S1 anchor is separate from score order. The generated Effect API is excluded even though large and churned; its owning generator is `packages/client/script/build.ts`. D14 duplication and generated-contract parity are not measured here.
+
+S1 hand-off (E78): `src/contract.ts` is outside the `exports` map with no importer; dead-code candidate for SC-client.

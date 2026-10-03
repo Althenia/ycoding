@@ -52,7 +52,7 @@ The baseline blob classification above remains a record of the original checkout
 | `packages/script` selected SST declaration | 1 | 0 | 0 | 0 | 0 |
 | `packages/tui` | 107 | 103 | 101 (99 runtime, 2 declarations) | 0 | 2 |
 
-The 19 rows account for all 555 named upstream-unchanged non-test TS/declaration/example/script paths outside `packages/ui`: 514 remain, of which 484 have a demonstrated internal, type, script, or test linkage, three have documented/example/public-subpath exposure without an internal consumer, and 27 remain unresolved for current-use purposes. Forty-one were removed under approved slices. The other 186 named `packages/ui` paths were removed under S2. This is file reachability, not an exported-symbol census or permission to delete unresolved/public surfaces.
+The 19 rows account for all 555 named upstream-unchanged non-test TS/declaration/example/script paths outside `packages/ui`: 514 remain, of which 484 have a demonstrated internal, type, script, or test linkage and three have documented/example/public-subpath exposure without an internal consumer. The 27 paths the table lists as not resolved are resolved in § Resolution of the 27 (E78): 18 public API surfaces and 9 without a product caller. Forty-one were removed under approved slices. The other 186 named `packages/ui` paths were removed under S2. This is file reachability, not an exported-symbol census or permission to delete unresolved/public surfaces.
 
 A separate read-only classifier run at cleanup head `96c6b644` against upstream `39fdd671` counted 2,393 current tracked `packages/` files: 794 unchanged, 702 modified, 760 YCoding-new, and 137 vendored; 483 are currently unchanged non-test TS/TSX paths. Those current classes feed the code-leaning ranking. They differ from the historical 741-path baseline set above because approved cleanup removed or modified some baseline files; 483 is not the number of surviving paths from that set.
 
@@ -845,3 +845,27 @@ All twenty-five Server baseline source paths remain internally referenced: `src/
 | packages/ui/src/v2/components/wordmark-v2.tsx | 72 |
 | packages/ui/sst-env.d.ts | 10 |
 | packages/ui/vite.config.ts | 60 |
+
+## Resolution of the 27 (E78)
+
+At `8dfbd7ee`, each path was searched across the whole tracked tree (excluding `plans/` and `bun.lock`) for imports, subpath strings, package scripts, docs, and tests, and checked against its package's `private` flag and `exports` map. A non-private package's `./*` wildcard or documented barrel makes a path a public API surface even without an internal caller.
+
+| Path | Result | Evidence |
+|---|---|---|
+| `ai/src/{protocols,providers}.ts`, `ai/src/protocols/index.ts` | public API | `@ycoding-ai/ai` is not private; `./protocols` and `./providers` documented in `README.md` and imported by `test/exports.test.ts` and `example/tutorial.ts` |
+| `ai/src/providers/zai.ts`, `ai/src/protocols/zai-images.ts` | public API | `providers/index.ts:19` exports `ZAI`; `README.md:160` documents `ZAI.configure` |
+| `ai/src/providers/google-vertex{,-chat,-messages,-responses,-shared}.ts`, `ai/src/providers/google-vertex/{chat,gemini,messages,responses}.ts` | public API | `README.md:298–324` documents the four Vertex subpaths |
+| `ai/src/providers/openai-compatible-responses.ts`, `ai/src/providers/openai-compatible/responses.ts` | public API | `README.md:296`, `STATUS.md:21,84`; `protocols/index.ts:7` |
+| `ai/src/providers/cloudflare.ts` | public API | `STATUS.md:31`; `script/setup-recording-env.ts:10`; provider tests |
+| `schema/src/ide-event.ts` | public API, no producer | `@ycoding-ai/schema` is not private (`./*`); only `test/event-manifest.test.ts` imports it and it is absent from `event-manifest.ts` |
+| `core/src/control-plane/move-session.ts` | no product caller | only `core/test/move-session.test.ts` imports it; Core is private |
+| `core/src/plugin/layer-map.example.ts` | no product caller | self-export only |
+| `core/src/util/path.ts` | no product caller | no importer; TUI's `normalizePath` is its own `tui/src/util/path` |
+| `tui/src/component/dialog-tag.tsx` | no product caller | only `test/screen/dialog-remaining-capture.test.tsx`; design docs and backlog mention it |
+| `tui/src/util/revert-diff.ts` | no product caller | no reference |
+| `client/src/contract.ts` | no product caller | not in the Client `exports` map; no importer |
+| `ai/script/recording-cost-report.ts` | no product caller | not a package script; no reference |
+| `effect-drizzle-sqlite/examples/basic.ts` | no product caller | private package; no reference |
+| `effect-sqlite-node` (package root `src/index.ts`) | no product caller | private package; referenced only by root workspaces, `script/ycoding-workspace.ts`, `cli/test/import-boundaries.test.ts`, and `docs/architecture.md` |
+
+Public API rows stay unless a public-contract change is approved. The nine no-caller rows are SC dead-code candidates for their package sub-slice; removing the `effect-sqlite-node` workspace package changes the workspace and lockfile and needs approval first.

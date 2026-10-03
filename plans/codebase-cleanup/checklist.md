@@ -20,8 +20,8 @@ Tick an item only when its evidence is recorded in `tracking.md`. Slice order, g
 
 - [x] Recreate the blobless clone of `anomalyco/opencode` outside the repository (E1–E2).
 - [x] `plans/codebase-cleanup/classify.ts` gives each tracked file under `packages/` exactly one class against `39fdd671`: `upstream-unchanged`, `upstream-modified`, `ycoding-new`, or `vendored`. Files are matched by blob, or by blob after reversing the rebrand (E12).
-- [ ] Write `classification.md` with totals per package and a list of in-use `upstream-unchanged` files. E12 supplies totals and a 741-file upstream-unchanged source list, but it does not mark which are in use after S2–S6.
-- [ ] Feed the in-use `upstream-unchanged` list into the SC ranking (`tracking.md` § Code leaning).
+- [x] Write `classification.md` with totals per package and a list of in-use `upstream-unchanged` files (E12, E38–E73, E78).
+- [x] Feed the in-use `upstream-unchanged` list into the SC ranking (`code-leaning/*.md` S1 anchors and E78 hand-off notes).
 
 ## S2 — Remove `packages/ui`
 
@@ -210,3 +210,4 @@ Sub-slices run one package at a time, in this order:
   - measured performance changes.
 - [ ] Commit per slice with conventional messages. Rebase on `main`, then `git merge --ff-only --autostash codebase-cleanup`.
 - [ ] Update the stale memory note `cli/managed-restart-interrupts-sessions` (G5).
+- [ ] Remove `/^plans\/codebase-cleanup\//` from `upstreamPaths` in `script/ycoding-rebrand.ts` and its test case when the plan directory is deleted (E79).
