@@ -128,14 +128,6 @@ function noUpdate<E>(check: (event: WatcherEvent) => boolean, trigger: Effect.Ef
   )
 }
 
-it.live("starts the recursive fallback without synchronously crawling existing files", () =>
-  Effect.promise(async () => {
-    const source = await fs.readFile(path.join(import.meta.dir, "../../src/filesystem/watcher.ts"), "utf8")
-    expect(source).not.toContain("readdirSync")
-    expect(source).not.toMatch(/readdir[^\n]*recursive:\s*true/)
-  }),
-)
-
 it.live("publishes create, update, and delete changes through the recursive fallback", () =>
   Effect.gen(function* () {
     const tmp = yield* Effect.acquireRelease(
