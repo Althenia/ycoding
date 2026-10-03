@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { DateTime, Schema } from "effect"
+import { DateTime, Schema, SchemaAST } from "effect"
 import { Agent } from "../src/agent.js"
 import { FileSystem } from "../src/filesystem.js"
 import { Form } from "../src/form.js"
@@ -167,16 +167,27 @@ describe("contract hygiene", () => {
     expect(new Set(identifiers).size).toBe(identifiers.length)
   })
 
-  test("current source avoids Any and mutable contract wrappers", async () => {
-    const files = [...new Bun.Glob("*.ts").scanSync(new URL("../src", import.meta.url).pathname)].filter(
-      (file) => !file.endsWith("-v1.ts"),
-    )
-    const source = await Promise.all(
-      files.map((file) => Bun.file(new URL(`../src/${file}`, import.meta.url)).text()),
-    ).then((values) => values.join("\n"))
+  test("current exported contracts avoid Any and mutable wrappers", async () => {
+    const visited = new WeakSet<object>()
+    const violations: string[] = []
+    const visit = (value: unknown, path: string): void => {
+      if ((typeof value !== "object" || value === null) && typeof value !== "function") return
+      if (visited.has(value)) return
+      visited.add(value)
+      if (Schema.isSchema(value)) return visit(value.ast, path)
+      if (SchemaAST.isAST(value)) {
+        if (SchemaAST.isAny(value)) violations.push(`${path}: Any`)
+        if (value.context?.isMutable || (SchemaAST.isArrays(value) && value.isMutable)) {
+          violations.push(`${path}: mutable`)
+        }
+        if (SchemaAST.isSuspend(value)) visit(value.thunk(), path)
+      }
+      Object.entries(value).forEach(([key, child]) => visit(child, `${path}.${key}`))
+    }
+    const files = [...new Bun.Glob("*.ts").scanSync(new URL("../src", import.meta.url).pathname)]
+    for (const file of files) visit(await import(`../src/${file}`), file)
 
-    expect(source).not.toContain("Schema.Any")
-    expect(source).not.toContain("Schema.mutable")
+    expect(violations).toEqual([])
   })
 
   test("assistant content keeps only domain identities", () => {
