@@ -1,0 +1,3203 @@
+[
+  {
+    "file": "packages/cli/script/generate-extension-fonts.ts",
+    "exports": [
+      {
+        "name": "root",
+        "line": 3,
+        "col": 14,
+        "pos": 43
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "extensions/chrome/protocol.js",
+    "exports": [
+      {
+        "name": "MAX_CAPTURE_BYTES",
+        "line": 2,
+        "col": 14,
+        "pos": 38
+      },
+      {
+        "name": "MAX_ELEMENTS",
+        "line": 3,
+        "col": 14,
+        "pos": 83
+      },
+      {
+        "name": "tabID",
+        "line": 33,
+        "col": 17,
+        "pos": 1114
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "infra/cloudflare/src/auth/service.ts",
+    "exports": [
+      {
+        "name": "browserSessionRotationMs",
+        "line": 21,
+        "col": 14,
+        "pos": 923
+      },
+      {
+        "name": "enrollmentTtlMs",
+        "line": 23,
+        "col": 14,
+        "pos": 1039
+      },
+      {
+        "name": "challengeTtlMs",
+        "line": 24,
+        "col": 14,
+        "pos": 1085
+      },
+      {
+        "name": "accessCredentialTtlMs",
+        "line": 25,
+        "col": 14,
+        "pos": 1129
+      },
+      {
+        "name": "refreshCredentialTtlMs",
+        "line": 26,
+        "col": 14,
+        "pos": 1181
+      },
+      {
+        "name": "safeRedirectAfter",
+        "line": 68,
+        "col": 17,
+        "pos": 2548
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "infra/cloudflare/src/auth/google.ts",
+    "exports": [
+      {
+        "name": "googleConfigured",
+        "line": 72,
+        "col": 17,
+        "pos": 2230
+      }
+    ],
+    "types": [
+      {
+        "name": "AuthFailureReason",
+        "line": 37,
+        "col": 13,
+        "pos": 1088
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "infra/cloudflare/src/invite/service.ts",
+    "exports": [
+      {
+        "name": "formatAccessKey",
+        "line": 7,
+        "col": 17,
+        "pos": 223
+      },
+      {
+        "name": "normalizeAccessKey",
+        "line": 11,
+        "col": 17,
+        "pos": 333
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "infra/cloudflare/src/router.ts",
+    "exports": [
+      {
+        "name": "sessionCookieName",
+        "line": 55,
+        "col": 14,
+        "pos": 1650
+      },
+      {
+        "name": "oauthCookieName",
+        "line": 56,
+        "col": 14,
+        "pos": 1696
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "infra/cloudflare/test/support/d1-sqlite.ts",
+    "exports": [
+      {
+        "name": "migrationNames",
+        "line": 6,
+        "col": 17,
+        "pos": 159
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/cli/src/remote-local.ts",
+    "exports": [
+      {
+        "name": "limits",
+        "line": 495,
+        "col": 14,
+        "pos": 27132
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "apps/web/src/remote/http.ts",
+    "exports": [
+      {
+        "name": "readDeviceInfo",
+        "line": 170,
+        "col": 17,
+        "pos": 7756
+      }
+    ],
+    "types": [
+      {
+        "name": "RemoteHttpFailureReason",
+        "line": 3,
+        "col": 13,
+        "pos": 165
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "apps/web/src/remote/store.ts",
+    "exports": [
+      {
+        "name": "readAutonomyFromResponse",
+        "line": 3393,
+        "col": 17,
+        "pos": 195778
+      }
+    ],
+    "types": [
+      {
+        "name": "TeamView",
+        "line": 140,
+        "col": 13,
+        "pos": 5449
+      },
+      {
+        "name": "SessionCreation",
+        "line": 179,
+        "col": 13,
+        "pos": 7352
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/cli/vite.node.config.ts",
+    "exports": [
+      {
+        "name": "default",
+        "line": 210,
+        "col": 16,
+        "pos": 8512
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/cli/script/models-snapshot.ts",
+    "exports": [
+      {
+        "name": "validateModelsSnapshot",
+        "line": 4,
+        "col": 17,
+        "pos": 116
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/cli/src/remote-config.ts",
+    "exports": [
+      {
+        "name": "filename",
+        "line": 26,
+        "col": 14,
+        "pos": 858
+      },
+      {
+        "name": "file",
+        "line": 32,
+        "col": 14,
+        "pos": 1067
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/cli/src/remote-operations.ts",
+    "exports": [
+      {
+        "name": "unscopedOperations",
+        "line": 39,
+        "col": 14,
+        "pos": 1237
+      },
+      {
+        "name": "failureFrame",
+        "line": 173,
+        "col": 17,
+        "pos": 7837
+      },
+      {
+        "name": "filterActiveSessions",
+        "line": 1344,
+        "col": 17,
+        "pos": 76212
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "apps/web/src/remote/projection.ts",
+    "exports": [
+      {
+        "name": "messageTextLimit",
+        "line": 370,
+        "col": 14,
+        "pos": 16467
+      },
+      {
+        "name": "formatElapsed",
+        "line": 401,
+        "col": 17,
+        "pos": 17361
+      },
+      {
+        "name": "readDataList",
+        "line": 767,
+        "col": 17,
+        "pos": 37253
+      },
+      {
+        "name": "readError",
+        "line": 1161,
+        "col": 17,
+        "pos": 57504
+      }
+    ],
+    "types": [
+      {
+        "name": "GenerationSpeedSampleView",
+        "line": 36,
+        "col": 13,
+        "pos": 1532
+      },
+      {
+        "name": "GenerationSpeedHistoryView",
+        "line": 43,
+        "col": 13,
+        "pos": 1699
+      },
+      {
+        "name": "ContextWindowView",
+        "line": 48,
+        "col": 13,
+        "pos": 1847
+      },
+      {
+        "name": "FormWhenView",
+        "line": 265,
+        "col": 13,
+        "pos": 11736
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/plugin/host-api.ts",
+    "exports": [
+      {
+        "name": "stringifyKeySequence",
+        "line": 40,
+        "col": 10,
+        "pos": 1436
+      },
+      {
+        "name": "stringifyKeyStroke",
+        "line": 40,
+        "col": 32,
+        "pos": 1458
+      },
+      {
+        "name": "formatCommandBindings",
+        "line": 42,
+        "col": 10,
+        "pos": 1621
+      },
+      {
+        "name": "formatKeySequence",
+        "line": 42,
+        "col": 33,
+        "pos": 1644
+      },
+      {
+        "name": "createBindingLookup",
+        "line": 54,
+        "col": 17,
+        "pos": 1945
+      },
+      {
+        "name": "TuiAttentionSoundNames",
+        "line": 201,
+        "col": 14,
+        "pos": 5203
+      }
+    ],
+    "types": [
+      {
+        "name": "CliRenderer",
+        "line": 39,
+        "col": 15,
+        "pos": 1360
+      },
+      {
+        "name": "KeyEvent",
+        "line": 39,
+        "col": 28,
+        "pos": 1373
+      },
+      {
+        "name": "Renderable",
+        "line": 39,
+        "col": 38,
+        "pos": 1383
+      },
+      {
+        "name": "SlotMode",
+        "line": 39,
+        "col": 50,
+        "pos": 1395
+      },
+      {
+        "name": "Binding",
+        "line": 41,
+        "col": 15,
+        "pos": 1516
+      },
+      {
+        "name": "KeyLike",
+        "line": 41,
+        "col": 24,
+        "pos": 1525
+      },
+      {
+        "name": "KeySequencePart",
+        "line": 41,
+        "col": 33,
+        "pos": 1534
+      },
+      {
+        "name": "KeyStringifyInput",
+        "line": 41,
+        "col": 50,
+        "pos": 1551
+      },
+      {
+        "name": "StringifyOptions",
+        "line": 41,
+        "col": 69,
+        "pos": 1570
+      },
+      {
+        "name": "BindingConfig",
+        "line": 44,
+        "col": 3,
+        "pos": 1710
+      },
+      {
+        "name": "BindingLookup",
+        "line": 45,
+        "col": 3,
+        "pos": 1727
+      },
+      {
+        "name": "BindingValue",
+        "line": 46,
+        "col": 3,
+        "pos": 1744
+      },
+      {
+        "name": "CreateBindingLookupOptions",
+        "line": 47,
+        "col": 3,
+        "pos": 1760
+      },
+      {
+        "name": "FormatCommandBindingsOptions",
+        "line": 48,
+        "col": 3,
+        "pos": 1790
+      },
+      {
+        "name": "FormatKeySequenceOptions",
+        "line": 49,
+        "col": 3,
+        "pos": 1822
+      },
+      {
+        "name": "KeySequenceFormatPart",
+        "line": 50,
+        "col": 3,
+        "pos": 1850
+      },
+      {
+        "name": "SequenceBindingLike",
+        "line": 51,
+        "col": 3,
+        "pos": 1875
+      },
+      {
+        "name": "TuiRouteCurrent",
+        "line": 61,
+        "col": 13,
+        "pos": 2186
+      },
+      {
+        "name": "TuiKeys",
+        "line": 82,
+        "col": 13,
+        "pos": 2551
+      },
+      {
+        "name": "TuiKeymap",
+        "line": 87,
+        "col": 13,
+        "pos": 2755
+      },
+      {
+        "name": "TuiModeApi",
+        "line": 89,
+        "col": 13,
+        "pos": 2809
+      },
+      {
+        "name": "TuiDialogProps",
+        "line": 94,
+        "col": 13,
+        "pos": 2900
+      },
+      {
+        "name": "TuiDialogStack",
+        "line": 100,
+        "col": 13,
+        "pos": 3020
+      },
+      {
+        "name": "TuiDialogAlertProps",
+        "line": 109,
+        "col": 13,
+        "pos": 3297
+      },
+      {
+        "name": "TuiDialogConfirmProps",
+        "line": 115,
+        "col": 13,
+        "pos": 3395
+      },
+      {
+        "name": "TuiDialogPromptProps",
+        "line": 122,
+        "col": 13,
+        "pos": 3519
+      },
+      {
+        "name": "TuiDialogSelectOption",
+        "line": 133,
+        "col": 13,
+        "pos": 3748
+      },
+      {
+        "name": "TuiDialogSelectProps",
+        "line": 143,
+        "col": 13,
+        "pos": 3957
+      },
+      {
+        "name": "TuiPromptInfo",
+        "line": 155,
+        "col": 13,
+        "pos": 4308
+      },
+      {
+        "name": "TuiPromptRef",
+        "line": 167,
+        "col": 13,
+        "pos": 4521
+      },
+      {
+        "name": "TuiPromptProps",
+        "line": 177,
+        "col": 13,
+        "pos": 4696
+      },
+      {
+        "name": "TuiToast",
+        "line": 192,
+        "col": 13,
+        "pos": 5001
+      },
+      {
+        "name": "TuiAttentionSound",
+        "line": 204,
+        "col": 13,
+        "pos": 5398
+      },
+      {
+        "name": "TuiAttentionNotification",
+        "line": 212,
+        "col": 13,
+        "pos": 5542
+      },
+      {
+        "name": "TuiAttentionSoundboardActivateOptions",
+        "line": 231,
+        "col": 13,
+        "pos": 5874
+      },
+      {
+        "name": "TuiAttentionSoundboard",
+        "line": 235,
+        "col": 13,
+        "pos": 5951
+      },
+      {
+        "name": "TuiTheme",
+        "line": 325,
+        "col": 13,
+        "pos": 8482
+      },
+      {
+        "name": "TuiState",
+        "line": 342,
+        "col": 13,
+        "pos": 8974
+      },
+      {
+        "name": "TuiApp",
+        "line": 421,
+        "col": 13,
+        "pos": 11609
+      },
+      {
+        "name": "TuiSidebarMcpItem",
+        "line": 433,
+        "col": 13,
+        "pos": 11919
+      },
+      {
+        "name": "TuiSidebarLspItem",
+        "line": 439,
+        "col": 13,
+        "pos": 12018
+      },
+      {
+        "name": "TuiSidebarFileItem",
+        "line": 441,
+        "col": 13,
+        "pos": 12093
+      },
+      {
+        "name": "TuiHostSlotMap",
+        "line": 447,
+        "col": 13,
+        "pos": 12186
+      },
+      {
+        "name": "TuiSlotPlugin",
+        "line": 501,
+        "col": 13,
+        "pos": 13476
+      },
+      {
+        "name": "TuiSlots",
+        "line": 505,
+        "col": 13,
+        "pos": 13595
+      },
+      {
+        "name": "TuiEventBus",
+        "line": 512,
+        "col": 13,
+        "pos": 13758
+      },
+      {
+        "name": "TuiDispose",
+        "line": 519,
+        "col": 13,
+        "pos": 13935
+      },
+      {
+        "name": "TuiLifecycle",
+        "line": 521,
+        "col": 13,
+        "pos": 13988
+      },
+      {
+        "name": "TuiPluginState",
+        "line": 526,
+        "col": 13,
+        "pos": 14095
+      },
+      {
+        "name": "TuiPluginEntry",
+        "line": 528,
+        "col": 13,
+        "pos": 14154
+      },
+      {
+        "name": "TuiPluginMeta",
+        "line": 543,
+        "col": 13,
+        "pos": 14438
+      },
+      {
+        "name": "TuiWorkspace",
+        "line": 572,
+        "col": 13,
+        "pos": 14902
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/theme/index.ts",
+    "exports": [
+      {
+        "name": "ThemeFile",
+        "line": 10,
+        "col": 10,
+        "pos": 437
+      }
+    ],
+    "types": [
+      {
+        "name": "ThemeSource",
+        "line": 10,
+        "col": 39,
+        "pos": 466
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/theme/v2/index.ts",
+    "exports": [
+      {
+        "name": "ActionState",
+        "line": 2,
+        "col": 3,
+        "pos": 11
+      },
+      {
+        "name": "ActionVariant",
+        "line": 4,
+        "col": 3,
+        "pos": 49
+      },
+      {
+        "name": "BaseHue",
+        "line": 5,
+        "col": 3,
+        "pos": 66
+      },
+      {
+        "name": "CategoricalDefinition",
+        "line": 6,
+        "col": 3,
+        "pos": 77
+      },
+      {
+        "name": "FeedbackKind",
+        "line": 7,
+        "col": 3,
+        "pos": 102
+      },
+      {
+        "name": "FormfieldState",
+        "line": 8,
+        "col": 3,
+        "pos": 118
+      },
+      {
+        "name": "HueAlias",
+        "line": 10,
+        "col": 3,
+        "pos": 162
+      },
+      {
+        "name": "HueName",
+        "line": 11,
+        "col": 3,
+        "pos": 174
+      },
+      {
+        "name": "MarkdownDefinition",
+        "line": 13,
+        "col": 3,
+        "pos": 196
+      },
+      {
+        "name": "MarkdownToken",
+        "line": 14,
+        "col": 3,
+        "pos": 218
+      },
+      {
+        "name": "SyntaxDefinition",
+        "line": 16,
+        "col": 3,
+        "pos": 253
+      },
+      {
+        "name": "SyntaxToken",
+        "line": 17,
+        "col": 3,
+        "pos": 273
+      },
+      {
+        "name": "DEFAULT_CATEGORICAL",
+        "line": 46,
+        "col": 10,
+        "pos": 856
+      },
+      {
+        "name": "selectTheme",
+        "line": 47,
+        "col": 10,
+        "pos": 905
+      },
+      {
+        "name": "selectThemeMode",
+        "line": 47,
+        "col": 23,
+        "pos": 918
+      },
+      {
+        "name": "supportsThemeMode",
+        "line": 47,
+        "col": 40,
+        "pos": 935
+      },
+      {
+        "name": "themeModes",
+        "line": 47,
+        "col": 59,
+        "pos": 954
+      }
+    ],
+    "types": [
+      {
+        "name": "FormfieldStateKey",
+        "line": 9,
+        "col": 8,
+        "pos": 141
+      },
+      {
+        "name": "DiffDefinition",
+        "line": 21,
+        "col": 8,
+        "pos": 354
+      },
+      {
+        "name": "FormfieldColorDefinition",
+        "line": 23,
+        "col": 8,
+        "pos": 405
+      },
+      {
+        "name": "HueOverrideDefinition",
+        "line": 25,
+        "col": 8,
+        "pos": 460
+      },
+      {
+        "name": "Categorical",
+        "line": 35,
+        "col": 3,
+        "pos": 663
+      },
+      {
+        "name": "FormfieldColor",
+        "line": 36,
+        "col": 3,
+        "pos": 678
+      },
+      {
+        "name": "Hue",
+        "line": 37,
+        "col": 3,
+        "pos": 696
+      },
+      {
+        "name": "HueSource",
+        "line": 38,
+        "col": 3,
+        "pos": 703
+      },
+      {
+        "name": "ResolvedFormfieldState",
+        "line": 41,
+        "col": 3,
+        "pos": 751
+      },
+      {
+        "name": "StatefulColor",
+        "line": 44,
+        "col": 3,
+        "pos": 815
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/context/data.tsx",
+    "exports": [
+      {
+        "name": "isMessageComplete",
+        "line": 197,
+        "col": 17,
+        "pos": 6844
+      },
+      {
+        "name": "reconcileCanonicalMessages",
+        "line": 298,
+        "col": 17,
+        "pos": 10701
+      }
+    ],
+    "types": [
+      {
+        "name": "SubagentPage",
+        "line": 139,
+        "col": 13,
+        "pos": 4766
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/component/error-component.tsx",
+    "exports": [
+      {
+        "name": "buildCrashReport",
+        "line": 241,
+        "col": 17,
+        "pos": 8422
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/component/prompt/mode-chips.tsx",
+    "exports": [
+      {
+        "name": "FilledWarningChip",
+        "line": 59,
+        "col": 17,
+        "pos": 2235
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/routes/home.tsx",
+    "exports": [
+      {
+        "name": "LandingFooter",
+        "line": 66,
+        "col": 17,
+        "pos": 2421
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/routes/session/provider-usage-reports.tsx",
+    "exports": [
+      {
+        "name": "providerUsageReportGroup",
+        "line": 67,
+        "col": 17,
+        "pos": 2347
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/util/session-autonomy.ts",
+    "exports": [
+      {
+        "name": "yoloLevelLabel",
+        "line": 16,
+        "col": 17,
+        "pos": 460
+      },
+      {
+        "name": "yoloLevelTooltip",
+        "line": 21,
+        "col": 17,
+        "pos": 579
+      },
+      {
+        "name": "YOLO_LEVEL_DETAILS",
+        "line": 28,
+        "col": 14,
+        "pos": 835
+      },
+      {
+        "name": "createSessionID",
+        "line": 73,
+        "col": 17,
+        "pos": 2212
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/ui/glyph.ts",
+    "exports": [
+      {
+        "name": "GLYPHS",
+        "line": 37,
+        "col": 14,
+        "pos": 913
+      }
+    ],
+    "types": [
+      {
+        "name": "GlyphColorKind",
+        "line": 18,
+        "col": 13,
+        "pos": 329
+      },
+      {
+        "name": "GlyphColorToken",
+        "line": 20,
+        "col": 13,
+        "pos": 410
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/feature-plugins/sidebar/skills.tsx",
+    "exports": [
+      {
+        "name": "default",
+        "line": 156,
+        "col": 16,
+        "pos": 5625
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/feature-plugins/sidebar/subagents.tsx",
+    "exports": [
+      {
+        "name": "SubagentRail",
+        "line": 13,
+        "col": 17,
+        "pos": 666
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/feature-plugins/sidebar/guardrails.tsx",
+    "exports": [
+      {
+        "name": "GuardrailContent",
+        "line": 29,
+        "col": 17,
+        "pos": 1336
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/feature-plugins/system/diff-viewer-file-tree-utils.ts",
+    "exports": [
+      {
+        "name": "compareFileTreeNodes",
+        "line": 113,
+        "col": 17,
+        "pos": 3397
+      }
+    ],
+    "types": [
+      {
+        "name": "FileTreeNode",
+        "line": 11,
+        "col": 13,
+        "pos": 280
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/mini/scrollback.writer.tsx",
+    "exports": [
+      {
+        "name": "entryLayout",
+        "line": 33,
+        "col": 17,
+        "pos": 1154
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/mini/footer.prompt.tsx",
+    "exports": [
+      {
+        "name": "TEXTAREA_MAX_ROWS",
+        "line": 39,
+        "col": 14,
+        "pos": 1723
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/mini/form.shared.ts",
+    "exports": [
+      {
+        "name": "formSelected",
+        "line": 17,
+        "col": 43,
+        "pos": 462
+      },
+      {
+        "name": "formSetEditing",
+        "line": 100,
+        "col": 17,
+        "pos": 3493
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/mini/permission.shared.ts",
+    "exports": [
+      {
+        "name": "permissionReply",
+        "line": 67,
+        "col": 17,
+        "pos": 1799
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/mini/stream.ts",
+    "exports": [
+      {
+        "name": "traceSubagentState",
+        "line": 88,
+        "col": 17,
+        "pos": 2311
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/routes/session/inline-diff.tsx",
+    "exports": [
+      {
+        "name": "inlineDiffFileStatus",
+        "line": 56,
+        "col": 17,
+        "pos": 1573
+      },
+      {
+        "name": "inlineDiffSummary",
+        "line": 75,
+        "col": 17,
+        "pos": 2547
+      }
+    ],
+    "types": [
+      {
+        "name": "InlineDiffFileStatus",
+        "line": 46,
+        "col": 13,
+        "pos": 1350
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/util/selection.ts",
+    "exports": [
+      {
+        "namespace": "Selection",
+        "name": "copy",
+        "line": 28,
+        "col": 17,
+        "pos": 716
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/routes/session/composer/subagents-tab.tsx",
+    "exports": [
+      {
+        "name": "subagentMetadata",
+        "line": 145,
+        "col": 17,
+        "pos": 5247
+      },
+      {
+        "name": "SubagentMetadata",
+        "line": 170,
+        "col": 17,
+        "pos": 5952
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/simulation/src/manifest.ts",
+    "exports": [
+      {
+        "name": "Manifest",
+        "line": 27,
+        "col": 14,
+        "pos": 957
+      },
+      {
+        "name": "defaults",
+        "line": 53,
+        "col": 14,
+        "pos": 1639
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/ai/test/lib/http.ts",
+    "exports": [
+      {
+        "name": "runtimeLayer",
+        "line": 37,
+        "col": 14,
+        "pos": 1457
+      }
+    ],
+    "types": [
+      {
+        "name": "HandlerInput",
+        "line": 8,
+        "col": 13,
+        "pos": 477
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/ai/test/recorded-scenarios.ts",
+    "exports": [
+      {
+        "name": "weatherRuntimeTool",
+        "line": 45,
+        "col": 14,
+        "pos": 1358
+      },
+      {
+        "name": "expectFinish",
+        "line": 126,
+        "col": 14,
+        "pos": 4387
+      },
+      {
+        "name": "expectWeatherToolCall",
+        "line": 131,
+        "col": 14,
+        "pos": 4590
+      },
+      {
+        "name": "expectGoldenWeatherToolLoop",
+        "line": 161,
+        "col": 14,
+        "pos": 5771
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/ai/test/continuation-scenarios.ts",
+    "exports": [
+      {
+        "name": "basicContinuation",
+        "line": 3,
+        "col": 14,
+        "pos": 128
+      },
+      {
+        "name": "toolContinuation",
+        "line": 4,
+        "col": 14,
+        "pos": 230
+      },
+      {
+        "name": "reasoningContinuation",
+        "line": 5,
+        "col": 14,
+        "pos": 300
+      },
+      {
+        "name": "mediaContinuation",
+        "line": 6,
+        "col": 14,
+        "pos": 393
+      },
+      {
+        "name": "maximalContinuation",
+        "line": 7,
+        "col": 14,
+        "pos": 450
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "apps/web/src/app.tsx",
+    "exports": [
+      {
+        "name": "createAppRouter",
+        "line": 16,
+        "col": 17,
+        "pos": 908
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "apps/web/src/pwa/offline.ts",
+    "exports": [
+      {
+        "name": "isPrecachedShellUrl",
+        "line": 41,
+        "col": 17,
+        "pos": 1246
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "apps/web/src/remote/office/map.ts",
+    "exports": [
+      {
+        "name": "walkable",
+        "line": 206,
+        "col": 17,
+        "pos": 10763
+      },
+      {
+        "name": "center",
+        "line": 238,
+        "col": 17,
+        "pos": 12280
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "apps/web/src/remote/queries.ts",
+    "exports": [
+      {
+        "name": "readUsageProviders",
+        "line": 226,
+        "col": 17,
+        "pos": 13222
+      },
+      {
+        "name": "readUsageMetrics",
+        "line": 241,
+        "col": 17,
+        "pos": 14519
+      },
+      {
+        "name": "readUsageReport",
+        "line": 255,
+        "col": 17,
+        "pos": 15584
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "apps/web/src/seo/metadata.ts",
+    "exports": [
+      {
+        "name": "applyDocumentMetadata",
+        "line": 85,
+        "col": 17,
+        "pos": 4074
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "apps/web/src/theme/theme.ts",
+    "exports": [
+      {
+        "name": "THEME_PREFERENCES",
+        "line": 4,
+        "col": 14,
+        "pos": 154
+      },
+      {
+        "name": "isThemePreference",
+        "line": 9,
+        "col": 17,
+        "pos": 339
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/http-recorder/src/cassette/store.ts",
+    "exports": [
+      {
+        "name": "UnsafeCassetteError",
+        "line": 26,
+        "col": 14,
+        "pos": 1012
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/http-recorder/src/http/recorder.ts",
+    "exports": [
+      {
+        "name": "defaultMatcher",
+        "line": 18,
+        "col": 10,
+        "pos": 756
+      },
+      {
+        "name": "recordingLayer",
+        "line": 78,
+        "col": 14,
+        "pos": 2978
+      }
+    ],
+    "types": [
+      {
+        "name": "RecordReplayMode",
+        "line": 19,
+        "col": 13,
+        "pos": 785
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/http-recorder/script/pack.ts",
+    "exports": [
+      {
+        "name": "pack",
+        "line": 7,
+        "col": 14,
+        "pos": 157
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/http-recorder/src/cassette/model.ts",
+    "exports": [
+      {
+        "name": "CassetteMetadataSchema",
+        "line": 20,
+        "col": 14,
+        "pos": 569
+      },
+      {
+        "name": "InteractionSchema",
+        "line": 22,
+        "col": 14,
+        "pos": 654
+      },
+      {
+        "name": "isWebSocketInteraction",
+        "line": 28,
+        "col": 14,
+        "pos": 933
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/http-recorder/src/redaction/redactor.ts",
+    "exports": [
+      {
+        "name": "compose",
+        "line": 74,
+        "col": 14,
+        "pos": 2445
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/codemode/src/tool-schema.ts",
+    "exports": [
+      {
+        "name": "toTypeScript",
+        "line": 168,
+        "col": 14,
+        "pos": 7469
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/theme/v2/schema.ts",
+    "exports": [
+      {
+        "name": "FormfieldState",
+        "line": 19,
+        "col": 14,
+        "pos": 855
+      },
+      {
+        "name": "CategoricalDefinition",
+        "line": 39,
+        "col": 14,
+        "pos": 1609
+      },
+      {
+        "name": "SyntaxDefinition",
+        "line": 158,
+        "col": 14,
+        "pos": 5820
+      },
+      {
+        "name": "MarkdownDefinition",
+        "line": 178,
+        "col": 14,
+        "pos": 6304
+      }
+    ],
+    "types": [
+      {
+        "name": "FormfieldStateKey",
+        "line": 21,
+        "col": 13,
+        "pos": 937
+      },
+      {
+        "name": "HueOverrideDefinition",
+        "line": 77,
+        "col": 13,
+        "pos": 3195
+      },
+      {
+        "name": "FormfieldColorDefinition",
+        "line": 89,
+        "col": 13,
+        "pos": 3669
+      },
+      {
+        "name": "DiffDefinition",
+        "line": 209,
+        "col": 13,
+        "pos": 7334
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [
+      [
+        {
+          "name": "ActionState",
+          "line": 15,
+          "col": 14,
+          "pos": 640
+        },
+        {
+          "name": "FormfieldState",
+          "line": 19,
+          "col": 14,
+          "pos": 855
+        }
+      ]
+    ],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/ui/border.ts",
+    "exports": [
+      {
+        "name": "EmptyBorder",
+        "line": 1,
+        "col": 14,
+        "pos": 13
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/util/scroll.ts",
+    "exports": [
+      {
+        "name": "CustomSpeedScroll",
+        "line": 10,
+        "col": 14,
+        "pos": 183
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/util/subagent.ts",
+    "exports": [
+      {
+        "name": "activeSubagentCount",
+        "line": 7,
+        "col": 17,
+        "pos": 266
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/util/session-daybreak.ts",
+    "exports": [
+      {
+        "name": "daybreakStateLabel",
+        "line": 14,
+        "col": 17,
+        "pos": 400
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/util/time.ts",
+    "exports": [
+      {
+        "name": "subagentElapsedSeconds",
+        "line": 5,
+        "col": 17,
+        "pos": 172
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/client/src/contract.ts",
+    "exports": [
+      {
+        "name": "effectOmitEndpoints",
+        "line": 3,
+        "col": 3,
+        "pos": 24
+      },
+      {
+        "name": "groupNames",
+        "line": 4,
+        "col": 3,
+        "pos": 47
+      },
+      {
+        "name": "promiseOmitEndpoints",
+        "line": 5,
+        "col": 3,
+        "pos": 61
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/ai/test/recorded-utils.ts",
+    "exports": [
+      {
+        "name": "envList",
+        "line": 11,
+        "col": 14,
+        "pos": 286
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "apps/web/src/ui/site.tsx",
+    "exports": [
+      {
+        "name": "OfflineBanner",
+        "line": 45,
+        "col": 17,
+        "pos": 1488
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "apps/web/src/ui/docs.tsx",
+    "exports": [
+      {
+        "name": "DocsNav",
+        "line": 11,
+        "col": 17,
+        "pos": 557
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/http-recorder/src/http/matching.ts",
+    "exports": [
+      {
+        "name": "canonicalSnapshot",
+        "line": 8,
+        "col": 14,
+        "pos": 324
+      },
+      {
+        "name": "requestDiff",
+        "line": 40,
+        "col": 14,
+        "pos": 2094
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/http-recorder/src/http/model.ts",
+    "exports": [
+      {
+        "name": "RequestSnapshotSchema",
+        "line": 4,
+        "col": 14,
+        "pos": 95
+      },
+      {
+        "name": "ResponseSnapshotSchema",
+        "line": 13,
+        "col": 14,
+        "pos": 328
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/http-recorder/src/websocket/model.ts",
+    "exports": [
+      {
+        "name": "WebSocketEventSchema",
+        "line": 3,
+        "col": 14,
+        "pos": 46
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/codemode/src/openapi/spec.ts",
+    "exports": [
+      {
+        "name": "resolve",
+        "line": 37,
+        "col": 14,
+        "pos": 1456
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/component/bg-pulse-render.ts",
+    "exports": [
+      {
+        "name": "toRgb",
+        "line": 83,
+        "col": 17,
+        "pos": 2213
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/effect-drizzle-sqlite/src/up-migrations/sqlite.ts",
+    "exports": [
+      {
+        "name": "upgradeSyncIfNeeded",
+        "line": 125,
+        "col": 17,
+        "pos": 4522
+      },
+      {
+        "name": "upgradeAsyncIfNeeded",
+        "line": 193,
+        "col": 23,
+        "pos": 6949
+      }
+    ],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "infra/cloudflare/src/relay/notice-store.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "NoticeSql",
+        "line": 3,
+        "col": 13,
+        "pos": 155
+      },
+      {
+        "name": "NoticePage",
+        "line": 19,
+        "col": 13,
+        "pos": 674
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "infra/cloudflare/src/push/store.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "PushTestClaim",
+        "line": 13,
+        "col": 13,
+        "pos": 380
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "infra/cloudflare/src/relay/core.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "Relay",
+        "line": 85,
+        "col": 13,
+        "pos": 3345
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/cli/test/remote-harness.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "ProviderStandIn",
+        "line": 33,
+        "col": 13,
+        "pos": 1427
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/cli/src/remote-transport.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "RemoteTransport",
+        "line": 3,
+        "col": 18,
+        "pos": 68
+      },
+      {
+        "name": "RemoteSocketOptions",
+        "line": 29,
+        "col": 13,
+        "pos": 1138
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/devtools/index.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "Group",
+        "line": 7,
+        "col": 13,
+        "pos": 138
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/plugin/api.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "RouteMap",
+        "line": 9,
+        "col": 13,
+        "pos": 182
+      },
+      {
+        "name": "PluginRoutes",
+        "line": 40,
+        "col": 13,
+        "pos": 1046
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/mini/types.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "RunProviderModel",
+        "line": 56,
+        "col": 13,
+        "pos": 1509
+      },
+      {
+        "name": "FooterPhase",
+        "line": 157,
+        "col": 13,
+        "pos": 3594
+      },
+      {
+        "name": "TurnSummary",
+        "line": 175,
+        "col": 13,
+        "pos": 4084
+      },
+      {
+        "name": "ToolCodeSnapshot",
+        "line": 185,
+        "col": 13,
+        "pos": 4235
+      },
+      {
+        "name": "ToolDiffSnapshot",
+        "line": 192,
+        "col": 13,
+        "pos": 4336
+      },
+      {
+        "name": "ToolTaskSnapshot",
+        "line": 202,
+        "col": 13,
+        "pos": 4485
+      },
+      {
+        "name": "ToolQuestionSnapshot",
+        "line": 209,
+        "col": 13,
+        "pos": 4584
+      },
+      {
+        "name": "MiniToolState",
+        "line": 220,
+        "col": 13,
+        "pos": 4826
+      },
+      {
+        "name": "StreamPhase",
+        "line": 403,
+        "col": 13,
+        "pos": 9148
+      },
+      {
+        "name": "StreamSource",
+        "line": 405,
+        "col": 13,
+        "pos": 9206
+      },
+      {
+        "name": "StreamToolState",
+        "line": 407,
+        "col": 13,
+        "pos": 9280
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/component/dialog-custom-endpoint.tsx",
+    "exports": [],
+    "types": [
+      {
+        "name": "CustomEndpointModel",
+        "line": 21,
+        "col": 13,
+        "pos": 683
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/context/local.tsx",
+    "exports": [],
+    "types": [
+      {
+        "name": "LocalTheme",
+        "line": 27,
+        "col": 13,
+        "pos": 903
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/routes/session/composer/index.tsx",
+    "exports": [],
+    "types": [
+      {
+        "name": "ComposerHint",
+        "line": 13,
+        "col": 18,
+        "pos": 593
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/prompt/history.tsx",
+    "exports": [],
+    "types": [
+      {
+        "name": "PastedText",
+        "line": 11,
+        "col": 13,
+        "pos": 449
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/prompt/traits.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "PromptMode",
+        "line": 3,
+        "col": 13,
+        "pos": 63
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/ui/dialog-confirm.tsx",
+    "exports": [],
+    "types": [
+      {
+        "name": "DialogConfirmResult",
+        "line": 17,
+        "col": 13,
+        "pos": 560
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/simulation/src/control-server.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "Server",
+        "line": 4,
+        "col": 18,
+        "pos": 120
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/plugin/src/promise/tool.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "Context",
+        "line": 4,
+        "col": 13,
+        "pos": 117
+      },
+      {
+        "name": "SchemaType",
+        "line": 7,
+        "col": 13,
+        "pos": 238
+      },
+      {
+        "name": "Content",
+        "line": 8,
+        "col": 13,
+        "pos": 285
+      },
+      {
+        "name": "DynamicOutput",
+        "line": 9,
+        "col": 13,
+        "pos": 320
+      },
+      {
+        "name": "Definition",
+        "line": 11,
+        "col": 13,
+        "pos": 368
+      },
+      {
+        "name": "DynamicDefinition",
+        "line": 21,
+        "col": 13,
+        "pos": 760
+      },
+      {
+        "name": "ToolExecuteBeforeEvent",
+        "line": 29,
+        "col": 13,
+        "pos": 1065
+      },
+      {
+        "name": "ToolExecuteAfterEvent",
+        "line": 30,
+        "col": 13,
+        "pos": 1130
+      },
+      {
+        "name": "RegisterOptions",
+        "line": 31,
+        "col": 13,
+        "pos": 1193
+      },
+      {
+        "name": "ToolDraft",
+        "line": 33,
+        "col": 18,
+        "pos": 1250
+      },
+      {
+        "name": "ToolHooks",
+        "line": 40,
+        "col": 18,
+        "pos": 1493
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "apps/web/verify/remote-scenarios.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "RemoteScenarioName",
+        "line": 3,
+        "col": 13,
+        "pos": 72
+      },
+      {
+        "name": "RemoteScenarioViewport",
+        "line": 4,
+        "col": 13,
+        "pos": 378
+      },
+      {
+        "name": "RemoteScenarioView",
+        "line": 5,
+        "col": 13,
+        "pos": 432
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "apps/web/src/remote/keep-awake.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "KeepAwakeChange",
+        "line": 6,
+        "col": 13,
+        "pos": 230
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "apps/web/src/remote/notifications.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "SyncedNotice",
+        "line": 19,
+        "col": 13,
+        "pos": 562
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "apps/web/src/remote/preferences.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "NotificationPreference",
+        "line": 47,
+        "col": 13,
+        "pos": 2805
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "apps/web/src/remote/catalog.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "PromptMentionInput",
+        "line": 5,
+        "col": 13,
+        "pos": 171
+      },
+      {
+        "name": "AgentOption",
+        "line": 7,
+        "col": 13,
+        "pos": 277
+      },
+      {
+        "name": "CommandOption",
+        "line": 24,
+        "col": 13,
+        "pos": 672
+      },
+      {
+        "name": "SkillOption",
+        "line": 26,
+        "col": 13,
+        "pos": 758
+      },
+      {
+        "name": "ResourceOption",
+        "line": 33,
+        "col": 13,
+        "pos": 893
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "apps/web/src/remote/file-change-diff.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "SplitDiffRow",
+        "line": 7,
+        "col": 13,
+        "pos": 348
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "apps/web/src/remote/view-model.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "RemoteCapabilityName",
+        "line": 104,
+        "col": 13,
+        "pos": 5412
+      },
+      {
+        "name": "RemoteCapabilities",
+        "line": 105,
+        "col": 13,
+        "pos": 5488
+      },
+      {
+        "name": "RemoteDevice",
+        "line": 107,
+        "col": 13,
+        "pos": 5570
+      },
+      {
+        "name": "RemoteAutonomyMode",
+        "line": 115,
+        "col": 13,
+        "pos": 5732
+      },
+      {
+        "name": "RemoteToolStatus",
+        "line": 131,
+        "col": 13,
+        "pos": 6229
+      },
+      {
+        "name": "RemoteMessagePart",
+        "line": 133,
+        "col": 13,
+        "pos": 6308
+      },
+      {
+        "name": "RemoteMessage",
+        "line": 150,
+        "col": 13,
+        "pos": 6802
+      },
+      {
+        "name": "RemoteApproval",
+        "line": 155,
+        "col": 13,
+        "pos": 7083
+      },
+      {
+        "name": "RemotePromptInput",
+        "line": 162,
+        "col": 13,
+        "pos": 7214
+      },
+      {
+        "name": "RemoteActionFailureReason",
+        "line": 167,
+        "col": 13,
+        "pos": 7314
+      },
+      {
+        "name": "RemoteActionResult",
+        "line": 173,
+        "col": 13,
+        "pos": 7449
+      },
+      {
+        "name": "RemoteActions",
+        "line": 175,
+        "col": 13,
+        "pos": 7574
+      },
+      {
+        "name": "AccountAction",
+        "line": 428,
+        "col": 13,
+        "pos": 18363
+      },
+      {
+        "name": "ShellOutputStatus",
+        "line": 654,
+        "col": 13,
+        "pos": 27120
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "apps/web/src/remote/office/types.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "Direction",
+        "line": 25,
+        "col": 13,
+        "pos": 775
+      },
+      {
+        "name": "TaskState",
+        "line": 40,
+        "col": 13,
+        "pos": 1213
+      },
+      {
+        "name": "TeamCueInput",
+        "line": 50,
+        "col": 13,
+        "pos": 1508
+      },
+      {
+        "name": "ActorPose",
+        "line": 132,
+        "col": 13,
+        "pos": 4414
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "apps/web/src/remote/ui/team-model.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "TeamSideChat",
+        "line": 18,
+        "col": 13,
+        "pos": 501
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "infra/cloudflare/src/auth/store.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "IdentityRow",
+        "line": 13,
+        "col": 13,
+        "pos": 486
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/cli/src/framework/spec.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "Children",
+        "line": 21,
+        "col": 13,
+        "pos": 570
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/tui/src/theme/v2/types.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "ResolvedFormfieldState",
+        "line": 15,
+        "col": 13,
+        "pos": 273
+      },
+      {
+        "name": "Hue",
+        "line": 17,
+        "col": 13,
+        "pos": 385
+      },
+      {
+        "name": "HueSource",
+        "line": 18,
+        "col": 13,
+        "pos": 450
+      },
+      {
+        "name": "Categorical",
+        "line": 19,
+        "col": 13,
+        "pos": 527
+      },
+      {
+        "name": "StatefulColor",
+        "line": 20,
+        "col": 13,
+        "pos": 573
+      },
+      {
+        "name": "FormfieldColor",
+        "line": 21,
+        "col": 13,
+        "pos": 645
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/plugin/src/promise/agent.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "AgentDraft",
+        "line": 5,
+        "col": 15,
+        "pos": 182
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/plugin/src/promise/aisdk.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "AISDKHooks",
+        "line": 5,
+        "col": 18,
+        "pos": 175
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/plugin/src/promise/catalog.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "CatalogDraft",
+        "line": 5,
+        "col": 15,
+        "pos": 211
+      },
+      {
+        "name": "CatalogProviderRecord",
+        "line": 5,
+        "col": 29,
+        "pos": 225
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/plugin/src/promise/command.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "CommandDraft",
+        "line": 5,
+        "col": 15,
+        "pos": 188
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/plugin/src/promise/integration.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "IntegrationDraft",
+        "line": 7,
+        "col": 15,
+        "pos": 352
+      },
+      {
+        "name": "IntegrationMethodRegistration",
+        "line": 7,
+        "col": 33,
+        "pos": 370
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/plugin/src/promise/reference.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "ReferenceDraft",
+        "line": 5,
+        "col": 15,
+        "pos": 194
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/plugin/src/promise/session.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "SessionContext",
+        "line": 9,
+        "col": 18,
+        "pos": 395
+      },
+      {
+        "name": "SessionHooks",
+        "line": 19,
+        "col": 18,
+        "pos": 682
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/plugin/src/promise/skill.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "SkillDraft",
+        "line": 5,
+        "col": 15,
+        "pos": 182
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/plugin/src/promise/registration.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "Registration",
+        "line": 1,
+        "col": 18,
+        "pos": 17
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/effect-drizzle-sqlite/src/internal/drizzle-utils.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "JoinNullability",
+        "line": 127,
+        "col": 15,
+        "pos": 5057
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/codemode/src/openapi/types.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "InputLocation",
+        "line": 71,
+        "col": 13,
+        "pos": 2734
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/cli/src/services/update-preflight.tsx",
+    "exports": [],
+    "types": [
+      {
+        "name": "Handoff",
+        "line": 38,
+        "col": 13,
+        "pos": 1262
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/codemode/src/interpreter/model.ts",
+    "exports": [],
+    "types": [
+      {
+        "name": "SourcePosition",
+        "line": 4,
+        "col": 13,
+        "pos": 147
+      },
+      {
+        "name": "SourceLocation",
+        "line": 9,
+        "col": 13,
+        "pos": 213
+      }
+    ],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/ai/src/providers/azure.ts",
+    "exports": [],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [
+      [
+        {
+          "name": "responsesModel",
+          "line": 136,
+          "col": 14,
+          "pos": 4475
+        },
+        {
+          "name": "model",
+          "line": 140,
+          "col": 14,
+          "pos": 4763
+        }
+      ]
+    ],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/ai/src/providers/openrouter.ts",
+    "exports": [],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [
+      [
+        {
+          "name": "model",
+          "line": 242,
+          "col": 14,
+          "pos": 10951
+        },
+        {
+          "name": "responses",
+          "line": 255,
+          "col": 14,
+          "pos": 11589
+        }
+      ]
+    ],
+    "enumMembers": [],
+    "classMembers": null
+  },
+  {
+    "file": "packages/ai/src/route/auth.ts",
+    "exports": [],
+    "types": [],
+    "nsExports": null,
+    "nsTypes": null,
+    "duplicates": [
+      [
+        {
+          "name": "none",
+          "line": 97,
+          "col": 14,
+          "pos": 3827
+        },
+        {
+          "name": "passthrough",
+          "line": 106,
+          "col": 14,
+          "pos": 4245
+        }
+      ],
+      [
+        {
+          "name": "bearer",
+          "line": 113,
+          "col": 17,
+          "pos": 4483
+        },
+        {
+          "name": "apiKey",
+          "line": 118,
+          "col": 14,
+          "pos": 4643
+        }
+      ]
+    ],
+    "enumMembers": [],
+    "classMembers": null
+  }
+]
