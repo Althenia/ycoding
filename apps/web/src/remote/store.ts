@@ -420,6 +420,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   let selectionReadyToken: number | undefined
   let selectionFailedToken: number | undefined
   let teamWatching = false
+  const childAnswers = new Set<string>()
   let teamWatchToken = 0
   let teamShellRead = 0
   let activityWatching = false
@@ -2646,7 +2647,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
       const task = readTeamTask(data)
       if (task?.parentID !== rootID || task.sessionID !== childID) return { status: "unknown", message: "The device returned an unreadable cancellation; check the subagent before retrying." }
-      setState({ team: { ...container.state.team, tasks: container.state.team.tasks.map((item) => item.sessionID === childID ? { ...item, ...task } : item) } })
+      setState({ team: { ...container.state.team, tasks: container.state.team.tasks.map((item) => item.sessionID === childID ? { ...item, ...task, question: task.question } : item) } })
       return { status: "ok", message: "" }
     },
     answerSubagent: async (childID, questionID, text) => {
@@ -2656,13 +2657,16 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         return { status: "failed", message: "This subagent question is no longer pending." }
       const rootID = team.rootID
       const token = selectionToken
-      const outcome = await owner.request("session.subagent.answer", { sessionID: rootID, input: { childID, questionID, text }, timeoutMs: 10_000 })
+      const answerKey = `${rootID}:${childID}:${questionID}`
+      if (childAnswers.has(answerKey)) return { status: "failed", message: "An answer to this subagent question is already being sent." }
+      childAnswers.add(answerKey)
+      const outcome = await owner.request("session.subagent.answer", { sessionID: rootID, input: { childID, questionID, text }, timeoutMs: 10_000 }).finally(() => childAnswers.delete(answerKey))
       if (token !== selectionToken || !isCurrentConnection(owner) || container.state.team?.rootID !== rootID) return { status: "unknown", message: "The family changed; check the question before retrying." }
       if (outcome.status !== "ok") return teamActionFailure(outcome, "Answer subagent")
       const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
       const task = readTeamTask(data)
       if (task?.parentID !== rootID || task.sessionID !== childID) return { status: "unknown", message: "The device returned an unreadable answer; check the subagent before retrying." }
-      setState({ team: { ...container.state.team, tasks: container.state.team.tasks.map((item) => item.sessionID === childID ? { ...item, ...task } : item) } })
+      setState({ team: { ...container.state.team, tasks: container.state.team.tasks.map((item) => item.sessionID === childID ? { ...item, ...task, question: task.question } : item) } })
       return { status: "ok", message: "" }
     },
     killTeamShell: async (shellID) => {

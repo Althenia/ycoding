@@ -13,7 +13,7 @@ export function followState(following: boolean, event: { readonly kind: "scroll"
   if (event.kind === "top") return false
   if (event.kind === "session" || event.kind === "jump") return true
   if (event.kind === "content") return following
-  return event.distance <= 48
+  return event.distance <= (following ? 48 : 1)
 }
 
 export function navigationTargets(scrollTop: number, following: boolean) {
@@ -44,9 +44,14 @@ export function promptPreview(text: string): string {
   return normalized.length > 90 ? `${normalized.slice(0, 89)}…` : normalized
 }
 
-export function TranscriptNavigation(props: { readonly messages: () => readonly RemoteMessageView[]; readonly active?: boolean }): JSX.Element {
+export type TranscriptPosition = { readonly top: number; readonly key?: string; readonly offset?: number }
+
+export function TranscriptNavigation(props: { readonly messages: () => readonly RemoteMessageView[]; readonly active?: boolean; readonly position?: TranscriptPosition; readonly onPositioned?: () => void }): JSX.Element {
   const remote = useRemote()
-  const [away, setAway] = createSignal(false)
+  const [intent, setIntent] = createSignal<"following" | "leaving" | "reading">("following")
+  const following = () => intent() === "following"
+  const setFollowing = (value: boolean) => setIntent(value ? "following" : "reading")
+  const away = () => !following()
   const [scrollTop, setScrollTop] = createSignal(0)
   const [visible, setVisible] = createSignal<ReadonlySet<string>>(new Set())
   const [hovered, setHovered] = createSignal<string>()
@@ -67,10 +72,10 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
   let railSlot: HTMLDivElement | undefined
   let list: HTMLOListElement | undefined
   let scrollRoot: HTMLElement | undefined
-  let following = true
   let jumping = false
   let jumpingTop = false
   let selecting = false
+  let touchY: number | undefined
   let contentUpdate = false
   let loadingOlder = false
   let sessionID: string | undefined
@@ -108,15 +113,14 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     jumping = false
     jumpingTop = false
     selecting = false
-    if (landed && scrollRoot) following = followState(following, { kind: "scroll", distance: distance() })
+    if (landed && scrollRoot) setFollowing(followState(following(), { kind: "scroll", distance: distance() }))
     pin()
   }, { wait: 120 })
   const endContentUpdate = createDebouncer(() => { contentUpdate = false }, { wait: 0 })
   const pin = () => {
-    if (!active() || !scrollRoot || !following) return
+    if (!active() || !scrollRoot || !following()) return
     virtual.write(scrollRoot, scrollRoot.scrollHeight - scrollRoot.clientHeight)
     pinnedTop = scrollRoot.scrollTop
-    setAway(false)
     setScrollTop(scrollRoot.scrollTop)
     visibility.maybeExecute()
   }
@@ -130,8 +134,31 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     scrollPaddingStart: 12,
     scrollEndThreshold: 48,
     layout: historyHeader,
-    compensate: () => !following,
-    onChange: () => { if (mounted && following && !jumping && !jumpingTop) pin() },
+    compensate: () => !following(),
+    onChange: () => { if (mounted && following() && !jumping && !jumpingTop) pin() },
+  })
+  const restorePosition = () => {
+    const position = props.position
+    if (!position || !mounted || !active() || !scrollRoot) return
+    if (position.key && !virtual.indexByKey().has(position.key)) {
+      setFollowing(true)
+      pin()
+      props.onPositioned?.()
+      return
+    }
+    const row = position.key ? list?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(position.key)}"]`) : undefined
+    if (position.key && !row) { virtual.reveal(position.key); return }
+    setFollowing(false)
+    sessionID = remote.state().activeSessionID
+    contentUpdate = false
+    virtual.write(scrollRoot, row ? scrollRoot.scrollTop + row.getBoundingClientRect().top - scrollRoot.getBoundingClientRect().top - (position.offset ?? 0) : position.top)
+    setScrollTop(scrollRoot.scrollTop)
+    props.onPositioned?.()
+  }
+  createEffect(() => {
+    props.position
+    virtual.rendered()
+    queueMicrotask(restorePosition)
   })
   const olderCheck = createThrottler(() => {
     if (scrollRoot && scrollRoot.scrollTop < 120 && remote.state().history?.status === "idle") void loadOlder()
@@ -143,7 +170,8 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
   }
   const onScroll = () => {
     if (!active() || !scrollRoot || virtual.writing()) return
-    if (contentUpdate && following) {
+    if (intent() === "leaving" && distance() <= 1) return
+    if (contentUpdate && following()) {
       pin()
       return
     }
@@ -163,27 +191,40 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     }
     if (jumping && distance() > 48) return
     if (distance() <= 48) jumping = false
-    following = followState(following, { kind: "scroll", distance: distance() })
-    setAway(!following)
+    setFollowing(followState(following(), { kind: "scroll", distance: distance() }))
     setScrollTop(scrollRoot.scrollTop)
     visibility.maybeExecute()
     olderCheck.maybeExecute()
   }
-  const onUserScroll = () => { if (!active()) return; jumping = false; jumpingTop = false; selecting = false; pinnedTop = undefined }
+  const onUserScroll = (event: Event) => {
+    if (!active()) return
+    jumping = false
+    jumpingTop = false
+    selecting = false
+    pinnedTop = undefined
+    if (event instanceof WheelEvent && event.deltaY < 0 && !event.ctrlKey && !event.metaKey) setIntent("leaving")
+    if (event.type === "touchstart" && event instanceof TouchEvent) touchY = event.touches.length === 1 ? event.touches[0]?.clientY : undefined
+    if (event instanceof KeyboardEvent && ["ArrowUp", "PageUp", "Home"].includes(event.key) && event.target instanceof HTMLElement && !event.target.closest("input, textarea, select, [contenteditable='true'], [role='slider'], [role='combobox'], [role='listbox'], [role='menu']")) setIntent("leaving")
+  }
+  const onTouchMove = (event: TouchEvent) => {
+    if (!active() || touchY === undefined || event.touches.length !== 1) return
+    const next = event.touches[0]?.clientY
+    if (next === undefined) return
+    if (next > touchY) setIntent("leaving")
+    touchY = next
+  }
   const jumpToBottom = () => {
     if (!scrollRoot) return
-    following = followState(following, { kind: "jump", distance: distance() })
+    setFollowing(followState(following(), { kind: "jump", distance: distance() }))
     jumping = true
     jumpingTop = false
-    setAway(false)
     scrollRoot.scrollTo({ top: scrollRoot.scrollHeight, behavior: jumpBehavior() })
   }
   const jumpToTop = () => {
     if (!scrollRoot) return
-    following = followState(following, { kind: "top", distance: distance() })
+    setFollowing(followState(following(), { kind: "top", distance: distance() }))
     jumping = false
     jumpingTop = true
-    setAway(true)
     virtual.virtualizer.scrollToOffset(0, { behavior: jumpBehavior() })
     void loadOlder().then(() => { if (jumpingTop) virtual.virtualizer.scrollToOffset(0) })
   }
@@ -193,8 +234,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     jumping = false
     jumpingTop = false
     selecting = true
-    following = false
-    setAway(true)
+    setFollowing(false)
     const row = list?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(id)}"]`)
     pendingFocus = row ? undefined : id
     if (!row) virtual.reveal(id)
@@ -215,18 +255,21 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     setJumpSlot(container.querySelector<HTMLElement>(".conversation-jump-slot") ?? undefined)
     const observer = new ResizeObserver(() => {
       if (!active()) return
-      if (following && !jumping) pin()
+      if (following() && !jumping) pin()
       visibility.maybeExecute()
     })
     let observing = false
     const stop = () => {
       if (!observing) return
       observing = false
+      touchY = undefined
       observer.disconnect()
       root.removeEventListener("scroll", onScroll, { capture: true })
       root.removeEventListener("wheel", onUserScroll)
       root.removeEventListener("touchstart", onUserScroll)
+      root.removeEventListener("touchmove", onTouchMove)
       root.removeEventListener("pointerdown", onUserScroll)
+      root.removeEventListener("keydown", onUserScroll)
       visibility.cancel()
       settle.cancel()
     }
@@ -239,18 +282,21 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
       root.addEventListener("scroll", onScroll, { passive: true, capture: true })
       root.addEventListener("wheel", onUserScroll, { passive: true })
       root.addEventListener("touchstart", onUserScroll, { passive: true })
+      root.addEventListener("touchmove", onTouchMove, { passive: true })
       root.addEventListener("pointerdown", onUserScroll, { passive: true })
-      following = followState(following, { kind: "session", distance: distance() })
+      root.addEventListener("keydown", onUserScroll)
+      setFollowing(props.position === undefined)
       jumping = false
       jumpingTop = false
-      setAway(!following)
       setScrollTop(root.scrollTop)
-      pin()
+      if (props.position) virtual.write(root, props.position.top)
+      else pin()
+      restorePosition()
       visibility.maybeExecute()
     }
     start()
     createEffect(() => { if (active()) start(); else stop() })
-    onCleanup(stop)
+    onCleanup(() => { mounted = false; stop() })
   })
 
   createComputed(() => {
@@ -268,11 +314,11 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     rows()
     if (current !== sessionID) {
       sessionID = current
-      following = followState(following, { kind: "session", distance: distance() })
+      setFollowing(props.position === undefined)
       jumping = false
       jumpingTop = false
     }
-    contentUpdate = activeNow && following
+    contentUpdate = activeNow && following()
     endContentUpdate.maybeExecute()
     if (activeNow) pin()
   })

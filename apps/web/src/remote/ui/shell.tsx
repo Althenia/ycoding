@@ -1,7 +1,7 @@
 import { isSessionID, noticeSequence } from "@ycoding-ai/remote"
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack, type JSX } from "solid-js"
 import { Portal } from "solid-js/web"
-import { createDebouncer, createThrottler } from "@tanstack/solid-pacer"
+import { createThrottler } from "@tanstack/solid-pacer"
 import { useLocation, useNavigate } from "@tanstack/solid-router"
 import { Link } from "../../ui/link"
 import { browserStorage, readStored, writeStored } from "../../lib/storage"
@@ -17,7 +17,6 @@ import { SIGN_IN_PROVIDERS } from "../http"
 import { createInviteHttp } from "../http"
 import { normalizeAccessKey } from "../invite"
 import {
-  modelLabel,
   type PendingRequestView,
 } from "../projection"
 import type { SessionInfoView } from "../store"
@@ -52,12 +51,12 @@ import {
   moveRadio,
 } from "./settings"
 import { RequestCard } from "./conversation"
-import { JumpControls, TranscriptNavigation, jumpBehavior } from "./transcript-nav"
+import { JumpControls, TranscriptNavigation, jumpBehavior, type TranscriptPosition } from "./transcript-nav"
 import { NotificationCenter, ToastLayer } from "./notifications"
 import { TodoPanel } from "./todo-panel"
 import { RunningSessions } from "./running-sessions"
 import { LoadingPlaceholder } from "./loading"
-import { SubagentBar } from "./subagent-bar"
+import { SubagentBar, TeamAnswerForm } from "./subagent-bar"
 import { createRowVirtualizer, sameKeys, scrollParent } from "./virtual-rows"
 import { TeamHeading, TeamView } from "./team-view"
 import { isManagedSubagent, siblingTargets, teamActiveCount, teamActivityLabel } from "./team-model"
@@ -100,13 +99,21 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   }
   let rail: HTMLElement | undefined
   let railExpand: HTMLButtonElement | undefined
+  let railTop = 0
   const collapseRail = () => {
+    railTop = rail?.scrollTop ?? 0
     toggleRail()
-    queueMicrotask(() => railExpand?.focus())
+    queueMicrotask(() => railExpand?.focus({ preventScroll: true }))
   }
   const expandRail = () => {
     toggleRail()
-    queueMicrotask(() => rail?.querySelector<HTMLButtonElement>(".pane .session-panel__collapse")?.focus())
+    queueMicrotask(() => {
+      if (rail) {
+        rail.scrollTop = railTop
+        rail.dispatchEvent(new Event("scroll"))
+      }
+      rail?.querySelector<HTMLButtonElement>(".pane .session-panel__collapse")?.focus({ preventScroll: true })
+    })
   }
   const [teamOpen, setTeamOpen] = createSignal(false)
   const [teamVisible, setTeamVisible] = createSignal(false)
@@ -139,37 +146,25 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const view = (): RemoteView => views.find((entry) => entry === props.path()) ?? "/remote"
   let scrollHost: HTMLDivElement | undefined
   let jumpSlot: HTMLDivElement | undefined
-  const anchors = new Map<string, number>()
+  const anchors = new Map<string, TranscriptPosition>()
+  const [pendingAnchor, setPendingAnchor] = createSignal<{ readonly sessionID: string; readonly position: TranscriptPosition }>()
   let lastScroll = { top: 0, distance: 0 }
   const scrollTo = (top: number) => {
     if (!scrollHost) return
     scrollHost.scrollTop = top
     scrollHost.dispatchEvent(new Event("scroll"))
   }
-  let restoringAnchor = false
-  const endAnchorRestore = createDebouncer(() => { restoringAnchor = false }, { wait: 220 })
   let previousScrollContext = { route: view(), sessionID: state().activeSessionID }
   createEffect(() => {
     const route = view()
     const sessionID = state().activeSessionID
     if (route === previousScrollContext.route && sessionID === previousScrollContext.sessionID) return
-    if (previousScrollContext.route === "/remote" && previousScrollContext.sessionID) {
-      if (lastScroll.distance <= 48) anchors.delete(previousScrollContext.sessionID)
-      else anchors.set(previousScrollContext.sessionID, lastScroll.top)
-    }
     const routeChanged = previousScrollContext.route !== route
     previousScrollContext = { route, sessionID }
-    if (routeChanged && route === "/remote/sessions" && scrollHost) scrollTo(0)
-    restoringAnchor = false
-    endAnchorRestore.cancel()
+    setPendingAnchor(undefined)
+    if (routeChanged && route !== "/remote" && scrollHost) queueMicrotask(() => { if (view() === route) scrollTo(0) })
     if (routeChanged || route !== "/remote" || sessionID === undefined || !anchors.has(sessionID)) return
-    restoringAnchor = true
-    const restore = () => {
-      if (view() === "/remote" && state().activeSessionID === sessionID && scrollHost)
-        scrollTo(anchors.get(sessionID) ?? 0)
-    }
-    queueMicrotask(restore)
-    endAnchorRestore.maybeExecute()
+    setPendingAnchor({ sessionID, position: anchors.get(sessionID)! })
   })
   const officeShown = () => view() === "/remote" && !phoneLayout() && office.presentation() === "office"
   const activeSession = () => state().selectedSessionInfo ?? state().sessions.find((session) => session.id === state().activeSessionID)
@@ -204,9 +199,15 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const navExpanded = () => tabletRailToggle() ? !railCollapsed() : navOpen() && !navClosing()
   const navLabel = () => tabletRailToggle() ? railCollapsed() ? "Show sessions sidebar" : "Hide sessions sidebar" : "Open sessions"
   const canCreateSession = () => state().connection.kind === "connected" && state().transport.kind === "open"
+  const [listedGeneration, setListedGeneration] = createSignal<number>()
+  createEffect(() => {
+    if (state().sessionListStatus === "ready" || state().sessionListStatus === "error") setListedGeneration(state().generation)
+  })
+  const [newSessionVisited, setNewSessionVisited] = createSignal(false)
   const openSessionsNavigation = (trigger: HTMLButtonElement) => {
     if (tabletRailToggle()) {
-      toggleRail()
+      if (railCollapsed()) expandRail()
+      else collapseRail()
       return
     }
     navTrigger = trigger
@@ -217,7 +218,8 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     setNavOpen(true)
   }
   const newSessionOpen = () => view() === "/remote" && hash() === newSessionHash
-  const showNewSession = () => newSessionOpen() && canCreateSession()
+  const showNewSession = () => canCreateSession() && (newSessionOpen() || state().activeSessionID === undefined && listedGeneration() === state().generation)
+  createEffect(() => { if (newSessionOpen()) setNewSessionVisited(true) })
   const conversationHidden = () => view() !== "/remote" || showNewSession() || (officeShown() && selected())
   const openNewSession = () => {
     if (!canCreateSession()) return
@@ -226,6 +228,15 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   }
   let focusAfterSelection: string | undefined
   const openSession = (sessionID: string) => {
+    const current = state().activeSessionID
+    if (current !== undefined && !conversationHidden() && state().history !== undefined) {
+      if (lastScroll.distance <= 1) anchors.delete(current)
+      else {
+        const bounds = scrollHost?.getBoundingClientRect()
+        const row = bounds ? [...scrollHost!.querySelectorAll<HTMLElement>("[data-message-id]")].find((row) => row.getBoundingClientRect().top >= bounds.top && row.getBoundingClientRect().top < bounds.bottom) : undefined
+        anchors.set(current, { top: lastScroll.top, ...(row && bounds ? { key: row.dataset.messageId, offset: row.getBoundingClientRect().top - bounds.top } : {}) })
+      }
+    }
     focusAfterSelection = newSessionOpen() ? sessionID : undefined
     closeNav()
     void remote.store.selectSession(sessionID)
@@ -247,6 +258,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     })
   })
   const openFromTeam = (sessionID: string) => { closeTeam(); openSession(sessionID) }
+  const openCreatedSession = (sessionID: string) => { setNewSessionVisited(false); openSession(sessionID) }
   const requested = () => view() === "/remote" ? readAlertHash(hash()) : undefined
   let readAlert: string | undefined
   createEffect(() => {
@@ -365,20 +377,17 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
             </Show>
             <div class="workspace__scroll" ref={scrollHost} onScroll={() => {
               if (scrollHost) lastScroll = { top: scrollHost.scrollTop, distance: scrollHost.scrollHeight - scrollHost.clientHeight - scrollHost.scrollTop }
-              if (!restoringAnchor || view() !== "/remote" || !scrollHost) return
-              const anchor = anchors.get(state().activeSessionID ?? "")
-              if (anchor !== undefined && Math.abs(scrollHost.scrollTop - anchor) > 1) scrollHost.scrollTop = anchor
-            }} onWheel={() => { restoringAnchor = false }} onTouchStart={() => { restoringAnchor = false }} onPointerDown={() => { restoringAnchor = false }}>
+            }}>
               <Notices />
               <Show when={state().activeSessionID === undefined && !selected() && state().sessions.length === 0 &&
                 (state().connection.kind === "loading" || state().connection.kind === "connecting")}
                 fallback={<>
                   <RoutePanel active={!conversationHidden()} preserve class="remote-conversation-view">
                     <Show when={!selectedLoading()} fallback={<LoadingPlaceholder kind="screen" label="Loading session…" />}>
-                      <ConversationView title={activeSession()?.title ?? noSessionTitle} active={!conversationHidden()} canCreateSession={canCreateSession()} onNewSession={openNewSession} onCreated={openSession} />
+                      <ConversationView title={activeSession()?.title ?? noSessionTitle} active={!conversationHidden()} position={pendingAnchor()?.sessionID === state().activeSessionID ? pendingAnchor()?.position : undefined} onPositioned={() => setPendingAnchor(undefined)} canCreateSession={canCreateSession()} onNewSession={openNewSession} />
                     </Show>
                   </RoutePanel>
-                  <RoutePanel active={view() === "/remote" && showNewSession()}><NewSessionComposer onCreated={openSession} /></RoutePanel>
+                  <RoutePanel active={view() === "/remote" && showNewSession()} preserve={newSessionVisited()} onInteract={() => setNewSessionVisited(true)}><Show when={showNewSession() || newSessionVisited() ? state().activeDeviceID : undefined} keyed><NewSessionComposer onCreated={openCreatedSession} /></Show></RoutePanel>
                   <RoutePanel active={view() === "/remote" && !showNewSession() && officeShown() && selected()}><OfficePresentation office={office} onSelectSession={openSession} /></RoutePanel>
                   <RoutePanel active={view() === "/remote/sessions"}>
                     <SessionsPage
@@ -469,7 +478,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   )
 }
 
-function RoutePanel(props: { readonly active: boolean; readonly preserve?: boolean; readonly class?: string; readonly children: JSX.Element }): JSX.Element {
+function RoutePanel(props: { readonly active: boolean; readonly preserve?: boolean; readonly class?: string; readonly onInteract?: () => void; readonly children: JSX.Element }): JSX.Element {
   const [mounted, setMounted] = createSignal(props.preserve === true || props.active)
   const [phase, setPhase] = createSignal<"active" | "entering" | "exiting" | "idle">(props.active ? "active" : "idle")
   let host: HTMLDivElement | undefined
@@ -501,7 +510,7 @@ function RoutePanel(props: { readonly active: boolean; readonly preserve?: boole
     if (exitTimer !== undefined) clearTimeout(exitTimer)
     if (entranceFrame !== undefined) cancelAnimationFrame(entranceFrame)
   })
-  return <Show when={mounted()}><div ref={host} class={`route-panel route-panel--${phase()}${props.class ? ` ${props.class}` : ""}`} aria-hidden={props.active ? undefined : "true"} inert={!props.active}>{props.children}</div></Show>
+  return <Show when={mounted()}><div ref={host} onFocusIn={props.onInteract} onPointerDown={props.onInteract} onInput={props.onInteract} onDrop={props.onInteract} class={`route-panel route-panel--${phase()}${props.class ? ` ${props.class}` : ""}`} aria-hidden={props.active ? undefined : "true"} inert={!props.active}>{props.children}</div></Show>
 }
 
 /**
@@ -1103,15 +1112,18 @@ function NoSessionsState(): JSX.Element {
 function ConversationView(props: {
   readonly title: string
   readonly active: boolean
+  readonly position?: TranscriptPosition
+  readonly onPositioned: () => void
   readonly canCreateSession: boolean
   readonly onNewSession: () => void
-  readonly onCreated: (sessionID: string) => void
 }): JSX.Element {
   const remote = useRemote()
   const state = () => remote.state()
   const view = () => state().view
   const requests = () => view()?.requests ?? []
   const messages = () => view()?.messages ?? []
+  const childQuestions = () => state().team?.status === "ready" && state().team?.rootID === state().activeSessionID
+    ? state().team?.tasks.filter((task) => task.parentID === state().activeSessionID && task.state === "waiting" && task.question !== undefined) ?? [] : []
   const selectedSession = () => state().selectedSessionInfo ?? state().sessions.find((session) => session.id === state().activeSessionID)
   const devices = useDeviceAvailability()
   // Without a reachable machine the device state is the page's one explanation.
@@ -1120,10 +1132,6 @@ function ConversationView(props: {
     ? devices()
     : sessionAvailabilityView(state().connection, state().sessions.length, state().sessionListStatus)
   // A connection's first session list decides whether a session opens, so the composer waits for it.
-  const [listedGeneration, setListedGeneration] = createSignal<number>()
-  createEffect(() => {
-    if (state().sessionListStatus === "ready" || state().sessionListStatus === "error") setListedGeneration(state().generation)
-  })
   return (
     <Show
       when={state().activeSessionID !== undefined}
@@ -1152,9 +1160,7 @@ function ConversationView(props: {
             </div>
           }
         >
-          <Show when={listedGeneration() === state().generation} fallback={<LoadingPlaceholder kind="screen" label="Loading sessions…" />}>
-            <NewSessionComposer onCreated={props.onCreated} />
-          </Show>
+          <LoadingPlaceholder kind="screen" label="Loading sessions…" />
         </Show>
       }
     >
@@ -1171,6 +1177,7 @@ function ConversationView(props: {
             </span>
           )}
         </Show>
+        <button type="button" class="button button--secondary button--small conversation-breadcrumb__new" aria-label="New conversation" disabled={!props.canCreateSession} onClick={props.onNewSession}><Icon name="plus" size={16} />New conversation</button>
       </div>
       <div class="pane conversation-pane">
         <Show
@@ -1182,11 +1189,23 @@ function ConversationView(props: {
             </div>
           }
         >
-          <TranscriptNavigation messages={messages} active={props.active} />
+          <TranscriptNavigation messages={messages} active={props.active} position={props.position} onPositioned={props.onPositioned} />
         </Show>
         <Show when={requests().length > 0}>
           <div id="pending-requests" class="requests" tabindex="-1" aria-label="Pending requests">
             <RequestCards requests={requests} activeSessionID={state().activeSessionID} />
+          </div>
+        </Show>
+        <Show when={childQuestions().length > 0}>
+          <div class="requests" aria-label="Pending child questions">
+            <For each={childQuestions().map((task) => task.sessionID)}>{(childID) => {
+              const task = () => childQuestions().find((task) => task.sessionID === childID)!
+              return <Show when={task().question?.id} keyed>{(questionID) => <article class="request request--form" data-child-question={questionID}>
+                <header class="request__header"><Icon name="chat" size={16} /><span>Question from {task().agent ?? "Subagent"}</span></header>
+                <p class="request__body">{task().description}</p>
+                <TeamAnswerForm question={task().question!} onAnswer={(id, text) => remote.store.answerSubagent(childID, id, text)} />
+              </article>}</Show>
+            }}</For>
           </div>
         </Show>
       </div>

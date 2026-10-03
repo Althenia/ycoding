@@ -60,6 +60,6 @@ export function NewSessionComposer(props: { readonly onCreated: (sessionID: stri
       <button class="button button--primary" type="button" disabled={!connected()} onClick={() => void retry()}>Retry</button>
       <button class="button button--secondary" type="button" onClick={() => remote.store.dismissSessionCreation()}>{creation()?.status === "unknown" ? "Dismiss" : "Choose another repository"}</button>
     </div></Show>
-    <MiniComposer target={workspace() ? { workspaceID: workspaceID() } : undefined} text={text()} onText={setText} disabled={disabled()} allowEmpty onSubmit={(value) => void create(value)} />
+    <MiniComposer target={workspace() ? { workspaceID: workspaceID() } : undefined} text={text()} onText={setText} disabled={disabled()} allowEmpty onSubmit={create} />
   </section>
 }

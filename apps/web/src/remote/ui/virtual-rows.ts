@@ -89,7 +89,7 @@ export function createRowVirtualizer(input: RowVirtualizerInput) {
     estimateSize: (index) => typical ?? input.estimate(index),
     overscan: input.overscan,
     scrollPaddingStart: input.scrollPaddingStart ?? 0,
-    scrollEndThreshold: input.scrollEndThreshold ?? 1,
+    get scrollEndThreshold() { return input.compensate?.() === false ? input.scrollEndThreshold ?? 1 : -1 },
     anchorTo: "end",
     rangeExtractor: (range) => withPinnedIndex(range, focusedIndex()),
     measureElement: (element, entry, instance) => {
@@ -99,13 +99,19 @@ export function createRowVirtualizer(input: RowVirtualizerInput) {
         return size
       }
       const index = instance.indexFromElement(element)
-      return instance.itemSizeCache.get(instance.options.getItemKey(index)) ?? input.estimate(index)
+      return instance.itemSizeCache.get(instance.options.getItemKey(index)) ?? instance.measurementsCache[index]?.size ?? typical ?? input.estimate(index)
     },
     onChange: (instance) => input.onChange?.(instance),
   })
 
   // A list inside an inert panel is off screen while a shared scroller shows another page; its window must not follow that scroller.
-  const frozen = () => input.list()?.closest("[inert]") != null
+  const frozen = () => input.list()?.offsetParent === null || input.list()?.closest("[inert]") != null
+
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) => {
+    if (frozen() || input.compensate?.() === false) return false
+    const offset = input.scroller()?.scrollTop ?? instance.scrollOffset ?? 0
+    return instance.itemSizeCache.has(item.key) ? item.end <= offset : item.start < offset
+  }
 
   const measureLayout = () => {
     const list = input.list()
