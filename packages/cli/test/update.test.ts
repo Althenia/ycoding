@@ -439,7 +439,7 @@ describe("release updater", () => {
     expect(await readFile(fixture.helper, "utf8")).toBe("old helper\n")
   })
 
-  test("atomically replaces single-file Linux and pre-0.2.0 macOS installations directly", async () => {
+  test("preserves single-file Linux and pre-0.2.0 macOS installations when replacement fails", async () => {
     const fixtures = [
       {
         fixture: await setup({ target: "linux-x64", entries: ["ycoding"] }),
@@ -454,25 +454,19 @@ describe("release updater", () => {
     ]
 
     for (const item of fixtures) {
-      const moves: Array<{ source: string; destination: string }> = []
-      await installRelease({
+      const error = await installRelease({
         version: item.fixture.version,
         executable: item.fixture.executable,
         platform: item.platform,
         arch: item.arch,
         fetch: fixtureFetch(item.fixture),
         filesystem: {
-          rename: async (source, destination) => {
-            moves.push({ source, destination })
-            await rename(source, destination)
-          },
+          rename: async () => { throw new Error("injected replacement failure") },
         },
-      })
+      }).then(() => "", (cause) => String(cause))
 
-      expect(moves).toHaveLength(1)
-      expect(moves[0]?.source).toContain("/.ycoding-update-")
-      expect(path.basename(moves[0]?.source ?? "")).toBe("ycoding")
-      expect(moves[0]?.destination).toBe(item.fixture.executable)
+      expect(error).toContain("injected replacement failure")
+      expect(await readFile(item.fixture.executable, "utf8")).toBe("old executable\n")
       expect(await readFile(item.fixture.helper, "utf8")).toBe("old helper\n")
       expect(await updatePaths(item.fixture.root)).toEqual([])
     }
