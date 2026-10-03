@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { Deferred, Effect, Schema } from "effect"
+import { Deferred, Effect, Fiber, Schema } from "effect"
+import { TestClock } from "effect/testing"
 import { CodeMode, Tool, toolError } from "../src/index.js"
 
 // Wave 5 acceptance suite: first-class promise values. Un-awaited tool calls start eagerly on
@@ -25,8 +26,9 @@ const makeTrace = (): Trace => ({ starts: [], active: 0, maxActive: 0, completed
  *   call site, so several gated calls are provably live at once before any `open` runs.
  * - `pending` never settles; tests assert its interruption instead of racing a timer.
  *
- * Real clocks remain only in the wall-clock timeout tests (`timeoutMs`, `stubborn`
- * cleanup), where elapsed time is the behavior under test.
+ * Timeouts that interrupt pending calls run under `TestClock`, advanced only after the calls
+ * start. Real clocks remain only in the `stubborn` cleanup tests, where a timeout must land
+ * during real completion cleanup.
  */
 const echoTool = (trace: Trace) =>
   Tool.make({
@@ -135,10 +137,20 @@ const stubbornTool = (trace: Trace) =>
       ),
   })
 
-const run = (
-  code: string,
-  options: { trace?: Trace; limits?: CodeMode.ExecutionLimits } = {},
-): Promise<CodeMode.Result> => {
+const run = (code: string, options: { trace?: Trace; limits?: CodeMode.ExecutionLimits } = {}) =>
+  Effect.runPromise(execute(code, options))
+
+const timed = (code: string, trace: Trace, ready: (trace: Trace) => boolean) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(execute(code, { trace, limits: { timeoutMs: 100 } }))
+      while (!ready(trace)) yield* Effect.yieldNow
+      yield* TestClock.adjust(100)
+      return yield* Fiber.join(fiber)
+    }).pipe(Effect.provide(TestClock.layer())),
+  )
+
+const execute = (code: string, options: { trace?: Trace; limits?: CodeMode.ExecutionLimits }) => {
   const trace = options.trace ?? makeTrace()
   const gates = new Map<number, Deferred.Deferred<void>>()
   const gate = (id: number): Deferred.Deferred<void> => {
@@ -148,24 +160,22 @@ const run = (
     gates.set(id, created)
     return created
   }
-  return Effect.runPromise(
-    CodeMode.execute({
-      tools: {
-        host: {
-          echo: echoTool(trace),
-          gated: gatedTool(trace, gate),
-          open: openTool(gate),
-          pending: pendingTool(trace),
-          fail: failingTool,
-          interrupt: interruptedTool,
-          completed: completedTool(trace),
-          stubborn: stubbornTool(trace),
-        },
+  return CodeMode.execute({
+    tools: {
+      host: {
+        echo: echoTool(trace),
+        gated: gatedTool(trace, gate),
+        open: openTool(gate),
+        pending: pendingTool(trace),
+        fail: failingTool,
+        interrupt: interruptedTool,
+        completed: completedTool(trace),
+        stubborn: stubbornTool(trace),
       },
-      code,
-      ...(options.limits ? { limits: options.limits } : {}),
-    }),
-  )
+    },
+    code,
+    ...(options.limits ? { limits: options.limits } : {}),
+  })
 }
 
 const value = async (code: string, options: { trace?: Trace; limits?: CodeMode.ExecutionLimits } = {}) => {
@@ -495,7 +505,7 @@ describe("promises at data boundaries", () => {
         const pending = tools.host.pending({ id: 1 })
         return { pending }
       `,
-      { trace, limits: { timeoutMs: 100 } },
+      { trace, limits: { timeoutMs: 10_000 } },
     )
     expect(result.ok).toBe(false)
     if (result.ok) return
@@ -919,13 +929,14 @@ describe("Promise.resolve / Promise.reject", () => {
 describe("timeout interruption of forked calls", () => {
   test("the execution timeout interrupts in-flight forked fibers", async () => {
     const trace = makeTrace()
-    const result = await run(
+    const result = await timed(
       `
         const a = tools.host.pending({ id: 1 })
         const b = tools.host.pending({ id: 2 })
         return await a
       `,
-      { trace, limits: { timeoutMs: 100 } },
+      trace,
+      (trace) => trace.starts.length === 2,
     )
     expect(result.ok).toBe(false)
     if (result.ok) return
@@ -938,9 +949,10 @@ describe("timeout interruption of forked calls", () => {
 
   test("the timeout also interrupts calls inside Promise.all", async () => {
     const trace = makeTrace()
-    const result = await run(
+    const result = await timed(
       `return await Promise.all([tools.host.pending({ id: 1 }), tools.host.pending({ id: 2 })])`,
-      { trace, limits: { timeoutMs: 100 } },
+      trace,
+      (trace) => trace.starts.length === 2,
     )
     expect(result.ok).toBe(false)
     if (result.ok) return
@@ -952,7 +964,7 @@ describe("timeout interruption of forked calls", () => {
     const trace = makeTrace()
     const result = await run(`return await Promise.race(["winner", tools.host.pending({ id: 1 })])`, {
       trace,
-      limits: { timeoutMs: 100 },
+      limits: { timeoutMs: 10_000 },
     })
     // Completion interrupts the observed loser immediately; the race result survives.
     expect(result.ok).toBe(true)
