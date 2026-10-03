@@ -25,6 +25,7 @@ import { Cause, Effect, Logger } from "effect"
 import { Database } from "../../src/database/database"
 import { tmpdir } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
+import { fixtureModels } from "../lib/models"
 
 // Isolate global config discovery from the developer's real ~/.config/ycoding so plugin
 // auto-discovery (PluginSupervisor.scan) never picks up unrelated real plugin files.
@@ -40,6 +41,7 @@ const it = testEffect(
         home: path.join(globalDirectory, "home"),
       }),
     ],
+    fixtureModels,
   ]),
 )
 

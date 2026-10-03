@@ -17,7 +17,7 @@ import { PluginV2 } from "@ycoding-ai/core/plugin"
 import { SdkPlugins } from "@ycoding-ai/core/plugin/sdk"
 import { PluginSupervisor } from "@ycoding-ai/core/plugin/supervisor"
 import { ModelV2 } from "@ycoding-ai/core/model"
-import { ModelsDev } from "@ycoding-ai/core/models-dev"
+import { fixtureModels } from "./lib/models"
 import { ProjectV2 } from "@ycoding-ai/core/project"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
@@ -31,12 +31,7 @@ import { EventV2 } from "../src/event"
 import { Reference } from "../src/reference"
 import { ToolRegistry } from "../src/tool/registry"
 
-const models = [
-  [
-    ModelsDev.node,
-    ModelsDev.configured({ file: path.join(import.meta.dir, "plugin/fixtures/models-dev.json"), fetch: false }),
-  ],
-] as const
+const models = [fixtureModels] as const
 const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, LocationServiceMap.node]), models),
 )

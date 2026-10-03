@@ -47,6 +47,7 @@ import { Hash } from "@ycoding-ai/core/util/hash"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 import { executeTool, settleTool, toolIdentity, waitForTool } from "./lib/tool"
+import { fixtureModels } from "./lib/models"
 import { eq } from "drizzle-orm"
 
 const childText = "child final response"
@@ -141,7 +142,7 @@ const layer = AppNodeBuilder.build(
     PluginRuntime.providerNode,
     LocationServiceMap.node,
   ]),
-  [[SessionExecution.node, executionNode]],
+  [[SessionExecution.node, executionNode], fixtureModels],
 )
 
 const it = testEffect(layer)
@@ -173,6 +174,7 @@ const startupFailureIt = testEffect(
     [
       [SessionExecution.node, executionNode],
       [Job.node, jobStartupFailureNode],
+      fixtureModels,
     ],
   ),
 )
