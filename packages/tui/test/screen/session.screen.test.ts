@@ -13,7 +13,7 @@ const session = {
   projectID: "project",
   location: { directory },
   agent: "build",
-  model: { providerID: "anthropic", id: "claude-opus-5" },
+  model: { providerID: "anthropic", id: "claude-opus-5", variant: "max" },
   cost: 9.08,
   tokens: { input: 1_411, output: 53, reasoning: 0, cache: { read: 220_672, write: 4_096 } },
   time: { created: 1, updated: 4 },
@@ -43,7 +43,7 @@ describe("active session screen", () => {
                 id: "msg_assistant",
                 type: "assistant",
                 agent: "build",
-                model: { providerID: "anthropic", id: "claude-opus-5", variant: "max" },
+                model: { providerID: "anthropic", id: "claude-opus-5", variant: "balanced" },
                 content: [{ type: "text", text: "Two places record it." }],
                 finish: "stop",
                 time: { created: 2, completed: 3 },
@@ -155,7 +155,11 @@ describe("active session screen", () => {
         return undefined
       },
     })
-    for (let attempt = 0; attempt < 100 && !screen.frame().includes("main"); attempt++) await Bun.sleep(20)
+    const deadline = Date.now() + 15_000
+    while (!screen.lines()[1]?.includes("· main ·") && Date.now() < deadline) {
+      await screen.renderOnce()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
     const frame = screen.frame()
     const userLine = screen.lines().find((line) => line.includes("Where is provider cache telemetry recorded?"))
     const assistantLine = screen.lines().findIndex((line) => line.includes("Two places record it."))
@@ -170,6 +174,7 @@ describe("active session screen", () => {
     expect(frame).toContain("Build")
     expect(frame).toContain("Claude Opus 5")
     expect(frame).toContain("max")
+    expect(frame).not.toContain("balanced")
     expect(frame).toContain("Message YCoding…")
     // The composer no longer carries a hint row, and the rail footer that printed the connection
     // state is gone. The build version now sits beside the header brand instead.
