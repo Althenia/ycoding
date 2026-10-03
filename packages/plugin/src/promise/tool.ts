@@ -5,7 +5,6 @@ export type Context = Omit<Tool.Context, "progress"> & {
   readonly progress: (update: Tool.Progress) => Promise<void>
 }
 export type SchemaType<A> = Tool.SchemaType<A>
-export type Content = Tool.Content
 export type DynamicOutput = Tool.DynamicOutput
 
 export type Definition<

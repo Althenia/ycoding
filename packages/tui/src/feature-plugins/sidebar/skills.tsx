@@ -153,11 +153,6 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
   return <SkillsRailContent skills={skills() ?? []} sessionID={props.sessionID} refetch={refetch} />
 }
 
-export default Plugin.define({
-  id: "internal:sidebar-skills",
-  setup() {},
-})
-
 function skillConflicts(skills: ReadonlyArray<SessionSkill>): SkillConflict[] {
   const active = new Map(skills.filter((skill) => skill.state === "active").map((skill) => [skill.id, skill]))
   return skills.flatMap((winner) => {
