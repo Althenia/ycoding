@@ -122,7 +122,7 @@ test("deleting a managed service registration stops its owner", async () => {
   const service = await startManagedService("ycoding-service-delete-")
   try {
     await fs.rm(service.registration)
-    expect(await waitForExit(service.owner)).toBe(true)
+    await service.owner.exited
     expect(await Bun.file(service.registration).exists()).toBe(false)
     await expectPortAvailable(service.port)
   } finally {
@@ -135,7 +135,7 @@ test("deleting a failed service registration stops its owner", async () => {
   try {
     await waitForFailed(service.info)
     await fs.rm(service.registration)
-    expect(await waitForExit(service.owner)).toBe(true)
+    await service.owner.exited
     await expectPortAvailable(service.port)
   } finally {
     await stopManagedService(service)
@@ -194,7 +194,7 @@ test("corrupting a managed service registration stops its owner", async () => {
   const service = await startManagedService("ycoding-service-corrupt-")
   try {
     await fs.writeFile(service.registration, "not-json")
-    expect(await waitForExit(service.owner)).toBe(true)
+    await service.owner.exited
     expect(await Bun.file(service.registration).text()).toBe("not-json")
     await expectPortAvailable(service.port)
   } finally {
@@ -207,7 +207,7 @@ test("replacing a managed service registration stops its owner and preserves the
   const foreign = { ...service.info, id: "foreign-owner", pid: process.pid }
   try {
     await fs.writeFile(service.registration, JSON.stringify(foreign))
-    expect(await waitForExit(service.owner)).toBe(true)
+    await service.owner.exited
     expect(await Bun.file(service.registration).json()).toEqual(foreign)
     await expectPortAvailable(service.port)
   } finally {
@@ -219,7 +219,7 @@ test("clean managed service shutdown removes its registration", async () => {
   const service = await startManagedService("ycoding-service-clean-")
   try {
     await Effect.runPromise(Service.stop({ file: service.registration }).pipe(Effect.provide(NodeFileSystem.layer)))
-    expect(await waitForExit(service.owner)).toBe(true)
+    await service.owner.exited
     expect(await Bun.file(service.registration).exists()).toBe(false)
   } finally {
     await stopManagedService(service)
@@ -275,11 +275,7 @@ test("concurrent service processes elect one server without resuming suspended S
     const winner = processes.find((process) => process.pid === info.pid)
     if (!winner) throw new Error(`Registered service process ${info.pid} was not one of the contenders`)
     const losers = processes.filter((process) => process.pid !== info.pid)
-    const exited = await Promise.all(
-      losers.map((process) => Promise.race([process.exited.then(() => true), Bun.sleep(60_000).then(() => false)])),
-    )
-
-    expect(exited).toEqual(losers.map(() => true))
+    await Promise.all(losers.map((process) => process.exited))
     const errors = await Promise.all(
       losers.map(
         async (process) => (await new Response(process.stdout).text()) + (await new Response(process.stderr).text()),
@@ -307,12 +303,7 @@ test("concurrent service processes elect one server without resuming suspended S
     })
     const contender = Bun.spawn(command, { env, stderr: "pipe", stdout: "ignore" })
     try {
-      const contenderExited = await Promise.race([
-        contender.exited.then(() => true),
-        Bun.sleep(10_000).then(() => false),
-      ])
-      expect(contenderExited).toBe(true)
-      expect(contender.exitCode).toBe(0)
+      expect(await contender.exited).toBe(0)
       expect((await waitForInfo(registration)).id).toBe(info.id)
     } finally {
       contender.kill("SIGTERM")
@@ -484,9 +475,8 @@ test("unresponsive managed port occupancy reports a bounded conflict", async () 
   })
 
   try {
-    expect(await Promise.race([recognizing.promise.then(() => true), Bun.sleep(20_000).then(() => false)])).toBe(true)
-    const exitCode = await Promise.race([contender.exited, Bun.sleep(20_000).then(() => undefined)])
-    expect(exitCode).toBe(1)
+    await recognizing.promise
+    expect(await contender.exited).toBe(1)
     const output = (await new Response(contender.stdout).text()) + (await new Response(contender.stderr).text())
     expect(output).toContain(`Managed service port ${listener.port} on 127.0.0.1 is already in use by another process`)
     expect(await Bun.file(registration).json()).toEqual(stale)
@@ -535,7 +525,7 @@ test("port contender recognizes an incumbent registered during the bind race", a
   })
 
   try {
-    expect(await Promise.race([recognizing.promise.then(() => true), Bun.sleep(20_000).then(() => false)])).toBe(true)
+    await recognizing.promise
     await Bun.sleep(8_000)
     const info = {
       id: "incumbent",
@@ -546,7 +536,7 @@ test("port contender recognizes an incumbent registered during the bind race", a
     }
     await fs.writeFile(registration, JSON.stringify(info))
 
-    expect(await Promise.race([contender.exited, Bun.sleep(20_000).then(() => undefined)])).toBe(0)
+    expect(await contender.exited).toBe(0)
     expect(await Bun.file(registration).json()).toEqual(info)
   } finally {
     contender.kill("SIGTERM")
@@ -612,8 +602,7 @@ test("a failed service stays registered and owns the selected port until stopped
     expect(owner.exitCode).toBe(null)
 
     const contender = Bun.spawn(command, { env, stderr: "pipe", stdout: "ignore" })
-    expect(await Promise.race([contender.exited.then(() => true), Bun.sleep(10_000).then(() => false)])).toBe(true)
-    expect(contender.exitCode).toBe(0)
+    expect(await contender.exited).toBe(0)
     expect((await waitForInfo(registration)).id).toBe(info.id)
     expect(owner.exitCode).toBe(null)
 
@@ -747,10 +736,6 @@ async function stopManagedService(service: Awaited<ReturnType<typeof startManage
   service.owner.kill("SIGTERM")
   await service.owner.exited
   await fs.rm(service.root, { recursive: true, force: true })
-}
-
-function waitForExit(process: Bun.Subprocess, timeout = 10_000) {
-  return Promise.race([process.exited.then(() => true), Bun.sleep(timeout).then(() => false)])
 }
 
 async function expectPortAvailable(port: number) {

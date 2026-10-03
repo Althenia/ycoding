@@ -487,15 +487,16 @@ test("a real finished run reaches the web activity store without changing Sessio
   } finally { store.dispose(); await bridge.close(); await server.close(); await rm(directory, { recursive: true, force: true }) }
 }, 60_000)
 
-test("two delayed goal model calls cross the ordinary 30-second connector deadline", async () => {
+test("two delayed goal model calls cross the ordinary connector deadline", async () => {
   const directory = await mkdtemp(join(tmpdir(), "ycoding-remote-slow-goal-"))
-  const server = await startServer(directory, { provider: { text: synthesizedGoal, holdAfter: 2, settleDelayMs: 15_500 } })
+  const ordinaryTimeoutMs = 5_000
+  const server = await startServer(directory, { provider: { text: synthesizedGoal, holdAfter: 2, settleDelayMs: ordinaryTimeoutMs / 2 + 100 } })
   const provider = server.provider
   if (!provider) throw new Error("the isolated server must expose its provider stand-in")
   const relay = createRelay()
   const bridge = new RemoteAgent({
     relayURL: "https://relay.example",
-    local: createLocalServer({ url: server.base, auth: { type: "basic", username: "ycoding", password } }),
+    local: createLocalServer({ url: server.base, auth: { type: "basic", username: "ycoding", password } }, { timeoutMs: ordinaryTimeoutMs }),
     credentials: async () => ({ accessToken: "integration-token", accessExpiresAt: Date.now() + 600_000 }),
     createConnection: relay.createConnection,
     refreshIntervalMs: 3_600_000,
@@ -516,11 +517,11 @@ test("two delayed goal model calls cross the ordinary 30-second connector deadli
     const settled = await answer(relay, "slow_goal", 45_000)
     if (!settled?.ok) throw new Error(`goal operation failed: ${settled?.error.code}`)
     const result = settled.value
-    expect(Date.now() - started).toBeGreaterThan(30_000)
+    expect(Date.now() - started).toBeGreaterThan(ordinaryTimeoutMs)
     expect(result).toMatchObject({ data: { goal: { text: synthesizedGoal, status: "active" } } })
     expect(provider.requests()).toHaveLength(2)
   } finally { provider.releaseAll(); await bridge.close(); await server.close(); await rm(directory, { recursive: true, force: true }) }
-}, 65_000)
+}, 60_000)
 
 test("bridges authorized session operations against an isolated server", async () => {
   const directory = await mkdtemp(join(tmpdir(), "ycoding-remote-bridge-"))
