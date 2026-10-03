@@ -1,6 +1,6 @@
 # Codebase cleanup — tracking
 
-Local working file. Do not commit it (per `AGENTS.md`, progress trackers are transient development artifacts).
+Working file on the `v0.9.0-wip` branch. Remove it with the rest of `plans/codebase-cleanup/` before merging to `main` (S11); progress trackers never reach `main`.
 
 Status values: `todo`, `blocked`, `in_progress`, `done`, `dropped`. A row moves to `done` only with an Evidence entry.
 
@@ -48,6 +48,7 @@ Status values: `todo`, `blocked`, `in_progress`, `done`, `dropped`. A row moves 
 | D38 | Frontend monitoring option | user asks about a monitor/Sentry if slowness remains unresolved, and requires a free option. Recommend bounded local, user-exported timing/outcome diagnostics before any hosted service; no dependency, external telemetry, or production monitoring change approved | user, 2026-10-03 |
 | D39 | Parallel work and integration branch | user requests more independent subagents and merging completed work to `v0.9.0`. Keep at most five direct active children with exclusive file ownership; integrate only committed coherent/verified pieces by fast-forward, leave unfinished edits in lanes and avoid publication. D30 TUI, D33/D36/G23 web, and bounded SL TUI/AI/web corrections were rebased and fast-forwarded after clean handoffs; cleanup and local `v0.9.0` meet at `96c6b644` | user, 2026-10-03 |
 | D40 | Subagent model switch | user directed immediate stop of `gpt-6.1-sol` children and replacement with `gpt-6-sol`; do not start or reactivate a `6.1-sol` child. Preserve uncommitted TUI/web work and reverify it under exclusive `6-sol` ownership | user, 2026-10-03 |
+| D41 | Execution environment | approved: finish all remaining cleanup work in the cloud session on `v0.9.0-wip` (Linux x64 container); plan files are committed there and removed before merging to `main`. Item 2 (YQuery design) is out of this plan | user, 2026-10-03 |
 
 ## Slices
 
@@ -164,6 +165,8 @@ Resume baseline: cleanup rebased from `3962b14f` onto current `main` `c9a2957a`;
 | E73 | S1 named-source accounting completed | bounded live CLI/Client/Protocol/Server script/declaration and Containers/Effect SQLite Node checks plus prior E38–E72; the `classification.md` current-use table now sums exactly 555 named baseline non-test paths outside UI: 514 current (484 internally/test/type/script linked, three public/example, 27 unresolved) and 41 approved removals. The 186 other named paths belonged to removed UI. Missing aggregate package rows are tests/assets/manifests, not omitted source from the 741 named-path list | 0 | This is file-level reachability, not exported-function proof or safe-deletion authority. Effect SQLite Node's private package root has no demonstrated product caller; 27 current-use unknowns and SC ranking remain. No source changes/tests | 2026-10-03 |
 | E74 | P0 M2/M4/M5/M6/M7 harness sanity | Local `perf/{server,managed,prompt,transcript}.ts` use explicit target paths and isolated Home/XDG/data/SQLite; no production/dependency edits. Direct Server component sanity checked authenticated readiness and two SSE subscribers; managed compiled service sanity checked private registration/health/PID/stop/removal; prompt sanity correlated admitted input, first actual local fake-provider request, and durable Step terminal; transcript sanity seeded and read 2,000 ordered messages and rendered a TUI frame. Each one-sample path exited 0; scoped lint passed. M4 also passed standalone typecheck and negative RSS ceiling; M5 passed Prettier and syntax build | 0 | One-sample timings are NOT P0 estimates. Direct `ServerProcess.start` is a component baseline; managed mode measures compiled `serve --service` registration/ready, not client `Service.ensure` contender election. M4 terminal is observed SSE delivery after commit; M5 RSS combines server and TUI worker. Full 30+ baselines and ten-minute M6 soak remain unrun | 2026-10-03 |
 | E75 | Fresh fork class validation at cleanup head | Restored upstream commit `39fdd67123aba5afa6bd07f13b6e03660cfb4479` to an isolated temporary checkout; `bun plans/codebase-cleanup/classify.ts <v0.9.0-worktree> <upstream-checkout> <temporary-output>` exited 0 without overwriting the historical classification. At `96c6b644`, 2,393 tracked `packages/` files split 794 unchanged, 702 modified, 760 YCoding-new, 137 vendored; 483 are currently unchanged non-test TS/TSX. Sum verified 2,393 | 0 | Current class counts are not the historical 741 named source paths or the 514 survivors from that baseline; code-leaning ranking must distinguish these sets. No source changes | 2026-10-03 |
+| E76 | G7 recheck | `git grep -n "ThemeSource" -- packages` at `bdb9b125` | 0 | only the distinct `ThemeSource` type in `tui/src/context/theme.tsx`; `tui/src/theme/index.ts` has no `ThemeFile as ThemeSource` alias | 2026-10-03 |
+| E77 | G30 vision fix (`fix(core): analyze local tool-result images for text-only models`) | RED `bun test --cwd packages/core test/session-runner.test.ts -t "local tool-result images"` (text-only wire carried `image_url`); GREEN same; runner/image-analyzer/runner-message/compaction/instructions/tool-registry files; `bun run --cwd packages/core typecheck`; touched-file oxlint; `bun run lint:effect-patterns`; pre-push root `bun typecheck` under Bun 1.4.2 | 1 intended RED; 0 final | 2/2 focused, 336 pass/0 fail across six files (runner file baseline 238/238); typecheck 0; 0 lint errors and no new warnings on changed lines; 17/17 root typecheck tasks and Cloudflare types current. Success description is not covered end to end (no live vision provider); the failed user Session was not located | 2026-10-03 |
 
 ## Defects and gaps
 
@@ -175,7 +178,7 @@ Resume baseline: cleanup rebased from `3962b14f` onto current `main` `c9a2957a`;
 | G4 | `resumeSuspendedSessions` has no product caller | historical symbol; current bounded Core source grep empty | S6 | done: dead symbol absent after S6; E16–E17 |
 | G5 | Stale memory note on restart continuation | `specs/v2/session-restart-continuation.md:12,60` | S11 | todo |
 | G6 | Dead codegen `v2` branch after the rename | `httpapi-codegen/src/index.ts:763` | S8 | todo |
-| G7 | Aliased `ThemeFile as ThemeSource` re-export | `tui/src/theme/index.ts:10` | S8 | todo |
+| G7 | Aliased `ThemeFile as ThemeSource` re-export | historical `tui/src/theme/index.ts:10`; at `bdb9b125` the alias is absent and `ThemeSource` is a distinct type at `tui/src/context/theme.tsx:33` | S8 | done: alias absent (E76) |
 | G8 | The TUI did not project `session.skill.activated`/`deactivated` live | E4, E9, E11 | R | done in v0.8.9 released baseline |
 | G9 | Invoked skills had raw content and were recorded before the prompt | E3, E5, E11 | R | done in v0.8.9 released baseline |
 | G10 | Timing-dependent tests fail under CPU contention (111 TUI timeouts under load) | `/tmp` run log, 2026-10-02 | SL | todo |
@@ -198,6 +201,7 @@ Resume baseline: cleanup rebased from `3962b14f` onto current `main` `c9a2957a`;
 | G27 | iPhone receives OS approval alert but corresponding notice appears absent in web bell | new lock-screen screenshot D34; latest user's tap/read/device context unverified. Real store/relay notice probes currently healthy for unread/read/reconnect/races/storage failure/push accepted; rendered bell checks exposed a stale fixture that overrode state/subscription and passed after fixture ownership correction | remote/web | in_progress: no production bell mutation or reproduced user-specific missing row; selected device, read/activation and category/noticeSync remain unresolved for the real incident |
 | G28 | Remote connection is reported unstable and Sessions initial load unexpectedly slow with small data | D35; E40 synthetic local SQL/registry measurements exclude DB as demonstrated small-inventory bottleneck but do not measure real user's request/close timing | remote/web | in_progress browser→authenticated relay socket/close/pacing/response diagnostics; no index, LMDB or migration approved |
 | G29 | Sessions loading shows empty bordered Running/recent and Workspaces regions beside list skeletons | annotated screenshot D36; rendered Connected+held initial inventory RED→GREEN for named carousel and Workspaces placeholders, one accessible status per region and ≤1px content shift. Running-sessions 7/420, reading 14/113, web typecheck/strict DESIGN and final branch integration E58 passed | web | corrected on local `v0.9.0`; no iPhone/WebKit or hosted verification claimed |
+| G30 | Text-only model received local tool-result images as provider media (OpenAI Chat `image_url`), a reachable 400 for `local/sisyphus` (`capabilities.input: ["text"]`); only managed user attachments reached the image analyzer | E77 wire-level RED | Core | done: tool-result `data:` images analyzed through the existing analyzer and replaced in place; tool IDs/text, durable history, provider-executed results and multimodal passthrough preserved; `docs/configuration.md` updated |
 
 ## Added web outcome (D20–D21)
 
@@ -205,9 +209,7 @@ Implementation/evidence owner: original `web-fixes.md`; source edits land in the
 
 ## Unused exports (S6)
 
-| Package | File | Export | Class | Reason / reference | Status |
-|---|---|---|---|---|---|
-| | | | | | |
+The canonical row-level disposition of all 719 findings is `knip/triage.md` (G16, E27–E28).
 
 ## Test leaning (SL)
 
@@ -224,7 +226,7 @@ Implementation/evidence owner: original `web-fixes.md`; source edits land in the
 | apps/web | 143 → | | | | | | todo |
 | infra/cloudflare | | | | | | | todo |
 
-Per-case classification lives in `plans/codebase-cleanup/test-inventory/<package>.md` (local).
+Per-case classification lives in `plans/codebase-cleanup/test-inventory/<package>.md`.
 
 ### Resume routing
 
@@ -261,7 +263,7 @@ No inventories existed at resume despite unfinished edits in four lanes and thre
 | schema / protocol / client / plugin | 6,684 / 4,448 / 3,000 / 1,276 → | | 10 / 1 / 16 / 0 → | | n/a | todo |
 | cloudflare | 19,786 → | | 47 → | | n/a | todo |
 
-Ranked module lists per package (size × churn × S1 class): `plans/codebase-cleanup/code-leaning/<package>.md` (local).
+Ranked module lists per package (size × churn × S1 class): `plans/codebase-cleanup/code-leaning/<package>.md`.
 
 ## Risks
 

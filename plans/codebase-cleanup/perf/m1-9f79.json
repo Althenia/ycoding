@@ -1,7 +1,7 @@
 {
   "results": [
     {
-      "command": "/Users/viadz/Workspace/Project/ycoding/.worktrees/v0.9.0/.cache/tmp/cleanup-perf-9f79/tui-darwin-arm64/bin/ycoding --version",
+      "command": "<worktree>/.cache/tmp/cleanup-perf-9f79/tui-darwin-arm64/bin/ycoding --version",
       "mean": 0.07516781237499999,
       "stddev": 0.0036132432043723276,
       "median": 0.0742107495,
@@ -137,7 +137,7 @@
       ]
     },
     {
-      "command": "/Users/viadz/Workspace/Project/ycoding/.worktrees/v0.9.0/.cache/tmp/cleanup-perf-9f79/tui-darwin-arm64/bin/ycoding --help",
+      "command": "<worktree>/.cache/tmp/cleanup-perf-9f79/tui-darwin-arm64/bin/ycoding --help",
       "mean": 0.0735153281,
       "stddev": 0.004725700649118376,
       "median": 0.071410375,

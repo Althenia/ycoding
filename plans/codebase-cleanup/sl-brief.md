@@ -44,7 +44,7 @@ Do not remove these; you may still deduplicate within them:
 
 ## Method
 
-1. **Inventory first.** Write `/Users/viadz/Workspace/Project/ycoding/plans/codebase-cleanup/test-inventory/<your-area>.md`. For each test file record the cases (count), behaviors guarded, layer, wall time (`bun test <file>` time, run alone), and a classification per case or case-group: `keep`, `merge`, `rewrite`, or `delete`, each with a one-line reason.
+1. **Inventory first.** Write `plans/codebase-cleanup/test-inventory/<your-area>.md`. For each test file record the cases (count), behaviors guarded, layer, wall time (`bun test <file>` time, run alone), and a classification per case or case-group: `keep`, `merge`, `rewrite`, or `delete`, each with a one-line reason.
 2. **Map** each retained behavior to its surviving assertion before deleting anything.
 3. **Apply** the changes in coherent commits per file group: `test(<pkg>): …`.
 4. **Mutation probes.** For each deleted or merged group whose behavior is still required, temporarily mutate the guarded production line (invert a condition, drop a call). Observe that a retained test fails, then revert the mutation with `git checkout -- <file>`. Record each probe (file:line, mutation, failing test) in the inventory. Production code must be unchanged at the end, except where you fix a reported defect with a RED test first.

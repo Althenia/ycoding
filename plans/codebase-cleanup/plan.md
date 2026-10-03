@@ -5,7 +5,7 @@ Companion files:
 - `tracking.md`: decisions, status, evidence, defects, and performance results.
 - `testing.md`: acceptance criteria, checks, and new tests.
 
-All four are local working files. Do not commit them.
+All four are working files on the `v0.9.0-wip` branch. Remove `plans/codebase-cleanup/` before merging to `main` (S11).
 
 ## Outcome
 
@@ -97,7 +97,7 @@ S1 recreates the comparison source outside the repository with `git clone --bare
 
 ## Decisions
 
-All approved on 2026-10-02 (see `tracking.md` § Decisions):
+D1–D15 were approved on 2026-10-02. D16–D40 (2026-10-02/03) and every outcome live in `tracking.md` § Decisions:
 - D1: all deletions.
 - D2: drop the tables.
 - D3: one-off knip.
