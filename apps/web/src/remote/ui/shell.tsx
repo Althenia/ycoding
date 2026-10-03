@@ -1501,6 +1501,7 @@ function WorkspaceNav(): JSX.Element {
     <nav ref={nav} class="workspace-nav" aria-label="Workspaces" onScroll={pacedCue.maybeExecute}>
       <p class="workspace-nav__title">Workspaces</p>
       <ul class="workspace-nav__list">
+        <Show when={remote.state().sessionListStatus === "loading" && remote.state().sessionGroups.length === 0}><For each={[0, 1, 2]}>{(index) => <li><LoadingPlaceholder kind="session" label="Loading workspaces…" announce={index === 0} /></li>}</For></Show>
         <For each={remote.state().sessionGroups}>
           {(group) => (
             <li>

@@ -63,6 +63,7 @@ export function MiniComposer(props: {
   const catalog = (): CatalogView | undefined => targetKey() ? remote.state().catalogs[targetKey()!] : undefined
   const current = () => props.target && "sessionID" in props.target && remote.state().selectedSessionInfo?.id === props.target.sessionID ? remote.state().selectedSessionInfo : undefined
   const sessionTarget = () => props.target !== undefined && "sessionID" in props.target
+  const upload = () => props.target && "sessionID" in props.target && remote.state().upload?.sessionID === props.target.sessionID ? remote.state().upload : undefined
   const currentModel = () => {
     if (!current()) return undefined
     if (current()?.model) return current()?.model
@@ -280,7 +281,11 @@ export function MiniComposer(props: {
         : requested.kind === "prompt"
           ? await props.onSubmit({ kind: "prompt", input: { ...requested.input, ...(files.length ? { files } : {}) } })
           : await props.onSubmit(requested)
-      if (accepted === false || generation !== attachmentGeneration) return
+      if (generation !== attachmentGeneration) return
+      if (accepted === false) {
+        if (files.length && remote.state().transport.kind === "open" && remote.state().uploadError) setAttachmentError(remote.state().uploadError)
+        return
+      }
       if (parts() === submittedParts) setParts([])
       if (attachments() === submittedAttachments) {
         setAttachments([])
@@ -356,8 +361,7 @@ export function MiniComposer(props: {
         <div class="composer__catalog-status" role="status"><p class="field__hint">{catalog()?.status === "unsupported" ? "Update YCoding on the connected machine to load agents and models." : catalog()?.message ?? "The agent and model catalog could not be loaded."}</p><button type="button" class="button button--secondary button--small" aria-label="Retry agent and model catalog" disabled={props.disabled} onClick={() => { if (props.target) void remote.store.loadCatalog(props.target, { refresh: true }) }}>Retry catalog</button></div>
       </Show>
       <Show when={modelChoice().warning}>{(warning) => <p class="field__hint composer__model-warning" role="status">{warning()}</p>}</Show>
-      <Show when={remote.state().upload && attachments().length}><div class="composer__upload" role="status"><span>Uploading {remote.state().upload?.name} · {remote.state().upload?.percent}%</span><progress value={remote.state().upload?.percent ?? 0} max="100" /><button type="button" onClick={() => remote.store.cancelUpload()}>Cancel upload</button></div></Show>
-      <Show when={!attachmentError() && attachments().length && remote.state().uploadError}><p class="composer__attachment-error" role="alert">{remote.state().uploadError}</p></Show>
+      <Show when={upload()}>{(value) => <div class="composer__upload" role="status"><span>Uploading {value().name} · {value().percent}%</span><progress aria-label={`Uploading ${value().name}`} value={value().percent} max="100" /><button type="button" onClick={() => remote.store.cancelUpload()}>Cancel upload</button></div>}</Show>
       <div class="composer__controls">
         <ComposerPicker label="Agent" icon="user" placeholder="Default agent" value={selectedAgent()} pending={agentPending()} options={primaryAgents().map((item) => ({ value: item.id, label: item.name, detail: item.description }))} disabled={props.disabled || catalog()?.status !== "ready"} onChange={setAgent} />
         <Show when={contextWindow()}><div class="composer__context"><button ref={contextTrigger} type="button" class="composer__context-trigger" aria-label={contextAccessible()} aria-expanded={contextOpen() && !contextLeaving()} onMouseEnter={() => { if (window.matchMedia("(hover: hover)").matches) showContext() }} onMouseLeave={queueContextClose} onFocus={showContext} onBlur={() => { if (!contextPinned()) queueContextClose() }} onClick={() => { if (contextPinned()) closeContext(); else { setContextPinned(true); showContext() } }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeContext() } }}>{ring()}</button><Show when={contextOpen()}><div class="composer__context-popover" classList={{ "composer__context-popover--leaving": contextLeaving() }} role="tooltip" aria-hidden={contextLeaving()} inert={contextLeaving()} onMouseEnter={contextClose.cancel} onMouseLeave={queueContextClose} onAnimationEnd={finishContext} onAnimationCancel={finishContext}><strong>Context window</strong><span>{contextLabel()}</span><span>{contextWindow()?.tokens}</span></div></Show></div></Show>

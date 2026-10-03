@@ -341,3 +341,21 @@ test("completed output and snapshot refresh leave trusted typing, agent/model co
     expect(await page.evaluate<string>(`document.querySelector('.composer-resident .composer__input').value`)).toBe("x")
   } finally { await page.close() }
 }, 60_000)
+
+test("Connected Sessions paints named loading content in the carousel and workspace rail until inventory settles", async () => {
+  const page = await browser.openPage()
+  try {
+    await page.setViewport(1440, 900)
+    await page.navigate(`${origin}/verify/remote.html?view=sessions&inventoryGate=1`)
+    await wait(page, `document.querySelector('.sessions-page')!==null && document.querySelector('.workspace-nav')!==null`)
+    expect(await page.evaluate<string>(`document.querySelector('.app-header__connection')?.textContent??document.querySelector('.connection-label')?.textContent??document.querySelector('.app-header').textContent`)).toContain("Connected")
+    expect(await page.evaluate<number>(`document.querySelectorAll('.running-sessions [role="status"]').length`)).toBe(1)
+    expect(await page.evaluate<number>(`document.querySelectorAll('.workspace-nav [role="status"]').length`)).toBe(1)
+    await wait(page, `(() => {const node=document.querySelector('.running-sessions .loading-placeholder');return node!==null&&getComputedStyle(node).visibility==='visible'})()`)
+    const before = await page.evaluate<number>(`document.querySelector('.sessions-page__content').getBoundingClientRect().top`)
+    await page.evaluate(`window.remoteReleaseInventory()`)
+    await wait(page, `document.querySelectorAll('.workspace-nav__item').length>0 && document.querySelectorAll('.running-sessions__item').length>0`)
+    expect(await page.evaluate<number>(`Math.abs(document.querySelector('.sessions-page__content').getBoundingClientRect().top-${before})`)).toBeLessThanOrEqual(1)
+    expect(await page.evaluate<number>(`document.querySelectorAll('.workspace-nav .loading-placeholder,.running-sessions .loading-placeholder').length`)).toBe(0)
+  } finally { await page.close() }
+}, 60_000)

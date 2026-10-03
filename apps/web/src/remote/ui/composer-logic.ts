@@ -27,7 +27,7 @@ export function modelSelection(models: readonly ModelOption[], selected: ModelRe
   const option = models.find((item) => item.providerID === selected.providerID && item.id === selected.id)
   if (!option) return { model: selected, blocked: true, warning: `Model ${selected.id} is not offered by this machine. Choose another model before sending.` }
   if (selected.variant !== undefined && !option.variants.includes(selected.variant)) return { model: selected, blocked: true,
-    warning: `Saved effort ${selected.variant} is not offered for ${option.name}. Use Reset to choose Base, or select this model again and choose an offered effort before sending.` }
+    warning: `Saved effort ${selected.variant} is not offered for ${option.name}. Clear the reasoning effort override, or select this model again and choose an offered effort before sending.` }
   return { model: selected }
 }
 

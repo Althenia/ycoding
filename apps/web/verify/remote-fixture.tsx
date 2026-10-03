@@ -49,6 +49,9 @@ const accountParams = new URLSearchParams(window.location.search)
 const requestLatencyMs = Number(accountParams.get("latency") ?? 0)
 const requestLog: { readonly at: number; readonly operation: string; readonly input?: unknown }[] = []
 Object.assign(window, { requestLog })
+let inventoryHeld = accountParams.get("inventoryGate") === "1"
+const inventoryWaiters: (() => void)[] = []
+Object.assign(window, { remoteReleaseInventory: () => { inventoryHeld = false; inventoryWaiters.splice(0).forEach((release) => release()) } })
 if (accountParams.get("presentation") !== "keep") {
   window.localStorage.setItem(WORKSPACE_PRESENTATION_KEY, accountParams.get("presentation") === "office" ? "office" : "conversation")
   window.localStorage.removeItem(OFFICE_PREFERENCES_KEY)
@@ -640,6 +643,8 @@ function createFixtureStore(): Fixture {
     input?: Readonly<Record<string, unknown>>,
     targetSessionID = sessionID,
   ): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
+    if (inventoryHeld && (operation === "session.list" || operation === "workspace.list" && input?.sessionsOnly === true))
+      return new Promise<void>((resolve) => inventoryWaiters.push(resolve)).then(() => outcome(operation, input, targetSessionID))
     if (operation === "notice.subscribe" || operation === "notice.list") {
       const before = operation === "notice.list" && typeof input?.before === "string" ? noticeSequence(input.before) ?? Infinity : Infinity
       const older = [...fixtureNotices].reverse().filter((notice) => (noticeSequence(notice.id) ?? 0) < before)

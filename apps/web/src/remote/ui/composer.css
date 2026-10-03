@@ -136,7 +136,7 @@
 [data-theme="dark"] .model-control__surface[data-level="high"] { --composer-effort-color:#e4be7b; }
 [data-theme="dark"] .model-control__surface[data-level="xhigh"] { --composer-effort-color:#c6a1e0; }
 [data-theme="dark"] .model-control__surface[data-level="max"] { --composer-effort-color:#e2a2b9; }
-.model-control__surface[data-level="base"], [data-theme="dark"] .model-control__surface[data-level="base"] { --composer-effort-color:var(--yc-text-muted); }
+.model-control__surface[data-level="unselected"], [data-theme="dark"] .model-control__surface[data-level="unselected"] { --composer-effort-color:var(--yc-text-muted); }
 .model-control__hero { display:grid; grid-template-columns:44px minmax(0,1fr) auto; align-items:center; gap:var(--yc-space-1); padding:var(--yc-space-2) var(--yc-space-3); }
 .model-control__hero > .model-control__fast { display:grid; place-items:center; inline-size:var(--yc-hit-min); block-size:var(--yc-hit-min); border:0; border-radius:var(--yc-radius-pill); background:transparent; color:var(--yc-text-muted); transition:color var(--yc-dur-quick) var(--yc-ease-standard); }
 .model-control__fast svg { inline-size:22px; block-size:22px; transition:fill var(--yc-dur-quick) var(--yc-ease-standard); }
