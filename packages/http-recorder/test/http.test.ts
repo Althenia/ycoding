@@ -17,12 +17,14 @@ const runWith = <A, E>(
 
 describe("HTTP", () => {
   test("decorates a provided HTTP client", async () => {
-    await Effect.runPromise(
-      Effect.all([post("https://example.test/echo", { step: 1 }), post("https://example.test/echo", { step: 2 })]).pipe(
-        Effect.provide(HttpRecorder.layer("http/multi-step")),
-        Effect.provide(FetchHttpClient.layer),
+    expect(
+      await Effect.runPromise(
+        Effect.all([post("https://example.test/echo", { step: 1 }), post("https://example.test/echo", { step: 2 })]).pipe(
+          Effect.provide(HttpRecorder.layer("http/multi-step")),
+          Effect.provide(FetchHttpClient.layer),
+        ),
       ),
-    )
+    ).toEqual(['{"reply":"first"}', '{"reply":"second"}'])
   })
 
   test("replay returns recorded responses in order for identical requests", async () => {
