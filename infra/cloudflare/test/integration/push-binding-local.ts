@@ -124,7 +124,7 @@ try {
   answers.set("phone", 403)
   const started = performance.now()
   const hung = await notice(2, 10_800)
-  expect(JSON.stringify(hung) === JSON.stringify({ pushed: ["laptop-third", "phone"], laptop: 0, phone: 1 }), `a push service that never answered changed who presents: ${JSON.stringify(hung)}`)
+  expect(JSON.stringify(hung) === JSON.stringify({ pushed: ["laptop-third", "phone"], laptop: 1, phone: 1 }), `a timed-out or rejected push was not presented once by its browser: ${JSON.stringify(hung)}`)
   expect(performance.now() - started >= 10_000, "the fallback for the rejected browser arrived before the hung delivery was abandoned")
   answers.delete("phone")
   const afterHang = await notice(2)
@@ -136,7 +136,7 @@ try {
   const unregistered = await notice(1)
   expect(JSON.stringify(unregistered) === JSON.stringify({ pushed: ["phone"], laptop: 1, phone: 0 }), `a browser without a registration was not presented once: ${JSON.stringify(unregistered)}`)
 
-  console.log(`PASS: local workerd+D1 server-owned push: two verified browsers on one account are judged by their own subscriptions; a D1 renewal with no page participation, a replacement registration, and a worker restart keep one registration per browser and its outcome; a push service that never answers is abandoned at the 10-second deadline without a page alert for its browser while a rejected browser presents once; expired and missing registrations present exactly once. Push service deliveries: ${delivered.join(",")}`)
+  console.log(`PASS: local workerd+D1 server-owned push: two verified browsers on one account are judged by their own subscriptions; a D1 renewal with no page participation, a replacement registration, and a worker restart keep one registration per browser and its outcome; a push service that never answers is abandoned at the 10-second deadline and its browser presents once, as does a rejected browser; expired and missing registrations present exactly once. Push service deliveries: ${delivered.join(",")}`)
 } finally {
   for (const socket of sockets) socket.close()
   worker?.kill()

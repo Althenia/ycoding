@@ -516,10 +516,9 @@ Deleting the device deletes its log.
   push outcomes, each naming the browser session that owns its subscription.
   Every push request is abandoned as `unreachable` when the push service has not
   answered within 10 seconds, and is never retried. A browser whose subscription
-  the push service accepted keeps the alert with its service worker, and so does
-  a browser whose push is `unreachable`: its delivery is unknown, so its page
-  raises nothing, and the alert may never be shown. Every other browser that had a presenter when the event was admitted,
-  including one without a subscription, one whose push was not sent (its
+  the push service accepted keeps the alert with its service worker. Every other
+  browser that had a presenter when the event was admitted, including one whose
+  push is `unreachable`, one without a subscription, one whose push was not sent (its
   category is off), rejected, or expired, and every browser when the subscription
   read failed before any request, gets `notice.present` sent to its presenter at
   the time the outcomes settle. Every event beyond the push limit gets
