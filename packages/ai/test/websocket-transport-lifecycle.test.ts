@@ -265,11 +265,11 @@ describe("WebSocket JSON transport lifecycle", () => {
     )
   })
 
-  it.effect("closes a retained connection when idle eviction runs", () =>
-    Effect.gen(function* () {
+  it.effect("closes a retained connection when idle eviction runs", () => {
+    const originalSetTimeout = setTimeout
+    return Effect.gen(function* () {
       const closed = { value: false }
       const timers: Array<() => void> = []
-      const originalSetTimeout = setTimeout
       Object.defineProperty(globalThis, "setTimeout", {
         configurable: true,
         value: (callback: () => void) => {
@@ -288,9 +288,14 @@ describe("WebSocket JSON transport lifecycle", () => {
       ).pipe(Effect.provide(client))
       timers[0]!()
       expect(closed.value).toBe(true)
-      Object.defineProperty(globalThis, "setTimeout", { configurable: true, value: originalSetTimeout })
-    }),
-  )
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          Object.defineProperty(globalThis, "setTimeout", { configurable: true, value: originalSetTimeout })
+        }),
+      ),
+    )
+  })
 
   it.effect("closes the oldest retained connection on capacity eviction", () =>
     Effect.gen(function* () {
