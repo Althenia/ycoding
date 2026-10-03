@@ -11,3 +11,12 @@ At `96c6b644`: 253 tracked paths; 116 eligible operational source files, 26,822 
 | 5 | `remote/ui/conversation.tsx` | 619 × 25 = 15,475 | unknown | `remote/ui/shell.tsx:53` imports `RequestCard`. |
 
 Method: tracked operational `.ts/.tsx/.js/.jsx/.css` in `src`, excluding tests, generated files, fixtures, declarations and `src/content/` product copy; physical lines × commit-path touches in `git log --no-renames --since=2026-07-20T00:00:00Z --until=2026-10-04T00:00:00Z`. Fork-class ranking is unrankable for this out-of-classifier surface. D14 duplication, CSS/design ownership, real display checks and connection/relay contracts are not assessed by this score; no removal is implied.
+
+## D14 duplication (`bunx jscpd@4`, min 70 tokens, at `2e585dce`)
+
+156 files, 22736 lines; 2 clone groups, 23 duplicated lines (0.10%). Excludes tests, generated clients, `*.gen.ts`, and vendored `cursor/provider`. A clone group is a candidate for one owner only when both copies implement the same rule; matching text alone does not justify a merge.
+
+| Lines | First | Second |
+|---:|---|---|
+| 17 | `apps/web/src/remote/ui/composer-picker.tsx:77-93` | `apps/web/src/remote/ui/model-control.tsx:88-104` |
+| 8 | `apps/web/src/remote/office/OfficeScene.ts:357-364` | `apps/web/src/remote/office/OfficeScene.ts:325-332` |

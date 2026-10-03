@@ -11,3 +11,8 @@ At `96c6b644`: 21 tracked paths; 21 eligible operational source files, 4,323 phy
 | 5 | `auth/d1-store.ts` | 440 × 3 = 1,320 | unknown | `index.ts:18` and `relay/durable-object.ts:12` construct D1 auth stores. |
 
 Method: tracked operational `.ts/.tsx/.js/.jsx/.css` in `src`, excluding tests, generated files, fixtures and declarations; physical lines × commit-path touches in `git log --no-renames --since=2026-07-20T00:00:00Z --until=2026-10-04T00:00:00Z`. Fork-class ranking is unrankable for this out-of-classifier surface. D14 duplication, workerd-only checks, D1 data safety and relay authentication/ownership are not established by this score; no migration or public-contract change is authorized.
+
+## D14 duplication (`bunx jscpd@4`, min 70 tokens, at `2e585dce`)
+
+21 files, 4323 lines; 0 clone groups, 0 duplicated lines (0.00%). Excludes tests, generated clients, `*.gen.ts`, and vendored `cursor/provider`. A clone group is a candidate for one owner only when both copies implement the same rule; matching text alone does not justify a merge.
+

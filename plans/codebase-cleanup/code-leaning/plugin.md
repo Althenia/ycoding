@@ -11,3 +11,13 @@ At `96c6b644`: 39 tracked paths; 36 eligible operational source files, 1,228 phy
 | 5 | `tui/attention.ts` | 61 × 1 = 61 | new | `tui/context.ts:26` imports its `TuiAttention` type; `tui/index.ts:2` re-exports types. |
 
 Method: tracked operational `.ts/.tsx/.js/.jsx/.css` in `src`, excluding tests, generated files, fixtures and declarations; physical lines × commit-path touches in `git log --no-renames --since=2026-07-20T00:00:00Z --until=2026-10-04T00:00:00Z`. Current classifier/snapshot supplies exact classes, not historical package totals. Several paths are type-only public contracts; runtime deletion cannot be inferred from that. D14 duplication and plugin ABI/consumer checks are not measured here.
+
+## D14 duplication (`bunx jscpd@4`, min 70 tokens, at `2e585dce`)
+
+38 files, 2620 lines; 3 clone groups, 63 duplicated lines (2.40%). Excludes tests, generated clients, `*.gen.ts`, and vendored `cursor/provider`. A clone group is a candidate for one owner only when both copies implement the same rule; matching text alone does not justify a merge.
+
+| Lines | First | Second |
+|---:|---|---|
+| 23 | `packages/plugin/src/effect/session.ts:2-24` | `packages/plugin/src/promise/session.ts:2-24` |
+| 22 | `packages/plugin/src/effect/aisdk.ts:1-22` | `packages/plugin/src/promise/aisdk.ts:1-22` |
+| 21 | `packages/plugin/src/effect/plugin.ts:3-23` | `packages/plugin/src/promise/plugin.ts:2-23` |

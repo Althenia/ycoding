@@ -137,7 +137,7 @@ Sub-slices run one package at a time, in this order:
 
 - [ ] Record the package baseline: source lines, files, the lean-suite pass count, and (core/tui/cli) M1 startup and binary size.
 - [ ] Map the public surface (package `exports`, plugin API, Protocol), the module graph, and size × churn × S1 class. Write the ranked module list in `tracking.md` § Code leaning.
-- [ ] Duplication scan (D14): `bunx jscpd` once per package, with no repository change. Record the clone groups in the package ranking.
+- [x] Duplication scan (D14): `bunx jscpd` once per package, with no repository change. Record the clone groups in the package ranking (E80).
 - [ ] Apply the lean targets from `plan.md` in priority order, in reviewable batches.
 - [ ] After each batch: package typecheck; `bun run lint` (0 errors, no new warnings in touched files); `bun run lint:effect-patterns`; the package lean suite and consumer suites with no assertion edits.
 - [ ] For each removed compatibility path, confirm with `rg` that no live caller, config, fixture, or stored-data reader needs it. If stored data needs it, stop and ask.
