@@ -192,6 +192,7 @@ Resume baseline: cleanup rebased from `3962b14f` onto current `main` `c9a2957a`;
 | E78 | S1 resolution of the 27 | whole-tree `git grep -nE` per path (imports, subpath strings, scripts, docs, tests; excluding `plans/`, `bun.lock`) plus package `private`/`exports` inspection at `8dfbd7ee` | 0 | 18 public API surfaces (17 AI `src/`, Schema `ide-event.ts`); 9 without a product caller (Core `move-session`, `layer-map.example`, `util/path`; TUI `dialog-tag`, `revert-diff`; Client `contract.ts`; AI `recording-cost-report.ts`; Drizzle `examples/basic.ts`; `effect-sqlite-node` package). Recorded in `classification.md` § Resolution of the 27 and handed to `code-leaning/{core,tui,client,ai,schema}.md`. Reachability only; no deletion performed | 2026-10-03 |
 | E79 | S0 brand gate | `bun run check:ycoding-brand` at `8dfbd7ee` | 1 | 30 findings, all under `plans/codebase-cleanup/` (committed in `bdb9b125`; fork-point and vendored-symbol evidence). G31. Test-first: `script/ycoding-rebrand.test.ts` RED (`replace` for a plan path), then `plans/codebase-cleanup/` added to `upstreamPaths`; rebrand/residual tests 6 pass, brand check passes. Remove the entry at S11 with the directory | 2026-10-03 |
 | E80 | D14 duplication scan | `bunx jscpd@4 <pkg>/src --reporters json --min-tokens 70` per package (tests, generated, `*.gen.ts`, vendored excluded), at `2e585dce`, no repository change | 0 | clone groups: core 70 (1.43%), tui 47 (2.50%, largest are theme JSON assets), ai 24 (2.42%), cli 12, client 3, plugin 3, web 2, codemode 2, server/schema/protocol 1, cloudflare 0. Top 20 per package recorded in `code-leaning/<package>.md` § D14 | 2026-10-03 |
+| E81 | SL ai-contracts lane (`41130000`, `fa9b493b`, `8d5af6ef`, `ff448ac4`) | per-file JUnit at `d30e97bf` for every file in scope; touched files 3 isolated + 1 loaded (`sl-run --loaded`, forced root typecheck); client/codemode/server typecheck; oxlint on touched files; `lint:effect-patterns`; parent reran client `service.test.ts` 12/12 and codemode `promise.test.ts` 84/84 after integration | 0 | Fixed sleeps replaced with fixture events (client) and TestClock (codemode); Chrome tab poll bounded by attempts. No case deleted or merged; one assertion added. Environment-blocked: `server/test-integration/{isolated-browser,browser-owned-chrome}.test.ts` (12 cases; macOS arm64 / Chrome for Testing 152+). Expected skips: 28 recorded AI, 10 macOS installer, 1 macOS keep-awake. Root typecheck/lint ran via the pre-push hook only | 2026-10-03 |
 
 ## Defects and gaps
 
@@ -243,12 +244,12 @@ The canonical row-level disposition of all 719 findings is `knip/triage.md` (G16
 |---|---|---|---|---|---|---|---|
 | core | 280 → | ~2,444 → | 102,731 → | | | | todo |
 | tui | 230 → | ~1,319 → | 56,884 → | | | | todo |
-| ai | 50 → | ~574 → | 17,521 → | | | | todo |
-| codemode | 20 → | ~580 → | 12,669 → | | | | todo |
+| ai | 50 → 50 | 673 → 673 (28 recorded skips) | 17,521 → 17,521 | 8.2 s (JUnit, shared host) → unchanged | no file touched in this round; earlier lane E33/E59/E61 | E59 | done (E81) |
+| codemode | 20 → 20 | 969 → 969 (historical ~580 predates table expansion) | 12,669 → 12,681 | 4.9 s; `promise.test.ts` 1.86 → 1.62 s | `promise.test.ts` 3 isolated + 1 loaded, 84/84 each | 3 caught (`execute.ts:80`, `promises.ts:76`, `execute.ts:66`); `promises.ts:75` not detectable (scope close interrupts), covered by :76/:66 | done (E81) |
 | cli | 49 → | ~380 → | 11,395 → | | | | todo |
-| server | 29 → | ~70 → | | | | | todo |
-| schema / protocol / client | 19 / 18 / 9 → | ~88 / ~38 / ~75 → | | | | | todo |
-| simulation / remote | 10 / 4 → | ~42 / ~57 → | | | | | todo |
+| server | 31 → 31 | 97 → 97 (85 executed; 12 environment-blocked) | 4,976 → 4,976 | 15.0 s | `browser-connect.test.ts` 3 isolated + 1 loaded | n/a (no removal) | done (E81); 2 real-Chrome suites environment-blocked |
+| schema / protocol / client | 18 / 18 / 9 → unchanged | 109 / 38 / 75 → unchanged | client 2,215 → 2,229 | client 48.3 s; `service.test.ts` 36.4 → 37.9 s | `service.test.ts` 3 isolated + 1 loaded, 12/12 each | 3 caught (`client/src/effect/service.ts:110,112,114`) | done (E81) |
+| simulation / remote / recorder / drizzle / codegen / plugin / script | 21 + 3 + 10 files → unchanged | 240 + 8 + 113 → unchanged | unchanged | per `remaining.md` | n/a (no file touched) | probe in `remaining.md` | done (E81) |
 | apps/web | 143 → | | | | | | todo |
 | infra/cloudflare | | | | | | | todo |
 
