@@ -301,16 +301,8 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
             prior?.providerID === target.providerID && prior.modelID === target.modelID
               ? prior.variant
               : modelStore.variant[modelPreferenceKey(target)]
-          const variant = explicit
-            ? requested
-            : info.variants.some((item) => item.id === remembered) ? remembered : undefined
-          if (
-            prior &&
-            (prior.variant === undefined || data.location.model
-              .list(activeLocation())
-              ?.find((item) => item.providerID === prior.providerID && item.id === prior.modelID)
-              ?.variants.some((item) => item.id === prior.variant))
-          ) {
+          const variant = explicit ? requested : remembered
+          if (prior) {
             setModelStore("variant", modelPreferenceKey(prior), prior.variant)
           }
           setModelStore("variant", modelPreferenceKey(target), variant)
@@ -447,13 +439,7 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
             return selection()?.variant
           },
           current() {
-            const v = this.selected()
-            if (
-              route.data.type === "session" &&
-              (pendingTargets()[route.data.sessionID] || data.session.get(route.data.sessionID)?.model)
-            ) return v
-            if (v && this.list().includes(v)) return v
-            return undefined
+            return this.selected()
           },
           list() {
             const m = selectedModel()

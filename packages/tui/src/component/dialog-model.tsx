@@ -207,9 +207,10 @@ export function DialogModel(props: {
 
   function onSelect(providerID: string, modelID: string) {
     if (props.onComplete) {
-      const variants = models()
-        .find((model) => model.providerID === providerID && model.id === modelID)
-        ?.variants.map((variant) => variant.id) ?? []
+      const variants =
+        models()
+          .find((model) => model.providerID === providerID && model.id === modelID)
+          ?.variants.map((variant) => variant.id) ?? []
       const selection = completeModelSelection({
         providerID,
         modelID,
@@ -226,6 +227,7 @@ export function DialogModel(props: {
       dialog.replace(() => (
         <DialogVariant
           variants={variants}
+          current={undefined}
           onSelect={(variant) => {
             const selection = completeModelSelection({ providerID, modelID, variants, variant })
             if (!selection) return
@@ -234,6 +236,11 @@ export function DialogModel(props: {
             dialog.clear()
           }}
           onCancel={() => props.onComplete?.({ type: "cancelled" })}
+          onClear={() => {
+            settled = true
+            props.onComplete?.({ type: "selected", selection: { providerID, modelID } })
+            dialog.clear()
+          }}
         />
       ))
       return
@@ -246,7 +253,15 @@ export function DialogModel(props: {
       return
     }
     if (list.length > 0) {
-      dialog.replace(() => <DialogVariant onSelect={(variant) => void selectVariant(providerID, modelID, variant)} />)
+      dialog.replace(() => (
+        <DialogVariant
+          onSelect={(variant) => void selectVariant(providerID, modelID, variant)}
+          onClear={() => {
+            dialog.clear()
+            void local.model.select({ providerID, modelID, variant: undefined }, { sessionID: props.sessionID })
+          }}
+        />
+      ))
       return
     }
     dialog.clear()

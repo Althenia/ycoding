@@ -389,7 +389,7 @@ or an explicit object:
 }
 ```
 
-The variant is optional; omit it to select the base model. Every explicit variant ID must be offered by the selected model, or model resolution fails with `VariantUnavailableError`. `default` and `none` are ordinary variant IDs. An offered `none` variant can select reasoning effort `none` on OpenAI models or disable thinking on DeepSeek. The TUI variant cycle includes an offered `none` variant.
+The variant is optional; omission uses the selected model's settings and is not a named variant. YCoding does not create `default` or `base` variants for omission. Every explicit variant ID must be offered by the selected model, or model resolution fails with `VariantUnavailableError`; source-offered IDs retain their names and settings. An offered `none` variant can select reasoning effort `none` on OpenAI models or disable thinking on DeepSeek. The TUI variant cycle includes an offered `none` variant.
 
 Catalog reasoning variants reach the provider request in each provider's own format: DeepSeek variants send `thinking: { type: "enabled" | "disabled" }` and the requested `reasoning_effort`, which DeepSeek maps server-side; native OpenRouter variants send their `reasoning` object (`effort`, `enabled`, or `max_tokens`), merged with any configured OpenRouter reasoning options.
 

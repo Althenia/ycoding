@@ -112,6 +112,8 @@ async function renderFooter(
     providers?: RunProvider[]
     currentModel?: RunInput["model"]
     currentVariant?: string
+    variants?: string[]
+    onStatus?: (value: string) => void
     subagents?: FooterSubagentState
     width?: number
     height?: number
@@ -145,7 +147,7 @@ async function renderFooter(
           commands={() => input.commands ?? []}
           providers={() => input.providers}
           currentModel={() => input.currentModel}
-          variants={() => []}
+          variants={() => input.variants ?? []}
           currentVariant={() => input.currentVariant}
           state={state}
           view={view}
@@ -169,7 +171,7 @@ async function renderFooter(
           onVariantSelect={() => {}}
           onRows={() => {}}
           onLayout={() => {}}
-          onStatus={() => {}}
+          onStatus={input.onStatus ?? (() => {})}
           onQueuedRemove={async () => true}
         />
       </Keymap.Provider>
@@ -976,9 +978,7 @@ test("direct footer submits slash autocomplete selections without dispatching sh
 
 test("direct footer mention menu ranks an exact non-file match above a fuzzy prefix match", async () => {
   const app = await renderFooter({
-    agents: [
-      { id: "docs-sync", name: "docs-sync", mode: "subagent", hidden: false },
-    ],
+    agents: [{ id: "docs-sync", name: "docs-sync", mode: "subagent", hidden: false }],
     references: [
       {
         name: "docs",
@@ -1451,6 +1451,57 @@ test("direct model panel renders current model selector", async () => {
   }
 })
 
+test("direct footer keeps an unavailable variant draft without dispatching it", async () => {
+  const sent: RunPrompt[] = []
+  const notices: string[] = []
+  const app = await renderFooter({
+    currentModel: { providerID: "test", modelID: "fixture" },
+    currentVariant: "removed",
+    variants: ["none", "high"],
+    onSubmit: (prompt) => {
+      sent.push(prompt)
+      return true
+    },
+    onStatus: (text) => notices.push(text),
+  })
+  app.renderer.start()
+  try {
+    await app.renderOnce()
+    await app.mockInput.typeText("retain this draft")
+    app.mockInput.pressEnter()
+    await app.waitFor(() => notices.length > 0)
+    await app.waitForFrame((frame) => frame.includes("retain this draft"))
+    expect(sent).toEqual([])
+    expect(notices.join(" ")).toContain("removed")
+    expect(notices.join(" ")).toContain("unavailable")
+    expect(app.captureCharFrame()).toContain("retain this draft")
+  } finally {
+    app.cleanup()
+  }
+})
+
+test("direct footer submits an offered none variant without treating it as omission", async () => {
+  const sent: RunPrompt[] = []
+  const app = await renderFooter({
+    currentModel: { providerID: "test", modelID: "fixture" },
+    currentVariant: "none",
+    variants: ["none", "high"],
+    onSubmit: (prompt) => {
+      sent.push(prompt)
+      return true
+    },
+  })
+  try {
+    await app.renderOnce()
+    await app.mockInput.typeText("use offered none")
+    app.mockInput.pressEnter()
+    await app.renderOnce()
+    expect(sent.map((prompt) => prompt.text)).toEqual(["use offered none"])
+  } finally {
+    app.cleanup()
+  }
+})
+
 test("direct variant panel renders current variant selector", async () => {
   const [variants] = createSignal(["high", "minimal"])
   const [current] = createSignal<string | undefined>("high")
@@ -1479,13 +1530,42 @@ test("direct variant panel renders current variant selector", async () => {
     const list = panelMenu(app.renderer.root)
 
     expect(frame).toContain("Select variant")
-    expect(frame).toContain("Default")
+    expect(frame).not.toContain("Default")
     expect(frame).toContain("high")
     expect(frame).toContain("minimal")
     expect(frame).toContain("current")
     expect(frame).not.toContain("┌")
     expect(frame).not.toContain("┃")
-    expectPaletteList(list, 1)
+    expectPaletteList(list, 0)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("direct variant panel clears an unavailable selection only through its separate action", async () => {
+  const values: Array<string | undefined> = []
+  const app = await testRender(
+    () => (
+      <box width={100} height={RUN_COMMAND_PANEL_ROWS}>
+        <RunVariantSelectBody
+          theme={() => RUN_THEME_FALLBACK.footer}
+          variants={() => ["none", "high"]}
+          current={() => "removed"}
+          onClose={() => {}}
+          onSelect={(variant) => values.push(variant)}
+        />
+      </box>
+    ),
+    { width: 100, height: RUN_COMMAND_PANEL_ROWS },
+  )
+  try {
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("removed unavailable")
+    expect(app.captureCharFrame()).toContain("Clear selection")
+    expect(app.captureCharFrame()).not.toContain("Default")
+    app.mockInput.pressKey("u", { ctrl: true })
+    await app.renderOnce()
+    expect(values).toEqual([undefined])
   } finally {
     app.renderer.destroy()
   }

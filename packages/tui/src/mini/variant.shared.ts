@@ -1,11 +1,3 @@
-// Model variant resolution and persistence.
-//
-// Variants are provider-specific reasoning effort levels (e.g., "high", "max").
-// Resolution priority: CLI --variant flag > valid session history > saved preference.
-//
-// The saved variant persists across sessions in ~/.local/state/ycoding/model.json
-// so your last-used variant sticks. Cycling (ctrl+t) updates both the active
-// variant and the persisted file.
 import { createSession, sessionVariant, type RunSession, type SessionMessages } from "./session.shared"
 import type { RunInput, RunProvider } from "./types"
 import { cycleModelVariant } from "../model-preference"
@@ -36,27 +28,10 @@ export function pickVariant(model: RunInput["model"], input: RunSession | Sessio
   return sessionVariant(Array.isArray(input) ? createSession(input) : input, model)
 }
 
-// `undefined` means the catalog has not resolved this model yet, so a stored
-// value cannot be validated and is kept. An empty array means the catalog
-// resolved the model and it offers no variants, so any stored value is dropped.
-function fitVariant(value: string | undefined, variants: string[] | undefined): string | undefined {
-  if (value === undefined) return undefined
-  if (variants === undefined) return value
-  return variants.includes(value) ? value : undefined
-}
-
-// Picks the active variant. CLI flag wins, then valid session history, then the
-// saved preference. Saved and session values are dropped when the provider no
-// longer offers them.
 export function resolveVariant(
   input: string | undefined,
   session: string | undefined,
   saved: string | undefined,
-  variants: string[] | undefined,
 ): string | undefined {
-  if (input !== undefined) {
-    return input
-  }
-
-  return fitVariant(session, variants) ?? fitVariant(saved, variants)
+  return input ?? session ?? saved
 }

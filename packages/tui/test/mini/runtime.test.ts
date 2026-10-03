@@ -119,12 +119,17 @@ describe("run interactive runtime", () => {
     }
   })
 
-  test("switching to a model without the saved variant displays and submits no stale variant", async () => {
+  test("switching to a model with an unavailable saved variant retains it and starts no model prompt", async () => {
     const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
     const footerFixture = createFooterApiFixture()
     const api = footerFixture.api
     const modelLoaded = defer<void>()
     const promptReady = defer<void>()
+    const append = api.append.bind(api)
+    api.append = (commit) => {
+      append(commit)
+      if (commit.kind === "error" && commit.text.includes("Variant high unavailable")) api.close()
+    }
     let selectModel!: NonNullable<LifecycleInput["onModelSelect"]>
     const submitted: Array<{ model: unknown; variant: string | undefined }> = []
     const event = api.event.bind(api)
@@ -196,12 +201,12 @@ describe("run interactive runtime", () => {
     try {
       await modelLoaded.promise
       const selected = await selectModel({ providerID: "test", modelID: "model-b" })
-      expect(selected).toMatchObject({ modelLabel: "model-b · Test", variant: undefined })
+      expect(selected).toMatchObject({ modelLabel: "model-b · Test · high", variant: "high" })
       await promptReady.promise
       footerFixture.submit("use model b")
       await task
 
-      expect(submitted).toEqual([{ model: { providerID: "test", modelID: "model-b" }, variant: undefined }])
+      expect(submitted).toEqual([])
     } finally {
       api.close()
       await task
@@ -377,8 +382,7 @@ describe("run interactive runtime", () => {
         }) as never,
     )
     spyOn(sdk.message, "list").mockImplementation(
-      () =>
-        ok([{ id: "msg-user", type: "user", text: "previous prompt", time: { created: 1 } }]) as never,
+      () => ok([{ id: "msg-user", type: "user", text: "previous prompt", time: { created: 1 } }]) as never,
     )
     stubCatalogLists(sdk, {
       providers: [catalogProvider("openai", "OpenAI")],
@@ -512,10 +516,7 @@ describe("run interactive runtime", () => {
     await task
 
     expect(aborted).toBe(2)
-    expect(messages).toHaveBeenCalledWith(
-      { sessionID: "ses-resume-abort" },
-      { signal: expect.any(AbortSignal) },
-    )
+    expect(messages).toHaveBeenCalledWith({ sessionID: "ses-resume-abort" }, { signal: expect.any(AbortSignal) })
     expect(session).toHaveBeenCalledTimes(1)
     expect(session).toHaveBeenCalledWith({ sessionID: "ses-resume-abort" }, { signal: expect.any(AbortSignal) })
     expect(closedTitle).toBe("Cached title")

@@ -32,7 +32,7 @@ describe("util.model", () => {
     const previous = { providerID: "openai", id: "gpt-5.5", variant: "medium" }
 
     expect(switchLabel({ ...previous, variant: "high" }, undefined, previous)).toBe("Switched variant to high")
-    expect(switchLabel({ providerID: "openai", id: "gpt-5.5" }, undefined, previous)).toBe("Switched variant to Base")
+    expect(switchLabel({ providerID: "openai", id: "gpt-5.5" }, undefined, previous)).toBe("Cleared variant selection")
     expect(switchLabel({ providerID: "openai", id: "gpt-5.5", variant: "default" }, undefined, previous)).toBe(
       "Switched variant to default",
     )
