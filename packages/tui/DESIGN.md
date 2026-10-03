@@ -169,6 +169,8 @@ T13: run `bun test test/screen/clipboard-selection.screen.test.ts` for main expl
 
 T14: run `bun test ./test/prompt/autocomplete.test.ts` and `bun test ./test/screen/file-mention-ranking.screen.test.ts` for best-match ordering, tied relevance, preserved candidates, and real composer file selection and folder completion. The autocomplete retains the existing list-row and selected-row roles and geometry.
 
+Permission review: run `bun test ./test/util/permission.test.ts` and `bun test ./test/cli/tui/permission-interaction.test.tsx` to verify the site-scoped incidental-download warning for profile and owned Chrome actions in the initial review and Always confirmation. Use the existing approval body ink and scroll region; cancellation must send no permission reply.
+
 ## Maintenance
 
 Read `../../DESIGN.md` and this surface file before TUI presentation changes. Update binding rules and implementation checks in the same change when behavior changes; do not promote the typography specimen into renderer-owned font settings. Keep documented theme colors aligned with the resolved default `ycoding` dark theme through `test/design-md.test.ts`. Record any documented value with no honest theme counterpart as a scoped pending exception; never map it to a merely similar color.

@@ -5,9 +5,72 @@ import { testRender } from "@opentui/solid"
 import { ConfigProvider } from "../../../src/config"
 import { Keymap } from "../../../src/context/keymap"
 import { ThemeProvider } from "../../../src/context/theme"
-import { Prompt } from "../../../src/routes/session/permission"
+import { PermissionPrompt, Prompt } from "../../../src/routes/session/permission"
+import { ClientProvider } from "../../../src/context/client"
+import { DataProvider } from "../../../src/context/data"
+import { LocationProvider } from "../../../src/context/location"
+import { createApi, createFetch } from "../../fixture/tui-client"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
+
+test.each(["profile", "owned"])(
+  "shows the %s Chrome site download warning through confirmation and cancel",
+  async (mode) => {
+    const replies: unknown[] = []
+    const transport = createFetch(async (url, request) => {
+      if (url.pathname === "/api/session/ses_browser/permission/per_browser/reply") {
+        replies.push(await request.json())
+        return new Response(null, { status: 204 })
+      }
+      return undefined
+    })
+    const app = await testRender(
+      () => (
+        <TestTuiContexts>
+          <ConfigProvider config={createTuiResolvedConfig()}>
+            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+              <ClientProvider api={createApi(transport.fetch)}>
+                <DataProvider>
+                  <LocationProvider>
+                    <Keymap.Provider>
+                      <PermissionPrompt
+                        request={{
+                          id: "per_browser",
+                          sessionID: "ses_browser",
+                          action: "browser_interact",
+                          resources: ["https://example.test/page"],
+                          save: ["https://example.test"],
+                          metadata: { mode, incidentalDownloads: true, site: "https://example.test" },
+                        }}
+                      />
+                    </Keymap.Provider>
+                  </LocationProvider>
+                </DataProvider>
+              </ClientProvider>
+            </ThemeProvider>
+          </ConfigProvider>
+        </TestTuiContexts>
+      ),
+      { width: 80, height: 24, kittyKeyboard: true },
+    )
+    app.renderer.start()
+    try {
+      await app.waitForFrame((frame) => frame.includes("Permission required"))
+      const output = app.captureCharFrame().replace(/\s+/g, " ")
+      expect(output).toContain("Control Chrome site https://example.test")
+      expect(output).toContain("may trigger downloads without another prompt.")
+      app.mockInput.pressArrow("down")
+      app.mockInput.pressEnter()
+      await app.waitForFrame((frame) => frame.includes("Always allow"))
+      expect(app.captureCharFrame().replace(/\s+/g, " ")).toContain("may trigger downloads without another prompt.")
+      app.mockInput.pressEscape()
+      await app.waitForFrame((frame) => frame.includes("Permission required"))
+      expect(replies).toEqual([])
+    } finally {
+      app.renderer.destroy()
+    }
+  },
+)
 
 test("updates permission selection from vertical arrows and hover", async () => {
   const app = await testRender(
@@ -84,7 +147,10 @@ function descendants(node: Renderable): Renderable[] {
 for (const kind of ["permission", "guardrail"] as const) {
   test(`${kind} pins decisions while complete long details scroll at short heights and after resize`, async () => {
     const decisions: string[] = []
-    const command = [...Array.from({ length: 80 }, (_, index) => `display-only review line ${index}: ${"detail ".repeat(12)}`), "FINAL_REVIEW_SENTINEL"].join("\n")
+    const command = [
+      ...Array.from({ length: 80 }, (_, index) => `display-only review line ${index}: ${"detail ".repeat(12)}`),
+      "FINAL_REVIEW_SENTINEL",
+    ].join("\n")
     const app = await testRender(
       () => (
         <TestTuiContexts>
@@ -92,7 +158,9 @@ for (const kind of ["permission", "guardrail"] as const) {
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
               <Keymap.Provider>
                 <box height="100%">
-                  <box flexGrow={1}><text>Transcript remains visible</text></box>
+                  <box flexGrow={1}>
+                    <text>Transcript remains visible</text>
+                  </box>
                   <Prompt
                     kind={kind}
                     title="Approval required"
@@ -125,7 +193,9 @@ for (const kind of ["permission", "guardrail"] as const) {
       }
       assertVisible()
       expect(app.captureCharFrame()).toContain("Transcript remains visible")
-      const scroll = descendants(app.renderer.root).find((item): item is ScrollBoxRenderable => item instanceof ScrollBoxRenderable)
+      const scroll = descendants(app.renderer.root).find(
+        (item): item is ScrollBoxRenderable => item instanceof ScrollBoxRenderable,
+      )
       expect(scroll).toBeDefined()
       if (!scroll) throw new Error("review details did not render a scrollbox")
       expect(scroll.viewport.height).toBeGreaterThanOrEqual(5)

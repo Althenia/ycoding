@@ -101,7 +101,7 @@ export function permissionPresentation(
     }
   }
 
-  if ((action === "browser_navigate" || action === "browser_interact") && metadata.mode === "selected") {
+  if ((action === "browser_navigate" || action === "browser_interact") && metadata.incidentalDownloads === true) {
     const site = text(metadata.site) || resources[0] || "this site"
     return {
       icon: "◉",
@@ -160,7 +160,11 @@ function wildcardDirectory(value: string) {
   return prefix.replace(/[\\/]+$/, "")
 }
 
-export function permissionAlwaysLines(input: { action: string; save?: ReadonlyArray<string>; metadata?: unknown }): string[] {
+export function permissionAlwaysLines(input: {
+  action: string
+  save?: ReadonlyArray<string>
+  metadata?: unknown
+}): string[] {
   const save = input.save ?? []
   if (save.length === 1 && save[0] === "*") {
     return [`This will allow ${input.action} until YCoding is restarted.`]
@@ -173,7 +177,7 @@ export function permissionAlwaysLines(input: { action: string; save?: ReadonlyAr
 }
 
 function chromeSideEffectWarning(metadata: Dict) {
-  return metadata.mode === "selected" && metadata.incidentalDownloads === true
+  return metadata.incidentalDownloads === true
     ? ["Clicks, navigation, and typing on this site may trigger downloads without another prompt."]
     : []
 }
