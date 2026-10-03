@@ -43,13 +43,20 @@ test("Session-scoped managed attachment reads publish a bounded base64 result", 
   const endpoint = group.endpoints["session.attachment.read"]
   expect(endpoint.middlewares.has(SessionLocationMiddleware)).toBe(true)
   const digest = "a".repeat(64)
-  const operation = OpenApi.fromApi(HttpApi.make("session-attachment-test").add(group)).paths["/api/session/{sessionID}/attachment/{digest}"]?.get
+  const document = OpenApi.fromApi(HttpApi.make("session-attachment-test").add(group))
+  const operation = document.paths["/api/session/{sessionID}/attachment/{digest}"]?.get
   expect(operation?.operationId).toBe("v2.session.attachment.read")
+  expect(document.components?.schemas?.["Prompt.Base64"]).toEqual({
+    type: "string",
+    allOf: [{ pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$" }],
+  })
   for (const status of [200, 400, 404, 413]) expect(operation?.responses?.[status]).toBeDefined()
   const success = [...endpoint.success][0]
   if (!success) throw new Error("attachment read has no success schema")
   if (!endpoint.params) throw new Error("attachment read has no path params")
   expect(Schema.is(success)({ mime: "image/png", bytes: 3, data: "YWJj" })).toBe(true)
+  const large = Buffer.alloc(8 * 1024 * 1024, 255).toString("base64")
+  expect(Schema.is(success)({ mime: "image/png", bytes: 8 * 1024 * 1024, data: large })).toBe(true)
   expect(Schema.is(success)({ mime: "image/png", bytes: -1, data: "YWJj" })).toBe(false)
   expect(Schema.is(endpoint.params)({ sessionID: "ses_test", digest })).toBe(true)
   expect(Schema.is(endpoint.params)({ sessionID: "ses_test", digest: "../bad" })).toBe(false)

@@ -1,7 +1,8 @@
 import { describe, expect } from "bun:test"
-import { Cause, Effect, Exit, Fiber, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
+import { EventV2 } from "@ycoding-ai/core/event"
 import { Form } from "@ycoding-ai/core/form"
 import { PermissionV2 } from "@ycoding-ai/core/permission"
 import { SessionV2 } from "@ycoding-ai/core/session"
@@ -90,8 +91,82 @@ const it = testEffect(
     [Image.node, imagePassthrough],
   ]),
 )
+const withForms = testEffect(
+  AppNodeBuilder.build(
+    LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, questionToolNode, Form.node, EventV2.node]),
+    [
+      [PermissionV2.node, permission],
+      [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
+      [Image.node, imagePassthrough],
+    ],
+  ),
+)
 
 describe("QuestionTool", () => {
+  withForms.effect("holds a blocker for human review and missing evidence until the real Form is answered", () =>
+    Effect.gen(function* () {
+      deny = false
+      const registry = yield* ToolRegistry.Service
+      const forms = yield* Form.Service
+      const events = yield* EventV2.Service
+      const created = yield* Deferred.make<Form.Info>()
+      const unsubscribe = yield* events.listen((event) =>
+        event.type === Form.Event.Created.type
+          ? Deferred.succeed(created, Schema.decodeUnknownSync(Form.Event.Created.data)(event.data).form).pipe(
+              Effect.asVoid,
+            )
+          : Effect.void,
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const fiber = yield* settleTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: {
+          type: "tool-call",
+          id: "call-human-review",
+          name: "question",
+          input: {
+            questions: [
+              {
+                header: "Review",
+                question: "The failure did not reproduce. Should I continue investigating or stop?",
+                options: [
+                  { label: "Continue", description: "Investigate the failing input" },
+                  { label: "Stop", description: "Stop without a speculative fix" },
+                ],
+              },
+              { header: "Evidence", question: "Paste the exact failing input.", options: [] },
+            ],
+          },
+        },
+      }).pipe(Effect.forkScoped)
+      const pending = yield* Deferred.await(created)
+      expect(yield* forms.list({ sessionID })).toEqual([pending])
+      expect(yield* forms.state(pending.id)).toEqual({ status: "pending" })
+      expect(pending.metadata).toEqual({
+        kind: "question",
+        tool: { messageID: toolIdentity.messageID, callID: "call-human-review" },
+      })
+      expect(pending.fields[1]).toMatchObject({ key: "q1", type: "string", options: [], custom: true })
+      yield* forms.reply({ id: pending.id, answer: { q0: "Continue", q1: "Synthetic failing input" } })
+      expect(yield* Fiber.join(fiber)).toMatchObject({
+        output: { structured: { answers: [["Continue"], ["Synthetic failing input"]] } },
+      })
+      expect(yield* forms.list({ sessionID })).toEqual([])
+    }),
+  )
+
+  it.effect("advertises required input, decisions, and review instead of prose-only blockers", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const definition = (yield* toolDefinitions(registry)).find((tool) => tool.name === "question")
+      expect(definition?.description).toContain(
+        "When progress requires user input, a decision, or review, call this tool instead of ending with a prose-only request",
+      )
+      expect(definition?.description).toContain("For required free-text input, use an empty options array")
+    }),
+  )
+
   it.effect("advertises recommendations that follow the user's stated requirements", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service

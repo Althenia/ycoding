@@ -208,7 +208,10 @@ const route: FetchHandler = async (url, request) => {
     return json({
       location,
       data: catalogSkill
-        ? [{ id: "review", name: "Review", description: "Review code", content: "Review instructions", slash: true }]
+        ? [
+            { id: "review", name: "Review", description: "Review code", content: "Review instructions", slash: true },
+            { id: "plan", name: "Plan", description: "Plan work", content: "Plan instructions", slash: true },
+          ]
         : [],
     })
   if (url.pathname === "/api/agent")
@@ -403,6 +406,30 @@ test("direct skill metadata reaches admission without preactivation while the ed
     release()
     firstRequestGate = undefined
     firstRequestStarted = undefined
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("every space-separated skill mention reaches prompt admission from the composer", async () => {
+  resetFixture()
+  failFirstPrompt = false
+  catalogSkill = true
+  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+  try {
+    await focusComposer(screen)
+    await screen.input.typeText("Use $review $plan $review now")
+    await screen.renderOnce()
+    expect(screen.frame()).toContain("$review $plan $review now")
+    screen.input.pressEnter()
+    await waitFor(() => promptRequests.length === 2, "multi-skill admission and wake")
+    expect(promptRequests[0].text).toBe("Use $review $plan $review now")
+    expect(promptRequests[0].metadata?.skills).toEqual([
+      { id: "review", name: "Review" },
+      { id: "plan", name: "Plan" },
+    ])
+    expect(skillRequests).toEqual([])
+    expect(composer(screen.renderer.root)?.plainText).toBe("")
+  } finally {
     await screen.dispose()
   }
 }, 30_000)

@@ -1270,6 +1270,32 @@ const verifyPartialFlushOnInterruption = (kind: FragmentKind) =>
   })
 
 describe("SessionRunnerLLM", () => {
+  it.effect("loads every explicit skill in one prompt before the first model request", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* registerExplicitSkill("first-audit", "Inspect the first boundary.")
+      yield* registerExplicitSkill("second-audit", "Inspect the second boundary.")
+      yield* registerExplicitSkill("third-audit", "Inspect the third boundary.")
+      const input = yield* session.prompt({
+        sessionID,
+        text: "Use $first-audit $second-audit $third-audit $first-audit, then report.",
+        resume: false,
+      })
+      expect(input.data.metadata).toMatchObject({
+        skills: [{ id: "first-audit" }, { id: "second-audit" }, { id: "third-audit" }],
+      })
+      yield* session.resume(sessionID)
+      expect(requests).toHaveLength(1)
+      const prompt = JSON.stringify(requests[0]!.messages)
+      expect(prompt).toContain("Inspect the first boundary.")
+      expect(prompt).toContain("Inspect the second boundary.")
+      expect(prompt).toContain("Inspect the third boundary.")
+      expect(
+        (yield* session.context(sessionID)).flatMap((message) => (message.type === "skill" ? [message.skill] : [])),
+      ).toEqual(["first-audit", "second-audit", "third-audit"].map((id) => SkillV2.ID.make(id)))
+    }),
+  )
+
   it.effect("loads explicit skill instructions before the first model request without a tool decision", () =>
     Effect.gen(function* () {
       const session = yield* setup

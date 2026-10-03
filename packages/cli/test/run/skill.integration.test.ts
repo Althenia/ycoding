@@ -15,6 +15,10 @@ async function skillServer(deny = false) {
     skillPath,
     "---\nname: CLI explicit audit\nmetadata:\n  ycoding/autoinvoke: false\n---\nInspect the CLI skill boundary before making a model decision.\n",
   )
+  await writeFile(
+    path.join(directory, "config", "skills", "cli-explicit-plan.md"),
+    "---\nname: CLI explicit plan\nmetadata:\n  ycoding/autoinvoke: false\n---\nPlan every affected CLI boundary before implementation.\n",
+  )
   if (deny)
     await writeFile(
       path.join(directory, "config", "ycoding.json"),
@@ -50,7 +54,7 @@ async function skillServer(deny = false) {
   }
 }
 
-test("noninteractive CLI sends full explicit skill instructions in the first real provider request", async () => {
+test("noninteractive CLI sends every explicit skill's instructions in the first real provider request", async () => {
   const fixture = await skillServer()
   const exitCode = process.exitCode
   try {
@@ -58,7 +62,7 @@ test("noninteractive CLI sends full explicit skill instructions in the first rea
       client: fixture.client,
       sessionID: fixture.sessionID,
       location: { directory: fixture.directory },
-      message: "Use $cli-explicit-audit, then report.",
+      message: "Use $cli-explicit-audit $cli-explicit-plan $cli-explicit-audit, then report.",
       files: [],
       thinking: false,
       format: "json",
@@ -79,8 +83,20 @@ test("noninteractive CLI sends full explicit skill instructions in the first rea
             message.content.includes("Inspect the CLI skill boundary before making a model decision."),
         ),
     ).toBe(true)
+    expect(
+      Array.isArray(wireMessages) &&
+        wireMessages.some(
+          (message) =>
+            message?.role === "user" &&
+            typeof message.content === "string" &&
+            message.content.includes("Plan every affected CLI boundary before implementation."),
+        ),
+    ).toBe(true)
     const messages = (await fixture.client.session.snapshot({ sessionID: fixture.sessionID })).messages
-    expect(messages.filter((message) => message.type === "skill")).toHaveLength(1)
+    expect(messages.flatMap((message) => (message.type === "skill" ? [message.skill] : []))).toEqual([
+      "cli-explicit-audit",
+      "cli-explicit-plan",
+    ])
     expect(messages.filter((message) => message.type === "user")).toHaveLength(1)
     expect(
       messages.flatMap((message) =>

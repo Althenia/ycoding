@@ -22,6 +22,16 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.8.12",
+    date: "2026-10-03",
+    title: "Large images and actionable input requests",
+    tags: ["Changed", "Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Fix valid large images being rejected when attached from the terminal or remote web. Resizing and existing attachment size limits remain enforced. Update the connected machine to apply this fix remotely." },
+      { tag: "Changed", text: "Improve agent guidance to request missing information, decisions, and required reviews through actionable questions, so pending requests use the existing attention alerts instead of ending with a text-only request. Permission and guardrail approvals keep their existing rules." },
+    ],
+  },
+  {
     version: "0.8.11",
     date: "2026-10-02",
     title: "Specific and reliable System alerts",

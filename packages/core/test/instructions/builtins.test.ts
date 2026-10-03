@@ -24,6 +24,8 @@ const gitAttribution =
   "When creating commits, use the user's existing Git author and committer identity and write messages without Co-authored-by trailers or AI, model, agent, or provider attribution. Do not set `user.name`, `user.email`, or `GIT_AUTHOR_*`/`GIT_COMMITTER_*`, or pass `--author` or `--reset-author`, as part of committing. If Git reports a missing identity, report it and ask the user to configure their own identity; never invent one."
 const taskCompletion =
   "Call task_complete once after all accepted work is finished and verified, immediately before your final reply. Do not call it for ordinary replies, idle, partial results, blockers, or unfinished pending, subagent, or background work. In goal mode, first complete the achieved goal with the goal tool; goal completion alone is not work-completion evidence. If new input or unfinished work intervenes, finish and verify it before declaring completion again."
+const humanInput =
+  "When progress requires user input, a decision, or review, call question with the blocker and the minimum actionable request; do not end with a prose-only request for the user to act. Use options for decisions and an empty options array for free-text input. Continue after the reply; do not call task_complete while blocked. Keep permission and guardrail approvals on their native request paths. Do not ask for routine progress, optional acknowledgement, or information you can obtain yourself. Preserve autonomy and permission rules; if question is unavailable or denied, report that blocker without bypassing it."
 const locationLayer = Layer.succeed(
   Location.Service,
   Location.Service.of(
@@ -75,6 +77,8 @@ describe("InstructionBuiltIns", () => {
           "",
           gitAttribution,
           "",
+          humanInput,
+          "",
           taskCompletion,
         ].join("\n"),
       )
@@ -106,6 +110,20 @@ describe("InstructionBuiltIns", () => {
       expect(source.initial(taskCompletion)).toBe(taskCompletion)
       expect(source.changed(taskCompletion, taskCompletion)).toBe(taskCompletion)
       expect(yield* second.at(-1)!.read).toBe(value)
+    }),
+  )
+
+  it.effect("routes required human input and review through question for every Session", () =>
+    Effect.gen(function* () {
+      const builtins = yield* InstructionBuiltIns.Service
+      const first = (yield* builtins.load(sessionID)).find((source) => source.key === "core/human-input")
+      const second = (yield* builtins.load(otherSessionID)).find((source) => source.key === "core/human-input")
+      expect(first).toBeDefined()
+      expect(second).toBeDefined()
+      expect(yield* first!.read).toBe(humanInput)
+      expect(first!.initial(humanInput)).toBe(humanInput)
+      expect(first!.changed(humanInput, humanInput)).toBe(humanInput)
+      expect(yield* second!.read).toBe(humanInput)
     }),
   )
 

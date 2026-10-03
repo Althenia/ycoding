@@ -96,6 +96,14 @@ const layer = Layer.effect(
               render: { initial: (instruction) => instruction, changed: (_previous, instruction) => instruction },
             }),
             Instructions.make({
+              key: Instructions.Key.make("core/human-input"),
+              codec: Schema.toCodecJson(Schema.String),
+              read: Effect.succeed(
+                "When progress requires user input, a decision, or review, call question with the blocker and the minimum actionable request; do not end with a prose-only request for the user to act. Use options for decisions and an empty options array for free-text input. Continue after the reply; do not call task_complete while blocked. Keep permission and guardrail approvals on their native request paths. Do not ask for routine progress, optional acknowledgement, or information you can obtain yourself. Preserve autonomy and permission rules; if question is unavailable or denied, report that blocker without bypassing it.",
+              ),
+              render: { initial: (instruction) => instruction, changed: (_previous, instruction) => instruction },
+            }),
+            Instructions.make({
               key: Instructions.Key.make("core/task-completion"),
               codec: Schema.toCodecJson(Schema.String),
               read: Effect.succeed(

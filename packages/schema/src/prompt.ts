@@ -10,7 +10,13 @@ export const PromptMention = Schema.Struct({
 }).annotate({ identifier: "Prompt.Mention" })
 
 export const Base64 = Schema.String.check(
-  Schema.isPattern(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
+  Schema.makeFilter(
+    (value) => {
+      const match = /^[A-Za-z0-9+/]*={0,2}$/.exec(value)
+      return match !== null && match[0].length % 4 === 0
+    },
+    Schema.isPattern(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/).annotations,
+  ),
 ).annotate({ identifier: "Prompt.Base64" })
 export type Base64 = typeof Base64.Type
 

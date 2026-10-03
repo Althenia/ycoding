@@ -389,6 +389,53 @@ const guardrailNotification: TuiAttentionNotifyInput = {
 }
 
 describe("internal notifications TUI plugin", () => {
+  test("a pending blocker review reaches the terminal without declaring work complete", async () => {
+    const terminal = await notificationTerminal()
+    const harness = await setup({ attention: terminal.attention })
+    try {
+      terminal.stdin.emit("data", Buffer.from("\u001bP>|ghostty 1.1.3\u001b\\"))
+      terminal.stdin.emit("data", Buffer.from("\u001b[?1004;1$y"))
+      terminal.stdin.emit("data", Buffer.from("\u001b[O"))
+      harness.emit(executionStarted("started"))
+      const pending = {
+        ...form("blocker-review"),
+        title: "Questions",
+        metadata: { kind: "question", tool: { messageID: "msg_blocker", callID: "call_review" } },
+        fields: [
+          {
+            key: "q0",
+            type: "string",
+            title: "Evidence",
+            description: "Paste the exact failing input.",
+            options: [],
+            custom: true,
+          },
+        ],
+      } satisfies ReturnType<typeof form>
+      harness.emit({ id: "blocker", created: 0, type: "form.created", data: { form: pending } })
+      await harness.flush()
+      expect(terminal.output()).toContain("\u001b]777;notify;Questions;Input needs response\u001b\\")
+      expect(terminal.notifications()).toHaveLength(1)
+      expect(harness.notifications.some((input) => input.message === "Session done")).toBe(false)
+      harness.emit({ id: "duplicate", created: 0, type: "form.created", data: { form: pending } })
+      await harness.flush()
+      expect(terminal.notifications()).toHaveLength(1)
+      harness.emit({
+        id: "answered",
+        created: 0,
+        type: "form.replied",
+        data: { id: pending.id, sessionID: "session", answer: { q0: "Synthetic failing input" } },
+      })
+      harness.emit(executionSucceeded("settled"))
+      await settle()
+      expect(terminal.notifications()).toHaveLength(1)
+      expect(harness.notifications.some((input) => input.message === "Session done")).toBe(false)
+    } finally {
+      await harness.cleanup()
+      terminal.dispose()
+    }
+  })
+
   for (const focus of ["unknown", "blurred", "focused"] as const) {
     test(`approval events reach the real Ghostty renderer only when focus is ${focus}`, async () => {
       const terminal = await notificationTerminal()

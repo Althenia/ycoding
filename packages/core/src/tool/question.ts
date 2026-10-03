@@ -16,7 +16,10 @@ export const description = `Use this tool when you need to ask the user question
 3. Get decisions on implementation choices as you work
 4. Offer choices to the user about what direction to take.
 
+When progress requires user input, a decision, or review, call this tool instead of ending with a prose-only request. Include the blocker and the minimum actionable question, then continue after the reply. Do not use task_complete while blocked. Keep permission and guardrail approvals on their native request paths.
+
 Usage notes:
+- For required free-text input, use an empty options array
 - When \`custom\` is enabled (default), a "Type your own answer" option is added automatically; don't include "Other" or catch-all options
 - Answers are returned as arrays of labels; set \`multiple: true\` to allow selecting more than one
 - If you recommend a specific option, make that the first option in the list and add "(Recommended)" at the end of the label
