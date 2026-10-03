@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite"
-import { expect, spyOn, test } from "bun:test"
+import { expect, jest, spyOn, test } from "bun:test"
 import { base64UrlEncode } from "../src/auth/crypto"
 import { deriveWebPushKeys } from "../src/push/crypto"
 import { pushDeliveryTimeoutMs, sendPushToOwner, sendTestPush } from "../src/push/send"
@@ -260,6 +260,7 @@ test("a push service that never answers is abandoned at the delivery deadline as
   const keys = await vapidKeys()
   const calls: string[] = []
   const aborts: string[] = []
+  const hanging = Promise.withResolvers<void>()
   const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new Request(input).url
     calls.push(url)
@@ -269,6 +270,7 @@ test("a push service that never answers is abandoned at the delivery deadline as
         aborts.push(init.signal?.reason instanceof Error ? init.signal.reason.name : "unknown")
         reject(init.signal?.reason)
       })
+      if (calls.filter((call) => call.endsWith("/hung")).length === 2) hanging.resolve()
     })
   }
   const failures: [string, boolean][] = []
@@ -285,20 +287,25 @@ test("a push service that never answers is abandoned at the delivery deadline as
   await relay.attach({ ...connection, connectionID: "agent", role: "agent", browserSessionID: "dev_1", noticesSubscribed: false })
   for (const browser of ["hung", "refused", "none"]) await relay.attach({ ...connection, connectionID: `tab-${browser}`, role: "client", browserSessionID: `bs_${browser}` })
   const info = spyOn(console, "info").mockImplementation(() => undefined)
+  jest.useFakeTimers()
   try {
     await relay.handleAgentMessage("agent", JSON.stringify({ type: "status", running: [], attention: [] }))
-    const started = performance.now()
     await relay.handleAgentMessage("agent", JSON.stringify({ type: "status", running: [], attention: ["ses_a"] }))
-    const [admin] = await Promise.all([sendTestPush({ store: memoryStore([], failures), subscription: hung.subscription, ...keys, fetch }), relay.settleDeliveries()])
-    const elapsed = performance.now() - started
+    const settled = Promise.all([sendTestPush({ store: memoryStore([], failures), subscription: hung.subscription, ...keys, fetch }), relay.settleDeliveries()])
+    await hanging.promise
     expect(pushDeliveryTimeoutMs).toBe(10_000)
-    expect(elapsed).toBeGreaterThanOrEqual(pushDeliveryTimeoutMs - 50)
-    expect(elapsed).toBeLessThan(pushDeliveryTimeoutMs + 3_000)
+    jest.advanceTimersByTime(pushDeliveryTimeoutMs - 1)
+    expect(aborts).toEqual([])
+    jest.advanceTimersByTime(1)
+    const [admin] = await settled
     expect(admin).toEqual({ outcome: "unreachable" })
     expect(aborts).toEqual(["TimeoutError", "TimeoutError"])
     expect(calls.sort()).toEqual(["https://fcm.googleapis.com/fcm/send/hung", "https://fcm.googleapis.com/fcm/send/hung", "https://fcm.googleapis.com/fcm/send/refused"])
     const presented = (connectionID: string) => frames.filter((entry) => entry.connectionID === connectionID && entry.frame.includes('"type":"notice.present"')).length
     expect([presented("tab-hung"), presented("tab-refused"), presented("tab-none")]).toEqual([1, 1, 1])
     expect(failures.filter(([endpoint]) => endpoint.endsWith("/hung"))).toEqual([["https://fcm.googleapis.com/fcm/send/hung", false], ["https://fcm.googleapis.com/fcm/send/hung", false]])
-  } finally { info.mockRestore() }
-}, 20_000)
+  } finally {
+    jest.useRealTimers()
+    info.mockRestore()
+  }
+})
