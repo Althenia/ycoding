@@ -383,6 +383,31 @@ describe("PatchTool", () => {
     ),
   )
 
+  it.live("supports an end-of-file anchor", () =>
+    withTempTool((directory, registry) =>
+      Effect.gen(function* () {
+        const target = path.join(directory, "tail.txt")
+        yield* Effect.promise(() => fs.writeFile(target, "alpha\nlast\n"))
+        yield* executeTool(
+          registry,
+          call("*** Begin Patch\n*** Update File: tail.txt\n@@\n-last\n+end\n*** End of File\n*** End Patch"),
+        )
+        expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("alpha\nend\n")
+      }),
+    ),
+  )
+
+  it.live("applies multiple hunks to one file", () =>
+    withTempTool((directory, registry) =>
+      Effect.gen(function* () {
+        const target = path.join(directory, "multi.txt")
+        yield* Effect.promise(() => fs.writeFile(target, "a\nb\nc\nd\n"))
+        yield* executeTool(registry, call("*** Begin Patch\n*** Update File: multi.txt\n@@\n-b\n+B\n@@\n-d\n+D\n*** End Patch"))
+        expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("a\nB\nc\nD\n")
+      }),
+    ),
+  )
+
   it.live("rejects deleting a directory", () =>
     withTempTool((directory, registry) =>
       Effect.gen(function* () {
@@ -391,22 +416,6 @@ describe("PatchTool", () => {
           yield* executeTool(registry, call("*** Begin Patch\n*** Delete File: dir\n*** End Patch")),
         ).toMatchObject({ type: "error" })
         expect(yield* exists(path.join(directory, "dir"))).toBe(true)
-      }),
-    ),
-  )
-
-  it.live("supports an end-of-file anchor", () =>
-    withTempTool((directory, registry) =>
-      Effect.gen(function* () {
-        const target = path.join(directory, "tail.txt")
-        yield* Effect.promise(() => fs.writeFile(target, "alpha\nlast\n"))
-        yield* executeTool(
-          registry,
-          call(
-            "*** Begin Patch\n*** Update File: tail.txt\n@@\n-last\n+end\n*** End of File\n*** End Patch",
-          ),
-        )
-        expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("alpha\nend\n")
       }),
     ),
   )
@@ -425,63 +434,6 @@ describe("PatchTool", () => {
           ),
         ).toMatchObject({ type: "error" })
         expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("a\nb\nc\nd\n")
-      }),
-    ),
-  )
-
-  it.live("requires patchText", () =>
-    withTempTool((_directory, registry) =>
-      Effect.gen(function* () {
-        expect(yield* executeTool(registry, call(""))).toEqual({ type: "error", value: "patchText is required" })
-      }),
-    ),
-  )
-
-  it.live("rejects invalid patch format", () =>
-    withTempTool((_directory, registry) =>
-      Effect.gen(function* () {
-        expect(yield* executeTool(registry, call("invalid patch"))).toMatchObject({
-          type: "error",
-          value: expect.stringContaining("patch verification failed"),
-        })
-      }),
-    ),
-  )
-
-  it.live("rejects an empty patch", () =>
-    withTempTool((_directory, registry) =>
-      Effect.gen(function* () {
-        expect(yield* executeTool(registry, call("*** Begin Patch\n*** End Patch"))).toEqual({
-          type: "error",
-          value: "patch rejected: empty patch",
-        })
-      }),
-    ),
-  )
-
-  it.live("rejects an invalid hunk header", () =>
-    withTempTool((_directory, registry) =>
-      Effect.gen(function* () {
-        expect(
-          yield* executeTool(
-            registry,
-            call("*** Begin Patch\n*** Frobnicate File: foo\n*** End Patch"),
-          ),
-        ).toEqual({ type: "error", value: "patch verification failed: no hunks found" })
-      }),
-    ),
-  )
-
-  it.live("applies multiple hunks to one file", () =>
-    withTempTool((directory, registry) =>
-      Effect.gen(function* () {
-        const target = path.join(directory, "multi.txt")
-        yield* Effect.promise(() => fs.writeFile(target, "a\nb\nc\nd\n"))
-        yield* executeTool(
-          registry,
-          call("*** Begin Patch\n*** Update File: multi.txt\n@@\n-b\n+B\n@@\n-d\n+D\n*** End Patch"),
-        )
-        expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("a\nB\nc\nD\n")
       }),
     ),
   )
@@ -516,9 +468,7 @@ describe("PatchTool", () => {
         yield* Effect.promise(() => fs.writeFile(target, "no newline at end"))
         yield* executeTool(
           registry,
-          call(
-            "*** Begin Patch\n*** Update File: no-newline.txt\n@@\n-no newline at end\n+first line\n+second line\n*** End Patch",
-          ),
+          call("*** Begin Patch\n*** Update File: no-newline.txt\n@@\n-no newline at end\n+first line\n+second line\n*** End Patch"),
         )
         expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("first line\nsecond line\n")
       }),
@@ -534,81 +484,71 @@ describe("PatchTool", () => {
           registry,
           call("*** Begin Patch\n*** Update File: context.txt\n@@ fn b\n-x=10\n+x=11\n*** End Patch"),
         )
-        expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe(
-          "fn a\nx=10\ny=2\nfn b\nx=11\ny=20\n",
-        )
+        expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("fn a\nx=10\ny=2\nfn b\nx=11\ny=20\n")
       }),
     ),
   )
 
-  it.live("parses a heredoc-wrapped patch", () =>
+  it.live("parses heredoc-wrapped patches with and without cat", () =>
     withTempTool((directory, registry) =>
       Effect.gen(function* () {
         yield* executeTool(
           registry,
-          call("cat <<'EOF'\n*** Begin Patch\n*** Add File: heredoc.txt\n+with cat\n*** End Patch\nEOF"),
+          call("cat <<'EOF'\n*** Begin Patch\n*** Add File: with-cat.txt\n+with cat\n*** End Patch\nEOF"),
         )
-        expect(yield* Effect.promise(() => fs.readFile(path.join(directory, "heredoc.txt"), "utf8"))).toBe(
-          "with cat\n",
-        )
-      }),
-    ),
-  )
-
-  it.live("parses a heredoc-wrapped patch without cat", () =>
-    withTempTool((directory, registry) =>
-      Effect.gen(function* () {
         yield* executeTool(
           registry,
-          call("<<EOF\n*** Begin Patch\n*** Add File: heredoc.txt\n+without cat\n*** End Patch\nEOF"),
+          call("<<EOF\n*** Begin Patch\n*** Add File: without-cat.txt\n+without cat\n*** End Patch\nEOF"),
         )
-        expect(yield* Effect.promise(() => fs.readFile(path.join(directory, "heredoc.txt"), "utf8"))).toBe(
+        expect(yield* Effect.promise(() => fs.readFile(path.join(directory, "with-cat.txt"), "utf8"))).toBe("with cat\n")
+        expect(yield* Effect.promise(() => fs.readFile(path.join(directory, "without-cat.txt"), "utf8"))).toBe(
           "without cat\n",
         )
       }),
     ),
   )
 
-  it.live("matches with trailing whitespace differences", () =>
+  it.live("matches context with surrounding whitespace and Unicode punctuation differences", () =>
     withTempTool((directory, registry) =>
       Effect.gen(function* () {
-        const target = path.join(directory, "trailing.txt")
-        yield* Effect.promise(() => fs.writeFile(target, "line1  \nline2\nline3   \n"))
+        const trailing = path.join(directory, "trailing.txt")
+        yield* Effect.promise(() => fs.writeFile(trailing, "line1  \nline2\nline3   \n"))
         yield* executeTool(
           registry,
           call("*** Begin Patch\n*** Update File: trailing.txt\n@@\n-line2\n+changed\n*** End Patch"),
         )
-        expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("line1  \nchanged\nline3   \n")
-      }),
-    ),
-  )
+        expect(yield* Effect.promise(() => fs.readFile(trailing, "utf8"))).toBe("line1  \nchanged\nline3   \n")
 
-  it.live("matches with leading whitespace differences", () =>
-    withTempTool((directory, registry) =>
-      Effect.gen(function* () {
-        const target = path.join(directory, "leading.txt")
-        yield* Effect.promise(() => fs.writeFile(target, "  line1\nline2\n  line3\n"))
+        const leading = path.join(directory, "leading.txt")
+        yield* Effect.promise(() => fs.writeFile(leading, "  line1\nline2\n  line3\n"))
         yield* executeTool(
           registry,
           call("*** Begin Patch\n*** Update File: leading.txt\n@@\n-line2\n+changed\n*** End Patch"),
         )
-        expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("  line1\nchanged\n  line3\n")
+        expect(yield* Effect.promise(() => fs.readFile(leading, "utf8"))).toBe("  line1\nchanged\n  line3\n")
+
+        const unicode = path.join(directory, "unicode.txt")
+        yield* Effect.promise(() => fs.writeFile(unicode, "He said “hello”\nsome—dash\nend\n"))
+        yield* executeTool(
+          registry,
+          call('*** Begin Patch\n*** Update File: unicode.txt\n@@\n-He said "hello"\n+He said "hi"\n*** End Patch'),
+        )
+        expect(yield* Effect.promise(() => fs.readFile(unicode, "utf8"))).toBe('He said "hi"\nsome—dash\nend\n')
       }),
     ),
   )
 
-  it.live("matches with Unicode punctuation differences", () =>
-    withTempTool((directory, registry) =>
+  it.live("rejects malformed patch input with a model-visible error", () =>
+    withTempTool((_directory, registry) =>
       Effect.gen(function* () {
-        const target = path.join(directory, "unicode.txt")
-        yield* Effect.promise(() => fs.writeFile(target, "He said “hello”\nsome—dash\nend\n"))
-        yield* executeTool(
-          registry,
-          call(
-            '*** Begin Patch\n*** Update File: unicode.txt\n@@\n-He said "hello"\n+He said "hi"\n*** End Patch',
-          ),
-        )
-        expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe('He said "hi"\nsome—dash\nend\n')
+        for (const [patchText, value] of [
+          ["", "patchText is required"],
+          ["invalid patch", expect.stringContaining("patch verification failed")],
+          ["*** Begin Patch\n*** End Patch", "patch rejected: empty patch"],
+          ["*** Begin Patch\n*** Frobnicate File: foo\n*** End Patch", "patch verification failed: no hunks found"],
+        ] as const) {
+          expect(yield* executeTool(registry, call(patchText))).toEqual({ type: "error", value })
+        }
       }),
     ),
   )
