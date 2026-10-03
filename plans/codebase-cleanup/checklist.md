@@ -11,9 +11,9 @@ Tick an item only when its evidence is recorded in `tracking.md`. Slice order, g
 
 ## S0 — Baseline
 
-- [ ] `git worktree add -b codebase-cleanup .worktrees/codebase-cleanup main`, then `bun install --frozen-lockfile`.
+- [x] `git worktree add -b codebase-cleanup .worktrees/codebase-cleanup main`, then `bun install --frozen-lockfile` (cloud session: branch `v0.9.0-wip`, D41).
 - [x] Recheck every historical baseline row in `plan.md` against the new `main`; leave unrecounted historical totals explicitly unresolved.
-- [ ] Run every AC10 command one at a time. Record results and pre-existing failures in § Baseline.
+- [x] Run every AC10 command one at a time. Record results and pre-existing failures in § Baseline.
 - [ ] Build the P0 harness and record the baseline (see § P).
 
 ## S1 — Fork-point classification

@@ -55,7 +55,7 @@ Status values: `todo`, `blocked`, `in_progress`, `done`, `dropped`. A row moves 
 | Slice | Title | Depends on | Status | Evidence ref |
 |---|---|---|---|---|
 | R | v0.8.9 skill-invocation fix and release | — | done | E3–E11 |
-| S0 | Baseline | R | in_progress | E9, E11 (release legs on `1af767b6` = baseline) |
+| S0 | Baseline | R | done: AC10 at `8dfbd7ee` on the cloud host; P0 tracked under P | E9, E11, E79, § Baseline |
 | S1 | Fork-point classification | S0 | done: all 741 named baseline paths reconciled; the 27 resolved (18 public, 9 no product caller) and handed to the SC rankings | E12, E38, E41, E49–E55, E60, E63, E69, E71–E73, E75, E78 |
 | S2 | Remove `packages/ui` | S0 | done (`42b8c730`) | E13, E14 |
 | S3 | Remove schema V1 | S0 | done (`f33af45c`) | E13, E14 |
@@ -72,9 +72,31 @@ Status values: `todo`, `blocked`, `in_progress`, `done`, `dropped`. A row moves 
 
 ## Baseline (S0)
 
+AC10 at `8dfbd7ee` (2026-10-03) on the cloud host: Linux x64, 4 CPUs, 15 GB, Bun 1.4.2, Playwright Chromium 1194 as `YCODING_WEB_CHROME`. Commands ran one at a time.
+
 | Command | Exit | Result | Pre-existing failures |
 |---|---|---|---|
-| | | | |
+| `bun run check:ycoding-workspace` | 0 | passed | |
+| `bun run check:ycoding-brand` | 1 | 30 findings, all in `plans/codebase-cleanup/` from `bdb9b125` | G31/E79: fixed in `d30e97bf`; passes after |
+| `bun test --cwd script ./typecheck-cache.integration.test.ts` | 0 | 3 pass | |
+| `bun run typecheck` | 0 | 17/17 tasks, all Turbo-cached here; the pre-push hook ran the same 17 tasks fresh at `8dfbd7ee` | |
+| `bun run lint` | 0 | 0 errors, 2,899 warnings | |
+| `bun run lint:effect-patterns` | 0 | passed | |
+| `bun run test:web` | 0 | 693 pass, 72 files | |
+| `bun run test:remote` | 0 | 61 pass | |
+| `bun run build:web` | 0 | built | |
+| `bun run test:integration:web` | 0 | 418 pass, 25 files (Linux Chromium) | |
+| `bun run test:integration:remote` | 0 | composed real-flow proof passed | |
+| `bun run test:cloudflare` | 0 | 275 pass, 15 files | |
+| `bun run build:cloudflare` | 0 | dry-run built | |
+| TUI release legs (five files, D15) | 0 | 43 pass | |
+| `cd packages/cli && bun test --timeout 30000` | 0 | 421 pass, 6 skip (macOS-only `skipIf`: install-local ×2, computer-use packaging, update), 51 files | |
+| `bun run test:extension` | 0 | 45 pass | |
+| `bun run build:tui` | 0 | linux-x64 artifact | |
+| `bun run smoke:tui` | 0 | artifact smoke passed | |
+| `bun run smoke:runtime` | 0 | auth, archive, yolo, goal, subagent, cache-hit 0.75, tools 3/3, openai-fallback 1 | |
+
+Not covered on this host: macOS-only tests and gates (computer-use, signed install, darwin-arm64 artifacts), Safari/WebKit, branded Chrome, and `test:integration:browser`, which requires macOS arm64 with Chrome 152+.
 
 Resume baseline: cleanup rebased from `3962b14f` onto current `main` `c9a2957a`; resulting cleanup head `1141158a`. Original worktree edits remain with their exclusive owners. The rebase retained the newer alert-repeat constant and applied only the unused-type export removals in the notice-store conflict. Earlier slice commit IDs above remain historical references.
 
@@ -168,7 +190,7 @@ Resume baseline: cleanup rebased from `3962b14f` onto current `main` `c9a2957a`;
 | E76 | G7 recheck | `git grep -n "ThemeSource" -- packages` at `bdb9b125` | 0 | only the distinct `ThemeSource` type in `tui/src/context/theme.tsx`; `tui/src/theme/index.ts` has no `ThemeFile as ThemeSource` alias | 2026-10-03 |
 | E77 | G30 vision fix (`fix(core): analyze local tool-result images for text-only models`) | RED `bun test --cwd packages/core test/session-runner.test.ts -t "local tool-result images"` (text-only wire carried `image_url`); GREEN same; runner/image-analyzer/runner-message/compaction/instructions/tool-registry files; `bun run --cwd packages/core typecheck`; touched-file oxlint; `bun run lint:effect-patterns`; pre-push root `bun typecheck` under Bun 1.4.2 | 1 intended RED; 0 final | 2/2 focused, 336 pass/0 fail across six files (runner file baseline 238/238); typecheck 0; 0 lint errors and no new warnings on changed lines; 17/17 root typecheck tasks and Cloudflare types current. Success description is not covered end to end (no live vision provider); the failed user Session was not located | 2026-10-03 |
 | E78 | S1 resolution of the 27 | whole-tree `git grep -nE` per path (imports, subpath strings, scripts, docs, tests; excluding `plans/`, `bun.lock`) plus package `private`/`exports` inspection at `8dfbd7ee` | 0 | 18 public API surfaces (17 AI `src/`, Schema `ide-event.ts`); 9 without a product caller (Core `move-session`, `layer-map.example`, `util/path`; TUI `dialog-tag`, `revert-diff`; Client `contract.ts`; AI `recording-cost-report.ts`; Drizzle `examples/basic.ts`; `effect-sqlite-node` package). Recorded in `classification.md` § Resolution of the 27 and handed to `code-leaning/{core,tui,client,ai,schema}.md`. Reachability only; no deletion performed | 2026-10-03 |
-| E79 | S0 brand gate | `bun run check:ycoding-brand` at `8dfbd7ee` | 1 | 30 findings, all under `plans/codebase-cleanup/` (committed in `bdb9b125`; fork-point and vendored-symbol evidence). Test-first: `script/ycoding-rebrand.test.ts` RED (`replace` for a plan path), then `plans/codebase-cleanup/` added to `upstreamPaths`; rebrand/residual tests 6 pass, brand check passes. Remove the entry at S11 with the directory | 2026-10-03 |
+| E79 | S0 brand gate | `bun run check:ycoding-brand` at `8dfbd7ee` | 1 | 30 findings, all under `plans/codebase-cleanup/` (committed in `bdb9b125`; fork-point and vendored-symbol evidence). G31. Test-first: `script/ycoding-rebrand.test.ts` RED (`replace` for a plan path), then `plans/codebase-cleanup/` added to `upstreamPaths`; rebrand/residual tests 6 pass, brand check passes. Remove the entry at S11 with the directory | 2026-10-03 |
 
 ## Defects and gaps
 
@@ -204,6 +226,7 @@ Resume baseline: cleanup rebased from `3962b14f` onto current `main` `c9a2957a`;
 | G28 | Remote connection is reported unstable and Sessions initial load unexpectedly slow with small data | D35; E40 synthetic local SQL/registry measurements exclude DB as demonstrated small-inventory bottleneck but do not measure real user's request/close timing | remote/web | in_progress browser→authenticated relay socket/close/pacing/response diagnostics; no index, LMDB or migration approved |
 | G29 | Sessions loading shows empty bordered Running/recent and Workspaces regions beside list skeletons | annotated screenshot D36; rendered Connected+held initial inventory RED→GREEN for named carousel and Workspaces placeholders, one accessible status per region and ≤1px content shift. Running-sessions 7/420, reading 14/113, web typecheck/strict DESIGN and final branch integration E58 passed | web | corrected on local `v0.9.0`; no iPhone/WebKit or hosted verification claimed |
 | G30 | Text-only model received local tool-result images as provider media (OpenAI Chat `image_url`), a reachable 400 for `local/sisyphus` (`capabilities.input: ["text"]`); only managed user attachments reached the image analyzer | E77 wire-level RED | Core | done: tool-result `data:` images analyzed through the existing analyzer and replaced in place; tool IDs/text, durable history, provider-executed results and multimodal passthrough preserved; `docs/configuration.md` updated |
+| G31 | Committing the plan (`bdb9b125`) broke `check:ycoding-brand`: 30 upstream references under `plans/codebase-cleanup/` | E79 | S0 | done `d30e97bf`: plan directory classified as upstream evidence; remove at S11 |
 
 ## Added web outcome (D20–D21)
 
