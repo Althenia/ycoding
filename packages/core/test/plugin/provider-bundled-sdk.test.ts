@@ -68,22 +68,34 @@ const addPlugin = Effect.fn(function* (plugin: (typeof bundled)[number]["plugin"
 
 describe("bundled AI SDK provider plugins", () => {
   for (const entry of bundled) {
-    it.effect(`${entry.plugin.id} creates the SDK for its exact package with the provider ID as the SDK name`, () =>
+    it.effect(`${entry.plugin.id} creates the SDK for its exact package with canonical and custom provider IDs`, () =>
       Effect.gen(function* () {
         yield* addPlugin(entry.plugin)
-        const result = yield* runSDK(entry.pkg, "custom-provider")
-        const expected = (entry.create as (options: object) => { languageModel: (id: string) => { provider: string } })({
-          name: "custom-provider",
-          apiKey: "test",
-        })
-        expect(result.sdk?.languageModel("model").provider).toBe(expected.languageModel("model").provider)
+        for (const name of [entry.plugin.id.replace("ycoding.provider.", ""), "custom-provider"]) {
+          const result = yield* runSDK(entry.pkg, name)
+          const expected = (entry.create as (options: object) => {
+            languageModel: (id: string) => { provider: string; modelId: string }
+          })({
+            name,
+            apiKey: "test",
+          })
+          expect(result.sdk?.languageModel("model")).toMatchObject({
+            provider: expected.languageModel("model").provider,
+            modelId: expected.languageModel("model").modelId,
+          })
+        }
       }),
     )
 
     it.effect(`${entry.plugin.id} ignores other and lookalike packages`, () =>
       Effect.gen(function* () {
         yield* addPlugin(entry.plugin)
-        for (const pkg of ["@ai-sdk/openai-compatible", `${entry.pkg}/compat`, `file:///tmp/${entry.pkg}.js`]) {
+        for (const pkg of [
+          "@ai-sdk/openai-compatible",
+          `${entry.pkg}/compat`,
+          `${entry.pkg}-lookalike`,
+          `file:///tmp/${entry.pkg}.js`,
+        ]) {
           expect((yield* runSDK(pkg, "custom-provider")).sdk).toBeUndefined()
         }
       }),
