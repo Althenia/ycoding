@@ -144,6 +144,37 @@ test("a failed standalone skill remains owned and retries its stable ID without 
   }
 })
 
+test.each([
+  [
+    409,
+    { _tag: "ConflictError", message: "Prompt message ID conflicts with an existing durable record" },
+    "Prompt ID conflict · Retry send",
+  ],
+  [
+    400,
+    { _tag: "InvalidRequestError", field: "files", message: "Attachment exceeds the 20 MiB limit" },
+    "Attachment rejected · Retry send",
+  ],
+  [503, { _tag: "ServiceUnavailableError", message: "upstream unavailable" }, "Sending prompt unresolved · Retry send"],
+] as const)("admission status %i preserves a distinct recovery outcome", async (status, body, phase) => {
+  const item = submission()
+  const flow = fixture(async (url) => (url.pathname.endsWith("/prompt") ? json(body, { status }) : undefined))
+  try {
+    flow.dispatch(item)
+    await until(() => flow.manager.list()[0]?.state === "attention")
+    expect(flow.manager.list()[0]?.phase).toBe(phase)
+    expect(flow.manager.list()[0]?.error).toBe(status === 503 ? "UnexpectedStatus" : body.message)
+    expect(flow.manager.list()[0]?.input.promptID).toBe(item.promptID)
+    expect(flow.manager.list()[0]?.input.payload.inputText).toBe(item.payload.inputText)
+    expect(flow.receipts).toHaveLength(0)
+    expect(
+      flow.requests.filter((request) => request.path.endsWith("/prompt")).map((request) => request.body.resume),
+    ).toEqual([false])
+  } finally {
+    flow.manager.dispose()
+  }
+})
+
 test("model switch failure pauses only its Session and prevents accidental admission or wake", async () => {
   const first = submission("ses_model", "model first", false)
   first.payload.modelSelectionPending = true
