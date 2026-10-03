@@ -9,7 +9,9 @@ const termios = () =>
 if (process.stdin.isTTY) {
   const before = termios()
   try {
-    process.stdout.write(`\nRESULT=${await readHidden("Enrollment code: ")}\n`)
+    const reading = readHidden("Enrollment code: ")
+    process.stdout.write("READY\n")
+    process.stdout.write(`\nRESULT=${await reading}\n`)
   } catch (error) {
     process.stdout.write(`\nCANCELED=${error instanceof Error ? error.message : String(error)}\n`)
   }
