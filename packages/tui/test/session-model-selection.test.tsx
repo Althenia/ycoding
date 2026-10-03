@@ -6,7 +6,7 @@ import { mkdir } from "node:fs/promises"
 import path from "node:path"
 import type { ModelDaybreak } from "@ycoding-ai/client"
 import { createEffect, onMount } from "solid-js"
-import { DialogModel } from "../src/component/dialog-model"
+import { DialogModel, type DialogModelResult } from "../src/component/dialog-model"
 import { DialogVariant } from "../src/component/dialog-variant"
 import { ArgsProvider } from "../src/context/args"
 import { ClientProvider } from "../src/context/client"
@@ -147,6 +147,7 @@ async function renderPicker(input: {
   /** Skips opening the picker, for cases that exercise LocalProvider actions only. */
   withoutPicker?: boolean
   variantPicker?: boolean
+  onComplete?: (result: DialogModelResult) => void
 }) {
   const state = path.join(root, input.stateDir)
   await mkdir(state, { recursive: true })
@@ -206,7 +207,11 @@ async function renderPicker(input: {
           input.variantPicker ? (
             <DialogVariant sessionID={input.home ? undefined : sessionID} />
           ) : (
-            <DialogModel sessionID={input.home ? undefined : sessionID} order={input.order} />
+            <DialogModel
+              sessionID={input.home ? undefined : sessionID}
+              order={input.order}
+              onComplete={input.onComplete}
+            />
           ),
         ),
       )
@@ -426,6 +431,37 @@ test("model and variant picker selection performs no Session request", async () 
     await screen.dispose()
   }
 }, 30_000)
+
+test.each([
+  { name: "model", stateDir: "cancel-model-completion", selectModel: false },
+  { name: "variant", stateDir: "cancel-variant-completion", selectModel: true },
+])(
+  "Escape from the $name dialog reports cancellation without selecting a model",
+  async ({ stateDir, selectModel }) => {
+    switches.length = 0
+    const results: DialogModelResult[] = []
+    const screen = await renderPicker({
+      stateDir,
+      order: [{ providerID: "openai", modelID: "gpt-5-2" }],
+      onComplete: (result) => results.push(result),
+    })
+    try {
+      if (selectModel) {
+        screen.app.mockInput.pressEnter()
+        await screen.app.waitForFrame((frame) => frame.includes("Select variant"))
+        expect(results).toEqual([])
+      }
+      screen.app.mockInput.pressEscape()
+      await screen.app.waitFor(() => results.length > 0)
+      expect(results).toEqual([{ type: "cancelled" }])
+      expect(screen.pendingTarget()).toBeUndefined()
+      expect(switches).toEqual([])
+    } finally {
+      await screen.dispose()
+    }
+  },
+  30_000,
+)
 
 test("rapid model cycling keeps only the newest Session target", async () => {
   switches.length = 0
