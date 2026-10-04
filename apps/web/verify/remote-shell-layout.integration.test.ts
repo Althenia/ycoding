@@ -120,8 +120,9 @@ describe("remote shell layout", () => {
         expect(await page.evaluate<boolean>(`document.querySelector('.loading-placeholder--screen')?.getBoundingClientRect().height >= 240 && document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
         for (let attempt = 0; attempt < 20 && await page.evaluate<number>(`Number(getComputedStyle(document.querySelector('.loading-placeholder--screen .loading-placeholder__shape')).opacity)`) < 0.9; attempt += 1) await Bun.sleep(25)
         await Bun.write(new URL(`../../../.cache/tmp/shell-loading-screen-${width}x${height}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
-        for (let attempt = 0; attempt < 80 && await page.evaluate<boolean>(`document.querySelector('.workspace__main .loading-placeholder--screen') !== null`); attempt += 1) await Bun.sleep(50)
-        expect(await page.evaluate<boolean>(`document.querySelector('.workspace__main .loading-placeholder--screen') === null && document.querySelector('.new-session-composer') !== null`)).toBe(true)
+        const settled = `[...document.querySelectorAll('.workspace__main .loading-placeholder--screen')].every((element) => element.closest('[inert]') !== null && element.closest('[aria-hidden="true"]') !== null) && [...document.querySelectorAll('.new-session-composer')].some((element) => element.closest('[inert]') === null)`
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(settled); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<boolean>(settled)).toBe(true)
       } finally { await page.close() }
     }
   }, 20_000)
@@ -713,6 +714,7 @@ describe("remote shell layout", () => {
   }, 30_000)
 
   test("opens another Session from New session without leaving its composer in history", async () => {
+    const newSessionComposerRetainedClosed = `[...document.querySelectorAll('.new-session-composer')].every((element) => { const panel = element.closest('.route-panel'); return panel?.inert === true && panel.getAttribute('aria-hidden') === 'true' && panel.getClientRects().length === 0 })`
     for (const [width, height] of [[1440, 900], [390, 844]] as const) {
       const page = await fixture("view=chat", width, "Stream remote output safely", undefined, height)
       try {
@@ -721,7 +723,7 @@ describe("remote shell layout", () => {
           for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.overlay--sessions-sheet[open] .session-row') !== null`); attempt += 1) await Bun.sleep(50)
           await page.evaluate(`document.querySelector('.overlay--sessions-sheet .pane__head button')?.click()`)
         } else await page.evaluate(`document.querySelector('.workspace__rail .pane__head button')?.click()`)
-        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.new-session-composer') !== null`); attempt += 1) await Bun.sleep(50)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.route-panel:not([inert]) .new-session-composer') !== null`); attempt += 1) await Bun.sleep(50)
         expect(await page.evaluate<string>(`location.hash`)).toBe("#new-session")
         if (width === 390) {
           await page.evaluate(`document.querySelector('.app-header__menu')?.click()`)
@@ -732,13 +734,13 @@ describe("remote shell layout", () => {
         for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.activeElement === document.querySelector('.remote-conversation-view .conversation-breadcrumb')`); attempt += 1) await Bun.sleep(50)
         expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.remote-conversation-view .conversation-breadcrumb')`)).toBe(true)
         expect(await page.evaluate<{ readonly hash: string; readonly closed: boolean; readonly title: string }>(`(() => { const composer=document.querySelector('.new-session-composer'), panel=composer?.closest('.route-panel'); return { hash: location.hash, closed: !composer || panel?.inert === true && panel?.getAttribute('aria-hidden') === 'true', title: document.querySelector('.conversation-breadcrumb strong')?.textContent?.trim() ?? '' } })()`)).toEqual({ hash: "", closed: true, title: "Archived: release notes" })
-        for (let attempt = 0; attempt < 20 && await page.evaluate<boolean>(`document.querySelector('.new-session-composer') !== null`); attempt += 1) await Bun.sleep(50)
-        expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer') === null`)).toBe(true)
+        for (let attempt = 0; attempt < 20 && !await page.evaluate<boolean>(newSessionComposerRetainedClosed); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<boolean>(newSessionComposerRetainedClosed)).toBe(true)
         await page.evaluate(`history.back()`)
         await Bun.sleep(100)
         expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.new-session-composer')].every((element) => element.closest('[inert]') !== null)`)).toBe(true)
-        for (let attempt = 0; attempt < 20 && await page.evaluate<boolean>(`document.querySelector('.new-session-composer') !== null`); attempt += 1) await Bun.sleep(50)
-        expect(await page.evaluate<boolean>(`location.hash === '' && document.querySelector('.new-session-composer') === null && document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('Archived: release notes') === true`)).toBe(true)
+        for (let attempt = 0; attempt < 20 && !await page.evaluate<boolean>(newSessionComposerRetainedClosed); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<boolean>(`location.hash === '' && ${newSessionComposerRetainedClosed} &&document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('Archived: release notes') === true`)).toBe(true)
       } finally { await page.close() }
     }
   }, 30_000)

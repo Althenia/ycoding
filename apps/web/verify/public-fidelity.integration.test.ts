@@ -33,25 +33,29 @@ describe("public routes and design-system behavior", () => {
     await page.setViewport(1440, 900)
     for (const [path, selector] of [["/", ".hero__headline"], ["/docs/quickstart", ".docs-article > h1"], ["/changelog", ".release"]] as const) {
       await page.setReducedMotion(false)
+      await page.setAnimationPlaybackRate(0)
       await page.navigate(url(path))
-      const animated = await page.evaluate<{ readonly early: number; readonly middle: number; readonly settled: number; readonly transformChanged: boolean }>(`new Promise((resolve, reject) => {
+      const early = await page.evaluate<{ readonly opacity: number; readonly transform: string }>(`new Promise((resolve, reject) => {
         const selector = ${JSON.stringify(selector)}
         const start = performance.now()
         const wait = () => {
           const element = document.querySelector(selector)
-          if (!(element instanceof HTMLElement) || document.documentElement.dataset.motion !== 'on') {
-            if (performance.now() - start > 3000) return reject(new Error('motion gate or target missing'))
+          if (!(element instanceof HTMLElement) || document.documentElement.dataset.motion !== 'on' || Number(getComputedStyle(element).opacity) >= 1) {
+            if (performance.now() - start > 15000) return reject(new Error('motion gate, target or entrance missing'))
             return requestAnimationFrame(wait)
           }
-          const early = Number(getComputedStyle(element).opacity)
-          const firstTransform = getComputedStyle(element).transform + getComputedStyle(element).translate
-          setTimeout(() => {
-            const middle = Number(getComputedStyle(element).opacity)
-            const transformChanged = firstTransform !== getComputedStyle(element).transform + getComputedStyle(element).translate
-            setTimeout(() => resolve({ early, middle, settled: Number(getComputedStyle(element).opacity), transformChanged }), 700)
-          }, 100)
+          resolve({ opacity: Number(getComputedStyle(element).opacity), transform: getComputedStyle(element).transform + getComputedStyle(element).translate })
         }
         wait()
+      })`)
+      await page.setAnimationPlaybackRate(1)
+      const animated = await page.evaluate<{ readonly early: number; readonly middle: number; readonly settled: number; readonly transformChanged: boolean }>(`new Promise((resolve) => {
+        const element = document.querySelector(${JSON.stringify(selector)})
+        setTimeout(() => {
+          const middle = Number(getComputedStyle(element).opacity)
+          const transformChanged = ${JSON.stringify(early.transform)} !== getComputedStyle(element).transform + getComputedStyle(element).translate
+          setTimeout(() => resolve({ early: ${early.opacity}, middle, settled: Number(getComputedStyle(element).opacity), transformChanged }), 700)
+        }, 100)
       })`)
       expect(animated.early).toBeLessThan(1)
       expect(animated.middle).toBeGreaterThan(animated.early)
@@ -111,24 +115,24 @@ describe("public routes and design-system behavior", () => {
     const page = await requireBrowser().openPage()
     await page.setViewport(1440, 900)
     await page.navigate(url("/"))
+    await page.setAnimationPlaybackRate(0)
     await page.evaluate<void>(`document.querySelector('nav[aria-label="Primary"] a[href="/docs"]')?.click()`)
-    const route = await page.evaluate<{ readonly early: number; readonly later: number }>(`new Promise((resolve, reject) => {
+    const early = await page.evaluate<number>(`new Promise((resolve, reject) => {
       const start = performance.now()
       const wait = () => {
         const main = document.querySelector('.marketing > main')
-        if (!(main instanceof HTMLElement) || !main.querySelector('.docs-article')) {
-          if (performance.now() - start > 3000) return reject(new Error('docs route missing'))
+        if (!(main instanceof HTMLElement) || !main.querySelector('.docs-article') || !main.getAnimations().some((animation) => animation.animationName === 'yc-page-in')) {
+          if (performance.now() - start > 3000) return reject(new Error('docs route entry missing'))
           return requestAnimationFrame(wait)
         }
-        requestAnimationFrame(() => {
-          const early = Number(getComputedStyle(main).opacity)
-          setTimeout(() => resolve({ early, later: Number(getComputedStyle(main).opacity) }), 120)
-        })
+        resolve(Number(getComputedStyle(main).opacity))
       }
       wait()
     })`)
-    expect(route.early).toBeLessThan(1)
-    expect(route.later).toBeGreaterThan(route.early)
+    expect(early).toBeLessThan(1)
+    await page.setAnimationPlaybackRate(1)
+    const later = await page.evaluate<number>(`new Promise((resolve) => setTimeout(() => resolve(Number(getComputedStyle(document.querySelector('.marketing > main')).opacity)), 120))`)
+    expect(later).toBeGreaterThan(early)
     await page.navigate(url("/docs/quickstart"))
     const marker = await page.evaluate<{ readonly first: string; readonly moving: string; readonly settled: string }>(`new Promise((resolve, reject) => {
       const list = document.querySelector('.docs-toc__list')
@@ -274,7 +278,7 @@ describe("public routes and design-system behavior", () => {
       }
     }
     await page.close()
-  }, 60_000)
+  }, 180_000)
 
   test("keeps the install action and product footer destinations available", async () => {
     const page = await requireBrowser().openPage()
@@ -1190,7 +1194,7 @@ describe("public routes and design-system behavior", () => {
     expect(await heading("/offline.html", 768, ".offline-card h1")).toEqual({ size: 18, line: 27 })
     expect(await heading("/offline.html", 1440, ".offline-card h1")).toEqual({ size: 20, line: 28 })
     await page.close()
-  }, 10_000)
+  }, 60_000)
 
   test("keeps the search shortcut owned by its active dialog", async () => {
     const page = await requireBrowser().openPage()

@@ -78,6 +78,8 @@ const route: FetchHandler = async (url, request) => {
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
+  if (url.pathname === `/api/session/${sessionID}/wait` && request.method === "POST")
+    return new Response(null, { status: 204 })
   if (url.pathname === `/api/session/${sessionID}/autonomy`) {
     if (request.method === "PUT") {
       const body = (await request.json()) as Record<string, unknown>
@@ -254,6 +256,7 @@ test("clears the composer after an explicit /goal starts goal mode from normal",
     await submit(screen)
     await waitFor(() => autonomySets.length > 0, "goal activation request")
     await waitFor(() => !screen.lines().some((line) => line.includes("/goal finish product.")), "cleared composer")
+    await waitFor(() => screen.frame().includes("Goal · autonomous"), "live goal status")
 
     expect(autonomySets).toEqual([{ goal: "finish product." }])
     expect(promptRequests).toEqual([])
@@ -529,14 +532,59 @@ test("agrees with the composer branch when the slash menu selects the goal comma
   try {
     await focusComposer(screen)
     await screen.input.typeText("/goal")
-    await waitFor(() => screen.frame().includes("Enter accept"), "slash menu")
+    await screen.renderer.idle()
+    await screen.renderOnce()
+    expect(screen.lines().filter((line) => line.includes("Set autonomous goal"))).toHaveLength(1)
     // Enter with the menu visible selects `session.autonomy.goal`; it must reach the same
     // applyGoalCommand semantics as the composer branch instead of inventing an objective.
-    submit(screen)
+    await submit(screen)
     await waitFor(() => autonomySets.length > 0, "goal command from the slash menu")
 
     expect(autonomySets).toEqual([{ goal: null }])
     expect(promptRequests).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("the command palette exposes the goal action and applies it to the active Session", async () => {
+  resetFixture(goalState("active", "Old objective"))
+  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+  try {
+    screen.input.pressKey("p", { ctrl: true })
+    await waitFor(() => screen.frame().includes("Commands"), "command palette")
+    await screen.input.typeText("autonomous goal")
+    await waitFor(() => screen.frame().includes("Set autonomous goal") || screen.frame().includes("No results"), "goal palette search")
+    expect(screen.lines().filter((line) => line.includes("Set autonomous goal"))).toHaveLength(1)
+    screen.input.pressEnter()
+    await waitFor(() => autonomySets.length === 1, "goal action")
+    expect(autonomySets).toEqual([{ goal: null }])
+    expect(promptRequests).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("execution settlement refreshes a completed goal before the header reports readiness", async () => {
+  resetFixture(goalState("active", "Ship the patch"))
+  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Goal · autonomous" })
+  try {
+    await screen.waitForEventStream()
+    expect(screen.frame()).toContain("Goal · autonomous")
+    autonomyState = goalState("completed", "Ship the patch")
+    screen.events.emit({
+      id: "evt_goal_settled",
+      created: 20,
+      type: "session.execution.succeeded",
+      durable: { aggregateID: sessionID, seq: 1, version: 1 },
+      location: { directory },
+      data: { sessionID },
+    } satisfies YCodingEvent)
+    const deadline = Date.now() + 4_000
+    while (screen.frame().includes("Goal · autonomous") && Date.now() < deadline)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(screen.frame()).not.toContain("Goal · autonomous")
+    expect(screen.frame()).not.toContain("GOAL")
   } finally {
     await screen.dispose()
   }

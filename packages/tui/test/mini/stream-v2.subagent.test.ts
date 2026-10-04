@@ -1,14 +1,16 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
 import { YCoding, type EventSubscribeOutput, type MessageListOutput } from "@ycoding-ai/client/promise"
 import { createSessionTransport } from "../../src/mini/stream-v2.transport"
+import type { FooterEvent, FooterSubagentState } from "../../src/mini/types"
 import { createFooterApiFixture } from "./fixture/footer-api"
 
 type RunV2Event = EventSubscribeOutput
 
 function feed() {
-  const values: RunV2Event[] = []
+  const values: Array<{ value: RunV2Event; consumed: () => void }> = []
   let closed = false
   let wake: (() => void) | undefined
+  let flushed = Promise.resolve()
   const stream = (async function* (): AsyncGenerator<RunV2Event, void, unknown> {
     while (!closed || values.length > 0) {
       if (values.length === 0) {
@@ -17,16 +19,26 @@ function feed() {
         })
         continue
       }
-      const value = values.shift()
-      if (value) yield value
+      const next = values.shift()
+      if (next) {
+        yield next.value
+        next.consumed()
+      }
     }
   })()
   return {
     stream,
     push(value: RunV2Event) {
-      values.push(value)
+      let consumed!: () => void
+      flushed = new Promise<void>((resolve) => {
+        consumed = resolve
+      })
+      values.push({ value, consumed })
       wake?.()
       wake = undefined
+    },
+    flush() {
+      return flushed
     },
     close() {
       closed = true
@@ -192,6 +204,24 @@ function launchLiveSubagent(events: ReturnType<typeof feed>, background = false,
   events.push(subagentProgress(childID))
 }
 
+function waitForState(
+  ui: ReturnType<typeof createFooterApiFixture>,
+  predicate: (state: FooterSubagentState) => boolean,
+) {
+  const matches = (event: FooterEvent) => event.type === "stream.subagent" && predicate(event.state)
+  if (ui.events.some(matches)) return Promise.resolve()
+  return new Promise<void>((resolve) => {
+    const original = ui.api.event.bind(ui.api)
+    ui.api.event = (event) => {
+      original(event)
+      if (matches(event)) {
+        ui.api.event = original
+        resolve()
+      }
+    }
+  })
+}
+
 function familySessions(count: number, running: string[] = []) {
   return Array.from({ length: count }, (_, index) => ({
     id: `ses_old_${index}`,
@@ -232,7 +262,7 @@ describe("mini subagent tracker", () => {
     })
     const states = () => ui.events.flatMap((event) => (event.type === "stream.subagent" ? [event.state] : []))
     launchLiveSubagent(events)
-    while (!states().some((state) => state.tabs.length > 0)) await Bun.sleep(0)
+    await waitForState(ui, (state) => state.tabs.length > 0)
 
     await transport.replayOnResize({ reset: async () => {}, localRows: () => [] })
 
@@ -282,7 +312,7 @@ describe("mini subagent tracker", () => {
     })
     const states = () => ui.events.flatMap((event) => (event.type === "stream.subagent" ? [event.state] : []))
     launchLiveSubagent(events)
-    while (!states().some((state) => state.tabs.length > 0)) await Bun.sleep(0)
+    await waitForState(ui, (state) => state.tabs.length > 0)
 
     await transport.replayOnResize({ reset: async () => {}, localRows: () => [] })
 
@@ -305,15 +335,10 @@ describe("mini subagent tracker", () => {
     })
     const states = () => ui.events.flatMap((event) => (event.type === "stream.subagent" ? [event.state] : []))
     launchLiveSubagent(first)
-    while (!states().some((state) => state.tabs.some((tab) => tab.status === "running"))) await Bun.sleep(0)
+    await waitForState(ui, (state) => state.tabs.some((tab) => tab.status === "running"))
 
     first.close()
-    while (
-      states()
-        .at(-1)
-        ?.tabs.some((tab) => tab.status === "running")
-    )
-      await Bun.sleep(0)
+    await waitForState(ui, (state) => state.tabs.some((tab) => tab.status === "completed"))
 
     expect(states().at(-1)?.tabs).toMatchObject([{ sessionID: "ses_child", status: "completed" }])
     await transport.close()
@@ -327,15 +352,10 @@ describe("mini subagent tracker", () => {
     const transport = await createSessionTransport({ sdk: client, sessionID: "ses_1", thinking: false, footer: ui.api })
     const states = () => ui.events.flatMap((event) => (event.type === "stream.subagent" ? [event.state] : []))
     launchLiveSubagent(events)
-    while (!states().some((state) => state.tabs.some((tab) => tab.status === "running"))) await Bun.sleep(0)
+    await waitForState(ui, (state) => state.tabs.some((tab) => tab.status === "running"))
 
     events.push(subagentToolFailed())
-    while (
-      states()
-        .at(-1)
-        ?.tabs.some((tab) => tab.status === "running")
-    )
-      await Bun.sleep(0)
+    await waitForState(ui, (state) => state.tabs.some((tab) => tab.status === "error"))
 
     expect(states().at(-1)?.tabs).toMatchObject([{ sessionID: "ses_child", status: "error" }])
     await transport.close()
@@ -349,15 +369,10 @@ describe("mini subagent tracker", () => {
     const transport = await createSessionTransport({ sdk: client, sessionID: "ses_1", thinking: false, footer: ui.api })
     const states = () => ui.events.flatMap((event) => (event.type === "stream.subagent" ? [event.state] : []))
     launchLiveSubagent(events)
-    while (!states().some((state) => state.tabs.some((tab) => tab.status === "running"))) await Bun.sleep(0)
+    await waitForState(ui, (state) => state.tabs.some((tab) => tab.status === "running"))
 
     events.push(parentInterrupted())
-    while (
-      states()
-        .at(-1)
-        ?.tabs.some((tab) => tab.status === "running")
-    )
-      await Bun.sleep(0)
+    await waitForState(ui, (state) => state.tabs.some((tab) => tab.status === "cancelled"))
 
     expect(states().at(-1)?.tabs).toMatchObject([{ sessionID: "ses_child", status: "cancelled" }])
     await transport.close()
@@ -372,12 +387,10 @@ describe("mini subagent tracker", () => {
     const states = () => ui.events.flatMap((event) => (event.type === "stream.subagent" ? [event.state] : []))
     launchLiveSubagent(events, true)
     events.push(subagentBackgrounded("ses_child"))
-    while (!states().some((state) => state.tabs.some((tab) => tab.background === true))) await Bun.sleep(0)
+    await waitForState(ui, (state) => state.tabs.some((tab) => tab.background === true))
 
     events.push(parentInterrupted())
-    await Bun.sleep(0)
-    await Bun.sleep(0)
-    await Bun.sleep(0)
+    await events.flush()
 
     expect(states().at(-1)?.tabs).toMatchObject([{ sessionID: "ses_child", status: "running", background: true }])
     await transport.close()
@@ -403,7 +416,7 @@ describe("mini subagent tracker family cap", () => {
     const ui = createFooterApiFixture()
     const transport = await createSessionTransport({ sdk: client, sessionID: "ses_1", thinking: false, footer: ui.api })
     const states = () => ui.events.flatMap((event) => (event.type === "stream.subagent" ? [event.state] : []))
-    return { client, events, transport, states }
+    return { client, events, transport, states, ui }
   }
 
   const foundSession = { id: "ses_found", parentID: "ses_1", title: "Found", agent: "explore", time: { updated: 1 } }
@@ -424,16 +437,11 @@ describe("mini subagent tracker family cap", () => {
   }
 
   test("admits a new subagent once the family cap is already full", async () => {
-    const { events, transport, states } = await boot({ sessions: familySessions(CAP) })
+    const { events, transport, states, ui } = await boot({ sessions: familySessions(CAP) })
     expect(states().at(-1)?.tabs).toHaveLength(CAP)
 
     launchLiveSubagent(events, false, "ses_new")
-    while (
-      !states()
-        .at(-1)
-        ?.tabs.some((tab) => tab.sessionID === "ses_new")
-    )
-      await Bun.sleep(0)
+    await waitForState(ui, (state) => state.tabs.some((tab) => tab.sessionID === "ses_new"))
 
     const tabs = states().at(-1)?.tabs ?? []
     expect(tabs).toHaveLength(CAP)
@@ -445,7 +453,7 @@ describe("mini subagent tracker family cap", () => {
   })
 
   test("never evicts a running child while settled children remain", async () => {
-    const { events, transport, states } = await boot({
+    const { events, transport, states, ui } = await boot({
       sessions: familySessions(CAP - 1, ["ses_live"]),
       active: { ses_live: { type: "running" } },
     })
@@ -456,12 +464,7 @@ describe("mini subagent tracker family cap", () => {
     ).toMatchObject({ status: "running" })
 
     launchLiveSubagent(events, false, "ses_new")
-    while (
-      !states()
-        .at(-1)
-        ?.tabs.some((tab) => tab.sessionID === "ses_new")
-    )
-      await Bun.sleep(0)
+    await waitForState(ui, (state) => state.tabs.some((tab) => tab.sessionID === "ses_new"))
 
     const tabs = states().at(-1)?.tabs ?? []
     expect(tabs).toHaveLength(CAP)
@@ -474,19 +477,14 @@ describe("mini subagent tracker family cap", () => {
 
   test("grows past the cap rather than dropping a live child when every entry is running", async () => {
     const running = Array.from({ length: CAP }, (_, index) => `ses_live_${index}`)
-    const { events, transport, states } = await boot({
+    const { events, transport, states, ui } = await boot({
       sessions: familySessions(0, running),
       active: Object.fromEntries(running.map((id) => [id, { type: "running" as const }])),
     })
     expect(states().at(-1)?.tabs).toHaveLength(CAP)
 
     launchLiveSubagent(events, false, "ses_new")
-    while (
-      !states()
-        .at(-1)
-        ?.tabs.some((tab) => tab.sessionID === "ses_new")
-    )
-      await Bun.sleep(0)
+    await waitForState(ui, (state) => state.tabs.some((tab) => tab.sessionID === "ses_new"))
 
     const tabs = states().at(-1)?.tabs ?? []
     expect(tabs).toHaveLength(CAP + 1)
@@ -495,17 +493,12 @@ describe("mini subagent tracker family cap", () => {
   })
 
   test("keeps the selected child when the cap sheds a settled entry", async () => {
-    const { events, transport, states } = await boot({ sessions: familySessions(CAP) })
+    const { events, transport, states, ui } = await boot({ sessions: familySessions(CAP) })
     transport.selectSubagent("ses_old_0")
-    while (!states().at(-1)?.details.ses_old_0) await Bun.sleep(0)
+    await waitForState(ui, (state) => !!state.details.ses_old_0)
 
     launchLiveSubagent(events, false, "ses_new")
-    while (
-      !states()
-        .at(-1)
-        ?.tabs.some((tab) => tab.sessionID === "ses_new")
-    )
-      await Bun.sleep(0)
+    await waitForState(ui, (state) => state.tabs.some((tab) => tab.sessionID === "ses_new"))
 
     const tabs = states().at(-1)?.tabs ?? []
     expect(tabs).toHaveLength(CAP)
@@ -515,20 +508,11 @@ describe("mini subagent tracker family cap", () => {
   })
 
   test("discovers an indirect child at the cap by shedding a settled entry", async () => {
-    const { events, transport, states } = await boot({ sessions: familySessions(CAP), discovered: foundSession })
+    const { events, transport, states, ui } = await boot({ sessions: familySessions(CAP), discovered: foundSession })
     expect(states().at(-1)?.tabs).toHaveLength(CAP)
 
     events.push(foundStep())
-    // Bounded: a skipped discovery emits nothing, so the assertions must fail.
-    for (
-      let tick = 0;
-      tick < 50 &&
-      !states()
-        .at(-1)
-        ?.tabs.some((tab) => tab.sessionID === "ses_found");
-      tick++
-    )
-      await Bun.sleep(0)
+    await waitForState(ui, (state) => state.tabs.some((tab) => tab.sessionID === "ses_found"))
 
     const tabs = states().at(-1)?.tabs ?? []
     expect(tabs).toHaveLength(CAP)
@@ -548,7 +532,7 @@ describe("mini subagent tracker family cap", () => {
     const lookups = (client.session.get as ReturnType<typeof spyOn>).mock.calls.length
 
     events.push(foundStep())
-    for (let tick = 0; tick < 50; tick++) await Bun.sleep(0)
+    await events.flush()
 
     // No slot can be won, so the lookup is never issued and the list stays capped.
     expect((client.session.get as ReturnType<typeof spyOn>).mock.calls).toHaveLength(lookups)

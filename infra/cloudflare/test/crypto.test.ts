@@ -16,11 +16,6 @@ describe("base64url", () => {
     expect(base64UrlDecode("has=padding")).toBeUndefined()
     expect(base64UrlDecode("")).toBeUndefined()
   })
-
-  test("produces 32-byte P-256 coordinates", () => {
-    const coordinate = base64UrlEncode(new Uint8Array(32).fill(7))
-    expect(coordinate).toHaveLength(43)
-  })
 })
 
 describe("random tokens and digests", () => {

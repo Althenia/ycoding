@@ -839,8 +839,6 @@ describe("relay core: subscriptions and events", () => {
     await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "event", sessionID: "ses_secret", event: { seq: 1 } }))
     expect(h.messagesTo("client-1")).toEqual([])
     expect(h.closed).toEqual([])
-
-    expect(h.closed).toEqual([])
   })
 
   test("broadcasts bounded Session invalidations", async () => {
@@ -2008,7 +2006,7 @@ describe("relay core: one System alert owner per browser", () => {
     })
     h.reset()
     const delivering = status(h, ["ses_a"])
-    await Promise.race([reading, Bun.sleep(100).then(() => { throw new Error("Fresh authority read was bypassed") })])
+    await Promise.race([reading, delivering.then(() => { throw new Error("Fresh authority read was bypassed") })])
     h.relay.detach("tab-1")
     resume()
     await delivering

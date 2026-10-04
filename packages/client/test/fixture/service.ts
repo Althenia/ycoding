@@ -36,7 +36,7 @@ const server = Bun.serve({
   async fetch(request) {
     const pathname = new URL(request.url).pathname
     if (pathname === "/api/service/stop" && mode === "reject-stop") {
-      await writeFile(registration + ".stop-attempt", "")
+      await appendFile(registration + ".stop-attempt", "\n")
       return Response.json({ accepted: false })
     }
     if (pathname === "/api/service/stop" && mode === "graceful") {
@@ -54,8 +54,10 @@ const server = Bun.serve({
       return new Response(null, { status: 503 })
     }
     if (mode === "legacy") return Response.json({ healthy: true })
-    if (mode === "starting" && !(await Bun.file(registration + ".release").exists()))
+    if (mode === "starting" && !(await Bun.file(registration + ".release").exists())) {
+      await appendFile(registration + ".waiting", "\n")
       return Response.json({ healthy: true, version, pid: process.pid, sourceEpoch: id }, { status: 503 })
+    }
     if (mode === "failed-owner")
       return Response.json({ healthy: true, version, pid: process.pid, sourceEpoch: id }, { status: 500 })
     if (mode === "starting" || mode === "graceful" || mode === "reject-stop")

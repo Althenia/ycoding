@@ -1872,13 +1872,23 @@ export function Prompt(props: PromptProps) {
 
     if (submission.payload.mode === "shell") {
       move.startSubmit()
-      await client.api.session.shell(
+      const result = await client.api.session.shell(
         {
           sessionID,
           command: submission.payload.inputText,
         },
         requestOptions(currentOperation),
-      )
+      ).then(() => ({ success: true as const }), (error: unknown) => ({ error }))
+      if (currentOperation.controller.signal.aborted) return false
+      if ("error" in result) {
+        finishOperation(currentOperation.id, { message: "Shell submission failed · draft retained", error: true })
+        toast.show({
+          title: "Shell submission failed",
+          message: `${errorMessage(result.error)} · Check the Session before retrying`,
+          variant: "error",
+        })
+        return false
+      }
       setStore("mode", "normal")
     }
     history.append({
@@ -2279,6 +2289,7 @@ export function Prompt(props: PromptProps) {
                 }
               }}
               onSubmit={() => {
+                if (submitting || operation()) return
                 // IME: double-defer so the last composed character (e.g. Korean
                 // hangul) is flushed to plainText before we read it for submission!.
                 setTimeout(() => setTimeout(() => submit(), 0), 0)

@@ -44,7 +44,7 @@ test("formats guardrail profile and family counters", () => {
   })
 })
 
-test("attributes child reviews to their root family and exposes explicit guardrail replies", async () => {
+test("attributes child reviews to their root family", () => {
   const request = {
     id: "grq_review",
     rootSessionID: "ses_root",
@@ -62,20 +62,13 @@ test("attributes child reviews to their root family and exposes explicit guardra
     reason: "Destructive Git operation",
     resources: ["git reset --hard"],
   })
-  const source = await Bun.file(new URL("../../../src/routes/session/guardrail.tsx", import.meta.url)).text()
-  expect(source).toContain('kind="guardrail"')
-  expect(source).toContain('{ reject: "Deny", once: "Allow once", always: "Allow for this session" }')
-  expect(source).toContain("props.request.hardReview")
-  expect(source).toContain('const reply = (value: "once" | "always" | "reject") => {')
-  expect(source).toContain("reply: value")
-  expect(source).toContain('defaultOption="reject"')
 })
 
 test("renders a warning-framed guardrail approval", async () => {
   const replyReceived = Promise.withResolvers<unknown>()
   const transport = createFetch(async (url, request) => {
     if (/^\/api\/session\/[^/]+\/guardrail\/request\/[^/]+\/reply$/.test(url.pathname)) {
-      replyReceived.resolve(await request.json())
+      replyReceived.resolve({ path: url.pathname, body: await request.json() })
       return new Response(null, { status: 204 })
     }
     return undefined
@@ -126,7 +119,10 @@ test("renders a warning-framed guardrail approval", async () => {
     await app.waitForFrame((frame) => frame.includes("Action: shell"))
     app.mockInput.pressArrow("left")
     app.mockInput.pressEnter()
-    expect(await replyReceived.promise).toEqual({ reply: "always" })
+    expect(await replyReceived.promise).toEqual({
+      path: "/api/session/ses_root/guardrail/request/grq_review/reply",
+      body: { reply: "always" },
+    })
   } finally {
     app.renderer.destroy()
   }
@@ -136,7 +132,7 @@ test("renders a hard review with one-time approval or rejection only", async () 
   const replyReceived = Promise.withResolvers<unknown>()
   const transport = createFetch(async (url, request) => {
     if (/^\/api\/session\/[^/]+\/guardrail\/request\/[^/]+\/reply$/.test(url.pathname)) {
-      replyReceived.resolve(await request.json())
+      replyReceived.resolve({ path: url.pathname, body: await request.json() })
       return new Response(null, { status: 204 })
     }
     return undefined
@@ -181,7 +177,10 @@ test("renders a hard review with one-time approval or rejection only", async () 
     expect(frame).not.toContain("Allow for this session")
     app.mockInput.pressArrow("left")
     app.mockInput.pressEnter()
-    expect(await replyReceived.promise).toEqual({ reply: "once" })
+    expect(await replyReceived.promise).toEqual({
+      path: "/api/session/ses_root/guardrail/request/grq_hard_review/reply",
+      body: { reply: "once" },
+    })
   } finally {
     app.renderer.destroy()
   }

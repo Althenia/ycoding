@@ -1,6 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import { TextareaRenderable, type Renderable } from "@opentui/core"
+import { InputRenderable, TextareaRenderable, type Renderable } from "@opentui/core"
+import { realpathSync } from "node:fs"
+import { mkdir } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import type { SessionMessageAssistantTool, SessionTodoInfo } from "@ycoding-ai/client"
 import { json } from "./fixture/tui-client"
 import { renderScreen } from "./screen/harness"
@@ -8,7 +12,7 @@ import { renderScreen } from "./screen/harness"
 const parentID = "ses_btw_parent"
 const ordinaryID = "ses_ordinary_child"
 const btwID = "ses_btw_child"
-const directory = "/tmp/ycoding/btw-phase-one"
+const directory = path.join(realpathSync(tmpdir()), "ycoding/btw-phase-one")
 const location = { directory, project: { id: "proj_btw_phase_one", directory } }
 const model = { providerID: "openai", id: "gpt-5.6-sol", variant: "high" }
 const parent = session(parentID, "Main implementation", "build")
@@ -16,7 +20,7 @@ const ordinary = session(ordinaryID, "Ordinary review", "reviewer", parentID)
 const btw = session(btwID, "Investigate the side issue", "btw", parentID)
 
 type PromptRequest = {
-  id: string
+  id?: string
   text: string
   delivery?: "steer" | "queue"
   resume?: boolean
@@ -41,16 +45,17 @@ function isPromptRequest(value: unknown): value is PromptRequest {
   return (
     typeof value === "object" &&
     value !== null &&
-    "id" in value &&
-    typeof value.id === "string" &&
+    (!("id" in value) || typeof value.id === "string") &&
     "text" in value &&
     typeof value.text === "string"
   )
 }
 
-function fixture(options: { variant?: string; todos?: SessionTodoInfo[]; goalSteer?: string; goalTool?: SessionMessageAssistantTool; omitParentFromList?: boolean } = { variant: "high" }) {
+function fixture(options: { variant?: string; todos?: SessionTodoInfo[]; goalSteer?: string; goalTool?: SessionMessageAssistantTool; omitParentFromList?: boolean; alternativeModel?: boolean } = { variant: "high" }) {
   const sessions = [parent, ordinary, { ...btw, model: { ...model, variant: options.variant } }]
   const listedSessions = options.omitParentFromList ? sessions.filter((session) => session.id !== parentID) : sessions
+  const creations: unknown[] = []
+  const snapshots: unknown[] = []
   const prompts: Array<{ sessionID: string; body: PromptRequest }> = []
   const switches: Array<{ sessionID: string; kind: "agent" | "model"; body: unknown }> = []
   const generates: unknown[] = []
@@ -61,10 +66,20 @@ function fixture(options: { variant?: string; todos?: SessionTodoInfo[]; goalSte
   async function route(url: URL, request: Request) {
     if (url.pathname === "/api/fs/list") return json({ location, data: [] })
     if (url.pathname === "/api/location") return json(location)
+    if (url.pathname === "/api/session" && request.method === "POST") {
+      creations.push(await request.json())
+      const created = session("ses_btw_opened", "New side chat", "btw", parentID)
+      sessions.push(created)
+      return json({ data: created })
+    }
     if (url.pathname === "/api/session") return json({ data: listedSessions, cursor: {} })
+    if (url.pathname === "/api/session/ses_btw_opened/synthetic" && request.method === "POST") {
+      snapshots.push(await request.json())
+      return json({ data: { id: "msg_snapshot" } })
+    }
     const current = sessions.find((item) => url.pathname === `/api/session/${item.id}`)
     if (current) return json({ data: current })
-    const messageSession = [parentID, ordinaryID, btwID].find(
+    const messageSession = [parentID, ordinaryID, btwID, "ses_btw_opened"].find(
       (sessionID) => url.pathname === `/api/session/${sessionID}/message`,
     )
     if (messageSession)
@@ -108,7 +123,7 @@ function fixture(options: { variant?: string; todos?: SessionTodoInfo[]; goalSte
               ],
         cursor: {},
       })
-    const promptSession = [parentID, ordinaryID, btwID].find(
+    const promptSession = [parentID, ordinaryID, btwID, "ses_btw_opened"].find(
       (sessionID) => url.pathname === `/api/session/${sessionID}/prompt` && request.method === "POST",
     )
     if (promptSession) {
@@ -121,7 +136,7 @@ function fixture(options: { variant?: string; todos?: SessionTodoInfo[]; goalSte
       }
       return json({
         data: {
-          id: body.id,
+          id: body.id ?? "msg_btw_first",
           sessionID: promptSession,
           admittedSeq: prompts.length,
           timeCreated: prompts.length,
@@ -152,7 +167,7 @@ function fixture(options: { variant?: string; todos?: SessionTodoInfo[]; goalSte
       interrupts.push(await request.json().catch(() => undefined))
       return new Response(null, { status: 204 })
     }
-    if ([parentID, ordinaryID, btwID].some((sessionID) => url.pathname === `/api/session/${sessionID}/subagent`))
+    if ([parentID, ordinaryID, btwID, "ses_btw_opened"].some((sessionID) => url.pathname === `/api/session/${sessionID}/subagent`))
       return json({
         data:
           url.pathname === `/api/session/${parentID}/subagent` && taskActive
@@ -227,9 +242,23 @@ function fixture(options: { variant?: string; todos?: SessionTodoInfo[]; goalSte
             enabled: true,
             limit: { context: 200_000, output: 32_000 },
           },
+          ...(options.alternativeModel ? [{
+            id: "alternative",
+            modelID: "alternative",
+            providerID: "anthropic",
+            name: "Alternative Model",
+            family: "",
+            capabilities: { tools: true, input: ["text"], output: ["text"] },
+            variants: [],
+            time: { released: 0 },
+            cost: [],
+            status: "active",
+            enabled: true,
+            limit: { context: 100_000, output: 32_000 },
+          }] : []),
         ],
       })
-    if (url.pathname === "/api/provider") return json({ location, data: [{ id: "openai", name: "OpenAI" }] })
+    if (url.pathname === "/api/provider") return json({ location, data: [{ id: "openai", name: "OpenAI" }, { id: "anthropic", name: "Anthropic" }] })
     if (url.pathname === "/api/agent")
       return json({
         location,
@@ -279,6 +308,8 @@ function fixture(options: { variant?: string; todos?: SessionTodoInfo[]; goalSte
 
   return {
     route,
+    creations,
+    snapshots,
     prompts,
     switches,
     generates,
@@ -332,6 +363,13 @@ test("mounts one ordinary composer only for the root and BTW child without a BTW
   })
   try {
     expect(root.frame().match(/Message YCoding…/g)).toHaveLength(1)
+    root.input.pressKey("p", { ctrl: true })
+    await waitFor(() => root.frame().includes("Commands"), "root palette")
+    await waitFor(() => root.renderer.currentFocusedEditor instanceof InputRenderable, "root palette filter")
+    await root.input.typeText("send to main chat")
+    await waitFor(() => root.frame().includes("No results") || root.frame().includes("Send to main chat"), "root BTW export search")
+    expect(root.frame()).not.toContain("Send to main chat")
+    expect(rootFixture.prompts).toEqual([])
   } finally {
     await root.dispose()
   }
@@ -347,6 +385,13 @@ test("mounts one ordinary composer only for the root and BTW child without a BTW
   try {
     expect(ordinaryScreen.frame()).not.toContain("Message YCoding…")
     expect(ordinaryScreen.frame()).not.toContain("Message BTW…")
+    ordinaryScreen.input.pressKey("p", { ctrl: true })
+    await waitFor(() => ordinaryScreen.frame().includes("Commands"), "ordinary child palette")
+    await waitFor(() => ordinaryScreen.renderer.currentFocusedEditor instanceof InputRenderable, "ordinary child palette filter")
+    await ordinaryScreen.input.typeText("send to main chat")
+    await waitFor(() => ordinaryScreen.frame().includes("No results") || ordinaryScreen.frame().includes("Send to main chat"), "ordinary child BTW export search")
+    expect(ordinaryScreen.frame()).not.toContain("Send to main chat")
+    expect(ordinaryFixture.prompts).toEqual([])
   } finally {
     await ordinaryScreen.dispose()
   }
@@ -369,6 +414,70 @@ test("mounts one ordinary composer only for the root and BTW child without a BTW
     await btwScreen.dispose()
   }
 }, 120_000)
+
+test("BTW slash opens the model picker and preserves its draft on cancellation", async () => {
+  const state = fixture()
+  const screen = await renderScreen({
+    width: 120,
+    height: 40,
+    args: { sessionID: parentID },
+    route: state.route,
+    settle: "Message YCoding…",
+  })
+  try {
+    const promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, promptRow)
+    await screen.input.typeText("/btw investigate caching")
+    screen.input.pressEnter()
+    await waitFor(() => screen.frame().includes("Select model"), "BTW model picker")
+    screen.input.pressKey("ESCAPE")
+    await waitFor(() => !screen.frame().includes("Select model"), "closed BTW picker")
+    expect(screen.frame()).toContain("/btw investigate caching")
+    expect(state.creations).toEqual([])
+    expect(state.prompts).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("BTW model selection creates a side chat with the chosen model after loading its Location catalog", async () => {
+  const previous = process.cwd()
+  await mkdir(directory, { recursive: true })
+  process.chdir(directory)
+  const state = fixture({ alternativeModel: true })
+  try {
+    const screen = await renderScreen({
+      width: 120,
+      height: 40,
+      args: { sessionID: parentID },
+      route: state.route,
+      settle: "Message YCoding…",
+    })
+    try {
+      const promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+      await screen.mouse.click(3, promptRow)
+      await screen.input.typeText("/btw investigate caching ")
+      await waitFor(() => !screen.frame().includes("Enter accept"), "BTW arguments leave slash menu")
+      screen.input.pressEnter()
+      await waitFor(() => screen.frame().includes("Select model"), "BTW picker")
+      await waitFor(() => screen.frame().includes("Alternative Model"), "alternative BTW model")
+      const modelRow = screen.lines().findIndex((line) => line.includes("Alternative Model"))
+      await screen.mouse.click(20, modelRow)
+      await waitFor(() => state.creations.length === 1, "BTW side chat creation")
+      expect(state.creations).toEqual([expect.objectContaining({ parentID, agent: "btw", model: { providerID: "anthropic", id: "alternative" } })])
+      await waitFor(() => state.snapshots.length === 1, "BTW parent snapshot")
+      expect(state.snapshots[0]).toMatchObject({ resume: false, delivery: "steer", description: "Parent session history snapshot" })
+      await waitFor(() => state.prompts.length === 1, "BTW first prompt")
+      expect(state.prompts).toEqual([{ sessionID: "ses_btw_opened", body: expect.objectContaining({ text: "investigate caching " }) }])
+      await waitFor(() => screen.frame().includes("BTW SIDE CHAT") && screen.frame().includes("Message BTW…"), "new BTW route")
+      expect(screen.frame()).not.toContain("/btw investigate caching")
+    } finally {
+      await screen.dispose()
+    }
+  } finally {
+    process.chdir(previous)
+  }
+}, 30_000)
 
 test("main team surface reopens a BTW chat and returns without submitting or interrupting", async () => {
   const state = fixture()

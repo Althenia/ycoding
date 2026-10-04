@@ -57,7 +57,7 @@ Review files`,
           const command = yield* CommandV2.Service
           const events = yield* EventV2.Service
           const update = yield* events.publish(ConfigSchema.Event.Updated, {})
-          const updates = yield* PubSub.unbounded<typeof update>()
+          const updates = yield* PubSub.unbounded<typeof update>({ replay: 1 })
           yield* ConfigCommandPlugin.Plugin.effect(
             host({
               command: {
@@ -111,7 +111,6 @@ Review files`,
           ])
 
           yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "commands", "review.md"), "Review again"))
-          yield* Effect.sleep("10 millis")
           yield* PubSub.publish(updates, update)
           for (let attempt = 0; attempt < 100; attempt++) {
             if ((yield* command.get("review"))?.template === "Review again") break

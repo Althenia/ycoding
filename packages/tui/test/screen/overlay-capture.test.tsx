@@ -70,19 +70,22 @@ test("captures deterministic overlay frames", async () => {
         />
       ),
       viewport,
+      "Claude Opus 5",
     )
-    await captureDialog("dialog-prompt", "Prompt", () => <DialogPrompt title="Prompt" placeholder="Enter text" />, viewport)
+    await captureDialog("dialog-prompt", "Prompt", () => <DialogPrompt title="Prompt" placeholder="Enter text" />, viewport, "Enter text")
     await captureDialog(
       "dialog-confirm",
       "Confirm",
       () => <DialogConfirm title="Confirm" message="Continue with this action?" />,
       viewport,
+      "Continue with this action?",
     )
     await captureDialog(
       "dialog-alert",
       "Alert",
       () => <DialogAlert title="Alert" message="This action needs your attention." />,
       viewport,
+      "This action needs your attention.",
     )
     await captureAutocomplete(viewport)
 
@@ -97,6 +100,7 @@ async function captureDialog(
   settle: string,
   view: () => JSX.Element,
   viewport: (typeof viewports)[number],
+  evidence: string,
 ) {
   function DialogFixture() {
     const dialog = useDialog()
@@ -126,7 +130,7 @@ async function captureDialog(
   await app.waitForFrame((frame) => frame.includes(settle))
 
   try {
-    await writeCapture(`${name}-${viewport.width}x${viewport.height}.txt`, app.captureCharFrame(), viewport)
+    await writeCapture(`${name}-${viewport.width}x${viewport.height}.txt`, app.captureCharFrame(), viewport, [settle, evidence])
   } finally {
     app.renderer.destroy()
   }
@@ -157,7 +161,13 @@ async function captureToast(toast: (typeof toasts)[number], viewport: (typeof vi
   await app.waitForFrame((frame) => frame.includes(toast.message.slice(0, 16)))
 
   try {
-    await writeCapture(`${toast.name}-${viewport.width}x${viewport.height}.txt`, app.captureCharFrame(), viewport)
+    const label = {
+      success: "✓ Success",
+      info: "⋯ Info",
+      warning: "! Warning",
+      error: "✗ Error",
+    }[toast.variant]
+    await writeCapture(`${toast.name}-${viewport.width}x${viewport.height}.txt`, app.captureCharFrame(), viewport, [label, toast.message.slice(0, 40)])
   } finally {
     app.renderer.destroy()
   }
@@ -223,15 +233,16 @@ async function captureAutocomplete(viewport: (typeof viewports)[number]) {
   await app.waitForFrame((frame) => frame.includes("/model"))
 
   try {
-    await writeCapture(`autocomplete-${viewport.width}x${viewport.height}.txt`, app.captureCharFrame(), viewport)
+    await writeCapture(`autocomplete-${viewport.width}x${viewport.height}.txt`, app.captureCharFrame(), viewport, ["/mode", "switch the active model"])
   } finally {
     app.renderer.destroy()
   }
 }
 
-async function writeCapture(name: string, frame: string, viewport: (typeof viewports)[number]) {
+async function writeCapture(name: string, frame: string, viewport: (typeof viewports)[number], evidence: string[]) {
   const rows = frame.endsWith("\n") ? frame.slice(0, -1).split("\n") : frame.split("\n")
   expect(rows).toHaveLength(viewport.height)
   for (const row of rows) expect(row.length).toBeLessThanOrEqual(viewport.width)
+  for (const text of evidence) expect(frame).toContain(text)
   await Bun.write(path.join(renders, name), rows.join("\n"))
 }

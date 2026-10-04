@@ -139,11 +139,21 @@ export function createRowVirtualizer(input: RowVirtualizerInput) {
     if (!list || !root) return
     virtualizer._willUpdate()
     measureLayout()
-    const observer = new ResizeObserver(measureLayout)
+    let scheduled: number | undefined
+    const observer = new ResizeObserver(() => {
+      if (scheduled !== undefined) return
+      scheduled = requestAnimationFrame(() => {
+        scheduled = undefined
+        measureLayout()
+      })
+    })
     observer.observe(list)
     observer.observe(root)
     if (list.parentElement) observer.observe(list.parentElement)
-    onCleanup(() => observer.disconnect())
+    onCleanup(() => {
+      observer.disconnect()
+      if (scheduled !== undefined) cancelAnimationFrame(scheduled)
+    })
   })
 
   createEffect(() => {

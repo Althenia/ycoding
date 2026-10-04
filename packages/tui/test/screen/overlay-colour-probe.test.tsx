@@ -112,6 +112,9 @@ async function probeDialog(viewport: (typeof viewports)[number]) {
   await app.waitFor(() => app.renderer.currentFocusedEditor instanceof InputRenderable)
 
   try {
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("Choose overlay model")
+    expect(frame).toContain("Other model")
     const selectedRow = selectionBand(app, "Selected model")
     expect(selectedRow).not.toHaveLength(0)
     expect(selectedRow.every((span) => span.bg.toInts().every((value, index) => value === focusedActionFill[index]))).toBe(true)
@@ -148,6 +151,9 @@ async function probeToast(viewport: (typeof viewports)[number]) {
   await app.waitForFrame((frame) => frame.includes("Overlay colour probe"))
 
   try {
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("✓ Success")
+    expect(frame).toContain("Overlay colour probe")
     expect(colorOf(app, "Success")).toEqual(successFeedback)
   } finally {
     app.renderer.destroy()
@@ -212,6 +218,9 @@ async function probeAutocomplete(viewport: (typeof viewports)[number]) {
   await app.waitForFrame((frame) => frame.includes("/model"))
 
   try {
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("/mode")
+    expect(frame).toContain("switch the active model")
     const selectedRow = selectionBand(app, "/mo")
     expect(selectedRow).not.toHaveLength(0)
     expect(selectedRow.every((span) => span.bg.toInts().every((value, index) => value === focusedActionFill[index]))).toBe(true)

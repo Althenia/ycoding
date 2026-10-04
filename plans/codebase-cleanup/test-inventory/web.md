@@ -6,6 +6,115 @@
 - The web package has three layers: `src` unit/contract tests, `test` relay-backed integration/flow tests, and `verify` real-browser rendered-flow tests. Keep each layer where it detects behavior that a lower layer cannot observe; all `test` remote suites and all relevant `verify` flows remain protected.
 - `test.each` rows are one behavior group with separately asserted inputs. The `rg -c` declaration count is not a reliable expanded case count; report actual case counts from JUnit. JUnit rows record individually invoked file runs; the validation ledger distinguishes earlier unchanged-file runs, corrected remote-file repetitions, and measured loaded overlap.
 - Required behavior/surviving assertions and the pre-removal classification for every test group are in the following directory inventory. Unchanged files stay `keep`; no current edit is authority to remove a required assertion.
+- The current tree has 149 files; the Linux completion pass below supersedes the earlier remaining-failure classification and carries the AC15 gates for this lane.
+
+## Linux completion pass (base `d30e97bf`)
+
+### Environment and method
+
+- Host: Linux x64 container running as root, 4 CPUs. Browser: Playwright Chromium 1194 headless. Every command ran through the serialized lane wrapper (Bun 1.4.2), one test file per invocation, with `--timeout 30000 --reporter=junit`. `apps/web` was built with `bun run build:web` before the sweep (`test/build-output`, `verify/pwa-*` and `verify/invite` read `dist/`).
+- Chromium refuses to start as root without `--no-sandbox`, so `YCODING_WEB_CHROME` pointed at a scratch launcher that adds it. Headless Linux Chromium also reports `pointer: none` and `hover: none` (probed with `matchMedia`); CDP `Emulation.setEmulatedMedia` does not override `hover` or `pointer`. A second launcher adds `--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2` (fine pointer, hover), which matches the desktop pointer profile of the earlier macOS sweep. Neither launcher is committed.
+- Sweep 1 ran all 52 `verify` files with the no-pointer launcher. Every failure was rerun with the desktop-pointer launcher. The final sweep reran all 52 with the desktop-pointer launcher after the corrections.
+
+### New files since the 143-file inventory (all `keep`)
+
+| File | Cases | Required behavior | Layer |
+|---|---:|---|---|
+| `src/remote/question-history.test.ts` | 3 | Ordered human questions, typed recorded answers, truthful missing/failed answers, and parent answers only with producer metadata and matching question identity (D21) | Unit / projection |
+| `test/remote-child-question.test.ts` | 1 | Team and Conversation cannot send two answers for one owned child question; exactly one outgoing operation (D21 reproduced race) | Relay-backed flow |
+| `verify/conversation-reading.integration.test.ts` | 14 | Reader intent survives streaming, route entry positions, rail and Session anchors, single new-conversation landing (D20) | Real browser |
+| `verify/conversation-questions.integration.test.ts` | 3 | Readable question/answer history and parent-owned child answers (D21) | Real browser |
+| `verify/reader-keyboard.integration.test.ts` | 1 | Keyboard reading does not resume follow (D20 reproduced regression) | Real browser |
+| `verify/upload-flow.integration.test.ts` | 5 | Upload progress, cancel, same-ID retry, Session isolation, local oversize alert (D33/G26) | Real browser |
+
+### Browser failure classification (every `verify` file)
+
+Files not listed passed in sweep 1 and in the final sweep. They are classified `keep`: pass on Linux Chromium.
+
+| File / case | Sweep 1 (no pointer) | Desktop pointer | Classification and evidence |
+|---|---|---|---|
+| `composer-controls`: speed and context row (hover popover) | 36/37 | 37/37 | Environment-only: `onMouseEnter` opens the popover only when `matchMedia("(hover: hover)")` matches (`composer.tsx`), which headless Linux reports false |
+| `scrollbar` (4 cases) | 1/5 | 5/5 | Environment-only: owned scrollbar rules are gated by `@media (pointer: fine)` (`base.css:184`); Linux headless draws 15 px classic bars |
+| `office-engine`: clicking a character selects its Session | 20/21 | 21/21 | Environment-only: no-pointer profile; passes with a desktop pointer |
+| `office`: activity bubbles at tablet/desktop | 18/20 | 19/20 | Environment-only: no-pointer profile; passes with a desktop pointer |
+| `office`: 50 Conversation/Office switches | fail | fail | **Production defect (RED, not fixed)**: `window.officeErrors` collects `ResizeObserver loop completed with undelivered notifications` (3 in sweep 1, 6 with desktop pointer; the earlier macOS sweep saw 32). The assertion encodes the stated "no errors while switching" requirement and is retained unchanged. Candidates are the six `new ResizeObserver` owners (`office/create-game.ts:85`, `ui/shell.tsx:1237/1486`, `ui/running-sessions.tsx:40`, `ui/virtual-rows.ts:142`, `ui/transcript-nav.tsx:256`); the producing observer is not yet isolated |
+| `pwa-shell`: zoom lock only when installed | 7/9 | 8/9 | Environment-blocked: `Input.synthesizePinchGesture` leaves `visualViewport.scale` at 1 on Linux Chromium, Chromium with `--enable-pinch`, and the headless shell, so the non-installed "zoomed: true" branch cannot be exercised here |
+| `pwa-shell`: replaces old shell caches | 7/9 | pass after fix | **Test defect, fixed**: the zoom case unregistered workers and deleted caches only after its assertion, so its failure leaked a registered worker and `ycoding-web-shell-v1` into this case. Cleanup now runs in `finally`; the case passes while the zoom case still fails |
+| `remote-shell-layout`: one screen loading placeholder; New session not left in history | 47/49 | 47/49 → 49/49 after fix | **Test defect, fixed (stale after D21)**: retained idle route panels (`route-panel--idle`, `inert`, `aria-hidden`) keep a stale placeholder or composer in the DOM. The second case already accepted an inert retained composer (line 734) yet still required none to exist. The `web-fixes.md` D21 run filtered these cases out. The assertions now require the active surface to show the composer with no live placeholder, and every retained placeholder/composer to be inert, `aria-hidden` and (for the composer) unpainted |
+| `transcript`: streaming tail jump controls | 33/34 | 33/34 → 34/34 after fix | **Test defect, fixed**: `top` derives from `scrollTop()` and `bottom` from `away()`; the loop waited only for `bottom` before asserting both. It now waits (up to 2 s) for the full asserted `{ top: false, bottom: true }` state |
+| `transcript`: five phone navigation destinations (loaded run) | pass | failed once under load | **G10, fixed**: the bottom-nav mount wait capped at about 4 s; it now allows 15 s with the same condition and assertions |
+| `public-fidelity` (18 cases) | timeout cascade, killed at 600 s | 32/35 → 35/35 after fixes | **G10, fixed**: about 650 ms per Vite dev navigation on this host. The 150-navigation route sweep needed about 98 s against a 60 s budget, and the 20-navigation heading-scale case exceeded 10 s. Bun keeps a timed-out body running, so the stalled browser timed out every later case. Budgets are now 180 s and 60 s, with no assertion change |
+| `public-fidelity`: route cross-fade; entrance animation | pass | each failed once (isolated / loaded) | **G10, fixed**: both sampled opacity one frame after mount and failed when that frame landed after the animation. They now pause the page animation timeline (`Animation.setPlaybackRate(0)`, new `cdp.ts` helper) during navigation, assert the start state is below full opacity, resume, then assert progress and settling. The cold first route gets 15 s to reach the motion gate |
+| `safari-overflow` | no XML | n/a | Environment-blocked: requires `YCODING_SAFARI_PREVIEW` and `YCODING_SAFARI_DRIVER` (macOS `safaridriver`) |
+
+The earlier macOS failures in `compaction-checkpoint`, `invite`, `loading`, `model-replay`, `notifications`, `remote-fidelity`, `remote-inventory-feed`, `remote-relay-guardrail`, `remote-transitions` and `team` pass here (E65/E67 fixture corrections plus a fresh build).
+
+### G10 rewrites in unit and relay suites
+
+| File / group | Before | After | Surviving assertion |
+|---|---|---|---|
+| `src/remote/ui/toast-timer.test.ts` (5 cases) | Real `Bun.sleep` waits (20–300 ms); 0.932 s JUnit | `jest.useFakeTimers()` with `advanceTimersByTime` (fakes `setTimeout` and `performance.now`); 0.007 s | Exact boundaries: leaving at `duration`, not 1 ms earlier; done at `exit`; paused remainder exactly `200 - 80 = 120` ms after resume; dismiss and dispose unchanged |
+| `test/remote-team.test.ts`: four family-activity cases | `Bun.sleep(3_150)` twice, a real 3 s poll waited with a 4 s ceiling, `Bun.sleep(100)`; 12.928 s file JUnit | Shared `createRemoteStoreClock` through the store's existing `schedule`/`monotonicNow` options; 0.532–0.544 s | Refresh not sent at 2,999 ms and sent at 3,000 ms; error retry at 3,000 ms; no request after leaving Office or disconnecting. Negative checks count `transport.request` calls synchronously, because the store sends inside the timer callback and relay delivery is asynchronous |
+| `test/remote-store-clock.ts` | Origin `performance.now()` (fractional) | `Math.round(performance.now())` | A fractional origin made `pendingDelays()` report `2999.9999999999995` and split advances inexact (observed while probing) |
+
+Remaining `Bun.sleep` uses in `test/` are short negative-absence waits or relay settling and were not observed to fail under load; the web package has no G10 failure left in this pass.
+
+### Mutation probes (this pass)
+
+Each mutation was applied to the production line, the named retained test was run through the wrapper, and the file was restored with `git checkout`. SHA-256 after restore: `toast-timer.ts` `18b59659…860fb`, `store.ts` `a52110c1…712a5`, `site.css` `edbf8da6…b1020`, all identical to the base.
+
+| Location | Mutation | Result |
+|---|---|---|
+| `src/remote/ui/toast-timer.ts:27` | `remaining -= 0` (pause no longer subtracts elapsed time) | Fails "holds the remaining time while paused…". The replaced wall-clock test waited 240 ms past resume and would have passed this mutant |
+| `src/remote/ui/toast-timer.ts:20` | exit timer `options.exit + 1` | 3 cases fail at the exact boundary |
+| `src/remote/store.ts:957` | success refresh `3_001` | "one Office activity read…" and "disconnect cancels…" fail |
+| `src/remote/store.ts:942` | error retry `3_001` | "a transient family activity error stays retryable…" fails |
+| `src/remote/store.ts:923` + `:2587` | drop the `activityWatching` guard and the unwatch cancel together | "one Office activity read … stops after leaving Office" fails. Each half alone is masked by the other (redundant guards) |
+| `src/remote/store.ts:2293` + `:923` | drop the disconnect cancel and the connection/open guards | Masked: no request leaves. Also removing the team-root guard fails only through a `TypeError`, so disconnect cancellation has three independent guards and no single fault is observable. The replaced real-time assertion had the same masking |
+| `src/styles/site.css:91` | `.public-page-entry` animation `none` | Cross-fade case fails ("docs route entry missing") |
+| `src/styles/site.css:65,71` | reveal starts visible and has no animation | Entrance case fails ("motion gate, target or entrance missing") |
+
+No group was deleted or merged in this pass; the earlier pass's probes (above) still cover its merges.
+
+### Stability (touched files)
+
+Isolated: three serial wrapper runs per file, desktop-pointer launcher for browser files. Loaded: `sl-run --loaded` (forced root typecheck in parallel); the wrapper printed the measured interval for each.
+
+| File | Cases | Isolated ×3 | Loaded |
+|---|---:|---|---|
+| `src/remote/ui/toast-timer.test.ts` | 5 | 0/0/0 failures (0.006–0.007 s) | 0 failures (0.017 s) |
+| `test/remote-team.test.ts` | 25 | 0/0/0 (0.537–0.544 s) | 0 (1.402 s) |
+| `test/remote-data.test.ts` (clock user) | 30 | 0/0/0 (0.800–0.868 s) | 0 (1.739 s) |
+| `test/remote-carousel.test.ts` (clock user) | 7 | 0/0/0 (0.155–0.161 s) | 0 (0.437 s) |
+| `verify/remote-shell-layout.integration.test.ts` | 49 | 0/0/0 (258–261 s) | 0 (320.6 s) |
+| `verify/pwa-shell.integration.test.ts` | 9 | 1/1/1: only the environment-blocked zoom case (33.3–33.6 s) | same single case (54.3 s) |
+| `verify/transcript.integration.test.ts` | 34 | 0/0/0 (77.8–78.8 s) | 0 (133.3 s; an earlier loaded run exposed the bottom-nav G10 case, fixed in `bd29bf5d`) |
+| `verify/public-fidelity.integration.test.ts` | 35 | 0/0/0 (171.0–173.8 s) | 0 (232.3 s; earlier isolated/loaded runs exposed the fade/entrance G10 cases, fixed in `710cb5c2`/`bd29bf5d`) |
+
+### Before and after (`apps/web`)
+
+| Measure | Historical inventory (`1141158a`, macOS) | Lane base `d30e97bf` (Linux) | After this pass (Linux) |
+|---|---:|---:|---:|
+| Test files | 143 | 149 | 149 |
+| JUnit cases (Safari's one case is never emitted) | 1,596 | 1,629 | 1,629 |
+| Test-file lines (`*.test.ts(x)`) | — | 36,949 | 36,984 |
+| `src` + `test` summed isolated JUnit | — | 44.57 s (97 files) | 31.25 s (97 files, 0 failures) |
+| `verify` failures on Linux | 26 failed cases in 12 files (macOS) | sweep 1: 13 failed cases in 8 files, plus `public-fidelity` cascade and Safari | final sweep: 51 files emitted, 518 cases, 2 failures (`office` 50-switch RED, `pwa-shell` zoom environment-blocked), Safari environment-blocked; 1,945.2 s summed JUnit |
+
+No case was deleted, so the case count is unchanged; the line delta is the deterministic clock and wait code.
+
+### Final checks (Linux, lane HEAD)
+
+| Command (through the lane wrapper) | Exit | Result |
+|---|---:|---|
+| `bun run test:web` | 0 | 693 pass, 0 fail, 72 files |
+| `bun run test:integration:web` | 0 | 418 pass, 0 fail, 25 files |
+| every `src`/`test` file alone with JUnit | 0 each | 97 files, 1,111 cases, 0 failures, 31.25 s |
+| every `verify` file alone, desktop-pointer launcher | 0 except 3 | 49 files pass; `office` (RED), `pwa-shell` (zoom, environment) and `safari-overflow` (environment) as classified above |
+| `bun run --cwd apps/web typecheck` | 0 | after each commit group |
+| `bunx oxlint --type-aware <touched files>` | 0 | 0 errors; 2 warnings on unchanged `verify/cdp.ts` lines 20 and 31 |
+
+Open after this pass: the `office` ResizeObserver defect needs a production owner; the pinch-zoom and Safari checks need macOS hosts.
 
 ## Current edited groups (case-level classification)
 

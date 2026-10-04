@@ -28,6 +28,13 @@ test("the command palette refreshes models and providers for the current locatio
     return new Response(null, { status: 204 })
   }, events)
   const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  const waitForFrame = async (text: string) => {
+    const deadline = Date.now() + 10_000
+    while (!setup.captureCharFrame().includes(text) && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    expect(setup.captureCharFrame()).toContain(text)
+  }
 
   try {
     const { run } = await import("../src/app")
@@ -41,22 +48,17 @@ test("the command palette refreshes models and providers for the current locatio
       }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
     )
     await ready
-    await Bun.sleep(100)
+    await waitForFrame("Message YCoding…")
 
     setup.mockInput.pressKey("p", { ctrl: true })
-    await Bun.sleep(50)
+    await waitForFrame("Commands")
     await setup.mockInput.typeText("Refresh models")
-    await Bun.sleep(50)
-    expect(setup.captureCharFrame()).toContain("Refresh models and providers")
+    await waitForFrame("Refresh models and providers")
     const before = requests.length
     setup.mockInput.pressEnter()
 
-    for (let attempt = 0; attempt < 50; attempt++) {
-      await Bun.sleep(20)
-      if (setup.captureCharFrame().includes("Models and providers refreshed")) break
-    }
+    await waitForFrame("Models and providers refreshed")
     expect(refreshes).toEqual([directory])
-    expect(setup.captureCharFrame()).toContain("Models and providers refreshed")
     const after = requests.slice(before)
     expect(after.indexOf("GET /api/model")).toBeGreaterThan(after.indexOf("POST /api/provider/refresh"))
     expect(after.indexOf("GET /api/provider")).toBeGreaterThan(after.indexOf("POST /api/provider/refresh"))

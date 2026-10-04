@@ -297,3 +297,78 @@ Affected files:12 original suites/178 cases/4.195s baseline →14 suites/198 cas
 - `f9da65ca` — `test(server): replace source gates with HTTP boundary coverage` (HTTP guards, shared Session fixture, safe success dedupe).
 
 Lane working tree is clean. Original-root inventory remains uncommitted; named preservation stash remains retained. Parent owns rebasing/integrating onto its moved base and root AGENTS/validation. No permanent production changes, real production RED, changed public contract, missing surviving guard or runtime defect was discovered in this reconciliation. Remaining limitations:28 recorded skips,12 unrun browser cases and unchanged timer/process suites without universal scheduler-load proof. This inventory and these coherent slices do **not** establish all SL finished.
+
+## AC15 completion pass (lane `ai-contracts`, base `d30e97bf`)
+
+Scope re-verified against the live checkout: `packages/{ai,codemode,server,schema,protocol,client,plugin}`; remaining packages and `script/*.test.ts` are in `remaining.md`; Client in `client.md`. Every suite file in these packages is classified in the tables above; the live per-file JUnit counts equal the table counts for every file (ai 673, codemode 969, server 85 executed plus 12 browser cases, schema 109, protocol 38, client 75, plugin 8).
+
+CodeMode coverage: the historical "~580" estimate in `tracking.md` predates `test.each` expansion. Live JUnit registers 969 cases in 20 files, matching the CodeMode table row by row, so every CodeMode case is classified (`keep X`). No CodeMode source-text or mock-call-only case exists; Test262 rows are distinct boundary inputs.
+
+### Baseline at `d30e97bf` (per-file JUnit, batched invocations through the lane wrapper)
+
+| Package | Files | Registered | Pass | Skip | Fail | Suite lines | Summed JUnit seconds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| ai | 50 | 673 | 645 | 28 | 0 | 17,429 | 8.196 |
+| codemode | 20 | 969 | 969 | 0 | 0 | 12,669 | 4.877 |
+| server | 31 | 97 | 84 | 1 | 12 | 4,976 | 14.958 |
+| schema | 18 | 109 | 109 | 0 | 0 | 1,866 | 0.672 |
+| protocol | 18 | 38 | 38 | 0 | 0 | 975 | 0.901 |
+| client | 9 | 75 | 75 | 0 | 0 | 2,215 | 48.250 |
+| plugin | 3 | 8 | 8 | 0 | 0 | 195 | 0.181 |
+
+Seconds are JUnit in-process suite times, not process wall time, on a host shared with other lanes. Server: the 12 failures are the two environment-blocked browser suites below; the skip is `test-integration/keep-awake.test.ts` (`skipIf` not macOS).
+
+Environment-blocked, not passing: `server/test-integration/isolated-browser.test.ts` (6 cases) returns `ServiceUnavailableError: Isolated browser requires macOS arm64` on this Linux x64 host. `server/test-integration/browser-owned-chrome.test.ts` (6 cases) requires `YCODING_TEST_ISOLATED_BROWSER_CHROME`; with the available Playwright Chromium 141 (below the required Chrome 152, not Chrome for Testing, running as root) every case fails at launch with `Chrome control pipe failed`. Both remain release gates on macOS arm64; neither was edited.
+
+### Timing waits (G10) in scope
+
+| File / case | Wait | Decision |
+| --- | --- | --- |
+| `codemode/test/promise.test.ts` — timeout interrupts forked fibers; timeout interrupts `Promise.all` | 100 ms real timeout raced interpreter progress | rewrite: `TestClock`, advanced 100 ms only after both pending calls start; all assertions unchanged |
+| `codemode/test/promise.test.ts` — invalid returned data cancels pending work; race loser cannot hold execution | 100 ms safety timeout that must not fire | rewrite: 10 s safety limit; a held loser or an uncancelled call still fails the same assertions |
+| `codemode/test/promise.test.ts` — two stubborn completion-cleanup cases | real 100 ms timeout during 400 ms cleanup | keep real clock: under `TestClock` execution settled as soon as cleanup began and never reported the timeout, so the clock cannot model this cleanup; the program returns in microseconds of a 100 ms window |
+| `codemode/test/codemode.test.ts` — timeout interrupts a busy loop | elapsed < 3 s for a 200 ms timeout | keep: regression on real-timer interruption of a CPU-bound fiber; 15x margin |
+| `server/test-integration/browser-connect.test.ts` — shared tab listing | state poll, 20 x 10 ms | rewrite: same state poll bounded at 500 attempts (5 s) |
+| `server/test-integration/provider-refresh.test.ts`, `keep-awake.test.ts` | state polls bounded at 5 s / 60 s | keep: poll actual state |
+| `ai/test/transport-attempt.test.ts` — socket reset | server resets 10 ms after writing | keep: loopback data precedes the RST on one connection; correct client behavior does not depend on the delay |
+| `server/test-integration/isolated-browser.test.ts`, `browser-owned-chrome.test.ts` | fixed sleeps and real-time expiry windows | not changed: environment-blocked here, cannot be stability-verified |
+
+### Mutation probes (this pass)
+
+Each mutation was applied to the production line, the named retained test ran, then the file was restored with `git checkout -- <file>`; production diff is empty.
+
+| Production line | Mutation | Retained test result |
+| --- | --- | --- |
+| `codemode/src/interpreter/execute.ts:80` | timeout result kind `TimeoutExceeded` -> `TimeoutProbe` | both `TestClock` timeout cases fail |
+| `codemode/src/interpreter/promises.ts:76` | completion awaits instead of interrupting active promises | "a non-settling race loser cannot hold the execution to the timeout" fails after the 10 s limit with the timeout warning |
+| `codemode/src/interpreter/promises.ts:75` | skip the completion interrupt loop | not detected: scope close still interrupts; recorded as an ineffective probe, superseded by the two rows around it |
+| `codemode/src/interpreter/execute.ts:66` | scope release no longer closes the scope | "invalid returned data cancels pending work" fails (`interrupted` 0, expected 1) |
+
+### Changes in this pass
+
+- `test(codemode): drive pending-call timeouts with TestClock` — `promise.test.ts`, 84 cases retained.
+- `test(server): bound the shared-tab poll by attempts that survive load` — `browser-connect.test.ts`, 2 cases retained.
+- Client service changes are recorded in `client.md`.
+
+### Stability and final checks (this pass)
+
+Touched files, each run as its own `bun test --cwd <package> <file> --timeout 30000` through the lane wrapper:
+
+| File | Cases | Isolated 1 / 2 / 3 (JUnit s) | Loaded (JUnit s, overlapping a forced root typecheck) |
+| --- | ---: | --- | --- |
+| `client/test/service.test.ts` | 12 | 37.890 / 37.843 / 37.855, 0 fail | 39.592, 0 fail |
+| `codemode/test/promise.test.ts` | 84 | 1.604 / 1.618 / 1.623, 0 fail | 3.171, 0 fail |
+| `server/test-integration/browser-connect.test.ts` | 2 | 3.285 / 3.179 / 3.308, 0 fail | 9.828, 0 fail |
+
+Package typechecks `bun run --cwd packages/{client,codemode,server} typecheck`: exit 0 each. `oxlint` on the four touched test/fixture files: exit 0, 0 warnings, 0 errors. `bun run lint:effect-patterns`: exit 0. Prettier check on touched files: clean.
+
+### Before / after (this pass)
+
+| Package | Files | Cases | Suite lines | Summed JUnit s (touched file) |
+| --- | --- | --- | --- | --- |
+| client | 9 -> 9 | 75 -> 75 | 2,215 -> 2,229 (fixture 84 -> 86) | service 36.399 -> 37.9 |
+| codemode | 20 -> 20 | 969 -> 969 | 12,669 -> 12,681 | promise 1.857 -> 1.62 |
+| server | 31 -> 31 | 97 -> 97 (85 executed) | 4,976 -> 4,976 | browser-connect 1.275 (batched) -> 3.3 (isolated) |
+| ai, schema, protocol, plugin | unchanged | unchanged | unchanged | unchanged |
+
+No case was deleted or merged in this pass; the changes replace timing windows with event or clock-driven waits. No production defect was found; production diff is empty.

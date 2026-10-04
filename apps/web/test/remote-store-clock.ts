@@ -1,5 +1,6 @@
 export function createRemoteStoreClock() {
-  let current = performance.now()
+  // An integer origin keeps `at - current` and split advances exact; a fractional origin yields 2999.9999999999995.
+  let current = Math.round(performance.now())
   const timers: { readonly at: number; readonly callback: () => void; cancelled: boolean }[] = []
   return {
     now: () => current,

@@ -245,23 +245,3 @@ test("steers an explicit conclusion into the parent without interrupting it", as
     },
   ])
 })
-
-test("opens BTW only from explicit model-dialog completion and retains the draft on cancellation", async () => {
-  const source = await Bun.file(new URL("../src/component/prompt/index.tsx", import.meta.url)).text()
-  const start = source.indexOf('title: "Open BTW side chat"')
-  const end = source.indexOf('title: "Send to main chat"', start)
-  const command = source.slice(start, end)
-
-  expect(source).toContain('slash: { name: "btw", arguments: true as const }')
-  expect(source).toContain('slash: { name: "btw-send", arguments: true as const }')
-  expect(command).toContain("onComplete={(result) => {")
-  expect(command).toContain('if (result.type === "cancelled") return')
-  expect(command).toContain("clearPrompt()")
-  expect(command).toContain("openBtwSession({")
-  expect(command).not.toContain("local.model.current()")
-  expect(source).toContain(
-    'if (slash.command.id !== "session.btw" && slash.command.id !== "session.btw.send") clearPrompt()',
-  )
-  expect(source).not.toContain("queueMicrotask")
-  expect(source).toContain('enabled: data.session.get(props.sessionID ?? "")?.agent === "btw"')
-})

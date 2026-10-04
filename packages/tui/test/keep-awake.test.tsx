@@ -27,6 +27,15 @@ function fakeServer(initial: KeepAwakeStatus = { state: "off" }) {
   }
 }
 
+async function awaitFrame(app: Awaited<ReturnType<typeof testRender>>, matches: (frame: string) => boolean) {
+  const deadline = Date.now() + 8_000
+  while (Date.now() < deadline) {
+    if (matches(app.captureCharFrame())) return
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+  expect(matches(app.captureCharFrame())).toBe(true)
+}
+
 async function until(condition: () => boolean) {
   const deadline = Date.now() + 5_000
   while (!condition() && Date.now() < deadline) await Bun.sleep(20)
@@ -80,19 +89,16 @@ test("the one keep-awake row shows the backend state with a word and a color tha
     await view.app.waitForFrame((frame) => frame.includes("Keep machine awake"))
     await view.app.mockInput.typeText("Keep machine awake")
     const check = async (label: string, color: [number, number, number, number]) => {
-      await view.app.waitForFrame((frame) => frame.includes(`● ${label}`) && !frame.includes("Other command"))
+      await awaitFrame(view.app, (frame) => frame.includes(`● ${label}`) && !frame.includes("Other command"))
       const row = view.app.captureSpans().lines.find((line) => line.spans.some((span) => span.text.includes(`● ${label}`)))
       expect(row?.spans.find((span) => span.text.includes(`● ${label}`))?.fg.toInts()).toEqual(color)
     }
     await check("off", view.colors().off)
     server.change({ state: "on" })
-    await Bun.sleep(2_100)
     await check("on", view.colors().on)
     server.change({ state: "unsupported", message: "Keep machine awake is available on macOS only." })
-    await Bun.sleep(2_100)
     await check("unsupported", view.colors().off)
     server.change({ state: "error", message: "The sleep inhibitor stopped unexpectedly (exit code 3)." })
-    await Bun.sleep(2_100)
     await check("error", view.colors().error)
   } finally {
     view.app.renderer.destroy()

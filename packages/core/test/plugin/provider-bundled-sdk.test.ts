@@ -49,7 +49,13 @@ const bundled = [
   { plugin: XAIPlugin, pkg: "@ai-sdk/xai", create: createXai },
 ] as const
 
-const runSDK = Effect.fn(function* (pkg: string, name: string) {
+const apiKey = "bundled-provider-key"
+
+const runSDK = Effect.fn(function* (
+  pkg: string,
+  name: string,
+  fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>,
+) {
   const aisdk = yield* AISDK.Service
   return yield* aisdk.runSDK({
     model: ModelV2.Info.make({
@@ -58,7 +64,7 @@ const runSDK = Effect.fn(function* (pkg: string, name: string) {
       package: `aisdk:${pkg}`,
     }),
     package: pkg,
-    options: { name, apiKey: "test" },
+    options: { name, apiKey, fetch },
   })
 })
 
@@ -68,21 +74,30 @@ const addPlugin = Effect.fn(function* (plugin: (typeof bundled)[number]["plugin"
 
 describe("bundled AI SDK provider plugins", () => {
   for (const entry of bundled) {
-    it.effect(`${entry.plugin.id} creates the SDK for its exact package with canonical and custom provider IDs`, () =>
+    it.effect(`${entry.plugin.id} creates the SDK for its exact package with canonical and custom provider IDs and credentials`, () =>
       Effect.gen(function* () {
         yield* addPlugin(entry.plugin)
         for (const name of [entry.plugin.id.replace("ycoding.provider.", ""), "custom-provider"]) {
-          const result = yield* runSDK(entry.pkg, name)
+          const sent: string[][] = []
+          const result = yield* runSDK(entry.pkg, name, (_url, init) => {
+            sent.push(Array.from(new Headers(init?.headers).values()))
+            return Promise.reject(new Error("request captured"))
+          })
           const expected = (entry.create as (options: object) => {
             languageModel: (id: string) => { provider: string; modelId: string }
-          })({
-            name,
-            apiKey: "test",
-          })
-          expect(result.sdk?.languageModel("model")).toMatchObject({
+          })({ name, apiKey })
+          const language = result.sdk?.languageModel("model")
+          expect(language).toMatchObject({
             provider: expected.languageModel("model").provider,
             modelId: expected.languageModel("model").modelId,
           })
+          yield* Effect.promise(() =>
+            language
+              .doGenerate({ prompt: [{ role: "user", content: [{ type: "text", text: "hello" }] }] })
+              .catch(() => undefined),
+          )
+          expect(sent).toHaveLength(1)
+          expect(sent[0]?.some((value) => value.includes(apiKey))).toBe(true)
         }
       }),
     )

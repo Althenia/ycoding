@@ -9,12 +9,56 @@ import { LocationProvider } from "../../src/context/location"
 import { RouteProvider } from "../../src/context/route"
 import { TuiLifecycleProvider } from "../../src/context/runtime"
 import { ThemeProvider } from "../../src/context/theme"
-import { PluginProvider } from "../../src/plugin/context"
+import { PluginProvider, usePlugin } from "../../src/plugin/context"
 import { createNotifications } from "../../src/feature-plugins/system/notifications"
 import { contexts } from "../fixture/client-observer-plugin"
 import { createApi, createEventStream, createFetch, json } from "../fixture/tui-client"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
+
+test("invalid plugin modules report a user-facing error without an internal runtime label", async () => {
+  function ErrorState() {
+    const plugins = usePlugin()
+    return <text>{(() => {
+      const state = plugins.list().find((entry) => entry.target === "invalid-fixture")
+      return state?.status === "failed" ? state.error : state?.status
+    })()}</text>
+  }
+
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <TuiLifecycleProvider value={{ add: () => () => {} }}>
+          <ConfigProvider config={createTuiResolvedConfig({ plugins: ["invalid-fixture"], attention: { enabled: false } })}>
+            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+              <Keymap.Provider>
+                <RouteProvider>
+                  <ClientProvider api={createApi(createFetch().fetch)}>
+                    <DataProvider>
+                      <LocationProvider>
+                        <PluginProvider packages={{ resolve: async () => new URL("../fixture/tui-client.ts", import.meta.url).href }}>
+                          <ErrorState />
+                        </PluginProvider>
+                      </LocationProvider>
+                    </DataProvider>
+                  </ClientProvider>
+                </RouteProvider>
+              </Keymap.Provider>
+            </ThemeProvider>
+          </ConfigProvider>
+        </TuiLifecycleProvider>
+      </TestTuiContexts>
+    ),
+    { width: 100, height: 12 },
+  )
+  try {
+    await app.waitForFrame((frame) => frame.includes("invalid-fixture"))
+    expect(app.captureCharFrame()).toContain("Invalid TUI plugin module: invalid-fixture")
+    expect(app.captureCharFrame()).not.toContain("V2")
+  } finally {
+    app.renderer.destroy()
+  }
+})
 
 test("active production plugin contexts follow a managed-service client replacement", async () => {
   const initialEvents = createEventStream()

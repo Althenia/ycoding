@@ -5,6 +5,7 @@ import { Config } from "@ycoding-ai/schema/config"
 import { Plugin } from "@ycoding-ai/schema/plugin"
 import { Money } from "@ycoding-ai/schema/money"
 import { DateTime, Deferred, Effect, Equal, Fiber, Hash, RcMap, Schema, Stream } from "effect"
+import { TestClock } from "effect/testing"
 import { Plugin as EffectPlugin } from "@ycoding-ai/plugin/effect"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Catalog } from "@ycoding-ai/core/catalog"
@@ -16,6 +17,7 @@ import { PluginV2 } from "@ycoding-ai/core/plugin"
 import { SdkPlugins } from "@ycoding-ai/core/plugin/sdk"
 import { PluginSupervisor } from "@ycoding-ai/core/plugin/supervisor"
 import { ModelV2 } from "@ycoding-ai/core/model"
+import { fixtureModels } from "./lib/models"
 import { ProjectV2 } from "@ycoding-ai/core/project"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
@@ -29,9 +31,15 @@ import { EventV2 } from "../src/event"
 import { Reference } from "../src/reference"
 import { ToolRegistry } from "../src/tool/registry"
 
-const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, LocationServiceMap.node])))
+const models = [fixtureModels] as const
+const it = testEffect(
+  AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, LocationServiceMap.node]), models),
+)
 const itWithSdk = testEffect(
-  AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SdkPlugins.node, LocationServiceMap.node])),
+  AppNodeBuilder.build(
+    LayerNode.group([Database.node, EventV2.node, SdkPlugins.node, LocationServiceMap.node]),
+    models,
+  ),
 )
 
 describe("LocationServiceMap", () => {
@@ -222,7 +230,7 @@ describe("LocationServiceMap", () => {
     ),
   )
 
-  itWithSdk.live("keeps flush pending while startup updates continue", () =>
+  itWithSdk.effect("keeps flush pending while startup updates continue", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
@@ -239,10 +247,11 @@ describe("LocationServiceMap", () => {
 
           yield* Effect.forEach(
             Array.from({ length: 5 }),
-            () => events.publish(SdkPlugins.Updated, {}).pipe(Effect.andThen(Effect.sleep("50 millis"))),
+            () => events.publish(SdkPlugins.Updated, {}).pipe(Effect.andThen(TestClock.adjust("50 millis"))),
             { discard: true },
           )
           expect(flushFiber.pollUnsafe()).toBeUndefined()
+          yield* TestClock.adjust("100 millis")
           yield* Fiber.join(flushFiber)
         }),
       ),
@@ -398,37 +407,29 @@ describe("LocationServiceMap", () => {
           yield* Effect.gen(function* () {
             const registry = yield* PluginV2.Service
             const supervisor = yield* PluginSupervisor.Service
+            const events = yield* EventV2.Service
+            const ids = registry.list().pipe(Effect.map((plugins) => plugins.map((plugin) => String(plugin.id))))
+            const reload = Effect.fnUntraced(function* (plugins: string[], expected: string[]) {
+              const reloaded = yield* events.subscribe(Plugin.Event.Updated).pipe(
+                Stream.mapEffect(() => ids),
+                Stream.filter((current) => current.join("\n") === expected.join("\n")),
+                Stream.runHead,
+                Effect.forkScoped({ startImmediately: true }),
+              )
+              yield* Effect.promise(() => fs.writeFile(file, JSON.stringify({ plugins })))
+              yield* Fiber.join(reloaded)
+            })
             yield* supervisor.flush
-            expect((yield* registry.list()).map((plugin) => String(plugin.id))).toEqual(["ycoding.agent"])
+            expect(yield* ids).toEqual(["ycoding.agent"])
 
-            yield* Effect.promise(() => fs.writeFile(file, JSON.stringify({ plugins: ["-*", "ycoding.command"] })))
-            for (let attempt = 0; attempt < 100; attempt++) {
-              if ((yield* registry.list()).some((plugin) => plugin.id === "ycoding.command")) break
-              yield* Effect.sleep("20 millis")
-            }
+            yield* reload(["-*", "ycoding.command"], ["ycoding.command"])
+            expect(yield* ids).toEqual(["ycoding.command"])
 
-            expect((yield* registry.list()).map((plugin) => String(plugin.id))).toEqual(["ycoding.command"])
-
-            yield* Effect.promise(() =>
-              fs.writeFile(
-                file,
-                JSON.stringify({
-                  plugins: ["-*", path.join(import.meta.dir, "plugin/fixtures/failing-plugin.ts")],
-                }),
-              ),
-            )
-            for (let attempt = 0; attempt < 100; attempt++) {
-              if ((yield* registry.list()).length === 0) break
-              yield* Effect.sleep("20 millis")
-            }
+            yield* reload(["-*", path.join(import.meta.dir, "plugin/fixtures/failing-plugin.ts")], [])
             expect(yield* registry.list()).toEqual([])
 
-            yield* Effect.promise(() => fs.writeFile(file, JSON.stringify({ plugins: ["-*", "ycoding.agent"] })))
-            for (let attempt = 0; attempt < 100; attempt++) {
-              if ((yield* registry.list()).some((plugin) => plugin.id === "ycoding.agent")) break
-              yield* Effect.sleep("20 millis")
-            }
-            expect((yield* registry.list()).map((plugin) => String(plugin.id))).toEqual(["ycoding.agent"])
+            yield* reload(["-*", "ycoding.agent"], ["ycoding.agent"])
+            expect(yield* ids).toEqual(["ycoding.agent"])
           }).pipe(
             Effect.scoped,
             Effect.provide(
@@ -454,23 +455,32 @@ describe("LocationServiceMap", () => {
             const secondRef = Location.Ref.make({ directory: AbsolutePath.make(second.path) })
             const firstContext = yield* locations.contextEffect(firstRef)
             const secondContext = yield* locations.contextEffect(secondRef)
-            const received = { first: 0, second: 0 }
-            yield* events.subscribe(Config.Event.Updated).pipe(
-              Stream.runForEach(() => Effect.sync(() => received.first++)),
-              Effect.provideContext(firstContext),
-              Effect.forkScoped({ startImmediately: true }),
-            )
-            yield* events.subscribe(Config.Event.Updated).pipe(
-              Stream.runForEach(() => Effect.sync(() => received.second++)),
-              Effect.provideContext(secondContext),
-              Effect.forkScoped({ startImmediately: true }),
-            )
-            yield* Effect.sleep("10 millis")
+            const firstEvents = yield* events
+              .subscribe(Config.Event.Updated)
+              .pipe(
+                Stream.take(1),
+                Stream.runCollect,
+                Effect.provideContext(firstContext),
+                Effect.forkScoped({ startImmediately: true }),
+              )
+            const secondEvents = yield* events
+              .subscribe(Config.Event.Updated)
+              .pipe(
+                Stream.take(1),
+                Stream.runCollect,
+                Effect.provideContext(secondContext),
+                Effect.forkScoped({ startImmediately: true }),
+              )
 
             yield* events.publish(Config.Event.Updated, {}, { location: firstRef })
-            yield* Effect.sleep("10 millis")
+            yield* events.publish(Config.Event.Updated, {}, { location: secondRef })
 
-            expect(received).toEqual({ first: 1, second: 0 })
+            expect((yield* Fiber.join(firstEvents)).map((event) => event.location?.directory)).toEqual([
+              AbsolutePath.make(first.path),
+            ])
+            expect((yield* Fiber.join(secondEvents)).map((event) => event.location?.directory)).toEqual([
+              AbsolutePath.make(second.path),
+            ])
           }),
         ),
       ),

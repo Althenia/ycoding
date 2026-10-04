@@ -32,6 +32,7 @@ let sessionExists = true
 let failDaybreak = false
 let mutations: string[] = []
 let createdIDs: string[] = []
+let persistedDaybreakEvent: ((daybreak?: ModelDaybreak) => void) | undefined
 
 function resetFixture(input: { advertised: ModelDaybreak[]; daybreak?: ModelDaybreak; landing?: boolean }) {
   sessionID = baseSession.id
@@ -46,6 +47,7 @@ function resetFixture(input: { advertised: ModelDaybreak[]; daybreak?: ModelDayb
   promptRequests = []
   eventSeq = 0
   modelMessages.clear()
+  persistedDaybreakEvent = undefined
 }
 
 function sessionInfo() {
@@ -73,6 +75,8 @@ const route: FetchHandler = async (url, request) => {
     mutations.push("daybreak")
     if (failDaybreak) return new Response("Daybreak selection failed", { status: 500 })
     sessionDaybreak = body.daybreak === null ? undefined : body.daybreak
+    if (!persistedDaybreakEvent) throw new Error("Daybreak event stream is not ready")
+    persistedDaybreakEvent(sessionDaybreak)
     return json({ data: sessionInfo() })
   }
   if (url.pathname === `/api/session/${sessionID}/autonomy` && request.method === "PUT") {
@@ -257,6 +261,7 @@ async function expectPaletteTitle(screen: Screen, title: string) {
 async function boot(advertisedPrograms: ModelDaybreak[], daybreak?: ModelDaybreak, landing = false) {
   resetFixture({ advertised: advertisedPrograms, daybreak, landing })
   const screen = await renderScreen({ width: 120, height: 69, args: landing ? {} : { sessionID }, route, settle: "Message YCoding…" })
+  persistedDaybreakEvent = (daybreak) => emitDaybreak(screen, daybreak)
   await waitUntil(screen, () => screen.lines()[1].includes("openai/GPT 5.6 Terra"), "the resolved model").catch(async (error) => {
     await screen.dispose()
     throw error
@@ -322,17 +327,23 @@ test("retains the landing draft and retries the same Session when saving Daybrea
     await focusComposer(screen)
     await screen.input.typeText("Check the application")
     screen.input.pressEnter()
-    await waitUntil(screen, () => screen.frame().includes("Daybreak selection failed · draft retained"), "the failure")
+    await waitUntil(screen, () => screen.frame().includes("Selecting Daybreak unresolved · Retry send"), "the failure")
     expect(screen.frame()).toContain("Check the application")
-    expect(screen.frame()).toContain("What should we build?")
     expect(promptRequests).toEqual([])
     const created = createdIDs[0]
+    expect(created).toMatch(/^ses_/)
+    await focusComposer(screen)
+    await screen.input.typeText("unsent follow-up")
+    await waitUntil(screen, () => screen.frame().includes("unsent follow-up"), "the editable follow-up draft")
 
     failDaybreak = false
-    screen.input.pressEnter()
+    await screen.renderOnce()
+    const retryRow = screen.lines().findIndex((line) => line.includes("Retry send"))
+    expect(retryRow).toBeGreaterThan(-1)
+    await screen.mouse.click(screen.lines()[retryRow].indexOf("Retry send"), retryRow)
     await waitUntil(
       screen,
-      () => mutations.includes("wake") && !screen.frame().includes("What should we build?") && screen.lines()[1].includes("Daybreak Blue"),
+      () => mutations.includes("wake") && screen.lines()[1].includes("Daybreak Blue"),
       "the retried Session",
     )
     expect(createdIDs).toEqual([created])
@@ -340,6 +351,7 @@ test("retains the landing draft and retries the same Session when saving Daybrea
     expect(promptRequests).toHaveLength(2)
     expect(promptRequests[1].id).toBe(promptRequests[0].id)
     expect(sessionDaybreak).toBe("daybreak_blue")
+    await waitUntil(screen, () => screen.frame().includes("unsent follow-up"), "the preserved follow-up draft")
   } finally {
     await screen.dispose()
   }
@@ -507,7 +519,6 @@ test("cycles off → blue → red → off across the advertised programs", async
     expect(daybreakSets).toEqual([{ daybreak: "daybreak_blue" }])
     await waitUntil(screen, () => screen.frame().includes("Daybreak blue enabled"), "the blue toast")
 
-    emitDaybreak(screen, "daybreak_blue")
     await expectPaletteTitle(screen, "Daybreak: blue (cycle off→blue→red, /daybreak blue|red|off)")
 
     await submitDaybreak(screen)
@@ -515,7 +526,6 @@ test("cycles off → blue → red → off across the advertised programs", async
     expect(daybreakSets[1]).toEqual({ daybreak: "daybreak_red" })
     await waitUntil(screen, () => screen.frame().includes("Daybreak red enabled"), "the red toast")
 
-    emitDaybreak(screen, "daybreak_red")
     await expectPaletteTitle(screen, "Daybreak: red (cycle off→blue→red, /daybreak blue|red|off)")
 
     await submitDaybreak(screen)
@@ -538,7 +548,6 @@ test("cycles a red-only model off → red → off", async () => {
     await waitUntil(screen, () => daybreakSets.length === 1, "the red payload")
     expect(daybreakSets).toEqual([{ daybreak: "daybreak_red" }])
 
-    emitDaybreak(screen, "daybreak_red")
     await expectPaletteTitle(screen, "Daybreak: red (cycle off→blue→red, /daybreak blue|red|off)")
 
     await submitDaybreak(screen)

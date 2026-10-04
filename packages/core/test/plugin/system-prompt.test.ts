@@ -13,7 +13,6 @@ import { Provider } from "@ycoding-ai/schema/provider"
 import { Effect } from "effect"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
-import PROMPT_META from "../../src/plugin/system-prompt/meta.txt"
 import PROMPT_DEFAULT from "../../src/session/runner/prompt/base.txt"
 
 const it = testEffect(PluginTestLayer)
@@ -33,18 +32,27 @@ const context = (id: string, system = fallback): SessionHooks["context"] => ({
 })
 
 describe("SystemPromptPlugin", () => {
-  test("uses V2 vocabulary in the Meta prompt", () => {
-    expect(PROMPT_META).toContain("When webfetch returns")
-    expect(PROMPT_META).toContain("subagent tool")
-    expect(PROMPT_META).toContain("shell tool")
-    expect(PROMPT_META).toContain("read for reading files")
-    expect(PROMPT_META).toContain("edit for editing")
-    expect(PROMPT_META).toContain("write for creating files")
-    expect(PROMPT_META).toContain("Do not invent or guess a public YCoding documentation URL")
-    expect(PROMPT_META).not.toMatch(
-      /TodoWrite|Task tool|WebFetch|\bBash\b|Read for reading files|Edit for editing|Write for creating files|https:\/\/(?:v2\.)?ycoding\.ai/,
-    )
-  })
+  it.effect("gives Meta models a prompt in V2 tool vocabulary", () =>
+    Effect.gen(function* () {
+      const hooks = yield* PluginHooks.Service
+      yield* SystemPromptPlugin.MetaPlugin.effect(yield* makeHost)
+      const event = context("meta/muse-spark-1.1")
+
+      yield* hooks.trigger("session", "context", event)
+
+      const system = event.system.map((part) => part.text).join("\n")
+      expect(system).toContain("When webfetch returns")
+      expect(system).toContain("subagent tool")
+      expect(system).toContain("shell tool")
+      expect(system).toContain("read for reading files")
+      expect(system).toContain("edit for editing")
+      expect(system).toContain("write for creating files")
+      expect(system).toContain("Do not invent or guess a public YCoding documentation URL")
+      expect(system).not.toMatch(
+        /TodoWrite|Task tool|WebFetch|\bBash\b|Read for reading files|Edit for editing|Write for creating files|https:\/\/(?:v2\.)?ycoding\.ai/,
+      )
+    }),
+  )
 
   test("uses granular IDs with a common prefix", () => {
     expect(SystemPromptPlugin.Plugins.map((plugin) => plugin.id)).toEqual([

@@ -395,6 +395,27 @@ test("ends a completed idle exchange with the assistant block", async () => {
   }
 }, 60_000)
 
+test("preserves literal goal-marker text in a completed assistant message", async () => {
+  const text = "The literal [GOAL_COMPLETED] marker belongs to this answer."
+  const screen = await transcriptScreen([
+    { id: "msg_literal_user", type: "user", text: "Quote the marker", time: { created: 1 } },
+    {
+      id: "msg_literal_assistant",
+      type: "assistant",
+      agent: "build",
+      model,
+      content: [{ type: "text", text }],
+      finish: "stop",
+      time: { created: 2, completed: 3 },
+    },
+  ], "GOAL_COMPLETED marker belongs")
+  try {
+    expect(screen.frame()).toContain("GOAL_COMPLETED marker belongs to this answer.")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
 test("ends an interrupted idle turn with the assistant block", async () => {
   const screen = await transcriptScreen(interruptedTranscript, "Starting the provider audit.")
 

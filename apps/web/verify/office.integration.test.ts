@@ -140,6 +140,25 @@ describe("remote Office presentation", () => {
     }
   }, 180_000)
 
+  test("restores the Conversation scroller after Office switches and viewport changes without observer errors", async () => {
+    const page = await openRemote("view=chat")
+    try {
+      expect(await until(page, `document.querySelector('.transcript-navigation') !== null`)).toBe(true)
+      await page.evaluate<void>(`(() => {
+        window.officeResizeErrors = []
+        addEventListener('error', (event) => window.officeResizeErrors.push(String(event.message)))
+      })()`)
+      for (let index = 0; index < 20; index += 1) {
+        await page.setViewport([1440, 1024, 820, 1440][index % 4]!, 900)
+        await choosePresentation(page, "Office")
+        expect(await until(page, `document.querySelector('.office-workspace canvas') !== null`)).toBe(true)
+        await choosePresentation(page, "Conversation")
+        expect(await until(page, `document.querySelector('.transcript-navigation')?.getBoundingClientRect().height > 0 && document.querySelector('.office-workspace') === null`)).toBe(true)
+      }
+      expect(await page.evaluate<readonly string[]>(`window.officeResizeErrors`)).toEqual([])
+    } finally { await page.close() }
+  }, 120_000)
+
   test("selects and follows a family member from the roster without opening a transcript", async () => {
     const page = await openRemote("view=chat&presentation=office")
     try {
@@ -321,7 +340,7 @@ describe("remote Office presentation", () => {
       await choosePresentation(page, "Conversation")
       expect(await until(page, `document.querySelector('.mutation-toast--unknown') !== null`)).toBe(true)
       expect(await page.evaluate<number>(`remoteOperationReport().operations['session.prompt'] ?? 0`)).toBe(1)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.mutation-toast--unknown button,.transcript-message__send-error button').length`)).toBe(2)
+      expect(await until(page, `document.querySelectorAll('.mutation-toast--unknown button,.transcript-message__send-error button').length === 2`)).toBe(true)
     } finally {
       await page.close()
     }

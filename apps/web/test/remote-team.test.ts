@@ -3,6 +3,7 @@ import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore, readSessionInfo } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
 import { pacedFlowTimeoutMs, startRelayDouble, waitFor, type RelayHandlerOutcome, type RelayHandlerResult } from "./relay-double"
+import { createRemoteStoreClock } from "./remote-store-clock"
 import type { RemoteRequest } from "@ycoding-ai/remote"
 
 const task = (sessionID: string, parentID = "ses_a", state = "running") => ({
@@ -12,17 +13,22 @@ const task = (sessionID: string, parentID = "ses_a", state = "running") => ({
 })
 
 async function setup(handler: (operation: string, sessionID?: string, cursor?: unknown) => RelayHandlerResult,
-  snapshot?: (sessionID: string) => unknown, other?: (request: RemoteRequest) => RelayHandlerResult) {
+  snapshot?: (sessionID: string) => unknown, other?: (request: RemoteRequest) => RelayHandlerResult, clock?: ReturnType<typeof createRemoteStoreClock>) {
   const relay = await startRelayDouble({ handler: (request) => request.operation === "session.subagent.list"
     ? handler(request.operation, request.sessionID, request.input?.cursor) : other?.(request) ?? "default", snapshot })
+  const sent: string[] = []
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }),
+    createTransport: (deviceID, handlers) => {
+      const transport = createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 })
+      return { ...transport, request: (operation, request) => { sent.push(operation); return transport.request(operation, request) } }
+    },
     batchMs: 1,
+    ...(clock === undefined ? {} : { schedule: clock.schedule, monotonicNow: clock.now }),
   })
   await store.load()
   await waitFor(() => store.state().sessions.length > 0, 5_000)
-  return { store, relay, stop: async () => { store.dispose(); await relay.stop() } }
+  return { store, relay, sent, stop: async () => { store.dispose(); await relay.stop() } }
 }
 
 describe("remote team facts", () => {
@@ -159,24 +165,26 @@ describe("remote team facts", () => {
   }, pacedFlowTimeoutMs)
 
   test("watching task facts in Conversation never starts Office activity polling", async () => {
-    const test = await setup(() => ({ ok: true, value: { data: [task("ses_child")], summary: { total: 1 }, cursor: {} } }))
+    const clock = createRemoteStoreClock()
+    const test = await setup(() => ({ ok: true, value: { data: [task("ses_child")], summary: { total: 1 }, cursor: {} } }), undefined, undefined, clock)
     try {
       test.store.watchTeam(true)
       await test.store.selectSession("ses_a")
       await waitFor(() => test.store.state().team?.status === "ready")
-      await Bun.sleep(100)
-      expect(test.relay.requests.filter((request) => request.operation === "session.family.activity")).toEqual([])
+      await clock.advanceBy(10_000)
+      expect(test.sent.filter((operation) => operation === "session.family.activity")).toEqual([])
     } finally { await test.stop() }
   })
 
   test("one Office activity read reports each member and stops after leaving Office", async () => {
+    const clock = createRemoteStoreClock()
     let reads = 0
     const test = await setup(() => ({ ok: true, value: { data: [task("ses_child")], summary: { total: 1 }, cursor: {} } }), undefined,
       (request) => request.operation === "session.family.activity" ? { ok: true, value: { data: [
         { sessionID: "ses_a", executing: false },
         { sessionID: "ses_child", executing: true, activity: ++reads === 1 ? { kind: "tool", room: "qa", text: "Running bun test" }
           : { kind: "tool", room: "research", text: "Reading store.ts" } },
-      ] } } : "default")
+      ] } } : "default", clock)
     try {
       test.store.watchTeam(true)
       test.store.watchFamilyActivity(true)
@@ -184,13 +192,16 @@ describe("remote team facts", () => {
       await waitFor(() => test.store.state().familyActivity?.status === "ready")
       expect(test.store.state().familyActivity?.members).toMatchObject([{ sessionID: "ses_a", executing: false }, { sessionID: "ses_child", executing: true }])
       expect(test.relay.requests.filter((request) => request.operation === "session.family.activity")).toMatchObject([{ sessionID: "ses_a", input: { sessionIDs: ["ses_child"] } }])
-      await waitFor(() => test.relay.requests.filter((request) => request.operation === "session.family.activity").length === 2, 4_000)
+      await clock.advanceBy(2_999)
+      expect(test.sent.filter((operation) => operation === "session.family.activity")).toHaveLength(1)
+      await clock.advanceBy(1)
       await waitFor(() => test.store.state().familyActivity?.members[1]?.activity?.text === "Reading store.ts")
+      expect(reads).toBe(2)
       test.store.watchFamilyActivity(false)
-      await Bun.sleep(3_150)
-      expect(test.relay.requests.filter((request) => request.operation === "session.family.activity")).toHaveLength(2)
+      await clock.advanceBy(10_000)
+      expect(test.sent.filter((operation) => operation === "session.family.activity")).toHaveLength(2)
     } finally { await test.stop() }
-  }, 12_000)
+  })
 
   test("an older connector marks family activity unsupported instead of inventing child work", async () => {
     const test = await setup(() => ({ ok: true, value: { data: [task("ses_child")], summary: { total: 1 }, cursor: {} } }), undefined,
@@ -205,35 +216,41 @@ describe("remote team facts", () => {
     } finally { await test.stop() }
   })
   test("a transient family activity error stays retryable rather than asking for an update", async () => {
+    const clock = createRemoteStoreClock()
     let reads = 0
     const test = await setup(() => ({ ok: true, value: { data: [], summary: { total: 0 }, cursor: {} } }), undefined,
       (request) => request.operation !== "session.family.activity" ? "default" : ++reads === 1
         ? { ok: false, code: "internal_error", message: "Temporary backend failure" }
-        : { ok: true, value: { data: [{ sessionID: "ses_a", executing: false }] } })
+        : { ok: true, value: { data: [{ sessionID: "ses_a", executing: false }] } }, clock)
     try {
       test.store.watchTeam(true)
       test.store.watchFamilyActivity(true)
       await test.store.selectSession("ses_a")
       await waitFor(() => test.store.state().familyActivity?.status === "error")
-      await waitFor(() => test.store.state().familyActivity?.status === "ready", 4_000)
+      await clock.advanceBy(2_999)
+      expect(test.sent.filter((operation) => operation === "session.family.activity")).toHaveLength(1)
+      await clock.advanceBy(1)
+      await waitFor(() => test.store.state().familyActivity?.status === "ready")
       expect(reads).toBe(2)
     } finally { await test.stop() }
-  }, 8_000)
+  })
 
   test("disconnect cancels the Office activity refresh", async () => {
+    const clock = createRemoteStoreClock()
     const test = await setup(() => ({ ok: true, value: { data: [], summary: { total: 0 }, cursor: {} } }), undefined,
-      (request) => request.operation === "session.family.activity" ? { ok: true, value: { data: [{ sessionID: "ses_a", executing: false }] } } : "default")
+      (request) => request.operation === "session.family.activity" ? { ok: true, value: { data: [{ sessionID: "ses_a", executing: false }] } } : "default", clock)
     try {
       test.store.watchTeam(true)
       test.store.watchFamilyActivity(true)
       await test.store.selectSession("ses_a")
       await waitFor(() => test.store.state().familyActivity?.status === "ready")
-      const before = test.relay.requests.filter((request) => request.operation === "session.family.activity").length
+      const before = test.sent.filter((operation) => operation === "session.family.activity").length
+      expect(clock.pendingDelays()).toContain(3_000)
       test.store.disconnect()
-      await Bun.sleep(3_150)
-      expect(test.relay.requests.filter((request) => request.operation === "session.family.activity")).toHaveLength(before)
+      await clock.advanceBy(10_000)
+      expect(test.sent.filter((operation) => operation === "session.family.activity")).toHaveLength(before)
     } finally { await test.stop() }
-  }, 6_000)
+  })
 
   test("the one family read includes a selected child from a later task page", async () => {
     const test = await setup((_operation, _id, cursor) => ({ ok: true, value: {

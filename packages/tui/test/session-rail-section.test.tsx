@@ -146,6 +146,26 @@ test("renders guardrail auto-approval only at effective YOLO 3", async () => {
   }
 })
 
+test("renders the goal panel only while its durable status is active", async () => {
+  const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
+  for (const status of ["active", "completed", "stopped", "exhausted"] as const) {
+    const app = await mount(() => (
+      <AutonomyRailContent autonomy={{
+        mode: "normal",
+        yolo: 0,
+        goal: { text: "Finish the migration", status, iteration: 3, noProgress: 0, maxNoProgress: 3 },
+      }} />
+    ), { width: 40, height: 24 })
+    try {
+      await app.waitForFrame((frame) => frame.includes("AUTONOMY"))
+      expect(app.captureCharFrame().includes("GOAL"), status).toBe(status === "active")
+      expect(app.captureCharFrame().includes("Finish the migration"), status).toBe(status === "active")
+    } finally {
+      app.renderer.destroy()
+    }
+  }
+})
+
 test("keeps autonomy semantics out of generic rail sections", async () => {
   const { RailSection } = await import("../src/routes/session/rail-section")
   const app = await mount(() => <RailSection section="autonomy" title="AUTONOMY" />)

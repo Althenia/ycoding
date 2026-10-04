@@ -406,6 +406,61 @@ test("enter opens home so the next new session is created in the selected direct
   const app = await launch({
     width: 100,
     handler: async (url, request) => {
+      const responseLocation = {
+        directory: url.searchParams.get("location[directory]") ?? directory,
+        project: { id: "proj_test", directory: worktree },
+      }
+      if (url.pathname === "/api/agent")
+        return json({
+          location: responseLocation,
+          data: [
+            {
+              id: "build",
+              name: "Build",
+              mode: "primary",
+              hidden: false,
+              permissions: [],
+              request: { headers: {}, body: {} },
+            },
+          ],
+        })
+      if (url.pathname === "/api/model")
+        return json({
+          location: responseLocation,
+          data: [
+            {
+              id: "workspace-fixture",
+              modelID: "workspace-fixture",
+              providerID: "openai",
+              name: "Workspace fixture",
+              family: "",
+              capabilities: { tools: true, input: ["text"], output: ["text"] },
+              variants: [],
+              time: { released: 0 },
+              cost: [],
+              status: "active",
+              enabled: true,
+              limit: { context: 200_000, output: 32_000 },
+            },
+          ],
+        })
+      if (url.pathname === "/api/provider")
+        return json({
+          location: responseLocation,
+          data: [{ id: "openai", name: "OpenAI" }],
+        })
+      if (url.pathname === "/api/integration")
+        return json({
+          location: responseLocation,
+          data: [
+            {
+              id: "openai",
+              name: "OpenAI",
+              methods: [],
+              connections: [{ type: "credential", id: "cred_test", label: "test" }],
+            },
+          ],
+        })
       if (url.pathname !== "/api/session" || request.method !== "POST") return undefined
       created.push(await request.json())
       return json({ name: "Error", data: { message: "stop" } }, { status: 500 })

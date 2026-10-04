@@ -1,5 +1,205 @@
 # SL TUI inventory
 
+## Current source-assertion corrections (HEAD → working tree; 2026-10-04)
+
+The rows below replace stale live inventory entries for tests changed in the working tree. A real consumer assertion is not equivalent to a source-token count or source-spelling assertion; note that distinction explicitly. Mutation evidence is `UNPROVEN` unless an exact outcome is available. No mutation probe was run for this inventory correction; parent-run mutation and full-file evidence is identified where available.
+
+| HEAD test group | Current consumer assertion / status | Proof status |
+| --- | --- | --- |
+| `branding.test.ts`: “omits internal runtime generation labels…” source scan | Replaced in part by `plugin/context.test.tsx:19-57`, which renders `Invalid TUI plugin module: invalid-fixture` and excludes `V2`. Parent mutation `Invalid TUI` → `Invalid V2 TUI` failed this visible assertion (Bun exit 1); restored focused test exited 0. The prior route-error source string “for V2 sessions” has no equivalent exact-message or source-location assertion; the current missing-Session consumer now separately rejects a `V2` label. | Plugin error behavior proof verified by parent; exact route source wording is not asserted. Plugin file full run was 2/2; three isolated runs and one timestamp-overlap loaded run with guardrail 8/8 passed. |
+| `branding.test.ts`: “contains no legacy product copy…” source scan | Removed as a duplicate of the repository-wide brand gate. Continuation behavior survives at `test/util/presentation.test.ts:4-8`; its upstream-executable mutation failed both the output assertion and brand gate, then exact restoration passed. The four other former source paths were mutated at their product-title/error copy: app title, attention title, Mini splash, and CLI TUI error. The retained brand gate exited 1 and reported all four exact paths; source restoration was byte-exact and the gate returned 0. | E112/E120 verify the consumer and gate across all five former locations. This does not claim detection of arbitrary obfuscated strings or exempt external-provider references. |
+| `session-autonomy.test.ts`: “re-reads goal state when execution settles…” source scan | Replaced by real route/render flow `screen/goal-command.test.tsx:566-585`, “execution settlement refreshes a completed goal…”; it emits `session.execution.succeeded` and asserts the Goal indicator disappears and GOAL status is absent. Parent’s settlement mutation made the visible assertion fail (Bun exit 1); exact restoration passed (exit 0). | Behavior mutation verified by parent E116; included in the 18-case goal-command file’s three isolated passes and loaded pressure run. |
+| `session-autonomy.test.ts`: “renders durable assistant text directly…” source scan | Replaced for visible text by `session-transcript-chat-shape.test.tsx:398-413`, which renders literal `GOAL_COMPLETED marker belongs to this answer.` Parent removed the TextPart marker suffix; the actual visible-content assertion failed (Bun exit 1), then passed after exact source restoration. | Mutation verified by parent E118; full file passed 9/9 in three isolated runs and the loaded run. |
+| `session-autonomy.test.ts`: “hides the goal panel when the goal is not active” source scan | Replaced by `session-rail-section.test.tsx:149-163`, which checks Goal label and objective visibility for active, completed, stopped and exhausted states. Parent mutation of the active-only sidebar condition made the completed case fail (Bun exit 1); restoration passed the focused case (1/1). | Behavior assertion and parent mutation proof verified. |
+| `session-btw.test.ts`: “opens BTW only from explicit model-dialog completion…” source scan | Replaced by `btw-session-render.test.tsx:404-424` (cancel leaves the slash draft and creates/submits nothing) and `:428-459` (choosing the Location model creates the BTW child, snapshots parent history, admits the exact first prompt and navigates to the BTW route). Parent’s cancel and model-selection mutations each failed their consumer assertion (Bun exit 1); restorations passed (exit 0). | Behavior mutations verified by parent E116; file passed 25 cases in three isolated runs and one loaded run. These tests prove rendered/transport behavior, not source-spelling uniqueness. |
+| `session-layout.test.ts`: “session transcript does not render the redundant top header slot” source scan | The file is deleted in the working tree. Parent’s scoped consumer/reference check found no `TuiHostSlotMap` entry or current product consumer for `session.header`; current chrome coordinate assertions remain the product layout contract. Do not invent a fixture for an unsupported slot. | Implementation-only; no user-visible behavior mutation applies. Parent scoped search supports removing the source-spelling assertion; retain the live chrome coordinate contract. |
+| `keymap-registration.test.ts`: “session goal keeps palette and durable autonomy state wiring” source scan | Consumer flow in `screen/goal-command.test.tsx:549-562` opens the palette, verifies one visible action, submits it to the active Session, and asserts no prompt request. Parent’s `palette: true` → `false` mutation failed the visible test (Bun exit 1); exact restoration passed (exit 0). | Behavior mutation verified by parent E116; source identifier spelling and route prop wiring are not asserted. |
+| `keymap-registration.test.ts`: “session goal has one slash registration” source count | `screen/goal-command.test.tsx:529-543` opens the slash menu, verifies one visible “Set autonomous goal” row, submits and asserts the goal update with no prompt. Parent’s slash-registration removal failed the consumer test (Bun exit 1); exact restoration passed (exit 0). | Rendered cardinality/behavior mutation verified by parent E116; source declaration count is not asserted. The earlier piped probe remains unproven and is superseded by this direct result. |
+| `keymap-registration.test.ts`: “retained submission retry is an explicit conditional Prompt command” source scan | `screen/prompt-recovery.screen.test.ts:561-586` exercises receipt retry, request identity and preserving an editable draft; `:589-627` exercises shell retry. Parent changed `retry()` to `false`; the shell-rejection consumer assertion failed (Bun exit 1) and passed after restoration (exit 0). The `retryAlways()` discard path also has a red/green consumer probe. | Retry behavior mutations verified by parent E116; the earlier piped probe remains unproven and is superseded by these direct results. Source conditional/spelling is not asserted. |
+| `keymap-registration.test.ts`: “session skills is registered only by the session route” source scan | `session-skill-render.test.tsx:199-238` asserts one visible Session-skills action and opens its real details, expansion and paging flow. Duplicating the command failed the visible count (2 versus 1), then exact restoration passed. | E116 verifies the active consumer's uniqueness and effect. Requiring a declaration to reside in exactly one source module is implementation-only; no source-location invariant is retained. |
+| `keymap-registration.test.ts`: “session compact surfaces API rejection…” source scan | New real-route render test `screen/session-compact-command.screen.test.ts:20-103` asserts one compact request and the ConflictError toast. Parent’s toast mutation made the consumer test fail (Bun exit 1); exact restoration passed (exit 0). | Behavior mutation verified by parent E116; full file passed one case in three isolated runs and one loaded run. |
+| `keymap-registration.test.ts`: “shell output relies on configurable action bindings” source scan | New render test `screen/shell-output-keybind.screen.test.ts:32-93` configures `ctrl+k`/`q`, asserts kill request ownership and return to the Session prompt. Parent’s kill and back binding mutations each failed the consumer test (Bun exit 1); exact restorations passed (exit 0). | Behavior mutations verified by parent E116; full file passed one case in three isolated runs and one loaded run. It does not assert source keybind-ID spellings or absence of default literals. |
+| `mcp-oauth-routing.test.ts`: “MCP authorization launches from Enter or the toggle action” source scan | New component/render test `mcp-oauth-routing-render.test.ts:14-63` covers Enter and Space, checks the registered OAuth method request and asserts reconnect is empty. Parent’s Enter and Space mutations each failed their consumer assertion (Bun exit 1); exact restorations passed (exit 0). | Behavior mutations verified by parent E116; full file passed two cases in three isolated runs and one loaded run. It proves the supported inputs, not source call-site count. |
+| `source-hygiene.test.ts`: source-wide denied-token scan (`TuiConfigV1`, `Legacy api.command`, etc.) | Current path/export absence remains in `source-hygiene.test.ts:13-25`. The theme admission contract remains at `theme.test.ts:32-35`; accepting the old file shape failed that assertion, and exact restoration passed. | E112 verifies current-theme rejection. Arbitrary identifier/comment spellings are implementation-only and discarded; no blanket claim that every possible runtime adapter is detected. Public path/config/theme and command-consumer guards remain. |
+| `session-transcript-boundary.test.tsx`: resident row used outside Session context | Current render assertion `:51-71` verifies missing-Session-context guidance and absence of a `V2` label. Parent’s `V2`-label mutation failed the negative visible assertion (Bun exit 1); exact restoration passed (exit 0). | Guidance and label mutation verified by parent E115; full file passed 9/9 in three isolated runs and one loaded run. |
+| `cli/tui/guardrail.test.tsx`: source-only child attribution/reply wiring in “attributes child reviews…” | The updated render tests assert the exact root request path and serialized body for ordinary `always` and hard-review `once` replies (`:122-125`, `:180-183`). Parent mutations to the child endpoint, `hardReview=false` (leaking Always into hard review), and forcing reply `once` each failed the intended assertion (Bun exit 1); restorations passed. The restored full file was 8/8, with three isolated and one overlapping loaded run. | Behavior assertions and three mutation proofs verified by parent; source remains unchanged and no source-spelling/cardinality equivalence is claimed. |
+
+### Current AST census and added/revised groups
+
+Read-only TypeScript AST census of current `packages/tui/test/**/*.test.ts{,x}`: **232 files, 1,342 static test declarations or parameterized groups**. Direct calls, including loop-generated `test(item.name, callback)`, count once; `test.each` and `test.skipIf` count once without expanding runtime rows/platform branches. Deleted `session-layout.test.ts` is excluded. The census includes 36 changed/untracked test files at the finalized child snapshot; the parent independently confirmed 1,342 declarations at both HEAD and the live tree. Census used TypeScript 5.8.2 with a 2,048 MiB process cap; this is static inventory, not test evidence.
+
+### Inventory-only rows checked against audit HEAD `1db4d993`
+
+These rows were stale descriptions, not changes to tests in the cleanup worktree: the corresponding source groups are absent at the audit HEAD. Keep the behavior mappings below, but do not label an absent row as a test deletion or claim a mutation probe.
+
+| Stale inventory row | HEAD evidence and current mapping |
+| --- | --- |
+| `app-lifecycle.test.tsx`: “passive mouse selection never writes to the clipboard” | The live file has four groups at HEAD, no source-read case. `screen/clipboard-selection.screen.test.ts:105-133` renders the selection, asserts no clipboard write on drag, then asserts the explicit Ctrl+C write. This is screen behavior coverage, not the former app-source assertion. |
+| `dialog-model.test.ts`: model/variant cancellation groups | The file has two helper-selection groups at HEAD. Current UI cancellation has a rendered consumer assertion in `session-model-selection.test.tsx:435-464`: one `cancelled` result, no pending model and no switch. |
+| `cli/tui/provider-usage-command.test.tsx`: screen-only registration/back command group | The file has seven current helper/render groups at HEAD. `provider-usage-screen-interaction.test.tsx:239-282` covers the real shortcut, refresh, keyboard/mouse Back, retained draft, no prompt, and a focused palette search with No results/no Open provider usage. The earlier verified provider mapping below records shortcut and palette mutations plus restored loaded runs. |
+| `session-skills.test.ts`: bounded dialog, loaded badge and duplicate-tool source scans | At HEAD the file already contains only four pure helper groups (grouping, filtering, labels, content); these extra source-scan rows were not live test cases. Current render consumers are in `session-skill-render.test.tsx` (three rendered groups; duplicate-skill behavior was mutation-probed in E116) and transcript-boundary duplicate-skill coverage. The earlier skill-source mapping/evidence remains historical below. |
+| `session-skill-render.test.tsx`: one frame-defined placeholder group | Current file has three rendered tests: common completed Skill titles/badges, keyboard expansion bounds, and focusable agent-skill content paging. E116’s duplicate-skill consumer mutation failed then passed after restore; all three cases passed in three isolated runs and one loaded run. |
+| `tool-output-display.test.ts`: expanded skill scrollbox source scan | At HEAD the file contains six string-preview/output helper groups only. The rendered scrollbox behavior is in the current Skill render cases above, not this utility file. |
+| `util/format.test.ts`: “handles boundary values correctly” | The live file at HEAD has six groups; its boundary samples are already asserted within the seconds/minutes/hours/day groups (for example 59 at `:12-16`, 60 at `:19-25`, 3600 at `:28-33`). No separate seventh group exists. |
+| `util/model.test.ts`: “includes the selected variant in model refs” | At HEAD the file has four groups and no `formatRef` assertion. The current groups cover provider parsing and model-switch labels; do not present the absent ref row as a live test or equivalent proof. |
+| `test/util/cache-diagnostics.test.ts`: local-provider request, estimated-zero pricing and cache-reset groups | Those three labels are absent from the five live formatter cases at HEAD. Keep only the assertions currently in the file; this is an inventory correction, not a test deletion. |
+| `util/revert-diff.test.ts` | No file exists in the current tree, `HEAD`, or audit commit `1db4d993`; its inventory block was an orphan, not a historical test. |
+
+The inventory rows above are reconciled to source at `1db4d993`; a row absent there is not evidence that SL deleted a test in this worktree. Any behavior gap noted remains a gap, not an approved test deletion.
+
+### Selected current per-file census
+
+| Current file | Static groups | Current evidence anchor / disposition |
+| --- | ---: | --- |
+| `test/branding.test.ts` | 2 | `:4` logo and compact YC mark; `:20` terminal mark/header values. User-facing error wording is checked through the plugin and Session-context renders; all five former brand-scan paths are guarded by the verified repository gate above. |
+| `test/session-autonomy.test.ts` | 17 | Current behavioral helpers remain; removed source assertions are mapped above. |
+| `test/btw-session-render.test.tsx` | 17 | Adds `:404` cancel-retains-draft/no-create and `:428` selected-model create/snapshot/admission flow. Parent E116 verified the cancel, model-selection, and root-export consumers; 25 cases passed in three isolated runs and one loaded run. |
+| `test/session-btw.test.ts` | 5 | Retains five helper behavior groups; source-text dialog-completion group removed, mapped above. |
+| `test/keymap-registration.test.ts` | 1 | `:4-15` configurable keybinds have runtime consumers. Six removed source scans are mapped above. |
+| `test/mcp-oauth-routing.test.ts` | 2 | `:5-27` MCP lifecycle action and registered OAuth target behavior. |
+| `test/mcp-oauth-routing-render.test.ts` | 1 | `:14-63` Enter/Space OAuth render/route behavior; parameterized into two runtime cases. Parent E116 verified both key paths; two cases passed in three isolated runs and one loaded run. |
+| `test/source-hygiene.test.ts` | 2 | `:13-25` blocked filesystem paths/package exports; current-theme rejection is separately anchored at `theme.test.ts:32-35`; `:28-35` resolves built-in theme files. No arbitrary-token coverage claim. |
+| `test/screen/goal-command.test.tsx` | 15 | Includes `:529-543` slash menu uniqueness/behavior, `:549-562` palette action, `:566-585` execution-settlement render, and `:589-603` missing-objective dialog. Parent E116 verified palette, slash, and settlement mutations; 18 cases passed in three isolated runs and one loaded run. |
+| `test/screen/prompt-recovery.screen.test.ts` | 15 | Adds shell rejection/retry `:589-627`, discard `:630-664`, and cancel `:667-689` flows. Parent E116 verified `retry()` false and `retryAlways()` discard; 15 cases passed in three isolated runs and one loaded run. |
+| `test/screen/session-compact-command.screen.test.ts` | 1 | `:20-103` one compact request and visible ConflictError toast. Parent E116 verified the toast mutation; one case passed in three isolated runs and one loaded run. |
+| `test/screen/shell-output-keybind.screen.test.ts` | 1 | `:32-93` rebound kill/back behavior on the shell and Session routes. Parent E116 verified kill and back binding mutations; one case passed in three isolated runs and one loaded run. |
+| `test/screen/daybreak-command.test.tsx` | 16 | Updated `:321-357` failure receipt keeps the created Session and draft, explicit retry reuses the Session/input identity and reaches Daybreak Blue. Full file passed three isolated runs and one loaded run with `goal-command.test.tsx`. |
+| `test/screen/dialog-remaining-capture.test.tsx` | 2 | Variant capture now settles on “Select variant” and asserts “balanced” (`:86`, `:250-258`); two cases passed in three isolated runs and one loaded run with the base capture file. |
+| `test/screen/subagent-chat-capture.test.tsx` | 1 | Narrow switcher now asserts `? test-triage` is visible and `◦ keymap-audit` absent (`:60-62`); one case passed with 55 assertions. |
+| `test/screen/clipboard-selection.screen.test.ts` | 2 | Two table groups assert no clipboard write on mouse selection until explicit copy and settings-scoped copy behavior (`:105-133`, `:141-191`). |
+| `test/screen/file-mention-ranking.screen.test.ts` | 2 | `:117-151` asserts exact file ranks before weak folders and selection inserts `@AGENTS.md `; `:159-176` drills a folder with one trailing separator. |
+| `test/mini/entry.body.test.ts` | 14 | Thirteen named groups plus the loop-generated structured patch-final call at `:199`; it compares the structured result with the fixture snapshot. |
+| `test/mini/footer.view.test.tsx` | 36 | Current direct footer groups at `:1454`, `:1483`, `:1545` cover unavailable variant retention, offered `none` submission and explicit clear; prior rows now point at current source lines. |
+| `test/prompt/autocomplete.test.ts` | 16 | Current first five ranking/candidate tests at `:23-84`; remaining groups and current anchors are in the per-file rows below. |
+| `test/session-model-selection.test.tsx` | 21 | Current five added saved-variant/cancellation groups at `:344-435`; all current group anchors are in the per-file rows below. |
+| `test/session-skills.test.ts` | 4 | Four helper-only current groups at `:45-63`; old extra source rows were not in the audit HEAD. |
+| `test/session-skill-render.test.tsx` | 3 | Current render groups at `:170`, `:199`, `:240`; parent E116 verified the duplicate-skill consumer mutation. Three cases passed in three isolated runs and one loaded run. |
+| `test/ui/dialog-pattern.test.tsx` | 6 | Adds the JSX/factory dialog lifetime test at `:18` (table); five panel/layout cases follow. |
+| `test/util/cache-diagnostics.test.ts` | 5 | Current formatter groups at `:19`, `:27`, `:48`, `:68`, `:72`; three other inventory rows are absent at audit HEAD. |
+| `test/util/format.test.ts` | 6 | Boundaries are asserted inside seconds/minutes/hours groups; no separate boundary test at audit HEAD. |
+| `test/util/model.test.ts` | 4 | Current groups parse nested provider/model IDs and format switch notices at `:5`, `:10`, `:17`, `:31`; no separate `formatRef` assertion at audit HEAD. |
+| `test/util/permission.test.ts` | 3 | Adds a negative no-incidental-download assertion at `:44-54`; current helper anchors are listed below. |
+| `test/session-transcript-chat-shape.test.tsx` | 9 | Literal goal-marker render assertion at `:398-413`; parent E118’s TextPart-stripping mutation failed the visible-content assertion, then the source was restored; full file passed 9/9 in three isolated runs and a loaded pressure run. |
+| `test/session-transcript-boundary.test.tsx` | 9 | Resident missing-Session-context guidance and no-V2 label at `:51-71`; parent E115’s V2-label mutation failed the negative assertion, then source was restored; full file passed 9/9 in three isolated runs and a loaded pressure run. |
+| `test/plugin/context.test.tsx` | 2 | New visible invalid-plugin error row at `:19-57`; parent mutation and restore evidence above. |
+| `test/session-rail-section.test.tsx` | 26 | Current active-only Goal panel at `:149-163`; parent mutation and restore evidence above. Full file passed 26/26 in three isolated runs and one loaded run. |
+
+The groups whose status is pending are not claimed green by this census. The E116 parent handoff verified 14 distinct consumer mutations as red (exit 1) and exact restorations as green (exit 0): goal palette/slash/settlement, Session-skill duplicate rendering, BTW cancel/model/root export, compaction error, shell kill/back, MCP Enter/Space, and shell retry/discard. It also recorded four current-source SHA restoration checks, 21 isolated full-file runs across the seven settled child files (three each; runtime cases: prompt recovery 15, goal command 18, compaction 1, shell keybind 1, Session-skill render 3, MCP OAuth 2, BTW render 25), and seven corresponding loaded pressure runs with worker exit 0. The earlier piped probes remain unproven and are superseded by these direct results. E115/E118 separately verify Session context/Goal panel and literal goal-marker/guardrail consumers above. These outcomes prove the mapped consumer behaviors, not removed source-token or source-spelling coverage.
+
+## Mini test audit at `1db4d993` (read-only)
+
+Each of the 22 `test/mini/**` files ran alone as `bun test --cwd packages/tui --timeout 30000 ./test/mini/<file>` under a 6144 MiB cap: 206 executed cases, zero failures or skips. Static `test(...)` declarations total 203; dynamic table expansion and a platform-conditional case account for the difference. These are observed baseline file wall times, not baseline-to-final performance comparisons. No test deletion or mutation probe was performed, so the dispositions below retain all current behavior guards. The three timer-bearing files were rewritten with event/state/completion gates and passed three isolated plus one loaded run each (E98). One `Bun.sleep(0)` remains in `stream-v2.transport.test.ts:1076`: reconnect output precedes the transport's internal connected state and no test-visible ready signal exists; the case passed under load, and no production readiness API was added solely for this test.
+
+| File | Behavior/retained assertion boundary | Disposition | Wall s |
+| --- | --- | --- | ---: |
+| `catalog.shared.test.ts` | default selection, reference filtering, provider/model footer; result assertions beside request checks | keep | 0.099 |
+| `entry.body.test.ts` | assistant/reasoning/user, structured edits, progress, failure/interruption formatting | keep | 0.096 |
+| `footer-keymap.test.tsx` | empty-prompt Down opens subagents in a render | keep | 0.350 |
+| `footer.menu.test.ts` | top/bottom menu scroll edges | keep | 0.191 |
+| `footer.test.ts` | progress coalescing by message/tool state | keep | 0.331 |
+| `footer.view.test.tsx` | draft, geometry, panels, autocomplete, permission, model/variant, usage renders | keep | 0.576 |
+| `footer.width.test.ts` | dialog/statusline breakpoints | keep | 0.086 |
+| `form.shared.test.ts` | typed answers, Location, invalid/unsupported refusal | keep | 0.086 |
+| `permission.shared.test.ts` | decisions, action metadata, edit fallback, saved patterns | keep | 0.092 |
+| `prompt.editor.test.ts` | editor stripping, mention parts, offsets | keep | 0.087 |
+| `prompt.shared.test.ts` | history filtering, draft navigation, cursor, commands | keep | 0.086 |
+| `runtime.boot.test.ts` | keybinds, theme/thinking config, selector data | keep | 0.191 |
+| `runtime.queue.test.ts` | prompt routing, ordering, draining, close/error | keep | 0.138 |
+| `runtime.test.ts` | pairing, variants, Forms, first paint, resume/close, Location; direct footer-close completion | rewritten; assertions retained | 0.233 |
+| `scrollback.surface.test.ts` | render alignment, theme, streaming, replay, progress, errors | keep | 0.340 |
+| `session.shared.test.ts` | attachment/history projection and variant restoration | keep | 0.091 |
+| `stream-v2.subagent.test.ts` | child hydration, settlement, interruption, cap; event/state completion gates | rewritten; assertions retained | 0.449 |
+| `stream-v2.transport.test.ts` | blocker/Form hydration, routing, reconnect/resize, deduplication; completion gates except one reconnect microtick | rewritten; assertions retained | 0.967 |
+| `stream.test.ts` | phase and commit-before-update ordering | keep | 0.102 |
+| `theme.test.ts` | palette fallback, syntax, footer surface, mode | keep | 0.209 |
+| `tool.test.ts` | shell, alias, path, skill label | keep | 0.102 |
+| `variant.shared.test.ts` | variant precedence, cycling, absent/none labels | keep | 0.100 |
+
+The existing per-case rows below hold assertion anchors. No Mini production-source-text assertion or mock-only file was found; any later removal requires a production mutation that fails the retained behavior assertion. The old `footer.view.test.tsx` declaration estimate of 33 is superseded by 36 current static declarations.
+
+## Util test audit at `1db4d993` (read-only)
+
+Each of the 16 `test/util/*.test.ts` files ran alone with `bun test --cwd packages/tui test/util/<file>` under a 4096 MiB cap: 55 cases passed, zero failures/skips. No timer or production-source-text assertion was found in this directory. The per-case rows below retain the assertion anchors; all current cases remain `keep` pending any later behavior-specific redundancy probe, with no deletion or mutation claim.
+
+| File | Guarded behavior | Cases | Wall ms |
+| --- | --- | ---: | ---: |
+| `cache-diagnostics.test.ts` | cache/context values, missing versus zero, exact model identity | 5 | 219 |
+| `connected-provider.test.ts` | credential/environment integration connection status | 2 | 69 |
+| `error.test.ts` | readable native/opaque/provider error diagnostics | 7 | 69 |
+| `filetype.test.ts` | file-type classification | 2 | 68 |
+| `form.test.ts` | defaults, constraints, field rows and immutable multiselect | 4 | 69 |
+| `format.test.ts` | terminal formatting contracts | 6 | 68 |
+| `locale.test.ts` | width-safe truncation, compact numbers, elapsed time | 3 | 67 |
+| `model.test.ts` | model identity/display selection | 4 | 66 |
+| `path-format.test.ts` | relative/home/foreign path presentation | 1 | 68 |
+| `permission.test.ts` | permission roots and browser-download metadata | 4 | 70 |
+| `presentation.test.ts` | Session continuation summary | 1 | 68 |
+| `renderer.test.ts` | terminal title cleanup after renderer destruction | 2 | 68 |
+| `selection.test.ts` | platform copy/escape ownership and no-selection fallthrough | 5 | 69 |
+| `session.test.ts` | generated parent/child title recognition without matching a custom title | 1 | 69 |
+| `thai-truncation.test.ts` | combining-mark-safe truncation | 3 | 70 |
+| `tool-display.test.ts` | tool primitives, web-search label and metadata | 5 | 68 |
+
+## CLI test audit at `1db4d993` (read-only)
+
+Of 36 CLI test source files, 35 stable files ran separately with `bun test --timeout 30000 <file>` from `packages/tui`, under a 6144 MiB outer cap: 270 passes, zero failures/skips. The concurrently edited `test/cli/tui/guardrail.test.tsx` was excluded. The per-case anchors below are authoritative only where they match current live tests; the corrected guardrail autosurface and provider-usage rows below replace stale source-text classifications. No current CLI production-source-text or mock-call-only assertions were found in the files searched. No case was deleted, so no deletion mutation probe was performed.
+
+| CLI area | Individual file wall time (seconds) | Disposition |
+| --- | --- | --- |
+| `cmd/tui` | integration-options .308; model-options .325; notifications .701 | Keep option and delivery/recovery contracts. |
+| `tui` basics | collapse-tool-output .075; command-palette .383; context-breakdown .734; form .541; guardrail-autosurface .278; inline-tool-wrap-snapshot .682; keymap-arguments .190; memory-command .794; message-navigation .073; permission-interaction .612; permission .260; thinking .072; toast .195 | Keep existing behavior/render assertions; inspect any proposed duplicate against its surviving assertion before removal. |
+| `tui` prompt, dialog, display | data 6.764; dialog-prompt .416; dialog-select .872; diff-viewer-file-tree .304; diff-viewer .468; prompt-submit-race .082; provider-usage-command .557; provider-usage-layout .473; theme-mode .240; use-event 1.528 | Keep contracts; timer-sensitive synchronization in data, dialog-prompt/select, diff-viewer, prompt-submit-race, theme-mode and use-event needs an event/state gate review before any rewrite. |
+| `tui` Session/children | session-row-view .656; session-rows-live 3.368; session-rows .174; sidebar-cache .762; subagent-economics .453; subagent-footer .419; subagent-navigation .321; subagents-tab .630; transcript-history .184 | Keep transcript, usage and child interaction checks; session-rows-live and subagents-tab timers need a deterministic completion gate review. |
+
+The isolated pass is not a parallel-load stability check. Recheck `guardrail.test.tsx` after its writer settles and repeat affected files after subsequent production changes.
+
+## Screen test audit at `1db4d993` (read-only baseline)
+
+Of 38 `test/screen/**` test files, 34 stable files ran alone with `bun test --cwd packages/tui --timeout 90000 ./test/screen/<file>` under a 6144 MiB cap. Initial results: 31 files exit zero; 98 pass, four fail across three files, zero skips. Four concurrently edited files were excluded: `goal-command.test.tsx`, `prompt-recovery.screen.test.ts`, `session-compact-command.screen.test.ts`, and `shell-output-keybind.screen.test.ts`. The individual case groups and assertion anchors below remain the coverage map; no case was deleted or mutation-probed. Capture tests write ignored `.aphrodite/renders` artifacts; 86 were present after the run, with no established pre-run count or cleanup.
+
+| Failed file | Initial result | Current gate |
+| --- | --- | --- |
+| `daybreak-command.test.tsx` | 14 pass, two timeouts waiting for Session/failure | Fixture now emits the durable Daybreak event after successful persistence; failed submission checks receipt retry, one Session, no admission before retry, and an independent editable draft. The full file passed three isolated runs and one loaded run with `goal-command.test.tsx`. |
+| `dialog-remaining-capture.test.tsx` | one pass, one frame-predicate timeout | Corrected the variant dialog to wait for its rendered title and assert selected `balanced`; three isolated and one loaded run with the base capture file passed. Connect behavior retained. |
+| `subagent-chat-capture.test.tsx` | zero pass, one narrow-switcher assertion failure | Corrected the stale absent-waiting-sibling expectation: at 80 columns the current switcher fits `? test-triage`, while the completed `keymap-audit` remains hidden. Focused rerun: one pass, 55 assertions. |
+
+The 31 initially passing files cover blocked-child, recovery, chrome, clipboard, base/runtime/workspace dialogs, goal rail, file mentions, keep-awake, autonomy, landing, overlay, remote status, responsive/route/color, Session chrome/rail/retry/running/transcript, shell output/navigation, child answer/picker, and transcript blocks. The four capture/shape-only candidates (`chrome-capture`, `dialog-workspace-capture`, `overlay-capture`, `overlay-colour-probe`) now assert fixture-backed visible content and state alongside dimensions and color; their representative production mutations failed the added assertions and were restored (E110). Other timer-bearing files need state/event completion review, not longer sleeps. An isolated run does not establish parallel-load stability.
+
+## Nested TUI test audit at `1db4d993` (read-only)
+
+All 32 test files under `test/{context,feature-plugins,plugin,prompt,simulation,theme,ui}/**` ran alone with `bun test --cwd packages/tui --timeout 90000 ./test/<file>` under a 6144 MiB cap: 181 passes, zero failures/skips. The current edited `plugin/context.test.tsx` was included without further edits. Existing per-case rows retain behavior/assertion anchors across model selection, plugin registration and context replacement, prompt persistence/attachments/mentions/admission, theme V2 resolution, dialogs, glyphs and rendered toasts; no deletion/merge is justified without replacement assertions and mutation probes.
+
+Final individual JUnit runs (`--reporter=junit --reporter-outfile`, one file per process) recorded 181/181 passes in 9.812 summed file-wall seconds, without skips or failures. Per-case JUnit timings and assertions are in ignored `.verification-tmp/sl-tui-nested-wall/*.xml`; these are final-shape measurements, not a comparable pre-leaning baseline.
+
+| File | Cases | Wall s | File | Cases | Wall s |
+| --- | ---: | ---: | --- | ---: | ---: |
+| `context/local.test.ts` | 2 | .462 | `feature-plugins/diff-viewer-file-tree-utils.test.ts` | 22 | .080 |
+| `plugin/context.test.tsx` | 2 | .466 | `plugin/runtime.test.ts` | 2 | .126 |
+| `plugin/slots.test.tsx` | 1 | .179 | `prompt/autocomplete.test.ts` | 16 | .070 |
+| `prompt/autocomplete.test.tsx` | 5 | .843 | `prompt/codec.test.ts` | 2 | .078 |
+| `prompt/display.test.ts` | 5 | .069 | `prompt/history-provider.test.tsx` | 2 | .141 |
+| `prompt/history.test.ts` | 6 | .136 | `prompt/jsonl.test.ts` | 3 | .145 |
+| `prompt/local-attachment.test.ts` | 4 | .075 | `prompt/mention.test.ts` | 3 | .072 |
+| `prompt/parse.test.ts` | 2 | .070 | `prompt/part.test.ts` | 2 | .069 |
+| `prompt/persistence.test.ts` | 1 | .074 | `prompt/skill.test.ts` | 11 | .138 |
+| `prompt/submission.test.ts` | 14 | .140 | `prompt/traits.test.ts` | 3 | .069 |
+| `prompt/yolo-hint.test.tsx` | 1 | .495 | `simulation/semantics.test.ts` | 1 | .137 |
+| `theme/v2/component.test.ts` | 1 | .139 | `theme/v2/resolve.test.ts` | 18 | .159 |
+| `theme/v2/select.test.ts` | 6 | .113 | `theme/v2/types.test.ts` | 1 | .070 |
+| `ui/dialog-pattern.test.tsx` | 7 | 1.196 | `ui/file-path.test.ts` | 8 | .124 |
+| `ui/glyph.test.ts` | 12 | .069 | `ui/select-controller.test.ts` | 3 | .068 |
+| `ui/state-glyph.test.tsx` | 1 | .305 | `ui/toast-slot.test.tsx` | 14 | 3.437 |
+
+The two identified quality gaps were rewritten (E111): `plugin/slots.test.tsx` renders through the real TUI slot registry and asserts visible plugin content as well as one mount; `ui/toast-slot.test.tsx` waits for the live event subscription and emits the toast without the fixture's one-second timer, then checks the eventual rendered state. That frame wait yields through `setImmediate` and retains a five-second failure bound; the OpenTUI frame helper's default 20 render passes failed before the async event was consumed, so a direct frame-helper substitution is not claimed. Existing toast duration, variants, placement and unmount assertions remain. A restored production slot mutation failed the new assertion; no production-source-text, snapshot, capture-only, or purely mock-call-only assertion was found in this scoped group.
+
+## Direct TUI test audit at `1db4d993` (read-only baseline)
+
+All 88 live direct `test/*.test.ts{,x}` files ran separately with `bun test --timeout 90000 <file>` from `packages/tui`, under a 6144 MiB cap. Eighty-seven exited zero with no skipped cases. `workspaces-screen.test.ts` had eight passes and one failure: the selected-directory send case reached Home but showed Connect a service before its Session-create assertion. A first runner invocation of `btw-session-render.test.tsx` had undecodable UTF-8 output; replacement-decoding capture recorded one passing 25-case run, not a test failure rerun. The deleted `session-layout.test.ts` is not a live test file; its row assertions survive in `session-rail-section.test.tsx` and `session-transcript-chat-shape.test.tsx` per the non-Mini SL mapping.
+
+The workspace test's shared fetch fixture returns empty agents, models and integrations. Its submission case now supplies a connected provider, agent, and a unique fixture model for both the default and selected Locations, returning the requested Location in each response; the selected-directory `session.create` POST assertion is unchanged. The corrected file passed nine cases in three isolated runs and 15 cases when loaded with `landing.test.tsx`. This fixes the fixture boundary rather than bypassing the composer or fabricating a Session result.
+
+Existing direct-file case rows remain the behavior/assertion map. Thirty-five direct files use timers, sleeps or clocks and need case-specific synchronization review; this is not evidence that all are unstable. `source-hygiene.test.ts` intentionally guards the package export/filesystem surface and is not a removable source-text assertion. No deletion/merge or mutation probe is claimed; no full TUI suite was run.
+
 Lane rebased from `3962b14f` onto `codebase-cleanup` `1141158a`. Original-root local inventory; never stage this file. No package-local AGENTS exists under `packages/tui`; root rules apply. One file per Bun process (G13); never run the full TUI suite. Lane-owned targeted package typechecks are recorded per verified group; final integrated checks remain parent-owned, with heavy calls serialized by the 24 GiB resource gate.
 
 ## Basis and risk
@@ -227,17 +427,16 @@ Layer: live integration. Isolated duration: Not Run (except evidence below). Ini
 | --- | --- |
 | "rendered explicit Start and Stop cross the real Session API and isolated Chrome lifecycle" — test-integration/isolated-browser-integration.test.tsx:24 | `expect(initial.state).toBe("unavailable")` |
 
-### test/app-lifecycle.test.tsx (5 declarations/groups, 344 lines)
+### test/app-lifecycle.test.tsx (4 AST groups, 341 lines)
 
-Layer: component/application render. Isolated duration: Not Run (except evidence below). Initial disposition: rewrite; reason: production-source assertions need behavioral/render replacement.
+Layer: component/application render. Keep the four live application lifecycle contracts. The prior passive-selection source-read row is not a test group at audit HEAD; its observable clipboard behavior is mapped in the census correction table above.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
 | "SIGHUP clears title and disposes scoped resources once" — test/app-lifecycle.test.tsx:8 | `expect(setup.renderer.isDestroyed).toBe(true)` |
 | "Escape never exits and Ctrl+C requires two presses" — test/app-lifecycle.test.tsx:52 | `expect(resolved).toBe(false)` |
-| "session lifecycle updates the terminal title and prints the epilogue after cleanup" — test/app-lifecycle.test.tsx:103 | `expect(stdout).toContain("Renamed session")` |
-| "explicit session bootstrap restores its location-scoped model without an invalid-model warning" — test/app-lifecycle.test.tsx:191 | `expect(frame).toContain("session-workspace")` |
-| "passive mouse selection never writes to the clipboard" — test/app-lifecycle.test.tsx:339 | `expect(source).not.toContain("MouseButton.RIGHT")` |
+| "session lifecycle updates the terminal title and prints the epilogue after cleanup" — test/app-lifecycle.test.tsx:105 | `expect(stdout).toContain("Renamed session")` |
+| "explicit session bootstrap restores its location-scoped model without an invalid-model warning" — test/app-lifecycle.test.tsx:193 | `expect(frame).toContain("session-workspace")` |
 
 ### test/attention-sounds.test.ts (1 declarations/groups, 20 lines)
 
@@ -281,38 +480,38 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 | --- | --- |
 | "mounts the transparent canonical mark at landing and header sizes" — test/brand-mark.test.tsx:10 | `expect(painted.length).toBeGreaterThan(0)` |
 
-### test/branding.test.ts (4 declarations/groups, 52 lines)
+### test/branding.test.ts (2 current AST groups, 25 lines; HEAD had 4)
 
-Layer: behavior/contract. Isolated duration: Not Run (except evidence below). Initial disposition: rewrite; reason: production-source assertions need behavioral/render replacement.
+Layer: visual brand exports. Current disposition: keep the two observable mark/wordmark contracts; removed source-copy checks are mapped in “Current source-assertion corrections” above and remain unproven.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
-| "omits internal runtime generation labels from user-facing errors" — test/branding.test.ts:7 | `expect(await Bun.file(path.join(root, "src/plugin/context.tsx")).text()).not.toContain("Invalid V2 TUI plugin")` |
-| "uses the YCoding wordmark and compact YC mark" — test/branding.test.ts:12 | `expect(logo).toEqual({` |
-| "exports the Penpot terminal mark and header lockup" — test/branding.test.ts:28 | `expect(terminal).toEqual(["\u2588   \u2588", "\u2580\u2588 \u2588\u2580", "  \u2588"])` |
-| "contains no legacy product copy in active TUI presentation sources" — test/branding.test.ts:35 | `expect(stale).toEqual([])` |
+| "uses the YCoding wordmark and compact YC mark" — test/branding.test.ts:4 | `expect(logo).toEqual({` |
+| "exports the Penpot terminal mark and header lockup" — test/branding.test.ts:20 | `expect(terminal).toEqual(["\u2588   \u2588", "\u2580\u2588 \u2588\u2580", "  \u2588"])` |
 
-### test/btw-session-render.test.tsx (15 declarations/groups, 805 lines)
+### test/btw-session-render.test.tsx (17 current AST groups, 913 lines; HEAD had 15)
 
 Layer: component/application render. Isolated duration: Not Run (except evidence below). Initial disposition: rewrite; reason: timed synchronization needs event/state completion review.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
-| "mounts one ordinary composer only for the root and BTW child without a BTW subagent picker" — test/btw-session-render.test.tsx:324 | `expect(root.frame().match(/Message YCoding…/g)).toHaveLength(1)` |
-| "main team surface reopens a BTW chat and returns without submitting or interrupting" — test/btw-session-render.test.tsx:373 | `expect(screen.frame()).toContain("+ New side chat")` |
-| "hydrates the parent title for a cold-opened BTW and retains it for the export preview" — test/btw-session-render.test.tsx:408 | `No inline assertion; inspect called harness` |
-| "BTW shows side-conversation context rather than delegated-task chrome at %s columns" — test/btw-session-render.test.tsx:429 (table) | `expect(screen.frame()).toContain("BTW SIDE CHAT")` |
-| "renders the compact BTW notice and chrome footer at $width×$height" — test/btw-session-render.test.tsx:458 (table) | `expect(lines).toHaveLength(height + 1)` |
-| "subagent chat hydrates its todos and renders live status changes without the parent rail" — test/btw-session-render.test.tsx:486 | `expect(screen.frame()).toContain("TODO LIST")` |
-| "goal steer shows the generated response rather than the synthetic description" — test/btw-session-render.test.tsx:519 | `expect(screen.frame()).toContain("Goal · steer")` |
-| "hides %s goal tool rows but retains the goal steer" — test/btw-session-render.test.tsx:539 (table) | `expect(screen.frame()).toContain("Goal · steer")` |
-| "main header clears its stale child count after reconnect without visiting the child" — test/btw-session-render.test.tsx:574 | `expect(screen.lines()[1]).not.toContain("subagent")` |
-| "BTW returns to the main transcript by %s while its composer has a draft" — test/btw-session-render.test.tsx:596 (table) | `expect(row).toBeGreaterThan(-1)` |
-| "keeps repeated ordinary BTW messages on the read-only child agent and model (variant %s)" — test/btw-session-render.test.tsx:633 (table) | `expect(childPrompts.map((request) => request.body.text)).toEqual([` |
-| "opens an editable immediate-parent export preview and cancellation preserves the BTW draft" — test/btw-session-render.test.tsx:685 | `expect(screen.frame()).toContain("Destination: Main implementation")` |
-| "prevents an empty reviewed parent export" — test/btw-session-render.test.tsx:717 | `expect(screen.frame()).toContain("Send to Main implementation")` |
-| "sends exact reviewed text to the immediate parent as one stable steer and stays in BTW" — test/btw-session-render.test.tsx:741 | `expect(exports).toHaveLength(1)` |
-| "retries a failed reviewed export with the exact same parent message id" — test/btw-session-render.test.tsx:774 | `expect(exports.map((request) => request.body.text)).toEqual(["Retain this export", "Retain this export"])` |
+| "mounts one ordinary composer only for the root and BTW child without a BTW subagent picker" — test/btw-session-render.test.tsx:355 | `expect(root.frame().match(/Message YCoding…/g)).toHaveLength(1)` |
+| "BTW slash opens the model picker and preserves its draft on cancellation" — test/btw-session-render.test.tsx:404 | `expect(state.creations).toEqual([])` |
+| "BTW model selection creates a side chat with the chosen model after loading its Location catalog" — test/btw-session-render.test.tsx:428 | `expect(state.creations).toEqual([expect.objectContaining({ parentID, agent: "btw", model: { providerID: "anthropic", id: "alternative" } })])` |
+| "main team surface reopens a BTW chat and returns without submitting or interrupting" — test/btw-session-render.test.tsx:467 | `expect(screen.frame()).toContain("+ New side chat")` |
+| "hydrates the parent title for a cold-opened BTW and retains it for the export preview" — test/btw-session-render.test.tsx:502 | `No inline assertion; inspect called harness` |
+| "BTW shows side-conversation context rather than delegated-task chrome at %s columns" — test/btw-session-render.test.tsx:523 (table) | `expect(screen.frame()).toContain("BTW SIDE CHAT")` |
+| "renders the compact BTW notice and chrome footer at $width×$height" — test/btw-session-render.test.tsx:552 (table) | `expect(lines).toHaveLength(height + 1)` |
+| "subagent chat hydrates its todos and renders live status changes without the parent rail" — test/btw-session-render.test.tsx:580 | `expect(screen.frame()).toContain("TODO LIST")` |
+| "goal steer shows the generated response rather than the synthetic description" — test/btw-session-render.test.tsx:613 | `expect(screen.frame()).toContain("Goal · steer")` |
+| "hides %s goal tool rows but retains the goal steer" — test/btw-session-render.test.tsx:633 (table) | `expect(screen.frame()).toContain("Goal · steer")` |
+| "main header clears its stale child count after reconnect without visiting the child" — test/btw-session-render.test.tsx:668 | `expect(screen.lines()[1]).not.toContain("subagent")` |
+| "BTW returns to the main transcript by %s while its composer has a draft" — test/btw-session-render.test.tsx:690 (table) | `expect(row).toBeGreaterThan(-1)` |
+| "keeps repeated ordinary BTW messages on the read-only child agent and model (variant %s)" — test/btw-session-render.test.tsx:727 (table) | `expect(childPrompts.map((request) => request.body.text)).toEqual([` |
+| "opens an editable immediate-parent export preview and cancellation preserves the BTW draft" — test/btw-session-render.test.tsx:779 | `expect(screen.frame()).toContain("Destination: Main implementation")` |
+| "prevents an empty reviewed parent export" — test/btw-session-render.test.tsx:811 | `expect(screen.frame()).toContain("Send to Main implementation")` |
+| "sends exact reviewed text to the immediate parent as one stable steer and stays in BTW" — test/btw-session-render.test.tsx:835 | `expect(exports).toHaveLength(1)` |
+| "retries a failed reviewed export with the exact same parent message id" — test/btw-session-render.test.tsx:868 | `expect(exports.map((request) => request.body.text)).toEqual(["Retain this export", "Retain this export"])` |
 
 ### test/captured-child-hydration.test.tsx (4 declarations/groups, 199 lines)
 
@@ -551,9 +750,9 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 | "includes external acknowledgements in progress" — test/cli/tui/form.test.tsx:129 | `expect(prompt.app.captureCharFrame()).toContain("0/1")` |
 | "keeps a form surface immediately above the session footer" — test/cli/tui/form.test.tsx:140 | `expect(footer).toBe(19)` |
 
-### test/cli/tui/guardrail-autosurface.test.ts (6 declarations/groups, 45 lines)
+### test/cli/tui/guardrail-autosurface.test.ts (4 declarations/groups, 26 lines)
 
-Layer: behavior/contract. Isolated duration: Not Run (except evidence below). Initial disposition: rewrite; reason: production-source assertions need behavioral/render replacement.
+Layer: behavior/contract. Isolated duration: .278 seconds. Disposition: keep the four `activeGuardrail` selection/fallback assertions.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
@@ -561,19 +760,17 @@ Layer: behavior/contract. Isolated duration: Not Run (except evidence below). In
 | "returns explicitly selected pending request when valid" — test/cli/tui/guardrail-autosurface.test.ts:14 | `expect(activeGuardrail([first, second], "grq_second")).toEqual(second)` |
 | "falls back to first pending when selection is stale" — test/cli/tui/guardrail-autosurface.test.ts:18 | `expect(activeGuardrail([first, second], "grq_missing")).toEqual(first)` |
 | "returns undefined when no requests pending" — test/cli/tui/guardrail-autosurface.test.ts:22 | `expect(activeGuardrail([], undefined)).toBeUndefined()` |
-| "index.tsx auto-surfaces pending guardrails at composer" — test/cli/tui/guardrail-autosurface.test.ts:29 | `expect(source).toContain("activeGuardrail")` |
-| "rows.ts mounts pending guardrails without a compaction boundary" — test/cli/tui/guardrail-autosurface.test.ts:40 | `expect(source).toContain("activityRows()")` |
 
-### test/cli/tui/guardrail.test.tsx (7 declarations/groups, 387 lines)
+### test/cli/tui/guardrail.test.tsx (7 declarations/groups, 386 lines)
 
-Layer: component/application render. Isolated duration: Not Run (except evidence below). Initial disposition: rewrite; reason: production-source assertions need behavioral/render replacement.
+Layer: component/application render. Current disposition: keep the current rendered behavior and request assertions. The old source-text reply wiring was removed; parent verified wrong-child endpoint, hard-review-flag and reply-value mutations each fail, then restored the 8-case file with three isolated runs and one overlapping loaded run.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
 | "formats guardrail profile and family counters" — test/cli/tui/guardrail.test.tsx:35 | `expect(module.guardrailSummary(status)).toEqual({` |
-| "attributes child reviews to their root family and exposes explicit guardrail replies" — test/cli/tui/guardrail.test.tsx:47 | `expect(prompt.guardrailPresentation(request)).toEqual({` |
-| "renders a warning-framed guardrail approval" — test/cli/tui/guardrail.test.tsx:74 | `expect(frame).not.toContain("!!")` |
-| "renders a hard review with one-time approval or rejection only" — test/cli/tui/guardrail.test.tsx:135 | `expect(frame).toContain("Allow once")` |
+| "attributes child reviews to their root family" — test/cli/tui/guardrail.test.tsx:47 | `expect(prompt.guardrailPresentation(request)).toEqual({` |
+| "renders a warning-framed guardrail approval" — test/cli/tui/guardrail.test.tsx:67 | `expect(await replyReceived.promise).toEqual({ path: "/api/session/ses_root/guardrail/request/grq_review/reply", body: { reply: "always" } })` |
+| "renders a hard review with one-time approval or rejection only" — test/cli/tui/guardrail.test.tsx:131 | `expect(await replyReceived.promise).toEqual({ path: "/api/session/ses_root/guardrail/request/grq_hard_review/reply", body: { reply: "once" } })` |
 | "defaults guardrails to deny and ordinary permissions to allow once" — test/cli/tui/guardrail.test.tsx:190 | `expect(selected).toBeDefined()` |
 | "renders guardrail status without raw rules or command resources" — test/cli/tui/guardrail.test.tsx:254 | `expect(frame).toContain("GUARDRAILS")` |
 | `replacing a scrolled review resets hard-review details and sends ${decision} once` — test/cli/tui/guardrail.test.tsx:303 | `expect(app.captureCharFrame()).toContain("FINAL_COMMAND_SENTINEL")` |
@@ -627,15 +824,16 @@ Layer: behavior/contract. Isolated duration: Not Run (except evidence below). In
 | "keeps the logical boundary when layout temporarily moves it outside the viewport" — test/cli/tui/message-navigation.test.ts:118 | `No inline assertion; inspect called harness` |
 | "stops at the first and last message" — test/cli/tui/message-navigation.test.ts:132 | `No inline assertion; inspect called harness` |
 
-### test/cli/tui/permission-interaction.test.tsx (3 declarations/groups, 245 lines)
+### test/cli/tui/permission-interaction.test.tsx (4 AST groups, 315 lines)
 
 Layer: component/application render. Isolated duration: Not Run (except evidence below). Initial disposition: keep; reason: retain named observable guards pending redundancy review.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
-| "updates permission selection from vertical arrows and hover" — test/cli/tui/permission-interaction.test.tsx:12 | `expect(descendants(app.renderer.root).some((item) => item.id === "session.permission.action.reject.band")).toBe(` |
-| `${kind} pins decisions while complete long details scroll at short heights and after resize` — test/cli/tui/permission-interaction.test.tsx:85 | `expect(frame).toContain(label)` |
-| `${kind} choices stay on the same terminal lines during selection at width ${width}` — test/cli/tui/permission-interaction.test.tsx:168 | `expect(before.every((line) => line >= 0)).toBe(true)` |
+| `shows the ${mode} Chrome site download warning through confirmation and cancel` — test/cli/tui/permission-interaction.test.tsx:16 (table) | `expect(replies).toEqual([])` after Escape; explicit allow shows the download warning first. |
+| "updates permission selection from vertical arrows and hover" — test/cli/tui/permission-interaction.test.tsx:75 | `expect(descendants(app.renderer.root).some((item) => item.id === "session.permission.action.reject.band")).toBe(` |
+| `${kind} pins decisions while complete long details scroll at short heights and after resize` — test/cli/tui/permission-interaction.test.tsx:148 | `expect(frame).toContain(label)` |
+| `${kind} choices stay on the same terminal lines during selection at width ${width}` — test/cli/tui/permission-interaction.test.tsx:238 | `expect(before.every((line) => line >= 0)).toBe(true)` |
 
 ### test/cli/tui/permission.test.ts (1 declarations/groups, 7 lines)
 
@@ -660,20 +858,19 @@ Layer: behavior/contract. Isolated duration: Not Run (except evidence below). In
 | "retry restoration preserves display-cell cursor offsets for wide characters" — test/cli/tui/prompt-submit-race.test.ts:243 | `expect(restored.prompt.text).toBe("中文")` |
 | "holds changed skill metadata behind the retained identity of an unresolved admission" — test/cli/tui/prompt-submit-race.test.ts:264 | `expect(run(first)).rejects.toThrow("lost response")` |
 
-### test/cli/tui/provider-usage-command.test.tsx (8 declarations/groups, 384 lines)
+### test/cli/tui/provider-usage-command.test.tsx (7 AST groups, 363 lines)
 
-Layer: component/application render. Isolated duration: Not Run (except evidence below). Initial disposition: rewrite; reason: production-source assertions need behavioral/render replacement.
+Layer: component/application render. Isolated duration: .557 seconds. Disposition: keep behavioral and real-component render assertions.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
-| "hides unsupported providers and de-duplicates each provider profile" — test/cli/tui/provider-usage-command.test.tsx:28 | `No inline assertion; inspect called harness` |
-| "invalidates stale asynchronous generations" — test/cli/tui/provider-usage-command.test.tsx:51 | `expect(guard.current(first)).toBeFalse()` |
-| "registers screen-only entry and back commands without a command palette item" — test/cli/tui/provider-usage-command.test.tsx:63 | `expect(footer).toContain("session.provider-usage.open")` |
-| "renders provider progress and unavailable states in a dedicated dialog" — test/cli/tui/provider-usage-command.test.tsx:76 | `expect(frame).toContain("Claude Max")` |
-| "renders missing local pricing as an estimated zero cost" — test/cli/tui/provider-usage-command.test.tsx:154 | `expect(frame).toContain("custom/custom")` |
-| "renders durable backend request usage after detailed records are compacted" — test/cli/tui/provider-usage-command.test.tsx:205 | `expect(frame).toContain("12,000")` |
-| "renders aggregate provider request usage on the screen" — test/cli/tui/provider-usage-command.test.tsx:257 | `expect(frame).toContain("Usage")` |
-| "renders usage in a narrow screen without horizontal layout assumptions" — test/cli/tui/provider-usage-command.test.tsx:326 | `expect(frame).toContain("Usage")` |
+| "hides unsupported providers and de-duplicates each provider profile" — test/cli/tui/provider-usage-command.test.tsx:25 | `expect(visibleProviderSnapshots(...).map(...)).toEqual([...])` |
+| "invalidates stale asynchronous generations" — test/cli/tui/provider-usage-command.test.tsx:48 | `expect(guard.current(first)).toBeFalse()` |
+| "renders provider progress and unavailable states in a dedicated dialog" — test/cli/tui/provider-usage-command.test.tsx:60 | `expect(frame).toContain("Claude Max")` |
+| "renders missing local pricing as an estimated zero cost" — test/cli/tui/provider-usage-command.test.tsx:134 | `expect(frame).toContain("custom/custom")` |
+| "renders durable backend request usage after detailed records are compacted" — test/cli/tui/provider-usage-command.test.tsx:187 | `expect(frame).toContain("12,000")` |
+| "renders aggregate provider request usage on the screen" — test/cli/tui/provider-usage-command.test.tsx:236 | `expect(frame).toContain("Usage")` |
+| "renders usage in a narrow screen without horizontal layout assumptions" — test/cli/tui/provider-usage-command.test.tsx:305 | `expect(frame).toContain("Usage")` |
 
 ### test/cli/tui/provider-usage-layout.test.tsx (3 declarations/groups, 303 lines)
 
@@ -1018,16 +1215,14 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 | --- | --- |
 | "recent and favorite rows render the formatted context window footer" — test/dialog-model-recent-footer.test.tsx:26 | `expect(recent).toBeTruthy()` |
 
-### test/dialog-model.test.ts (4 declarations/groups, 48 lines)
+### test/dialog-model.test.ts (2 AST groups, 29 lines)
 
 Layer: behavior/contract. Isolated duration: Not Run (except evidence below). Initial disposition: rewrite; reason: production-source assertions need behavioral/render replacement.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
-| "completes an explicit selection of the already-current model and variant" — test/dialog-model.test.ts:5 | `No inline assertion; inspect called harness` |
+| "completes an explicit selection of the already-current model and variant" — test/dialog-model.test.ts:5 | `expect(dialogModel.completeModelSelection(...)).toEqual({ providerID: "openai", modelID: "gpt-5.6", variant: "high" })` |
 | "withholds completion until a required variant is explicitly selected" — test/dialog-model.test.ts:16 | `expect(dialogModel.completeModelSelection(input)).toBeUndefined()` |
-| "model and variant cancellation have no completion result" — test/dialog-model.test.ts:31 | `No inline assertion; inspect called harness` |
-| "reports explicit cancellation from both model and variant dialogs" — test/dialog-model.test.ts:41 | `expect(model).toContain('props.onComplete?.({ type: "cancelled" })')` |
 
 ### test/dialog-session-list-archive.test.tsx (5 declarations/groups, 256 lines)
 
@@ -1138,7 +1333,7 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 
 ### test/guardrail-surface.test.tsx (5 declarations/groups, 219 lines)
 
-Layer: component/application render. Isolated duration: Not Run (except evidence below). Initial disposition: rewrite; reason: timed synchronization needs event/state completion review.
+Layer: component/application render. Parent E118 changed the default reply from `reject` to `once`; the child-to-root consumer assertion failed with expected `reject`, received `once` (Bun exit 1), then passed after exact restoration (exit 0). This does not establish a full-file run.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
@@ -1146,7 +1341,7 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 | "surfaces a pending root guardrail review that arrives as a live event" — test/guardrail-surface.test.tsx:162 | `expect(screen.frame()).not.toContain("Guardrail blocked")` |
 | "surfaces a pending subagent guardrail review from the durable list" — test/guardrail-surface.test.tsx:175 | `expect(screen.frame()).toContain("Subagent ses_guardrail_child in ses_guardrail_parent")` |
 | "surfaces a pending subagent guardrail review that arrives as a live event" — test/guardrail-surface.test.tsx:186 | `expect(screen.frame()).not.toContain("Guardrail blocked")` |
-| "renders a transcript row for a subagent review and replies against the root session" — test/guardrail-surface.test.tsx:199 | `expect(screen.frame()).toContain("rm -rf packages/one packages/two")` |
+| "renders a transcript row for a subagent review and replies against the root session" — test/guardrail-surface.test.tsx:199 | `expect(replies[0]).toMatchObject({ reply: "reject" })`; `expect(repliedTo).toEqual([` verifies the exact root Session endpoint. E118 mutation `reject` → `once` failed the reply-value assertion, then passed after source restoration. |
 
 ### test/index.test.tsx (1 declarations/groups, 6 lines)
 
@@ -1207,19 +1402,13 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 | "new supported shortcuts remain configurable and render in help" — test/keybind.test.ts:33 | `expect(TuiKeybind.parse({ variant_list: "ctrl+v", session_autonomy_normal: "ctrl+d" })).toMatchObject({` |
 | "binds shell output actions through configurable commands" — test/keybind.test.ts:104 | `expect(TuiKeybind.Definitions.shell_output_back.default).toBe("escape")` |
 
-### test/keymap-registration.test.ts (7 declarations/groups, 78 lines)
+### test/keymap-registration.test.ts (1 current AST group, 14 lines; HEAD had 7)
 
-Layer: behavior/contract. Isolated duration: Not Run (except evidence below). Initial disposition: rewrite; reason: production-source assertions need behavioral/render replacement.
+Layer: behavior/contract. Keep the current configurable-keybind consumer check. The six removed source scans and their consumer replacements are mapped above; exact source token/cardinality claims are not inferred from those flows.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
 | "every configurable keybind has a runtime consumer" — test/keymap-registration.test.ts:4 | `expect(missing).toEqual([])` |
-| "session goal keeps palette and durable autonomy state wiring" — test/keymap-registration.test.ts:16 | `expect(command).toContain('name: "session.autonomy.goal"')` |
-| "session goal has one slash registration" — test/keymap-registration.test.ts:32 | `expect(sources.join("\n").match(/slash:\s*\{\s*name:\s*"goal"\s*\}/g)).toHaveLength(1)` |
-| "retained submission retry is an explicit conditional Prompt command" — test/keymap-registration.test.ts:41 | `expect(prompt).toContain('title: "Retry previous submission"')` |
-| "session skills is registered only by the session route" — test/keymap-registration.test.ts:52 | `expect(session).toContain('title: "Session skills"')` |
-| "session compact surfaces API rejection through the toast error path" — test/keymap-registration.test.ts:60 | `expect(command).toContain("client.api.session.compact({ sessionID: route.sessionID })")` |
-| "shell output relies on configurable action bindings" — test/keymap-registration.test.ts:71 | `expect(route).toContain('id: "shell-output.back"')` |
 
 ### test/keymap.test.tsx (9 declarations/groups, 315 lines)
 
@@ -1262,15 +1451,22 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 | "keeps subagent and shell footer counts as independent segments" — test/live-ui-regressions.test.tsx:106 | `expect(line).toContain("subagents 2   shells 0")` |
 | "keeps the header model readable while a toast is visible" — test/live-ui-regressions.test.tsx:161 | `expect(app.captureCharFrame()).toContain("Claude Opus 5")` |
 
-### test/mcp-oauth-routing.test.ts (3 declarations/groups, 41 lines)
+### test/mcp-oauth-routing.test.ts (2 current AST groups, 31 lines; HEAD had 3)
 
-Layer: behavior/contract. Isolated duration: Not Run (except evidence below). Initial disposition: rewrite; reason: production-source assertions need behavioral/render replacement.
+Layer: behavior/contract. Keep the two direct routing helper assertions. The removed authorization source scan maps to the current render/route test below.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
 | "maps MCP lifecycle states to the correct dialog action" — test/mcp-oauth-routing.test.ts:7 | `expect(mcpDialogAction("pending")).toBe("none")` |
 | "resolves the OAuth method registered for an MCP server" — test/mcp-oauth-routing.test.ts:15 | `expect(mcpOAuthTarget(server, [integration])).toEqual({ integration, method })` |
-| "MCP authorization launches from Enter or the toggle action" — test/mcp-oauth-routing.test.ts:35 | `expect(dialogMcp).toContain('if (server.status.status === "needs_auth")')` |
+
+### test/mcp-oauth-routing-render.test.ts (1 current AST table group, 63 lines)
+
+Layer: component/application render. New replacement for the removed source-only authorization assertion. Current test drives both Enter and Space through the real dialog component and checks the registered OAuth request and absence of reconnect. Pending final child proof; the source call-site count itself is not asserted.
+
+| Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
+| --- | --- |
+| `"%s opens the registered MCP OAuth method rather than reconnecting"` — test/mcp-oauth-routing-render.test.ts:14 (table) | `expect(oauth).toEqual([expect.objectContaining({ methodID: "oauth", inputs: {} })])` and `expect(reconnect).toEqual([])` |
 
 ### test/mcp-presentation.test.ts (2 declarations/groups, 33 lines)
 
@@ -1291,7 +1487,7 @@ Layer: behavior/contract. Isolated duration: Not Run (except evidence below). In
 | "loads visible project references from the current reference catalog" — test/mini/catalog.shared.test.ts:31 | `expect(list).toHaveBeenCalledWith({ location: { directory: "/tmp" } })` |
 | "merges current providers and models into the footer catalog shape" — test/mini/catalog.shared.test.ts:60 | `expect(providers).toEqual([` |
 
-### test/mini/entry.body.test.ts (13 declarations/groups, 541 lines)
+### test/mini/entry.body.test.ts (14 AST groups including one dynamically named table call, 541 lines)
 
 Layer: behavior/contract. Isolated duration: Not Run (except evidence below). Initial disposition: keep; reason: retain named observable guards pending redundancy review.
 
@@ -1299,6 +1495,7 @@ Layer: behavior/contract. Isolated duration: Not Run (except evidence below). In
 | --- | --- |
 | "renders a failed direct shell as an error instead of completed success" — test/mini/entry.body.test.ts:45 | `No inline assertion; inspect called harness` |
 | "renders assistant, reasoning, and user entries in their display formats" — test/mini/entry.body.test.ts:62 | `expect(reasoning).toEqual({` |
+| "keeps completed patch tool finals structured" — test/mini/entry.body.test.ts:199 (dynamic names from two fixtures) | `expect(structured(item.commit)).toEqual(item.snapshot)` |
 | "keeps running subagent tool state out of scrollback" — test/mini/entry.body.test.ts:204 | `No inline assertion; inspect called harness` |
 | "promotes subagent results to markdown and falls back to structured summaries" — test/mini/entry.body.test.ts:228 | `No inline assertion; inspect called harness` |
 | "streams tool progress text and treats completed progress as done" — test/mini/entry.body.test.ts:280 | `expect(body).toEqual({` |
@@ -1336,31 +1533,31 @@ Layer: behavior/contract. Isolated duration: Not Run (except evidence below). In
 | --- | --- |
 | "coalesces progress only within the same message and tool state" — test/mini/footer.test.ts:19 | `expect(coalesceProgressCommit(progress(), progress({ messageID: "msg_2" }))).toBeUndefined()` |
 
-### test/mini/footer.view.test.tsx (33 declarations/groups, 1492 lines)
+### test/mini/footer.view.test.tsx (36 AST groups, 1572 lines)
 
 Layer: component/application render. Isolated duration: Not Run (except evidence below). Initial disposition: keep; reason: retain named observable guards pending redundancy review.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
-| "direct footer preserves a partial multi-field form draft across permission preemption" — test/mini/footer.view.test.tsx:199 | `expect(app.renderer.currentFocusedEditor?.plainText).toBe("keep this draft")` |
-| "direct footer composer area does not adopt footer surface" — test/mini/footer.view.test.tsx:296 | `expect(area.backgroundColor.toInts()).not.toEqual(surface.toInts())` |
-| "run entry content updates when live commit text changes" — test/mini/footer.view.test.tsx:321 | `expect(app.captureCharFrame()).toContain("I")` |
-| "direct command panel renders grouped command palette" — test/mini/footer.view.test.tsx:365 | `expect(frame).toContain("Commands")` |
-| "direct skill panel renders searchable skill list" — test/mini/footer.view.test.tsx:431 | `expect(frame).toContain("Skills")` |
-| "direct skill panel truncates long descriptions from the end" — test/mini/footer.view.test.tsx:479 | `expect(frame).toContain("terminal-control")` |
-| "direct command panel shows subagent entry when available" — test/mini/footer.view.test.tsx:518 | `expect(frame).toContain("View subagents")` |
-| "direct command panel keeps completed subagents available" — test/mini/footer.view.test.tsx:564 | `expect(frame).toContain("View subagents")` |
-| "direct subagent panel renders active subagents" — test/mini/footer.view.test.tsx:612 | `expect(frame).toContain("Select subagent")` |
-| "direct subagent panel closes when moving up from the first item" — test/mini/footer.view.test.tsx:659 | `expect(closed).toBe(0)` |
-| "direct queued prompt panel renders pending prompt actions" — test/mini/footer.view.test.tsx:695 | `expect(frame).toContain("Queued prompts")` |
-| "direct footer recreates the frame across command panel transitions" — test/mini/footer.view.test.tsx:739 | `expect(composer).toBeDefined()` |
-| "Mini Chrome command shows the service address and creates a code only on p" — test/mini/footer.view.test.tsx:766 | `expect(app.captureCharFrame()).toContain("Connect Chrome")` |
-| "closing Mini Chrome pairing ignores a pending response and does not submit twice" — test/mini/footer.view.test.tsx:807 | `expect(starts).toHaveLength(1)` |
-| "Mini paired Chrome view hides pair and exposes deliberate forget" — test/mini/footer.view.test.tsx:842 | `expect(app.captureCharFrame()).toContain("Chrome is paired; waiting for Chrome to reconnect.")` |
-| "direct footer dispatches leader variant binding only when leader is registered" — test/mini/footer.view.test.tsx:876 | `expect(calls).toEqual([])` |
-| "direct footer keeps leader variant binding inactive when leader is disabled" — test/mini/footer.view.test.tsx:896 | `expect(calls).toEqual([])` |
-| "direct footer submits slash autocomplete selections without dispatching shell completions" — test/mini/footer.view.test.tsx:915 | `expect(submits).toEqual([` |
-| "direct footer mention menu ranks an exact non-file match above a fuzzy prefix match" — test/mini/footer.view.test.tsx:977 | `expect(agentRow).toBeGreaterThanOrEqual(0)` |
+| "direct footer preserves a partial multi-field form draft across permission preemption" — test/mini/footer.view.test.tsx:201 | `expect(app.renderer.currentFocusedEditor?.plainText).toBe("keep this draft")` |
+| "direct footer composer area does not adopt footer surface" — test/mini/footer.view.test.tsx:298 | `expect(area.backgroundColor.toInts()).not.toEqual(surface.toInts())` |
+| "run entry content updates when live commit text changes" — test/mini/footer.view.test.tsx:323 | `expect(app.captureCharFrame()).toContain("I")` |
+| "direct command panel renders grouped command palette" — test/mini/footer.view.test.tsx:367 | `expect(frame).toContain("Commands")` |
+| "direct skill panel renders searchable skill list" — test/mini/footer.view.test.tsx:433 | `expect(frame).toContain("Skills")` |
+| "direct skill panel truncates long descriptions from the end" — test/mini/footer.view.test.tsx:481 | `expect(frame).toContain("terminal-control")` |
+| "direct command panel shows subagent entry when available" — test/mini/footer.view.test.tsx:520 | `expect(frame).toContain("View subagents")` |
+| "direct command panel keeps completed subagents available" — test/mini/footer.view.test.tsx:568 | `expect(frame).toContain("View subagents")` |
+| "direct subagent panel renders active subagents" — test/mini/footer.view.test.tsx:616 | `expect(frame).toContain("Select subagent")` |
+| "direct subagent panel closes when moving up from the first item" — test/mini/footer.view.test.tsx:663 | `expect(closed).toBe(0)` |
+| "direct queued prompt panel renders pending prompt actions" — test/mini/footer.view.test.tsx:699 | `expect(frame).toContain("Queued prompts")` |
+| "direct footer recreates the frame across command panel transitions" — test/mini/footer.view.test.tsx:743 | `expect(composer).toBeDefined()` |
+| "Mini Chrome command shows the service address and creates a code only on p" — test/mini/footer.view.test.tsx:770 | `expect(app.captureCharFrame()).toContain("Connect Chrome")` |
+| "closing Mini Chrome pairing ignores a pending response and does not submit twice" — test/mini/footer.view.test.tsx:811 | `expect(starts).toHaveLength(1)` |
+| "Mini paired Chrome view hides pair and exposes deliberate forget" — test/mini/footer.view.test.tsx:846 | `expect(app.captureCharFrame()).toContain("Chrome is paired; waiting for Chrome to reconnect.")` |
+| "direct footer dispatches leader variant binding only when leader is registered" — test/mini/footer.view.test.tsx:880 | `expect(calls).toEqual([])` |
+| "direct footer keeps leader variant binding inactive when leader is disabled" — test/mini/footer.view.test.tsx:900 | `expect(calls).toEqual([])` |
+| "direct footer submits slash autocomplete selections without dispatching shell completions" — test/mini/footer.view.test.tsx:919 | `expect(submits).toEqual([` |
+| "direct footer mention menu ranks an exact non-file match above a fuzzy prefix match" — test/mini/footer.view.test.tsx:981 | `expect(agentRow).toBeGreaterThanOrEqual(0)` |
 | "direct footer slash autocomplete keeps a real skills command" — test/mini/footer.view.test.tsx:1009 | `expect(submits).toEqual([{ text: "/skills ", parts: [], command: { name: "skills", arguments: "" } }])` |
 | "selectedCommand backfills the catalog source for bound drafts" — test/mini/footer.view.test.tsx:1036 | `expect(selectedCommand("/ycoding-ts fix it", { name: "ycoding-ts", arguments: "" }, catalog)).toEqual({` |
 | "direct footer tags skill slash submissions with their catalog source" — test/mini/footer.view.test.tsx:1059 | `expect(submits).toEqual([` |
@@ -1374,7 +1571,10 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 | "direct footer mode label keeps left padding without a status pill" — test/mini/footer.view.test.tsx:1348 | `expect(statusline).toBeDefined()` |
 | "direct permission rejection submits through keymap return binding" — test/mini/footer.view.test.tsx:1365 | `expect(app.captureCharFrame()).toContain("retry")` |
 | "direct model panel renders current model selector" — test/mini/footer.view.test.tsx:1411 | `expect(frame).toContain("Select model")` |
-| "direct variant panel renders current variant selector" — test/mini/footer.view.test.tsx:1454 | `expect(frame).toContain("Select variant")` |
+| "direct footer keeps an unavailable variant draft without dispatching it" — test/mini/footer.view.test.tsx:1454 | `expect(sent).toEqual([])` and the retained draft contains `removed unavailable` |
+| "direct footer submits an offered none variant without treating it as omission" — test/mini/footer.view.test.tsx:1483 | `expect(sent.map((prompt) => prompt.text)).toEqual(["use offered none"])` |
+| "direct variant panel renders current variant selector" — test/mini/footer.view.test.tsx:1505 | `expect(frame).toContain("Select variant")` |
+| "direct variant panel clears an unavailable selection only through its separate action" — test/mini/footer.view.test.tsx:1545 | `expect(app.captureCharFrame()).toContain("Clear selection")` and `expect(values).toEqual([undefined])` |
 
 ### test/mini/footer.width.test.ts (1 declarations/groups, 35 lines)
 
@@ -1480,7 +1680,7 @@ Layer: behavior/contract. Isolated duration: Not Run (except evidence below). In
 | "aborts deferred resume history on close and uses the cached exit title" — test/mini/runtime.test.ts:446 | `expect(aborted).toBe(2)` |
 | "adopts the deferred target location for catalogs, files, and runtime placement" — test/mini/runtime.test.ts:524 | `expect(targets).toBe(0)` |
 
-### test/mini/scrollback.surface.test.ts (13 declarations/groups, 737 lines)
+### test/mini/scrollback.surface.test.ts (13 AST groups including one Windows-conditional `test.skipIf`, 737 lines)
 
 Layer: component/application render. Isolated duration: Not Run (except evidence below). Initial disposition: keep; reason: retain named observable guards pending redundancy review.
 
@@ -1620,20 +1820,20 @@ Layer: behavior/contract. Isolated duration: Not Run (except evidence below). In
 | "keeps segment-safe contained tool paths relative" — test/mini/tool.test.ts:76 | `expect(toolPath("..cache/result.txt", { directory: "/work/project" })).toBe("..cache/result.txt")` |
 | "labels completed skills as loaded" — test/mini/tool.test.ts:81 | `expect(toolInlineInfo(skill).title).toBe('Skill "review"  Loaded')` |
 
-### test/mini/variant.shared.test.ts (8 declarations/groups, 86 lines)
+### test/mini/variant.shared.test.ts (8 AST groups, 87 lines)
 
 Layer: behavior/contract. Isolated duration: Not Run (except evidence below). Initial disposition: keep; reason: retain named observable guards pending redundancy review.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
-| "prefers cli then session then saved variants" — test/mini/variant.shared.test.ts:25 | `expect(resolveVariant("max", "high", "low", ["low", "high"])).toBe("max")` |
-| "drops a stored variant when the model offers no variants at all" — test/mini/variant.shared.test.ts:31 | `expect(resolveVariant(undefined, "high", "low", [])).toBeUndefined()` |
-| "keeps stored variants while the catalog has not resolved the model yet" — test/mini/variant.shared.test.ts:36 | `expect(resolveVariant(undefined, "high", "low", undefined)).toBe("high")` |
-| "keeps an explicit cli variant even when the catalog has not resolved variants" — test/mini/variant.shared.test.ts:41 | `expect(resolveVariant("max", undefined, undefined, undefined)).toBe("max")` |
-| "cycles through variants and back to no variant" — test/mini/variant.shared.test.ts:46 | `expect(cycleVariant(undefined, ["low", "high"])).toBe("low")` |
-| "cycles through an offered none variant and treats a catalog variant named default as an ordinary id" — test/mini/variant.shared.test.ts:53 | `expect(cycleVariant(undefined, ["none", "low", "high"])).toBe("none")` |
-| "formats model labels" — test/mini/variant.shared.test.ts:67 | `expect(formatModelLabel(model, undefined)).toBe("gpt-5 · openai")` |
-| "picks the latest matching variant from session history" — test/mini/variant.shared.test.ts:74 | `expect(pickVariant(model, session)).toBe("minimal")` |
+| "prefers explicit cli then session then saved variants without replacing unavailable ids" — test/mini/variant.shared.test.ts:25 | `expect(resolveVariant(undefined, "missing", "low")).toBe("missing")` |
+| "retains a stored explicit variant when the model offers no variants" — test/mini/variant.shared.test.ts:32 | `expect(resolveVariant(undefined, undefined, "high")).toBe("high")` |
+| "keeps stored variants while the catalog has not resolved the model yet" — test/mini/variant.shared.test.ts:37 | `expect(resolveVariant(undefined, "high", "low")).toBe("high")` |
+| "keeps an explicit cli variant even when the catalog has not resolved variants" — test/mini/variant.shared.test.ts:42 | `expect(resolveVariant("max", undefined, undefined)).toBe("max")` |
+| "cycles through offered variants without clearing the optional selection" — test/mini/variant.shared.test.ts:46 | `expect(cycleVariant("missing", ["low", "high"])).toBe("low")` |
+| "cycles through an offered none variant and treats a catalog variant named default as an ordinary id" — test/mini/variant.shared.test.ts:54 | `expect(cycleVariant(undefined, ["none", "low", "high"])).toBe("none")` |
+| "formats model labels" — test/mini/variant.shared.test.ts:68 | `expect(formatModelLabel(model, undefined)).toBe("gpt-5 · openai")` |
+| "picks the latest matching variant from session history" — test/mini/variant.shared.test.ts:75 | `expect(pickVariant(model, session)).toBe("minimal")` |
 
 ### test/model-preference.test.ts (3 declarations/groups, 59 lines)
 
@@ -1674,13 +1874,14 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 | "surfaces a live subagent permission in the subagent view" — test/permission-surface.test.tsx:154 | `No inline assertion; inspect called harness` |
 | "shows the download side-effect warning on selected Chrome site approval" — test/permission-surface.test.tsx:177 | `expect(screen.frame()).toContain("example.test")` |
 
-### test/plugin/context.test.tsx (1 declarations/groups, 112 lines)
+### test/plugin/context.test.tsx (2 current AST groups, 156 lines)
 
-Layer: component/application render. Isolated duration: Not Run (except evidence below). Initial disposition: keep; reason: retain named observable guards pending redundancy review.
+Layer: component/application render. Keep the managed-client replacement behavior and visible invalid-plugin error. Parent changed the error prefix to `Invalid V2 TUI`: the new visible assertion failed with Bun exit 1; restored focused test exited 0. Full file 2/2 passed, three isolated runs and one timestamp-overlap loaded run with guardrail 8/8 passed.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
-| "active production plugin contexts follow a managed-service client replacement" — test/plugin/context.test.tsx:19 | `expect(context.client).toBe(initial)` |
+| "invalid plugin modules report a user-facing error without an internal runtime label" — test/plugin/context.test.tsx:19 | `expect(app.captureCharFrame()).toContain("Invalid TUI plugin module: invalid-fixture")` and `expect(app.captureCharFrame()).not.toContain("V2")` |
+| "active production plugin contexts follow a managed-service client replacement" — test/plugin/context.test.tsx:63 | `expect(context.client).toBe(initial)` |
 
 ### test/plugin/runtime.test.ts (2 declarations/groups, 50 lines)
 
@@ -1723,23 +1924,28 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 | "attaches a clipboard image from super+v" — test/prompt-paste.test.tsx:151 | `No inline assertion; inspect called harness` |
 | "attaches an image from a pasted file path" — test/prompt-paste.test.tsx:173 | `expect(screen.frame()).not.toContain("pasted-image.png")` |
 
-### test/prompt/autocomplete.test.ts (11 declarations/groups, 128 lines)
+### test/prompt/autocomplete.test.ts (16 AST groups, 206 lines)
 
 Layer: behavior/contract. Isolated duration: Not Run (except evidence below). Initial disposition: keep; reason: retain named observable guards pending redundancy review.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
-| "lists directories before files while preserving backend ranking" — test/prompt/autocomplete.test.ts:23 | `expect(merged.map((item) => item.path)).toEqual([` |
-| "keeps folders visible even when the file search fills every slot" — test/prompt/autocomplete.test.ts:43 | `expect(merged[0]?.path).toBe("packages/tui/")` |
-| "caps folders so file results always keep slots" — test/prompt/autocomplete.test.ts:50 | `expect(merged.filter((item) => item.type === "directory")).toHaveLength(MENTION_DIRECTORY_LIMIT)` |
-| "keeps a single row when both searches return the same path" — test/prompt/autocomplete.test.ts:57 | `expect(merged.map((item) => item.path)).toEqual(["src/", "src/app.ts"])` |
-| "still returns results when one of the two searches came back empty" — test/prompt/autocomplete.test.ts:69 | `expect(mergeFileSearchEntries([], files(3)).map((item) => item.path)).toEqual([` |
-| "keeps every returned agent and file result reachable" — test/prompt/autocomplete.test.ts:80 | `expect(merged.filter((item) => item.display.startsWith("file-"))).toHaveLength(20)` |
-| "leaves command and skill lists untouched when there are no file results" — test/prompt/autocomplete.test.ts:91 | `expect(mergeAutocompleteOptions(nonFiles, [])).toHaveLength(9)` |
-| "keeps the highlighted row inside the current option list" — test/prompt/autocomplete.test.ts:98 | `expect(clampAutocompleteIndex(7, 3)).toBe(2)` |
-| "keeps only the selected viewport resident while preserving option indexes" — test/prompt/autocomplete.test.ts:107 | `expect(autocompleteWindow(options, 0, 10)).toEqual({ start: 0, options: options.slice(0, 10) })` |
-| "does not double the trailing separator for directory entries" — test/prompt/autocomplete.test.ts:117 | `expect(expandDirectoryQuery("packages/tui/")).toBe("packages/tui/")` |
-| "normalizes the platform separator the search backend appends" — test/prompt/autocomplete.test.ts:124 | `expect(expandDirectoryQuery("packages/tui\\")).toBe("packages/tui/")` |
+| "promotes the best query match ahead of folders and keeps the remaining backend order" — test/prompt/autocomplete.test.ts:23 | `expect(merged.map((entry) => entry.path)).toEqual(["AGENTS.md", "packages/containers/", ...])` |
+| "promotes equal best matches without an arbitrary score cutoff" — test/prompt/autocomplete.test.ts:45 | `expect(merged.map((entry) => entry.path)).toEqual(["two/AGENTS.md", "one/AGENTS.md", "packages/containers/"])` |
+| "promotes an exact folder match ahead of both weak folders and a file prefix match" — test/prompt/autocomplete.test.ts:57 | `expect(...).toEqual(["agents/", "packages/containers/", "AGENTS.md"])` |
+| "normalizes platform separators for scoring and duplicate identity without rewriting the returned paths" — test/prompt/autocomplete.test.ts:70 | `expect(...).toEqual(["src\\AGENTS.md", "packages\\client\\", "docs/notes.md"])` |
+| "keeps the directory cap and all file candidates after query promotion" — test/prompt/autocomplete.test.ts:84 | `expect(merged.filter((entry) => entry.type === "directory")).toHaveLength(MENTION_DIRECTORY_LIMIT)` |
+| "lists directories before files while preserving backend ranking" — test/prompt/autocomplete.test.ts:101 | `expect(merged.map((item) => item.path)).toEqual([` |
+| "keeps folders visible even when the file search fills every slot" — test/prompt/autocomplete.test.ts:121 | `expect(merged[0]?.path).toBe("packages/tui/")` |
+| "caps folders so file results always keep slots" — test/prompt/autocomplete.test.ts:128 | `expect(merged.filter((item) => item.type === "directory")).toHaveLength(MENTION_DIRECTORY_LIMIT)` |
+| "keeps a single row when both searches return the same path" — test/prompt/autocomplete.test.ts:135 | `expect(merged.map((item) => item.path)).toEqual(["src/", "src/app.ts"])` |
+| "still returns results when one of the two searches came back empty" — test/prompt/autocomplete.test.ts:147 | `expect(mergeFileSearchEntries([], files(3)).map((item) => item.path)).toEqual([` |
+| "keeps every returned agent and file result reachable" — test/prompt/autocomplete.test.ts:158 | `expect(merged.filter((item) => item.display.startsWith("file-"))).toHaveLength(20)` |
+| "leaves command and skill lists untouched when there are no file results" — test/prompt/autocomplete.test.ts:169 | `expect(mergeAutocompleteOptions(nonFiles, [])).toHaveLength(9)` |
+| "keeps the highlighted row inside the current option list" — test/prompt/autocomplete.test.ts:176 | `expect(clampAutocompleteIndex(7, 3)).toBe(2)` |
+| "keeps only the selected viewport resident while preserving option indexes" — test/prompt/autocomplete.test.ts:185 | `expect(autocompleteWindow(options, 0, 10)).toEqual({ start: 0, options: options.slice(0, 10) })` |
+| "does not double the trailing separator for directory entries" — test/prompt/autocomplete.test.ts:195 | `expect(expandDirectoryQuery("packages/tui/")).toBe("packages/tui/")` |
+| "normalizes the platform separator the search backend appends" — test/prompt/autocomplete.test.ts:202 | `expect(expandDirectoryQuery("packages/tui\\")).toBe("packages/tui/")` |
 
 ### test/prompt/autocomplete.test.tsx (3 declarations/groups, 173 lines)
 
@@ -2006,6 +2212,15 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 | "healthy %s live edits update a collapsed summary before toggling and toggling fetches nothing" — test/screen/captured-child-recovery.screen.test.tsx:342 (table) | `expect(screen.frame()).not.toContain("src/three.ts")` |
 | "reopens a Session whose captured transcript is still resident without crashing" — test/screen/captured-child-recovery.screen.test.tsx:382 | `expect(screen.frame()).not.toContain("YCoding crashed")` |
 
+### test/screen/clipboard-selection.screen.test.ts (2 AST table groups, 197 lines)
+
+Layer: component/application render. Stable current render-flow tests; no suite was run in this inventory update.
+
+| Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
+| --- | --- |
+| `main transcript uses explicit copy when dialog copy-on-select is %s` — test/screen/clipboard-selection.screen.test.ts:105 (table) | After mouse selection, `expect(writes).toEqual([])`; Ctrl+C then writes the selected text and keeps the renderer alive. |
+| `Settings names dialog scope and dialog release honors %s at %i columns` — test/screen/clipboard-selection.screen.test.ts:141 (table) | `expect(writes).toEqual(enabled ? ["Terminal"] : [])`; when disabled, the selected text remains available. |
+
 ### test/screen/chrome-capture.test.tsx (1 declarations/groups, 121 lines)
 
 Layer: component/application render. Isolated duration: Not Run (except evidence below). Initial disposition: keep; reason: retain named observable guards pending redundancy review.
@@ -2014,28 +2229,28 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 | --- | --- |
 | "captures the product chrome variants at canonical terminal dimensions" — test/screen/chrome-capture.test.tsx:27 | `expect(rows).toHaveLength(viewport.height)` |
 
-### test/screen/daybreak-command.test.tsx (16 declarations/groups, 591 lines)
+### test/screen/daybreak-command.test.tsx (16 current AST groups, 600 lines)
 
-Layer: component/application render. Isolated duration: Not Run (except evidence below). Initial disposition: rewrite; reason: timed synchronization needs event/state completion review.
+Layer: component/application render. Keep observable state/persistence flows. The changed failure/retry case is verified by the three isolated full-file runs and loaded run recorded above.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
-| "toggles Daybreak from the landing palette and slash command without creating a Session" — test/screen/daybreak-command.test.tsx:267 | `expect(screen.frame()).toContain("What should we build?")` |
-| "saves landing Daybreak before the first prompt and rehydrates its Session indicator" — test/screen/daybreak-command.test.tsx:290 | `expect(mutations).toEqual(["create", "daybreak", "admit", "wake"])` |
-| "retains the landing draft and retries the same Session when saving Daybreak fails" — test/screen/daybreak-command.test.tsx:316 | `expect(screen.frame()).toContain("Check the application")` |
-| "rejects unsupported landing Daybreak without starting a Session" — test/screen/daybreak-command.test.tsx:348 | `expect(screen.lines()[1]).not.toContain("Daybreak")` |
-| "applies landing Daybreak before an explicit goal starts the new Session" — test/screen/daybreak-command.test.tsx:360 | `expect(mutations).toEqual(["create", "daybreak", "goal"])` |
-| "does not activate a landing goal when Daybreak persistence fails" — test/screen/daybreak-command.test.tsx:381 | `expect(mutations).toEqual(["create", "daybreak"])` |
-| "lists the Daybreak command in the palette with the Session's current state" — test/screen/daybreak-command.test.tsx:400 | `No inline assertion; inspect called harness` |
-| "rehydrates and updates the header indicator from durable Daybreak state" — test/screen/daybreak-command.test.tsx:413 | `expect(screen.lines()[1]).toContain("openai/GPT 5.6 Terra · Daybreak Blue · high")` |
-| "marks a saved Daybreak program inactive on a model that does not advertise it" — test/screen/daybreak-command.test.tsx:433 | `expect(screen.lines()[1]).toContain("openai/GPT 5.6 Terra · Daybreak Blue (inactive)")` |
-| "keeps Daybreak inactive on unsupported models and providers, and restores it on the supported model" — test/screen/daybreak-command.test.tsx:444 | `expect(sessionDaybreak).toBe("daybreak_blue")` |
-| "refreshes Daybreak activity when the account's advertised programs change" — test/screen/daybreak-command.test.tsx:470 | `expect(sessionDaybreak).toBe("daybreak_blue")` |
-| "cycles off → blue → red → off across the advertised programs" — test/screen/daybreak-command.test.tsx:500 | `expect(daybreakSets).toEqual([{ daybreak: "daybreak_blue" }])` |
-| "cycles a red-only model off → red → off" — test/screen/daybreak-command.test.tsx:532 | `expect(daybreakSets).toEqual([{ daybreak: "daybreak_red" }])` |
-| "reports Daybreak as unavailable when the model advertises no program" — test/screen/daybreak-command.test.tsx:553 | `expect(daybreakSets).toEqual([])` |
-| "rejects an explicit program the active model does not advertise" — test/screen/daybreak-command.test.tsx:565 | `expect(daybreakSets).toEqual([])` |
-| "clears the program with an explicit off argument" — test/screen/daybreak-command.test.tsx:581 | `expect(daybreakSets).toEqual([{ daybreak: null }])` |
+| "toggles Daybreak from the landing palette and slash command without creating a Session" — test/screen/daybreak-command.test.tsx:272 | `expect(screen.frame()).toContain("What should we build?")` |
+| "saves landing Daybreak before the first prompt and rehydrates its Session indicator" — test/screen/daybreak-command.test.tsx:295 | `expect(mutations).toEqual(["create", "daybreak", "admit", "wake"])` |
+| "retains the landing draft and retries the same Session when saving Daybreak fails" — test/screen/daybreak-command.test.tsx:321 | `expect(screen.frame()).toContain("Selecting Daybreak unresolved · Retry send")`; after retry, `expect(createdIDs).toEqual([created])` and `expect(promptRequests[1].id).toBe(promptRequests[0].id)` |
+| "rejects unsupported landing Daybreak without starting a Session" — test/screen/daybreak-command.test.tsx:360 | `expect(screen.lines()[1]).not.toContain("Daybreak")` |
+| "applies landing Daybreak before an explicit goal starts the new Session" — test/screen/daybreak-command.test.tsx:372 | `expect(mutations).toEqual(["create", "daybreak", "goal"])` |
+| "does not activate a landing goal when Daybreak persistence fails" — test/screen/daybreak-command.test.tsx:393 | `expect(mutations).toEqual(["create", "daybreak"])` |
+| "lists the Daybreak command in the palette with the Session's current state" — test/screen/daybreak-command.test.tsx:412 | `No inline assertion; inspect called harness` |
+| "rehydrates and updates the header indicator from durable Daybreak state" — test/screen/daybreak-command.test.tsx:425 | `expect(screen.lines()[1]).toContain("openai/GPT 5.6 Terra · Daybreak Blue · high")` |
+| "marks a saved Daybreak program inactive on a model that does not advertise it" — test/screen/daybreak-command.test.tsx:445 | `expect(screen.lines()[1]).toContain("openai/GPT 5.6 Terra · Daybreak Blue (inactive)")` |
+| "keeps Daybreak inactive on unsupported models and providers, and restores it on the supported model" — test/screen/daybreak-command.test.tsx:456 | `expect(sessionDaybreak).toBe("daybreak_blue")` |
+| "refreshes Daybreak activity when the account's advertised programs change" — test/screen/daybreak-command.test.tsx:482 | `expect(sessionDaybreak).toBe("daybreak_blue")` |
+| "cycles off → blue → red → off across the advertised programs" — test/screen/daybreak-command.test.tsx:512 | `expect(daybreakSets).toEqual([{ daybreak: "daybreak_blue" }])` |
+| "cycles a red-only model off → red → off" — test/screen/daybreak-command.test.tsx:542 | `expect(daybreakSets).toEqual([{ daybreak: "daybreak_red" }])` |
+| "reports Daybreak as unavailable when the model advertises no program" — test/screen/daybreak-command.test.tsx:562 | `expect(daybreakSets).toEqual([])` |
+| "rejects an explicit program the active model does not advertise" — test/screen/daybreak-command.test.tsx:574 | `expect(daybreakSets).toEqual([])` |
+| "clears the program with an explicit off argument" — test/screen/daybreak-command.test.tsx:590 | `expect(daybreakSets).toEqual([{ daybreak: null }])` |
 
 ### test/screen/dialog-base-capture.test.tsx (1 declarations/groups, 158 lines)
 
@@ -2045,14 +2260,14 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 | --- | --- |
 | "captures canonical shared dialog fixtures at canonical and compact dimensions" — test/screen/dialog-base-capture.test.tsx:86 | `No inline assertion; inspect called harness` |
 
-### test/screen/dialog-remaining-capture.test.tsx (2 declarations/groups, 384 lines)
+### test/screen/dialog-remaining-capture.test.tsx (2 current AST groups, 384 lines)
 
 Layer: component/application render. Isolated duration: Not Run (except evidence below). Initial disposition: keep; reason: retain named observable guards pending redundancy review.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
 | "the Connect integration menu opens the custom endpoint dialog" — test/screen/dialog-remaining-capture.test.tsx:114 | `expect(opened).toBe(true)` |
-| "captures concrete remaining dialog fixtures at canonical terminal dimensions" — test/screen/dialog-remaining-capture.test.tsx:175 | `No inline assertion; inspect called harness` |
+| "captures concrete remaining dialog fixtures at canonical terminal dimensions" — test/screen/dialog-remaining-capture.test.tsx:175 | `expect(frame).toContain(dialogState.settle)`; variant case now settles on `Select variant` and asserts `balanced` (`:86`, `:250-258`) |
 
 ### test/screen/dialog-runtime-capture.test.tsx (2 declarations/groups, 305 lines)
 
@@ -2079,25 +2294,36 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 | --- | --- |
 | "captures the expanded goal and YOLO session with populated rail fixtures" — test/screen/expanded-goal-yolo-capture.test.tsx:165 | `expect(screen.lines().some((line) => line.slice(railStart).includes('−  ${title}'))).toBe(true)` |
 
-### test/screen/goal-command.test.tsx (13 declarations/groups, 563 lines)
+### test/screen/file-mention-ranking.screen.test.ts (2 AST groups, 180 lines)
+
+Layer: component/application render. Keep ranked results and insertion behavior; no suite was run in this inventory update.
+
+| Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
+| --- | --- |
+| `@agents shows and selects AGENTS.md before weak folder matches at %i×%i` — test/screen/file-mention-ranking.screen.test.ts:117 (table) | `expect(file).toBeLessThan(folder)` and `expect(composer(screen.renderer.root)?.plainText).toBe("@AGENTS.md ")` |
+| "the folder row after the best match still drills with one trailing separator" — test/screen/file-mention-ranking.screen.test.ts:159 | `expect(composer(screen.renderer.root)?.plainText).not.toContain("//")` |
+
+### test/screen/goal-command.test.tsx (15 current AST groups; test.each is counted once)
 
 Layer: component/application render. Isolated duration: Not Run (except evidence below). Initial disposition: rewrite; reason: timed synchronization needs event/state completion review.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
-| "replaces an active goal with the exact /goal text and never admits a prompt" — test/screen/goal-command.test.tsx:231 | `expect(autonomySets).toEqual([{ goal: "replace the migration plan" }])` |
-| "clears the composer after an explicit /goal starts goal mode from normal" — test/screen/goal-command.test.tsx:247 | `expect(autonomySets).toEqual([{ goal: "finish product." }])` |
-| `clears a goal draft after ${name} and steer events before the autonomy response` — test/screen/goal-command.test.tsx:270 | `expect(screen.frame()).not.toContain("/goal finish product.")` |
-| "retains the goal draft after a failed PUT across a permission remount" — test/screen/goal-command.test.tsx:339 | `expect(screen.frame()).toContain("/goal finish product.")` |
-| "creates a landing session and sets its goal with the returned session ID" — test/screen/goal-command.test.tsx:370 | `expect(landingCreates).toBe(1)` |
-| "expands a tracked long paste after /goal and keeps the surrounding text" — test/screen/goal-command.test.tsx:387 | `expect(autonomySets).toEqual([{ goal: '${pasted} trailing context' }])` |
-| "keeps the draft and attachment and reports an error when goal calculation fails" — test/screen/goal-command.test.tsx:407 | `expect(screen.frame()).toContain("replace the migration plan")` |
-| "switches the selected variant before an explicit /goal activates its steer" — test/screen/goal-command.test.tsx:438 | `expect(modelSwitchStarted).toBe(false)` |
-| "a rejected selected variant keeps /goal editable and does not activate a steer" — test/screen/goal-command.test.tsx:463 | `expect(switchRequests).toEqual([{ providerID: "openai", id: "gpt-5.6-terra", variant: "low" }])` |
-| "stops an active goal on a bare /goal without admitting a prompt" — test/screen/goal-command.test.tsx:494 | `expect(autonomySets).toEqual([{ goal: null }])` |
-| "resumes a retained goal on a bare /goal without synthesis or prompt admission" — test/screen/goal-command.test.tsx:510 | `expect(autonomySets).toEqual([{ goal: true }])` |
-| "agrees with the composer branch when the slash menu selects the goal command" — test/screen/goal-command.test.tsx:526 | `expect(autonomySets).toEqual([{ goal: null }])` |
-| "opens the explicit objective dialog when a bare /goal has no retained goal" — test/screen/goal-command.test.tsx:545 | `expect(autonomySets).toEqual([])` |
+| "replaces an active goal with the exact /goal text and never admits a prompt" — test/screen/goal-command.test.tsx:233 | `expect(autonomySets).toEqual([{ goal: "replace the migration plan" }])` |
+| "clears the composer after an explicit /goal starts goal mode from normal" — test/screen/goal-command.test.tsx:249 | `expect(autonomySets).toEqual([{ goal: "finish product." }])` |
+| `clears a goal draft after ${name} and steer events before the autonomy response` — test/screen/goal-command.test.tsx:273 | `expect(screen.frame()).not.toContain("/goal finish product.")` |
+| "retains the goal draft after a failed PUT across a permission remount" — test/screen/goal-command.test.tsx:342 | `expect(screen.frame()).toContain("/goal finish product.")` |
+| "creates a landing session and sets its goal with the returned session ID" — test/screen/goal-command.test.tsx:373 | `expect(landingCreates).toBe(1)` |
+| "expands a tracked long paste after /goal and keeps the surrounding text" — test/screen/goal-command.test.tsx:390 | `expect(autonomySets).toEqual([{ goal: '${pasted} trailing context' }])` |
+| "keeps the draft and attachment and reports an error when goal calculation fails" — test/screen/goal-command.test.tsx:410 | `expect(screen.frame()).toContain("replace the migration plan")` |
+| "switches the selected variant before an explicit /goal activates its steer" — test/screen/goal-command.test.tsx:441 | `expect(modelSwitchStarted).toBe(false)` |
+| "a rejected selected variant keeps /goal editable and does not activate a steer" — test/screen/goal-command.test.tsx:466 | `expect(switchRequests).toEqual([{ providerID: "openai", id: "gpt-5.6-terra", variant: "low" }])` |
+| "stops an active goal on a bare /goal without admitting a prompt" — test/screen/goal-command.test.tsx:497 | `expect(autonomySets).toEqual([{ goal: null }])` |
+| "resumes a retained goal on a bare /goal without synthesis or prompt admission" — test/screen/goal-command.test.tsx:513 | `expect(autonomySets).toEqual([{ goal: true }])` |
+| "agrees with the composer branch when the slash menu selects the goal command" — test/screen/goal-command.test.tsx:529 | `expect(autonomySets).toEqual([{ goal: null }])` |
+| "the command palette exposes the goal action and applies it to the active Session" — test/screen/goal-command.test.tsx:549 | `expect(screen.lines().filter((line) => line.includes("Set autonomous goal"))).toHaveLength(1)` and `expect(autonomySets).toEqual([{ goal: null }])` |
+| "execution settlement refreshes a completed goal before the header reports readiness" — test/screen/goal-command.test.tsx:566 | `expect(screen.frame()).not.toContain("Goal · autonomous")` |
+| "opens the explicit objective dialog when a bare /goal has no retained goal" — test/screen/goal-command.test.tsx:589 | `expect(autonomySets).toEqual([])` |
 
 ### test/screen/keep-awake-status.screen.test.tsx (2 declarations/groups, 97 lines)
 
@@ -2155,23 +2381,26 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 | --- | --- |
 | "probes dialog, toast, and autocomplete colours at canonical viewports" — test/screen/overlay-colour-probe.test.tsx:67 | `No inline assertion; inspect called harness` |
 
-### test/screen/prompt-recovery.screen.test.ts (11 declarations/groups, 659 lines)
+### test/screen/prompt-recovery.screen.test.ts (15 current AST groups, 815 lines)
 
 Layer: component/application render. Isolated duration: Not Run (except evidence below). Initial disposition: keep; reason: retain named observable guards pending redundancy review.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
-| "dispatch releases the composer for a second send while the first acknowledgement is unresolved" — test/screen/prompt-recovery.screen.test.ts:254 | `expect(composer(screen.renderer.root)?.plainText).toBe("")` |
-| "enhanced Enter release never submits a draft while an earlier send is pending" — test/screen/prompt-recovery.screen.test.ts:297 | `expect(composer(screen.renderer.root)?.plainText).toBe("not released as submit")` |
-| "route disposal does not cancel owned transport or attach its late failure to the home draft" — test/screen/prompt-recovery.screen.test.ts:332 | `expect(composer(screen.renderer.root)?.plainText).toBe("new home draft")` |
-| "direct skill metadata reaches admission without preactivation while the editor accepts another send" — test/screen/prompt-recovery.screen.test.ts:373 | `expect(composer(screen.renderer.root)?.plainText).toBe("")` |
-| "every space-separated skill mention reaches prompt admission from the composer" — test/screen/prompt-recovery.screen.test.ts:413 | `expect(screen.frame()).toContain("$review $plan $review now")` |
-| "a late admission failure retains the submitted input without erasing a new draft or queued send" — test/screen/prompt-recovery.screen.test.ts:437 | `expect(promptRequests).toHaveLength(1)` |
-| "standalone skill loading stays owned while the real composer accepts a second draft" — test/screen/prompt-recovery.screen.test.ts:476 | `expect(composer(screen.renderer.root)?.plainText).toBe("")` |
-| "receipt retry uses the retained prompt identity and leaves an editable draft untouched" — test/screen/prompt-recovery.screen.test.ts:508 | `expect(promptRequests).toHaveLength(1)` |
-| "configured command admission releases editing and queues the next prompt without repeating command processing" — test/screen/prompt-recovery.screen.test.ts:536 | `expect(composer(screen.renderer.root)?.plainText).toBe("")` |
-| "explicit local recovery discard releases a failed head without replaying it or erasing the new draft" — test/screen/prompt-recovery.screen.test.ts:575 | `expect(promptRequests.map((request) => request.text)).toEqual([` |
-| "successful delayed clipboard admission reconciles recalled history to its managed attachment before cleanup" — test/screen/prompt-recovery.screen.test.ts:606 | `expect(composer(screen.renderer.root)?.plainText).toBe("")` |
+| "dispatch releases the composer for a second send while the first acknowledgement is unresolved" — test/screen/prompt-recovery.screen.test.ts:307 | `expect(composer(screen.renderer.root)?.plainText).toBe("")` |
+| "enhanced Enter release never submits a draft while an earlier send is pending" — test/screen/prompt-recovery.screen.test.ts:350 | `expect(composer(screen.renderer.root)?.plainText).toBe("not released as submit")` |
+| "route disposal does not cancel owned transport or attach its late failure to the home draft" — test/screen/prompt-recovery.screen.test.ts:385 | `expect(composer(screen.renderer.root)?.plainText).toBe("new home draft")` |
+| "direct skill metadata reaches admission without preactivation while the editor accepts another send" — test/screen/prompt-recovery.screen.test.ts:426 | `expect(composer(screen.renderer.root)?.plainText).toBe("")` |
+| "every space-separated skill mention reaches prompt admission from the composer" — test/screen/prompt-recovery.screen.test.ts:466 | `expect(screen.frame()).toContain("$review $plan $review now")` |
+| "a late admission failure retains the submitted input without erasing a new draft or queued send" — test/screen/prompt-recovery.screen.test.ts:490 | `expect(promptRequests).toHaveLength(1)` |
+| "standalone skill loading stays owned while the real composer accepts a second draft" — test/screen/prompt-recovery.screen.test.ts:529 | `expect(composer(screen.renderer.root)?.plainText).toBe("")` |
+| "receipt retry uses the retained prompt identity and leaves an editable draft untouched" — test/screen/prompt-recovery.screen.test.ts:561 | `expect(promptRequests).toHaveLength(1)` |
+| "configured command admission releases editing and queues the next prompt without repeating command processing" — test/screen/prompt-recovery.screen.test.ts:692 | `expect(composer(screen.renderer.root)?.plainText).toBe("")` |
+| "explicit local recovery discard releases a failed head without replaying it or erasing the new draft" — test/screen/prompt-recovery.screen.test.ts:731 | `expect(promptRequests.map((request) => request.text)).toEqual([` |
+| "shell rejection retains the draft and restores the local retry without duplicate dispatch" — test/screen/prompt-recovery.screen.test.ts:589 | `expect(shellRequests).toEqual([{ command: "echo retry" }, { command: "echo retry" }])` |
+| "discarding failed shell recovery does not replay the command or erase its draft" — test/screen/prompt-recovery.screen.test.ts:630 | `expect(shellRequests).toEqual([{ command: "echo discard" }])` |
+| "cancelled shell submission keeps cancellation feedback instead of a late request error" — test/screen/prompt-recovery.screen.test.ts:653 | `expect(screen.frame()).not.toContain("Shell submission failed")` |
+| "successful delayed clipboard admission reconciles recalled history to its managed attachment before cleanup" — test/screen/prompt-recovery.screen.test.ts:762 | `expect(composer(screen.renderer.root)?.plainText).toBe("")` |
 
 ### test/screen/remote-status.screen.test.tsx (1 declarations/groups, 72 lines)
 
@@ -2273,6 +2502,22 @@ Layer: behavior/contract. Isolated duration: Not Run (except evidence below). In
 | "shell-output route renders identity header, stream, metadata, and footer" — test/screen/shell-output-capture.test.tsx:51 | `expect(rows).toHaveLength(viewport.height)` |
 | "shell-output route renders an exited shell without a kill action" — test/screen/shell-output-capture.test.tsx:93 | `expect(text).toContain("exited")` |
 
+### test/screen/session-compact-command.screen.test.ts (1 AST group, 103 lines; untracked consumer, E116 proof)
+
+Layer: component/application render. The parent E116 toast mutation failed the real-route consumer test, exact restoration passed, and the one-case file passed three isolated runs plus one loaded pressure run.
+
+| Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
+| --- | --- |
+| "compaction command displays a backend conflict as an error toast" — test/screen/session-compact-command.screen.test.ts:20 | `expect(compactions).toEqual([sessionID])` and the frame contains “Compaction already running”. |
+
+### test/screen/shell-output-keybind.screen.test.ts (1 AST group, 93 lines; untracked consumer, E116 proof)
+
+Layer: component/application render. The parent E116 kill/back binding mutations each failed the consumer test, exact restorations passed, and the one-case file passed three isolated runs plus one loaded pressure run.
+
+| Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
+| --- | --- |
+| "rebound shell-output kill and back keys act on the real shell and Session routes" — test/screen/shell-output-keybind.screen.test.ts:32 | `expect(kills).toEqual([shellID])`; returning home removes the shell route text. |
+
 ### test/screen/shells-capture.test.tsx (2 declarations/groups, 151 lines)
 
 Layer: component/application render. Isolated duration: Not Run (except evidence below). Initial disposition: keep; reason: retain named observable guards pending redundancy review.
@@ -2300,7 +2545,7 @@ Layer: behavior/contract. Isolated duration: Not Run (except evidence below). In
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
-| "captures populated subagent chat states at reference terminal dimensions" — test/screen/subagent-chat-capture.test.tsx:17 | `expect(lines).toHaveLength(viewport.height)` |
+| "captures populated subagent chat states at reference terminal dimensions" — test/screen/subagent-chat-capture.test.tsx:17 | `expect(lines).toHaveLength(viewport.height)`; narrow case at `:60-62` asserts `? test-triage` visible and `◦ keymap-audit` absent. Pending final child proof. |
 
 ### test/screen/subagent-picker-capture.test.tsx (3 declarations/groups, 336 lines)
 
@@ -2352,36 +2597,33 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 | "updates active tool durations once per second" — test/session-activity-row.test.tsx:92 | `expect(interval).toBe(1_000)` |
 | "self-stops a subagent interval when its durable task completes" — test/session-activity-row.test.tsx:105 | `expect(callbacks).toHaveLength(1)` |
 
-### test/session-autonomy.test.ts (20 declarations/groups, 300 lines)
+### test/session-autonomy.test.ts (17 current AST groups, 278 lines; HEAD had 20)
 
-Layer: behavior/contract. Isolated duration: Not Run (except evidence below). Initial disposition: rewrite; reason: production-source assertions need behavioral/render replacement.
+Layer: behavior/contract. Current disposition: keep behavioral autonomy formatting, action, refresh-guard and retry-identity assertions. The three removed source-text groups and replacement status are mapped above.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
 | "normalizes untrusted YOLO input to a supported level" — test/session-autonomy.test.ts:13 | `expect([1.5, 9, Number.NaN, -1, true].map((yolo) => yoloLevel({ yolo }))).toEqual([1, 3, 0, 0, 2])` |
-| "represents explicit goal reports through the progress label" — test/session-autonomy.test.ts:17 | `No inline assertion; inspect called harness` |
-| "re-reads goal state when execution settles rather than when the assistant turn ends" — test/session-autonomy.test.ts:33 | `expect(source).toContain('data.on("session.execution.succeeded"')` |
-| "rejects a completed refresh that began before a local goal activation" — test/session-autonomy.test.ts:41 | `expect(guard.accepts(stale)).toBe(false)` |
-| "rejects an older refresh after a newer refresh starts" — test/session-autonomy.test.ts:51 | `expect(guard.accepts(stale)).toBe(false)` |
-| "renders durable assistant text directly without treating literal marker text as control state" — test/session-autonomy.test.ts:60 | `expect(textPart).toContain("createMemo(() => props.part.text)")` |
-| "labels normal, yolo, and goal modes" — test/session-autonomy.test.ts:68 | `expect(autonomyModeLabel({ mode: "normal", yolo: 0 } as unknown as SessionAutonomyState)).toBe("Normal")` |
-| "formats goal progress" — test/session-autonomy.test.ts:109 | `expect(autonomyProgressLabel({ mode: "normal", yolo: 0 })).toBeUndefined()` |
-| "renders goal iteration separately from no-progress" — test/session-autonomy.test.ts:123 | `No inline assertion; inspect called harness` |
-| "hides the goal panel when the goal is not active" — test/session-autonomy.test.ts:136 | `expect(source).toContain('props.autonomy.goal?.status === "active"')` |
-| "reports how a finished goal ended" — test/session-autonomy.test.ts:142 | `expect(autonomyProgressLabel(terminal("completed"))).toBe("completed after 3 iterations")` |
-| "parses single-line, multiline, non-goal, and empty goal commands" — test/session-autonomy.test.ts:153 | `expect(parseGoalCommand("/goal Finish the migration")).toEqual({ goal: "Finish the migration" })` |
-| "stops an active goal on a bare toggle" — test/session-autonomy.test.ts:160 | `No inline assertion; inspect called harness` |
-| "resumes a retained goal without inventing or recalculating its objective" — test/session-autonomy.test.ts:170 | `No inline assertion; inspect called harness` |
-| "requests an explicit objective when no retained goal text exists" — test/session-autonomy.test.ts:187 | `expect(goalToggleAction({ mode: "normal", yolo: 0 })).toEqual({ type: "request-objective" })` |
-| "does not reset an active goal when its original text is re-activated" — test/session-autonomy.test.ts:198 | `expect(calls).toEqual([])` |
-| "calculates and replaces the goal when new objective text is submitted" — test/session-autonomy.test.ts:224 | `expect(calls).toEqual(["Replace migration"])` |
-| "surfaces a failed calculation so the dialog can preserve the draft" — test/session-autonomy.test.ts:251 | `No inline assertion; inspect called harness` |
-| "keeps the goal dialog retry identity for a failed submission" — test/session-autonomy.test.ts:264 | `expect(changed).toBe(original)` |
-| "exposes autonomy only for the connected active session" — test/session-autonomy.test.ts:281 | `expect(typeof currentSessionAutonomy).toBe("function")` |
+| "represents explicit goal reports through the progress label" — test/session-autonomy.test.ts:17 | `expect(autonomyProgressLabel(...)).toBe("7 · no progress 2/3")` |
+| "rejects a completed refresh that began before a local goal activation" — test/session-autonomy.test.ts:33 | `expect(guard.accepts(stale)).toBe(false)` |
+| "rejects an older refresh after a newer refresh starts" — test/session-autonomy.test.ts:43 | `expect(guard.accepts(stale)).toBe(false)` |
+| "labels normal, yolo, and goal modes" — test/session-autonomy.test.ts:52 | `expect(autonomyModeLabel({ mode: "normal", yolo: 0 } as unknown as SessionAutonomyState)).toBe("Normal")` |
+| "formats goal progress" — test/session-autonomy.test.ts:93 | `expect(autonomyProgressLabel({ mode: "normal", yolo: 0 })).toBeUndefined()` |
+| "renders goal iteration separately from no-progress" — test/session-autonomy.test.ts:107 | `expect(autonomyProgressLabel(...)).toBe("50 · no progress 1/3")` |
+| "reports how a finished goal ended" — test/session-autonomy.test.ts:120 | `expect(autonomyProgressLabel(terminal("completed"))).toBe("completed after 3 iterations")` |
+| "parses single-line, multiline, non-goal, and empty goal commands" — test/session-autonomy.test.ts:131 | `expect(parseGoalCommand("/goal Finish the migration")).toEqual({ goal: "Finish the migration" })` |
+| "stops an active goal on a bare toggle" — test/session-autonomy.test.ts:138 | `goalToggleAction(...)` result assertion |
+| "resumes a retained goal without inventing or recalculating its objective" — test/session-autonomy.test.ts:148 | `goalToggleAction(...)` result assertion |
+| "requests an explicit objective when no retained goal text exists" — test/session-autonomy.test.ts:165 | `expect(goalToggleAction({ mode: "normal", yolo: 0 })).toEqual({ type: "request-objective" })` |
+| "does not reset an active goal when its original text is re-activated" — test/session-autonomy.test.ts:176 | `expect(calls).toEqual([])` |
+| "calculates and replaces the goal when new objective text is submitted" — test/session-autonomy.test.ts:202 | `expect(calls).toEqual(["Replace migration"])` |
+| "surfaces a failed calculation so the dialog can preserve the draft" — test/session-autonomy.test.ts:229 | `await expect(...).rejects.toThrow("goal.calculation_failed")` |
+| "keeps the goal dialog retry identity for a failed submission" — test/session-autonomy.test.ts:242 | `expect(changed).toBe(original)` |
+| "exposes autonomy only for the connected active session" — test/session-autonomy.test.ts:259 | `expect(currentSessionAutonomy("ses_old", false, response)).toBeUndefined()` |
 
-### test/session-btw.test.ts (6 declarations/groups, 267 lines)
+### test/session-btw.test.ts (5 current AST groups, 247 lines; HEAD had 6)
 
-Layer: behavior/contract. Isolated duration: Not Run (except evidence below). Initial disposition: rewrite; reason: production-source assertions need behavioral/render replacement.
+Layer: behavior/contract. Current disposition: keep the five behavioral helper tests. The removed slash/dialog wiring source scan is mapped to the BTW screen tests above; source spelling is not inferred from those render checks.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
@@ -2390,7 +2632,6 @@ Layer: behavior/contract. Isolated duration: Not Run (except evidence below). In
 | "side-chat activity leaves parent session state untouched" — test/session-btw.test.ts:168 | `expect(typeof openBtwSessionCandidate).toBe("function")` |
 | "does not list or reuse an existing BTW child" — test/session-btw.test.ts:192 | `expect(typeof openBtwSessionCandidate).toBe("function")` |
 | "steers an explicit conclusion into the parent without interrupting it" — test/session-btw.test.ts:225 | `expect(typeof steerBtwConclusionCandidate).toBe("function")` |
-| "opens BTW only from explicit model-dialog completion and retains the draft on cancellation" — test/session-btw.test.ts:249 | `expect(source).toContain('slash: { name: "btw", arguments: true as const }')` |
 
 ### test/session-chrome-live-fixes.test.tsx (4 declarations/groups, 208 lines)
 
@@ -2487,36 +2728,37 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 | "blocked subagent keeps status, task, result, and question on their design rows" — test/session-design-surfaces.test.tsx:47 | `expect(output).toContain("TEST-TRIAGE SUBAGENT")` |
 | "subagent sibling labels preserve lowercase names and blocked status" — test/session-design-surfaces.test.tsx:71 | `expect(subagentSwitcherLabel({ agent: "docs-sync", state: "running" })).toBe("◦ docs-sync")` |
 
-### test/session-layout.test.ts (1 declarations/groups, 7 lines)
+### test/session-layout.test.ts (HEAD-only; deleted from current tree)
 
-Layer: behavior/contract. Isolated duration: Not Run (except evidence below). Initial disposition: rewrite; reason: production-source assertions need behavioral/render replacement.
+HEAD contained one source-text assertion against `name="session.header"`. No live test file or direct assertion for that exact rendered absence was found; see the explicit mapping and unproven mutation status above.
 
-| Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
-| --- | --- |
-| "session transcript does not render the redundant top header slot" — test/session-layout.test.ts:5 | `expect(sessionRoute).not.toContain('name="session.header"')` |
-
-### test/session-model-selection.test.tsx (16 declarations/groups, 637 lines)
+### test/session-model-selection.test.tsx (21 AST groups, 791 lines)
 
 Layer: component/application render. Isolated duration: Not Run (except evidence below). Initial disposition: rewrite; reason: timed synchronization needs event/state completion review.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
-| "renders one row for a Daybreak-advertising model and records the ordinary model id" — test/session-model-selection.test.tsx:284 | `expect(rows).toHaveLength(1)` |
-| "model and variant picker selection performs no Session request" — test/session-model-selection.test.tsx:316 | `expect(screen.current()).toEqual({ providerID: "openai", modelID: "gpt-5-2" })` |
-| "rapid model cycling keeps only the newest Session target" — test/session-model-selection.test.tsx:335 | `expect(screen.pendingTarget()).toEqual({ providerID: "google", modelID: "gemini-3-pro" })` |
-| "switching routes does not leak one Session's desired model" — test/session-model-selection.test.tsx:357 | `expect(switches).toEqual([])` |
-| "selecting a model restores its valid stored variant without another variant choice" — test/session-model-selection.test.tsx:376 | `expect(screen.pendingTarget()).toEqual({ providerID: "openai", modelID: "gpt-5-2", variant: "high" })` |
-| "rapid variant cycling advances from the newest pending variant" — test/session-model-selection.test.tsx:395 | `expect(screen.pendingTarget()).toEqual({ providerID: "openai", modelID: "gpt-5-2", variant: "low" })` |
-| "variant cycling displays none, advances through offered variants, then returns to base" — test/session-model-selection.test.tsx:414 | `expect(screen.pendingTarget()).toEqual({ providerID: "openai", modelID: "gpt-5-2", variant: "none" })` |
-| "renders and persists an advertised none variant from model selection" — test/session-model-selection.test.tsx:448 | `expect(await Bun.file(path.join(root, "variant-saved-none", "model.json")).json()).toMatchObject({` |
-| "keeps the desired target until the matching prompt submission commits it" — test/session-model-selection.test.tsx:472 | `expect(screen.pendingTarget()?.variant).toBe("high")` |
-| "Session model authority follows durable changes without using the agent's model preference" — test/session-model-selection.test.tsx:499 | `expect(screen.pendingTarget()).toBeUndefined()` |
-| "ModelSelected replaces the whole Session reference when the target omits the prior max effort" — test/session-model-selection.test.tsx:515 | `expect(screen.durableModel()).toEqual({ providerID: "openai", id: "gpt-5-2", variant: "max" })` |
-| "model round trips restore each target's valid effort, including uncommitted choices" — test/session-model-selection.test.tsx:540 | `expect(screen.variant()).toBeUndefined()` |
-| "invalid model or explicit effort selections preserve the prior pending choice and preferences" — test/session-model-selection.test.tsx:560 | `expect(screen.pendingTarget()).toEqual(pending)` |
-| "selecting a model with no variants does not inherit the prior model's stored variant" — test/session-model-selection.test.tsx:581 | `expect(screen.pendingTarget()).toEqual({ providerID: "google", modelID: "gemini-3-pro" })` |
-| "selecting a model that does not offer the stored variant value clears it" — test/session-model-selection.test.tsx:600 | `expect(screen.variant()).toBeUndefined()` |
-| "the home screen commits the next-Session preference without a Session API call" — test/session-model-selection.test.tsx:621 | `expect(screen.pendingTarget()).toBeUndefined()` |
+| "renders one row for a Daybreak-advertising model and records the ordinary model id" — test/session-model-selection.test.tsx:312 | `expect(rows).toHaveLength(1)` |
+| "home keeps an unavailable saved variant visible without falling through to absence" — test/session-model-selection.test.tsx:344 | `expect(screen.variant()).toBe("removed")` |
+| "implicit selection preserves a stale explicit Session variant until an explicit correction" — test/session-model-selection.test.tsx:360 | `expect(screen.pendingTarget()?.variant).toBe("removed")` |
+| "variant picker shows source ids without a synthesized default description" — test/session-model-selection.test.tsx:376 | `expect(screen.app.captureCharFrame()).not.toContain("default")` |
+| "variant picker keeps unavailable selection visible and clears it with a separate action" — test/session-model-selection.test.tsx:397 | `expect(screen.app.captureCharFrame()).toContain("Clear selection")` |
+| "model and variant picker selection performs no Session request" — test/session-model-selection.test.tsx:416 | `expect(screen.current()).toEqual({ providerID: "openai", modelID: "gpt-5-2" })` |
+| `Escape from the $name dialog reports cancellation without selecting a model` — test/session-model-selection.test.tsx:435 (table) | `expect(results).toEqual([{ type: "cancelled" }])` and `expect(screen.pendingTarget()).toBeUndefined()` |
+| "rapid model cycling keeps only the newest Session target" — test/session-model-selection.test.tsx:466 | `expect(screen.pendingTarget()).toEqual({ providerID: "google", modelID: "gemini-3-pro" })` |
+| "switching routes does not leak one Session's desired model" — test/session-model-selection.test.tsx:488 | `expect(switches).toEqual([])` |
+| "selecting a model restores its valid stored variant without another variant choice" — test/session-model-selection.test.tsx:507 | `expect(screen.pendingTarget()).toEqual({ providerID: "openai", modelID: "gpt-5-2", variant: "high" })` |
+| "rapid variant cycling advances from the newest pending variant" — test/session-model-selection.test.tsx:526 | `expect(screen.pendingTarget()).toEqual({ providerID: "openai", modelID: "gpt-5-2", variant: "low" })` |
+| "variant cycling displays none and wraps only through offered variants" — test/session-model-selection.test.tsx:545 | `expect(screen.pendingTarget()).toEqual({ providerID: "openai", modelID: "gpt-5-2", variant: "none" })` |
+| "renders and persists an advertised none variant from model selection" — test/session-model-selection.test.tsx:577 | `expect(await Bun.file(path.join(root, "variant-saved-none", "model.json")).json()).toMatchObject({` |
+| "keeps the desired target until the matching prompt submission commits it" — test/session-model-selection.test.tsx:601 | `expect(screen.pendingTarget()?.variant).toBe("high")` |
+| "Session model authority follows durable changes without using the agent's model preference" — test/session-model-selection.test.tsx:628 | `expect(screen.pendingTarget()).toBeUndefined()` |
+| "ModelSelected replaces the whole Session reference when the target omits the prior max effort" — test/session-model-selection.test.tsx:653 | `expect(screen.durableModel()).toEqual({ providerID: "openai", id: "gpt-5-2", variant: "max" })` |
+| "model round trips restore each target's valid effort, including uncommitted choices" — test/session-model-selection.test.tsx:682 | `expect(screen.variant()).toBeUndefined()` |
+| "invalid model or explicit effort selections preserve the prior pending choice and preferences" — test/session-model-selection.test.tsx:708 | `expect(screen.pendingTarget()).toEqual(pending)` |
+| "selecting a model with no variants does not inherit the prior model's stored variant" — test/session-model-selection.test.tsx:735 | `expect(screen.pendingTarget()).toEqual({ providerID: "google", modelID: "gemini-3-pro" })` |
+| "selecting a model with an unoffered saved variant keeps it after picker cancellation" — test/session-model-selection.test.tsx:754 | `expect(screen.pendingTarget()).toEqual({ providerID: "openai", modelID: "gpt-5-2", variant: "max" })` |
+| "the home screen commits the next-Session preference without a Session API call" — test/session-model-selection.test.tsx:775 | `expect(screen.pendingTarget()).toBeUndefined()` |
 
 ### test/session-rail-live-fixes.test.tsx (9 declarations/groups, 570 lines)
 
@@ -2534,7 +2776,7 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 | "keeps the rail top below the header across autonomy modes and retained goals" — test/session-rail-live-fixes.test.tsx:297 | `expect(tops).toEqual(Array.from({ length: modes.length }, () => tops[0]))` |
 | "does not render a shell rail section for running and just-finished session shells" — test/session-rail-live-fixes.test.tsx:330 | `expect(frame).toContain("SESSION")` |
 
-### test/session-rail-section.test.tsx (25 declarations/groups, 894 lines)
+### test/session-rail-section.test.tsx (26 current AST groups, 914 lines)
 
 Layer: component/application render. Isolated duration: Not Run (except evidence below). Initial disposition: keep; reason: retain named observable guards pending redundancy review.
 
@@ -2545,26 +2787,27 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 | "renders expanded when no rail provider is mounted" — test/session-rail-section.test.tsx:88 | `expect(app.captureCharFrame()).toContain("mcp body")` |
 | "renders the session title only inside the section body" — test/session-rail-section.test.tsx:100 | `expect(rows[0]).toMatch(/^− SESSION *$/)` |
 | "renders guardrail auto-approval only at effective YOLO 3" — test/session-rail-section.test.tsx:115 | `expect(row?.trimEnd(), item.name).toEndWith(item.expected)` |
-| "keeps autonomy semantics out of generic rail sections" — test/session-rail-section.test.tsx:149 | `expect(app.captureCharFrame()).not.toContain("Guardrails")` |
-| "renders aggregate context rows when diagnostics are unavailable" — test/session-rail-section.test.tsx:161 | `expect(frame).toContain("SPEND")` |
-| "renders a summary on both expanded and collapsed headers" — test/session-rail-section.test.tsx:189 | `expect(frame).toContain("56% · 71% hit")` |
-| "renders compact operational rail summaries from live component state" — test/session-rail-section.test.tsx:210 | `expect(header).toContain(summary)` |
-| "keeps guardrail profile identity and surfaces only its highest-priority exception" — test/session-rail-section.test.tsx:261 | `expect(guardrailSummary({ ...base, blocked: 2, invalidFiles: ["bad.md"] }).header).toBe("Standard · 2 blocked")` |
-| "leaves one blank row after expanded TODO content" — test/session-rail-section.test.tsx:277 | `expect(lines[completed + 1]?.trim()).toBe("")` |
-| "applies one outer surface row around populated expandable rail sections" — test/session-rail-section.test.tsx:310 | `expect(contentRow - headerRow).toBe(3)` |
-| "renders RailRow values right-aligned on a single line with custom value color" — test/session-rail-section.test.tsx:349 | `expect(line?.endsWith("71%")).toBe(true)` |
-| "renders the CONTEXT design rows and omits unreported cache telemetry" — test/session-rail-section.test.tsx:372 | `expect(indexes.every((index) => index >= 0)).toBe(true)` |
-| "keeps credential identity out of the Context section" — test/session-rail-section.test.tsx:473 | `expect(provider).toBeGreaterThan(-1)` |
-| "renders a non-toggleable CACHE sub-heading inside the toggleable CONTEXT section" — test/session-rail-section.test.tsx:505 | `expect(heading?.fg.toInts()).toEqual(themeV2()!.text.feedback.success.default.toInts())` |
-| "renders rail header glyphs and colors for expanded, collapsed, and attention states" — test/session-rail-section.test.tsx:549 | `expect(expanded[0]?.plainText).toBe("\u2212")` |
-| "auto-expands an expandable section on attention and re-collapses once it clears" — test/session-rail-section.test.tsx:595 | `No inline assertion; inspect called harness` |
-| "expands every section on attention" — test/session-rail-section.test.tsx:619 | `expect(app.captureCharFrame()).not.toContain("subagent body")` |
-| "renders distinct GOAL and AUTONOMY sections, SUBAGENTS rail rows, and a TODO LIST in the correct order" — test/session-rail-section.test.tsx:643 | `expect(indexes.every((index) => index >= 0)).toBe(true)` |
-| "an attention event preserves default-expanded sections and releases its own section" — test/session-rail-section.test.tsx:723 | `expect(app.captureCharFrame()).toContain("todo body")` |
-| "a user can toggle an expandable section from its header" — test/session-rail-section.test.tsx:773 | `expect(app.captureCharFrame()).toContain("todo body")` |
-| "every section toggles from its header" — test/session-rail-section.test.tsx:796 | `expect(app.captureCharFrame()).not.toContain("mcp body")` |
-| "preserves user toggles across session prop changes" — test/session-rail-section.test.tsx:821 | `expect(app.captureCharFrame()).toContain("todo body")` |
-| "preserves expand/collapse across Session remounts (main <-> subagent)" — test/session-rail-section.test.tsx:854 | `expect(next.captureCharFrame()).toContain("context body")` |
+| "renders the goal panel only while its durable status is active" — test/session-rail-section.test.tsx:149 | `expect(app.captureCharFrame().includes("GOAL"), status).toBe(status === "active")` and objective visibility has the same status assertion. Parent’s completed-status visibility mutation failed; exact restoration passed focused 1/1. |
+| "keeps autonomy semantics out of generic rail sections" — test/session-rail-section.test.tsx:169 | `expect(app.captureCharFrame()).not.toContain("Guardrails")` |
+| "renders aggregate context rows when diagnostics are unavailable" — test/session-rail-section.test.tsx:181 | `expect(frame).toContain("SPEND")` |
+| "renders a summary on both expanded and collapsed headers" — test/session-rail-section.test.tsx:209 | `expect(frame).toContain("56% · 71% hit")` |
+| "renders compact operational rail summaries from live component state" — test/session-rail-section.test.tsx:230 | `expect(header).toContain(summary)` |
+| "keeps guardrail profile identity and surfaces only its highest-priority exception" — test/session-rail-section.test.tsx:281 | `expect(guardrailSummary({ ...base, blocked: 2, invalidFiles: ["bad.md"] }).header).toBe("Standard · 2 blocked")` |
+| "leaves one blank row after expanded TODO content" — test/session-rail-section.test.tsx:297 | `expect(lines[completed + 1]?.trim()).toBe("")` |
+| "applies one outer surface row around populated expandable rail sections" — test/session-rail-section.test.tsx:330 | `expect(contentRow - headerRow).toBe(3)` |
+| "renders RailRow values right-aligned on a single line with custom value color" — test/session-rail-section.test.tsx:369 | `expect(line?.endsWith("71%")).toBe(true)` |
+| "renders the CONTEXT design rows and omits unreported cache telemetry" — test/session-rail-section.test.tsx:392 | `expect(indexes.every((index) => index >= 0)).toBe(true)` |
+| "keeps credential identity out of the Context section" — test/session-rail-section.test.tsx:493 | `expect(provider).toBeGreaterThan(-1)` |
+| "renders a non-toggleable CACHE sub-heading inside the toggleable CONTEXT section" — test/session-rail-section.test.tsx:525 | `expect(heading?.fg.toInts()).toEqual(themeV2()!.text.feedback.success.default.toInts())` |
+| "renders rail header glyphs and colors for expanded, collapsed, and attention states" — test/session-rail-section.test.tsx:569 | `expect(expanded[0]?.plainText).toBe("\u2212")` |
+| "auto-expands an expandable section on attention and re-collapses once it clears" — test/session-rail-section.test.tsx:615 | `No inline assertion; inspect called harness` |
+| "expands every section on attention" — test/session-rail-section.test.tsx:639 | `expect(app.captureCharFrame()).not.toContain("subagent body")` |
+| "renders distinct GOAL and AUTONOMY sections, SUBAGENTS rail rows, and a TODO LIST in the correct order" — test/session-rail-section.test.tsx:663 | `expect(indexes.every((index) => index >= 0)).toBe(true)` |
+| "an attention event preserves default-expanded sections and releases its own section" — test/session-rail-section.test.tsx:743 | `expect(app.captureCharFrame()).toContain("todo body")` |
+| "a user can toggle an expandable section from its header" — test/session-rail-section.test.tsx:793 | `expect(app.captureCharFrame()).toContain("todo body")` |
+| "every section toggles from its header" — test/session-rail-section.test.tsx:816 | `expect(app.captureCharFrame()).not.toContain("mcp body")` |
+| "preserves user toggles across session prop changes" — test/session-rail-section.test.tsx:841 | `expect(app.captureCharFrame()).toContain("todo body")` |
+| "preserves expand/collapse across Session remounts (main <-> subagent)" — test/session-rail-section.test.tsx:874 | `expect(next.captureCharFrame()).toContain("context body")` |
 
 ### test/session-rail.test.ts (15 declarations/groups, 142 lines)
 
@@ -2588,44 +2831,44 @@ Layer: behavior/contract. Isolated duration: Not Run (except evidence below). In
 | "interpolates the docked rail from 32 to 50 columns" — test/session-rail.test.ts:128 | `expect(railWidth(120)).toBe(32)` |
 | "changes smoothly around the former design viewport widths" — test/session-rail.test.ts:136 | `expect(Math.abs(railWidth(188) - railWidth(189))).toBeLessThanOrEqual(1)` |
 
-### test/session-skill-render.test.tsx (1 declarations/groups, 33 lines)
+### test/session-skill-render.test.tsx (3 current AST groups, 268 lines; E116 proof)
 
-Layer: component/application render. Isolated duration: Not Run (except evidence below). Initial disposition: rewrite; reason: production-source assertions need behavioral/render replacement.
-
-| Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
-| --- | --- |
-| "renders user and agent-invoked completed Skill titles with the same treatment" — test/session-skill-render.test.tsx:11 | `expect(app.captureCharFrame()).toBeDefined()` |
-
-### test/session-skills.test.ts (7 declarations/groups, 85 lines)
-
-Layer: behavior/contract. Isolated duration: Not Run (except evidence below). Initial disposition: rewrite; reason: production-source assertions need behavioral/render replacement.
+Layer: component/application render. Current cases replace source-oriented skill presentation checks with rendered titles/badges, bounded details and agent-invoked content. Parent E116 verified the duplicate-skill consumer mutation; all three cases passed in three isolated runs and one loaded pressure run.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
-| "groups active skills before inactive skills while preserving server order" — test/session-skills.test.ts:43 | `expect(groupSessionSkills(skills)).toEqual({` |
-| "filters skill IDs and names without case sensitivity" — test/session-skills.test.ts:50 | `expect(filterSessionSkills(skills, "CODE")).toEqual([skills[0]])` |
-| "formats active conflicts and inactive boundaries" — test/session-skills.test.ts:55 | `expect(sessionSkillLabel(skills[1])).toBe("ACTIVE - CONFLICT")` |
-| "keeps exact string content and discards non-string tool output" — test/session-skills.test.ts:61 | `expect(sessionSkillContent("\nExact skill content\n")).toBe("\nExact skill content\n")` |
-| "renders skill details in a bounded scrollbox with keyboard expansion" — test/session-skills.test.ts:66 | `expect(dialogSessionSkills).toContain("<scrollbox")` |
-| "highlights loaded skill badges with the skill accent" — test/session-skills.test.ts:73 | `expect(sessionRoute).toContain("status={<StatusBadge color={accent()}>Loaded</StatusBadge>}")` |
-| "hides only completed duplicate Skill tool parts" — test/session-skills.test.ts:81 | `expect(sessionRoute).toContain("function transcriptToolPartVisible(part: SessionMessageAssistantTool)")` |
+| "renders user and agent-invoked completed Skill titles with the same treatment" — test/session-skill-render.test.tsx:170 | `expect(screen.frame().match(/Loaded/g)).toHaveLength(2)` and both badge foregrounds equal the skill accent. |
+| "skill details keyboard expansion keeps long content bounded and pageable" — test/session-skill-render.test.tsx:199 | `expect(scroll?.height).toBeLessThanOrEqual(15)` and End/Space assertions verify bounded paging and collapse. |
+| "agent skill content expands from its focusable row into a bounded pageable transcript region" — test/session-skill-render.test.tsx:240 | `expect(row?.focusable).toBe(true)` and the expanded scrollbox stays at most 13 lines. |
 
-### test/session-transcript-boundary.test.tsx (8 declarations/groups, 344 lines)
+### test/session-skills.test.ts (4 AST groups, 67 lines)
+
+Layer: behavior/contract. This file has four live utility behavior groups at audit HEAD; the three additional rendered/source-text rows in the old inventory are not present there. Their historical skill-source mapping/evidence remains above; current render consumer is the mutable `session-skill-render.test.tsx` section.
+
+| Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
+| --- | --- |
+| "groups active skills before inactive skills while preserving server order" — test/session-skills.test.ts:45 | `expect(groupSessionSkills(skills)).toEqual({ active: [skills[1]], inactive: [skills[0], skills[2]] })` |
+| "filters skill IDs and names without case sensitivity" — test/session-skills.test.ts:52 | `expect(filterSessionSkills(skills, "CODE")).toEqual([skills[0]])` |
+| "formats active conflicts and inactive boundaries" — test/session-skills.test.ts:57 | `expect(sessionSkillLabel(skills[1])).toBe("ACTIVE - CONFLICT")` |
+| "keeps exact string content and discards non-string tool output" — test/session-skills.test.ts:63 | `expect(sessionSkillContent("\nExact skill content\n")).toBe("\nExact skill content\n")` |
+
+### test/session-transcript-boundary.test.tsx (9 current AST groups, 368 lines)
 
 Layer: component/application render. Isolated duration: Not Run (except evidence below). Initial disposition: keep; reason: retain named observable guards pending redundancy review.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
-| "allocates no lines or child context for a hidden goal tool" — test/session-transcript-boundary.test.tsx:51 | `expect(frame(app)).toBe("before\nafter")` |
-| "does not render a completed duplicate Skill tool part" — test/session-transcript-boundary.test.tsx:78 | `expect(frame(app)).toContain("before\nafter")` |
-| "does not allocate a line for an unresolved transcript row" — test/session-transcript-boundary.test.tsx:112 | `expect(frame(app)).toContain("before\nafter")` |
-| "renders a decode-only historical V1 compaction marker" — test/session-transcript-boundary.test.tsx:120 | `expect(frame(app)).toContain("~ compacted · 42 messages → 1.2k tokens")` |
-| "renders sanitized V2 compaction lifecycle labels" — test/session-transcript-boundary.test.tsx:150 | `expect(frame(app)).toContain(label)` |
-| "renders real V1 and V2 failed compactions as zero-line diagnostic-only state" — test/session-transcript-boundary.test.tsx:231 | `expect(frame(legacyApp)).toContain("before\nafter")` |
-| "renders cancelled and superseded compactions as neutral terminal markers" — test/session-transcript-boundary.test.tsx:269 | `expect(frame(app)).toContain(lifecycle.label)` |
-| "sums completed compactions while retaining per-compaction metrics" — test/session-transcript-boundary.test.tsx:308 | `expect(frame(app)).toContain("~52k tokens saved total")` |
+| "a resident row outside its Session reports current context guidance" — test/session-transcript-boundary.test.tsx:51 | `expect(app.captureCharFrame()).toContain("must be used within a Session component")` and `expect(app.captureCharFrame()).not.toContain("V2")`; parent E115’s injected `V2` label failed the negative assertion (Bun exit 1), then exact restoration passed (exit 0). |
+| "allocates no lines or child context for a hidden goal tool" — test/session-transcript-boundary.test.tsx:75 | `expect(frame(app)).toBe("before\nafter")` |
+| "does not render a completed duplicate Skill tool part" — test/session-transcript-boundary.test.tsx:102 | `expect(frame(app)).toContain("before\nafter")` |
+| "does not allocate a line for an unresolved transcript row" — test/session-transcript-boundary.test.tsx:136 | `expect(frame(app)).toContain("before\nafter")` |
+| "renders a decode-only historical V1 compaction marker" — test/session-transcript-boundary.test.tsx:144 | `expect(frame(app)).toContain("~ compacted · 42 messages → 1.2k tokens")` |
+| "renders sanitized V2 compaction lifecycle labels" — test/session-transcript-boundary.test.tsx:174 | `expect(frame(app)).toContain(label)` |
+| "renders real V1 and V2 failed compactions as zero-line diagnostic-only state" — test/session-transcript-boundary.test.tsx:255 | `expect(frame(legacyApp)).toContain("before\nafter")` |
+| "renders cancelled and superseded compactions as neutral terminal markers" — test/session-transcript-boundary.test.tsx:293 | `expect(frame(app)).toContain(lifecycle.label)` |
+| "sums completed compactions while retaining per-compaction metrics" — test/session-transcript-boundary.test.tsx:332 | `expect(frame(app)).toContain("~52k tokens saved total")` |
 
-### test/session-transcript-chat-shape.test.tsx (8 declarations/groups, 507 lines)
+### test/session-transcript-chat-shape.test.tsx (9 current AST groups, 528 lines)
 
 Layer: component/application render. Isolated duration: Not Run (except evidence below). Initial disposition: rewrite; reason: timed synchronization needs event/state completion review.
 
@@ -2634,11 +2877,12 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 | "renders the delivery receipt below the user bubble" — test/session-transcript-chat-shape.test.tsx:359 | `expect(receipt).toContain("✓")` |
 | "keeps a loaded skill row without rendering its following content" — test/session-transcript-chat-shape.test.tsx:374 | `expect(screen.frame()).toContain('Skill "focus-test"')` |
 | "ends a completed idle exchange with the assistant block" — test/session-transcript-chat-shape.test.tsx:386 | `expect(lastTranscriptRow(screen.lines()).trim()).toMatch(/^Build · .+ · 2s$/)` |
-| "ends an interrupted idle turn with the assistant block" — test/session-transcript-chat-shape.test.tsx:398 | `expect(lastTranscriptRow(screen.lines()).trim()).toMatch(/^Build · .+ · 1s · interrupted$/)` |
-| "ends an idle tool-only turn with the assistant block rather than a dangling tool row" — test/session-transcript-chat-shape.test.tsx:408 | `expect(last).not.toContain("project_audit")` |
-| "renders assistant chat text only through the markdown path" — test/session-transcript-chat-shape.test.tsx:420 | `expect(heading).not.toContain("#")` |
-| "renders restored instruction notices through the markdown path" — test/session-transcript-chat-shape.test.tsx:442 | `expect(heading).not.toContain("#")` |
-| "collapses a segment's file edits into one summary block that expands to the diff view" — test/session-transcript-chat-shape.test.tsx:458 | `expect(header.indexOf("Captured changes 3 files")).toBe(10)` |
+| "preserves literal goal-marker text in a completed assistant message" — test/session-transcript-chat-shape.test.tsx:398 | `expect(screen.frame()).toContain("GOAL_COMPLETED marker belongs to this answer.")` |
+| "ends an interrupted idle turn with the assistant block" — test/session-transcript-chat-shape.test.tsx:419 | `expect(lastTranscriptRow(screen.lines()).trim()).toMatch(/^Build · .+ · 1s · interrupted$/)` |
+| "ends an idle tool-only turn with the assistant block rather than a dangling tool row" — test/session-transcript-chat-shape.test.tsx:429 | `expect(last).not.toContain("project_audit")` |
+| "renders assistant chat text only through the markdown path" — test/session-transcript-chat-shape.test.tsx:441 | `expect(heading).not.toContain("#")` |
+| "renders restored instruction notices through the markdown path" — test/session-transcript-chat-shape.test.tsx:463 | `expect(heading).not.toContain("#")` |
+| "collapses a segment's file edits into one summary block that expands to the diff view" — test/session-transcript-chat-shape.test.tsx:479 | `expect(header.indexOf("Captured changes 3 files")).toBe(10)` |
 
 ### test/session-transcript-live-fixes.test.tsx (25 declarations/groups, 1860 lines)
 
@@ -2722,14 +2966,14 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 | "resolves the selected skill winner" — test/skills-conflict.test.tsx:100 | `expect(calls).toEqual([{ winner: "loser", loser: "winner" }])` |
 | "refreshes the server-derived skills after a conflict is already resolved" — test/skills-conflict.test.tsx:123 | `expect(app.captureCharFrame()).not.toContain("1 conflict")` |
 
-### test/source-hygiene.test.ts (2 declarations/groups, 50 lines)
+### test/source-hygiene.test.ts (2 current AST groups, 38 lines)
 
-Layer: behavior/contract. Isolated duration: Not Run (except evidence below). Initial disposition: keep; reason: retain named observable guards pending redundancy review.
+Layer: package-surface/current-schema contract. Keep path/export absence and current built-in theme resolution. Parent’s `theme.test.ts:32-35` mutation also proves the current-theme rejection boundary; do not claim arbitrary source identifiers or comments are scanned.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
-| "contains no V1 config, theme, or command compatibility" — test/source-hygiene.test.ts:12 | `expect(matches).toEqual([])` |
-| "resolves every built-in theme from a current theme file" — test/source-hygiene.test.ts:39 | `expect(modes.length).toBeGreaterThan(0)` |
+| "does not expose V1 theme, config, or command paths" — test/source-hygiene.test.ts:13 | `expect(blocked.filter((entry) => existsSync(path.join(root, entry)))).toEqual([])` and `expect(matches).toEqual([])` |
+| "resolves every built-in theme from a current theme file" — test/source-hygiene.test.ts:28 | `expect(modes.length).toBeGreaterThan(0)` |
 
 ### test/subagent-answer.test.tsx (5 declarations/groups, 187 lines)
 
@@ -2889,31 +3133,31 @@ Layer: behavior/contract. Isolated duration: Not Run (except evidence below). In
 | --- | --- |
 | "supports property-first definitions, variants, states, and contexts" — test/theme/v2/types.test.ts:60 | `expect(text.action.primary.$hovered).toBe("$hue.neutral.200")` |
 
-### test/tool-output-display.test.ts (7 declarations/groups, 55 lines)
+### test/tool-output-display.test.ts (6 AST groups, 45 lines)
 
 Layer: behavior/contract. Isolated duration: Not Run (except evidence below). Initial disposition: rewrite; reason: production-source assertions need behavioral/render replacement.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
-| "shows output within the preview budget without an expand affordance" — test/tool-output-display.test.ts:7 | `expect(toolOutputDisplay("done", false, 4, 80)).toEqual({` |
-| "bounds output exceeding the preview budget and makes it expandable" — test/tool-output-display.test.ts:15 | `expect(display.visible).toBe(true)` |
-| "shows complete output after expansion" — test/tool-output-display.test.ts:24 | `expect(toolOutputDisplay(output, true, 4, 80).output).toBe(output)` |
-| "hides empty and whitespace-only output" — test/tool-output-display.test.ts:30 | `expect(toolOutputDisplay("", false, 4, 80).visible).toBe(false)` |
-| "keeps error output visible" — test/tool-output-display.test.ts:35 | `expect(display.visible).toBe(true)` |
-| "keeps loaded skill output collapsed until expansion" — test/tool-output-display.test.ts:42 | `expect(toolOutputDisplay(content, false, 4, 80).output).toBe("one\ntwo\nthree\nfour…")` |
-| "renders expanded skill output in a focusable bounded scrollbox" — test/tool-output-display.test.ts:49 | `expect(sessionRoute).toContain("function SkillContent")` |
+| "shows output within the preview budget without an expand affordance" — test/tool-output-display.test.ts:5 | `expect(toolOutputDisplay("done", false, 4, 80)).toEqual({` |
+| "bounds output exceeding the preview budget and makes it expandable" — test/tool-output-display.test.ts:13 | `expect(display.visible).toBe(true)` |
+| "shows complete output after expansion" — test/tool-output-display.test.ts:22 | `expect(toolOutputDisplay(output, true, 4, 80).output).toBe(output)` |
+| "hides empty and whitespace-only output" — test/tool-output-display.test.ts:28 | `expect(toolOutputDisplay("", false, 4, 80).visible).toBe(false)` |
+| "keeps error output visible" — test/tool-output-display.test.ts:33 | `expect(display.visible).toBe(true)` |
+| "keeps loaded skill output collapsed until expansion" — test/tool-output-display.test.ts:40 | `expect(toolOutputDisplay(content, false, 4, 80).output).toBe("one\ntwo\nthree\nfour…")` |
 
-### test/ui/dialog-pattern.test.tsx (5 declarations/groups, 335 lines)
+### test/ui/dialog-pattern.test.tsx (6 AST groups, 434 lines)
 
 Layer: component/application render. Isolated duration: Not Run (except evidence below). Initial disposition: keep; reason: retain named observable guards pending redundancy review.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
-| "clamps the 98-column dialog panel across responsive widths" — test/ui/dialog-pattern.test.tsx:18 | `expect(panel.width).toBe(80)` |
-| "renders select, confirm, and alert dialogs on the shared panel cell grid" — test/ui/dialog-pattern.test.tsx:35 | `expect(select.panel.width).toBe(98)` |
-| "fills selected dialog bands across the compact 80-column panel" — test/ui/dialog-pattern.test.tsx:113 | `expect(snapshot.panel.width).toBe(80)` |
-| "renders a full dialog panel with its selected model" — test/ui/dialog-pattern.test.tsx:129 | `expect(frame).toContain("Select model")` |
-| "renders the variant glyph and label in toast titles" — test/ui/dialog-pattern.test.tsx:177 | `expect(frame).toContain("Success")` |
+| `keeps %s dialog input resident until entry replacement and restores focus on close` — test/ui/dialog-pattern.test.tsx:18 (table) | `expect(mounts).toBe(1)`, replaced content disappears, and `expect(background.focused).toBe(true)`. |
+| "clamps the 98-column dialog panel across responsive widths" — test/ui/dialog-pattern.test.tsx:96 | `expect(panel.width).toBe(80)` |
+| "renders select, confirm, and alert dialogs on the shared panel cell grid" — test/ui/dialog-pattern.test.tsx:113 | `expect(select.panel.width).toBe(98)` |
+| "fills selected dialog bands across the compact 80-column panel" — test/ui/dialog-pattern.test.tsx:191 | `expect(snapshot.panel.width).toBe(80)` |
+| "renders a full dialog panel with its selected model" — test/ui/dialog-pattern.test.tsx:207 | `expect(frame).toContain("Select model")` |
+| "renders the variant glyph and label in toast titles" — test/ui/dialog-pattern.test.tsx:257 | `expect(frame).toContain("Success")` |
 
 ### test/ui/file-path.test.ts (8 declarations/groups, 52 lines)
 
@@ -2970,20 +3214,17 @@ Layer: component/application render. Isolated duration: Not Run (except evidence
 | "keeps the toast on the right margin when the route renders no rail" — test/ui/toast-slot.test.tsx:272 | `expect(railPlacement(width)).toBe("docked")` |
 | "renders the full docked session route with a top-right toast over the rail" — test/ui/toast-slot.test.tsx:317 | `expect(screen.frame()).toContain("Provider usage refreshed")` |
 
-### test/util/cache-diagnostics.test.ts (8 declarations/groups, 145 lines)
+### test/util/cache-diagnostics.test.ts (5 AST groups, 76 lines)
 
 Layer: behavior/contract. Isolated duration: Not Run (except evidence below). Initial disposition: keep; reason: retain named observable guards pending redundancy review.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
-| "formats provider context and prompt cache diagnostics" — test/util/cache-diagnostics.test.ts:24 | `expect(formatCacheDiagnostics(diagnostics)).toEqual({` |
-| "distinguishes missing provider telemetry from a confirmed zero" — test/util/cache-diagnostics.test.ts:32 | `No inline assertion; inspect called harness` |
-| "handles missing limits and cache categories safely" — test/util/cache-diagnostics.test.ts:53 | `No inline assertion; inspect called harness` |
-| "formats bounded local provider request diagnostics" — test/util/cache-diagnostics.test.ts:73 | `No inline assertion; inspect called harness` |
-| "formats unavailable request pricing as an estimated zero" — test/util/cache-diagnostics.test.ts:103 | `expect(formatProviderRequestDiagnostics(base).estimatedCost).toBe("$0.0000")` |
-| "labels cache reset diagnostics" — test/util/cache-diagnostics.test.ts:116 | `expect(formatProviderRequestDiagnostics({ ...base, latestInvalidation: "compaction-reset" }).latestInvalidation).toBe(` |
-| "omits an unavailable diagnostics model without inventing a variant" — test/util/cache-diagnostics.test.ts:137 | `expect(formatDiagnosticsModel(undefined)).toBeUndefined()` |
-| "formats provider, model, and variant identity exactly" — test/util/cache-diagnostics.test.ts:141 | `expect(formatDiagnosticsModel({ providerID: "anthropic", id: "claude-sonnet-4", variant: "thinking" })).toBe(` |
+| "formats provider context and prompt cache diagnostics" — test/util/cache-diagnostics.test.ts:19 | `expect(formatCacheDiagnostics(diagnostics)).toEqual({` |
+| "distinguishes missing provider telemetry from a confirmed zero" — test/util/cache-diagnostics.test.ts:27 | `expect(formatCacheDiagnostics(...)).toEqual({ model: "openai/model", ... })` |
+| "handles missing limits and cache categories safely" — test/util/cache-diagnostics.test.ts:48 | `expect(formatCacheDiagnostics(...)).toEqual({ model: "openai/model", ... })` |
+| "omits an unavailable diagnostics model without inventing a variant" — test/util/cache-diagnostics.test.ts:68 | `expect(formatDiagnosticsModel(undefined)).toBeUndefined()` |
+| "formats provider, model, and variant identity exactly" — test/util/cache-diagnostics.test.ts:72 | `expect(formatDiagnosticsModel({ providerID: "anthropic", id: "claude-sonnet-4", variant: "thinking" })).toBe(` |
 
 ### test/util/connected-provider.test.ts (2 declarations/groups, 14 lines)
 
@@ -3028,19 +3269,18 @@ Layer: behavior/contract. Isolated duration: Not Run (except evidence below). In
 | "shares field classification, rows, selection, and display" — test/util/form.test.ts:76 | `expect([isFormAnswerField(text), isFormAnswerField(external)]).toEqual([true, false])` |
 | "updates multiselects without mutating their source" — test/util/form.test.ts:97 | `expect(formToggleMultiselect(source, "one")).toEqual(["custom"])` |
 
-### test/util/format.test.ts (7 declarations/groups, 60 lines)
+### test/util/format.test.ts (6 AST groups, 49 lines)
 
 Layer: behavior/contract. Isolated duration: Not Run (except evidence below). Initial disposition: keep; reason: retain named observable guards pending redundancy review.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
 | "returns empty string for zero or negative values" — test/util/format.test.ts:6 | `expect(formatDuration(0)).toBe("")` |
-| "formats seconds under a minute" — test/util/format.test.ts:12 | `expect(formatDuration(1)).toBe("1s")` |
-| "formats minutes under an hour" — test/util/format.test.ts:19 | `expect(formatDuration(60)).toBe("1m00s")` |
+| "formats seconds under a minute" — test/util/format.test.ts:12 | `expect(formatDuration(1)).toBe("1s")`; includes `59` and `48.9` boundary values. |
+| "formats minutes under an hour" — test/util/format.test.ts:19 | `expect(formatDuration(60)).toBe("1m00s")`; includes `3599` immediately below the hour boundary. |
 | "formats hours under a day" — test/util/format.test.ts:28 | `expect(formatDuration(3600)).toBe("1h")` |
 | "formats days under a week" — test/util/format.test.ts:36 | `expect(formatDuration(86400)).toBe("~1 day")` |
 | "formats weeks" — test/util/format.test.ts:43 | `expect(formatDuration(604800)).toBe("~1 week")` |
-| "handles boundary values correctly" — test/util/format.test.ts:49 | `expect(formatDuration(59)).toBe("59s")` |
 
 ### test/util/locale.test.ts (3 declarations/groups, 21 lines)
 
@@ -3052,17 +3292,16 @@ Layer: behavior/contract. Isolated duration: Not Run (except evidence below). In
 | "formats compact numbers with lowercase magnitude suffixes" — test/util/locale.test.ts:11 | `expect(Locale.number(1_200)).toBe("1.2k")` |
 | "formats elapsed durations with compact whole-second tokens" — test/util/locale.test.ts:17 | `expect(Locale.duration(48_000)).toBe("48s")` |
 
-### test/util/model.test.ts (5 declarations/groups, 49 lines)
+### test/util/model.test.ts (4 AST groups, 43 lines)
 
 Layer: behavior/contract. Isolated duration: Not Run (except evidence below). Initial disposition: keep; reason: retain named observable guards pending redundancy review.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
 | "splits provider from a nested model identifier" — test/util/model.test.ts:5 | `expect(parse("provider/org/model")).toEqual({ providerID: "provider", modelID: "org/model" })` |
-| "includes the selected variant in model refs" — test/util/model.test.ts:10 | `expect(formatRef({ providerID: "anthropic", id: "sonnet", variant: "thinking" })).toBe("anthropic/sonnet/thinking")` |
-| "includes the selected variant in model switch notices" — test/util/model.test.ts:15 | `expect(switchLabel({ providerID: "anthropic", id: "sonnet", variant: "thinking" })).toBe(` |
-| "uses the catalog display name in model switch notices" — test/util/model.test.ts:21 | `expect(switchLabel({ providerID: "openai", id: "gpt-5.5-fast", variant: "high" }, models)).toBe(` |
-| "distinguishes variant-only switches from model switches" — test/util/model.test.ts:35 | `expect(switchLabel({ ...previous, variant: "high" }, undefined, previous)).toBe("Switched variant to high")` |
+| "includes the selected variant in model switch notices" — test/util/model.test.ts:10 | `expect(switchLabel({ providerID: "anthropic", id: "sonnet", variant: "thinking" })).toBe(` |
+| "uses the catalog display name in model switch notices" — test/util/model.test.ts:17 | `expect(switchLabel({ providerID: "openai", id: "gpt-5.5-fast", variant: "high" }, models)).toBe(` |
+| "distinguishes variant-only switches from model switches" — test/util/model.test.ts:31 | `expect(switchLabel({ ...previous, variant: "high" }, undefined, previous)).toBe("Switched variant to high")` |
 
 ### test/util/path-format.test.ts (1 declarations/groups, 17 lines)
 
@@ -3072,22 +3311,23 @@ Layer: behavior/contract. Isolated duration: Not Run (except evidence below). In
 | --- | --- |
 | "formats relative, home, and foreign paths" — test/util/path-format.test.ts:4 | `expect(formatPath(".", { base: "/work/project" })).toBe(".")` |
 
-### test/util/permission.test.ts (2 declarations/groups, 29 lines)
+### test/util/permission.test.ts (3 AST groups, 54 lines)
 
 Layer: behavior/contract. Isolated duration: Not Run (except evidence below). Initial disposition: keep; reason: retain named observable guards pending redundancy review.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
 | "preserves permission roots and self-contained metadata" — test/util/permission.test.ts:4 | `expect(permissionPresentation({ action: "external_directory", resources: ["/*"] }).title).toBe(` |
-| "warns before granting selected Chrome site actions that can trigger downloads" — test/util/permission.test.ts:21 | `expect(view.title).toContain("example.test")` |
+| `warns before granting %s Chrome site actions that can trigger downloads` — test/util/permission.test.ts:25 (table) | `expect(view.lines.join(" ")).toMatch(/click.*download|download.*click/i)` |
+| "does not invent an incidental Chrome download warning for unflagged browser actions" — test/util/permission.test.ts:44 | `expect(...).not.toContain("download")` for both the presentation and Always-summary paths. |
 
-### test/util/presentation.test.ts (1 declarations/groups, 9 lines)
+### test/util/presentation.test.ts (1 declaration, 9 lines)
 
-Layer: behavior/contract. Isolated duration: Not Run (except evidence below). Initial disposition: keep; reason: retain named observable guards pending redundancy review.
+Layer: behavior/contract. Keep continuation rendering/copy assertions; parent’s verified spelling mutation caught the visible command drift and repo brand residual.
 
 | Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
 | --- | --- |
-| "formats session continuation summary" — test/util/presentation.test.ts:4 | `expect(epilogue).toContain("A session")` |
+| "formats session continuation summary" — test/util/presentation.test.ts:4 | `expect(epilogue).toContain("A session")` and `expect(epilogue).toContain("ycoding -s ses_123")` |
 
 ### test/util/renderer.test.ts (2 declarations/groups, 30 lines)
 
@@ -3097,14 +3337,6 @@ Layer: behavior/contract. Isolated duration: Not Run (except evidence below). In
 | --- | --- |
 | "clears the terminal title before destroying the renderer" — test/util/renderer.test.ts:4 | `expect(calls).toEqual(["title:", "destroy"])` |
 | "still clears the title after renderer destruction" — test/util/renderer.test.ts:18 | `expect(calls).toEqual(["title:"])` |
-
-### test/util/revert-diff.test.ts (1 declarations/groups, 35 lines)
-
-Layer: behavior/contract. Isolated duration: Not Run (except evidence below). Initial disposition: keep; reason: retain named observable guards pending redundancy review.
-
-| Case/group and surviving assertion location | Existing assertion (bounded excerpt) |
-| --- | --- |
-| "prefers the actual file path over /dev/null for added and deleted files" — test/util/revert-diff.test.ts:5 | `expect(files).toEqual([` |
 
 ### test/util/selection.test.ts (5 declarations/groups, 66 lines)
 

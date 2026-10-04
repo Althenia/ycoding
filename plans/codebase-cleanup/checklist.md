@@ -11,17 +11,17 @@ Tick an item only when its evidence is recorded in `tracking.md`. Slice order, g
 
 ## S0 — Baseline
 
-- [ ] `git worktree add -b codebase-cleanup .worktrees/codebase-cleanup main`, then `bun install --frozen-lockfile`.
+- [x] `git worktree add -b codebase-cleanup .worktrees/codebase-cleanup main`, then `bun install --frozen-lockfile` (cloud session: branch `v0.9.0-wip`, D41).
 - [x] Recheck every historical baseline row in `plan.md` against the new `main`; leave unrecounted historical totals explicitly unresolved.
-- [ ] Run every AC10 command one at a time. Record results and pre-existing failures in § Baseline.
+- [x] Run every AC10 command one at a time. Record results and pre-existing failures in § Baseline.
 - [ ] Build the P0 harness and record the baseline (see § P).
 
 ## S1 — Fork-point classification
 
 - [x] Recreate the blobless clone of `anomalyco/opencode` outside the repository (E1–E2).
 - [x] `plans/codebase-cleanup/classify.ts` gives each tracked file under `packages/` exactly one class against `39fdd671`: `upstream-unchanged`, `upstream-modified`, `ycoding-new`, or `vendored`. Files are matched by blob, or by blob after reversing the rebrand (E12).
-- [ ] Write `classification.md` with totals per package and a list of in-use `upstream-unchanged` files. E12 supplies totals and a 741-file upstream-unchanged source list, but it does not mark which are in use after S2–S6.
-- [ ] Feed the in-use `upstream-unchanged` list into the SC ranking (`tracking.md` § Code leaning).
+- [x] Write `classification.md` with totals per package and a list of in-use `upstream-unchanged` files (E12, E38–E73, E78).
+- [x] Feed the in-use `upstream-unchanged` list into the SC ranking (`code-leaning/*.md` S1 anchors and E78 hand-off notes).
 
 ## S2 — Remove `packages/ui`
 
@@ -137,7 +137,7 @@ Sub-slices run one package at a time, in this order:
 
 - [ ] Record the package baseline: source lines, files, the lean-suite pass count, and (core/tui/cli) M1 startup and binary size.
 - [ ] Map the public surface (package `exports`, plugin API, Protocol), the module graph, and size × churn × S1 class. Write the ranked module list in `tracking.md` § Code leaning.
-- [ ] Duplication scan (D14): `bunx jscpd` once per package, with no repository change. Record the clone groups in the package ranking.
+- [x] Duplication scan (D14): `bunx jscpd` once per package, with no repository change. Record the clone groups in the package ranking (E80).
 - [ ] Apply the lean targets from `plan.md` in priority order, in reviewable batches.
 - [ ] After each batch: package typecheck; `bun run lint` (0 errors, no new warnings in touched files); `bun run lint:effect-patterns`; the package lean suite and consumer suites with no assertion edits.
 - [ ] For each removed compatibility path, confirm with `rg` that no live caller, config, fixture, or stored-data reader needs it. If stored data needs it, stop and ask.
@@ -210,3 +210,4 @@ Sub-slices run one package at a time, in this order:
   - measured performance changes.
 - [ ] Commit per slice with conventional messages. Rebase on `main`, then `git merge --ff-only --autostash codebase-cleanup`.
 - [ ] Update the stale memory note `cli/managed-restart-interrupts-sessions` (G5).
+- [ ] Remove `/^plans\/codebase-cleanup\//` from `upstreamPaths` in `script/ycoding-rebrand.ts` and its test case when the plan directory is deleted (E79).

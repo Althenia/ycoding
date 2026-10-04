@@ -104,8 +104,11 @@ describe("built PWA shell in Chrome", () => {
         expect({ ...zoom, zoomed }).toEqual(installed
           ? { touchAction: "pan-x pan-y", viewport: "width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1", zoomed: false }
           : { touchAction: "auto", viewport: "width=device-width, initial-scale=1, viewport-fit=cover", zoomed: true })
-        await page.evaluate(`Promise.all([navigator.serviceWorker.getRegistrations().then(registrations => Promise.all(registrations.map(registration => registration.unregister()))), caches.keys().then(names => Promise.all(names.map(name => caches.delete(name))))])`)
-      } finally { await page.close() }
+      } finally {
+        try {
+          await page.evaluate(`Promise.all([navigator.serviceWorker.getRegistrations().then(registrations => Promise.all(registrations.map(registration => registration.unregister()))), caches.keys().then(names => Promise.all(names.map(name => caches.delete(name))))])`)
+        } finally { await page.close() }
+      }
     }
   }, 30_000)
 

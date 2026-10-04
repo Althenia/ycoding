@@ -11,7 +11,7 @@ import {
   type PermissionV2Request,
 } from "@ycoding-ai/client/promise"
 import { createSessionTransport } from "../../src/mini/stream-v2.transport"
-import type { StreamCommit } from "../../src/mini/types"
+import type { FooterEvent, StreamCommit } from "../../src/mini/types"
 import { createFooterApiFixture } from "./fixture/footer-api"
 import { canonicalToolPart } from "./fixture/tool-part"
 import { tmpdir } from "../fixture/fixture"
@@ -19,9 +19,10 @@ import { tmpdir } from "../fixture/fixture"
 type RunV2Event = EventSubscribeOutput
 
 function feed() {
-  const values: RunV2Event[] = []
+  const values: Array<{ value: RunV2Event; consumed: () => void }> = []
   let closed = false
   let wake: (() => void) | undefined
+  let flushed = Promise.resolve()
   const stream = (async function* (): AsyncGenerator<RunV2Event, void, unknown> {
     while (!closed || values.length > 0) {
       if (values.length === 0) {
@@ -30,16 +31,26 @@ function feed() {
         })
         continue
       }
-      const value = values.shift()
-      if (value) yield value
+      const next = values.shift()
+      if (next) {
+        yield next.value
+        next.consumed()
+      }
     }
   })()
   return {
     stream,
     push(value: RunV2Event) {
-      values.push(value)
+      let consumed!: () => void
+      flushed = new Promise<void>((resolve) => {
+        consumed = resolve
+      })
+      values.push({ value, consumed })
       wake?.()
       wake = undefined
+    },
+    flush() {
+      return flushed
     },
     close() {
       closed = true
@@ -101,6 +112,20 @@ function promptAdmission(input: Parameters<YCodingClient["session"]["prompt"]>[0
 
 function footer() {
   return createFooterApiFixture()
+}
+
+function waitForFooter(ui: ReturnType<typeof createFooterApiFixture>, predicate: (event: FooterEvent) => boolean) {
+  if (ui.events.some(predicate)) return Promise.resolve()
+  return new Promise<void>((resolve) => {
+    const original = ui.api.event.bind(ui.api)
+    ui.api.event = (event) => {
+      original(event)
+      if (predicate(event)) {
+        ui.api.event = original
+        resolve()
+      }
+    }
+  })
 }
 
 type SessionMessages = MessageListOutput
@@ -280,11 +305,13 @@ describe("V2 mini transport", () => {
         ses_child: [sourceMessage],
       },
     })
-    const releaseSource = defer<void>()
+    const releaseSource = defer()
+    const retriedSourceLookup = defer()
     let sourceLookups = 0
     spyOn(client.session, "message").mockImplementation(async () => {
       sourceLookups++
       if (sourceLookups === 1) throw new Error("source temporarily unavailable")
+      retriedSourceLookup.resolve()
       await releaseSource.promise
       return sourceMessage as never
     })
@@ -296,7 +323,7 @@ describe("V2 mini transport", () => {
       footer: ui.api,
     })
 
-    while (sourceLookups < 2) await Bun.sleep(0)
+    await retriedSourceLookup.promise
     expect(
       ui.events.some(
         (event) =>
@@ -304,13 +331,11 @@ describe("V2 mini transport", () => {
       ),
     ).toBe(false)
     releaseSource.resolve()
-    while (
-      !ui.events.some(
-        (event) =>
-          event.type === "stream.view" && event.view.type === "permission" && event.view.request.id === permission.id,
-      )
+    await waitForFooter(
+      ui,
+      (event) =>
+        event.type === "stream.view" && event.view.type === "permission" && event.view.request.id === permission.id,
     )
-      await Bun.sleep(0)
 
     expect(client.session.message).toHaveBeenCalledWith(
       { sessionID: "ses_child", messageID: "msg_child_source" },
@@ -358,12 +383,10 @@ describe("V2 mini transport", () => {
     const child = form("frm_child_live", "ses_child")
     events.push({ id: "evt_child_form", created: 1, type: "form.created", data: { form: eventForm(child) } })
     events.push({ id: "evt_child_form_retry", created: 2, type: "form.created", data: { form: eventForm(child) } })
-    while (
-      !ui.events.some(
-        (event) => event.type === "stream.view" && event.view.type === "form" && event.view.request.id === child.id,
-      )
+    await waitForFooter(
+      ui,
+      (event) => event.type === "stream.view" && event.view.type === "form" && event.view.request.id === child.id,
     )
-      await Bun.sleep(0)
     const childSnapshots = ui.events.flatMap((event) => (event.type === "stream.subagent" ? [event.state] : []))
     expect(childSnapshots.at(-1)?.forms.filter((item) => item.id === child.id)).toHaveLength(1)
 
@@ -381,7 +404,7 @@ describe("V2 mini transport", () => {
       location: { directory: "/work", workspaceID: "wrk_other" },
       data: { form: eventForm(global) },
     })
-    await Bun.sleep(0)
+    await events.flush()
     expect(
       ui.events.some(
         (event) => event.type === "stream.view" && event.view.type === "form" && event.view.request.id === global.id,
@@ -394,12 +417,10 @@ describe("V2 mini transport", () => {
       location: { directory: "/work", workspaceID: "wrk_1" },
       data: { form: eventForm(global) },
     })
-    while (
-      !ui.events.some(
-        (event) => event.type === "stream.view" && event.view.type === "form" && event.view.request.id === global.id,
-      )
+    await waitForFooter(
+      ui,
+      (event) => event.type === "stream.view" && event.view.type === "form" && event.view.request.id === global.id,
     )
-      await Bun.sleep(0)
     expect(ui.events.at(-1)).toMatchObject({
       type: "stream.view",
       view: {
@@ -415,7 +436,11 @@ describe("V2 mini transport", () => {
       location: { directory: "/work", workspaceID: "wrk_1" },
       data: { id: global.id, sessionID: "global" },
     })
-    while (ui.events.filter((event) => event.type === "stream.view").length === beforeCancel) await Bun.sleep(0)
+    await waitForFooter(
+      ui,
+      (event) =>
+        event.type === "stream.view" && ui.events.filter((item) => item.type === "stream.view").length > beforeCancel,
+    )
     expect(ui.events.filter((event) => event.type === "stream.view").at(-1)).toEqual({
       type: "stream.view",
       view: { type: "prompt" },
@@ -453,9 +478,9 @@ describe("V2 mini transport", () => {
     expect(ui.commits.map((item) => item.text)).toEqual(["[Link](https://example.com)"])
     expect(idle).toHaveBeenCalledTimes(1)
 
-    let admitted = false
+    const promptAdmitted = defer()
     spyOn(client.session, "prompt").mockImplementation((request) => {
-      admitted = true
+      promptAdmitted.resolve()
       return ok({ data: promptAdmission(request) }) as never
     })
 
@@ -467,7 +492,7 @@ describe("V2 mini transport", () => {
       files: [],
       includeFiles: true,
     })
-    while (!admitted) await Bun.sleep(0)
+    await promptAdmitted.promise
     events.push({
       id: "evt_prompted",
       created: 0,
@@ -777,7 +802,7 @@ describe("V2 mini transport", () => {
       data: { id: "per_1", sessionID: "ses_1", action: "read", resources: ["/tmp/file"] },
     })
 
-    await Bun.sleep(0)
+    await events.flush()
     expect(ui.events).toContainEqual({
       type: "stream.view",
       view: {
@@ -832,11 +857,11 @@ describe("V2 mini transport", () => {
       thinking: false,
       footer: ui.api,
     })
-    let admitted = false
+    const promptAdmitted = defer()
     // The generated method has conditional return types for throwOnError; this mock represents the successful branch.
     // @ts-expect-error successful SDK response is valid for both modes at runtime
     spyOn(client.session, "prompt").mockImplementation((request) => {
-      admitted = true
+      promptAdmitted.resolve()
       return ok({ data: promptAdmission(request) })
     })
 
@@ -848,7 +873,7 @@ describe("V2 mini transport", () => {
       files: [],
       includeFiles: true,
     })
-    while (!admitted) await Bun.sleep(0)
+    await promptAdmitted.promise
     projected = true
     running = false
     first.close()
@@ -899,11 +924,11 @@ describe("V2 mini transport", () => {
       thinking: false,
       footer: ui.api,
     })
-    let admitted = false
+    const promptAdmitted = defer()
     // The generated method has conditional return types for throwOnError; this mock represents the successful branch.
     // @ts-expect-error successful SDK response is valid for both modes at runtime
     spyOn(client.session, "prompt").mockImplementation((request) => {
-      admitted = true
+      promptAdmitted.resolve()
       return ok({ data: promptAdmission(request) })
     })
 
@@ -915,7 +940,7 @@ describe("V2 mini transport", () => {
       files: [],
       includeFiles: true,
     })
-    while (!admitted) await Bun.sleep(0)
+    await promptAdmitted.promise
     projected = true
     running = false
     first.close()
@@ -954,7 +979,8 @@ describe("V2 mini transport", () => {
       }),
     )
     let releaseHydration!: () => void
-    let replacementHydrating = false
+    const replacementHydrationStarted = defer()
+    const replacementCatalogsReady = defer()
     const hydration = new Promise<void>((resolve) => {
       releaseHydration = resolve
     })
@@ -965,7 +991,7 @@ describe("V2 mini transport", () => {
     })
     spyOn(second.message, "list").mockImplementation(async (request) => {
       if (request.sessionID !== "ses_1") return ok({ data: [], cursor: {} })
-      replacementHydrating = true
+      replacementHydrationStarted.resolve()
       await hydration
       return ok([
         {
@@ -990,12 +1016,16 @@ describe("V2 mini transport", () => {
       footer: ui.api,
       onCatalogRefresh: () => {
         refreshes++
-        if (refreshes === 2) return catalog
+        if (refreshes === 2) {
+          replacementCatalogsReady.resolve()
+          return catalog
+        }
+        return undefined
       },
     })
 
     firstEvents.close()
-    while (!replacementHydrating) await Bun.sleep(0)
+    await replacementHydrationStarted.promise
     await expect(
       transport.runPromptTurn({
         agent: undefined,
@@ -1025,13 +1055,11 @@ describe("V2 mini transport", () => {
       },
     })
     releaseHydration()
-    while (
-      !ui.events.some(
-        (event) => event.type === "stream.view" && event.view.type === "form" && event.view.request.id === "frm_child",
-      )
+    await waitForFooter(
+      ui,
+      (event) => event.type === "stream.view" && event.view.type === "form" && event.view.request.id === "frm_child",
     )
-      await Bun.sleep(0)
-    while (refreshes < 2) await Bun.sleep(0)
+    await replacementCatalogsReady.promise
     await resize
     expect(resized).toBe(false)
     await expect(
@@ -1046,17 +1074,6 @@ describe("V2 mini transport", () => {
     ).rejects.toThrow("Event stream is reconnecting")
     releaseCatalog()
     await Bun.sleep(0)
-
-    expect(current).toEqual([second])
-    expect(first.event.subscribe).toHaveBeenCalledTimes(1)
-    expect(second.event.subscribe).toHaveBeenCalledTimes(1)
-    expect(second.session.list).toHaveBeenCalled()
-    expect(second.form.list).toHaveBeenCalledWith({ sessionID: "ses_child" }, { signal: expect.any(AbortSignal) })
-    expect(ui.commits.filter((commit) => commit.messageID === "msg_assistant").map((commit) => commit.text)).toEqual([
-      "partial",
-      " replacement",
-    ])
-
     const prompt = spyOn(second.session, "prompt").mockImplementation((request) => {
       queueMicrotask(() => {
         secondEvents.push({
@@ -1084,6 +1101,15 @@ describe("V2 mini transport", () => {
       files: [],
       includeFiles: true,
     })
+    expect(current).toEqual([second])
+    expect(first.event.subscribe).toHaveBeenCalledTimes(1)
+    expect(second.event.subscribe).toHaveBeenCalledTimes(1)
+    expect(second.session.list).toHaveBeenCalled()
+    expect(second.form.list).toHaveBeenCalledWith({ sessionID: "ses_child" }, { signal: expect.any(AbortSignal) })
+    expect(ui.commits.filter((commit) => commit.messageID === "msg_assistant").map((commit) => commit.text)).toEqual([
+      "partial",
+      " replacement",
+    ])
     const interrupt = spyOn(second.session, "interrupt").mockImplementation(() => ok(undefined))
     await transport.interruptActiveTurn()
 
@@ -1148,7 +1174,7 @@ describe("V2 mini transport", () => {
         delta: "answer",
       },
     })
-    await Bun.sleep(0)
+    await events.flush()
     reset()
     await replay
 
@@ -1197,7 +1223,7 @@ describe("V2 mini transport", () => {
         delta: " suffix",
       },
     })
-    await Bun.sleep(0)
+    await events.flush()
     expect(live.map((commit) => commit.text)).toEqual(["partial suffix"])
 
     await transport.replayOnResize({
@@ -1272,7 +1298,7 @@ describe("V2 mini transport", () => {
         delta: " suffix",
       },
     })
-    await Bun.sleep(0)
+    await events.flush()
     reset()
     await replay
 
@@ -1322,7 +1348,7 @@ describe("V2 mini transport", () => {
         delta: "thought",
       },
     })
-    await Bun.sleep(0)
+    await events.flush()
     expect(live.map((commit) => commit.text)).toEqual(["hello", "Thinking: thought"])
 
     await transport.replayOnResize({
@@ -1359,7 +1385,7 @@ describe("V2 mini transport", () => {
         order.push("first:end")
       },
     })
-    await Bun.sleep(0)
+    await events.flush()
     const second = transport.replayOnResize({
       localRows: () => [],
       reset: async () => {
@@ -1399,7 +1425,7 @@ describe("V2 mini transport", () => {
         delta: "hello",
       },
     })
-    await Bun.sleep(0)
+    await events.flush()
     spyOn(client.message, "list").mockImplementation(() => Promise.reject(new Error("projection failed")))
 
     const replay = transport.replayOnResize({
@@ -1463,7 +1489,7 @@ describe("V2 mini transport", () => {
         error: { type: "provider.transport", message: "provider failed" },
       },
     })
-    await Bun.sleep(0)
+    await events.flush()
 
     expect(ui.commits.filter((commit) => commit.kind === "error" && commit.text === "provider failed")).toHaveLength(1)
     await transport.close()
@@ -1494,7 +1520,7 @@ describe("V2 mini transport", () => {
         error: { type: "provider.transport", message: "provider failed" },
       },
     })
-    await Bun.sleep(0)
+    await events.flush()
     expect(live[0]?.messageID).toBe("msg_assistant")
     spyOn(client.message, "list").mockImplementation(() =>
       ok({
@@ -1644,7 +1670,7 @@ describe("V2 mini transport", () => {
         text: "considering",
       },
     })
-    await Bun.sleep(0)
+    await events.flush()
 
     expect(ui.commits.at(-1)?.text).toBe("Thinking: considering")
     await transport.close()
@@ -1698,7 +1724,7 @@ describe("V2 mini transport", () => {
         },
       })
     }
-    await Bun.sleep(0)
+    await events.flush()
 
     const commits = ui.commits.filter((item) => item.part?.id === "call_repeated")
     expect(commits.map((item) => [item.messageID, item.phase])).toEqual([
@@ -1777,7 +1803,7 @@ describe("V2 mini transport", () => {
         executed: true,
       },
     })
-    await Bun.sleep(0)
+    await events.flush()
 
     const commits = ui.commits.filter((item) => item.part?.id === "call_progress")
     expect(commits.map((item) => [item.phase, item.text, item.toolState])).toEqual([
@@ -1807,11 +1833,11 @@ describe("V2 mini transport", () => {
       thinking: false,
       footer: ui.api,
     })
-    let admitted = false
+    const promptAdmitted = defer()
     // The generated method has conditional return types for throwOnError; this mock represents the successful branch.
     // @ts-expect-error successful SDK response is valid for both modes at runtime
     spyOn(client.session, "prompt").mockImplementation((request) => {
-      admitted = true
+      promptAdmitted.resolve()
       return ok({ data: promptAdmission(request) })
     })
     const interrupted = spyOn(client.session, "interrupt").mockImplementation(() => ok(undefined))
@@ -1824,7 +1850,7 @@ describe("V2 mini transport", () => {
       files: [],
       includeFiles: true,
     })
-    while (!admitted) await Bun.sleep(0)
+    await promptAdmitted.promise
     await transport.interruptActiveTurn()
     events.push({
       id: "evt_settled",
@@ -1859,11 +1885,11 @@ describe("V2 mini transport", () => {
         }) as never,
     )
     const switched = spyOn(client.session, "switchModel").mockImplementation(() => ok(undefined))
-    let admitted = false
+    const promptAdmitted = defer()
     // The generated method has conditional return types for throwOnError; this mock represents the successful branch.
     // @ts-expect-error successful SDK response is valid for both modes at runtime
     spyOn(client.session, "prompt").mockImplementation((request) => {
-      admitted = true
+      promptAdmitted.resolve()
       return ok({ data: promptAdmission(request) })
     })
 
@@ -1875,7 +1901,7 @@ describe("V2 mini transport", () => {
       files: [],
       includeFiles: true,
     })
-    while (!admitted) await Bun.sleep(0)
+    await promptAdmitted.promise
     events.push({
       id: "evt_prompted",
       created: 0,
@@ -1913,11 +1939,11 @@ describe("V2 mini transport", () => {
       thinking: false,
       footer: ui.api,
     })
-    let admitted = false
+    const promptAdmitted = defer()
     // The generated method has conditional return types for throwOnError; this mock represents the successful branch.
     // @ts-expect-error successful SDK response is valid for both modes at runtime
     spyOn(client.session, "prompt").mockImplementation((request) => {
-      admitted = true
+      promptAdmitted.resolve()
       return ok({ data: promptAdmission(request) })
     })
     const interrupted = spyOn(client.session, "interrupt").mockImplementation(() => ok(undefined))
@@ -1931,7 +1957,7 @@ describe("V2 mini transport", () => {
       includeFiles: true,
       signal: controller.signal,
     })
-    while (!admitted) await Bun.sleep(0)
+    await promptAdmitted.promise
     events.push({
       id: "evt_prompted",
       created: 0,
@@ -1942,7 +1968,7 @@ describe("V2 mini transport", () => {
         inputID: "msg_prompt",
       },
     })
-    await Bun.sleep(0)
+    await events.flush()
     controller.abort()
     events.push({
       id: "evt_settled",
@@ -1969,7 +1995,7 @@ describe("V2 mini transport", () => {
       thinking: false,
       footer: ui.api,
     })
-    let request: Parameters<YCodingClient["session"]["shell"]>[0] | undefined
+    let request!: Parameters<YCodingClient["session"]["shell"]>[0]
     spyOn(client.session, "shell").mockImplementation((input) => {
       request = input
       queueMicrotask(() => {
@@ -2060,12 +2086,12 @@ describe("V2 mini transport", () => {
       thinking: false,
       footer: ui.api,
     })
-    let started = false
+    const shellStarted = defer()
     let aborted = false
     spyOn(client.session, "shell").mockImplementation(
       (_input, options) =>
         new Promise((_, reject) => {
-          started = true
+          shellStarted.resolve()
           options?.signal?.addEventListener("abort", () => {
             aborted = true
             reject(new Error("aborted"))
@@ -2082,7 +2108,7 @@ describe("V2 mini transport", () => {
       files: [],
       includeFiles: true,
     })
-    while (!started) await Bun.sleep(0)
+    await shellStarted.promise
     await transport.interruptActiveTurn()
     await turn
 
@@ -2102,10 +2128,12 @@ describe("V2 mini transport", () => {
       thinking: false,
       footer: ui.api,
     })
-    let request: Parameters<YCodingClient["session"]["shell"]>[0] | undefined
+    let request!: Parameters<YCodingClient["session"]["shell"]>[0]
     let complete!: () => void
+    const shellRequested = defer()
     spyOn(client.session, "shell").mockImplementation((input) => {
       request = input
+      shellRequested.resolve()
       return new Promise<void>((resolve) => {
         complete = resolve
       }) as never
@@ -2124,7 +2152,7 @@ describe("V2 mini transport", () => {
       .then(() => {
         done = true
       })
-    while (!request) await Bun.sleep(0)
+    await shellRequested.promise
     events.push({
       id: "evt_unrelated_shell",
       created: 0,
@@ -2165,9 +2193,9 @@ describe("V2 mini transport", () => {
         output: { output: "wrong", cursor: 5, size: 5, truncated: false },
       },
     })
-    await Bun.sleep(0)
+    await events.flush()
     complete()
-    await Bun.sleep(0)
+    await events.flush()
     expect(done).toBe(false)
 
     events.push({
@@ -2268,8 +2296,8 @@ describe("V2 mini transport", () => {
         output: { output: "file.txt", cursor: 8, size: 8, truncated: false },
       },
     })
-    await Bun.sleep(0)
-    await Bun.sleep(0)
+    await events.flush()
+    await events.flush()
 
     expect(ui.commits.filter((item) => item.shell)).toMatchObject([
       { phase: "start", partID: "shell:sh_1", shell: { command: "ls" } },
@@ -2347,7 +2375,7 @@ describe("V2 mini transport", () => {
         output: { output: "partial", cursor: 7, size: 20, truncated: false },
       },
     })
-    await Bun.sleep(0)
+    await events.flush()
 
     expect(ui.commits).toContainEqual(
       expect.objectContaining({ toolState: "error", toolError: "Shell exited with code 7" }),
@@ -2518,9 +2546,9 @@ describe("V2 mini transport", () => {
       thinking: false,
       footer: ui.api,
     })
-    let sent = false
+    const skillSent = defer()
     spyOn(client.session, "skill").mockImplementation(() => {
-      sent = true
+      skillSent.resolve()
       return ok(undefined) as never
     })
 
@@ -2542,7 +2570,7 @@ describe("V2 mini transport", () => {
       .then(() => {
         done = true
       })
-    while (!sent) await Bun.sleep(0)
+    await skillSent.promise
     events.push({
       id: "evt_other",
       created: 0,
@@ -2562,8 +2590,8 @@ describe("V2 mini transport", () => {
       durable: durable("ses_1"),
       data: { sessionID: "ses_1" },
     })
-    await Bun.sleep(0)
-    await Bun.sleep(0)
+    await events.flush()
+    await events.flush()
     expect(done).toBe(false)
 
     events.push({
@@ -2639,8 +2667,7 @@ describe("V2 mini transport", () => {
       location: { directory: "/project", workspaceID: "work-2" },
       data: {},
     })
-    while (refreshes < 7) await Bun.sleep(0)
-    await Bun.sleep(0)
+    await events.flush()
 
     expect(refreshes).toBe(7)
     await transport.close()
@@ -2684,8 +2711,8 @@ describe("V2 mini transport", () => {
         text: "skill instructions",
       },
     })
-    await Bun.sleep(0)
-    await Bun.sleep(0)
+    await events.flush()
+    await events.flush()
 
     expect(ui.commits.filter((item) => item.text === '→ Skill "tigerstyle"')).toHaveLength(1)
     await transport.close()
@@ -2741,8 +2768,11 @@ describe("V2 mini transport", () => {
         content: [],
       },
     })
-    while (!states().some((state) => state.tabs.some((tab) => tab.sessionID === "ses_child_progress")))
-      await Bun.sleep(0)
+    await waitForFooter(
+      ui,
+      (event) =>
+        event.type === "stream.subagent" && event.state.tabs.some((tab) => tab.sessionID === "ses_child_progress"),
+    )
     expect(states().at(-1)?.tabs).toMatchObject([
       {
         sessionID: "ses_child_progress",
@@ -2754,7 +2784,7 @@ describe("V2 mini transport", () => {
     ])
 
     transport.selectSubagent("ses_child_progress")
-    while (!states().at(-1)?.details.ses_child_progress) await Bun.sleep(0)
+    await waitForFooter(ui, (event) => event.type === "stream.subagent" && !!event.state.details.ses_child_progress)
     events.push({
       id: "evt_child_tool_input",
       created: 4,
@@ -2818,14 +2848,15 @@ describe("V2 mini transport", () => {
         executed: true,
       },
     })
-    while (
-      !states()
-        .at(-1)
-        ?.details.ses_child_progress?.commits.some(
+    await waitForFooter(
+      ui,
+      (event) =>
+        event.type === "stream.subagent" &&
+        (event.state.details.ses_child_progress?.commits.some(
           (item) => item.part?.id === "call_child_shell" && item.toolState === "error",
-        )
+        ) ??
+          false),
     )
-      await Bun.sleep(0)
 
     const commits = states().at(-1)?.details.ses_child_progress?.commits ?? []
     expect(
@@ -2921,8 +2952,12 @@ describe("V2 mini transport", () => {
         model: { providerID: "test", id: "model" },
       },
     })
-    while (!states().some((state) => state.details.ses_child?.commits.some((item) => item.text === "task prompt")))
-      await Bun.sleep(0)
+    await waitForFooter(
+      ui,
+      (event) =>
+        event.type === "stream.subagent" &&
+        (event.state.details.ses_child?.commits.some((item) => item.text === "task prompt") ?? false),
+    )
     expect(states().at(-1)?.tabs).toMatchObject([
       { sessionID: "ses_child", label: "Explore", title: "Find files", status: "running" },
     ])
@@ -2944,7 +2979,7 @@ describe("V2 mini transport", () => {
         delta: "answer",
       },
     })
-    await Bun.sleep(0)
+    await events.flush()
     expect(
       states()
         .at(-1)
@@ -2962,10 +2997,12 @@ describe("V2 mini transport", () => {
         delta: " suffix",
       },
     })
-    while (
-      !states().some((state) => state.details.ses_child?.commits.some((item) => item.text === "child answer suffix"))
+    await waitForFooter(
+      ui,
+      (event) =>
+        event.type === "stream.subagent" &&
+        (event.state.details.ses_child?.commits.some((item) => item.text === "child answer suffix") ?? false),
     )
-      await Bun.sleep(0)
 
     events.push({
       id: "evt_child_settled",
@@ -2974,7 +3011,10 @@ describe("V2 mini transport", () => {
       durable: durable("ses_child"),
       data: { sessionID: "ses_child" },
     })
-    while (!states().some((state) => state.tabs.some((tab) => tab.status === "completed"))) await Bun.sleep(0)
+    await waitForFooter(
+      ui,
+      (event) => event.type === "stream.subagent" && event.state.tabs.some((tab) => tab.status === "completed"),
+    )
     await transport.close()
   })
 
@@ -2995,7 +3035,7 @@ describe("V2 mini transport", () => {
     })
     const states = () => ui.events.flatMap((event) => (event.type === "stream.subagent" ? [event.state] : []))
     transport.selectSubagent("ses_child")
-    while (!states().some((state) => state.details.ses_child)) await Bun.sleep(0)
+    await waitForFooter(ui, (event) => event.type === "stream.subagent" && !!event.state.details.ses_child)
 
     events.push({
       id: "evt_child_admitted",
@@ -3008,7 +3048,7 @@ describe("V2 mini transport", () => {
         input: { type: "user", data: { text: "actual child prompt" }, delivery: "steer" },
       },
     })
-    await Bun.sleep(0)
+    await events.flush()
     expect(
       states()
         .at(-1)
@@ -3022,14 +3062,15 @@ describe("V2 mini transport", () => {
       durable: durable("ses_child", 1),
       data: { sessionID: "ses_child", inputID: "msg_child_prompt" },
     })
-    while (
-      !states()
-        .at(-1)
-        ?.details.ses_child?.commits.some(
+    await waitForFooter(
+      ui,
+      (event) =>
+        event.type === "stream.subagent" &&
+        (event.state.details.ses_child?.commits.some(
           (item) => item.messageID === "msg_child_prompt" && item.text === "actual child prompt",
-        )
+        ) ??
+          false),
     )
-      await Bun.sleep(0)
 
     await transport.close()
   })
@@ -3041,14 +3082,14 @@ describe("V2 mini transport", () => {
       streams: [events],
       sessions: [{ id: "ses_child", parentID: "ses_1", time: { updated: 1 } }],
     })
-    let childHydrating = false
+    const childHydrationStarted = defer()
     let releaseHydration!: () => void
     const hydration = new Promise<void>((resolve) => {
       releaseHydration = resolve
     })
     spyOn(client.message, "list").mockImplementation(async (request) => {
       if (request.sessionID === "ses_child") {
-        childHydrating = true
+        childHydrationStarted.resolve()
         await hydration
       }
       return ok({ data: [], cursor: {} })
@@ -3060,7 +3101,6 @@ describe("V2 mini transport", () => {
       thinking: false,
       footer: ui.api,
     })
-    const states = () => ui.events.flatMap((event) => (event.type === "stream.subagent" ? [event.state] : []))
     events.push({
       id: "evt_child_admitted_race",
       created: 1,
@@ -3072,9 +3112,9 @@ describe("V2 mini transport", () => {
         input: { type: "user", data: { text: "prompt admitted before hydration" }, delivery: "steer" },
       },
     })
-    await Bun.sleep(0)
+    await events.flush()
     transport.selectSubagent("ses_child")
-    while (!childHydrating) await Bun.sleep(0)
+    await childHydrationStarted.promise
     events.push({
       id: "evt_child_promoted_race",
       created: 2,
@@ -3082,18 +3122,19 @@ describe("V2 mini transport", () => {
       durable: durable("ses_child", 1),
       data: { sessionID: "ses_child", inputID: "msg_child_race" },
     })
-    await Bun.sleep(0)
+    await events.flush()
     releaseHydration()
-    await Bun.sleep(0)
-    await Bun.sleep(0)
-    while (
-      !states()
-        .at(-1)
-        ?.details.ses_child?.commits.some(
+    await events.flush()
+    await events.flush()
+    await waitForFooter(
+      ui,
+      (event) =>
+        event.type === "stream.subagent" &&
+        (event.state.details.ses_child?.commits.some(
           (item) => item.messageID === "msg_child_race" && item.text === "prompt admitted before hydration",
-        )
+        ) ??
+          false),
     )
-      await Bun.sleep(0)
 
     await transport.close()
   })
@@ -3106,6 +3147,8 @@ describe("V2 mini transport", () => {
       sessions: [{ id: "ses_child", parentID: "ses_1", time: { updated: 1 } }],
     })
     let childRequests = 0
+    const firstChildRequest = defer()
+    const secondChildRequest = defer()
     let releaseStale!: () => void
     let releaseRetry!: () => void
     const stale = new Promise<void>((resolve) => {
@@ -3118,9 +3161,11 @@ describe("V2 mini transport", () => {
       if (request.sessionID !== "ses_child") return ok({ data: [], cursor: {} })
       childRequests++
       if (childRequests === 1) {
+        firstChildRequest.resolve()
         await stale
         return ok({ data: [], cursor: {} })
       }
+      if (childRequests === 2) secondChildRequest.resolve()
       await retry
       return ok([
         {
@@ -3150,7 +3195,7 @@ describe("V2 mini transport", () => {
     })
     const states = () => ui.events.flatMap((event) => (event.type === "stream.subagent" ? [event.state] : []))
     transport.selectSubagent("ses_child")
-    while (childRequests < 1) await Bun.sleep(0)
+    await firstChildRequest.promise
 
     for (let index = 0; index < 65; index++)
       events.push({
@@ -3164,14 +3209,14 @@ describe("V2 mini transport", () => {
           delta: `live ${index}`,
         },
       })
-    while (
-      !states()
-        .at(-1)
-        ?.details.ses_child?.commits.some((item) => item.text === "live 64")
+    await waitForFooter(
+      ui,
+      (event) =>
+        event.type === "stream.subagent" &&
+        (event.state.details.ses_child?.commits.some((item) => item.text === "live 64") ?? false),
     )
-      await Bun.sleep(0)
     releaseStale()
-    while (childRequests < 2) await Bun.sleep(0)
+    await secondChildRequest.promise
     expect(
       states()
         .at(-1)
@@ -3179,12 +3224,12 @@ describe("V2 mini transport", () => {
     ).toBe(true)
 
     releaseRetry()
-    while (
-      !states()
-        .at(-1)
-        ?.details.ses_child?.commits.some((item) => item.text === "baseline history")
+    await waitForFooter(
+      ui,
+      (event) =>
+        event.type === "stream.subagent" &&
+        (event.state.details.ses_child?.commits.some((item) => item.text === "baseline history") ?? false),
     )
-      await Bun.sleep(0)
     expect(
       states()
         .at(-1)
@@ -3201,14 +3246,14 @@ describe("V2 mini transport", () => {
       streams: [events],
       sessions: [{ id: "ses_child", parentID: "ses_1", time: { updated: 1 } }],
     })
-    let childHydrating = false
+    const childHydrationStarted = defer()
     let releaseHydration!: () => void
     const hydration = new Promise<void>((resolve) => {
       releaseHydration = resolve
     })
     spyOn(client.message, "list").mockImplementation(async (request) => {
       if (request.sessionID !== "ses_child") return ok({ data: [], cursor: {} })
-      childHydrating = true
+      childHydrationStarted.resolve()
       await hydration
       return ok({
         data: [
@@ -3270,9 +3315,9 @@ describe("V2 mini transport", () => {
 
     inputStarted("call_terminal", "grep", 0)
     called("call_terminal", { pattern: "needle" }, 1)
-    await Bun.sleep(0)
+    await events.flush()
     transport.selectSubagent("ses_child")
-    while (!childHydrating) await Bun.sleep(0)
+    await childHydrationStarted.promise
     events.push({
       id: "evt_success_terminal",
       created: 2,
@@ -3289,11 +3334,15 @@ describe("V2 mini transport", () => {
     })
     inputStarted("call_overlap", "shell", 3)
     called("call_overlap", { command: "stale" }, 4)
-    await Bun.sleep(0)
+    await events.flush()
     const beforeHydration = states().length
     releaseHydration()
-    while (states().length === beforeHydration) await Bun.sleep(0)
-    await Bun.sleep(0)
+    await waitForFooter(
+      ui,
+      (event) =>
+        event.type === "stream.subagent" &&
+        ui.events.filter((item) => item.type === "stream.subagent").length > beforeHydration,
+    )
 
     const commits = states().at(-1)?.details.ses_child?.commits ?? []
     expect(commits.find((item) => item.partID === "prt_call_terminal")).toMatchObject({
@@ -3338,7 +3387,6 @@ describe("V2 mini transport", () => {
       thinking: false,
       footer: ui.api,
     })
-    const states = () => ui.events.flatMap((event) => (event.type === "stream.subagent" ? [event.state] : []))
 
     // Both events arrive while session.get is still in flight.
     events.push({
@@ -3360,9 +3408,12 @@ describe("V2 mini transport", () => {
       durable: durable("ses_child"),
       data: { sessionID: "ses_child", reason: "user" },
     })
-    await Bun.sleep(0)
+    await events.flush()
     resolveGet?.()
-    while (!states().some((state) => state.tabs.some((tab) => tab.status === "cancelled"))) await Bun.sleep(0)
+    await waitForFooter(
+      ui,
+      (event) => event.type === "stream.subagent" && event.state.tabs.some((tab) => tab.status === "cancelled"),
+    )
     await transport.close()
   })
 
@@ -3458,15 +3509,20 @@ describe("V2 mini transport", () => {
       durable: durable("ses_child"),
       data: { sessionID: "ses_child", reason: "shutdown" },
     })
-    while (!states().some((state) => state.tabs.some((tab) => tab.status === "cancelled"))) await Bun.sleep(0)
+    await waitForFooter(
+      ui,
+      (event) => event.type === "stream.subagent" && event.state.tabs.some((tab) => tab.status === "cancelled"),
+    )
 
     // Resolving discovery must not replay the buffered step.started over the
     // terminal status.
     const before = states().length
     resolveGet?.()
-    while (states().length === before) await Bun.sleep(0)
-    await Bun.sleep(0)
-    await Bun.sleep(0)
+    await waitForFooter(
+      ui,
+      (event) =>
+        event.type === "stream.subagent" && ui.events.filter((item) => item.type === "stream.subagent").length > before,
+    )
     expect(states().at(-1)?.tabs).toMatchObject([{ sessionID: "ses_child", status: "cancelled" }])
     await transport.close()
   })

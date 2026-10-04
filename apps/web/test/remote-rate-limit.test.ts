@@ -4,13 +4,17 @@ import { createRelay } from "../../../infra/cloudflare/src/relay/core"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
+import { loadWorkspaces } from "./remote-queries"
 import { waitFor } from "./relay-double"
+import { createRemoteStoreClock } from "./remote-store-clock"
 
-async function harness(count: number) {
+async function harness(count: number, statusGate?: Promise<void>) {
   const sockets = new Map<string, Bun.ServerWebSocket<{ id: string }>>()
   const closed: { code: number; reason: string }[] = []
   const requests: RemoteRequest[] = []
   let storedStatus: RemoteStatus | undefined
+  let statusReads = 0
+  let statusResponses = 0
   let pongs = 0
   const relay = createRelay({
     now: Date.now,
@@ -44,18 +48,23 @@ async function harness(count: number) {
             time: { created: 1, updated: 1 },
           }))
         : {}
-      void relay.handleAgentMessage("agent", serializeResponse({
-        type: "response",
-        id: request.id,
-        ok: true,
-        value: request.operation === "session.file.find" || request.operation === "workspace.file.find" || request.operation === "session.catalog" || request.operation === "workspace.catalog" ? data : {
-          data,
-          ...(request.operation === "session.list"
-            ? { cursor: { ...(offset > 0 ? { previous: String(Math.max(0, offset - limit)) } : {}),
-              ...(offset + limit < Math.ceil(count / 2) ? { next: String(offset + limit) } : {}) } }
-            : {}),
-        },
-      }))
+      const respond = async () => {
+        await relay.handleAgentMessage("agent", serializeResponse({
+          type: "response",
+          id: request.id,
+          ok: true,
+          value: request.operation === "session.file.find" || request.operation === "workspace.file.find" || request.operation === "session.catalog" || request.operation === "workspace.catalog" ? data : {
+            data,
+            ...(request.operation === "session.list"
+              ? { cursor: { ...(offset > 0 ? { previous: String(Math.max(0, offset - limit)) } : {}),
+                ...(offset + limit < Math.ceil(count / 2) ? { next: String(offset + limit) } : {}) } }
+              : {}),
+          },
+        }))
+        if (request.operation === "session.status") statusResponses += 1
+      }
+      if (request.operation === "session.status" && statusGate && ++statusReads === 1) void statusGate.then(respond)
+      else void respond()
     },
     close: (connectionID, code, reason) => {
       closed.push({ code, reason })
@@ -116,6 +125,7 @@ async function harness(count: number) {
     server,
     closed,
     requests,
+    get statusResponses() { return statusResponses },
     get pongs() { return pongs },
     ping: () => {
       for (const socket of sockets.values()) socket.send('{"type":"ping"}')
@@ -129,6 +139,103 @@ async function harness(count: number) {
 }
 
 describe("remote request budget integration", () => {
+  test("a pending status read does not hold the Session list, next page, or a newer inventory", async () => {
+    const status = Promise.withResolvers<void>()
+    const fixture = await harness(100, status.promise)
+    const store = createRemoteStore({
+      http: createRemoteHttp({ baseURL: `http://127.0.0.1:${fixture.server.port}` }),
+      createTransport: (_deviceID, handlers) => createRemoteTransport({ url: `ws://127.0.0.1:${fixture.server.port}`, handlers }),
+    })
+    try {
+      await store.load()
+      await waitFor(() => store.state().sessionListStatus === "ready" && store.state().sessions.length === 25)
+      await store.nextSessionsPage()
+      expect(store.state().sessions).toHaveLength(50)
+      expect(await loadWorkspaces(store)).toHaveLength(2)
+      await fixture.invalidate()
+      await waitFor(() => fixture.requests.filter((request) => request.operation === "workspace.list").length >= 2, 500)
+      await fixture.status([], [])
+      await waitFor(() => store.state().carouselStatus === "ready", 500)
+      status.resolve()
+      expect(fixture.closed).toEqual([])
+    } finally { status.resolve(); store.dispose(); await fixture.server.stop(true) }
+  }, 5_000)
+
+  test("a failed status request leaves the small Session inventory and carousel readable", async () => {
+    const fixture = await harness(10)
+    const logged: unknown[][] = []
+    const originalError = console.error
+    console.error = (...args: unknown[]) => { logged.push(args) }
+    const store = createRemoteStore({
+      http: createRemoteHttp({ baseURL: `http://127.0.0.1:${fixture.server.port}` }),
+      createTransport: (_deviceID, handlers) => {
+        const transport = createRemoteTransport({ url: `ws://127.0.0.1:${fixture.server.port}`, handlers })
+        return { ...transport, request: (operation, input) => operation === "session.status"
+          ? Promise.reject(new Error("Synthetic status transport failure token=secret")) : transport.request(operation, input) }
+      },
+    })
+    try {
+      await store.load()
+      await waitFor(() => store.state().sessions.length === 5 && store.state().carouselSessions?.length === 5)
+      expect(store.state().sessionListStatus).toBe("ready")
+      expect(store.state().carouselStatus).toBe("ready")
+      expect(fixture.closed).toEqual([])
+      expect(logged).toEqual([["Session status read failed"]])
+    } finally { console.error = originalError; store.dispose(); await fixture.server.stop(true) }
+  })
+
+  test("a late status reply from the closed socket cannot reset the recovered carousel", async () => {
+    const status = Promise.withResolvers<void>()
+    const fixture = await harness(10, status.promise)
+    const store = createRemoteStore({
+      http: createRemoteHttp({ baseURL: `http://127.0.0.1:${fixture.server.port}` }),
+      createTransport: (_deviceID, handlers) => createRemoteTransport({
+        url: `ws://127.0.0.1:${fixture.server.port}`, handlers, resetDelayMs: 10, random: () => 0.5,
+      }),
+    })
+    try {
+      await store.load()
+      await waitFor(() => store.state().sessions.length === 5 && fixture.requests.some((request) => request.operation === "session.status"))
+      fixture.drop()
+      await waitFor(() => fixture.requests.filter((request) => request.operation === "session.status").length === 2 &&
+        store.state().carouselStatus === "ready" && store.state().carouselSessions?.length === 5, 5_000)
+      const carousel = store.state().carouselSessions
+      status.resolve()
+      await waitFor(() => fixture.statusResponses === 2)
+      expect(store.state().carouselSessions).toEqual(carousel)
+      expect(store.state().connection.kind).toBe("connected")
+      expect(fixture.closed).toEqual([])
+    } finally { status.resolve(); store.dispose(); await fixture.server.stop(true) }
+  }, 10_000)
+
+  for (const selected of [false, true]) test(`loads the small running and recent inventory promptly after reconnect${selected ? " with a selected Session" : ""}`, async () => {
+    const fixture = await harness(10)
+    const clock = createRemoteStoreClock()
+    const store = createRemoteStore({
+      http: createRemoteHttp({ baseURL: `http://127.0.0.1:${fixture.server.port}` }),
+      createTransport: (_deviceID, handlers) => createRemoteTransport({
+        url: `ws://127.0.0.1:${fixture.server.port}`,
+        handlers,
+        resetDelayMs: 10,
+        random: () => 0.5,
+      }),
+      schedule: clock.schedule,
+      monotonicNow: clock.now,
+    })
+    try {
+      await store.load()
+      await waitFor(() => store.state().sessions.length === 5 && store.state().carouselSessions?.length === 5)
+      if (selected) await store.selectSession("ses_0")
+      fixture.drop()
+      await waitFor(() => fixture.requests.filter((request) => request.operation === "workspace.list").length >= 2 &&
+        store.state().sessionListStatus === "ready" && store.state().sessions.length === 5, 5_000)
+      await waitFor(() => store.state().carouselStatus === "ready" && store.state().carouselSessions?.length === 5, 1_000)
+      expect(fixture.closed).toEqual([])
+      expect(store.state().connection.kind).toBe("connected")
+      if (selected) expect(store.state().activeSessionID).toBe("ses_0")
+    } finally { store.dispose(); await fixture.server.stop(true) }
+  }, 10_000)
+
   test("keeps status, catalog, file reads, and inventory invalidation bursts inside the relay window", async () => {
     const fixture = await harness(200)
     const store = createRemoteStore({

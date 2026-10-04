@@ -1,17 +1,6 @@
 import { expect, test } from "bun:test"
 
-test("routes relay paths to the Worker so SPA fallback cannot mask them", async () => {
-  const config = await Bun.file(new URL("../wrangler.jsonc", import.meta.url)).json()
-  const first = config.assets?.run_worker_first ?? []
-  expect(first).toContain("/api/*")
-  expect(first).toContain("/ws/*")
-  expect(first).toContain("/health")
-  expect(first.some((pattern: string) => pattern.startsWith("!"))).toBe(false)
-  expect(config.assets?.not_found_handling).toBe("single-page-application")
-  expect(config.assets?.binding).toBe("ASSETS")
-})
-
-test("adopts the existing production Worker and only the requested Cloudflare resources", async () => {
+test("adopts the existing production Worker, only the requested Cloudflare resources, and Worker-first relay routes the SPA fallback cannot mask", async () => {
   const config = await Bun.file(new URL("../wrangler.jsonc", import.meta.url)).json()
   expect(config).toMatchObject({
     name: "ycoding-cloud",

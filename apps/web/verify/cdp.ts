@@ -128,6 +128,10 @@ export async function launchBrowser(executable: string, width: number, height: n
         setColorScheme: (scheme: "light" | "dark") => call("Emulation.setEmulatedMedia", {
           features: [{ name: "prefers-color-scheme", value: scheme }],
         }),
+        async setAnimationPlaybackRate(playbackRate: number) {
+          await call("Animation.enable")
+          await call("Animation.setPlaybackRate", { playbackRate })
+        },
         setReducedMotion: (reduce: boolean) => call("Emulation.setEmulatedMedia", {
           features: [{ name: "prefers-reduced-motion", value: reduce ? "reduce" : "no-preference" }],
         }),

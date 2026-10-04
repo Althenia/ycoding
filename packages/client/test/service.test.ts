@@ -55,9 +55,13 @@ test("waits for a registered service to finish starting", async () => {
   const registration = join(directory, "service.json")
   const process = spawn(registration, "starting")
   await waitForFile(registration)
-  const result = run(Service.ensure({ file: registration, version: "test", command: [] }))
+  const settled = { value: false }
+  const result = run(Service.ensure({ file: registration, version: "test", command: [] })).finally(() => {
+    settled.value = true
+  })
 
-  await Bun.sleep(500)
+  await waitForLines(registration + ".waiting", 2)
+  expect(settled.value).toBe(false)
   expect(process.exitCode).toBe(null)
   await writeFile(registration + ".release", "")
   expect((await result).url).toBe((await Bun.file(registration).json()).url)
@@ -114,8 +118,7 @@ test("does not spawn contenders while an incompatible service rejects replacemen
     { signal: controller.signal },
   )
 
-  await waitForFile(registration + ".stop-attempt")
-  await Bun.sleep(500)
+  await waitForLines(registration + ".stop-attempt", 2)
   controller.abort()
   await starting.catch(() => undefined)
 
@@ -228,7 +231,7 @@ test("replaces an incompatible owner that appears during startup", async () => {
       command: [process.execPath, fixture, registration, "delayed", "8000"],
     }),
   )
-  await Bun.sleep(1_000)
+  await waitForFile(registration + ".owner")
   const old = spawn(registration, "old")
   await waitForFile(registration)
   const endpoint = await starting
@@ -267,6 +270,17 @@ async function waitForFile(file: string) {
     await Bun.sleep(5)
   }
   throw new Error(`Timed out waiting for ${file}`)
+}
+
+async function waitForLines(file: string, count: number) {
+  for (let attempt = 0; attempt < 2_000; attempt++) {
+    const text = await Bun.file(file)
+      .text()
+      .catch(() => "")
+    if (text.split("\n").length - 1 >= count) return
+    await Bun.sleep(5)
+  }
+  throw new Error(`Timed out waiting for ${count} lines in ${file}`)
 }
 
 async function health(url: string) {

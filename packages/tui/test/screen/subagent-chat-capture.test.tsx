@@ -58,7 +58,7 @@ test("captures populated subagent chat states at reference terminal dimensions",
     }
     if (viewport.width === 80) {
       expect(lines.join("\n")).toContain("↑ Pr…")
-      expect(lines.join("\n")).not.toContain("? test-triage")
+      expect(lines.join("\n")).toContain("? test-triage")
       expect(lines.join("\n")).not.toContain("◦ keymap-audit")
     }
     // Wide transcript mode renders expanded reasoning with its left border; narrow terminals omit it.

@@ -2,7 +2,7 @@ import { $ } from "bun"
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Deferred, Duration, Effect, Fiber, Layer, Option, Schedule, Stream } from "effect"
+import { Deferred, Duration, Effect, Fiber, Layer, Option, Queue, Schedule, Stream } from "effect"
 import { Config } from "@ycoding-ai/core/config"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
@@ -140,30 +140,38 @@ it.live("publishes create, update, and delete changes through the recursive fall
     const created = path.join(tmp.path, "created.txt")
     yield* fs.writeFileString(existing, "before")
 
+    const sentinel = path.join(tmp.path, ".watcher-ready")
     const next = <E>(file: string, type: Watcher.Update["type"], trigger: Effect.Effect<void, E>) =>
       Effect.gen(function* () {
-        const update = yield* watcher
+        const updates = yield* Queue.unbounded<Watcher.Update>()
+        yield* watcher
           .subscribe({ path: tmp.path, type: "directory" })
           .pipe(
-            Stream.filter((event) => event.path === file && event.type === type),
-            Stream.take(1),
-            Stream.runHead,
+            Stream.runForEach((event) => Queue.offer(updates, event)),
             Effect.forkScoped({ startImmediately: true }),
           )
-        yield* Effect.sleep("50 millis")
+        const take = (matches: (event: Watcher.Update) => boolean): Effect.Effect<Watcher.Update> =>
+          Queue.take(updates).pipe(Effect.flatMap((event) => (matches(event) ? Effect.succeed(event) : take(matches))))
+        const ready: Effect.Effect<Watcher.Update, unknown> = fs
+          .writeFileString(sentinel, `ready-${Math.random()}`)
+          .pipe(
+            Effect.andThen(take((event) => event.path === sentinel).pipe(Effect.timeoutOption("250 millis"))),
+            Effect.flatMap(Option.match({ onNone: () => ready, onSome: Effect.succeed })),
+          )
+        yield* ready
         yield* trigger
-        return yield* Fiber.join(update).pipe(Effect.timeout("5 seconds"))
+        return yield* take((event) => event.path === file && event.type === type).pipe(Effect.timeout("5 seconds"))
       })
 
-    expect((yield* next(existing, "update", fs.writeFileString(existing, "after"))).valueOrUndefined).toEqual({
+    expect(yield* next(existing, "update", fs.writeFileString(existing, "after"))).toEqual({
       path: existing,
       type: "update",
     })
-    expect((yield* next(existing, "delete", fs.remove(existing))).valueOrUndefined).toEqual({
+    expect(yield* next(existing, "delete", fs.remove(existing))).toEqual({
       path: existing,
       type: "delete",
     })
-    expect((yield* next(created, "create", fs.writeFileString(created, "created"))).valueOrUndefined).toEqual({
+    expect(yield* next(created, "create", fs.writeFileString(created, "created"))).toEqual({
       path: created,
       type: "create",
     })

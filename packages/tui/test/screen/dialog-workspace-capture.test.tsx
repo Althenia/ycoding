@@ -135,6 +135,11 @@ async function capture(
     const rows = (frame.endsWith("\n") ? frame.slice(0, -1) : frame).split("\n")
     expect(rows).toHaveLength(viewport.height)
     for (const row of rows) expect(row.length).toBeLessThanOrEqual(viewport.width)
+    if (name === "command-palette") {
+      expect(frame).toContain("Suggested")
+      expect(frame).toContain("Open settings")
+      expect(frame).toContain("New session")
+    }
 
     // --- Focused assertions for open TOON differences ---
 

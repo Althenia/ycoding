@@ -2,6 +2,7 @@
 import { testRender } from "@opentui/solid"
 import { BoxRenderable, TextRenderable, type Renderable } from "@opentui/core"
 import { expect, test } from "bun:test"
+import type { YCodingEvent } from "@ycoding-ai/client"
 import { createSignal, onMount, Show } from "solid-js"
 import { ConfigProvider } from "../../src/config"
 import { ThemeProvider } from "../../src/context/theme"
@@ -115,7 +116,11 @@ test("does not show an update toast after unmount", async () => {
     const [shown, setShown] = createSignal(true)
     hide = () => setShown(false)
     onMount(mounted)
-    return <Show when={shown()}><UpdateNotice message={message} /></Show>
+    return (
+      <Show when={shown()}>
+        <UpdateNotice message={message} />
+      </Show>
+    )
   }
 
   const app = await testRender(
@@ -200,7 +205,9 @@ for (const viewport of [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE]) {
         expect(body.fg.toInts()).toEqual(messageInk)
         expect(body.bg.toInts()).toEqual(overlay)
         expect(border).toHaveLength(toast.height * 2)
-        expect(border.every((span) => span.fg.toInts().every((value, index) => value === current.borderAccent[index]))).toBe(true)
+        expect(
+          border.every((span) => span.fg.toInts().every((value, index) => value === current.borderAccent[index])),
+        ).toBe(true)
       } finally {
         app.renderer.destroy()
       }
@@ -225,17 +232,17 @@ test("keeps a capped toast on the physical right edge above the docked session r
         <ConfigProvider config={createTuiResolvedConfig()}>
           <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
             <RouteProvider initialRoute={{ type: "session", sessionID: "ses_toast" }}>
-            <ToastProvider>
-              <box width={width} height={24}>
-                <box flexGrow={1} />
-                {railPlacement(width) === "docked" && (
-                  <box id="session-rail" position="absolute" top={0} right={0} width={rail} height="100%">
-                    <SessionRailContent sessionID="ses_toast" title={title} />
-                  </box>
-                )}
-                <ToastFixture />
-              </box>
-            </ToastProvider>
+              <ToastProvider>
+                <box width={width} height={24}>
+                  <box flexGrow={1} />
+                  {railPlacement(width) === "docked" && (
+                    <box id="session-rail" position="absolute" top={0} right={0} width={rail} height="100%">
+                      <SessionRailContent sessionID="ses_toast" title={title} />
+                    </box>
+                  )}
+                  <ToastFixture />
+                </box>
+              </ToastProvider>
             </RouteProvider>
           </ThemeProvider>
         </ConfigProvider>
@@ -319,15 +326,32 @@ test("renders the full docked session route with a top-right toast over the rail
     ...DESIGN_VIEWPORT_WIDE,
     args: { sessionID: "ses_toast" },
     route: toastRoute,
-    settle: "Provider usage refreshed",
+    settle: "New session - 2026-07-30T06:00",
   })
 
   try {
+    await screen.waitForEventStream()
+    screen.events.emit({
+      id: "evt_toast",
+      created: 1,
+      type: "tui.toast.show",
+      data: { variant: "info", message: "Provider usage refreshed", duration: 60_000 },
+    } satisfies YCodingEvent)
+    await waitFor(() => screen.frame().includes("Provider usage refreshed"), "the toast event")
     expect(screen.frame()).toContain("Provider usage refreshed")
   } finally {
     await screen.dispose()
   }
 }, 60_000)
+
+async function waitFor(predicate: () => boolean, label: string) {
+  const deadline = Date.now() + 5000
+  while (Date.now() < deadline) {
+    if (predicate()) return
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+  throw new Error(`Timed out waiting for ${label}`)
+}
 
 function descendants(root: Renderable): BoxRenderable[] {
   return root.getChildren().flatMap((child) => {
@@ -369,7 +393,6 @@ function toastRoute(url: URL) {
     time: { created: 1, updated: 1 },
   }
 
-  if (url.pathname === "/api/event") return toastEvents()
   if (url.pathname === "/api/fs/list") return json({ location, data: [] })
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
@@ -426,33 +449,20 @@ function toastRoute(url: URL) {
   if (url.pathname === "/api/agent")
     return json({
       location,
-      data: [{ id: "build", name: "Build", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }],
+      data: [
+        {
+          id: "build",
+          name: "Build",
+          request: { headers: {}, body: {} },
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+        },
+      ],
     })
   if (["/api/integration", "/api/command", "/api/skill", "/api/reference"].includes(url.pathname))
     return json({ location, data: [] })
-  if (url.pathname === "/api/permission/request" || url.pathname === "/api/form/request") return json({ location, data: [] })
+  if (url.pathname === "/api/permission/request" || url.pathname === "/api/form/request")
+    return json({ location, data: [] })
   return undefined
-}
-
-function toastEvents() {
-  const encoder = new TextEncoder()
-  let timeout: ReturnType<typeof setTimeout> | undefined
-  return new Response(
-    new ReadableStream({
-      start(controller) {
-        controller.enqueue(encoder.encode('data: {"id":"evt_connected","type":"server.connected","data":{}}\n\n'))
-        timeout = setTimeout(() => {
-          controller.enqueue(
-            encoder.encode(
-              'data: {"id":"evt_toast","created":1,"type":"tui.toast.show","data":{"variant":"info","message":"Provider usage refreshed","duration":60000}}\n\n',
-            ),
-          )
-        }, 1_000).unref()
-      },
-      cancel() {
-        if (timeout) clearTimeout(timeout)
-      },
-    }),
-    { headers: { "content-type": "text/event-stream" } },
-  )
 }

@@ -10,5 +10,4 @@ process.env.XDG_CONFIG_HOME = path.join(root, "config")
 process.env.XDG_DATA_HOME = path.join(root, "data")
 process.env.XDG_STATE_HOME = path.join(root, "state")
 process.env.YCODING_DB = ":memory:"
-process.env.YCODING_MODELS_PATH = path.join(import.meta.dir, "plugin", "fixtures", "models-dev.json")
-process.env.YCODING_DISABLE_MODELS_FETCH = "true"
+delete process.env.CLAUDE_CODE_ENTRYPOINT

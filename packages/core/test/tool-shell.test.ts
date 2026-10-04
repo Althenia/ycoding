@@ -561,15 +561,7 @@ describe("ShellTool", () => {
           Effect.gen(function* () {
             const shell = yield* Shell.Service
             const prepared = yield* shell.prepare({ command: helloCommand, cwd: tmp.path, timeout: 50 })
-            const result = yield* Effect.raceFirst(
-              shell.create(prepared).pipe(
-                Effect.exit,
-                Effect.map((exit) => ({ type: "settled" as const, exit })),
-              ),
-              Effect.sleep("250 millis").pipe(Effect.as({ type: "hung" as const })),
-            )
-            expect(result.type).toBe("settled")
-            if (result.type === "settled") expect(result.exit).toMatchObject({ _tag: "Failure" })
+            expect(yield* shell.create(prepared).pipe(Effect.exit)).toMatchObject({ _tag: "Failure" })
             expect(yield* shell.list()).toEqual([])
           }),
         )

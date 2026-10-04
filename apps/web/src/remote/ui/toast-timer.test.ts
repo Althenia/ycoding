@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test"
 import { createToastTimer } from "./toast-timer"
 
 function observe(duration: number, exit: number) {
@@ -13,30 +13,37 @@ function observe(duration: number, exit: number) {
 }
 
 describe("toast timer", () => {
-  test("starts leaving after the duration and finishes after the exit", async () => {
+  beforeEach(() => jest.useFakeTimers())
+  afterEach(() => jest.useRealTimers())
+
+  test("starts leaving after the duration and finishes after the exit", () => {
     const { events } = observe(40, 30)
-    await Bun.sleep(20)
+    jest.advanceTimersByTime(39)
     expect(events).toEqual([])
-    await Bun.sleep(40)
+    jest.advanceTimersByTime(1)
     expect(events).toEqual(["leaving"])
-    await Bun.sleep(60)
+    jest.advanceTimersByTime(29)
+    expect(events).toEqual(["leaving"])
+    jest.advanceTimersByTime(1)
     expect(events).toEqual(["leaving", "done"])
   })
 
-  test("holds the remaining time while paused and spends only that remainder after resuming", async () => {
+  test("holds the remaining time while paused and spends only that remainder after resuming", () => {
     const { events, timer } = observe(200, 20)
-    await Bun.sleep(80)
+    jest.advanceTimersByTime(80)
     timer.pause()
-    await Bun.sleep(300)
+    jest.advanceTimersByTime(300)
     expect(events).toEqual(["paused"])
     timer.resume()
-    await Bun.sleep(60)
+    jest.advanceTimersByTime(119)
     expect(events).toEqual(["paused", "running"])
-    await Bun.sleep(180)
+    jest.advanceTimersByTime(1)
+    expect(events).toEqual(["paused", "running", "leaving"])
+    jest.advanceTimersByTime(20)
     expect(events).toEqual(["paused", "running", "leaving", "done"])
   })
 
-  test("ignores repeated pause and resume", async () => {
+  test("ignores repeated pause and resume", () => {
     const { events, timer } = observe(200, 20)
     timer.resume()
     timer.pause()
@@ -47,24 +54,26 @@ describe("toast timer", () => {
     timer.dispose()
   })
 
-  test("a manual dismiss leaves at once, cannot be paused, and finishes once", async () => {
+  test("a manual dismiss leaves at once, cannot be paused, and finishes once", () => {
     const { events, timer } = observe(1_000, 30)
     timer.dismiss()
     timer.dismiss()
     timer.pause()
     timer.resume()
     expect(events).toEqual(["leaving"])
-    await Bun.sleep(80)
+    jest.advanceTimersByTime(30)
+    expect(events).toEqual(["leaving", "done"])
+    jest.advanceTimersByTime(1_000)
     expect(events).toEqual(["leaving", "done"])
   })
 
-  test("dispose cancels both the expiry and the exit", async () => {
+  test("dispose cancels both the expiry and the exit", () => {
     const expiring = observe(20, 20)
     expiring.timer.dispose()
     const leaving = observe(1_000, 40)
     leaving.timer.dismiss()
     leaving.timer.dispose()
-    await Bun.sleep(100)
+    jest.advanceTimersByTime(2_000)
     expect(expiring.events).toEqual([])
     expect(leaving.events).toEqual(["leaving"])
   })

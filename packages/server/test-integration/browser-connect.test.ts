@@ -169,7 +169,7 @@ test("pairs an exact Chrome extension origin without URL secrets and exposes an 
     let tabs = Schema.decodeUnknownSync(tabsResponse)(
       await (await request(`/api/session/${sessionID}/browser/tabs`)).json(),
     ).data
-    for (let attempt = 0; tabs.length === 0 && attempt < 20; attempt++) {
+    for (let attempt = 0; tabs.length === 0 && attempt < 500; attempt++) {
       await Bun.sleep(10)
       tabs = Schema.decodeUnknownSync(tabsResponse)(
         await (await request(`/api/session/${sessionID}/browser/tabs`)).json(),

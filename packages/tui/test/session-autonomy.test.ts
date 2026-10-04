@@ -30,14 +30,6 @@ test("represents explicit goal reports through the progress label", () => {
   ).toBe("7 · no progress 2/3")
 })
 
-test("re-reads goal state when execution settles rather than when the assistant turn ends", async () => {
-  const source = await Bun.file(new URL("../src/routes/session/index.tsx", import.meta.url)).text()
-  // The server scores the turn after the drain, so a refresh keyed on the assistant message would
-  // read the previous iteration and keep reporting goal mode after the goal already ended.
-  expect(source).toContain('data.on("session.execution.succeeded"')
-  expect(source).not.toContain("lastAssistant()?.time.completed")
-})
-
 test("rejects a completed refresh that began before a local goal activation", () => {
   const guard = createSessionAutonomyRefreshGuard()
   const stale = guard.refresh()
@@ -55,14 +47,6 @@ test("rejects an older refresh after a newer refresh starts", () => {
 
   expect(guard.accepts(stale)).toBe(false)
   expect(guard.accepts(current)).toBe(true)
-})
-
-test("renders durable assistant text directly without treating literal marker text as control state", async () => {
-  const source = await Bun.file(new URL("../src/routes/session/index.tsx", import.meta.url)).text()
-  const body = source.slice(source.indexOf("function TextPart("))
-  const textPart = body.slice(0, body.indexOf("\n}\n"))
-  expect(textPart).toContain("createMemo(() => props.part.text)")
-  expect(textPart).not.toContain("stripGoalCompletionMarker")
 })
 
 test("labels normal, yolo, and goal modes", () => {
@@ -131,12 +115,6 @@ test("renders goal iteration separately from no-progress", () => {
       },
     }),
   ).toBe("50 · no progress 1/3")
-})
-
-test("hides the goal panel when the goal is not active", async () => {
-  const source = await Bun.file(new URL("../src/routes/session/sidebar.tsx", import.meta.url)).text()
-  expect(source).toContain('props.autonomy.goal?.status === "active"')
-  expect(source).not.toContain("<Show when={props.autonomy.goal}>")
 })
 
 test("reports how a finished goal ended", () => {

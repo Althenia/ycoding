@@ -442,6 +442,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   let openRootInfo: SessionInfoView | undefined
   let loadingPageToken: number | undefined
   let statusReadOwner: RemoteTransport | undefined
+  let statusReadPending = false
   let catalogGeneration = 0
   let recoveries = 0
   const recoveryWaiters = new Set<{ readonly scope: QueryScope; readonly settle: (recovered: boolean) => void }>()
@@ -1166,6 +1167,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       lastStatusReload = -Infinity
       lastCarouselReload = -Infinity
       statusReadOwner = undefined
+      statusReadPending = false
       statusFrameRevision += 1
       statusBaseline = false
       setState({ sessionStatus: undefined, carouselSessions: [], carouselStatus: "loading" })
@@ -1747,11 +1749,22 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   const readSessionStatus = async (owner: RemoteTransport) => {
     if (statusReadOwner === owner) return
     statusReadOwner = owner
+    statusReadPending = true
     const revision = statusFrameRevision
-    const outcome = await owner.request("session.status")
-    if (!isCurrentConnection(owner) || revision !== statusFrameRevision ||
-      (statusBaseline && container.state.sessionStatus !== undefined)) return
-    const status = outcome.status === "ok" ? parseSessionStatus(outcome.value) : undefined
+    let outcome: RemoteRequestOutcome | undefined
+    try {
+      outcome = await owner.request("session.status")
+    } catch {
+      console.error("Session status read failed")
+    } finally {
+      if (statusReadOwner === owner) statusReadPending = false
+    }
+    if (!isCurrentConnection(owner)) return
+    if (revision !== statusFrameRevision || (statusBaseline && container.state.sessionStatus !== undefined)) {
+      if (statusReloadLocal || carouselRefreshPending) void reloadStatusFirstPage(owner)
+      return
+    }
+    const status = outcome?.status === "ok" ? parseSessionStatus(outcome.value) : undefined
     if (status !== undefined) {
       statusBaseline = true
       publishSessionStatus(status)
@@ -1789,10 +1802,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (statusReloading) return
     const now = monotonicNow()
     const loadLocal = statusReloadLocal && container.state.selectedWorkspaceID !== undefined && loadingPageToken !== sessionsToken && now - lastStatusReload >= 5_000
-    const loadCarousel = carouselRefreshPending && now - lastCarouselReload >= 5_000
+    const waitingForStatus = statusReadOwner === owner && statusReadPending && !statusBaseline
+    if (waitingForStatus && !statusReloadLocal) return
+    const loadCarousel = carouselRefreshPending && !waitingForStatus && now - lastCarouselReload >= 5_000
     if (!loadLocal && !loadCarousel) {
       const localDelay = statusReloadLocal ? loadingPageToken === sessionsToken ? 50 : Math.max(1, Math.ceil(5_000 - (now - lastStatusReload))) : Infinity
-      const carouselDelay = carouselRefreshPending ? Math.max(1, Math.ceil(5_000 - (now - lastCarouselReload))) : Infinity
+      const carouselDelay = carouselRefreshPending && !waitingForStatus ? Math.max(1, Math.ceil(5_000 - (now - lastCarouselReload))) : Infinity
       cancelStatusReload?.()
       cancelStatusReload = schedule(() => {
         cancelStatusReload = undefined
@@ -2501,6 +2516,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       cancelStatusReload?.()
       cancelStatusReload = undefined
       statusReadOwner = undefined
+      statusReadPending = false
       statusBaseline = false
       statusReloading = false
       statusReloadLocal = false

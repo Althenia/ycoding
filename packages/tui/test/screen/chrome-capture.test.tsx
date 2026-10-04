@@ -47,6 +47,16 @@ test("captures the product chrome variants at canonical terminal dimensions", as
       const rows = rowsOf(app.captureCharFrame())
       expect(rows).toHaveLength(viewport.height)
       for (const row of rows) expect(row.length).toBeLessThanOrEqual(viewport.width)
+      const frame = rows.join("\n")
+      for (const text of [
+        "Claude Opus 5",
+        "ready",
+        "? awaiting input",
+        "provider error",
+        "YOLO 2",
+        "guardrail blocked",
+        "Enter approve",
+      ]) expect(frame).toContain(text)
       await Bun.write(path.join(renders, `chrome-components-${viewport.width}x${viewport.height}.txt`), rows.join("\n"))
     } finally {
       app.renderer.destroy()

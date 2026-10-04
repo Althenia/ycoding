@@ -586,7 +586,7 @@ describe("run interactive runtime", () => {
           createSessionTransport: async (input) => {
             transportLocation = input.location
             await findFiles?.("index")
-            setTimeout(() => input.footer.close(), 0)
+            input.footer.close()
             return {
               runPromptTurn: async () => {},
               interruptActiveTurn: async () => {},

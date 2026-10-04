@@ -44,6 +44,8 @@ let managedReceipt = false
 let commandGate: Promise<void> | undefined
 let commandStarted: (() => void) | undefined
 let commandRequests: Array<{ id: string; command: string; arguments: string; resume?: boolean }> = []
+let shellRequests: Array<{ command: string }> = []
+let shellGate: Promise<void> | undefined
 
 function resetFixture() {
   promptRequests = []
@@ -52,6 +54,8 @@ function resetFixture() {
   skillRequests = []
   catalogCommand = false
   commandRequests = []
+  shellRequests = []
+  shellGate = undefined
   managedReceipt = false
 }
 
@@ -83,6 +87,17 @@ const route: FetchHandler = async (url, request) => {
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
   if (url.pathname === `/api/session/${sessionID}/model` && request.method === "POST")
     return new Response(null, { status: 204 })
+  if (url.pathname === `/api/session/${sessionID}/shell` && request.method === "POST") {
+    const body: unknown = await request.json()
+    if (!body || typeof body !== "object" || !("command" in body) || typeof body.command !== "string")
+      throw new Error("Invalid shell request")
+    shellRequests.push({ command: body.command })
+    if (shellRequests.length === 1) {
+      await shellGate
+      return json({ message: "shell dispatch rejected" }, { status: 500 })
+    }
+    return new Response(null, { status: 204 })
+  }
   if (url.pathname === `/api/session/${sessionID}/skill` && request.method === "POST") {
     skillRequests.push((await request.json()) as { id: string; skill: string; resume: boolean })
     skillStarted?.()
@@ -567,6 +582,110 @@ test("receipt retry uses the retained prompt identity and leaves an editable dra
     expect(promptRequests.map((request) => request.resume)).toEqual([false, false, true])
     expect(composer(screen.renderer.root)?.plainText).toBe("unsent draft")
   } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("shell rejection retains the draft and restores the local retry without duplicate dispatch", async () => {
+  resetFixture()
+  const gate = Promise.withResolvers<void>()
+  shellGate = gate.promise
+  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+  try {
+    await focusComposer(screen)
+    screen.input.pressKey("!")
+    await screen.input.typeText("echo retry")
+    screen.input.pressEnter()
+    await waitFor(() => shellRequests.length === 1, "first shell dispatch")
+    screen.input.pressEnter()
+    expect(shellRequests).toEqual([{ command: "echo retry" }])
+    expect(composer(screen.renderer.root)?.plainText).toBe("echo retry")
+
+    gate.resolve()
+    await waitFor(() => screen.frame().includes("✗ Error · Shell submission failed"), "shell rejection feedback")
+    expect(screen.frame()).toContain("Check the Session before retrying")
+    expect(screen.frame()).toContain("Shell submission failed · draft retained")
+    expect(composer(screen.renderer.root)?.plainText).toBe("echo retry")
+    expect(shellRequests).toHaveLength(1)
+
+    await screen.input.typeText(" changed")
+    screen.input.pressKey("p", { ctrl: true })
+    await waitFor(() => screen.frame().includes("Commands"), "shell recovery palette")
+    await screen.input.typeText("retry previous submission")
+    await waitFor(() => screen.frame().includes("Retry previous submission") || screen.frame().includes("No results"), "shell retry search")
+    expect(screen.frame()).toContain("Retry previous submission")
+    expect(screen.frame()).toContain("Discard previous submission recovery")
+    screen.input.pressEnter()
+    await waitFor(() => composer(screen.renderer.root)?.plainText === "echo retry", "restored shell draft")
+    expect(shellRequests).toHaveLength(1)
+    screen.input.pressEnter()
+    await waitFor(() => shellRequests.length === 2, "explicit shell retry")
+    expect(shellRequests).toEqual([{ command: "echo retry" }, { command: "echo retry" }])
+  } finally {
+    gate.resolve()
+    shellGate = undefined
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("discarding failed shell recovery does not replay the command or erase its draft", async () => {
+  resetFixture()
+  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+  try {
+    screen.input.pressKey("p", { ctrl: true })
+    await waitFor(() => screen.frame().includes("Commands"), "pristine recovery palette")
+    await screen.input.typeText("previous submission")
+    await waitFor(() => screen.frame().includes("No results") || screen.frame().includes("Retry previous submission"), "pristine recovery search")
+    expect(screen.frame()).not.toContain("Retry previous submission")
+    expect(screen.frame()).not.toContain("Discard previous submission recovery")
+    screen.input.pressKey("ESCAPE")
+    await waitFor(() => !screen.frame().includes("Commands"), "closed pristine palette")
+    await focusComposer(screen)
+    screen.input.pressKey("!")
+    await screen.input.typeText("echo discard")
+    screen.input.pressEnter()
+    await waitFor(() => shellRequests.length === 1, "failed shell dispatch")
+    await waitFor(() => screen.frame().includes("Shell submission failed"), "shell rejection")
+    screen.input.pressKey("p", { ctrl: true })
+    await waitFor(() => screen.frame().includes("Commands"), "recovery palette")
+    await screen.input.typeText("Discard previous submission recovery")
+    await waitFor(() => screen.frame().includes("Discard previous submission recovery"), "discard command")
+    screen.input.pressEnter()
+    await waitFor(() => screen.frame().includes("Previous submission recovery discarded"), "local discard")
+    expect(shellRequests).toEqual([{ command: "echo discard" }])
+    expect(composer(screen.renderer.root)?.plainText).toBe("echo discard")
+    screen.input.pressKey("p", { ctrl: true })
+    await waitFor(() => screen.frame().includes("Commands"), "discarded recovery palette")
+    await screen.input.typeText("previous submission")
+    await waitFor(() => screen.frame().includes("No results") || screen.frame().includes("Retry previous submission"), "discarded recovery search")
+    expect(screen.frame()).not.toContain("Retry previous submission")
+    expect(screen.frame()).not.toContain("Discard previous submission recovery")
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("cancelled shell submission keeps cancellation feedback instead of a late request error", async () => {
+  resetFixture()
+  const gate = Promise.withResolvers<void>()
+  shellGate = gate.promise
+  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+  try {
+    await focusComposer(screen)
+    screen.input.pressKey("!")
+    await screen.input.typeText("echo cancel")
+    screen.input.pressEnter()
+    await waitFor(() => shellRequests.length === 1, "in-flight shell dispatch")
+    screen.input.pressKey("ESCAPE")
+    await waitFor(() => screen.frame().includes("Cancelled · draft retained"), "cancelled shell feedback")
+    gate.resolve()
+    await screen.renderOnce()
+    expect(shellRequests).toEqual([{ command: "echo cancel" }])
+    expect(composer(screen.renderer.root)?.plainText).toBe("echo cancel")
+    expect(screen.frame()).not.toContain("Shell submission failed")
+  } finally {
+    gate.resolve()
+    shellGate = undefined
     await screen.dispose()
   }
 }, 30_000)

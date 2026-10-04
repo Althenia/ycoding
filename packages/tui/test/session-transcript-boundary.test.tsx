@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { testRender } from "@opentui/solid"
 import { describe, expect, test } from "bun:test"
+import { ErrorBoundary } from "solid-js"
 import type { SessionMessageInfo } from "@ycoding-ai/client"
 import type { DataSessionCompactionLifecycle } from "../src/context/data"
 import { SessionRowView } from "../src/routes/session/index"
@@ -48,6 +49,32 @@ function frame(app: Awaited<ReturnType<typeof testRender>>) {
 }
 
 describe("transcript row residency", () => {
+  test("a resident row outside its Session reports current context guidance", async () => {
+    const message: Extract<SessionMessageInfo, { type: "assistant" }> = {
+      id: "msg_missing_session_context",
+      type: "assistant",
+      agent: "build",
+      model: { providerID: "openai", id: "fixture-model" },
+      content: [],
+      time: { created: 1, completed: 2 },
+    }
+    const app = await testRender(
+      () => (
+        <ErrorBoundary fallback={(error) => <text>{error instanceof Error ? error.message : String(error)}</text>}>
+          <SessionRowView row={{ type: "assistant-footer", messageID: message.id }} message={() => message} />
+        </ErrorBoundary>
+      ),
+      { width: 100, height: 4 },
+    )
+    try {
+      await app.renderOnce()
+      expect(app.captureCharFrame()).toContain("must be used within a Session component")
+      expect(app.captureCharFrame()).not.toContain("V2")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
   test("allocates no lines or child context for a hidden goal tool", async () => {
     const message: Extract<SessionMessageInfo, { type: "assistant" }> = {
       id: "msg_hidden_goal",

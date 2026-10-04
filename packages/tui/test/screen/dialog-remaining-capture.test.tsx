@@ -83,7 +83,7 @@ const states = [
     { providerID: "openai", modelID: "gpt-5-2" },
     { providerID: "google", modelID: "gemini-3-pro" },
   ]} /> },
-  { name: "select-variant", settle: "deep reasoning · highest cost", evidence: "lower latency", view: () => <DialogVariant variants={["max", "balanced", "fast"]} current="balanced" /> },
+  { name: "select-variant", settle: "Select variant", evidence: "balanced", view: () => <DialogVariant variants={["max", "balanced", "fast"]} current="balanced" /> },
   { name: "switch-session", settle: "Provider cache audit", evidence: "Theme migration", view: () => <DialogSessionList pinned={[sessionID]} messageCounts={{ [sessionID]: 1_204, ses_docs_capture: 88, ses_keymap_capture: 41, ses_theme_capture: 210 }} now={captureNow} /> },
   { name: "session-goal", settle: "Set autonomous goal", evidence: "Activate the concrete goal dialog", view: () => <DialogSessionGoal sessionID={sessionID} currentGoal="Activate the concrete goal dialog" /> },
   { name: "session-timeline", settle: "Fix shared cache accounting", evidence: "Verify baseline", view: () => <DialogTimeline sessionID={sessionID} onMove={() => {}} presentation={[

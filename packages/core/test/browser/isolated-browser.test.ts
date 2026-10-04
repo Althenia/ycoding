@@ -548,7 +548,11 @@ describe("isolated browser service", () => {
 
   test("settles and cancels an in-flight mutation before stop destroys the owned runtime", async () => {
     let closed = 0
-    await run(fixtureExecutor(fixtureRuntime({ action: () => Effect.never, close: () => closed++ })),
+    const entered = Promise.withResolvers<void>()
+    await run(fixtureExecutor(fixtureRuntime({
+      action: () => Effect.sync(() => entered.resolve()).pipe(Effect.andThen(Effect.never)),
+      close: () => closed++,
+    })),
       Effect.gen(function* () {
         const isolated = yield* IsolatedBrowser.Service
         const started = yield* isolated.start(sessionID, { url: "https://example.test/form" })
@@ -564,7 +568,7 @@ describe("isolated browser service", () => {
             action: { type: "click", ref: "b1" },
           })
           .pipe(Effect.forkScoped)
-        yield* Effect.sleep("5 millis")
+        yield* Effect.promise(() => entered.promise)
         yield* isolated.stop(sessionID)
         expect(yield* Fiber.join(running)).toMatchObject({ status: "uncertain", callID: "stopped-action" })
       }),
@@ -574,6 +578,7 @@ describe("isolated browser service", () => {
 
   test("settles caller cancellation once and ignores a late executor result", async () => {
     const late = Promise.withResolvers<IsolatedBrowserExecutor.ActionOutput>()
+    const entered = Promise.withResolvers<void>()
     const actions: string[] = []
     let closed = 0
     await run(fixtureExecutor(fixtureRuntime({
@@ -581,6 +586,7 @@ describe("isolated browser service", () => {
       action: (action) =>
         Effect.promise(() => {
           actions.push(action.type)
+          entered.resolve()
           return late.promise
         }),
       close: () => closed++,
@@ -599,7 +605,7 @@ describe("isolated browser service", () => {
           action: { type: "click" as const, ref: "b1" },
         }
         const running = yield* isolated.action(input).pipe(Effect.forkScoped)
-        yield* Effect.sleep("5 millis")
+        yield* Effect.promise(() => entered.promise)
         yield* Fiber.interrupt(running)
         const retry = yield* isolated.action(input)
         expect(retry).toMatchObject({
@@ -625,10 +631,15 @@ describe("isolated browser service", () => {
 
   test("settles pending work and starts cleanup when the runtime closes spontaneously", async () => {
     const lost = Promise.withResolvers<void>()
+    const entered = Promise.withResolvers<void>()
+    const cleanup = Promise.withResolvers<void>()
     let closed = 0
     await run(fixtureExecutor(fixtureRuntime({
-      action: () => Effect.never,
-      close: () => closed++,
+      action: () => Effect.sync(() => entered.resolve()).pipe(Effect.andThen(Effect.never)),
+      close: () => {
+        closed++
+        cleanup.resolve()
+      },
       closed: Effect.promise(() => lost.promise),
     })),
       Effect.gen(function* () {
@@ -646,15 +657,13 @@ describe("isolated browser service", () => {
             action: { type: "click", ref: "b1" },
           })
           .pipe(Effect.forkScoped)
-        yield* Effect.sleep("5 millis")
+        yield* Effect.promise(() => entered.promise)
         lost.resolve()
-        yield* Effect.sleep("10 millis")
-        const settledBeforeStop = running.pollUnsafe() !== undefined
-        const settlement = settledBeforeStop ? yield* Fiber.join(running) : undefined
+        const settlement = yield* Fiber.join(running)
         const status = yield* isolated.status(sessionID)
+        yield* Effect.promise(() => cleanup.promise)
         const cleanupStarted = closed
         yield* isolated.stop(sessionID)
-        expect(settledBeforeStop).toBe(true)
         expect(settlement).toMatchObject({ status: "uncertain", callID: "runtime-lost" })
         expect(status).toMatchObject({ mode: "isolated", state: "unavailable" })
         expect(cleanupStarted).toBeGreaterThanOrEqual(1)

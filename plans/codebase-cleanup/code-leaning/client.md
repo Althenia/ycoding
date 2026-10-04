@@ -12,3 +12,15 @@ At `96c6b644`: 20 tracked paths; 9 eligible hand-authored operational source fil
 | S1 anchor | `promise/index.ts` | 16 × 1 = 16 | unchanged | The package root and `./promise` exports map here; CLI and TUI use the Promise Client. |
 
 Method: tracked operational `.ts/.tsx/.js/.jsx/.css` in `src`, excluding generated clients/API declarations, tests, fixtures and declarations; physical lines × commit-path touches in `git log --no-renames --since=2026-07-20T00:00:00Z --until=2026-10-04T00:00:00Z`. Current classifier/snapshot supplies classes; S1 anchor is separate from score order. The generated Effect API is excluded even though large and churned; its owning generator is `packages/client/script/build.ts`. D14 duplication and generated-contract parity are not measured here.
+
+S1 hand-off (E78): `src/contract.ts` is outside the `exports` map with no importer; dead-code candidate for SC-client.
+
+## D14 duplication (`bunx jscpd@4`, min 70 tokens, at `2e585dce`)
+
+9 files, 945 lines; 3 clone groups, 56 duplicated lines (5.93%). Excludes tests, generated clients, `*.gen.ts`, and vendored `cursor/provider`. A clone group is a candidate for one owner only when both copies implement the same rule; matching text alone does not justify a merge.
+
+| Lines | First | Second |
+|---:|---|---|
+| 31 | `packages/client/src/effect/service.ts:147-177` | `packages/client/src/promise/service.ts:123-153` |
+| 16 | `packages/client/src/effect/service.ts:75-90` | `packages/client/src/promise/service.ts:55-70` |
+| 12 | `packages/client/src/effect/service.ts:119-130` | `packages/client/src/promise/service.ts:100-111` |

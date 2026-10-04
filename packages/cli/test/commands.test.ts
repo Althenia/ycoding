@@ -7,65 +7,42 @@ setDefaultTimeout(30_000)
 describe("shipped TUI command surface", () => {
   test.each([
     [[], "run", "update"],
-    [["run"], "Run YCoding with a message", "--model"],
     [["update"], "Update ycoding", "--version"],
   ])("shows the expected help for %j", async (args, first, second) => {
-    const result = Bun.spawnSync([process.execPath, cli, ...args, "--help"], {
-      cwd: path.resolve(import.meta.dir, ".."),
-      stdout: "pipe",
-      stderr: "pipe",
-    })
+    const result = await spawnCli([...args, "--help"])
     expect(result.exitCode).toBe(0)
-    expect(result.stdout.toString()).toContain(first)
-    expect(result.stdout.toString()).toContain(second)
+    expect(result.stdout).toContain(first)
+    expect(result.stdout).toContain(second)
   })
 
-  test("run help exposes the durable YOLO levels and removes --auto", () => {
-    const result = Bun.spawnSync([process.execPath, cli, "run", "--help"], {
-      cwd: path.resolve(import.meta.dir, ".."),
-      stdout: "pipe",
-      stderr: "pipe",
-      timeout: 10_000,
-    })
+  test("run help describes the command, exposes --model and the durable YOLO levels, and removes --auto", async () => {
+    const result = await spawnCli(["run", "--help"])
     expect(result.exitCode).toBe(0)
-    expect(result.stdout.toString()).toContain("--yolo")
-    expect(result.stdout.toString()).toContain("choices: 0, 1, 2, 3")
-    expect(result.stdout.toString()).toContain("Set durable Session YOLO level")
-    expect(result.stdout.toString()).toContain("omitted preserves it")
-    expect(result.stdout.toString()).not.toContain("--auto")
+    expect(result.stdout).toContain("Run YCoding with a message")
+    expect(result.stdout).toContain("--model")
+    expect(result.stdout).toContain("--yolo")
+    expect(result.stdout).toContain("choices: 0, 1, 2, 3")
+    expect(result.stdout).toContain("Set durable Session YOLO level")
+    expect(result.stdout).toContain("omitted preserves it")
+    expect(result.stdout).not.toContain("--auto")
   })
 
-  test.each(["4", "-1", "true"])("run rejects invalid --yolo level %s", (level) => {
-    const result = Bun.spawnSync([process.execPath, cli, "run", "hello", "--yolo", level], {
-      cwd: path.resolve(import.meta.dir, ".."),
-      stdout: "pipe",
-      stderr: "pipe",
-      timeout: 10_000,
-    })
+  test.each(["4", "-1", "true"])("run rejects invalid --yolo level %s", async (level) => {
+    const result = await spawnCli(["run", "hello", "--yolo", level])
     expect(result.exitCode).not.toBe(0)
-    expect(result.stdout.toString() + result.stderr.toString()).not.toBe("")
+    expect(result.stdout + result.stderr).not.toBe("")
   })
 
-  test("run requires an explicit --yolo value", () => {
-    const result = Bun.spawnSync([process.execPath, cli, "run", "hello", "--yolo"], {
-      cwd: path.resolve(import.meta.dir, ".."),
-      stdout: "pipe",
-      stderr: "pipe",
-      timeout: 10_000,
-    })
+  test("run requires an explicit --yolo value", async () => {
+    const result = await spawnCli(["run", "hello", "--yolo"])
     expect(result.exitCode).not.toBe(0)
-    expect(result.stdout.toString() + result.stderr.toString()).toContain("--yolo")
+    expect(result.stdout + result.stderr).toContain("--yolo")
   })
 
-  test("run rejects the removed --auto flag", () => {
-    const result = Bun.spawnSync([process.execPath, cli, "run", "hello", "--auto"], {
-      cwd: path.resolve(import.meta.dir, ".."),
-      stdout: "pipe",
-      stderr: "pipe",
-      timeout: 10_000,
-    })
+  test("run rejects the removed --auto flag", async () => {
+    const result = await spawnCli(["run", "hello", "--auto"])
     expect(result.exitCode).not.toBe(0)
-    expect(result.stdout.toString() + result.stderr.toString()).toContain("--auto")
+    expect(result.stdout + result.stderr).toContain("--auto")
   })
 
   test.each([0, 1, 2, 3] as const)("run persists --yolo %d before prompt admission", async (level) => {
@@ -126,31 +103,8 @@ describe("shipped TUI command surface", () => {
         return Response.json({ error: `unexpected ${request.method} ${url.pathname}` }, { status: 404 })
       },
     })
-    const child = Bun.spawn(
-      [
-        process.execPath,
-        cli,
-        "--model",
-        "test/model",
-        "prompt_xyz",
-        "--session",
-        "ses_test",
-        "--server",
-        server.url.toString(),
-      ],
-      { cwd: path.resolve(import.meta.dir, ".."), stdin: "ignore", stdout: "pipe", stderr: "pipe" },
-    )
-    const timeout = setTimeout(() => child.kill(), 10_000)
-    try {
-      const [exitCode] = await Promise.all([
-        child.exited,
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
-      ])
-      expect(exitCode).toBe(1)
-    } finally {
-      clearTimeout(timeout)
-    }
+    const result = await spawnCli(["--model", "test/model", "prompt_xyz", "--session", "ses_test", "--server", server.url.toString()])
+    expect(result.exitCode).toBe(1)
     expect(calls.map((call) => call.path)).toContain("/api/session/ses_test/model")
     expect(calls.find((call) => call.path === "/api/session/ses_test/model")?.body).toEqual({
       model: { providerID: "test", id: "model" },
@@ -160,15 +114,10 @@ describe("shipped TUI command surface", () => {
     })
   })
 
-  test("root --model without a prompt fails instead of silently opening the TUI", () => {
-    const result = Bun.spawnSync([process.execPath, cli, "--model", "test/model"], {
-      cwd: path.resolve(import.meta.dir, ".."),
-      stdout: "pipe",
-      stderr: "pipe",
-      timeout: 10_000,
-    })
+  test("root --model without a prompt fails instead of silently opening the TUI", async () => {
+    const result = await spawnCli(["--model", "test/model"])
     expect(result.exitCode).toBe(1)
-    expect(result.stderr.toString()).toContain("--model requires a positional prompt")
+    expect(result.stderr).toContain("--model requires a positional prompt")
   })
 })
 
@@ -210,31 +159,25 @@ async function runTransport(args: string[], options: { autonomyStatus?: number }
       return Response.json({ error: `unexpected ${request.method} ${url.pathname}` }, { status: 404 })
     },
   })
-  const child = Bun.spawn(
-    [
-      process.execPath,
-      cli,
-      "run",
-      "hello",
-      "--session",
-      "ses_yolo",
-      "--model",
-      "test/model",
-      "--server",
-      server.url.toString(),
-      ...args,
-    ],
-    { cwd: path.resolve(import.meta.dir, ".."), stdin: "ignore", stdout: "pipe", stderr: "pipe" },
-  )
-  const timeout = setTimeout(() => child.kill(), 10_000)
+  const result = await spawnCli(["run", "hello", "--session", "ses_yolo", "--model", "test/model", "--server", server.url.toString(), ...args])
+  return { calls, ...result }
+}
+
+async function spawnCli(args: string[]) {
+  const child = Bun.spawn([process.execPath, cli, ...args], {
+    cwd: path.resolve(import.meta.dir, ".."),
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  })
   try {
     const [exitCode, stdout, stderr] = await Promise.all([
       child.exited,
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
     ])
-    return { calls, exitCode, stdout, stderr }
+    return { exitCode, stdout, stderr }
   } finally {
-    clearTimeout(timeout)
+    child.kill()
   }
 }

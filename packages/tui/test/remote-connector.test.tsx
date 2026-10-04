@@ -27,6 +27,15 @@ function fakeServer() {
   }
 }
 
+async function awaitFrame(app: Awaited<ReturnType<typeof testRender>>, matches: (frame: string) => boolean) {
+  const deadline = Date.now() + 8_000
+  while (Date.now() < deadline) {
+    if (matches(app.captureCharFrame())) return
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+  expect(matches(app.captureCharFrame())).toBe(true)
+}
+
 async function renderRemote(server: ReturnType<typeof fakeServer>) {
   let remote!: ReturnType<typeof useRemote>
   let dispatch!: (id: string) => void
@@ -67,20 +76,17 @@ test("the one remote row shows colored server states even when highlighted", asy
     await view.app.waitForFrame((frame) => frame.includes("Remote connection"))
     await view.app.mockInput.typeText("Remote connection")
     const check = async (label: string, color: [number, number, number, number]) => {
-      await view.app.waitForFrame((frame) => frame.includes(`● ${label}`) && !frame.includes("Other command"))
+      await awaitFrame(view.app, (frame) => frame.includes(`● ${label}`) && !frame.includes("Other command"))
       const row = view.app.captureSpans().lines.find((line) => line.spans.some((span) => span.text.includes(`● ${label}`)))
       expect(row?.spans.find((span) => span.text.includes(`● ${label}`))?.fg.toInts()).toEqual(color)
       expect(view.app.captureCharFrame()).not.toContain("elsewhere")
     }
     await check("off", view.colors().inactive)
     server.change({ state: "on" })
-    await Bun.sleep(2_100)
     await check("on", view.colors().active)
     server.change({ state: "connecting" })
-    await Bun.sleep(2_100)
     await check("connecting", view.colors().inactive)
     server.change({ state: "error", message: "Relay rejected the device" })
-    await Bun.sleep(2_100)
     await check("error", view.colors().inactive)
   } finally {
     view.app.renderer.destroy()
@@ -131,14 +137,12 @@ test("two TUIs display one server state and reflect the other's switch within a 
     await app.waitForFrame((frame) => frame.includes("first: off") && frame.includes("second: off"))
     controls.first?.()
     await app.waitForFrame((frame) => frame.includes("first: on"))
-    const deadline = Date.now() + 2_500
-    while (Date.now() < deadline && !app.captureCharFrame().includes("second: on")) await Bun.sleep(20)
+    await awaitFrame(app, (frame) => frame.includes("second: on"))
     expect(app.captureCharFrame()).toContain("second: on")
     expect(app.captureCharFrame()).not.toContain("elsewhere")
     controls.second?.()
     await app.waitForFrame((frame) => frame.includes("second: off"))
-    const changed = Date.now() + 2_500
-    while (Date.now() < changed && !app.captureCharFrame().includes("first: off")) await Bun.sleep(20)
+    await awaitFrame(app, (frame) => frame.includes("first: off"))
     expect(app.captureCharFrame()).toContain("first: off")
     expect(server.writes).toEqual([true, false])
   } finally {
