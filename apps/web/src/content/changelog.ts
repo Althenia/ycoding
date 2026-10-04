@@ -22,6 +22,24 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.9.0",
+    date: "2026-10-04",
+    title: "Reliable shell recovery and remote protocol v4",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Reconcile verified background shells after a managed server crash and mark an owed completion notice as lost Session attention, without replaying the command. Process listing must be available to verify ownership." },
+      { tag: "Changed", text: "Upgrade the remote connector and managed local server together for WebSocket v4, then refresh open browser tabs after the matching relay and web deployment. Older v3 clients cannot connect; existing device enrollment stays valid." },
+      { tag: "Changed", text: "Update `ycoding api` operation IDs and permission/question event subscribers to the current unprefixed names; regenerate Client integrations. The old names have no aliases." },
+      { tag: "Changed", text: "Use the semantic `theme` surface in custom TUI theme consumers. Built-in palettes retain their values, and selected endpoint actions have readable contrast." },
+      { tag: "Changed", text: "Back up the local database before upgrading: inactive account/share tables are removed and a shell ledger is added. Rollback requires a backup if shell rows still need reconciliation." },
+      { tag: "Changed", text: "`ycoding update --force` restarts the server after a failed outstanding-work read and reports that running work may be interrupted; without force, it leaves the server running." },
+      { tag: "Changed", text: "Remove imports of the unproduced IDE event subpath and the non-resolving CLI daemon export; neither has a replacement alias." },
+      { tag: "Fixed", text: "Describe local tool-result images to text-only models instead of forwarding unsupported image parts." },
+      { tag: "Fixed", text: "Keep a rejected terminal shell command in the editor with explicit Retry and Discard choices, without replaying a second Enter." },
+      { tag: "Fixed", text: "Keep repeated Conversation–Office switches and viewport changes from triggering virtual-row ResizeObserver loop errors." },
+    ],
+  },
+  {
     version: "0.8.12",
     date: "2026-10-03",
     title: "Large images and actionable input requests",
