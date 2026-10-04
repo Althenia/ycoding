@@ -9,17 +9,15 @@
 - A domain may keep a minimal public wire contract here when Client generation needs it, but do not move the broader runtime model into Schema just because an event is public. Schema may own the minimum browser-safe event payload, while plugin runtime behavior stays outside Schema.
 - The root barrel exports canonical current domain contracts. Specialized event modules, manifests, and infrastructure modules use direct entrypoints when they should not become first-class root exports.
 
-## V2-only contracts
+## Current Contracts
 
-- This repository is V2 only. Do not add or restore V1 contracts, compatibility barrels, event facades, or migration-only runtime shapes.
-- Current contracts use canonical names such as `Session`, `Permission`, and `Question`.
+- Keep one current set of public contracts; do not add compatibility barrels, duplicate event facades, or migration-only runtime shapes.
+- Use canonical contract names such as `Session`, `Permission`, and `Question`.
 - `@ycoding-ai/protocol` defines the HTTP surface and `@ycoding-ai/client` exposes generated and composed client APIs.
 
 ## Events
 
-- Classify event definitions by protocol role before adding them to a public manifest: `current`, `shared transitional`, or `V1-only`.
-- Include an event in Protocol only when a current Client or runtime contract requires it.
-- Do not restore removed legacy events such as `message.updated` or `message.part.*`.
+- Include an event in the Protocol manifest only when a current Client or runtime contract requires it.
 - Preserve a single canonical event definition. Do not duplicate definitions for generation convenience.
 
 ## Module Shape
@@ -74,18 +72,18 @@
 - Current public contracts avoid `Schema.Any`.
 - Use `Schema.Json` for values that must be JSON-serializable.
 - Use `Schema.Unknown` for genuinely opaque values that require consumer-side narrowing.
-- Keep `Schema.Any` only at an explicitly unsafe compatibility boundary with a documented reason.
+- Keep `Schema.Any` only at an explicitly unsafe boundary with a documented reason.
 
 ## IDs And Identifiers
 
 - Current ID constructors expose `create()`.
-- Directional constructors such as `ascending()` or `descending()` remain only where ordering semantics are part of the public contract or compatibility requires the old method.
+- Keep directional constructors such as `ascending()` or `descending()` only where ordering semantics are part of the public contract.
 - New generated ID schemas must validate exactly the prefix they emit, including the underscore.
-- Do not tighten legacy loose ID validators without an explicit compatibility and migration decision; existing callers and tests may rely on accepted non-canonical IDs.
+- Treat narrowing an existing ID validator as a public-contract change; inspect current callers and stored values and obtain approval before changing it.
 - Reusable exported public schemas get stable, domain-qualified identifiers such as `Model.Ref` or `Agent.Color`.
 - Public schema identifiers and brands must be unique and stable. Private one-use nested schemas may remain anonymous.
 
 ## Tests For Contract Changes
 
 - Add focused tests when changing contract behavior or generated surface.
-- Cover optional properties omitting `undefined`, no accidental current-contract `Schema.Any`, stable and unique public identifiers, exact facade/schema identity, and current Protocol manifests excluding V1-only events.
+- Cover optional properties omitting `undefined`, no accidental current-contract `Schema.Any`, stable and unique public identifiers, exact facade/schema identity, and current Protocol manifests containing only events required by current Client/runtime contracts.

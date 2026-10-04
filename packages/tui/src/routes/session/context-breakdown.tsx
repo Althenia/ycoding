@@ -56,7 +56,7 @@ export function ContextBreakdownContent(props: {
   usage?: ProviderRequestSummary
   onBack: () => void
 }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const backShortcut = Keymap.useShortcut("session-context.back")
   Keymap.createLayer(() => ({
@@ -101,12 +101,12 @@ export function ContextBreakdownContent(props: {
     ["Last Activity", props.session?.time.active === undefined ? "—" : Locale.datetime(props.session.time.active)],
   ] as const)
   const hues = ["blue", "purple", "green", "orange", "red", "cyan", "yellow"] as const
-  const color = (index: number) => themeV2.hue[hues[index]][500]
+  const color = (index: number) => theme.hue[hues[index]][500]
 
-  return <box width={dimensions().width} height={dimensions().height} flexDirection="column" backgroundColor={themeV2.background.default}>
-    <box height={3} flexShrink={0} flexDirection="row" alignItems="center" paddingLeft={3} paddingRight={3} backgroundColor={themeV2.background.chrome}>
+  return <box width={dimensions().width} height={dimensions().height} flexDirection="column" backgroundColor={theme.background.default}>
+    <box height={3} flexShrink={0} flexDirection="row" alignItems="center" paddingLeft={3} paddingRight={3} backgroundColor={theme.background.chrome}>
       <BrandMark width={2} height={1} /><text> Context breakdown</text><box flexGrow={1} />
-      <text fg={themeV2.text.subdued} onMouseUp={props.onBack}>{backShortcut() ?? "esc"} back</text>
+      <text fg={theme.text.subdued} onMouseUp={props.onBack}>{backShortcut() ?? "esc"} back</text>
     </box>
     <scrollbox flexGrow={1} paddingLeft={3} paddingRight={3} paddingTop={1}>
       <box flexDirection="column" gap={1}>
@@ -114,20 +114,20 @@ export function ContextBreakdownContent(props: {
           <box flexDirection={dimensions().width >= 84 ? "row" : "column"}>
             <For each={dimensions().width >= 84 ? [rows()[index * 2], rows()[index * 2 + 1]] : [rows()[index]]}>
               {(row) => <box flexDirection="row" width={dimensions().width >= 84 ? "50%" : "100%"} minWidth={0}>
-                <text width={25} fg={themeV2.text.subdued}>{row[0]}</text><text truncate>{row[1]}</text>
+                <text width={25} fg={theme.text.subdued}>{row[0]}</text><text truncate>{row[1]}</text>
               </box>}
             </For>
           </box>
         }</For>
-        <text fg={themeV2.text.default}>Context breakdown</text>
-        <Show when={breakdown()} fallback={<text fg={themeV2.text.subdued}>The breakdown appears after this Session's next model step.</text>}>
+        <text fg={theme.text.default}>Context breakdown</text>
+        <Show when={breakdown()} fallback={<text fg={theme.text.subdued}>The breakdown appears after this Session's next model step.</text>}>
           <box flexDirection="column" gap={1}>
             <box flexDirection="row"><For each={cells()}>{(count, index) => <text fg={color(index())}>{"█".repeat(count)}</text>}</For></box>
             <box flexDirection="row" flexWrap="wrap" gap={2}>
               <For each={categories}>{([key, label], index) => <text fg={color(index())}>● {label} {total() ? (100 * breakdown()![key] / total()).toFixed(1) : "0.0"}%</text>}</For>
             </box>
             <box flexDirection="row">
-              <text width={29} fg={themeV2.text.subdued}>Category</text><text width={13} fg={themeV2.text.subdued}>{"Tokens".padStart(13)}</text><text width={8} fg={themeV2.text.subdued}>{"%".padStart(8)}</text>
+              <text width={29} fg={theme.text.subdued}>Category</text><text width={13} fg={theme.text.subdued}>{"Tokens".padStart(13)}</text><text width={8} fg={theme.text.subdued}>{"%".padStart(8)}</text>
             </box>
             <For each={categories}>{([key, label], index) => <box flexDirection="row">
               <text width={29} fg={color(index())}>{label}</text>

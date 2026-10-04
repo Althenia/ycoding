@@ -67,7 +67,7 @@ export type RunDeferredInput = {
 }
 
 type StreamTransportModule = Pick<
-  Awaited<typeof import("./stream-v2.transport")>,
+  Awaited<typeof import("./stream.transport")>,
   "createSessionTransport" | "formatUnknownError"
 >
 
@@ -735,7 +735,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
   let streamTask = deps.streamTransport
   const loadStreamTransport = () => {
     if (streamTask) return streamTask
-    streamTask = import("./stream-v2.transport")
+    streamTask = import("./stream.transport")
     return streamTask
   }
   const ensureStream = () => {

@@ -132,7 +132,7 @@ export const ProjectArtifactGroup = HttpApiGroup.make("server.projectArtifact")
       error: errors,
     })
       .annotateMerge(locationQueryOpenApi)
-      .annotateMerge(OpenApi.annotations({ identifier: "v2.artifact.list", summary: "List project artifacts" })),
+      .annotateMerge(OpenApi.annotations({ identifier: "artifact.list", summary: "List project artifacts" })),
   )
   .add(
     HttpApiEndpoint.get("artifact.get", "/api/artifact/:scope/:kind/:id", {
@@ -142,7 +142,7 @@ export const ProjectArtifactGroup = HttpApiGroup.make("server.projectArtifact")
       error: errors,
     })
       .annotateMerge(locationQueryOpenApi)
-      .annotateMerge(OpenApi.annotations({ identifier: "v2.artifact.get", summary: "Get project artifact" })),
+      .annotateMerge(OpenApi.annotations({ identifier: "artifact.get", summary: "Get project artifact" })),
   )
   .add(
     HttpApiEndpoint.post("artifact.create", "/api/artifact", {
@@ -152,7 +152,7 @@ export const ProjectArtifactGroup = HttpApiGroup.make("server.projectArtifact")
       error: errors,
     })
       .annotateMerge(locationQueryOpenApi)
-      .annotateMerge(OpenApi.annotations({ identifier: "v2.artifact.create", summary: "Create project artifact" })),
+      .annotateMerge(OpenApi.annotations({ identifier: "artifact.create", summary: "Create project artifact" })),
   )
   .add(
     HttpApiEndpoint.put("artifact.update", "/api/artifact/:scope/:kind/:id", {
@@ -163,7 +163,7 @@ export const ProjectArtifactGroup = HttpApiGroup.make("server.projectArtifact")
       error: errors,
     })
       .annotateMerge(locationQueryOpenApi)
-      .annotateMerge(OpenApi.annotations({ identifier: "v2.artifact.update", summary: "Update project artifact" })),
+      .annotateMerge(OpenApi.annotations({ identifier: "artifact.update", summary: "Update project artifact" })),
   )
   .add(
     HttpApiEndpoint.post("artifact.confirmGlobal", "/api/artifact/global/confirm", {
@@ -173,7 +173,7 @@ export const ProjectArtifactGroup = HttpApiGroup.make("server.projectArtifact")
       error: errors,
     })
       .annotateMerge(locationQueryOpenApi)
-      .annotateMerge(OpenApi.annotations({ identifier: "v2.artifact.global.confirm", summary: "Confirm global artifact mutation" })),
+      .annotateMerge(OpenApi.annotations({ identifier: "artifact.global.confirm", summary: "Confirm global artifact mutation" })),
   )
   .add(
     HttpApiEndpoint.post("artifact.disable", "/api/artifact/:scope/:kind/:id/disable", {

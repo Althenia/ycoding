@@ -27,7 +27,7 @@ export type DialogSessionSkillsProps = {
 export function DialogSessionSkills(props: DialogSessionSkillsProps) {
   const client = useClient()
   const dialog = useDialog()
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const paths = useTuiPaths()
   const [filter, setFilter] = createSignal("")
   const [selected, setSelected] = createSignal<SessionSkill>()
@@ -77,18 +77,18 @@ export function DialogSessionSkills(props: DialogSessionSkillsProps) {
         title: skill.name,
         titleView:
           skill.conflicts.length ? (
-            <span style={{ fg: themeV2.text.feedback.warning.default }}>{skill.name}</span>
+            <span style={{ fg: theme.text.feedback.warning.default }}>{skill.name}</span>
           ) : skill.state === "inactive" ? (
-            <span style={{ fg: themeV2.text.subdued }}>{skill.name}</span>
+            <span style={{ fg: theme.text.subdued }}>{skill.name}</span>
           ) : undefined,
         description: skill.conflicts.length ? `${skill.conflicts.length + 1} sources` : skill.scope,
         footer:
           skill.conflicts.length ? (
-            <span style={{ fg: themeV2.text.feedback.warning.default }}>Needs choice</span>
+            <span style={{ fg: theme.text.feedback.warning.default }}>Needs choice</span>
           ) : skill.state === "active" ? (
-            <span style={{ fg: themeV2.text.action.primary.focused }}>Active</span>
+            <span style={{ fg: theme.text.action.primary.focused }}>Active</span>
           ) : (
-            <span style={{ fg: themeV2.text.subdued }}>Inactive</span>
+            <span style={{ fg: theme.text.subdued }}>Inactive</span>
           ),
         category: skill.conflicts.length ? "Conflict" : skill.state === "active" ? "Active" : "Available",
         state: skill.conflicts.length ? "failed" : skill.state === "inactive" ? "disabled" : "connected",
@@ -108,7 +108,7 @@ export function DialogSessionSkills(props: DialogSessionSkillsProps) {
           renderFilter={!skills.loading && !loadError()}
           locked={skills.loading || Boolean(loadError())}
           onFilter={setFilter}
-          footer={<text fg={themeV2.text.hint}>space toggle</text>}
+          footer={<text fg={theme.text.hint}>space toggle</text>}
           bindings={[
             {
               bind: "r",
@@ -125,29 +125,29 @@ export function DialogSessionSkills(props: DialogSessionSkillsProps) {
             <Switch
               fallback={
                 <box paddingLeft={4} paddingRight={4} paddingTop={1}>
-                  <text fg={themeV2.text.subdued}>No loaded skills in this session</text>
+                  <text fg={theme.text.subdued}>No loaded skills in this session</text>
                 </box>
               }
             >
               <Match when={loadError()}>
                 <box paddingLeft={4} paddingRight={4} paddingTop={1}>
-                  <text fg={themeV2.text.feedback.error.default} attributes={TextAttributes.BOLD}>
+                  <text fg={theme.text.feedback.error.default} attributes={TextAttributes.BOLD}>
                     Could not load session skills
                   </text>
-                  <text fg={themeV2.text.subdued}>{errorMessage(loadError())}</text>
-                  <text fg={themeV2.text.subdued}>Press r to retry.</text>
+                  <text fg={theme.text.subdued}>{errorMessage(loadError())}</text>
+                  <text fg={theme.text.subdued}>Press r to retry.</text>
                 </box>
               </Match>
               <Match when={skills.loading}>
                 <box paddingLeft={4} paddingRight={4} paddingTop={1}>
-                  <text fg={themeV2.text.subdued}>Loading session skills…</text>
+                  <text fg={theme.text.subdued}>Loading session skills…</text>
                 </box>
               </Match>
             </Switch>
           }
           noMatchView={
             <box paddingLeft={4} paddingRight={4} paddingTop={1}>
-              <text fg={themeV2.text.subdued}>No skills found</text>
+              <text fg={theme.text.subdued}>No skills found</text>
             </box>
           }
         />
@@ -159,7 +159,7 @@ export function DialogSessionSkills(props: DialogSessionSkillsProps) {
 }
 
 function SessionSkillDetails(props: { skill: SessionSkill; onBack: () => void }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
   const config = useConfig().data
@@ -212,25 +212,25 @@ function SessionSkillDetails(props: { skill: SessionSkill; onBack: () => void })
           scrollAcceleration={getScrollAcceleration(config)}
         >
           <box paddingLeft={4} paddingRight={4} paddingTop={1} flexDirection="column">
-            <text fg={themeV2.text.default}>{sessionSkillLabel(props.skill)}</text>
-            <text fg={themeV2.text.subdued}>Source: {props.skill.activatedBy}</text>
-            <text fg={themeV2.text.subdued}>Message: {props.skill.activationMessageID}</text>
-            <text fg={themeV2.text.subdued}>Scope: Session</text>
-            <text fg={themeV2.text.subdued}>
+            <text fg={theme.text.default}>{sessionSkillLabel(props.skill)}</text>
+            <text fg={theme.text.subdued}>Source: {props.skill.activatedBy}</text>
+            <text fg={theme.text.subdued}>Message: {props.skill.activationMessageID}</text>
+            <text fg={theme.text.subdued}>Scope: Session</text>
+            <text fg={theme.text.subdued}>
               Latest boundary: {props.skill.inactiveReason ? props.skill.inactiveReason.replace("_", " ") : "current"}
             </text>
             <Show when={props.skill.conflicts.length}>
-              <text fg={themeV2.text.subdued}>Conflicts</text>
+              <text fg={theme.text.subdued}>Conflicts</text>
               <For each={props.skill.conflicts}>
-                {(conflict) => <text fg={themeV2.text.subdued}>  {conflict.type}: {conflict.name}</text>}
+                {(conflict) => <text fg={theme.text.subdued}>  {conflict.type}: {conflict.name}</text>}
               </For>
             </Show>
-            <text fg={themeV2.text.subdued}>Declarations: {JSON.stringify(props.skill.declarations)}</text>
+            <text fg={theme.text.subdued}>Declarations: {JSON.stringify(props.skill.declarations)}</text>
             <Show when={content()}>
               <box paddingTop={1} onMouseUp={toggle}>
-                <text fg={themeV2.text.subdued}>{expanded() ? "- Skill content" : "+ Skill content"}</text>
+                <text fg={theme.text.subdued}>{expanded() ? "- Skill content" : "+ Skill content"}</text>
                 <Show when={expanded()}>
-                  <text fg={themeV2.text.default}>{content()}</text>
+                  <text fg={theme.text.default}>{content()}</text>
                 </Show>
               </box>
             </Show>

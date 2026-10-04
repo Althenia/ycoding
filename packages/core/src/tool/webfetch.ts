@@ -6,7 +6,7 @@ import { Duration, Effect, Schema } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { Parser } from "htmlparser2"
 import TurndownService from "turndown"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { collectBoundedResponseBody } from "./http-body"
 import { Tool } from "./tool"
 
@@ -103,7 +103,7 @@ export const Plugin = {
   id: "ycoding.tool.webfetch",
   effect: Effect.fn("WebFetchTool.Plugin")(function* (ctx: PluginContext) {
     const http = yield* HttpClient.HttpClient
-    const permission = yield* PermissionV2.Service
+    const permission = yield* Permission.Service
 
     yield* ctx.tool
       .transform((draft) =>

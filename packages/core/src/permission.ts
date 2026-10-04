@@ -1,11 +1,11 @@
-export * as PermissionV2 from "./permission"
+export * as Permission from "./permission"
 
 import { makeLocationNode } from "./effect/app-node"
 import { Context, Deferred, Effect, Layer, Schema, Stream } from "effect"
 import { Permission } from "@ycoding-ai/schema/permission"
-import { EventV2 } from "./event"
+import { EventRuntime } from "./event"
 import { Location } from "./location"
-import { AgentV2 } from "./agent"
+import { Agent } from "./agent"
 import { SessionErrors } from "./session/error"
 import { SessionSchema } from "./session/schema"
 import { SessionAutonomy } from "./session/autonomy"
@@ -43,32 +43,32 @@ export type Reply = typeof Reply.Type
 export const AssertInput = Schema.Struct({
   id: ID.pipe(Schema.optional),
   ...RequestFields,
-  agent: AgentV2.ID.pipe(Schema.optional),
-}).annotate({ identifier: "PermissionV2.AssertInput" })
+  agent: Agent.ID.pipe(Schema.optional),
+}).annotate({ identifier: "Permission.AssertInput" })
 export type AssertInput = typeof AssertInput.Type
 
 export const ReplyInput = Schema.Struct({
   requestID: ID,
   reply: Reply,
   message: Schema.String.pipe(Schema.optional),
-}).annotate({ identifier: "PermissionV2.ReplyInput" })
+}).annotate({ identifier: "Permission.ReplyInput" })
 export type ReplyInput = typeof ReplyInput.Type
 
 export const AskResult = Schema.Struct({
   id: ID,
   effect: Permission.Effect,
-}).annotate({ identifier: "PermissionV2.AskResult" })
+}).annotate({ identifier: "Permission.AskResult" })
 export type AskResult = typeof AskResult.Type
 
 export const Event = Permission.Event
 
-export class DeclinedError extends Schema.TaggedErrorClass<DeclinedError>()("PermissionV2.DeclinedError", {}) {}
+export class DeclinedError extends Schema.TaggedErrorClass<DeclinedError>()("Permission.DeclinedError", {}) {}
 
-export class CorrectedError extends Schema.TaggedErrorClass<CorrectedError>()("PermissionV2.CorrectedError", {
+export class CorrectedError extends Schema.TaggedErrorClass<CorrectedError>()("Permission.CorrectedError", {
   feedback: Schema.String,
 }) {}
 
-export class BlockedError extends Schema.TaggedErrorClass<BlockedError>()("PermissionV2.BlockedError", {
+export class BlockedError extends Schema.TaggedErrorClass<BlockedError>()("Permission.BlockedError", {
   rules: Permission.Ruleset,
   permission: Schema.String,
   resources: Schema.Array(Schema.String),
@@ -78,7 +78,7 @@ export class BlockedError extends Schema.TaggedErrorClass<BlockedError>()("Permi
   }
 }
 
-export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("PermissionV2.NotFoundError", {
+export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Permission.NotFoundError", {
   requestID: ID,
 }) {}
 
@@ -122,7 +122,7 @@ function decision(
 
 export interface EvaluateEffectiveInput {
   readonly sessionID: SessionSchema.ID
-  readonly agent?: AgentV2.ID
+  readonly agent?: Agent.ID
   readonly action: string
   readonly resource: string
 }
@@ -139,25 +139,25 @@ export interface Interface {
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/Permission") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/Permission") {}
 
-export const evaluateEffective = Effect.fn("PermissionV2.evaluateEffective")(function* (input: EvaluateEffectiveInput) {
+export const evaluateEffective = Effect.fn("Permission.evaluateEffective")(function* (input: EvaluateEffectiveInput) {
   const service = yield* Service
   return yield* service.evaluateEffective(input)
 })
 
 interface Pending {
   readonly request: Request
-  readonly agent?: AgentV2.ID
+  readonly agent?: Agent.ID
   readonly deferred: Deferred.Deferred<void, DeclinedError | CorrectedError>
 }
 
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const location = yield* Location.Service
-    const agents = yield* AgentV2.Service
+    const agents = yield* Agent.Service
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
     const pending = new Map<ID, Pending>()
@@ -180,9 +180,9 @@ const layer = Layer.effect(
       )
     })
 
-    const configured = Effect.fn("PermissionV2.configured")(function* (
+    const configured = Effect.fn("Permission.configured")(function* (
       sessionID: SessionSchema.ID,
-      agentID?: AgentV2.ID,
+      agentID?: Agent.ID,
     ) {
       const session = yield* sessions.get(sessionID)
       if (!session) return yield* new SessionErrors.NotFoundError({ sessionID })
@@ -196,7 +196,7 @@ const layer = Layer.effect(
       return decision(input, rules, yield* savedRules())
     })
 
-    const evaluateEffective = Effect.fn("PermissionV2.evaluateEffectiveService")(function* (
+    const evaluateEffective = Effect.fn("Permission.evaluateEffectiveService")(function* (
       input: EvaluateEffectiveInput,
     ) {
       return (
@@ -221,7 +221,7 @@ const layer = Layer.effect(
       }
     }
 
-    const create = (request: Request, agent?: AgentV2.ID) =>
+    const create = (request: Request, agent?: Agent.ID) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           const deferred = yield* Deferred.make<void, DeclinedError | CorrectedError>()
@@ -261,7 +261,7 @@ const layer = Layer.effect(
         .pipe(Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID })))
     })
 
-    const ask = Effect.fn("PermissionV2.ask")(function* (input: AssertInput) {
+    const ask = Effect.fn("Permission.ask")(function* (input: AssertInput) {
       const result = yield* evaluateInput(input)
       const value = request(input)
       if (result.effect === "ask" && (yield* autonomousPermission(input.sessionID)))
@@ -270,7 +270,7 @@ const layer = Layer.effect(
       return { id: value.id, effect: result.effect }
     })
 
-    const assert = Effect.fn("PermissionV2.assert")((input: AssertInput) =>
+    const assert = Effect.fn("Permission.assert")((input: AssertInput) =>
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const result = yield* evaluateInput(input)
@@ -285,7 +285,7 @@ const layer = Layer.effect(
           if (yield* autonomousPermission(input.sessionID)) return
           const item = yield* create(request(input), input.agent)
           return yield* restore(Deferred.await(item.deferred)).pipe(
-            Effect.catchTag("PermissionV2.DeclinedError", (error) => Effect.die(error)),
+            Effect.catchTag("Permission.DeclinedError", (error) => Effect.die(error)),
             Effect.ensuring(
               Effect.sync(() => {
                 pending.delete(item.request.id)
@@ -296,7 +296,7 @@ const layer = Layer.effect(
       ),
     )
 
-    const reply = Effect.fn("PermissionV2.reply")((input: ReplyInput) =>
+    const reply = Effect.fn("Permission.reply")((input: ReplyInput) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           const existing = pending.get(input.requestID)
@@ -364,15 +364,15 @@ const layer = Layer.effect(
       ),
     )
 
-    const list = Effect.fn("PermissionV2.list")(function* () {
+    const list = Effect.fn("Permission.list")(function* () {
       return Array.from(pending.values(), (item) => item.request)
     })
 
-    const get = Effect.fn("PermissionV2.get")(function* (id: ID) {
+    const get = Effect.fn("Permission.get")(function* (id: ID) {
       return pending.get(id)?.request
     })
 
-    const forSession = Effect.fn("PermissionV2.forSession")(function* (sessionID: SessionSchema.ID) {
+    const forSession = Effect.fn("Permission.forSession")(function* (sessionID: SessionSchema.ID) {
       return Array.from(pending.values(), (item) => item.request).filter((request) => request.sessionID === sessionID)
     })
 
@@ -383,5 +383,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [EventV2.node, Location.node, AgentV2.node, SessionAutonomy.node, SessionStore.node, PermissionSaved.node],
+  deps: [EventRuntime.node, Location.node, Agent.node, SessionAutonomy.node, SessionStore.node, PermissionSaved.node],
 })

@@ -1,17 +1,17 @@
-export * as SkillV2 from "./skill"
+export * as Skill from "./skill"
 
 import { makeLocationNode } from "./effect/app-node"
 import path from "path"
 import { Context, Effect, Layer, Schema, Stream, Types } from "effect"
 import { FileSystem } from "@ycoding-ai/schema/filesystem"
 import { Skill } from "@ycoding-ai/schema/skill"
-import { AgentV2 } from "./agent"
+import { Agent } from "./agent"
 import { ConfigMarkdown } from "./config/markdown"
-import { EventV2 } from "./event"
+import { EventRuntime } from "./event"
 import { FSUtil } from "./fs-util"
 import { MCP } from "./mcp"
 import { MCPSkills } from "./mcp/skills"
-import { PermissionV2 } from "./permission"
+import { Permission } from "./permission"
 import { AbsolutePath } from "./schema"
 import { SkillDiscovery } from "./skill/discovery"
 import { State } from "./state"
@@ -39,8 +39,8 @@ export type Conflicts = Skill.Conflicts
 
 export const Event = Skill.Event
 
-export const available = <A extends { readonly id: ID }>(skills: ReadonlyArray<A>, agent: AgentV2.Info) =>
-  skills.filter((skill) => PermissionV2.evaluate("skill", skill.id, agent.permissions).effect !== "deny")
+export const available = <A extends { readonly id: ID }>(skills: ReadonlyArray<A>, agent: Agent.Info) =>
+  skills.filter((skill) => Permission.evaluate("skill", skill.id, agent.permissions).effect !== "deny")
 
 const Frontmatter = Schema.Struct({
   name: Schema.String.pipe(Schema.optional),
@@ -126,14 +126,14 @@ export interface Interface extends State.Transformable<Draft> {
   readonly mcp: () => Effect.Effect<MCPSkillInfo[]>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/Skill") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/Skill") {}
 
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const discovery = yield* SkillDiscovery.Service
     const fs = yield* FSUtil.Service
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const mcp = yield* MCP.Service
 
     const state = State.create<Data, Draft>({
@@ -155,7 +155,7 @@ const layer = Layer.effect(
     // serving skills that were edited or deleted on disk.
     const pulled = new Map<string, readonly string[]>()
 
-    const directories = Effect.fn("SkillV2.directories")(function* (source: Source) {
+    const directories = Effect.fn("Skill.directories")(function* (source: Source) {
       if (source.type === "embedded") return [] as readonly string[]
       if (source.type === "directory") return [source.path] as readonly string[]
       const cached = pulled.get(source.url)
@@ -165,7 +165,7 @@ const layer = Layer.effect(
       return resolved
     })
 
-    const load = Effect.fn("SkillV2.load")(function* (source: Source) {
+    const load = Effect.fn("Skill.load")(function* (source: Source) {
       const skills: Info[] = []
       if (source.type === "embedded") {
         yield* Effect.logDebug("skill source loaded", {
@@ -215,7 +215,7 @@ const layer = Layer.effect(
       return skills
     })
 
-    const changed = Effect.fn("SkillV2.changedFromWatcher")(function* (file: string) {
+    const changed = Effect.fn("Skill.changedFromWatcher")(function* (file: string) {
       const matched = state
         .get()
         .sources.flatMap((source) =>
@@ -231,7 +231,7 @@ const layer = Layer.effect(
       Effect.forkScoped({ startImmediately: true }),
     )
 
-    const list = Effect.fn("SkillV2.list")(function* () {
+    const list = Effect.fn("Skill.list")(function* () {
       const skills = new Map<ID, Info>()
       for (const source of state.get().sources) for (const skill of yield* load(source)) skills.set(skill.id, skill)
       return Array.from(skills.values())
@@ -240,11 +240,11 @@ const layer = Layer.effect(
     return Service.of({
       transform: state.transform,
       reload: state.reload,
-      sources: Effect.fn("SkillV2.sources")(function* () {
+      sources: Effect.fn("Skill.sources")(function* () {
         return state.get().sources
       }),
       list,
-      mcp: Effect.fn("SkillV2.mcp")(function* () {
+      mcp: Effect.fn("Skill.mcp")(function* () {
         const entries = yield* mcp.skillCatalog()
         return entries.map((entry) => ({
           id: mcpSkillID(entry.server, entry.uri),
@@ -262,5 +262,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [SkillDiscovery.node, FSUtil.node, EventV2.node, MCP.node],
+  deps: [SkillDiscovery.node, FSUtil.node, EventRuntime.node, MCP.node],
 })

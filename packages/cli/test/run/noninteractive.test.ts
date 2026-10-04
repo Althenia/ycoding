@@ -2,9 +2,9 @@ import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
 import { YCoding, type EventSubscribeOutput, type SessionMessageAssistantTool } from "@ycoding-ai/client/promise"
 import { runNonInteractivePrompt } from "../../src/run/noninteractive"
 
-type V2Event = EventSubscribeOutput
-type FormInfo = Extract<V2Event, { type: "form.created" }>["data"]["form"]
-type GuardrailInfo = Extract<V2Event, { type: "guardrail.asked" }>["data"]
+type ServerEvent = EventSubscribeOutput
+type FormInfo = Extract<ServerEvent, { type: "form.created" }>["data"]["form"]
+type GuardrailInfo = Extract<ServerEvent, { type: "guardrail.asked" }>["data"]
 const location = { directory: "/work tree", workspaceID: "wrk_1" }
 const hardGuardrail: GuardrailInfo = {
   id: "grq_1",
@@ -31,24 +31,24 @@ function form(id: string, sessionID: string): FormInfo {
   }
 }
 
-function formCreated(info: FormInfo, eventLocation = location): V2Event {
+function formCreated(info: FormInfo, eventLocation = location): ServerEvent {
   return { id: `evt_${info.id}`, created: 0, type: "form.created", location: eventLocation, data: { form: info } }
 }
 
-function permissionAsked(): V2Event {
+function permissionAsked(): ServerEvent {
   return {
     id: "evt_permission",
     created: 0,
-    type: "permission.v2.asked",
+    type: "permission.asked",
     data: { id: "per_1", sessionID: "ses_1", action: "shell", resources: ["git status"] },
   }
 }
 
-function questionAsked(): V2Event {
+function questionAsked(): ServerEvent {
   return {
     id: "evt_question",
     created: 0,
-    type: "question.v2.asked",
+    type: "question.asked",
     data: {
       id: "que_1",
       sessionID: "ses_1",
@@ -63,7 +63,7 @@ function questionAsked(): V2Event {
   }
 }
 
-function guardrailAsked(): V2Event {
+function guardrailAsked(): ServerEvent {
   return {
     id: "evt_guardrail",
     created: 0,
@@ -72,7 +72,7 @@ function guardrailAsked(): V2Event {
   }
 }
 
-function prompted(inputID: string): V2Event {
+function prompted(inputID: string): ServerEvent {
   return {
     id: "evt_prompted",
     created: 0,
@@ -82,7 +82,7 @@ function prompted(inputID: string): V2Event {
   }
 }
 
-function settled(outcome: "success" | "interrupted" = "success"): V2Event {
+function settled(outcome: "success" | "interrupted" = "success"): ServerEvent {
   if (outcome === "interrupted")
     return {
       id: "evt_interrupted",
@@ -100,7 +100,7 @@ function settled(outcome: "success" | "interrupted" = "success"): V2Event {
   }
 }
 
-function stepStarted(): V2Event {
+function stepStarted(): ServerEvent {
   return {
     id: "evt_step_started",
     created: 1,
@@ -115,7 +115,7 @@ function stepStarted(): V2Event {
   }
 }
 
-function stepFailed(message: string): V2Event {
+function stepFailed(message: string): ServerEvent {
   return {
     id: "evt_step_failed",
     created: 2,
@@ -129,7 +129,7 @@ function stepFailed(message: string): V2Event {
   }
 }
 
-function executionFailed(message: string): V2Event {
+function executionFailed(message: string): ServerEvent {
   return {
     id: "evt_execution_failed",
     created: 3,
@@ -142,7 +142,7 @@ function executionFailed(message: string): V2Event {
   }
 }
 
-function failedTool(inputID: string): V2Event[] {
+function failedTool(inputID: string): ServerEvent[] {
   return [
     prompted(inputID),
     {
@@ -203,7 +203,7 @@ function failedTool(inputID: string): V2Event[] {
 // Runs one non-interactive prompt against a mocked SDK. `turn` produces the
 // live events the prompt admission triggers, keyed by the generated message ID.
 async function run(input: {
-  turn: (inputID: string) => V2Event[]
+  turn: (inputID: string) => ServerEvent[]
   files?: Array<{ url: string; filename: string; mime: string }>
   pendingForms?: FormInfo[]
   pendingGuardrails?: GuardrailInfo[]
@@ -215,10 +215,10 @@ async function run(input: {
   renderToolError?: (part: SessionMessageAssistantTool) => Promise<void>
 }) {
   const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
-  const values: V2Event[] = [{ id: "evt_connected", type: "server.connected", data: {}, sourceEpoch: "1" }]
+  const values: ServerEvent[] = [{ id: "evt_connected", type: "server.connected", data: {}, sourceEpoch: "1" }]
   let submitted = false
   let wake: (() => void) | undefined
-  const stream = (async function* (): AsyncGenerator<V2Event, void, unknown> {
+  const stream = (async function* (): AsyncGenerator<ServerEvent, void, unknown> {
     while (true) {
       const value = values.shift()
       if (!value) {
@@ -393,7 +393,9 @@ describe("runNonInteractivePrompt", () => {
   })
 
   test("rejects a permission blocker without locally approving it", async () => {
-    const output = await capture({ turn: () => [permissionAsked(), settled("interrupted")] })
+    const output = await capture({
+      turn: (messageID) => [permissionAsked(), prompted(messageID), settled("interrupted")],
+    })
 
     expect(output.sdk.permission.reply).toHaveBeenCalledWith({
       sessionID: "ses_1",
@@ -403,14 +405,20 @@ describe("runNonInteractivePrompt", () => {
     expect(output.sdk.permission.reply).not.toHaveBeenCalledWith(expect.objectContaining({ reply: "once" }))
     expect(output.stderr).toContain("permission requested")
     expect(output.exitCode).toBe(1)
+    expect(output.sdk.session.interrupt).toHaveBeenCalledTimes(1)
+    expect(output.sdk.session.interrupt).toHaveBeenCalledWith({ sessionID: "ses_1" })
   })
 
   test("rejects a question blocker instead of choosing an answer locally", async () => {
-    const output = await capture({ turn: () => [questionAsked(), settled("interrupted")] })
+    const output = await capture({
+      turn: (messageID) => [questionAsked(), prompted(messageID), settled("interrupted")],
+    })
 
     expect(output.sdk.question.reject).toHaveBeenCalledWith({ sessionID: "ses_1", requestID: "que_1" })
     expect(output.stderr).toContain("question requested")
     expect(output.exitCode).toBe(1)
+    expect(output.sdk.session.interrupt).toHaveBeenCalledTimes(1)
+    expect(output.sdk.session.interrupt).toHaveBeenCalledWith({ sessionID: "ses_1" })
   })
 
   test("rejects a hard guardrail blocker without locally approving it", async () => {

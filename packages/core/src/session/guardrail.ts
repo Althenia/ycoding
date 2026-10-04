@@ -8,7 +8,7 @@ import { Config } from "../config"
 import { ConfigGuardrail } from "../config/guardrail"
 import { makeLocationNode } from "../effect/app-node"
 import { KeyedMutex } from "../effect/keyed-mutex"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { FSUtil } from "../fs-util"
 import { Global } from "../global"
 import { Location } from "../location"
@@ -92,7 +92,7 @@ export interface Interface {
   ) => Effect.Effect<A, E | SessionErrors.NotFoundError, R>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionGuardrail") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionGuardrail") {}
 
 interface Pending {
   readonly request: Guardrail.Request
@@ -150,7 +150,7 @@ export const layer = Layer.effect(
     const config = yield* Config.Service
     const fs = yield* FSUtil.Service
     const global = yield* Global.Service
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const sessions = yield* SessionStore.Service
     const autonomy = yield* SessionAutonomy.Service
     const location = yield* Location.Service
@@ -548,5 +548,5 @@ export const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Config.node, FSUtil.node, Global.node, EventV2.node, SessionStore.node, SessionAutonomy.node, Location.node],
+  deps: [Config.node, FSUtil.node, Global.node, EventRuntime.node, SessionStore.node, SessionAutonomy.node, Location.node],
 })

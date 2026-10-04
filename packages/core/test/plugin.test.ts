@@ -3,11 +3,11 @@ import { Context, Effect, Exit, Fiber, Schema, Stream } from "effect"
 import { Plugin as EffectPlugin } from "@ycoding-ai/plugin/effect"
 import { Config as ConfigSchema } from "@ycoding-ai/schema/config"
 import { Plugin } from "@ycoding-ai/schema/plugin"
-import { AgentV2 } from "@ycoding-ai/core/agent"
-import { EventV2 } from "@ycoding-ai/core/event"
-import { PluginV2 } from "@ycoding-ai/core/plugin"
+import { Agent } from "@ycoding-ai/core/agent"
+import { EventRuntime } from "@ycoding-ai/core/event"
+import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { Tool } from "@ycoding-ai/core/tool/tool"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
@@ -20,11 +20,11 @@ class Secret extends Context.Service<Secret, string>()("@ycoding/test/PluginSecr
 
 const versioned = <R>(plugin: EffectPlugin.Plugin<R>, version = "1") => ({ ...plugin, version })
 
-describe("PluginV2", () => {
+describe("PluginRegistry", () => {
   it.live("exposes public events through the plugin context", () =>
     Effect.gen(function* () {
-      const plugins = yield* PluginV2.Service
-      const events = yield* EventV2.Service
+      const plugins = yield* PluginRegistry.Service
+      const events = yield* EventRuntime.Service
       const host = yield* PluginHost.make(plugins)
       const received = yield* host.event.subscribe().pipe(
         Stream.filter((event) => event.type === "config.updated"),
@@ -40,9 +40,9 @@ describe("PluginV2", () => {
 
   it.effect("replaces plugins by ID and version", () =>
     Effect.gen(function* () {
-      const plugins = yield* PluginV2.Service
-      const agents = yield* AgentV2.Service
-      const events = yield* EventV2.Service
+      const plugins = yield* PluginRegistry.Service
+      const agents = yield* Agent.Service
+      const events = yield* EventRuntime.Service
       let description = "first"
       let updates = 0
       const unsubscribe = yield* events.listen((event) =>
@@ -66,19 +66,19 @@ describe("PluginV2", () => {
 
       yield* plugins.activate([versioned(managed(), "1")])
 
-      expect((yield* agents.get(AgentV2.ID.make("configured")))?.description).toBe("first")
+      expect((yield* agents.get(Agent.ID.make("configured")))?.description).toBe("first")
 
       description = "second"
       yield* plugins.activate([versioned(managed(), "2")])
-      expect((yield* agents.get(AgentV2.ID.make("configured")))?.description).toBe("second")
+      expect((yield* agents.get(Agent.ID.make("configured")))?.description).toBe("second")
 
       description = "third"
       yield* plugins.activate([versioned(managed(), "2")])
       expect(updates).toBe(2)
-      expect((yield* agents.get(AgentV2.ID.make("configured")))?.description).toBe("second")
+      expect((yield* agents.get(Agent.ID.make("configured")))?.description).toBe("second")
 
       yield* plugins.activate([])
-      expect(yield* agents.get(AgentV2.ID.make("configured"))).toBeUndefined()
+      expect(yield* agents.get(Agent.ID.make("configured"))).toBeUndefined()
       expect(updates).toBe(3)
       yield* unsubscribe
     }),
@@ -86,7 +86,7 @@ describe("PluginV2", () => {
 
   it.effect("rejects duplicate IDs before replacing active plugins", () =>
     Effect.gen(function* () {
-      const plugins = yield* PluginV2.Service
+      const plugins = yield* PluginRegistry.Service
       const active = Plugin.ID.make("active")
       const duplicate = "duplicate"
       yield* plugins.activate([{ id: active, version: "1", effect: () => Effect.void }])
@@ -105,8 +105,8 @@ describe("PluginV2", () => {
 
   it.effect("skips failed plugins and loads the rest", () =>
     Effect.gen(function* () {
-      const plugins = yield* PluginV2.Service
-      const agents = yield* AgentV2.Service
+      const plugins = yield* PluginRegistry.Service
+      const agents = yield* Agent.Service
       let fail = true
       const good = EffectPlugin.define({
         id: "good",
@@ -129,7 +129,7 @@ describe("PluginV2", () => {
 
       yield* plugins.activate([versioned(good), versioned(bad)])
       expect(yield* plugins.list()).toEqual([{ id: Plugin.ID.make("good") }])
-      expect((yield* agents.get(AgentV2.ID.make("configured")))?.description).toBe("loaded")
+      expect((yield* agents.get(Agent.ID.make("configured")))?.description).toBe("loaded")
 
       fail = false
       yield* plugins.activate([versioned(good), versioned(bad, "2")])
@@ -139,8 +139,8 @@ describe("PluginV2", () => {
 
   it.effect("restores the previous plugin when its replacement fails", () =>
     Effect.gen(function* () {
-      const plugins = yield* PluginV2.Service
-      const agents = yield* AgentV2.Service
+      const plugins = yield* PluginRegistry.Service
+      const agents = yield* Agent.Service
       const previous = EffectPlugin.define({
         id: "managed",
         effect: (ctx) =>
@@ -169,14 +169,14 @@ describe("PluginV2", () => {
       yield* plugins.activate([versioned(replacement, "2")])
 
       expect(yield* plugins.list()).toEqual([{ id: Plugin.ID.make("managed") }])
-      expect((yield* agents.get(AgentV2.ID.make("configured")))?.description).toBe("previous")
+      expect((yield* agents.get(Agent.ID.make("configured")))?.description).toBe("previous")
     }),
   )
 
   it.effect("deactivates a plugin when replacement and restoration fail", () =>
     Effect.gen(function* () {
-      const plugins = yield* PluginV2.Service
-      const agents = yield* AgentV2.Service
+      const plugins = yield* PluginRegistry.Service
+      const agents = yield* Agent.Service
       let loads = 0
       const previous = EffectPlugin.define({
         id: "managed",
@@ -201,13 +201,13 @@ describe("PluginV2", () => {
       yield* plugins.activate([versioned(replacement, "2")])
 
       expect(yield* plugins.list()).toEqual([])
-      expect(yield* agents.get(AgentV2.ID.make("configured"))).toBeUndefined()
+      expect(yield* agents.get(Agent.ID.make("configured"))).toBeUndefined()
     }),
   )
 
   it.effect("closes the previous generation in reverse order", () =>
     Effect.gen(function* () {
-      const plugins = yield* PluginV2.Service
+      const plugins = yield* PluginRegistry.Service
       const closed: string[] = []
       yield* plugins.activate(
         ["first", "second"].map((id) => ({
@@ -225,7 +225,7 @@ describe("PluginV2", () => {
 
   it.effect("isolates plugins from ambient services", () =>
     Effect.gen(function* () {
-      const plugins = yield* PluginV2.Service
+      const plugins = yield* PluginRegistry.Service
       let visible = true
       const plugin = EffectPlugin.define({
         id: "isolated",
@@ -244,7 +244,7 @@ describe("PluginV2", () => {
 
   it.effect("registers location tools through the plugin context", () =>
     Effect.gen(function* () {
-      const plugins = yield* PluginV2.Service
+      const plugins = yield* PluginRegistry.Service
       const registry = yield* ToolRegistry.Service
       const plugin = EffectPlugin.define({
         id: "tool-plugin",
@@ -275,7 +275,7 @@ describe("PluginV2", () => {
 
   it.effect("namespaces tool names and routes codemode registrations through execute", () =>
     Effect.gen(function* () {
-      const plugins = yield* PluginV2.Service
+      const plugins = yield* PluginRegistry.Service
       const registry = yield* ToolRegistry.Service
       const tool = (description: string) =>
         Tool.make({
@@ -308,7 +308,7 @@ describe("PluginV2", () => {
 
   it.effect("fires before/after tool hooks with mutable events around settlement", () =>
     Effect.gen(function* () {
-      const plugins = yield* PluginV2.Service
+      const plugins = yield* PluginRegistry.Service
       const registry = yield* ToolRegistry.Service
       const executed: unknown[] = []
       const seen: {
@@ -360,8 +360,8 @@ describe("PluginV2", () => {
 
       const materialized = yield* registry.materialize()
       const settlement = yield* materialized.settle({
-        sessionID: SessionV2.ID.make("ses_hooks"),
-        agent: AgentV2.ID.make("build"),
+        sessionID: Session.ID.make("ses_hooks"),
+        agent: Agent.ID.make("build"),
         messageID: SessionMessage.ID.make("msg_hooks"),
         call: { type: "tool-call", id: "call-hooks", name: "echo", input: { text: "original" } },
       })

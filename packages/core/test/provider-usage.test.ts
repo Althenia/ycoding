@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
 import { ProviderUsageCache } from "@ycoding-ai/core/provider-usage/cache"
-import { ProviderUsageV2 } from "@ycoding-ai/core/provider-usage"
+import { ProviderUsageRuntime } from "@ycoding-ai/core/provider-usage"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Integration } from "@ycoding-ai/schema/integration"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { Deferred, Effect, Schema } from "effect"
 
-const providerID = ProviderV2.ID.make("test-provider")
+const providerID = Provider.ID.make("test-provider")
 
 const snapshot = (used: number, updatedAt: number) =>
   new ProviderUsage.Snapshot({
@@ -96,10 +96,10 @@ describe("ProviderUsageCache", () => {
   })
 })
 
-describe("ProviderUsageV2", () => {
+describe("ProviderUsageRuntime", () => {
   test("reports only measured YCoding-local daily spend separately from account quotas", () => {
     const now = new Date(2026, 8, 27, 12).getTime()
-    const values = ProviderUsageV2.localSpendSnapshots([
+    const values = ProviderUsageRuntime.localSpendSnapshots([
       { model: { providerID: "anthropic" }, cost: 0, timeCreated: now },
       { model: { providerID: "anthropic" }, cost: 0.75, timeCreated: now - 1_000 },
       { model: { providerID: "anthropic" }, cost: 2, timeCreated: now },
@@ -116,12 +116,12 @@ describe("ProviderUsageV2", () => {
 
   test("lists local spend separately from a provider's account windows", async () => {
     const now = new Date(2026, 8, 27, 12).getTime()
-    const service = ProviderUsageV2.make({
+    const service = ProviderUsageRuntime.make({
       credentials: { all: () => Effect.succeed([new Credential.Info({
         id: Credential.ID.make("cred_local_spend"), integrationID: Integration.ID.make("anthropic"),
         label: "default", value: { type: "key", key: "secret" },
       })]) },
-      providers: { available: () => Effect.succeed([{ id: ProviderV2.ID.make("anthropic") }]) },
+      providers: { available: () => Effect.succeed([{ id: Provider.ID.make("anthropic") }]) },
       adapters: { anthropic: (input) => Effect.succeed(new ProviderUsage.Snapshot({
         providerID: input.providerID, label: "Claude", status: "available", source: "provider_internal_api",
         stability: "best_effort", updatedAt: now,
@@ -137,7 +137,7 @@ describe("ProviderUsageV2", () => {
 
   test("does not surface local spend for a provider disabled in the current Location", async () => {
     const now = new Date(2026, 8, 27, 12).getTime()
-    const service = ProviderUsageV2.make({
+    const service = ProviderUsageRuntime.make({
       credentials: { all: () => Effect.succeed([]) },
       providers: { available: () => Effect.succeed([]) },
       adapters: {}, now: () => now,
@@ -149,7 +149,7 @@ describe("ProviderUsageV2", () => {
   test("refreshes independent providers concurrently and preserves successes beside failures", async () => {
     const ready = await Effect.runPromise(Deferred.make<void>())
     const started: string[] = []
-    const service = ProviderUsageV2.make({
+    const service = ProviderUsageRuntime.make({
       credentials: {
         all: () => Effect.succeed(["healthy", "failed"].map((id) => new Credential.Info({
           id: Credential.ID.make(`cred_${id}`),
@@ -159,9 +159,9 @@ describe("ProviderUsageV2", () => {
         }))),
       },
       providers: {
-        available: () => Effect.succeed(["healthy", "failed"].map((id) => ({ id: ProviderV2.ID.make(id) }))),
+        available: () => Effect.succeed(["healthy", "failed"].map((id) => ({ id: Provider.ID.make(id) }))),
       },
-      adapters: Object.fromEntries(["healthy", "failed"].map((id) => [id, (input: ProviderUsageV2.AdapterInput) =>
+      adapters: Object.fromEntries(["healthy", "failed"].map((id) => [id, (input: ProviderUsageRuntime.AdapterInput) =>
         Effect.gen(function* () {
           started.push(id)
           if (started.length === 2) yield* Deferred.succeed(ready, undefined)
@@ -193,8 +193,8 @@ describe("ProviderUsageV2", () => {
   })
 
   test("lists every connected provider once and reports unsupported connected providers honestly", async () => {
-    const unsupportedProviderID = ProviderV2.ID.make("connected-without-usage-adapter")
-    const unconnectedProviderID = ProviderV2.ID.make("unconnected-with-adapter")
+    const unsupportedProviderID = Provider.ID.make("connected-without-usage-adapter")
+    const unconnectedProviderID = Provider.ID.make("unconnected-with-adapter")
     const credential = new Credential.Info({
       id: Credential.ID.make("cred_connected_provider_usage"),
       integrationID: Integration.ID.make("test-provider"),
@@ -202,13 +202,13 @@ describe("ProviderUsageV2", () => {
       value: { type: "key", key: "secret", metadata: {} },
     })
     const calls: string[] = []
-    const service = ProviderUsageV2.make({
+    const service = ProviderUsageRuntime.make({
       credentials: { all: () => Effect.succeed([credential]) },
       providers: {
         available: () => Effect.succeed([
-          ProviderV2.Info.empty(providerID),
-          ProviderV2.Info.empty(unsupportedProviderID),
-          ProviderV2.Info.empty(providerID),
+          Provider.Info.empty(providerID),
+          Provider.Info.empty(unsupportedProviderID),
+          Provider.Info.empty(providerID),
         ]),
       },
       adapters: {
@@ -252,9 +252,9 @@ describe("ProviderUsageV2", () => {
       value: { type: "key", key: "sk-secret-value", metadata: {} },
     })
     let loads = 0
-    const service = ProviderUsageV2.make({
+    const service = ProviderUsageRuntime.make({
       credentials: { all: () => Effect.succeed([credential]) },
-      providers: { available: () => Effect.succeed([ProviderV2.Info.empty(providerID)]) },
+      providers: { available: () => Effect.succeed([Provider.Info.empty(providerID)]) },
       adapters: {
         "test-provider": ({ providerID, label, updatedAt }) =>
           Effect.sync(() => {
@@ -296,7 +296,7 @@ describe("ProviderUsageV2", () => {
     expect(loads).toBe(1)
 
     const unsupported = await Effect.runPromise(
-      service.get({ providerID: ProviderV2.ID.make("missing-provider") }),
+      service.get({ providerID: Provider.ID.make("missing-provider") }),
     )
     expect(unsupported).toMatchObject({ status: "unsupported", windows: [] })
   })
@@ -310,8 +310,8 @@ describe("ProviderUsageV2", () => {
         active,
         value: { type: "key", key: `secret-${id}`, metadata: {} },
       })
-    const single = ProviderV2.ID.make("single-provider")
-    const service = ProviderUsageV2.make({
+    const single = Provider.ID.make("single-provider")
+    const service = ProviderUsageRuntime.make({
       credentials: {
         all: () =>
           Effect.succeed([
@@ -325,8 +325,8 @@ describe("ProviderUsageV2", () => {
             }),
           ]),
       },
-      providers: { available: () => Effect.succeed([ProviderV2.Info.empty(providerID), ProviderV2.Info.empty(single)]) },
-      adapters: Object.fromEntries([providerID, single].map((id) => [id, (input: ProviderUsageV2.AdapterInput) =>
+      providers: { available: () => Effect.succeed([Provider.Info.empty(providerID), Provider.Info.empty(single)]) },
+      adapters: Object.fromEntries([providerID, single].map((id) => [id, (input: ProviderUsageRuntime.AdapterInput) =>
         Effect.succeed(new ProviderUsage.Snapshot({
           providerID: input.providerID,
           label: input.label,
@@ -375,11 +375,11 @@ describe("ProviderUsageV2", () => {
       label: "default",
       value: { type: "key", key: "secret", metadata: {} },
     })
-    const service = ProviderUsageV2.make({
+    const service = ProviderUsageRuntime.make({
       credentials: { all: () => Effect.succeed([credential]) },
-      providers: { available: () => Effect.succeed([ProviderV2.Info.empty(providerID)]) },
+      providers: { available: () => Effect.succeed([Provider.Info.empty(providerID)]) },
       adapters: {
-        "test-provider": () => Effect.fail(new ProviderUsageV2.RequestError({ status: 401 })),
+        "test-provider": () => Effect.fail(new ProviderUsageRuntime.RequestError({ status: 401 })),
       },
       now: () => 100,
     })

@@ -127,7 +127,7 @@ test("active production plugin contexts follow a managed-service client replacem
     const notify = spyOn(context.attention, "notify").mockResolvedValue({ ok: true, notification: true, sound: true })
     restoreNotify = () => notify.mockRestore()
     gatePending = true
-    initialEvents.emit({ id: "permission_asked", created: 1, type: "permission.v2.asked", data: permission("permission_replacement") })
+    initialEvents.emit({ id: "permission_asked", created: 1, type: "permission.asked", data: permission("permission_replacement") })
     await app.waitFor(() => checkpoints.length === 1)
     const confirming = checkpoints.shift()!()
     await pendingStarted.promise

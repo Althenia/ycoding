@@ -1,7 +1,7 @@
 ---
 type: Interface
 title: Session Protocol and Durable Events
-description: V2 session contracts define prompt admission, execution boundaries, instructions,
+description: Session contracts define prompt admission, execution boundaries, instructions,
   tools, restart continuity, and public event-stream semantics across Schema, Protocol,
   and Core.
 tags:
@@ -11,20 +11,22 @@ tags:
 - contracts
 sources:
 - id: spec-session
-  resource: repo:///specs/v2/session.md
+  resource: repo:///specs/session.md
 - id: spec-stream
-  resource: repo:///specs/v2/event-stream-architecture.md
+  resource: repo:///specs/event-stream-architecture.md
 - id: spec-restart
-  resource: repo:///specs/v2/session-restart-continuation.md
+  resource: repo:///specs/session-restart-continuation.md
 - id: spec-tools
-  resource: repo:///specs/v2/tools.md
+  resource: repo:///specs/tools.md
 - id: spec-instructions
-  resource: repo:///specs/v2/instruction-sync-proposal.md
+  resource: repo:///specs/instruction-sync-proposal.md
 ---
+
+
 
 ## Prompt Admission and Model Fit
 
-SessionV2.prompt records one durable admitted fact and one pending row before advisory execution; promotion publishes promotion, projects the visible message, and consumes the pending row atomically, while manual compaction uses its own idempotent compact endpoint rather than the pending store.[^spec-session]
+Session.prompt records one durable admitted fact and one pending row before advisory execution; promotion publishes promotion, projects the visible message, and consumes the pending row atomically, while manual compaction uses its own idempotent compact endpoint rather than the pending store.[^spec-session]
 
 Model switching checks rolling context against the target window minus the configured safety margin; an unfitting switch returns 409 without changing durable state and never starts compaction or rewrites transcript rows.[^spec-session]
 
@@ -51,8 +53,8 @@ Graceful managed-service shutdown marks executing Sessions with private Session 
 - [Durable Background Subagents](./subagents.md)
 - [Provider Integration and Cache](./provider-integration.md)
 
-[^spec-session]: repo:///specs/v2/session.md
-[^spec-instructions]: repo:///specs/v2/instruction-sync-proposal.md
-[^spec-tools]: repo:///specs/v2/tools.md
-[^spec-stream]: repo:///specs/v2/event-stream-architecture.md
-[^spec-restart]: repo:///specs/v2/session-restart-continuation.md
+[^spec-session]: repo:///specs/session.md
+[^spec-instructions]: repo:///specs/instruction-sync-proposal.md
+[^spec-tools]: repo:///specs/tools.md
+[^spec-stream]: repo:///specs/event-stream-architecture.md
+[^spec-restart]: repo:///specs/session-restart-continuation.md

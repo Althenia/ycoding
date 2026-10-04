@@ -33,7 +33,7 @@ export interface Interface {
   ) => Effect.Effect<Domains[Domain][Name]>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/PluginHooks") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/PluginHooks") {}
 
 const layer = Layer.effect(
   Service,

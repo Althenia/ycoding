@@ -3,7 +3,7 @@ import type {
   FormInfo,
   LocationRef,
   YCodingClient,
-  PermissionV2Request,
+  PermissionRequest,
   SessionMessageAssistantTool,
   SessionMessageInfo,
 } from "@ycoding-ai/client/promise"
@@ -11,8 +11,8 @@ import { Event } from "@ycoding-ai/schema/event"
 import { SessionMessage } from "@ycoding-ai/schema/session-message"
 import { blockerStatus, pickBlockerView } from "./session-data"
 import { writeSessionOutput } from "./stream"
-import { createFragmentReconciler, fragmentRef, type FragmentReconciler } from "./stream-v2.fragment"
-import { createSubagentTracker, toolCommit, toolFinalPhase } from "./stream-v2.subagent"
+import { createFragmentReconciler, fragmentRef, type FragmentReconciler } from "./stream.fragment"
+import { createSubagentTracker, toolCommit, toolFinalPhase } from "./stream.subagent"
 import { normalizeTool, toolOutputText } from "./tool"
 import type {
   FooterApi,
@@ -92,7 +92,7 @@ type ShellWait = {
   abort: () => void
 }
 
-type RunV2Event = EventSubscribeOutput
+type RunEvent = EventSubscribeOutput
 type PromptFilePart = Extract<RunPromptPart, { type: "file" }>
 
 type Attempt = {
@@ -103,7 +103,7 @@ type Attempt = {
 
 type ReplayBuffer = {
   attempt: Attempt
-  events: RunV2Event[]
+  events: RunEvent[]
 }
 
 type ToolState = {
@@ -150,7 +150,7 @@ export function formatUnknownError(error: unknown): string {
   return "unknown error"
 }
 
-function sessionID(event: RunV2Event) {
+function sessionID(event: RunEvent) {
   if (event.type === "form.created") return event.data.form.sessionID
   return "sessionID" in event.data && typeof event.data.sessionID === "string" ? event.data.sessionID : undefined
 }
@@ -179,9 +179,9 @@ function wait(delay: number, signal: AbortSignal) {
   })
 }
 
-function nextEvent(stream: AsyncIterator<RunV2Event>, signal: AbortSignal) {
+function nextEvent(stream: AsyncIterator<RunEvent>, signal: AbortSignal) {
   if (signal.aborted) return Promise.reject(signal.reason ?? new Error("Event stream aborted"))
-  return new Promise<IteratorResult<RunV2Event>>((resolve, reject) => {
+  return new Promise<IteratorResult<RunEvent>>((resolve, reject) => {
     const abort = () => {
       signal.removeEventListener("abort", abort)
       reject(signal.reason ?? new Error("Event stream aborted"))
@@ -264,7 +264,7 @@ function permissionSourceKey(messageID: string, callID: string) {
   return streamPartKey(messageID, callID)
 }
 
-function permissionTool(request: PermissionV2Request, tools: Map<string, SessionMessageAssistantTool>) {
+function permissionTool(request: PermissionRequest, tools: Map<string, SessionMessageAssistantTool>) {
   if (request.source?.type !== "tool") return request
   const tool = tools.get(permissionSourceKey(request.source.messageID, request.source.callID))
   return tool ? { ...request, tool } : request
@@ -635,7 +635,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
 
   const resolvePermissionSources = async (
     client: YCodingClient,
-    permissions: PermissionV2Request[],
+    permissions: PermissionRequest[],
     attempt: Attempt,
   ) => {
     const pending = new Set(
@@ -724,7 +724,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
     }
   }
 
-  const apply = (attempt: Attempt, event: RunV2Event) => {
+  const apply = (attempt: Attempt, event: RunEvent) => {
     if (!current(attempt)) return
     const client = attempt.client
     if (catalogEvents.has(event.type)) {
@@ -987,13 +987,13 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       renderTool(event.data.assistantMessageID, item)
       return
     }
-    if (event.type === "permission.v2.asked") {
+    if (event.type === "permission.asked") {
       if (!state.permissions.some((item) => item.id === event.data.id))
         state.permissions.push(permissionTool(event.data, state.toolSources))
       syncBlockers()
       return
     }
-    if (event.type === "permission.v2.replied") {
+    if (event.type === "permission.replied") {
       state.permissions = state.permissions.filter((item) => item.id !== event.data.requestID)
       pruneToolSources()
       syncBlockers()
@@ -1073,7 +1073,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
     }
   }
 
-  const receive = (attempt: Attempt, event: RunV2Event) => {
+  const receive = (attempt: Attempt, event: RunEvent) => {
     if (!current(attempt)) return
     if (state.buffered?.attempt === attempt) {
       state.buffered.events.push(event)
@@ -1141,7 +1141,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
         try {
           const first = await nextEvent(stream, connection.signal)
           if (first.done || first.value.type !== "server.connected") throw new Error("Event stream disconnected")
-          const buffered: RunV2Event[] = []
+          const buffered: RunEvent[] = []
           let booting = true
           const consume = (async () => {
             while (true) {
@@ -1295,7 +1295,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
   const performResizeReplay = async (attempt: Attempt, next: SessionResizeReplayInput) => {
     if (!input.replay || !state.connected || !current(attempt) || state.closed || input.footer.isClosed) return false
     const localRows = next.localRows()
-    const buffered: RunV2Event[] = []
+    const buffered: RunEvent[] = []
     const replayBuffer = { attempt, events: buffered }
     let failure: unknown
     let reset = false

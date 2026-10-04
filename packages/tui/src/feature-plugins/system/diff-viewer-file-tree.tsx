@@ -23,7 +23,7 @@ export type DiffViewerFileTreeProps = {
 }
 
 export function DiffViewerFileTree(props: DiffViewerFileTreeProps) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const tree = createMemo(() => buildFileTree(props.files))
   const rows = createMemo(() => flattenFileTree(tree(), props.expandedNodes))
   let scroll: ScrollBoxRenderable | undefined
@@ -38,7 +38,7 @@ export function DiffViewerFileTree(props: DiffViewerFileTreeProps) {
     requestAnimationFrame(scrollSelectedIntoView)
   })
 
-  const fadedColor = () => tint(themeV2.text.default, themeV2.background.default, 0.75)
+  const fadedColor = () => tint(theme.text.default, theme.background.default, 0.75)
 
   return (
     <Panel border="both" width={props.width}>
@@ -52,7 +52,7 @@ export function DiffViewerFileTree(props: DiffViewerFileTreeProps) {
             <text />
           </Match>
           <Match when={props.files.length === 0}>
-            <text fg={themeV2.text.default}>No files</text>
+            <text fg={theme.text.default}>No files</text>
           </Match>
           <Match when={props.files.length > 0}>
             <For each={rows()}>
@@ -71,11 +71,11 @@ export function DiffViewerFileTree(props: DiffViewerFileTreeProps) {
                   <box
                     flexDirection="row"
                     width="100%"
-                    backgroundColor={highlighted() ? themeV2.background.action.primary.focused : undefined}
+                    backgroundColor={highlighted() ? theme.background.action.primary.focused : undefined}
                     onMouseUp={() => props.onRowClick?.(row)}
                   >
                     <text
-                      fg={highlighted() ? themeV2.text.action.primary.focused : fadedColor()}
+                      fg={highlighted() ? theme.text.action.primary.focused : fadedColor()}
                       wrapMode="none"
                       flexShrink={0}
                     >
@@ -85,12 +85,12 @@ export function DiffViewerFileTree(props: DiffViewerFileTreeProps) {
                       <text
                         fg={
                           highlighted()
-                            ? themeV2.text.action.primary.focused
+                            ? theme.text.action.primary.focused
                             : selected()
-                              ? themeV2.text.formfield.selected
+                              ? theme.text.formfield.selected
                               : reviewed() || row.kind === "directory"
-                                ? themeV2.text.subdued
-                                : themeV2.text.default
+                                ? theme.text.subdued
+                                : theme.text.default
                         }
                         wrapMode="none"
                       >
@@ -98,7 +98,7 @@ export function DiffViewerFileTree(props: DiffViewerFileTreeProps) {
                       </text>
                     </box>
                     <text
-                      fg={highlighted() ? themeV2.text.action.primary.focused : themeV2.text.subdued}
+                      fg={highlighted() ? theme.text.action.primary.focused : theme.text.subdued}
                       wrapMode="none"
                       flexShrink={0}
                     >

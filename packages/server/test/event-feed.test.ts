@@ -1,40 +1,40 @@
 import { describe, expect, test } from "bun:test"
-import { AgentV2 } from "@ycoding-ai/core/agent"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { Agent } from "@ycoding-ai/core/agent"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { YCodingEvent } from "@ycoding-ai/protocol/groups/event"
 import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
 import { DateTime, Deferred, Effect, Exit, Fiber, Option, Schema, Stream } from "effect"
 import { it } from "../../core/test/lib/effect"
 import { EventFeed } from "../src/event-feed"
 
-const Internal = EventV2.ephemeral({ type: "test.internal", schema: { value: Schema.String } })
+const Internal = EventRuntime.ephemeral({ type: "test.internal", schema: { value: Schema.String } })
 const sourceEpoch = ServiceStatus.Epoch.make("source_test")
 
-const event = (id: string): EventV2.Payload<typeof AgentV2.Event.Updated> => ({
-  id: EventV2.ID.make(`evt_${id}`),
+const event = (id: string): EventRuntime.Payload<typeof Agent.Event.Updated> => ({
+  id: EventRuntime.ID.make(`evt_${id}`),
   created: DateTime.makeUnsafe(Date.now()),
-  type: AgentV2.Event.Updated.type,
+  type: Agent.Event.Updated.type,
   data: {},
 })
 
-const internal = (value: string): EventV2.Payload<typeof Internal> => ({
-  id: EventV2.ID.create(),
+const internal = (value: string): EventRuntime.Payload<typeof Internal> => ({
+  id: EventRuntime.ID.create(),
   created: DateTime.makeUnsafe(Date.now()),
   type: Internal.type,
   data: { value },
 })
 
 function makeSource() {
-  let subscriber: EventV2.Subscriber | undefined
+  let subscriber: EventRuntime.Subscriber | undefined
   return {
-    observe: (next: EventV2.Subscriber) =>
+    observe: (next: EventRuntime.Subscriber) =>
       Effect.sync(() => {
         subscriber = next
         return Effect.sync(() => {
           if (subscriber === next) subscriber = undefined
         })
       }),
-    publish: (event: EventV2.Payload) => Effect.suspend(() => (subscriber ? subscriber(event) : Effect.void)),
+    publish: (event: EventRuntime.Payload) => Effect.suspend(() => (subscriber ? subscriber(event) : Effect.void)),
   }
 }
 
@@ -64,8 +64,8 @@ describe("EventFeed", () => {
       yield* source.publish(event("example"))
 
       expect([Array.from(yield* Fiber.join(left)), Array.from(yield* Fiber.join(right))]).toEqual([
-        [AgentV2.Event.Updated.type],
-        [AgentV2.Event.Updated.type],
+        [Agent.Event.Updated.type],
+        [Agent.Event.Updated.type],
       ])
       expect(encodes).toBe(1)
     }),
@@ -125,7 +125,7 @@ describe("EventFeed", () => {
       yield* source.publish(internal("two"))
       yield* source.publish(event("public"))
 
-      expect(Array.from(yield* stream.pipe(Stream.take(1), Stream.runCollect))).toEqual([AgentV2.Event.Updated.type])
+      expect(Array.from(yield* stream.pipe(Stream.take(1), Stream.runCollect))).toEqual([Agent.Event.Updated.type])
     }),
   )
 
@@ -134,7 +134,7 @@ describe("EventFeed", () => {
       const source = makeSource()
       const feed = yield* EventFeed.make(sourceEpoch, source.observe, {
         encode: (event) => {
-          if (event.id === EventV2.ID.make("evt_bad")) throw new Error("invalid event")
+          if (event.id === EventRuntime.ID.make("evt_bad")) throw new Error("invalid event")
           return event.id
         },
       })

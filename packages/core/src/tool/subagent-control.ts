@@ -5,7 +5,7 @@ import type { Context as PluginContext } from "@ycoding-ai/plugin/effect/plugin"
 import { Control, Task } from "@ycoding-ai/schema/session-orchestration"
 import { Effect, Schema } from "effect"
 import { PluginRuntime } from "../plugin/runtime"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { SessionOrchestration } from "../session/orchestration"
 import { Tool } from "./tool"
 import { SessionOrchestrationIdentity } from "../session/orchestration-identity"
@@ -25,7 +25,7 @@ export const Plugin = {
   id: "ycoding.tool.subagent-control",
   effect: Effect.fn("SubagentControlTool.Plugin")(function* (ctx: PluginContext) {
     const orchestration = (yield* PluginRuntime.Service).orchestration
-    const permission = yield* PermissionV2.Service
+    const permission = yield* Permission.Service
     yield* ctx.tool
       .transform((draft) =>
         draft.add(
@@ -43,7 +43,7 @@ export const Plugin = {
                   return { action: "list" as const, tasks: yield* orchestration.list(context.sessionID) }
                 const target = yield* orchestration.get(context.sessionID, input.sessionID)
                 yield* SessionOrchestration.authorize(context.sessionID, target.agent, source).pipe(
-                  Effect.provideService(PermissionV2.Service, permission),
+                  Effect.provideService(Permission.Service, permission),
                 )
                 if (input.action === "send")
                   return {

@@ -38,7 +38,7 @@ export function Dialog(
   }>,
 ) {
   const dimensions = useTerminalDimensions()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const renderer = useRenderer()
 
   let dismiss = false
@@ -81,7 +81,7 @@ export function Dialog(
         width={width()}
         height={props.size === "command-palette" ? Math.min(34, dimensions().height) : undefined}
         maxWidth={dimensions().width < 100 ? dimensions().width : dimensions().width - 2}
-        backgroundColor={themeV2.background.surface.offset}
+        backgroundColor={theme.background.surface.offset}
         paddingTop={1}
       >
         {props.children}
@@ -92,7 +92,7 @@ export function Dialog(
 
 export function DialogHeader(props: { title: JSX.Element }) {
   const dimensions = useTerminalDimensions()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const dialog = useDialog()
 
   return (
@@ -105,7 +105,7 @@ export function DialogHeader(props: { title: JSX.Element }) {
       flexShrink={0}
     >
       {props.title}
-      <text fg={themeV2.text.subdued} onMouseUp={() => dialog.clear()}>
+      <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
         esc
       </text>
     </box>
@@ -113,9 +113,9 @@ export function DialogHeader(props: { title: JSX.Element }) {
 }
 
 export function DialogTitle(props: { children: JSX.Element }) {
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   return (
-    <text attributes={TextAttributes.BOLD} fg={themeV2.text.default}>
+    <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
       {props.children}
     </text>
   )
@@ -123,7 +123,7 @@ export function DialogTitle(props: { children: JSX.Element }) {
 
 export function DialogSearchRow(props: ParentProps) {
   const dimensions = useTerminalDimensions()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   if (props.children)
     return (
       <box
@@ -139,10 +139,10 @@ export function DialogSearchRow(props: ParentProps) {
     )
   return (
     <box width={dialogPanelWidth(dimensions().width)} paddingTop={2} paddingLeft={6} paddingRight={3} flexDirection="row" flexShrink={0}>
-      <box width={1} backgroundColor={themeV2.background.action.primary.focused}>
-        <text fg={themeV2.text.action.primary.focused}>S</text>
+      <box width={1} backgroundColor={theme.background.action.primary.focused}>
+        <text fg={theme.text.action.primary.focused}>S</text>
       </box>
-      <text fg={themeV2.text.subdued}>earch</text>
+      <text fg={theme.text.subdued}>earch</text>
     </box>
   )
 }

@@ -45,7 +45,7 @@ export interface Interface {
   readonly cleanup: () => Effect.Effect<void>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/ToolOutputStore") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/ToolOutputStore") {}
 
 const takePrefix = (input: string, maximumBytes: number) => {
   let bytes = 0

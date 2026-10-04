@@ -1,6 +1,6 @@
 export * as PtyConnect from "./pty-connect"
 
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 
 const servers = new WeakMap<
   object,
@@ -29,7 +29,7 @@ export function parse(url: string) {
     return undefined
   return {
     ticket,
-    sessionID: SessionV2.ID.make(rawSessionID),
+    sessionID: Session.ID.make(rawSessionID),
     access: access === "control" ? ("control" as const) : ("inspect" as const),
     generation,
     offset,

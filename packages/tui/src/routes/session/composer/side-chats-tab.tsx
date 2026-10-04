@@ -57,7 +57,7 @@ function SideChatsTabContent(props: { sessionID: string }) {
   const client = useClient()
   const data = useData()
   const navigation = useRoute()
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const toast = useToast()
   const composer = useComposerTab()
   const session = createMemo(() => data.session.get(props.sessionID))
@@ -212,24 +212,24 @@ function SideChatsTabContent(props: { sessionID: string }) {
 
   return (
     <box flexDirection="column" paddingTop={2}>
-      <text fg={themeV2.text.default} onMouseUp={openNew}>
+      <text fg={theme.text.default} onMouseUp={openNew}>
         {creating() ? " Opening side chat…" : "+ New side chat"}
       </text>
       <Show when={error()}>
         {(message) => (
           <box flexDirection="row" gap={1}>
-            <text fg={themeV2.text.feedback.error.default}> Unable to load side chats: {message()}</text>
-            <text fg={themeV2.text.action.primary.default} onMouseUp={() => void load({ reset: true })}>
+            <text fg={theme.text.feedback.error.default}> Unable to load side chats: {message()}</text>
+            <text fg={theme.text.action.primary.default} onMouseUp={() => void load({ reset: true })}>
               Retry
             </text>
           </box>
         )}
       </Show>
       <Show when={loading() && entries().length === 0}>
-        <text fg={themeV2.text.subdued}> Loading side chats…</text>
+        <text fg={theme.text.subdued}> Loading side chats…</text>
       </Show>
       <Show when={!loading() && !error() && entries().length === 0}>
-        <text fg={themeV2.text.subdued}> No side chats</text>
+        <text fg={theme.text.subdued}> No side chats</text>
       </Show>
       <Show when={entries().length > 0}>
         <For each={entries()}>
@@ -238,12 +238,12 @@ function SideChatsTabContent(props: { sessionID: string }) {
             return (
               <box
                 paddingRight={1}
-                backgroundColor={active() ? themeV2.background.surface.offset : undefined}
+                backgroundColor={active() ? theme.background.surface.offset : undefined}
                 onMouseOver={() => setSelectedID(entry.sessionID)}
                 onMouseUp={() => navigation.navigate({ type: "session", sessionID: entry.sessionID })}
               >
                 <text
-                  fg={active() || entry.current ? themeV2.text.feedback.info.default : themeV2.text.default}
+                  fg={active() || entry.current ? theme.text.feedback.info.default : theme.text.default}
                   truncate
                   wrapMode="none"
                 >
@@ -255,7 +255,7 @@ function SideChatsTabContent(props: { sessionID: string }) {
         </For>
       </Show>
       <Show when={cursor()}>
-        <text fg={themeV2.text.action.primary.default} onMouseUp={() => void load({ cursor: cursor() })}>
+        <text fg={theme.text.action.primary.default} onMouseUp={() => void load({ cursor: cursor() })}>
           {loading() ? " Loading older side chats…" : " + More side chats"}
         </text>
       </Show>

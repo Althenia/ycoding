@@ -4,7 +4,7 @@ This document specifies the current behaviour of the Cloudflare relay and its tw
 WebSocket peers. Authoritative code: `packages/remote/src/index.ts` (envelope,
 parsers, limits, close codes, operation allowlist, auth request/response shapes)
 and `infra/cloudflare/src` (relay, authentication, routing). The authoritative
-local session API is `packages/protocol` (`specs/v2`).
+local session API is `packages/protocol` (`specs`).
 
 Consumers: the local agent transport in `packages/cli`, the remote client in
 `apps/web`, and this worker. Any change to the envelope, operation names, or error
@@ -37,8 +37,8 @@ vocabulary changes the contract for all three at once.
 | `POST` | `/api/devices/:deviceID/revoke` | browser session | same-origin required | Revoke a device, its credentials, and its live sockets |
 | `DELETE` | `/api/devices/:deviceID` | browser session | same-origin required | Remove one revoked device record of this account; `409` for an active device |
 | `DELETE` | `/api/devices/revoked` | browser session | same-origin required | Remove every revoked device record of this account |
-| `GET` | `/ws/v3/client` | browser session cookie | same-origin required | Browser/phone relay connection |
-| `GET` | `/ws/v3/agent` | device access token | not required | Local agent relay connection |
+| `GET` | `/ws/v4/client` | browser session cookie | same-origin required | Browser/phone relay connection |
+| `GET` | `/ws/v4/agent` | device access token | not required | Local agent relay connection |
 | `GET` | `/health` | none | not required | Database liveness probe |
 
 There is no unauthenticated relay path and no legacy/smoke compatibility route.
@@ -86,12 +86,12 @@ JavaScript cannot set it):
   `DELETE /api/devices/revoked`) require a present, exactly matching
   `Origin` (`https://<host>` for `https`, `http://<host>` on localhost
   development) and additionally reject `Sec-Fetch-Site: cross-site`.
-- Browser WebSocket upgrade `/ws/v3/client` requires the same exact same-origin
+- Browser WebSocket upgrade `/ws/v4/client` requires the same exact same-origin
   `Origin`; a missing `Origin` is rejected.
 - `/api/auth/google/start` and `/api/auth/google/callback` are navigations and
   require no `Origin`; they are protected by the one-use transaction cookie,
   `state`, PKCE, and the ID token binding.
-- Agent routes (`POST /api/devices/enroll|challenge|token|refresh`, `/ws/v3/agent`)
+- Agent routes (`POST /api/devices/enroll|challenge|token|refresh`, `/ws/v4/agent`)
   carry no browser cookie and never require an `Origin`; they are rate limited.
 
 `GET /api/*` responses are `Cache-Control: no-store`. No `GET` route writes
@@ -235,15 +235,15 @@ than trusting the connection's upgrade state for its lifetime.
 
 ### 3.1 Connections
 
-- `GET /ws/v3/client?device=<deviceID>` requires a valid browser session cookie, a
+- `GET /ws/v4/client?device=<deviceID>` requires a valid browser session cookie, a
   present same-origin `Origin`, and a device the owner owns and has not revoked. It
   connects to the Durable Object named `<ownerID>:<deviceID>`.
-- `GET /ws/v3/agent` requires `Authorization: Bearer <accessToken>`. The token must be
+- `GET /ws/v4/agent` requires `Authorization: Bearer <accessToken>`. The token must be
   an unexpired, unrevoked `access` credential whose device is not revoked. The same
   `<ownerID>:<deviceID>` Durable Object is used.
 - The worker strips every inbound `x-ycoding-*` header and re-derives trusted relay
   headers itself. Browser-supplied internal headers are never honored.
-- `/ws/v3/client` never accepts a bearer token, and `/ws/v3/agent` never accepts the
+- `/ws/v4/client` never accepts a bearer token, and `/ws/v4/agent` never accepts the
   browser cookie, so one role cannot impersonate the other.
 - One agent connection is authoritative per device. A newer agent connection closes
   the previous one with `1012`.
@@ -565,7 +565,7 @@ response. A violation closes the agent with `1008`. `packages/remote` exports
 `parseChunkedValue` for the client side.
 
 Large `session.messages` results are chunked through the relay. `session.log`
-(`v2.session.log`) remains the incremental read via `after`.
+(`session.log`) remains the incremental read via `after`.
 `session.snapshot` reads the full projection when no window is requested, or
 returns newest-first pages requested with `limit` (1–200) and an opaque `before`
 cursor (at most 256 characters) in ascending message order. Each page includes
@@ -582,61 +582,61 @@ grouping and Session-list filters are derived from backend metadata.
 
 | Remote operation | Session-scoped | Local Protocol identifier | Local route | `input` fields |
 | --- | --- | --- | --- | --- |
-| `workspace.list` | no | `v2.session.list`, `v2.project.list`, `v2.project.directories` | `GET /api/session`, `GET /api/project`, `GET /api/project/:projectID/directories` | `sessionsOnly?` |
+| `workspace.list` | no | `session.list`, `project.list`, `project.directories` | `GET /api/session`, `GET /api/project`, `GET /api/project/:projectID/directories` | `sessionsOnly?` |
 | `workspace.catalog` | no | Location-scoped catalog reads | `GET /api/agent`, `/api/model`, `/api/model/default`, `/api/provider`, `/api/command`, `/api/skill`, `/api/reference`, `/api/mcp/resource` | `workspace` |
-| `workspace.file.find` | no | `v2.fs.find` | `GET /api/fs/find` | `workspace`, `query`, `limit?` |
-| `session.list` | no | `v2.session.list`, `v2.session.active` | `GET /api/session`, `GET /api/session/active` | `limit?`, `order?`, `search?`, `searchFields?`, `workspace?`, `status?`, `parentID?`, `cursor?` |
-| `session.active` | no | `v2.session.active` | `GET /api/session/active` | — |
-| `usage.providers` | no | `v2.providerUsage.list` | `GET /api/provider/usage` | `refresh?` boolean |
-| `usage.summary` | no | `v2.usage.get` | `GET /api/usage` | — |
-| `usage.report` | no | `v2.usage.report` | `GET /api/usage/report` | `group`, `timeZone?`, `from?`, `to?`, `offset?`, `limit?`, `sort?`, `order?` |
-| `machine.keepAwake.get` | no | `v2.keepAwake.get` | `GET /api/keep-awake` | — |
-| `machine.keepAwake.set` | no | `v2.keepAwake.set` | `PUT /api/keep-awake` | `enabled` boolean |
-| `session.status` | no | `v2.session.active`, `v2.session.outstanding`, pending Session permission/form/guardrail reads | Local active, outstanding-work, and pending-request GET routes | — |
-| `session.get` | yes | `v2.session.get` | `GET /api/session/:sessionID` | — |
-| `session.messages` | yes | `v2.message.list` | `GET /api/session/:sessionID/message` | — |
-| `session.capturedChanges.list` | yes | `v2.message.list` | Verified root and dispatched direct-child reads at their backend Locations | `cursor?` (opaque, at most 256 chars) |
-| `session.compaction.list` | yes | `v2.message.list` | `GET /api/session/:sessionID/message` at the verified Session Location | — |
-| `session.compact` | yes | `v2.session.compact` | `POST /api/session/:sessionID/compact` at the verified Session Location | `id` (`cmp_` prefix, at most 128 characters) |
-| `session.snapshot` | yes | `v2.session.snapshot` | `GET /api/session/:sessionID/snapshot` | `limit?` (1–200), `before?` (requires limit; at most 256 chars) |
-| `session.pending.list` | yes | `v2.session.pending.list` | `GET /api/session/:sessionID/pending` | — |
-| `session.attachment.read` | yes | `v2.session.attachment.read` | `GET /api/session/:sessionID/attachment/:digest` | `digest` (64 lowercase hex) |
-| `session.message.stream` | yes | `v2.session.message` | `GET /api/session/:sessionID/message/:messageID` | `messageID` (HTTP stream relay-internal request) |
-| `session.todo.list` | yes | `v2.session.todo.list` | `GET /api/session/:sessionID/todo` | — |
+| `workspace.file.find` | no | `fs.find` | `GET /api/fs/find` | `workspace`, `query`, `limit?` |
+| `session.list` | no | `session.list`, `session.active` | `GET /api/session`, `GET /api/session/active` | `limit?`, `order?`, `search?`, `searchFields?`, `workspace?`, `status?`, `parentID?`, `cursor?` |
+| `session.active` | no | `session.active` | `GET /api/session/active` | — |
+| `usage.providers` | no | `providerUsage.list` | `GET /api/provider/usage` | `refresh?` boolean |
+| `usage.summary` | no | `usage.get` | `GET /api/usage` | — |
+| `usage.report` | no | `usage.report` | `GET /api/usage/report` | `group`, `timeZone?`, `from?`, `to?`, `offset?`, `limit?`, `sort?`, `order?` |
+| `machine.keepAwake.get` | no | `keepAwake.get` | `GET /api/keep-awake` | — |
+| `machine.keepAwake.set` | no | `keepAwake.set` | `PUT /api/keep-awake` | `enabled` boolean |
+| `session.status` | no | `session.active`, `session.outstanding`, pending Session permission/form/guardrail reads | Local active, outstanding-work, and pending-request GET routes | — |
+| `session.get` | yes | `session.get` | `GET /api/session/:sessionID` | — |
+| `session.messages` | yes | `message.list` | `GET /api/session/:sessionID/message` | — |
+| `session.capturedChanges.list` | yes | `message.list` | Verified root and dispatched direct-child reads at their backend Locations | `cursor?` (opaque, at most 256 chars) |
+| `session.compaction.list` | yes | `message.list` | `GET /api/session/:sessionID/message` at the verified Session Location | — |
+| `session.compact` | yes | `session.compact` | `POST /api/session/:sessionID/compact` at the verified Session Location | `id` (`cmp_` prefix, at most 128 characters) |
+| `session.snapshot` | yes | `session.snapshot` | `GET /api/session/:sessionID/snapshot` | `limit?` (1–200), `before?` (requires limit; at most 256 chars) |
+| `session.pending.list` | yes | `session.pending.list` | `GET /api/session/:sessionID/pending` | — |
+| `session.attachment.read` | yes | `session.attachment.read` | `GET /api/session/:sessionID/attachment/:digest` | `digest` (64 lowercase hex) |
+| `session.message.stream` | yes | `session.message` | `GET /api/session/:sessionID/message/:messageID` | `messageID` (HTTP stream relay-internal request) |
+| `session.todo.list` | yes | `session.todo.list` | `GET /api/session/:sessionID/todo` | — |
 | `session.catalog` | yes | Location-scoped catalog reads | Same routes as `workspace.catalog` at the verified Session Location | — |
-| `session.file.find` | yes | `v2.fs.find` | `GET /api/fs/find` at the verified Session Location | `query`, `limit?` |
-| `session.subagent.list` | yes | `v2.session.subagent.list` | `GET /api/session/:parentID/subagent` | `cursor?` |
-| `session.subagent.cancel` | yes | `v2.session.subagent.cancel` | `POST /api/session/:parentID/subagent/:childID/cancel` | `childID` |
-| `session.subagent.answer` | yes | `v2.session.subagent.answer` | `POST /api/session/:parentID/subagent/:childID/question/:questionID/answer` | `childID`, `questionID`, `text` |
-| `session.team.economics` | yes | `v2.session.get`, `v2.session.diagnostics` | Bounded child reads at each recorded Location | `sessionIDs` (1–15 unique direct managed children) |
-| `session.team.shell.list` | yes | `v2.shell.list` | `GET /api/shell` at up to 16 verified family Locations | — |
-| `session.team.shell.kill` | yes | `v2.shell.get`, `v2.shell.remove` | `GET`, `DELETE /api/shell/:id` at the verified owner Location | `shellID` |
-| `session.side-chat.list` | yes | `v2.session.list` | `GET /api/session?parentID=:rootID` | `cursor?` |
-| `session.side-chat.create` | yes | `v2.session.create`, `v2.session.snapshot`, `v2.session.synthetic` | `POST /api/session`, `GET /api/session/:rootID/snapshot`, `POST /api/session/:id/synthetic` | `id` |
-| `session.family.activity` | yes | `v2.session.active`, `v2.session.snapshot` | `GET /api/session/active`, bounded `GET /api/session/:sessionID/snapshot` for executing members only | `sessionIDs` (zero to 15 unique direct child IDs) |
-| `session.log` | yes | `v2.session.log` | `GET /api/experimental/session/:sessionID/log` | `after?` |
-| `session.subscribe` | yes | `v2.event.subscribe` | `GET /api/event` (SSE) | — |
-| `session.unsubscribe` | yes | — (tears down the agent's `v2.event.subscribe` stream for that session) | — | — |
-| `session.prompt` | yes | `v2.session.prompt` | `POST /api/session/:sessionID/prompt` | `id?`, `text`, `files?`, `agents?`, `delivery?`, `resume?` |
+| `session.file.find` | yes | `fs.find` | `GET /api/fs/find` at the verified Session Location | `query`, `limit?` |
+| `session.subagent.list` | yes | `session.subagent.list` | `GET /api/session/:parentID/subagent` | `cursor?` |
+| `session.subagent.cancel` | yes | `session.subagent.cancel` | `POST /api/session/:parentID/subagent/:childID/cancel` | `childID` |
+| `session.subagent.answer` | yes | `session.subagent.answer` | `POST /api/session/:parentID/subagent/:childID/question/:questionID/answer` | `childID`, `questionID`, `text` |
+| `session.team.economics` | yes | `session.get`, `session.diagnostics` | Bounded child reads at each recorded Location | `sessionIDs` (1–15 unique direct managed children) |
+| `session.team.shell.list` | yes | `shell.list` | `GET /api/shell` at up to 16 verified family Locations | — |
+| `session.team.shell.kill` | yes | `shell.get`, `shell.remove` | `GET`, `DELETE /api/shell/:id` at the verified owner Location | `shellID` |
+| `session.side-chat.list` | yes | `session.list` | `GET /api/session?parentID=:rootID` | `cursor?` |
+| `session.side-chat.create` | yes | `session.create`, `session.snapshot`, `session.synthetic` | `POST /api/session`, `GET /api/session/:rootID/snapshot`, `POST /api/session/:id/synthetic` | `id` |
+| `session.family.activity` | yes | `session.active`, `session.snapshot` | `GET /api/session/active`, bounded `GET /api/session/:sessionID/snapshot` for executing members only | `sessionIDs` (zero to 15 unique direct child IDs) |
+| `session.log` | yes | `session.log` | `GET /api/experimental/session/:sessionID/log` | `after?` |
+| `session.subscribe` | yes | `event.subscribe` | `GET /api/event` (SSE) | — |
+| `session.unsubscribe` | yes | — (tears down the agent's `event.subscribe` stream for that session) | — | — |
+| `session.prompt` | yes | `session.prompt` | `POST /api/session/:sessionID/prompt` | `id?`, `text`, `files?`, `agents?`, `delivery?`, `resume?` |
 | `session.attachment.upload` | yes | local agent upload buffer | none | `uploadID`, `index`, `last`, `data` |
-| `session.command` | yes | `v2.session.command` | `POST /api/session/:sessionID/command` | `id?`, `command`, `arguments?`, `files?`, `agents?`, `delivery?` |
-| `session.skill` | yes | `v2.session.skill` | `POST /api/session/:sessionID/skill` | `id?`, `skill`, `resume?` |
-| `session.switchModel` | yes | `v2.session.switchModel` | `POST /api/session/:sessionID/model` | `model` |
-| `session.switchAgent` | yes | `v2.session.switchAgent` | `POST /api/session/:sessionID/agent` | `agent` |
-| `session.interrupt` | yes | `v2.session.interrupt` | `POST /api/session/:sessionID/interrupt` | — |
-| `session.permission.list` | yes | `v2.session.permission.list` | `GET /api/session/:sessionID/permission` | — |
-| `session.permission.reply` | yes | `v2.session.permission.reply` | `POST /api/session/:sessionID/permission/:requestID/reply` | `requestID`, `reply`, `message?` |
-| `session.guardrail.status` | yes | `v2.session.guardrail.status` | `GET /api/session/:sessionID/guardrail` | — |
-| `session.guardrail.request.list` | yes | `v2.session.guardrail.request.list` | `GET /api/session/:sessionID/guardrail/request` | — |
-| `session.guardrail.reply` | yes | `v2.session.guardrail.request.reply` | `POST /api/session/:sessionID/guardrail/request/:requestID/reply` | `requestID`, `reply` |
-| `session.form.list` | yes | `v2.session.form.list` | `GET /api/session/:sessionID/form` | — |
-| `session.form.reply` | yes | `v2.session.form.reply` | `POST /api/session/:sessionID/form/:formID/reply` | `formID`, `answer` |
-| `session.form.cancel` | yes | `v2.session.form.cancel` | `POST /api/session/:sessionID/form/:formID/cancel` | `formID` |
-| `session.autonomy.get` | yes | `v2.session.autonomy.get` | `GET /api/session/:sessionID/autonomy` | — |
-| `session.autonomy.set` | yes | `v2.session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `yolo`, `maxNoProgress?` |
-| `session.goal.set` | yes | `v2.session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `goal` (non-empty string), `maxNoProgress?` |
-| `session.goal.stop` | yes | `v2.session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `goal: null` |
-| `session.create` | no | `v2.session.create`, `v2.project.current` | `POST /api/session`, `GET /api/project/current` | `id`, `workspace`, `agent?`, `model?` |
+| `session.command` | yes | `session.command` | `POST /api/session/:sessionID/command` | `id?`, `command`, `arguments?`, `files?`, `agents?`, `delivery?` |
+| `session.skill` | yes | `session.skill` | `POST /api/session/:sessionID/skill` | `id?`, `skill`, `resume?` |
+| `session.switchModel` | yes | `session.switchModel` | `POST /api/session/:sessionID/model` | `model` |
+| `session.switchAgent` | yes | `session.switchAgent` | `POST /api/session/:sessionID/agent` | `agent` |
+| `session.interrupt` | yes | `session.interrupt` | `POST /api/session/:sessionID/interrupt` | — |
+| `session.permission.list` | yes | `session.permission.list` | `GET /api/session/:sessionID/permission` | — |
+| `session.permission.reply` | yes | `session.permission.reply` | `POST /api/session/:sessionID/permission/:requestID/reply` | `requestID`, `reply`, `message?` |
+| `session.guardrail.status` | yes | `session.guardrail.status` | `GET /api/session/:sessionID/guardrail` | — |
+| `session.guardrail.request.list` | yes | `session.guardrail.request.list` | `GET /api/session/:sessionID/guardrail/request` | — |
+| `session.guardrail.reply` | yes | `session.guardrail.request.reply` | `POST /api/session/:sessionID/guardrail/request/:requestID/reply` | `requestID`, `reply` |
+| `session.form.list` | yes | `session.form.list` | `GET /api/session/:sessionID/form` | — |
+| `session.form.reply` | yes | `session.form.reply` | `POST /api/session/:sessionID/form/:formID/reply` | `formID`, `answer` |
+| `session.form.cancel` | yes | `session.form.cancel` | `POST /api/session/:sessionID/form/:formID/cancel` | `formID` |
+| `session.autonomy.get` | yes | `session.autonomy.get` | `GET /api/session/:sessionID/autonomy` | — |
+| `session.autonomy.set` | yes | `session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `yolo`, `maxNoProgress?` |
+| `session.goal.set` | yes | `session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `goal` (non-empty string), `maxNoProgress?` |
+| `session.goal.stop` | yes | `session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `goal: null` |
+| `session.create` | no | `session.create`, `project.current` | `POST /api/session`, `GET /api/project/current` | `id`, `workspace`, `agent?`, `model?` |
 
 `session.compaction.list` returns `{ data, truncated, completedBefore, completedCount, totalSavedTokens }`. `data` contains the latest 100 job-backed compaction messages in chronological order, each with `jobID`, `trigger`, `status`, `created` (milliseconds), and completed `metrics` or failure `code` where applicable. `truncated` marks omitted older jobs; `completedBefore` counts completed jobs omitted from `data`. `completedCount` and `totalSavedTokens` cover all completed jobs, including omitted ones; savings is the sum of `inputTokens - retainedTokens`. The connector verifies the Session against its recorded Location, excludes message content and error text, and accepts no caller-selected path, cursor, or Location.
 
@@ -1048,4 +1048,4 @@ Verification limits, stated so they are not mistaken for covered behaviour:
 - No arbitrary proxy: the operation allowlist is closed, and the relay does not
   accept a URL, path, or method from a client.
 - No transcript, event, or delta persistence anywhere in D1.
-- No browser credentials on `/ws/v3/agent` and no device credentials on `/ws/v3/client`.
+- No browser credentials on `/ws/v4/agent` and no device credentials on `/ws/v4/client`.

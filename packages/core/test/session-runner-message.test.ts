@@ -1,19 +1,19 @@
 import { describe, expect, test } from "bun:test"
 import { Message } from "@ycoding-ai/ai"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { AgentAttachment, FileAttachment } from "@ycoding-ai/schema/prompt"
 import { toLLMMessages } from "@ycoding-ai/core/session/runner/to-llm-message"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Shell } from "@ycoding-ai/schema/shell"
 import { ID, Name } from "@ycoding-ai/core/skill"
 import { DateTime, Schema } from "effect"
 
 const created = DateTime.makeUnsafe(0)
 const id = (value: string) => SessionMessage.ID.make(`msg_${value}`)
-const model = ModelV2.Ref.make({ id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") })
-const build = AgentV2.defaultID
+const model = CatalogModel.Ref.make({ id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("provider") })
+const build = Agent.defaultID
 const managed = (mime: string, name: string, digest = "a".repeat(64), bytes = 4) =>
   FileAttachment.make({
     content: {
@@ -33,7 +33,7 @@ describe("toLLMMessages", () => {
         id: id(value),
         type: "assistant",
         agent: build,
-        model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+        model: { id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("provider") },
         content,
         time: { created, completed: created },
       })
@@ -61,9 +61,9 @@ describe("toLLMMessages", () => {
   })
 
   test("replays empty Anthropic reasoning in durable order before tool calls", () => {
-    const anthropicModel = ModelV2.Ref.make({
-      id: ModelV2.ID.make("claude-sonnet-4-5"),
-      providerID: ProviderV2.ID.make("anthropic"),
+    const anthropicModel = CatalogModel.Ref.make({
+      id: CatalogModel.ID.make("claude-sonnet-4-5"),
+      providerID: Provider.ID.make("anthropic"),
     })
     const durableMessage = SessionMessage.Assistant.make({
       id: id("anthropic-thinking"),
@@ -96,9 +96,9 @@ describe("toLLMMessages", () => {
   })
 
   test("rehydrates opaque OpenAI compaction state only for its source model", () => {
-    const openaiModel = ModelV2.Ref.make({
-      id: ModelV2.ID.make("gpt-5.6"),
-      providerID: ProviderV2.ID.make("openai"),
+    const openaiModel = CatalogModel.Ref.make({
+      id: CatalogModel.ID.make("gpt-5.6"),
+      providerID: Provider.ID.make("openai"),
     })
     const history = [
       SessionMessage.Assistant.make({
@@ -135,16 +135,16 @@ describe("toLLMMessages", () => {
     expect(
       toLLMMessages(
         history,
-        ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.5"), providerID: ProviderV2.ID.make("openai") }),
+        CatalogModel.Ref.make({ id: CatalogModel.ID.make("gpt-5.5"), providerID: Provider.ID.make("openai") }),
         "openai",
       ),
     ).toEqual([])
   })
 
   test("rehydrates assistant text phase only for its source model", () => {
-    const openaiModel = ModelV2.Ref.make({
-      id: ModelV2.ID.make("gpt-5.6-sol"),
-      providerID: ProviderV2.ID.make("openai"),
+    const openaiModel = CatalogModel.Ref.make({
+      id: CatalogModel.ID.make("gpt-5.6-sol"),
+      providerID: Provider.ID.make("openai"),
     })
     const history = [
       SessionMessage.Assistant.make({
@@ -171,7 +171,7 @@ describe("toLLMMessages", () => {
     expect(
       toLLMMessages(
         history,
-        ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.5"), providerID: ProviderV2.ID.make("openai") }),
+        CatalogModel.Ref.make({ id: CatalogModel.ID.make("gpt-5.5"), providerID: Provider.ID.make("openai") }),
         "openai",
       ),
     ).toMatchObject([{ content: [{ type: "text", text: "Working", providerMetadata: undefined }] }])
@@ -217,7 +217,7 @@ describe("toLLMMessages", () => {
     })
   })
 
-  test("maps every top-level V2 Session message type", () => {
+  test("maps every top-level Session message type", () => {
     const file = managed("image/png", "hello.png")
     const messages = toLLMMessages(
       [
@@ -230,7 +230,7 @@ describe("toLLMMessages", () => {
         SessionMessage.ModelSelected.make({
           id: id("model"),
           type: "model-switched",
-          model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+          model: { id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("provider") },
           time: { created },
         }),
         SessionMessage.System.make({
@@ -460,7 +460,7 @@ Earlier work
           id: id("assistant"),
           type: "assistant",
           agent: build,
-          model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+          model: { id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("provider") },
           content: [
             SessionMessage.AssistantText.make({ type: "text", text: "Checking" }),
             SessionMessage.AssistantReasoning.make({
@@ -615,7 +615,7 @@ Earlier work
           id: id("assistant-openai-reasoning"),
           type: "assistant",
           agent: build,
-          model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+          model: { id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("provider") },
           content: [
             SessionMessage.AssistantReasoning.make({
               type: "reasoning",
@@ -639,9 +639,9 @@ Earlier work
   })
 
   test("replays flat state under an external hosted model's route key", () => {
-    const providerModel = ModelV2.Ref.make({
-      id: ModelV2.ID.make("claude-fable-5"),
-      providerID: ProviderV2.ID.opencode,
+    const providerModel = CatalogModel.Ref.make({
+      id: CatalogModel.ID.make("claude-fable-5"),
+      providerID: Provider.ID.opencode,
     })
     const messages = toLLMMessages(
       [
@@ -676,7 +676,7 @@ Earlier work
           id: id("assistant-failed"),
           type: "assistant",
           agent: build,
-          model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+          model: { id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("provider") },
           content: [
             SessionMessage.AssistantReasoning.make({
               type: "reasoning",
@@ -777,7 +777,7 @@ Earlier work
           id: id("assistant-old-model"),
           type: "assistant",
           agent: build,
-          model: { id: ModelV2.ID.make("old-model"), providerID: ProviderV2.ID.make("provider") },
+          model: { id: CatalogModel.ID.make("old-model"), providerID: Provider.ID.make("provider") },
           content: [
             SessionMessage.AssistantReasoning.make({
               type: "reasoning",
@@ -872,7 +872,7 @@ Earlier work
           id: id("assistant-alias"),
           type: "assistant",
           agent: build,
-          model: { id: ModelV2.ID.make("fast"), providerID: ProviderV2.ID.make("provider") },
+          model: { id: CatalogModel.ID.make("fast"), providerID: Provider.ID.make("provider") },
           content: [
             SessionMessage.AssistantReasoning.make({
               type: "reasoning",
@@ -883,7 +883,7 @@ Earlier work
           time: { created, completed: created },
         }),
       ],
-      ModelV2.Ref.make({ id: ModelV2.ID.make("fast"), providerID: ProviderV2.ID.make("provider") }),
+      CatalogModel.Ref.make({ id: CatalogModel.ID.make("fast"), providerID: Provider.ID.make("provider") }),
     )
 
     expect(messages[0]?.content).toEqual([

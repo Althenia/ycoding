@@ -65,7 +65,7 @@ export function DialogVariant(props: {
       title={"Select variant"}
       footer={
         <Show when={current() !== undefined && !variants().includes(current()!)}>
-          <text fg={theme.themeV2.text.feedback.warning.default}>{current()} · unavailable</text>
+          <text fg={theme.theme.text.feedback.warning.default}>{current()} · unavailable</text>
         </Show>
       }
       actions={

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { OpenAIUsage } from "@ycoding-ai/core/provider-usage/openai"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 
-const providerID = ProviderV2.ID.make("openai")
+const providerID = Provider.ID.make("openai")
 
 describe("OpenAIUsage", () => {
   test("aggregates documented organization usage and cost buckets", () => {

@@ -2,29 +2,29 @@ import { expect, test } from "bun:test"
 import { Effect, Schema } from "effect"
 import { LLMEvent } from "@ycoding-ai/ai"
 import { Money } from "@ycoding-ai/schema/money"
-import { EventV2 } from "@ycoding-ai/core/event"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { EventRuntime } from "@ycoding-ai/core/event"
+import { Agent } from "@ycoding-ai/core/agent"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
-import { SessionV2 } from "@ycoding-ai/core/session"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Session } from "@ycoding-ai/core/session"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { RelativePath } from "@ycoding-ai/core/schema"
 import { Snapshot } from "@ycoding-ai/core/snapshot"
 import { createLLMEventPublisher } from "@ycoding-ai/core/session/runner/publish-llm-event"
 
-const sessionID = SessionV2.ID.make("ses_tool_event_test")
+const sessionID = Session.ID.make("ses_tool_event_test")
 const base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
 
 const capture = (providerMetadataKey = "anthropic") => {
   const published: Array<{ readonly type: string; readonly data: unknown }> = []
-  const events: Pick<EventV2.Interface, "publish"> = {
+  const events: Pick<EventRuntime.Interface, "publish"> = {
     publish: (definition, data) =>
       Effect.sync(() => {
-        const event = { id: EventV2.ID.create(), type: definition.type, data } as EventV2.Payload<typeof definition>
+        const event = { id: EventRuntime.ID.create(), type: definition.type, data } as EventRuntime.Payload<typeof definition>
         published.push({
           type: definition.durable
-            ? EventV2.versionedType(definition.type, definition.durable.version)
+            ? EventRuntime.versionedType(definition.type, definition.durable.version)
             : definition.type,
           data,
         })
@@ -35,10 +35,10 @@ const capture = (providerMetadataKey = "anthropic") => {
     published,
     publisher: createLLMEventPublisher(events, {
       sessionID,
-      agent: AgentV2.ID.make("build"),
+      agent: Agent.ID.make("build"),
       model: {
-        id: ModelV2.ID.make("model"),
-        providerID: ProviderV2.ID.opencode,
+        id: CatalogModel.ID.make("model"),
+        providerID: Provider.ID.opencode,
       },
       providerMetadataKey,
     }),

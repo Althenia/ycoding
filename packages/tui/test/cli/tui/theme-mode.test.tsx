@@ -48,8 +48,8 @@ test("uses an available mode while retaining the pinned preference", async () =>
 
   try {
     await wait(() => theme?.ready === true)
-    expect("theme" in current()).toBeFalse()
-    expect(current().themeV2.text.default).toBeDefined()
+    expect("selectedListItemText" in current().theme).toBeFalse()
+    expect(current().theme.text.default).toBeDefined()
     expect(current().mode()).toBe("light")
     expect(current().modes()).toEqual(["light"])
     expect(current().supports("dark")).toBeFalse()

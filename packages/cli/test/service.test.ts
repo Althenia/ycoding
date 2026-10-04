@@ -2,14 +2,14 @@ import { NodeFileSystem } from "@effect/platform-node"
 import { Service, type Info } from "@ycoding-ai/client/effect/service"
 import { Database } from "@ycoding-ai/core/database/database"
 import { DatabaseFormat } from "@ycoding-ai/core/database/format"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { EventSequenceTable, EventTable } from "@ycoding-ai/core/event/sql"
 import { Global } from "@ycoding-ai/core/global"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { expect, test } from "bun:test"
@@ -239,7 +239,7 @@ test("concurrent service processes elect one server without resuming suspended S
     XDG_DATA_HOME: path.join(root, "data"),
     XDG_STATE_HOME: path.join(root, "state"),
   }
-  const sessionID = SessionV2.ID.make("ses_service_recovery")
+  const sessionID = Session.ID.make("ses_service_recovery")
   await withDatabase(
     database,
     Effect.gen(function* () {
@@ -337,8 +337,8 @@ test("concurrent service processes elect one server without resuming suspended S
 }, 120_000)
 
 test("managed service startup settles an unterminated execution as a failed run without resuming it", async () => {
-  const sessionID = SessionV2.ID.make("ses_service_killed")
-  const startedType = EventV2.versionedType(
+  const sessionID = Session.ID.make("ses_service_killed")
+  const startedType = EventRuntime.versionedType(
     SessionEvent.Execution.Started.type,
     SessionEvent.Execution.Started.durable.version,
   )
@@ -361,7 +361,7 @@ test("managed service startup settles an unterminated execution as a failed run 
         yield* db
           .insert(EventTable)
           .values({
-            id: EventV2.ID.create(),
+            id: EventRuntime.ID.create(),
             aggregate_id: sessionID,
             seq: 1,
             created: Date.now(),
@@ -620,7 +620,7 @@ function withDatabase<A, E>(file: string, effect: Effect.Effect<A, E, Database.S
   return Effect.runPromise(effect.pipe(Effect.provide(Database.layer({ path: file })), Effect.scoped))
 }
 
-function executionStarts(file: string, sessionID: SessionV2.ID) {
+function executionStarts(file: string, sessionID: Session.ID) {
   return withDatabase(
     file,
     Effect.gen(function* () {
@@ -636,7 +636,7 @@ function executionStarts(file: string, sessionID: SessionV2.ID) {
               (row) =>
                 row.sessionID === sessionID &&
                 row.type ===
-                  EventV2.versionedType(
+                  EventRuntime.versionedType(
                     SessionEvent.Execution.Started.type,
                     SessionEvent.Execution.Started.durable.version,
                   ),

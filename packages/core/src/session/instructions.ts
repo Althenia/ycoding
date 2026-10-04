@@ -4,7 +4,7 @@ import { relative } from "path"
 import { Context, DateTime, Effect, Layer, Option, Ref, Schema } from "effect"
 import { Config } from "../config"
 import { makeLocationNode } from "../effect/app-node"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { FSUtil } from "../fs-util"
 import { renderInstructionContent } from "../instruction-content"
 import { Location } from "../location"
@@ -25,13 +25,13 @@ export interface Interface {
   }) => Effect.Effect<void, MessageDecodeError | FSUtil.Error>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionInstructions") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionInstructions") {}
 
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const config = yield* Config.Service
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const fs = yield* FSUtil.Service
     const store = yield* SessionStore.Service
     const location = yield* Location.Service
@@ -80,8 +80,8 @@ const layer = Layer.effect(
       )
       const readable = files.filter((file): file is { path: string; content: string } => file !== undefined)
       if (readable.length === 0) return
-      // Publish directly rather than through SessionV2.synthetic: a Location-scoped layer
-      // cannot depend on SessionV2 (it routes through LocationServiceMap, forming a type
+      // Publish directly rather than through Session.synthetic: a Location-scoped layer
+      // cannot depend on Session (it routes through LocationServiceMap, forming a type
       // cycle with this node). The durable publish is what makes the synthetic visible on
       // the next projected history reload. The dedup ledger lives on the synthetic message
       // metadata so it survives across Location layer restarts.
@@ -122,5 +122,5 @@ function describePath(root: string, path: string) {
 export const node = makeLocationNode({
   name: "session-instructions",
   layer,
-  deps: [Config.node, EventV2.node, FSUtil.node, Location.node, SessionStore.node],
+  deps: [Config.node, EventRuntime.node, FSUtil.node, Location.node, SessionStore.node],
 })

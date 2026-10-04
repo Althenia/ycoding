@@ -1,30 +1,30 @@
 import { describe, expect, test } from "bun:test"
 import { DateTime, Option, Schema } from "effect"
-import { AgentV2 } from "@ycoding-ai/core/agent"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Agent } from "@ycoding-ai/core/agent"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { SessionSkillStatus } from "@ycoding-ai/core/session/skill-status"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
-import { SkillV2 } from "@ycoding-ai/core/skill"
+import { Skill } from "@ycoding-ai/core/skill"
 import { Instructions } from "@ycoding-ai/core/instructions"
 
 const created = DateTime.makeUnsafe(0)
-const model = ModelV2.Ref.make({ id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") })
+const model = CatalogModel.Ref.make({ id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("provider") })
 const messageID = (value: string) => SessionMessage.ID.make(`msg_${value}`)
-const skillID = (value: string) => SkillV2.ID.make(value)
+const skillID = (value: string) => Skill.ID.make(value)
 
 const reference = (
   id: string,
   skill: string,
   name: string,
   content: string,
-  conflicts: SkillV2.Conflicts = { skills: [], instructions: [] },
+  conflicts: Skill.Conflicts = { skills: [], instructions: [] },
 ) =>
   SessionMessage.Skill.make({
     id: messageID(id),
     type: "skill",
     skill: skillID(skill),
-    name: SkillV2.Name.make(name),
+    name: Skill.Name.make(name),
     text: content,
     conflicts,
     time: { created },
@@ -34,7 +34,7 @@ const assistant = (id: string, state: SessionMessage.ToolState) =>
   SessionMessage.Assistant.make({
     id: messageID(id),
     type: "assistant",
-    agent: AgentV2.defaultID,
+    agent: Agent.defaultID,
     model,
     content: [
       SessionMessage.AssistantTool.make({
@@ -53,7 +53,7 @@ const toolCompleted = (
   skill: string,
   name: string,
   content: string,
-  conflicts: SkillV2.Conflicts = { skills: [], instructions: [] },
+  conflicts: Skill.Conflicts = { skills: [], instructions: [] },
 ) =>
   assistant(
     id,
@@ -78,7 +78,7 @@ describe("SessionSkillStatus.list", () => {
     ).toEqual([
       expect.objectContaining({
         id: skillID("review"),
-        name: SkillV2.Name.make("Review"),
+        name: Skill.Name.make("Review"),
         state: "active",
         activatedBy: "reference",
         activationMessageID: messageID("reference"),
@@ -87,7 +87,7 @@ describe("SessionSkillStatus.list", () => {
       }),
       expect.objectContaining({
         id: skillID("effect"),
-        name: SkillV2.Name.make("Effect"),
+        name: Skill.Name.make("Effect"),
         state: "active",
         activatedBy: "tool",
         activationMessageID: messageID("tool"),
@@ -101,7 +101,7 @@ describe("SessionSkillStatus.list", () => {
     const message = SessionMessage.Assistant.make({
       id: messageID("repeated"),
       type: "assistant",
-      agent: AgentV2.defaultID,
+      agent: Agent.defaultID,
       model,
       content: ["old", "new"].map((description, index) =>
         SessionMessage.AssistantTool.make({
@@ -203,7 +203,7 @@ describe("SessionSkillStatus.list", () => {
           SessionMessage.AgentSelected.make({
             id: messageID("switched"),
             type: "agent-switched",
-            agent: AgentV2.defaultID,
+            agent: Agent.defaultID,
             time: { created },
           }),
         ],
@@ -212,7 +212,7 @@ describe("SessionSkillStatus.list", () => {
     ).toEqual([
       expect.objectContaining({
         id: skillID("review"),
-        name: SkillV2.Name.make("Review updated"),
+        name: Skill.Name.make("Review updated"),
         content: "second",
         state: "inactive",
         inactiveReason: "agent_switched",
@@ -261,7 +261,7 @@ describe("SessionSkillStatus.list", () => {
     const switched = SessionMessage.AgentSelected.make({
       id: messageID("switched"),
       type: "agent-switched",
-      agent: AgentV2.defaultID,
+      agent: Agent.defaultID,
       time: { created },
     })
 
@@ -280,7 +280,7 @@ describe("SessionSkillStatus.list", () => {
       SessionMessage.AgentSelected.make({
         id: messageID("switched"),
         type: "agent-switched",
-        agent: AgentV2.defaultID,
+        agent: Agent.defaultID,
         time: { created },
       }),
     )
@@ -307,7 +307,7 @@ describe("SessionSkillStatus.list", () => {
   test("rejects invalid state and inactive-reason combinations", () => {
     const base = {
       id: skillID("review"),
-      name: SkillV2.Name.make("Review"),
+      name: Skill.Name.make("Review"),
       activatedBy: "reference",
       activationMessageID: messageID("activation"),
       content: "content",
@@ -335,13 +335,13 @@ describe("SessionSkillStatus.list", () => {
       expect.objectContaining({
         id: skillID("review"),
         conflicts: [
-          { type: "skill", id: skillID("effect"), name: SkillV2.Name.make("Effect") },
+          { type: "skill", id: skillID("effect"), name: Skill.Name.make("Effect") },
           { type: "instruction", id: Instructions.Key.make("core/instructions"), name: "core/instructions" },
         ],
       }),
       expect.objectContaining({
         id: skillID("effect"),
-        conflicts: [{ type: "skill", id: skillID("review"), name: SkillV2.Name.make("Review") }],
+        conflicts: [{ type: "skill", id: skillID("review"), name: Skill.Name.make("Review") }],
       }),
     ])
   })

@@ -27,16 +27,16 @@ let once = false
 export const landingPlaceholder = { normal: ["Message YCoding…"] }
 
 export function LandingHero() {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
 
   return (
     <box alignItems="center" flexShrink={0}>
       <box flexDirection="column" alignItems="center" gap={2}>
         <BrandMark />
-        <text fg={themeV2.text.default} selectable={false}>
+        <text fg={theme.text.default} selectable={false}>
           What should we build?
         </text>
-        <text fg={themeV2.text.subdued} selectable={false}>
+        <text fg={theme.text.subdued} selectable={false}>
           Describe a goal, paste an error, or press ^p for commands.
         </text>
       </box>
@@ -45,14 +45,14 @@ export function LandingHero() {
 }
 
 export function LandingComposer(props: { children: JSX.Element }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   return (
     <box
       width="100%"
       paddingBottom={Math.max(0, Math.max(1, Math.min(4, Math.floor(dimensions().height / 16))) - 1)}
       border={["top"]}
-      borderColor={themeV2.text.feedback.success.default}
+      borderColor={theme.text.feedback.success.default}
     >
       {props.children}
     </box>
@@ -64,7 +64,7 @@ export function LandingMark(props: { overlay: boolean; children: JSX.Element }) 
 }
 
 function LandingFooter(props: { autonomy?: SessionAutonomyState }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const shortcut = Keymap.useShortcut("command.palette.show")
   const usageShortcut = Keymap.useShortcut("home.provider-usage.open")
   const route = useRoute()
@@ -85,20 +85,20 @@ function LandingFooter(props: { autonomy?: SessionAutonomyState }) {
       paddingRight={3}
       height={3}
       alignItems="center"
-      backgroundColor={themeV2.background.chrome}
+      backgroundColor={theme.background.chrome}
     >
       <box flexDirection="row" gap={3}>
-        <text fg={themeV2.text.subdued}>main</text>
+        <text fg={theme.text.subdued}>main</text>
         <ModeChips autonomy={props.autonomy} />
-        <text fg={themeV2.text.subdued}>subagents 0</text>
+        <text fg={theme.text.subdued}>subagents 0</text>
       </box>
       <box flexDirection="row" gap={3} flexShrink={0}>
-        <text fg={themeV2.text.default} wrapMode="none" onMouseUp={openUsage}>
+        <text fg={theme.text.default} wrapMode="none" onMouseUp={openUsage}>
           <Show when={usageShortcut()}>{(value) => `${value().replaceAll("ctrl+", "⌃")} `}</Show>
-          <span style={{ fg: themeV2.text.subdued }}>usage</span>
+          <span style={{ fg: theme.text.subdued }}>usage</span>
         </text>
         <Show when={shortcut()}>
-          {(value) => <text fg={themeV2.text.default} wrapMode="none">{value().replaceAll("ctrl+", "⌃")} <span style={{ fg: themeV2.text.subdued }}>commands</span></text>}
+          {(value) => <text fg={theme.text.default} wrapMode="none">{value().replaceAll("ctrl+", "⌃")} <span style={{ fg: theme.text.subdued }}>commands</span></text>}
         </Show>
       </box>
     </box>

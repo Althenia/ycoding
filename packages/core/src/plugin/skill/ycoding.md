@@ -4,14 +4,14 @@ Use this guide for work involving YCoding itself: configuration, terminal behavi
 
 ## Authority
 
-YCoding is terminal-first and V2-only. Use sources in this order:
+YCoding is terminal-first with one current runtime. Use sources in this order:
 
 1. Current executable behavior and targeted tests.
 2. Public shapes in `packages/schema`.
 3. HTTP operations in `packages/protocol` and handlers in `packages/server`.
 4. Runtime behavior in `packages/core`.
 5. Terminal behavior in `packages/tui` and CLI ownership in `packages/cli`.
-6. Root documentation in `docs` and contracts in `specs/v2`.
+6. Root documentation in `docs` and contracts in `specs`.
 7. Historical upstream material only when a migration or comparison explicitly requires it.
 
 Do not use removed V1, Electron, browser-product, console, website, or legacy SDK paths as current behavior.
@@ -47,7 +47,7 @@ Do not describe an unimplemented hook or compatibility bridge as available.
 
 ## Sessions and subagents
 
-Sessions are durable V2 aggregates. Prompt admission, autonomy state, goals, instructions, orchestration, subagents, compaction, and transcript history must survive restart and rehydration according to current tests.
+Sessions are durable aggregates. Prompt admission, autonomy state, goals, instructions, orchestration, subagents, compaction, and transcript history must survive restart and rehydration according to current tests.
 
 Subagents are durable child sessions and run in the background. Parent notification and status projection must not depend on opening the child session in the TUI.
 

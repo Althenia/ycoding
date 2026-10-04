@@ -12,9 +12,9 @@ export const DOT_TRAIL_FRAMES = ["..●", ".●.", "●.."]
 registerYCodingSpinner()
 
 export function Spinner(props: { children?: JSX.Element; color?: RGBA; frames?: string[]; interval?: number }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const config = useConfig().data
-  const color = () => props.color ?? themeV2.text.subdued
+  const color = () => props.color ?? theme.text.subdued
   return (
     <Show
       when={config.animations ?? true}

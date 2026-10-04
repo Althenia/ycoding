@@ -3,13 +3,13 @@ import { LLMError, TransportReason } from "@ycoding-ai/ai"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import type { LocationServices } from "@ycoding-ai/core/location-services"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionCompactionExecution } from "@ycoding-ai/core/session/compaction-execution"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
@@ -28,9 +28,9 @@ import { EventTable } from "@ycoding-ai/core/event/sql"
 import { Hash } from "@ycoding-ai/core/util/hash"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
-import { AgentV2 } from "@ycoding-ai/core/agent"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Agent } from "@ycoding-ai/core/agent"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 import { Shell } from "@ycoding-ai/core/shell"
@@ -39,16 +39,16 @@ import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Logg
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
-const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionStore.node, Job.node])))
+const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionStore.node, Job.node])))
 const completionIt = testEffect(AppNodeBuilder.build(LayerNode.group([
-  Database.node, EventV2.node, SessionStore.node, SessionProjector.node, Job.node,
+  Database.node, EventRuntime.node, SessionStore.node, SessionProjector.node, Job.node,
 ])))
 
 completionIt.effect("records verified work once after an explicit declaration and the final response settle", () =>
   Effect.gen(function* () {
     const database = yield* Database.Service
-    const events = yield* EventV2.Service
-    const sessionID = SessionV2.ID.make("ses_verified_work")
+    const events = yield* EventRuntime.Service
+    const sessionID = Session.ID.make("ses_verified_work")
     yield* seedSessions(database, [sessionID])
     const inputID = SessionMessage.ID.make("msg_verified_input")
     yield* SessionPending.admit(database.db, events, { id: inputID, sessionID, input: SessionPending.Message.make({
@@ -71,7 +71,7 @@ completionIt.effect("records verified work once after an explicit declaration an
     ], { concurrency: "unbounded" })
     expect(SessionCompletion).toHaveProperty("latest")
     const page = yield* SessionCompletion.latest(database.db, { limit: 1 })
-    expect(page).toEqual({ data: [{ id: completed[0].id, seq: EventV2.Seq.make(completed[0].seq), created: completed[0].created,
+    expect(page).toEqual({ data: [{ id: completed[0].id, seq: EventRuntime.Seq.make(completed[0].seq), created: completed[0].created,
       sessionID, inputID, assistantMessageID: SessionMessage.ID.make("msg_work_final") }] })
     expect(yield* SessionCompletion.latest(database.db, { after: sessionID, limit: 1 })).toEqual({ data: [] })
     yield* Scope.close(scope, Exit.void)
@@ -79,7 +79,7 @@ completionIt.effect("records verified work once after an explicit declaration an
 )
 
 function completionExchange(
-  database: Database.Service["Service"], events: EventV2.Interface, sessionID: SessionV2.ID,
+  database: Database.Service["Service"], events: EventRuntime.Interface, sessionID: Session.ID,
   options: {
     declaration?: boolean; text?: string; finish?: "stop" | "length"; phase?: "commentary";
     providerExecuted?: boolean; beforeDeclaration?: Effect.Effect<void>; afterDeclaration?: Effect.Effect<void>; failedStep?: boolean;
@@ -88,11 +88,11 @@ function completionExchange(
 ) {
   return Effect.gen(function* () {
     yield* SessionPending.promoteSteers(database.db, events, sessionID)
-    const model = { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") }
+    const model = { id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("provider") }
     const tokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
     if (options.declaration !== false) {
       const assistantMessageID = SessionMessage.ID.make(`msg_work_declaration${options.suffix ?? ""}`)
-      yield* events.publish(SessionEvent.Step.Started, { sessionID, assistantMessageID, agent: AgentV2.defaultID, model })
+      yield* events.publish(SessionEvent.Step.Started, { sessionID, assistantMessageID, agent: Agent.defaultID, model })
       yield* options.beforeDeclaration ?? Effect.void
       yield* events.publish(SessionEvent.Tool.Input.Started, { sessionID, assistantMessageID, callID: "complete", name: "task_complete" })
       yield* events.publish(SessionEvent.Tool.Called, { sessionID, assistantMessageID, callID: "complete", input: {}, executed: options.providerExecuted ?? false })
@@ -101,7 +101,7 @@ function completionExchange(
       yield* events.publish(SessionEvent.Step.Ended, { sessionID, assistantMessageID, finish: "tool-calls", cost: Money.USD.zero, tokens })
     }
     const finalID = SessionMessage.ID.make(`msg_work_final${options.suffix ?? ""}`)
-    yield* events.publish(SessionEvent.Step.Started, { sessionID, assistantMessageID: finalID, agent: AgentV2.defaultID, model })
+    yield* events.publish(SessionEvent.Step.Started, { sessionID, assistantMessageID: finalID, agent: Agent.defaultID, model })
     yield* events.publish(SessionEvent.Text.Started, { sessionID, assistantMessageID: finalID, ordinal: 0 })
     yield* events.publish(SessionEvent.Text.Ended, { sessionID, assistantMessageID: finalID, ordinal: 0,
       text: options.text ?? "Implemented and verified.", ...(options.phase ? { phase: options.phase } : {}) })
@@ -124,8 +124,8 @@ for (const scenario of [
   completionIt.effect(`does not certify ${scenario.name} as verified work`, () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
-      const events = yield* EventV2.Service
-      const sessionID = SessionV2.ID.make("ses_unverified_reply")
+      const events = yield* EventRuntime.Service
+      const sessionID = Session.ID.make("ses_unverified_reply")
       yield* seedSessions(database, [sessionID])
       yield* admitCompletionInput(database, events, sessionID)
       const scope = yield* Scope.make()
@@ -141,8 +141,8 @@ for (const outcome of ["failed", "interrupted"] as const) {
   completionIt.effect(`does not certify an execution that ${outcome} after declaring completion`, () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
-      const events = yield* EventV2.Service
-      const sessionID = SessionV2.ID.make("ses_unverified_execution")
+      const events = yield* EventRuntime.Service
+      const sessionID = Session.ID.make("ses_unverified_execution")
       yield* seedSessions(database, [sessionID])
       yield* admitCompletionInput(database, events, sessionID)
       const scope = yield* Scope.make()
@@ -160,8 +160,8 @@ for (const delivery of ["queue", "steer"] as const) {
   completionIt.effect(`a ${delivery} admitted during the declaring step requires a fresh declaration`, () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
-      const events = yield* EventV2.Service
-      const sessionID = SessionV2.ID.make("ses_stale_completion")
+      const events = yield* EventRuntime.Service
+      const sessionID = Session.ID.make("ses_stale_completion")
       yield* seedSessions(database, [sessionID])
       yield* admitCompletionInput(database, events, sessionID)
       const changed = admitCompletionInput(database, events, sessionID, "msg_new_work", delivery).pipe(
@@ -180,8 +180,8 @@ for (const delivery of ["queue", "steer"] as const) {
 completionIt.effect("a late tool declaration is scoped to its invoking step rather than a newer admitted input", () =>
   Effect.gen(function* () {
     const database = yield* Database.Service
-    const events = yield* EventV2.Service
-    const sessionID = SessionV2.ID.make("ses_late_declaration")
+    const events = yield* EventRuntime.Service
+    const sessionID = Session.ID.make("ses_late_declaration")
     yield* seedSessions(database, [sessionID])
     yield* admitCompletionInput(database, events, sessionID)
     const scope = yield* Scope.make()
@@ -200,8 +200,8 @@ for (const change of ["admission", "revert"] as const) {
   completionIt.effect(`atomically rejects a completion raced by ${change} before publication`, () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
-      const events = yield* EventV2.Service
-      const sessionID = SessionV2.ID.make("ses_raced_completion")
+      const events = yield* EventRuntime.Service
+      const sessionID = Session.ID.make("ses_raced_completion")
       yield* seedSessions(database, [sessionID])
       yield* admitCompletionInput(database, events, sessionID)
       let attempted = false
@@ -228,9 +228,9 @@ for (const change of ["admission", "revert"] as const) {
 completionIt.effect("restart does not backfill an old declaration; completion reads survive a new owner and compacted projections", () =>
   Effect.gen(function* () {
     const database = yield* Database.Service
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const jobs = yield* Job.Service
-    const sessionID = SessionV2.ID.make("ses_restart_completion")
+    const sessionID = Session.ID.make("ses_restart_completion")
     yield* seedSessions(database, [sessionID])
     yield* admitCompletionInput(database, events, sessionID)
     yield* events.publish(SessionEvent.Execution.Started, { sessionID })
@@ -257,9 +257,9 @@ completionIt.effect("restart does not backfill an old declaration; completion re
 completionIt.effect("a child declaration never certifies the parent's work", () =>
   Effect.gen(function* () {
     const database = yield* Database.Service
-    const events = yield* EventV2.Service
-    const parentID = SessionV2.ID.make("ses_completion_parent")
-    const childID = SessionV2.ID.make("ses_completion_child")
+    const events = yield* EventRuntime.Service
+    const parentID = Session.ID.make("ses_completion_parent")
+    const childID = Session.ID.make("ses_completion_child")
     yield* seedSessions(database, [parentID, childID])
     yield* database.db.update(SessionTable).set({ parent_id: parentID }).where(eq(SessionTable.id, childID)).run().pipe(Effect.orDie)
     yield* admitCompletionInput(database, events, childID)
@@ -276,11 +276,11 @@ for (const blocker of ["goal", "task", "waiting task", "pending child", "notice"
   completionIt.effect(`refuses completion while ${blocker} remains unfinished in the family`, () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const jobs = yield* Job.Service
-      const sessionID = SessionV2.ID.make("ses_work_family")
-      const childID = SessionV2.ID.make("ses_work_child")
-      const grandchildID = SessionV2.ID.make("ses_work_grandchild")
+      const sessionID = Session.ID.make("ses_work_family")
+      const childID = Session.ID.make("ses_work_child")
+      const grandchildID = Session.ID.make("ses_work_grandchild")
       yield* seedSessions(database, [sessionID, childID, grandchildID])
       yield* database.db.update(SessionTable).set({ parent_id: sessionID }).where(eq(SessionTable.id, childID)).run().pipe(Effect.orDie)
       yield* database.db.update(SessionTable).set({ parent_id: childID }).where(eq(SessionTable.id, grandchildID)).run().pipe(Effect.orDie)
@@ -312,26 +312,26 @@ for (const blocker of ["goal", "task", "waiting task", "pending child", "notice"
   )
 }
 
-function admitCompletionInput(database: Database.Service["Service"], events: EventV2.Interface,
-  sessionID: SessionV2.ID, id = "msg_work_input", delivery: "steer" | "queue" = "steer") {
+function admitCompletionInput(database: Database.Service["Service"], events: EventRuntime.Interface,
+  sessionID: Session.ID, id = "msg_work_input", delivery: "steer" | "queue" = "steer") {
   return SessionPending.admit(database.db, events, { id: SessionMessage.ID.make(id), sessionID,
     input: SessionPending.Message.make({ type: "user", delivery, data: { text: "Do and verify this work" } }),
   }).pipe(Effect.asVoid)
 }
 
-function completionReceipts(database: Database.Service["Service"], sessionID: SessionV2.ID) {
+function completionReceipts(database: Database.Service["Service"], sessionID: Session.ID) {
   return database.db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID))
     .orderBy(EventTable.seq).all().pipe(Effect.orDie, Effect.map((rows) => rows.filter((row) => row.type === "session.work.completed.1")
-      .map((row) => ({ id: row.id, seq: EventV2.Seq.make(row.seq), created: row.created,
+      .map((row) => ({ id: row.id, seq: EventRuntime.Seq.make(row.seq), created: row.created,
         ...Schema.decodeUnknownSync(SessionEvent.Work.Completed.data)(row.data) }))))
 }
 
 completionIt.effect("does not resurrect a completion declaration outside its settling execution", () =>
   Effect.gen(function* () {
     const database = yield* Database.Service
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const jobs = yield* Job.Service
-    const sessionID = SessionV2.ID.make("ses_idle_declaration")
+    const sessionID = Session.ID.make("ses_idle_declaration")
     yield* seedSessions(database, [sessionID])
     yield* admitCompletionInput(database, events, sessionID)
     yield* events.publish(SessionEvent.Execution.Started, { sessionID })
@@ -346,7 +346,7 @@ for (const completedGoal of [false, true]) {
   completionIt.effect(`idle success${completedGoal ? " with a completed goal" : ""} is not verified work`, () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
-      const sessionID = SessionV2.ID.make("ses_ordinary_idle")
+      const sessionID = Session.ID.make("ses_ordinary_idle")
       yield* seedSessions(database, [sessionID])
       if (completedGoal) {
         const autonomy = SessionAutonomy.make({ db: database.db })
@@ -365,12 +365,12 @@ for (const completedGoal of [false, true]) {
 completionIt.effect("pages latest root receipts by Session ID without unrelated-job suppression or child receipts", () =>
   Effect.gen(function* () {
     const database = yield* Database.Service
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const jobs = yield* Job.Service
-    const sessionID = SessionV2.ID.make("ses_completed_pages")
-    const otherID = SessionV2.ID.make("ses_other_completed")
-    const childID = SessionV2.ID.make("ses_completed_child")
-    const unrelated = SessionV2.ID.make("ses_unrelated_work")
+    const sessionID = Session.ID.make("ses_completed_pages")
+    const otherID = Session.ID.make("ses_other_completed")
+    const childID = Session.ID.make("ses_completed_child")
+    const unrelated = Session.ID.make("ses_unrelated_work")
     yield* seedSessions(database, [sessionID, otherID, childID, unrelated])
     yield* database.db.update(SessionTable).set({ parent_id: sessionID }).where(eq(SessionTable.id, childID)).run().pipe(Effect.orDie)
     const release = yield* Deferred.make<void>()
@@ -446,8 +446,8 @@ describe("SessionExecution lifecycle", () => {
     Effect.gen(function* () {
       const database = yield* Database.Service
       const store = yield* SessionStore.Service
-      const first = SessionV2.ID.make("ses_recover_first")
-      const second = SessionV2.ID.make("ses_recover_second")
+      const first = Session.ID.make("ses_recover_first")
+      const second = Session.ID.make("ses_recover_second")
       yield* seedSessions(database, [first, second], { time_suspended: Date.now() })
 
       expect(yield* store.consumeSuspended(first)).toBe(true)
@@ -460,8 +460,8 @@ describe("SessionExecution lifecycle", () => {
   it.effect("suspension survives teardown interruption and clears when a drain finishes on its own", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
-      const interrupted = SessionV2.ID.make("ses_suspend_interrupted")
-      const completed = SessionV2.ID.make("ses_suspend_completed")
+      const interrupted = Session.ID.make("ses_suspend_interrupted")
+      const completed = Session.ID.make("ses_suspend_completed")
       yield* seedSessions(database, [interrupted, completed])
 
       const draining = yield* Deferred.make<void>()
@@ -496,7 +496,7 @@ describe("SessionExecution lifecycle", () => {
   it.effect("starts a fresh drain after an interrupt so an admitted steer is not stranded", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
-      const sessionID = SessionV2.ID.make("ses_interrupt_steer")
+      const sessionID = Session.ID.make("ses_interrupt_steer")
       yield* seedSessions(database, [sessionID])
 
       let drains = 0
@@ -530,8 +530,8 @@ describe("SessionExecution lifecycle", () => {
   it.effect("does not invoke the runner for a waiting managed child", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
-      const parentID = SessionV2.ID.make("ses_waiting_parent")
-      const childID = SessionV2.ID.make("ses_waiting_child")
+      const parentID = Session.ID.make("ses_waiting_parent")
+      const childID = Session.ID.make("ses_waiting_child")
       yield* seedSessions(database, [parentID, childID])
       yield* database.db
         .insert(SessionTaskTable)
@@ -542,8 +542,8 @@ describe("SessionExecution lifecycle", () => {
           tool_call_id: "call_waiting",
           input_id: SessionMessage.ID.make("msg_input"),
           description: "waiting",
-          agent: AgentV2.ID.make("reviewer"),
-          model: ModelV2.Ref.make({ providerID: ProviderV2.ID.make("test"), id: ModelV2.ID.make("model") }),
+          agent: Agent.ID.make("reviewer"),
+          model: CatalogModel.Ref.make({ providerID: Provider.ID.make("test"), id: CatalogModel.ID.make("model") }),
           prompt_digest: "digest",
           background: false,
           delivery: "steer",
@@ -553,7 +553,7 @@ describe("SessionExecution lifecycle", () => {
           question_time: 1,
         })
         .run()
-      const drained: SessionV2.ID[] = []
+      const drained: Session.ID[] = []
       const warnings: string[] = []
       const logger = Logger.map(Logger.formatStructured, (entry) => {
         const message = Array.isArray(entry.message) ? entry.message[0] : entry.message
@@ -584,7 +584,7 @@ describe("SessionExecution lifecycle", () => {
   it.effect("binds the process-global compaction executor to Location runner drains", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
-      const sessionID = SessionV2.ID.make("ses_compaction_execution_binding")
+      const sessionID = Session.ID.make("ses_compaction_execution_binding")
       yield* seedSessions(database, [sessionID])
       const compactionExecution = noopCompactionExecution()
       const scope = yield* Scope.make()
@@ -608,7 +608,7 @@ describe("SessionExecution lifecycle", () => {
   it.effect("stops goal continuations after three unresolved-blocker reports", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
-      const sessionID = SessionV2.ID.make("ses_goal_loop")
+      const sessionID = Session.ID.make("ses_goal_loop")
       yield* seedSessions(database, [sessionID])
       const autonomy = SessionAutonomy.make({ db: database.db })
       yield* autonomy.setGoal({ sessionID, text: "Ship the fix", maxNoProgress: 3 })
@@ -645,7 +645,7 @@ describe("SessionExecution lifecycle", () => {
   it.effect("continues without reports or marker inference until the agent explicitly completes the goal", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
-      const sessionID = SessionV2.ID.make("ses_goal_completed")
+      const sessionID = Session.ID.make("ses_goal_completed")
       yield* seedSessions(database, [sessionID])
       const autonomy = SessionAutonomy.make({ db: database.db })
       yield* autonomy.setGoal({ sessionID, text: "Ship the fix" })
@@ -684,7 +684,7 @@ describe("SessionExecution lifecycle", () => {
   it.effect("uses only the newest assistant question for goal continuations", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
-      const sessionID = SessionV2.ID.make("ses_goal_latest_question")
+      const sessionID = Session.ID.make("ses_goal_latest_question")
       yield* seedSessions(database, [sessionID])
       const autonomy = SessionAutonomy.make({ db: database.db })
       yield* autonomy.setGoal({ sessionID, text: "Ship the fix" })
@@ -736,7 +736,7 @@ describe("SessionExecution lifecycle", () => {
   it.effect("leaves the active goal unchanged when continuation steer generation fails", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
-      const sessionID = SessionV2.ID.make("ses_goal_steer_failure")
+      const sessionID = Session.ID.make("ses_goal_steer_failure")
       yield* seedSessions(database, [sessionID])
       const autonomy = SessionAutonomy.make({ db: database.db })
       yield* autonomy.setGoal({ sessionID, text: "Ship the fix" })
@@ -766,7 +766,7 @@ describe("SessionExecution lifecycle", () => {
   it.effect("does not admit a late steer after the user stops the goal during generation", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
-      const sessionID = SessionV2.ID.make("ses_goal_stale_steer")
+      const sessionID = Session.ID.make("ses_goal_stale_steer")
       yield* seedSessions(database, [sessionID])
       const autonomy = SessionAutonomy.make({ db: database.db })
       yield* autonomy.setGoal({ sessionID, text: "Ship the fix" })
@@ -802,7 +802,7 @@ describe("SessionExecution lifecycle", () => {
   it.effect("does not spin a parent goal while its background shell is still running", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
-      const sessionID = SessionV2.ID.make("ses_goal_background_shell")
+      const sessionID = Session.ID.make("ses_goal_background_shell")
       yield* seedSessions(database, [sessionID])
       const autonomy = SessionAutonomy.make({ db: database.db })
       yield* autonomy.setGoal({ sessionID, text: "Ship the fix" })
@@ -850,8 +850,8 @@ describe("SessionExecution lifecycle", () => {
       it.effect(`continues a goal after a direct ${terminal} child settles from ${state}`, () =>
         Effect.gen(function* () {
           const database = yield* Database.Service
-          const parentID = SessionV2.ID.make(`ses_goal_${state}_parent`)
-          const childID = SessionV2.ID.make(`ses_goal_${state}_child`)
+          const parentID = Session.ID.make(`ses_goal_${state}_parent`)
+          const childID = Session.ID.make(`ses_goal_${state}_child`)
           yield* seedSessions(database, [parentID, childID])
           yield* seedTask(database, { parentID, childID, state })
           const autonomy = SessionAutonomy.make({ db: database.db })
@@ -905,7 +905,7 @@ describe("SessionExecution lifecycle", () => {
   it.effect("settles the goal before publishing the terminal execution event", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
-      const sessionID = SessionV2.ID.make("ses_goal_settled_first")
+      const sessionID = Session.ID.make("ses_goal_settled_first")
       yield* seedSessions(database, [sessionID])
       const autonomy = SessionAutonomy.make({ db: database.db })
       yield* autonomy.setGoal({ sessionID, text: "Ship the fix" })
@@ -941,7 +941,7 @@ describe("SessionExecution lifecycle", () => {
   it.effect("leaves an active goal untouched when a drain fails", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
-      const sessionID = SessionV2.ID.make("ses_goal_failed")
+      const sessionID = Session.ID.make("ses_goal_failed")
       yield* seedSessions(database, [sessionID])
       const autonomy = SessionAutonomy.make({ db: database.db })
       yield* autonomy.setGoal({ sessionID, text: "Ship the fix" })
@@ -970,7 +970,7 @@ describe("SessionExecution lifecycle", () => {
   it.effect("queues no continuation once the goal left goal mode", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
-      const sessionID = SessionV2.ID.make("ses_goal_stopped")
+      const sessionID = Session.ID.make("ses_goal_stopped")
       yield* seedSessions(database, [sessionID])
       const autonomy = SessionAutonomy.make({ db: database.db })
       yield* autonomy.setGoal({ sessionID, text: "Ship the fix" })
@@ -1001,7 +1001,7 @@ const encodeMessage = Schema.encodeSync(SessionMessage.Info)
 /** Writes the assistant message a real drain would leave behind for the goal loop to read. */
 function recordAssistant(
   database: Database.Service["Service"],
-  sessionID: SessionV2.ID,
+  sessionID: Session.ID,
   seq: number,
   content: ReadonlyArray<{ type: "text"; text: string }>,
 ) {
@@ -1014,8 +1014,8 @@ function recordAssistant(
     SessionMessage.Assistant.make({
       id: SessionMessage.ID.make(`msg_assistant_${seq}`),
       type: "assistant",
-      agent: AgentV2.defaultID,
-      model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+      agent: Agent.defaultID,
+      model: { id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("provider") },
       content,
       time: { created, completed: created },
     }),
@@ -1036,7 +1036,7 @@ function recordAssistant(
 
 function seedTask(
   database: Database.Service["Service"],
-  input: { parentID: SessionV2.ID; childID: SessionV2.ID; state: "running" | "waiting" },
+  input: { parentID: Session.ID; childID: Session.ID; state: "running" | "waiting" },
 ) {
   return database.db
     .insert(SessionTaskTable)
@@ -1047,8 +1047,8 @@ function seedTask(
       tool_call_id: "call_goal_child",
       input_id: SessionMessage.ID.make("msg_goal_child_input"),
       description: "goal child",
-      agent: AgentV2.ID.make("reviewer"),
-      model: ModelV2.Ref.make({ providerID: ProviderV2.ID.make("test"), id: ModelV2.ID.make("model") }),
+      agent: Agent.ID.make("reviewer"),
+      model: CatalogModel.Ref.make({ providerID: Provider.ID.make("test"), id: CatalogModel.ID.make("model") }),
       prompt_digest: "digest",
       background: true,
       delivery: "steer",
@@ -1060,7 +1060,7 @@ function seedTask(
 
 function seedSessions(
   database: Database.Service["Service"],
-  sessionIDs: ReadonlyArray<SessionV2.ID>,
+  sessionIDs: ReadonlyArray<Session.ID>,
   values: { time_suspended?: number } = {},
 ) {
   return Effect.gen(function* () {
@@ -1139,7 +1139,7 @@ function buildExecution(
   compactionExecution = noopCompactionExecution(),
   shells: Shell.Interface["list"] = () => Effect.succeed([]),
   steer: (input: {
-    readonly session: SessionV2.Info
+    readonly session: Session.Info
     readonly goal: SessionAutonomy.Goal
     readonly phase: "start" | "continue"
     readonly latestAssistantText?: string
@@ -1147,9 +1147,9 @@ function buildExecution(
 ) {
   return Effect.gen(function* () {
     const database = yield* Database.Service
-    const published = yield* EventV2.Service
+    const published = yield* EventRuntime.Service
     const events = observePublish
-      ? EventV2.Service.of({
+      ? EventRuntime.Service.of({
           ...published,
           publish: (definition, data, options) =>
             observePublish(definition.type).pipe(Effect.andThen(published.publish(definition, data, options))),
@@ -1180,7 +1180,7 @@ function buildExecution(
       SessionRestart.layer.pipe(
         Layer.provideMerge(SessionExecution.layer),
         Layer.provide(Layer.succeed(Database.Service, database)),
-        Layer.provide(Layer.succeed(EventV2.Service, events)),
+        Layer.provide(Layer.succeed(EventRuntime.Service, events)),
         Layer.provide(Layer.succeed(SessionStore.Service, store)),
         Layer.provide(Layer.succeed(SessionAutonomy.Service, autonomy)),
         Layer.provide(Layer.succeed(Job.Service, jobs)),

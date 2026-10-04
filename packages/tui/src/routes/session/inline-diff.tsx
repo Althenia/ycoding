@@ -90,7 +90,7 @@ function inlineDiffSummary(file: InlineDiffFile) {
 }
 
 export function InlineDiff(props: InlineDiffGroup & { wrapMode?: "word" | "none"; heading?: boolean; view?: "split" | "unified" }) {
-  const { themeV2, syntax } = useTheme()
+  const { theme, syntax } = useTheme()
   const patches = createMemo(() => props.files.filter((file) => parseInlineDiff(file.diff)?.patch))
   const hunkLines = createMemo(() => props.files.flatMap((file) => inlineDiffSummary(file).lines))
 
@@ -99,7 +99,7 @@ export function InlineDiff(props: InlineDiffGroup & { wrapMode?: "word" | "none"
       <box
         flexDirection="column"
         border={props.heading === false ? [] : ["left", "right", "top", "bottom"]}
-        borderColor={themeV2.border.default}
+        borderColor={theme.border.default}
         paddingLeft={props.heading === false ? 1 : 0}
         paddingRight={props.heading === false ? 1 : 0}
       >
@@ -111,12 +111,12 @@ export function InlineDiff(props: InlineDiffGroup & { wrapMode?: "word" | "none"
             paddingRight={1}
             paddingTop={1}
             paddingBottom={1}
-            backgroundColor={themeV2.background.surface.offset}
+            backgroundColor={theme.background.surface.offset}
           >
             <Show
               when={props.status === "created" || props.status === "deleted"}
               fallback={
-                <text flexShrink={1} wrapMode="none" truncate={true} fg={themeV2.text.default}>
+                <text flexShrink={1} wrapMode="none" truncate={true} fg={theme.text.default}>
                   {props.path}
                 </text>
               }
@@ -125,14 +125,14 @@ export function InlineDiff(props: InlineDiffGroup & { wrapMode?: "word" | "none"
                 flexShrink={1}
                 wrapMode="none"
                 truncate={true}
-                fg={props.status === "created" ? themeV2.diff.text.added : themeV2.diff.text.removed}
+                fg={props.status === "created" ? theme.diff.text.added : theme.diff.text.removed}
               >
                 {props.status === "created" ? `+ ${props.path}` : `− ${props.path}`}
               </text>
             </Show>
             <box flexGrow={1} flexShrink={0} />
             <Show when={props.additions > 0}>
-              <text flexShrink={0} fg={themeV2.diff.text.added} attributes={TextAttributes.BOLD}>
+              <text flexShrink={0} fg={theme.diff.text.added} attributes={TextAttributes.BOLD}>
                 +{props.additions}
               </text>
             </Show>
@@ -140,12 +140,12 @@ export function InlineDiff(props: InlineDiffGroup & { wrapMode?: "word" | "none"
               <box width={1} flexShrink={0} />
             </Show>
             <Show when={props.deletions > 0}>
-              <text flexShrink={0} fg={themeV2.diff.text.removed} attributes={TextAttributes.BOLD}>
+              <text flexShrink={0} fg={theme.diff.text.removed} attributes={TextAttributes.BOLD}>
                 −{props.deletions}
               </text>
             </Show>
           </box>
-          <box height={1} flexShrink={0} border={["top"]} borderColor={themeV2.border.default} />
+          <box height={1} flexShrink={0} border={["top"]} borderColor={theme.border.default} />
         </Show>
         <box flexDirection="column" paddingTop={1} paddingBottom={1} flexShrink={0} paddingLeft={props.view === "split" ? 5 : 0}>
           <Show
@@ -155,16 +155,16 @@ export function InlineDiff(props: InlineDiffGroup & { wrapMode?: "word" | "none"
                 {(item) => {
                   const rowBg =
                     item.kind === "added"
-                      ? themeV2.diff.background.added
+                      ? theme.diff.background.added
                       : item.kind === "removed"
-                        ? themeV2.diff.background.removed
+                        ? theme.diff.background.removed
                         : undefined
                   const gutterBg =
                     item.kind === "added"
-                      ? themeV2.diff.lineNumber.background.added
+                      ? theme.diff.lineNumber.background.added
                       : item.kind === "removed"
-                        ? themeV2.diff.lineNumber.background.removed
-                        : themeV2.diff.background.context
+                        ? theme.diff.lineNumber.background.removed
+                        : theme.diff.background.context
                   return (
                     <box flexShrink={0} backgroundColor={rowBg}>
                       <text
@@ -172,16 +172,16 @@ export function InlineDiff(props: InlineDiffGroup & { wrapMode?: "word" | "none"
                         truncate={props.wrapMode !== "word"}
                         fg={
                           item.kind === "added"
-                            ? themeV2.diff.text.added
+                            ? theme.diff.text.added
                             : item.kind === "removed"
-                              ? themeV2.diff.text.removed
-                              : themeV2.diff.text.context
+                              ? theme.diff.text.removed
+                              : theme.diff.text.context
                         }
                       >
                         {" "}
                         <span
                           style={{
-                            fg: themeV2.diff.lineNumber.text,
+                            fg: theme.diff.lineNumber.text,
                             bg: gutterBg,
                           }}
                         >
@@ -206,16 +206,16 @@ export function InlineDiff(props: InlineDiffGroup & { wrapMode?: "word" | "none"
                   showLineNumbers={true}
                   width="100%"
                   wrapMode={props.wrapMode ?? "none"}
-                  fg={themeV2.text.default}
-                  addedBg={themeV2.diff.background.added}
-                  removedBg={themeV2.diff.background.removed}
-                  contextBg={themeV2.diff.background.context}
-                  addedSignColor={themeV2.diff.highlight.added}
-                  removedSignColor={themeV2.diff.highlight.removed}
-                  lineNumberFg={themeV2.diff.lineNumber.text}
-                  lineNumberBg={themeV2.diff.background.context}
-                  addedLineNumberBg={themeV2.diff.lineNumber.background.added}
-                  removedLineNumberBg={themeV2.diff.lineNumber.background.removed}
+                  fg={theme.text.default}
+                  addedBg={theme.diff.background.added}
+                  removedBg={theme.diff.background.removed}
+                  contextBg={theme.diff.background.context}
+                  addedSignColor={theme.diff.highlight.added}
+                  removedSignColor={theme.diff.highlight.removed}
+                  lineNumberFg={theme.diff.lineNumber.text}
+                  lineNumberBg={theme.diff.background.context}
+                  addedLineNumberBg={theme.diff.lineNumber.background.added}
+                  removedLineNumberBg={theme.diff.lineNumber.background.removed}
                 />
               )}
             </For>

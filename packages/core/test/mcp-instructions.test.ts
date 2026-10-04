@@ -1,18 +1,18 @@
 import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { MCP } from "@ycoding-ai/core/mcp/index"
 import { McpInstructions } from "@ycoding-ai/core/mcp/instructions"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { McpTool } from "@ycoding-ai/core/tool/mcp"
 import { it } from "./lib/effect"
 import { readInitial, readUpdate } from "./lib/instructions"
 
-const build = AgentV2.ID.make("build")
+const build = Agent.ID.make("build")
 
-const selection = (permissions: PermissionV2.Ruleset = []) => {
-  const info = AgentV2.Info.make({ ...AgentV2.Info.empty(build), permissions })
+const selection = (permissions: Permission.Ruleset = []) => {
+  const info = Agent.Info.make({ ...Agent.Info.empty(build), permissions })
   return { id: info.id, info }
 }
 

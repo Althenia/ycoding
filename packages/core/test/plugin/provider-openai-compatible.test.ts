@@ -1,18 +1,18 @@
 import { AISDK } from "@ycoding-ai/core/aisdk"
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { PluginV2 } from "@ycoding-ai/core/plugin"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
 import { OpenAICompatiblePlugin } from "@ycoding-ai/core/plugin/provider/openai-compatible"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
 
 const it = testEffect(PluginTestLayer)
 
 const addPlugin = Effect.fn(function* () {
-  const plugin = yield* PluginV2.Service
+  const plugin = yield* PluginRegistry.Service
   const aisdk = yield* AISDK.Service
   const host = yield* PluginHost.make(plugin)
   yield* OpenAICompatiblePlugin.effect(host)
@@ -21,22 +21,22 @@ const addPlugin = Effect.fn(function* () {
 describe("OpenAICompatiblePlugin", () => {
   it.effect("preserves explicit includeUsage false and defaults it to true", () =>
     Effect.gen(function* () {
-      const plugin = yield* PluginV2.Service
+      const plugin = yield* PluginRegistry.Service
       const aisdk = yield* AISDK.Service
       yield* addPlugin()
       const defaulted = yield* aisdk.runSDK({
-        model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(ProviderV2.ID.make("custom"), ModelV2.ID.make("model")),
-          modelID: ModelV2.ID.make("model"),
+        model: CatalogModel.Info.make({
+          ...CatalogModel.Info.empty(Provider.ID.make("custom"), CatalogModel.ID.make("model")),
+          modelID: CatalogModel.ID.make("model"),
           package: "aisdk:test-provider",
         }),
         package: "@ai-sdk/openai-compatible",
         options: { name: "custom" },
       })
       const disabled = yield* aisdk.runSDK({
-        model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(ProviderV2.ID.make("custom"), ModelV2.ID.make("model")),
-          modelID: ModelV2.ID.make("model"),
+        model: CatalogModel.Info.make({
+          ...CatalogModel.Info.empty(Provider.ID.make("custom"), CatalogModel.ID.make("model")),
+          modelID: CatalogModel.ID.make("model"),
           package: "aisdk:test-provider",
         }),
         package: "@ai-sdk/openai-compatible",
@@ -49,13 +49,13 @@ describe("OpenAICompatiblePlugin", () => {
 
   it.effect("defaults includeUsage for OpenAI-compatible package matches", () =>
     Effect.gen(function* () {
-      const plugin = yield* PluginV2.Service
+      const plugin = yield* PluginRegistry.Service
       const aisdk = yield* AISDK.Service
       yield* addPlugin()
       const result = yield* aisdk.runSDK({
-        model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(ProviderV2.ID.make("custom"), ModelV2.ID.make("model")),
-          modelID: ModelV2.ID.make("model"),
+        model: CatalogModel.Info.make({
+          ...CatalogModel.Info.empty(Provider.ID.make("custom"), CatalogModel.ID.make("model")),
+          modelID: CatalogModel.ID.make("model"),
           package: "aisdk:test-provider",
         }),
         package: "file:///tmp/@ai-sdk/openai-compatible-provider.js",
@@ -67,7 +67,7 @@ describe("OpenAICompatiblePlugin", () => {
 
   it.effect("uses the provider ID as the OpenAI-compatible provider name", () =>
     Effect.gen(function* () {
-      const plugin = yield* PluginV2.Service
+      const plugin = yield* PluginRegistry.Service
       const aisdk = yield* AISDK.Service
       const observed: string[] = []
       yield* addPlugin()
@@ -77,9 +77,9 @@ describe("OpenAICompatiblePlugin", () => {
         }),
       )
       yield* aisdk.runSDK({
-        model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(ProviderV2.ID.make("custom-provider"), ModelV2.ID.make("model")),
-          modelID: ModelV2.ID.make("model"),
+        model: CatalogModel.Info.make({
+          ...CatalogModel.Info.empty(Provider.ID.make("custom-provider"), CatalogModel.ID.make("model")),
+          modelID: CatalogModel.ID.make("model"),
           package: "aisdk:test-provider",
         }),
         package: "@ai-sdk/openai-compatible",
@@ -98,9 +98,9 @@ describe("OpenAICompatiblePlugin", () => {
       })
       yield* addPlugin()
       const result = yield* aisdk.runSDK({
-        model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(ProviderV2.ID.make("cloudflare-workers-ai"), ModelV2.ID.make("model")),
-          modelID: ModelV2.ID.make("model"),
+        model: CatalogModel.Info.make({
+          ...CatalogModel.Info.empty(Provider.ID.make("cloudflare-workers-ai"), CatalogModel.ID.make("model")),
+          modelID: CatalogModel.ID.make("model"),
           package: "aisdk:test-provider",
         }),
         package: "@ai-sdk/openai-compatible",

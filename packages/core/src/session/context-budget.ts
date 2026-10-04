@@ -1,7 +1,7 @@
 export * as SessionContextBudget from "./context-budget"
 
-import type { ModelV2 } from "../model"
-import type { ProviderV2 } from "../provider"
+import type { CatalogModel } from "../model"
+import type { Provider } from "../provider"
 import { ConfigCompaction } from "../config/compaction"
 import { Token } from "../util/token"
 
@@ -15,9 +15,9 @@ export type Capabilities = {
 // caller reservation. Output limits are intentionally excluded: advisory gates
 // measure against the raw context window and the hard cap is context - margin.
 export const resolveCapabilities = (
-  models: readonly ModelV2.Info[],
-  providerID: ProviderV2.ID,
-  modelID: ModelV2.ID,
+  models: readonly CatalogModel.Info[],
+  providerID: Provider.ID,
+  modelID: CatalogModel.ID,
   options?: { readonly safetyMarginTokens?: number },
 ): Capabilities | undefined => {
   const model = models.find((item) => item.providerID === providerID && item.id === modelID)

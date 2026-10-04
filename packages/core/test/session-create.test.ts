@@ -2,22 +2,22 @@ import { describe, expect } from "bun:test"
 import path from "path"
 import { DateTime, Effect, Layer, Stream } from "effect"
 import { Money } from "@ycoding-ai/schema/money"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { asc, eq } from "drizzle-orm"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { EventTable } from "@ycoding-ai/core/event/sql"
 import { Location } from "@ycoding-ai/core/location"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProjectV2 } from "@ycoding-ai/core/project"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
@@ -25,15 +25,15 @@ import { SessionPending } from "@ycoding-ai/core/session/pending"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
-import { WorkspaceV2 } from "@ycoding-ai/core/workspace"
+import { Workspace } from "@ycoding-ai/core/workspace"
 import { testEffect } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
 
 const projects = Layer.succeed(
-  ProjectV2.Service,
-  ProjectV2.Service.of({
+  Project.Service,
+  Project.Service.of({
     list: () => Effect.succeed([]),
-    resolve: (directory) => Effect.succeed({ id: ProjectV2.ID.global, directory }),
+    resolve: (directory) => Effect.succeed({ id: Project.ID.global, directory }),
     directories: () => Effect.succeed([]),
     recordOpened: () => Effect.void,
     commit: () => Effect.void,
@@ -43,32 +43,32 @@ const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       Database.node,
-      EventV2.node,
+      EventRuntime.node,
       SessionProjector.node,
       SessionStore.node,
-      SessionV2.node,
+      Session.node,
       LocationServiceMap.node,
     ]),
     [
-      [ProjectV2.node, projects],
+      [Project.node, projects],
       [SessionExecution.node, SessionExecution.noopLayer],
     ],
   ),
 )
 const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
-const id = SessionV2.ID.create()
+const id = Session.ID.create()
 
 /** Public session events from a `log` read, without synced markers. */
-const logEvents = (session: SessionV2.Interface, sessionID: SessionV2.ID, follow?: boolean) =>
+const logEvents = (session: Session.Interface, sessionID: Session.ID, follow?: boolean) =>
   session
     .log({ sessionID, follow })
-    .pipe(Stream.filter((item): item is SessionEvent.PublicDurableEvent => !EventV2.isSynced(item)))
+    .pipe(Stream.filter((item): item is SessionEvent.PublicDurableEvent => !EventRuntime.isSynced(item)))
 
-const assertCreateInputTypes = (session: SessionV2.Interface) => {
+const assertCreateInputTypes = (session: Session.Interface) => {
   // @ts-expect-error location or parentID is required.
   session.create({})
   // @ts-expect-error child sessions inherit their parent's location.
-  session.create({ parentID: SessionV2.ID.create(), location })
+  session.create({ parentID: Session.ID.create(), location })
 }
 void assertCreateInputTypes
 
@@ -79,10 +79,10 @@ function withTmp<A, E, R>(f: (directory: string) => Effect.Effect<A, E, R>) {
   ).pipe(Effect.flatMap((tmp) => f(tmp.path)))
 }
 
-describe("SessionV2.create", () => {
+describe("Session.create", () => {
   it.effect("creates a fresh projected session when the ID is omitted", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
 
       const first = yield* session.create({ location })
       const second = yield* session.create({ location })
@@ -94,7 +94,7 @@ describe("SessionV2.create", () => {
 
   it.effect("returns the original session when the ID is retried", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       const input = { id, location }
 
       const first = yield* session.create(input)
@@ -107,18 +107,18 @@ describe("SessionV2.create", () => {
 
   it.effect("stores supplied immutable create attributes", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const workspaceID = WorkspaceV2.ID.make("wrk_test")
-      const model = ModelV2.Ref.make({
-        id: ModelV2.ID.make("sonnet"),
-        providerID: ProviderV2.ID.anthropic,
-        variant: ModelV2.VariantID.make("fast"),
+      const session = yield* Session.Service
+      const workspaceID = Workspace.ID.make("wrk_test")
+      const model = CatalogModel.Ref.make({
+        id: CatalogModel.ID.make("sonnet"),
+        providerID: Provider.ID.anthropic,
+        variant: CatalogModel.VariantID.make("fast"),
       })
 
       expect(
         yield* session.create({
           location: Location.Ref.make({ directory: location.directory, workspaceID }),
-          agent: AgentV2.ID.make("build"),
+          agent: Agent.ID.make("build"),
           model,
         }),
       ).toMatchObject({ location: { directory: location.directory, workspaceID }, agent: "build", model })
@@ -127,7 +127,7 @@ describe("SessionV2.create", () => {
 
   it.effect("persists only deny rules in the session permission ceiling", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       const deny = { action: "shell", resource: "*", effect: "deny" as const }
 
       const created = yield* session.create({
@@ -146,7 +146,7 @@ describe("SessionV2.create", () => {
 
   it.effect("inherits location from an existing parent when omitted", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       const parent = yield* session.create({ location })
       const child = yield* session.create({ parentID: parent.id, title: "child" })
 
@@ -161,7 +161,7 @@ describe("SessionV2.create", () => {
   ] as const)
     it.effect(scenario.name, () =>
       Effect.gen(function* () {
-        const session = yield* SessionV2.Service
+        const session = yield* Session.Service
         const parent = yield* session.create({ location, title: "parent" })
         if (scenario.parentDaybreak) yield* session.daybreak.set({ sessionID: parent.id, daybreak: "daybreak_blue" })
 
@@ -177,7 +177,7 @@ describe("SessionV2.create", () => {
 
   it.effect("does not let child creation drop the parent permission ceiling", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       const inherited = { action: "shell", resource: "*", effect: "deny" as const }
       const added = { action: "read", resource: "/secret/*", effect: "deny" as const }
       const parent = yield* session.create({ location, permissionCeiling: [inherited] })
@@ -197,18 +197,18 @@ describe("SessionV2.create", () => {
 
   it.effect("rejects child creation when the parent does not exist", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const missing = SessionV2.ID.create()
+      const session = yield* Session.Service
+      const missing = Session.ID.create()
 
       expect(yield* Effect.flip(session.create({ parentID: missing, title: "child" }))).toEqual(
-        new SessionV2.NotFoundError({ sessionID: missing }),
+        new Session.NotFoundError({ sessionID: missing }),
       )
     }),
   )
 
   it.effect("filters root sessions before applying the page limit", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       const { db } = yield* Database.Service
       const staleRoot = yield* session.create({ location, title: "stale root" })
       const root = yield* session.create({ location, title: "root" })
@@ -242,7 +242,7 @@ describe("SessionV2.create", () => {
 
   it.effect("filters direct child sessions by parent ID", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       const parent = yield* session.create({ location, title: "parent" })
       const child = yield* session.create({ parentID: parent.id, title: "child" })
       yield* session.create({ location, title: "other root" })
@@ -255,7 +255,7 @@ describe("SessionV2.create", () => {
 
   it.effect("preserves the permission ceiling when forking", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       const deny = { action: "shell", resource: "*", effect: "deny" as const }
       const parent = yield* session.create({ location, permissionCeiling: [deny] })
 
@@ -267,8 +267,8 @@ describe("SessionV2.create", () => {
 
   it.effect("forks a session by replaying a durable fork event into copied projected rows", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const { db } = yield* Database.Service
       const parent = yield* session.create({ location, title: "Parent" })
       const admitted = yield* session.prompt({
@@ -335,8 +335,8 @@ describe("SessionV2.create", () => {
 
   it.effect("forks before the selected boundary message", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const { db } = yield* Database.Service
       const parent = yield* session.create({ location })
       const first = yield* session.prompt({
@@ -352,11 +352,11 @@ describe("SessionV2.create", () => {
       })
       yield* SessionPending.promoteSteers(db, events, parent.id)
       const assistantMessageID = SessionMessage.ID.create()
-      const model = ModelV2.Ref.make({ id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") })
+      const model = CatalogModel.Ref.make({ id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("provider") })
       yield* events.publish(SessionEvent.Step.Started, {
         sessionID: parent.id,
         assistantMessageID,
-        agent: AgentV2.ID.make("build"),
+        agent: Agent.ID.make("build"),
         model,
       })
       yield* events.publish(SessionEvent.Step.Ended, {
@@ -389,15 +389,15 @@ describe("SessionV2.create", () => {
 
   it.effect("returns the existing Session when one ID is reused with different create arguments", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       const created = yield* session.create({ id, location })
       const changed = [
         { id, location: Location.Ref.make({ directory: AbsolutePath.make("/other") }) },
-        { id, location, agent: AgentV2.ID.make("build") },
+        { id, location, agent: Agent.ID.make("build") },
         {
           id,
           location,
-          model: ModelV2.Ref.make({ id: ModelV2.ID.make("sonnet"), providerID: ProviderV2.ID.anthropic }),
+          model: CatalogModel.Ref.make({ id: CatalogModel.ID.make("sonnet"), providerID: Provider.ID.anthropic }),
         },
       ]
 
@@ -410,7 +410,7 @@ describe("SessionV2.create", () => {
 
   it.effect("returns one recorded session to concurrent exact retries", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       const input = { id, location }
 
       const created = yield* Effect.all([session.create(input), session.create(input)], { concurrency: "unbounded" })
@@ -422,14 +422,14 @@ describe("SessionV2.create", () => {
 
   it.effect("returns the current Session projection after projected updates", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const input = { id, location }
       const created = yield* session.create(input)
 
       yield* events.publish(SessionEvent.AgentSelected, {
         sessionID: id,
-        agent: AgentV2.ID.make("build"),
+        agent: Agent.ID.make("build"),
       })
 
       expect(yield* session.create(input)).toMatchObject({ id, agent: "build" })
@@ -439,20 +439,20 @@ describe("SessionV2.create", () => {
   for (const scenario of [{ name: "generated ID", input: { location } }, { name: "caller ID", input: { id, location } }])
     it.effect(`persists ${scenario.name} creation through the current created event`, () =>
       Effect.gen(function* () {
-        const session = yield* SessionV2.Service
+        const session = yield* Session.Service
         const { db } = yield* Database.Service
         const created = yield* session.create(scenario.input)
 
         expect(
           yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all().pipe(Effect.orDie),
-        ).toMatchObject([{ type: EventV2.versionedType(SessionEvent.Created.type, 2), data: { sessionID: created.id } }])
+        ).toMatchObject([{ type: EventRuntime.versionedType(SessionEvent.Created.type, 2), data: { sessionID: created.id } }])
       }),
     )
 
   it.effect("includes current creation rows in the Session event stream", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const { db } = yield* Database.Service
       const created = yield* session.create({ location })
       yield* session.prompt({
@@ -468,7 +468,7 @@ describe("SessionV2.create", () => {
         {
           durable: { seq: 0, version: 2 },
           type: "session.created",
-          data: { projectID: ProjectV2.ID.global, location, title: expect.any(String) },
+          data: { projectID: Project.ID.global, location, title: expect.any(String) },
         },
         {
           durable: { seq: 1 },
@@ -482,10 +482,10 @@ describe("SessionV2.create", () => {
 
   it.effect("replays one prompt lifecycle into a fresh target database", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const sourceEvents = yield* EventV2.Service
+      const session = yield* Session.Service
+      const sourceEvents = yield* EventRuntime.Service
       const sourceDb = (yield* Database.Service).db
-      const created = yield* session.create({ id: SessionV2.ID.make("ses_fresh_target_replay"), location })
+      const created = yield* session.create({ id: Session.ID.make("ses_fresh_target_replay"), location })
       const admitted = yield* session.prompt({
         sessionID: created.id,
         text: "Replay lifecycle",
@@ -513,17 +513,17 @@ describe("SessionV2.create", () => {
       )
       const targetDatabase = Database.layer({ path: path.join(tmp.path, "target.sqlite") })
       const targetLayer = AppNodeBuilder.build(
-        LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionStore.node]),
+        LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node, SessionStore.node]),
         [[Database.node, targetDatabase]],
       )
 
       yield* Effect.gen(function* () {
         const db = (yield* Database.Service).db
-        const events = yield* EventV2.Service
+        const events = yield* EventRuntime.Service
         const store = yield* SessionStore.Service
         yield* db
           .insert(ProjectTable)
-          .values({ id: ProjectV2.ID.global, worktree: location.directory, sandboxes: [] })
+          .values({ id: Project.ID.global, worktree: location.directory, sandboxes: [] })
           .run()
           .pipe(Effect.orDie)
 
@@ -553,9 +553,9 @@ describe("SessionV2.create", () => {
             .all()
             .pipe(Effect.orDie)).map((event) => [event.seq, event.type]),
         ).toEqual([
-          [0, EventV2.versionedType(SessionEvent.Created.type, 2)],
-          [1, EventV2.versionedType(SessionEvent.InputAdmitted.type, 1)],
-          [2, EventV2.versionedType(SessionEvent.InputPromoted.type, 1)],
+          [0, EventRuntime.versionedType(SessionEvent.Created.type, 2)],
+          [1, EventRuntime.versionedType(SessionEvent.InputAdmitted.type, 1)],
+          [2, EventRuntime.versionedType(SessionEvent.InputPromoted.type, 1)],
         ])
       }).pipe(Effect.provide(Layer.fresh(targetLayer)))
     }),
@@ -563,8 +563,8 @@ describe("SessionV2.create", () => {
 
   it.effect("does not mask unrelated created projector defects", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const event = yield* EventV2.Service
+      const session = yield* Session.Service
+      const event = yield* EventRuntime.Service
       const defect = new Error("unrelated projector defect")
       yield* event.project(SessionEvent.Created, () => Effect.die(defect))
 
@@ -575,7 +575,7 @@ describe("SessionV2.create", () => {
   it.live("runs a shell command and projects the started/ended shell message", () =>
     withTmp((directory) =>
       Effect.gen(function* () {
-        const session = yield* SessionV2.Service
+        const session = yield* Session.Service
         const created = yield* session.create({
           location: Location.Ref.make({ directory: AbsolutePath.make(directory) }),
         })
@@ -595,7 +595,7 @@ describe("SessionV2.create", () => {
   it.live("records the owning Session on the started shell info", () =>
     withTmp((directory) =>
       Effect.gen(function* () {
-        const session = yield* SessionV2.Service
+        const session = yield* Session.Service
         const created = yield* session.create({
           location: Location.Ref.make({ directory: AbsolutePath.make(directory) }),
         })
@@ -619,7 +619,7 @@ describe("SessionV2.create", () => {
   it.live("rejects catastrophic direct shell commands before process creation", () =>
     withTmp((directory) =>
       Effect.gen(function* () {
-        const session = yield* SessionV2.Service
+        const session = yield* Session.Service
         const created = yield* session.create({
           location: Location.Ref.make({ directory: AbsolutePath.make(directory) }),
         })
@@ -641,7 +641,7 @@ describe("SessionV2.create", () => {
         yield* Effect.promise(() =>
           Bun.write(path.join(directory, "ycoding.json"), JSON.stringify({ shell_sandbox: "required" })),
         )
-        const session = yield* SessionV2.Service
+        const session = yield* Session.Service
         const created = yield* session.create({
           location: Location.Ref.make({ directory: AbsolutePath.make(directory) }),
         })
@@ -663,7 +663,7 @@ describe("SessionV2.create", () => {
         yield* Effect.promise(() =>
           Bun.write(path.join(directory, "ycoding.json"), JSON.stringify({ shell: "/bin/sh", shell_sandbox: "optional" })),
         )
-        const session = yield* SessionV2.Service
+        const session = yield* Session.Service
         const created = yield* session.create({
           location: Location.Ref.make({ directory: AbsolutePath.make(directory) }),
         })
@@ -682,7 +682,7 @@ describe("SessionV2.create", () => {
   it.live("still emits shell ended for a failing command", () =>
     withTmp((directory) =>
       Effect.gen(function* () {
-        const session = yield* SessionV2.Service
+        const session = yield* Session.Service
         const created = yield* session.create({
           location: Location.Ref.make({ directory: AbsolutePath.make(directory) }),
         })
@@ -700,10 +700,10 @@ describe("SessionV2.create", () => {
 
   it.effect("switches the selected agent through the durable Session event", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       const created = yield* session.create({ location })
 
-      yield* session.switchAgent({ sessionID: created.id, agent: AgentV2.ID.make("plan") })
+      yield* session.switchAgent({ sessionID: created.id, agent: Agent.ID.make("plan") })
 
       expect(yield* session.get(created.id)).toMatchObject({ agent: "plan" })
       expect(
@@ -716,11 +716,11 @@ describe("SessionV2.create", () => {
 
   it.effect("rejects an agent switch for a missing Session", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const missing = SessionV2.ID.make("ses_missing_agent_switch")
+      const session = yield* Session.Service
+      const missing = Session.ID.make("ses_missing_agent_switch")
 
       expect(
-        yield* session.switchAgent({ sessionID: missing, agent: AgentV2.ID.make("plan") }).pipe(
+        yield* session.switchAgent({ sessionID: missing, agent: Agent.ID.make("plan") }).pipe(
           Effect.flip,
           Effect.map((error) => error._tag),
         ),
@@ -731,23 +731,23 @@ describe("SessionV2.create", () => {
   it.effect("switches the selected model through the durable Session event", () =>
     withTmp((directory) =>
       Effect.gen(function* () {
-        const session = yield* SessionV2.Service
+        const session = yield* Session.Service
         const created = yield* session.create({
           location: Location.Ref.make({ directory: AbsolutePath.make(directory) }),
         })
-        const model = ModelV2.Ref.make({
-          id: ModelV2.ID.make("sonnet"),
-          providerID: ProviderV2.ID.anthropic,
-          variant: ModelV2.VariantID.make("high"),
+        const model = CatalogModel.Ref.make({
+          id: CatalogModel.ID.make("sonnet"),
+          providerID: Provider.ID.anthropic,
+          variant: CatalogModel.VariantID.make("high"),
         })
         yield* Catalog.Service.use((catalog) =>
           catalog.transform((editor) => {
             editor.provider.update(model.providerID, (provider) => {
-              provider.package = ProviderV2.aisdk("@ai-sdk/anthropic")
+              provider.package = Provider.aisdk("@ai-sdk/anthropic")
             })
             editor.model.update(model.providerID, model.id, (entry) => {
               entry.limit = { context: 128_000, output: 16_384 }
-              entry.variants = [{ id: ModelV2.VariantID.make("high") }]
+              entry.variants = [{ id: CatalogModel.VariantID.make("high") }]
             })
           }),
         ).pipe(Effect.provide(LocationServiceMap.Service.get(created.location)))
@@ -766,8 +766,8 @@ describe("SessionV2.create", () => {
 
   it.effect("ignores a model switch when the selected model is unchanged", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const model = ModelV2.Ref.make({ id: ModelV2.ID.make("sonnet"), providerID: ProviderV2.ID.anthropic })
+      const session = yield* Session.Service
+      const model = CatalogModel.Ref.make({ id: CatalogModel.ID.make("sonnet"), providerID: Provider.ID.anthropic })
       const created = yield* session.create({ location, model })
 
       expect(yield* session.switchModel({ sessionID: created.id, model })).toEqual({ status: "switched" })
@@ -784,8 +784,8 @@ describe("SessionV2.create", () => {
   it.effect("treats a variant named default as an ordinary variant", () =>
     withTmp((directory) =>
       Effect.gen(function* () {
-        const session = yield* SessionV2.Service
-        const base = ModelV2.Ref.make({ id: ModelV2.ID.make("sonnet"), providerID: ProviderV2.ID.anthropic })
+        const session = yield* Session.Service
+        const base = CatalogModel.Ref.make({ id: CatalogModel.ID.make("sonnet"), providerID: Provider.ID.anthropic })
         const created = yield* session.create({
           location: Location.Ref.make({ directory: AbsolutePath.make(directory) }),
           model: base,
@@ -793,16 +793,16 @@ describe("SessionV2.create", () => {
         yield* Catalog.Service.use((catalog) =>
           catalog.transform((editor) => {
             editor.provider.update(base.providerID, (provider) => {
-              provider.package = ProviderV2.aisdk("@ai-sdk/anthropic")
+              provider.package = Provider.aisdk("@ai-sdk/anthropic")
             })
             editor.model.update(base.providerID, base.id, (entry) => {
               entry.limit = { context: 128_000, output: 16_384 }
-              entry.variants = [{ id: ModelV2.VariantID.make("default") }]
+              entry.variants = [{ id: CatalogModel.VariantID.make("default") }]
             })
           }),
         ).pipe(Effect.provide(LocationServiceMap.Service.get(created.location)))
 
-        const selected = ModelV2.Ref.make({ ...base, variant: ModelV2.VariantID.make("default") })
+        const selected = CatalogModel.Ref.make({ ...base, variant: CatalogModel.VariantID.make("default") })
         expect(yield* session.switchModel({ sessionID: created.id, model: selected })).toEqual({ status: "switched" })
 
         expect((yield* session.get(created.id)).model).toEqual(selected)
@@ -812,14 +812,14 @@ describe("SessionV2.create", () => {
 
   it.effect("rejects a model switch for a missing Session", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const missing = SessionV2.ID.make("ses_missing_model_switch")
+      const session = yield* Session.Service
+      const missing = Session.ID.make("ses_missing_model_switch")
 
       expect(
         yield* session
           .switchModel({
             sessionID: missing,
-            model: ModelV2.Ref.make({ id: ModelV2.ID.make("sonnet"), providerID: ProviderV2.ID.anthropic }),
+            model: CatalogModel.Ref.make({ id: CatalogModel.ID.make("sonnet"), providerID: Provider.ID.anthropic }),
           })
           .pipe(
             Effect.flip,

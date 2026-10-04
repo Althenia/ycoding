@@ -6,7 +6,7 @@ import { Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
 import { llmClient } from "../effect/app-node-platform"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { PluginHooks } from "../plugin/hooks"
 import { SessionContext } from "./context"
 import { SessionGenerate } from "./generate"
@@ -34,7 +34,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           const selection = yield* context.select(input.sessionID)
           const selected = yield* models.resolve(selection.session)
           const history = yield* SessionHistory.preview(database.db, selection.session.id, selection.instructions)
-          const permissions = PermissionV2.merge(
+          const permissions = Permission.merge(
             selection.agent.info.permissions,
             selection.session.permissionCeiling ?? [],
           )

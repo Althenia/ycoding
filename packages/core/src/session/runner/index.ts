@@ -27,4 +27,4 @@ export interface Interface {
   }) => Effect.Effect<void, RunError>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionRunner") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionRunner") {}

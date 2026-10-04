@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { Effect, Layer } from "effect"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi"
@@ -16,14 +16,14 @@ test("keeps global usage behind the server authorization boundary", () => {
   expect(Api.groups["server.usage"].endpoints["usage.report"].middlewares.has(Authorization)).toBe(true)
 })
 
-function fixture(service: Pick<SessionV2.Interface, "usageAll" | "usageReportAll">) {
+function fixture(service: Pick<Session.Interface, "usageAll" | "usageReportAll">) {
   const handler = HttpRouter.toWebHandler(
     HttpApiBuilder.layer(HttpApi.make("server").add(Api.groups["server.usage"])).pipe(
       Layer.provide(
         UsageHandler.pipe(
           Layer.provide(
             Layer.mergeAll(
-              Layer.mock(SessionV2.Service, {
+              Layer.mock(Session.Service, {
                 ...service,
                 autonomy: { get: () => Effect.die("unused"), set: () => Effect.die("unused") },
                 daybreak: { set: () => Effect.die("unused") },

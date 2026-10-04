@@ -7,8 +7,8 @@ import type {
   LanguageModelV3Usage,
 } from "@ai-sdk/provider"
 import { AISDK } from "@ycoding-ai/core/aisdk"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { CacheHint, LLM, LLMError, LLMEvent, Message } from "@ycoding-ai/ai"
 import { LLMClient, RequestExecutor } from "@ycoding-ai/ai/route"
 import { expect } from "bun:test"
@@ -18,10 +18,10 @@ import { testEffect } from "./lib/effect"
 const it = testEffect(AISDK.locationLayer)
 
 const model = (packageName: string, settings: Record<string, unknown> = {}) =>
-  ModelV2.Info.make({
-    ...ModelV2.Info.empty(ProviderV2.ID.make("test-provider"), ModelV2.ID.make("catalog-model")),
-    modelID: ModelV2.ID.make("api-model"),
-    package: ProviderV2.aisdk(packageName),
+  CatalogModel.Info.make({
+    ...CatalogModel.Info.empty(Provider.ID.make("test-provider"), CatalogModel.ID.make("catalog-model")),
+    modelID: CatalogModel.ID.make("api-model"),
+    package: Provider.aisdk(packageName),
     settings,
     limit: { context: 100, output: 20 },
   })
@@ -209,7 +209,7 @@ it.effect("routes AI Gateway model options by upstream prefix", () =>
         gateway: { order: ["anthropic"] },
         thinking: { type: "adaptive" },
       }),
-      modelID: ModelV2.ID.make("anthropic/claude-sonnet-5"),
+      modelID: CatalogModel.ID.make("anthropic/claude-sonnet-5"),
     })
     const anthropicPrepared = yield* LLMClient.prepare<LanguageModelV3CallOptions>(
       LLM.request({ model: anthropic, prompt: "Hello" }),
@@ -221,7 +221,7 @@ it.effect("routes AI Gateway model options by upstream prefix", () =>
 
     const bedrock = yield* aisdk.model({
       ...model("@ai-sdk/gateway", { reasoningConfig: { type: "enabled" } }),
-      modelID: ModelV2.ID.make("amazon/nova-2-lite"),
+      modelID: CatalogModel.ID.make("amazon/nova-2-lite"),
     })
     const bedrockPrepared = yield* LLMClient.prepare<LanguageModelV3CallOptions>(
       LLM.request({ model: bedrock, prompt: "Hello" }),
@@ -232,7 +232,7 @@ it.effect("routes AI Gateway model options by upstream prefix", () =>
 
     const fallback = yield* aisdk.model({
       ...model("@ai-sdk/gateway", { reasoningEffort: "high" }),
-      modelID: ModelV2.ID.make("deepseek/deepseek-v4"),
+      modelID: CatalogModel.ID.make("deepseek/deepseek-v4"),
     })
     const fallbackPrepared = yield* LLMClient.prepare<LanguageModelV3CallOptions>(
       LLM.request({ model: fallback, prompt: "Hello" }),
@@ -508,9 +508,9 @@ it.effect("projects Anthropic tool unions by route or Claude model identity", ()
       ["@ai-sdk/anthropic", "gateway-opus-alias"],
     ] as const) {
       const resolved = yield* aisdk.model(
-        ModelV2.Info.make({
+        CatalogModel.Info.make({
           ...model(packageName),
-          modelID: ModelV2.ID.make(modelID),
+          modelID: CatalogModel.ID.make(modelID),
         }),
       )
       const prepared = yield* LLMClient.prepare<LanguageModelV3CallOptions>(
@@ -716,9 +716,9 @@ it.effect("wraps unsupported Anthropic chronological system updates as user cont
         languageModel: () => ({ provider: event.model.providerID }),
       }
     })
-    const catalog = ModelV2.Info.make({
+    const catalog = CatalogModel.Info.make({
       ...model("@ai-sdk/anthropic"),
-      modelID: ModelV2.ID.make("claude-sonnet-4-6"),
+      modelID: CatalogModel.ID.make("claude-sonnet-4-6"),
     })
     const resolved = yield* aisdk.model(catalog)
     const prepared = yield* LLMClient.prepare<LanguageModelV3CallOptions>(
@@ -759,9 +759,9 @@ it.effect("preserves valid Opus 4.8 chronological system updates", () =>
         languageModel: () => ({ provider: event.model.providerID }),
       }
     })
-    const catalog = ModelV2.Info.make({
+    const catalog = CatalogModel.Info.make({
       ...model("@ai-sdk/anthropic"),
-      modelID: ModelV2.ID.make("claude-opus-4-8"),
+      modelID: CatalogModel.ID.make("claude-opus-4-8"),
     })
     const resolved = yield* aisdk.model(catalog)
     const prepared = yield* LLMClient.prepare<LanguageModelV3CallOptions>(
@@ -799,9 +799,9 @@ it.effect("preserves valid Claude 5 chronological system updates", () =>
       ["@ai-sdk/google-vertex/anthropic", "claude-fable-5"],
     ] as const) {
       const resolved = yield* aisdk.model(
-        ModelV2.Info.make({
+        CatalogModel.Info.make({
           ...model(packageName),
-          modelID: ModelV2.ID.make(modelID),
+          modelID: CatalogModel.ID.make(modelID),
         }),
       )
       const prepared = yield* LLMClient.prepare<LanguageModelV3CallOptions>(
@@ -856,7 +856,7 @@ it.effect("converts DeepSeek textual tool controls into a local tool call", () =
 
     const resolved = yield* aisdk.model({
       ...model("@openrouter/ai-sdk-provider"),
-      modelID: ModelV2.ID.make("deepseek/deepseek-r1"),
+      modelID: CatalogModel.ID.make("deepseek/deepseek-r1"),
     })
     const response = yield* LLMClient.generate(
       LLM.request({
@@ -1275,16 +1275,16 @@ it.effect("marks inclusive AI SDK output only for effective unreported thinking"
     const disabled = LLM.updateRequest(enabled, { providerOptions: { anthropic: { thinking: { type: "disabled" } } } })
     expect((yield* LLMClient.generate(disabled).pipe(Effect.provide(client))).usage?.outputMayIncludeUnreportedReasoning).toBeUndefined()
 
-    const defaultThinking = yield* aisdk.model(ModelV2.Info.make({
-      ...model("@ai-sdk/anthropic"), modelID: ModelV2.ID.make("claude-opus-5"),
+    const defaultThinking = yield* aisdk.model(CatalogModel.Info.make({
+      ...model("@ai-sdk/anthropic"), modelID: CatalogModel.ID.make("claude-opus-5"),
     }))
     expect((yield* LLMClient.prepare<LanguageModelV3CallOptions>(LLM.request({ model: defaultThinking, prompt: "Hello" }))).body.providerOptions)
       .toBeUndefined()
     expect((yield* LLMClient.generate(LLM.request({ model: defaultThinking, prompt: "Hello" })).pipe(Effect.provide(client))).usage?.outputMayIncludeUnreportedReasoning)
       .toBe(true)
 
-    const bedrock = yield* aisdk.model(ModelV2.Info.make({
-      ...model("@ai-sdk/gateway"), modelID: ModelV2.ID.make("amazon/nova-2-lite"),
+    const bedrock = yield* aisdk.model(CatalogModel.Info.make({
+      ...model("@ai-sdk/gateway"), modelID: CatalogModel.ID.make("amazon/nova-2-lite"),
     }))
     const bedrockEnabled = LLM.request({ model: bedrock, prompt: "Hello", providerOptions: {
       bedrock: { reasoningConfig: { type: "enabled" } },

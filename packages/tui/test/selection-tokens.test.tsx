@@ -4,7 +4,7 @@ import { errorSelectionColors } from "../src/component/error-component"
 import { autocompleteSelectionColors } from "../src/component/prompt/autocomplete"
 import { whichKeyThemeColors } from "../src/feature-plugins/system/which-key"
 import { DEFAULT_THEMES } from "../src/theme/builtins"
-import { resolveThemeFile } from "../src/theme/v2/resolve"
+import { resolveThemeFile } from "../src/theme/resolve"
 
 const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
 

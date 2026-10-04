@@ -7,37 +7,37 @@ import { Money } from "@ycoding-ai/schema/money"
 import { DateTime, Deferred, Effect, Equal, Fiber, Hash, RcMap, Schema, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { Plugin as EffectPlugin } from "@ycoding-ai/plugin/effect"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { LocationServiceMap } from "@ycoding-ai/core/location-services"
 import { Location } from "@ycoding-ai/core/location"
-import { PluginV2 } from "@ycoding-ai/core/plugin"
+import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { SdkPlugins } from "@ycoding-ai/core/plugin/sdk"
 import { PluginSupervisor } from "@ycoding-ai/core/plugin/supervisor"
-import { ModelV2 } from "@ycoding-ai/core/model"
+import { CatalogModel } from "@ycoding-ai/core/model"
 import { fixtureModels } from "./lib/models"
-import { ProjectV2 } from "@ycoding-ai/core/project"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Project } from "@ycoding-ai/core/project"
+import { Provider } from "@ycoding-ai/core/provider"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 import { toolDefinitions, waitForTool } from "./lib/tool"
 import { Database } from "../src/database/database"
-import { EventV2 } from "../src/event"
+import { EventRuntime } from "../src/event"
 import { Reference } from "../src/reference"
 import { ToolRegistry } from "../src/tool/registry"
 
 const models = [fixtureModels] as const
 const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, LocationServiceMap.node]), models),
+  AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, LocationServiceMap.node]), models),
 )
 const itWithSdk = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, EventV2.node, SdkPlugins.node, LocationServiceMap.node]),
+    LayerNode.group([Database.node, EventRuntime.node, SdkPlugins.node, LocationServiceMap.node]),
     models,
   ),
 )
@@ -52,7 +52,7 @@ describe("LocationServiceMap", () => {
         Effect.gen(function* () {
           const sdk = yield* SdkPlugins.Service
           const locations = yield* LocationServiceMap.Service
-          const id = AgentV2.ID.make("persistent-sdk-agent")
+          const id = Agent.ID.make("persistent-sdk-agent")
           const plugin = EffectPlugin.define({
             id: "persistent-sdk-plugin",
             effect: (ctx) => ctx.agent.transform((agents) => agents.update(id, () => {})),
@@ -63,7 +63,7 @@ describe("LocationServiceMap", () => {
           const read = Effect.gen(function* () {
             const supervisor = yield* PluginSupervisor.Service
             yield* supervisor.flush
-            const agents = yield* AgentV2.Service
+            const agents = yield* Agent.Service
             return yield* agents.get(id)
           })
 
@@ -109,11 +109,11 @@ describe("LocationServiceMap", () => {
           )
 
           const god = yield* Effect.gen(function* () {
-            const agents = yield* AgentV2.Service
+            const agents = yield* Agent.Service
             return yield* agents.resolve()
           }).pipe(Effect.provide(context))
 
-          expect(god).toMatchObject({ id: AgentV2.ID.make("god"), mode: "primary" })
+          expect(god).toMatchObject({ id: Agent.ID.make("god"), mode: "primary" })
           expect(god?.permissions.length).toBeGreaterThan(0)
         }),
       ),
@@ -201,7 +201,7 @@ describe("LocationServiceMap", () => {
           const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))
           yield* Deferred.await(firstStarted)
 
-          const events = yield* EventV2.Service
+          const events = yield* EventRuntime.Service
           const updated = yield* events.subscribe(Config.Event.Updated).pipe(
             Stream.filter((event) => event.location?.directory === dir.path),
             Stream.runHead,
@@ -243,7 +243,7 @@ describe("LocationServiceMap", () => {
             Effect.provide(context),
             Effect.forkChild({ startImmediately: true }),
           )
-          const events = yield* EventV2.Service
+          const events = yield* EventRuntime.Service
 
           yield* Effect.forEach(
             Array.from({ length: 5 }),
@@ -279,7 +279,7 @@ describe("LocationServiceMap", () => {
           yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(Effect.provide(context))
           expect(activations.count).toBe(1)
 
-          yield* EventV2.Service.use((events) => events.publish(Config.Event.Updated, {})).pipe(Effect.provide(context))
+          yield* EventRuntime.Service.use((events) => events.publish(Config.Event.Updated, {})).pipe(Effect.provide(context))
           yield* Effect.sleep("200 millis")
 
           expect(activations.count).toBe(1)
@@ -379,7 +379,7 @@ describe("LocationServiceMap", () => {
             fs.writeFile(path.join(dir.path, "ycoding.json"), JSON.stringify({ plugins: ["-*", "ycoding.agent"] })),
           )
           const plugins = yield* Effect.gen(function* () {
-            const plugins = yield* PluginV2.Service
+            const plugins = yield* PluginRegistry.Service
             yield* (yield* PluginSupervisor.Service).flush
             return yield* plugins.list()
           }).pipe(
@@ -405,9 +405,9 @@ describe("LocationServiceMap", () => {
           const file = path.join(dir.path, "ycoding.json")
           yield* Effect.promise(() => fs.writeFile(file, JSON.stringify({ plugins: ["-*", "ycoding.agent"] })))
           yield* Effect.gen(function* () {
-            const registry = yield* PluginV2.Service
+            const registry = yield* PluginRegistry.Service
             const supervisor = yield* PluginSupervisor.Service
-            const events = yield* EventV2.Service
+            const events = yield* EventRuntime.Service
             const ids = registry.list().pipe(Effect.map((plugins) => plugins.map((plugin) => String(plugin.id))))
             const reload = Effect.fnUntraced(function* (plugins: string[], expected: string[]) {
               const reloaded = yield* events.subscribe(Plugin.Event.Updated).pipe(
@@ -450,7 +450,7 @@ describe("LocationServiceMap", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const locations = yield* LocationServiceMap.Service
-            const events = yield* EventV2.Service
+            const events = yield* EventRuntime.Service
             const firstRef = Location.Ref.make({ directory: AbsolutePath.make(first.path) })
             const secondRef = Location.Ref.make({ directory: AbsolutePath.make(second.path) })
             const firstContext = yield* locations.contextEffect(firstRef)
@@ -548,7 +548,7 @@ describe("LocationServiceMap", () => {
     ).pipe(
       Effect.flatMap(([blocked, allowed]) =>
         Effect.gen(function* () {
-          const update = (directory: string, providerID: ProviderV2.ID) =>
+          const update = (directory: string, providerID: Provider.ID) =>
             Effect.gen(function* () {
               yield* Reference.Service
               const catalog = yield* Catalog.Service
@@ -592,8 +592,8 @@ describe("LocationServiceMap", () => {
               ),
             )
 
-          const blockedID = ProviderV2.ID.make("blocked-location")
-          const allowedID = ProviderV2.ID.make("allowed-location")
+          const blockedID = Provider.ID.make("blocked-location")
+          const allowedID = Provider.ID.make("allowed-location")
           const blockedState = yield* update(blocked.path, blockedID)
           expect(blockedState.providers.some((provider) => provider.id === blockedID)).toBe(true)
           expect(blockedState.providers.some((provider) => provider.id === allowedID)).toBe(false)
@@ -631,13 +631,13 @@ describe("LocationServiceMap", () => {
           )
           const failure = yield* SessionRunnerModel.Service.use((models) =>
             models.resolve(
-              SessionV2.Info.make({
-                id: SessionV2.ID.make("ses_unavailable_model"),
-                projectID: ProjectV2.ID.global,
+              Session.Info.make({
+                id: Session.ID.make("ses_unavailable_model"),
+                projectID: Project.ID.global,
                 title: "test",
                 model: {
-                  id: ModelV2.ID.make("chat"),
-                  providerID: ProviderV2.ID.make("unavailable"),
+                  id: CatalogModel.ID.make("chat"),
+                  providerID: Provider.ID.make("unavailable"),
                 },
                 cost: Money.USD.zero,
                 tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -668,25 +668,25 @@ describe("LocationServiceMap", () => {
           const resolved = yield* Effect.gen(function* () {
             const catalog = yield* Catalog.Service
             yield* catalog.transform((editor) => {
-              editor.provider.update(ProviderV2.ID.make("aliased"), (provider) => {
-                provider.package = ProviderV2.aisdk("@ai-sdk/openai")
+              editor.provider.update(Provider.ID.make("aliased"), (provider) => {
+                provider.package = Provider.aisdk("@ai-sdk/openai")
               })
-              editor.model.update(ProviderV2.ID.make("aliased"), ModelV2.ID.make("fast"), (model) => {
+              editor.model.update(Provider.ID.make("aliased"), CatalogModel.ID.make("fast"), (model) => {
                 // Catalog id and package model id intentionally differ, like gpt-5.5-fast -> gpt-5.5.
-                model.modelID = ModelV2.ID.make("base")
-                model.variants = [{ id: ModelV2.VariantID.make("high") }]
+                model.modelID = CatalogModel.ID.make("base")
+                model.variants = [{ id: CatalogModel.VariantID.make("high") }]
               })
             })
             const models = yield* SessionRunnerModel.Service
             return yield* models.resolve(
-              SessionV2.Info.make({
-                id: SessionV2.ID.make("ses_aliased_model"),
-                projectID: ProjectV2.ID.global,
+              Session.Info.make({
+                id: Session.ID.make("ses_aliased_model"),
+                projectID: Project.ID.global,
                 title: "test",
                 model: {
-                  id: ModelV2.ID.make("fast"),
-                  providerID: ProviderV2.ID.make("aliased"),
-                  variant: ModelV2.VariantID.make("high"),
+                  id: CatalogModel.ID.make("fast"),
+                  providerID: Provider.ID.make("aliased"),
+                  variant: CatalogModel.VariantID.make("high"),
                 },
                 cost: Money.USD.zero,
                 tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -697,10 +697,10 @@ describe("LocationServiceMap", () => {
           }).pipe(Effect.provide(LocationServiceMap.Service.get(location)))
 
           expect(resolved.ref).toEqual(
-            ModelV2.Ref.make({
-              id: ModelV2.ID.make("fast"),
-              providerID: ProviderV2.ID.make("aliased"),
-              variant: ModelV2.VariantID.make("high"),
+            CatalogModel.Ref.make({
+              id: CatalogModel.ID.make("fast"),
+              providerID: Provider.ID.make("aliased"),
+              variant: CatalogModel.VariantID.make("high"),
             }),
           )
           expect(String(resolved.model.id)).toBe("base")
@@ -716,7 +716,7 @@ describe("LocationServiceMap", () => {
     ).pipe(
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
-          const plugins = yield* PluginV2.Service
+          const plugins = yield* PluginRegistry.Service
           const reviewer = EffectPlugin.define({
             id: "reviewer",
             effect: (ctx) =>
@@ -731,7 +731,7 @@ describe("LocationServiceMap", () => {
           })
           yield* plugins.activate([{ ...reviewer, version: "1" }])
 
-          expect(yield* (yield* AgentV2.Service).get(AgentV2.ID.make("reviewer"))).toMatchObject({
+          expect(yield* (yield* Agent.Service).get(Agent.ID.make("reviewer"))).toMatchObject({
             description: "Reviews code",
             mode: "subagent",
           })

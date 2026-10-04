@@ -7,7 +7,7 @@ import { Effect, Layer, Schema } from "effect"
 import { LLM } from "@ycoding-ai/ai"
 import { AnthropicMessages, OpenAIChat, OpenAIResponses } from "@ycoding-ai/ai/protocols"
 import { Auth, LLMClient } from "@ycoding-ai/ai/route"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
@@ -15,14 +15,14 @@ import { Database } from "@ycoding-ai/core/database/database"
 import { Global } from "@ycoding-ai/core/global"
 import { Image } from "@ycoding-ai/core/image"
 import { Location } from "@ycoding-ai/core/location"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { ProjectArtifactStore } from "@ycoding-ai/core/project-artifact"
 import { ProjectArtifactAccounting } from "@ycoding-ai/core/project-artifact/accounting"
 import { ProjectArtifactSource } from "@ycoding-ai/core/project-artifact/source"
 import { ProjectArtifactStandardSourceRegistry } from "@ycoding-ai/core/project-artifact/source-registry"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
@@ -38,8 +38,8 @@ import { fixedResponse } from "../../ai/test/lib/http"
 import { sseEvents } from "../../ai/test/lib/sse"
 
 const decode = Schema.decodeUnknownOption(ProjectArtifactTool.Input)
-const sessionID = SessionV2.ID.make("ses_project_artifact_tool")
-const agentID = AgentV2.ID.make("build")
+const sessionID = Session.ID.make("ses_project_artifact_tool")
+const agentID = Agent.ID.make("build")
 const messageID = SessionMessage.ID.make("msg_project_artifact_tool")
 const projectID = Project.ID.make("project-artifact-tool")
 const location = {
@@ -79,7 +79,7 @@ const source = Layer.mock(ProjectArtifactSource.Service, {
   provenance: () => Effect.succeed(undefined),
   activate: () => Effect.void,
 })
-const permission = Layer.mock(PermissionV2.Service, {
+const permission = Layer.mock(Permission.Service, {
   evaluateEffective: () => Effect.sync(() => permissionDecision),
   ask: () => Effect.die("project_artifact must not publish permission asks"),
 })
@@ -93,7 +93,7 @@ const projectArtifactToolNode = makeLocationNode({
   deps: [
     ToolRegistry.toolsNode,
     Location.node,
-    PermissionV2.node,
+    Permission.node,
     SessionGuardrail.node,
     ProjectArtifactStore.node,
     ProjectArtifactSource.node,
@@ -104,7 +104,7 @@ const it = testEffect(
     LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, projectArtifactToolNode]),
     [
       [Location.node, locationLayer],
-      [PermissionV2.node, permission],
+      [Permission.node, permission],
       [SessionGuardrail.node, guardrail],
       [ProjectArtifactStore.node, store],
       [ProjectArtifactSource.node, source],
@@ -127,7 +127,7 @@ const realProjectArtifactToolNode = makeLocationNode({
   deps: [
     ToolRegistry.toolsNode,
     Location.node,
-    PermissionV2.node,
+    Permission.node,
     SessionGuardrail.node,
     ProjectArtifactStore.node,
     ProjectArtifactSource.node,
@@ -148,7 +148,7 @@ const realIt = testEffect(
     ]),
     [
       [Location.node, realLocationLayer],
-      [PermissionV2.node, permission],
+      [Permission.node, permission],
       [SessionGuardrail.node, guardrail],
       [ProjectArtifactSource.node, source],
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],

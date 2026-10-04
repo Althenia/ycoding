@@ -22,7 +22,7 @@ export const Options = Schema.Struct({
 })
 export type Options = typeof Options.Type
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/FileSystem/Search") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/FileSystem/Search") {}
 
 export const ripgrepLayer = Layer.effect(
   Service,

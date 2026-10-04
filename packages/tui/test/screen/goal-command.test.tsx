@@ -306,12 +306,12 @@ for (const { name, running, direct } of [
     } satisfies YCodingEvent)
     if (running && direct) {
       screen.events.emit({
-        id: "evt_goal_permission", created: 13, type: "permission.v2.asked",
+        id: "evt_goal_permission", created: 13, type: "permission.asked",
         data: { id: "per_goal_running", sessionID, action: "shell", resources: [directory] }, location: { directory },
       } satisfies YCodingEvent)
       await waitFor(() => screen.frame().includes("Permission required"), "running Session permission")
       screen.events.emit({
-        id: "evt_goal_permission_reply", created: 14, type: "permission.v2.replied",
+        id: "evt_goal_permission_reply", created: 14, type: "permission.replied",
         data: { sessionID, requestID: "per_goal_running", reply: "once" }, location: { directory },
       } satisfies YCodingEvent)
       await waitFor(() => screen.frame().includes("/goal finish product."), "restored draft after permission")
@@ -322,12 +322,12 @@ for (const { name, running, direct } of [
     expect(promptRequests).toEqual([])
     if (running && direct) {
       screen.events.emit({
-        id: "evt_goal_permission_again", created: 15, type: "permission.v2.asked",
+        id: "evt_goal_permission_again", created: 15, type: "permission.asked",
         data: { id: "per_goal_again", sessionID, action: "shell", resources: [directory] }, location: { directory },
       } satisfies YCodingEvent)
       await waitFor(() => screen.frame().includes("Permission required"), "second permission")
       screen.events.emit({
-        id: "evt_goal_permission_again_reply", created: 16, type: "permission.v2.replied",
+        id: "evt_goal_permission_again_reply", created: 16, type: "permission.replied",
         data: { sessionID, requestID: "per_goal_again", reply: "once" }, location: { directory },
       } satisfies YCodingEvent)
       await waitFor(() => screen.frame().includes("Message YCoding…"), "empty composer after second remount")
@@ -351,12 +351,12 @@ test("retains the goal draft after a failed PUT across a permission remount", as
     await submitComposer(screen)
     await waitFor(() => autonomySets.length > 0, "goal activation request")
     screen.events.emit({
-      id: "evt_failed_goal_permission", created: 17, type: "permission.v2.asked",
+      id: "evt_failed_goal_permission", created: 17, type: "permission.asked",
       data: { id: "per_failed_goal", sessionID, action: "shell", resources: [directory] }, location: { directory },
     } satisfies YCodingEvent)
     await waitFor(() => screen.frame().includes("Permission required"), "permission prompt")
     screen.events.emit({
-      id: "evt_failed_goal_permission_reply", created: 18, type: "permission.v2.replied",
+      id: "evt_failed_goal_permission_reply", created: 18, type: "permission.replied",
       data: { sessionID, requestID: "per_failed_goal", reply: "once" }, location: { directory },
     } satisfies YCodingEvent)
     await waitFor(() => screen.frame().includes("/goal finish product."), "restored goal draft")

@@ -3,7 +3,7 @@ export * as TodoWriteTool from "./todowrite"
 import { ToolFailure } from "@ycoding-ai/ai"
 import type { Context as PluginContext } from "@ycoding-ai/plugin/effect/plugin"
 import { Effect, Schema } from "effect"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { SessionTodo } from "../session/todo"
 import { Tool } from "./tool"
 
@@ -18,7 +18,7 @@ export const Plugin = {
   id: "ycoding.tool.todowrite",
   effect: Effect.fn("TodoWriteTool.Plugin")(function* (ctx: PluginContext) {
     const todos = yield* SessionTodo.Service
-    const permission = yield* PermissionV2.Service
+    const permission = yield* Permission.Service
     yield* ctx.tool
       .transform((draft) =>
         draft.add(

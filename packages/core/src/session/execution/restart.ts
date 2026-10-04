@@ -3,7 +3,7 @@ export * as SessionRestart from "./restart"
 import { Context, Effect, Layer } from "effect"
 import { makeGlobalNode } from "../../effect/app-node"
 import { Database } from "../../database/database"
-import { EventV2 } from "../../event"
+import { EventRuntime } from "../../event"
 import { SessionExecution } from "../execution"
 import { SessionInterruptedExecution } from "./interrupted"
 import { SessionStore } from "../store"
@@ -25,13 +25,13 @@ export interface Interface {
  * Restart continuity actions for the managed server. The service is inert until called: managed
  * startup never resumes suspended Sessions, and default, embedded, and stdio servers never suspend.
  */
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionRestart") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionRestart") {}
 
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const store = yield* SessionStore.Service
     const execution = yield* SessionExecution.Service
     return Service.of({
@@ -46,5 +46,5 @@ export const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [Database.node, EventV2.node, SessionStore.node, SessionExecution.node],
+  deps: [Database.node, EventRuntime.node, SessionStore.node, SessionExecution.node],
 })

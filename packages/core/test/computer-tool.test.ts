@@ -4,9 +4,9 @@ import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Computer } from "@ycoding-ai/core/computer"
 import { LocationMutation } from "@ycoding-ai/core/location-mutation"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { ComputerTool } from "@ycoding-ai/core/tool/computer"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
@@ -20,7 +20,7 @@ const calls: string[] = []
 const actions: Computer.Action[] = []
 let denyBrowser = false
 let denyStage = false
-const sessionID = SessionV2.ID.make("ses_computer_tool")
+const sessionID = Session.ID.make("ses_computer_tool")
 
 const computer = Layer.mock(Computer.Service, {
   status: Effect.succeed({ platform: "macos", state: "supported" as const, capabilities: [] }),
@@ -79,7 +79,7 @@ const computer = Layer.mock(Computer.Service, {
     return Effect.succeed({ status: "ok" as const, action: "desktop.unstage" as const, revision: "restored-revision" })
   },
 })
-const permission = Layer.mock(PermissionV2.Service, {
+const permission = Layer.mock(Permission.Service, {
   assert: (input) => {
     calls.push(`permission:${input.action}:${input.resources.join(",")}`)
     return Effect.void
@@ -106,13 +106,13 @@ const location = Layer.mock(LocationMutation.Service, {
 const computerToolNode = makeLocationNode({
   name: "test/computer-tool-plugin",
   layer: Layer.effectDiscard(registerToolPlugin(ComputerTool.Plugin)),
-  deps: [ToolRegistry.toolsNode, Computer.node, PermissionV2.node, SessionGuardrail.node, LocationMutation.node],
+  deps: [ToolRegistry.toolsNode, Computer.node, Permission.node, SessionGuardrail.node, LocationMutation.node],
 })
 
 const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, computerToolNode]), [
     [Computer.node, computer],
-    [PermissionV2.node, permission],
+    [Permission.node, permission],
     [SessionGuardrail.node, guardrail],
     [LocationMutation.node, location],
     [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],

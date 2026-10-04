@@ -5,7 +5,7 @@ import type { Context as PluginContext } from "@ycoding-ai/plugin/effect/plugin"
 import { Effect, Schema } from "effect"
 import { Browser } from "../browser"
 import { IsolatedBrowser } from "../isolated-browser"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { SessionGuardrail } from "../session/guardrail"
 import { Tool } from "./tool"
 
@@ -128,7 +128,7 @@ export const Plugin = {
   effect: Effect.fn("BrowserTool.Plugin")(function* (ctx: PluginContext) {
     const browser = yield* Browser.Service
     const isolated = yield* IsolatedBrowser.Service
-    const permission = yield* PermissionV2.Service
+    const permission = yield* Permission.Service
     const guardrail = yield* SessionGuardrail.Service
 
     yield* ctx.tool
@@ -195,7 +195,7 @@ export const Plugin = {
                     save: [tab.page.origin], metadata: { operation: "open" },
                     sessionID: context.sessionID, agent: context.agent, source,
                   }).pipe(Effect.catchIf(
-                    (error) => error instanceof PermissionV2.BlockedError || error instanceof PermissionV2.CorrectedError,
+                    (error) => error instanceof Permission.BlockedError || error instanceof Permission.CorrectedError,
                     () => browser.close({ sessionID: context.sessionID, tabID: tab.id,
                       generation: tab.generation, callID: `cleanup-${tab.id}` }).pipe(
                       Effect.catch(() => Effect.fail(new ToolFailure({

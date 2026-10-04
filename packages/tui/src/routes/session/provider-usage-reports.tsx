@@ -231,7 +231,7 @@ function ProviderUsageTable(props: {
   onOffset: (offset: number) => void
   onSelect: (key: string) => void
 }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const dialog = useDialog()
   const narrow = createMemo(() => !reportGeometry(dimensions().width).fits)
@@ -304,27 +304,27 @@ function ProviderUsageTable(props: {
   return (
     <box flexGrow={1} minHeight={0} flexDirection="column">
       <Show when={props.rangeError}>
-        {(error) => <text flexShrink={0} fg={themeV2.text.feedback.error.default}>{error()}</text>}
+        {(error) => <text flexShrink={0} fg={theme.text.feedback.error.default}>{error()}</text>}
       </Show>
       <Show when={props.state.loading && props.state.report}>
-        <text flexShrink={0} fg={themeV2.text.feedback.warning.default}>Refreshing · showing previous data</text>
+        <text flexShrink={0} fg={theme.text.feedback.warning.default}>Refreshing · showing previous data</text>
       </Show>
       <Show when={props.state.failed}>
-        <text flexShrink={0} fg={themeV2.text.feedback.error.default}>
+        <text flexShrink={0} fg={theme.text.feedback.error.default}>
           {props.state.stale ? "Refresh failed · showing stale data" : "Usage report could not be loaded."}
         </text>
       </Show>
       <Show when={!props.state.report && props.state.loading}>
-        <text flexShrink={0} fg={themeV2.text.subdued}>Loading usage...</text>
+        <text flexShrink={0} fg={theme.text.subdued}>Loading usage...</text>
       </Show>
       <Show when={props.state.report}>
         {(report) => (
           <>
-            <text flexShrink={0} fg={themeV2.text.default} attributes={TextAttributes.BOLD}>
+            <text flexShrink={0} fg={theme.text.default} attributes={TextAttributes.BOLD}>
               {providerUsageViewLabel(props.view)} · All sessions
             </text>
-            <text flexShrink={0} fg={themeV2.border.default}>{"─".repeat(Math.max(1, Math.min(dimensions().width - 6, 96)))}</text>
-            <Show when={!narrow()} fallback={<text flexShrink={0} fg={themeV2.text.subdued}>{compactHeader(props.view, props.sort, props.order)}</text>}>
+            <text flexShrink={0} fg={theme.border.default}>{"─".repeat(Math.max(1, Math.min(dimensions().width - 6, 96)))}</text>
+            <Show when={!narrow()} fallback={<text flexShrink={0} fg={theme.text.subdued}>{compactHeader(props.view, props.sort, props.order)}</text>}>
               <ReportHeader view={props.view} width={dimensions().width} sort={props.sort} order={props.order} onSort={props.onSort} />
             </Show>
             <scrollbox
@@ -338,7 +338,7 @@ function ProviderUsageTable(props: {
                   <box
                     width="100%"
                     flexShrink={0}
-                    backgroundColor={row.key === props.selected ? themeV2.background.surface.offset : undefined}
+                    backgroundColor={row.key === props.selected ? theme.background.surface.offset : undefined}
                     onMouseUp={() => {
                       if (row.key === props.selected) showDetails()
                       else props.onSelect(row.key)
@@ -356,26 +356,26 @@ function ProviderUsageTable(props: {
             </scrollbox>
             <box flexShrink={0} flexDirection="column">
               <text attributes={TextAttributes.BOLD}>{reportTotal(report().total)}</text>
-              <text fg={themeV2.text.subdued}>
+              <text fg={theme.text.subdued}>
                 {Locale.truncate(REPORT_LEGEND, Math.max(1, dimensions().width - 6))}
               </text>
-              <text fg={themeV2.text.subdued}>
+              <text fg={theme.text.subdued}>
                 Scope: All sessions · Range: {rangeLabel(props.range)} · Sort: {sortLabel(props.sort, props.order)} · {pageLabel(props.offset, report())}
               </text>
               <box flexDirection="row">
-                <text fg={themeV2.text.subdued} onMouseUp={() => props.onSort("key")}>d date/name</text>
-                <text fg={themeV2.text.subdued}> · </text>
-                <text fg={themeV2.text.subdued} onMouseUp={() => props.onSort("tokens")}>t tokens</text>
-                <text fg={themeV2.text.subdued}> · </text>
-                <text fg={themeV2.text.subdued} onMouseUp={() => props.onSort("cost")}>c cost</text>
-                <text fg={themeV2.text.subdued}> · </text>
-                <text fg={themeV2.text.subdued} onMouseUp={showRange}>f range</text>
-                <text fg={themeV2.text.subdued}> · Enter details</text>
+                <text fg={theme.text.subdued} onMouseUp={() => props.onSort("key")}>d date/name</text>
+                <text fg={theme.text.subdued}> · </text>
+                <text fg={theme.text.subdued} onMouseUp={() => props.onSort("tokens")}>t tokens</text>
+                <text fg={theme.text.subdued}> · </text>
+                <text fg={theme.text.subdued} onMouseUp={() => props.onSort("cost")}>c cost</text>
+                <text fg={theme.text.subdued}> · </text>
+                <text fg={theme.text.subdued} onMouseUp={showRange}>f range</text>
+                <text fg={theme.text.subdued}> · Enter details</text>
                 <box flexGrow={1} />
-                <text fg={props.offset > 0 ? themeV2.text.default : themeV2.text.subdued} onMouseUp={() => props.onOffset(Math.max(0, props.offset - PAGE_SIZE))}>[ previous ]</text>
+                <text fg={props.offset > 0 ? theme.text.default : theme.text.subdued} onMouseUp={() => props.onOffset(Math.max(0, props.offset - PAGE_SIZE))}>[ previous ]</text>
                 <text> </text>
                 <text
-                  fg={report().nextOffset !== undefined ? themeV2.text.default : themeV2.text.subdued}
+                  fg={report().nextOffset !== undefined ? theme.text.default : theme.text.subdued}
                   onMouseUp={() => {
                     if (report().nextOffset !== undefined) props.onOffset(report().nextOffset!)
                   }}
@@ -393,13 +393,13 @@ function ProviderUsageTable(props: {
 
 function UsageDetails(props: { row: ProviderRequestReport["rows"][number] }) {
   const dialog = useDialog()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   onMount(() => dialog.setSize("medium"))
   return (
     <box flexDirection="column" paddingBottom={1}>
       <DialogHeader title={<DialogTitle>Usage details</DialogTitle>} />
       <box flexDirection="column" paddingLeft={3} paddingRight={3} paddingTop={1}>
-        <text fg={themeV2.text.feedback.info.default}>{props.row.label}</text>
+        <text fg={theme.text.feedback.info.default}>{props.row.label}</text>
         <text>Steps (model calls) {formatNumber(props.row.logical)} · provider attempts {formatNumber(props.row.physical)}</text>
         <text>Helpers {formatNumber(props.row.helpers)} · continued {formatNumber(props.row.continued)} · fallback {formatNumber(props.row.fallback)}</text>
         <text>Input {formatNumber(props.row.tokens.input)} · Visible output {formatNumber(props.row.tokens.output)}</text>
@@ -407,7 +407,7 @@ function UsageDetails(props: { row: ProviderRequestReport["rows"][number] }) {
         <text>Cache read {cacheRead(props.row, formatNumber)} · write {formatNumber(props.row.tokens.cache.write)}</text>
         <text>Total tokens {tokenTotalLabel(props.row, formatNumber)} · Cost {costLabel(props.row)}</text>
         <Show when={props.row.cacheReadReported !== true}>
-          <text fg={themeV2.text.subdued}>≥ marks a lower bound: the provider did not report every cache read.</text>
+          <text fg={theme.text.subdued}>≥ marks a lower bound: the provider did not report every cache read.</text>
         </Show>
       </box>
     </box>
@@ -466,8 +466,8 @@ function ProviderUsageStats(props: {
   state: ReportState
   now: number
 }) {
-  const theme = useTheme()
-  const themeV2 = theme.themeV2
+  const themeContext = useTheme()
+  const theme = themeContext.theme
   const dimensions = useTerminalDimensions()
   const rows = createMemo(() => props.state.report?.rows ?? [])
   const byDay = createMemo(() => new Map(rows().map((row) => [row.key.slice(0, 10), row])))
@@ -480,9 +480,9 @@ function ProviderUsageStats(props: {
   const graphStart = createMemo(() => today() - (new Date(today()).getUTCDay() + (layout().weeks - 1) * 7) * DAY)
   const maximum = createMemo(() => Math.max(1, ...rows().map(knownTokens)))
   const palette = createMemo(() =>
-    theme.mode() === "light"
-      ? [themeV2.hue.gray[200], themeV2.hue.green[300], themeV2.hue.green[500], themeV2.hue.green[700], themeV2.hue.green[900]]
-      : [themeV2.hue.gray[800], themeV2.hue.green[800], themeV2.hue.green[600], themeV2.hue.green[400], themeV2.hue.green[200]],
+    themeContext.mode() === "light"
+      ? [theme.hue.gray[200], theme.hue.green[300], theme.hue.green[500], theme.hue.green[700], theme.hue.green[900]]
+      : [theme.hue.gray[800], theme.hue.green[800], theme.hue.green[600], theme.hue.green[400], theme.hue.green[200]],
   )
   const level = (row: ProviderRequestReport["rows"][number] | undefined) => {
     if (!row || knownTokens(row) === 0) return 0
@@ -526,14 +526,14 @@ function ProviderUsageStats(props: {
 
   return (
     <box flexGrow={1} minHeight={0} flexDirection="column">
-      <text attributes={TextAttributes.BOLD} fg={themeV2.text.feedback.info.default}>
+      <text attributes={TextAttributes.BOLD} fg={theme.text.feedback.info.default}>
         Activity graph · last {layout().weeks} weeks
       </text>
       <Show when={props.state.loading && !props.state.report}>
-        <text fg={themeV2.text.subdued}>Loading daily usage...</text>
+        <text fg={theme.text.subdued}>Loading daily usage...</text>
       </Show>
       <Show when={props.state.failed}>
-        <text fg={themeV2.text.feedback.error.default}>
+        <text fg={theme.text.feedback.error.default}>
           {props.state.stale ? "Refresh failed · showing stale data" : "Activity graph could not be loaded."}
         </text>
       </Show>
@@ -541,42 +541,42 @@ function ProviderUsageStats(props: {
         {(report) => (
           <>
             <box flexDirection="column" paddingTop={1}>
-              <text fg={themeV2.text.subdued}>{"    "}{months()}</text>
+              <text fg={theme.text.subdued}>{"    "}{months()}</text>
               <For each={WEEKDAYS}>
                 {(label, weekday) => (
                   <text>
-                    <span style={{ fg: themeV2.text.subdued }}>{label} </span>
+                    <span style={{ fg: theme.text.subdued }}>{label} </span>
                     <For each={cells(weekday())}>{(cell) => <span style={{ fg: cell.color }}>{cell.text}</span>}</For>
                   </text>
                 )}
               </For>
               <text paddingTop={1}>
-                <span style={{ fg: themeV2.text.subdued }}>Less </span>
+                <span style={{ fg: theme.text.subdued }}>Less </span>
                 <For each={palette()}>{(color) => <span style={{ fg: color }}>{"█".repeat(layout().cell)} </span>}</For>
-                <span style={{ fg: themeV2.text.subdued }}>More · shade = tokens per UTC day</span>
+                <span style={{ fg: theme.text.subdued }}>More · shade = tokens per UTC day</span>
               </text>
             </box>
-            <text paddingTop={1} attributes={TextAttributes.BOLD} fg={themeV2.text.feedback.info.default}>Stats</text>
+            <text paddingTop={1} attributes={TextAttributes.BOLD} fg={theme.text.feedback.info.default}>Stats</text>
             <box flexDirection="row" paddingTop={1}>
               <box flexDirection="column" width="50%">
-                <StatLine label="Favorite model" value={props.state.stats?.favoriteModel ?? "No usage yet"} color={themeV2.text.feedback.success.default} />
-                <StatLine label="Sessions" value={formatNumber(props.state.stats?.sessions ?? 0)} color={themeV2.text.feedback.info.default} />
-                <StatLine label="Current streak" value={dayCount(summary().current)} color={themeV2.text.feedback.info.default} />
-                <StatLine label="Active days" value={`${formatNumber(summary().active)}/${formatNumber(summary().days)}`} color={themeV2.text.feedback.info.default} />
+                <StatLine label="Favorite model" value={props.state.stats?.favoriteModel ?? "No usage yet"} color={theme.text.feedback.success.default} />
+                <StatLine label="Sessions" value={formatNumber(props.state.stats?.sessions ?? 0)} color={theme.text.feedback.info.default} />
+                <StatLine label="Current streak" value={dayCount(summary().current)} color={theme.text.feedback.info.default} />
+                <StatLine label="Active days" value={`${formatNumber(summary().active)}/${formatNumber(summary().days)}`} color={theme.text.feedback.info.default} />
               </box>
               <box flexDirection="column" width="50%">
-                <StatLine label="Total tokens" value={tokenTotalLabel(report().total, compactNumber)} color={themeV2.text.feedback.info.default} />
-                <StatLine label="Total cost" value={tableCost(report().total)} color={themeV2.text.feedback.warning.default} />
-                <StatLine label="Longest streak" value={dayCount(summary().longest)} color={themeV2.text.feedback.info.default} />
+                <StatLine label="Total tokens" value={tokenTotalLabel(report().total, compactNumber)} color={theme.text.feedback.info.default} />
+                <StatLine label="Total cost" value={tableCost(report().total)} color={theme.text.feedback.warning.default} />
+                <StatLine label="Longest streak" value={dayCount(summary().longest)} color={theme.text.feedback.info.default} />
                 <StatLine
                   label="Busiest day"
                   value={summary().busiest ? `${summary().busiest!.key.slice(0, 10)} · ${tokenTotalLabel(summary().busiest!, compactNumber)} tokens` : "No usage yet"}
-                  color={themeV2.text.feedback.info.default}
+                  color={theme.text.feedback.info.default}
                 />
               </box>
             </box>
             <box flexGrow={1} />
-            <text fg={themeV2.text.subdued}>
+            <text fg={theme.text.subdued}>
               {summary().first
                 ? ""
                 : "No usage recorded in the last 52 weeks."}
@@ -589,10 +589,10 @@ function ProviderUsageStats(props: {
 }
 
 function StatLine(props: { label: string; value: string; color: RGBA }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   return (
     <text>
-      <span style={{ fg: themeV2.text.subdued }}>{props.label}: </span>
+      <span style={{ fg: theme.text.subdued }}>{props.label}: </span>
       <span style={{ fg: props.color }}>{props.value}</span>
     </text>
   )
@@ -616,18 +616,18 @@ function CompactReportRow(props: {
   selected: () => boolean
   width: number
 }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   return (
     <box flexDirection="column" width="100%">
-      <text fg={props.selected() ? themeV2.text.feedback.info.default : themeV2.text.default} attributes={props.selected() ? TextAttributes.BOLD : undefined}>
+      <text fg={props.selected() ? theme.text.feedback.info.default : theme.text.default} attributes={props.selected() ? TextAttributes.BOLD : undefined}>
         {props.selected() ? ">" : " "} {Locale.truncate(props.row.label, Math.max(1, props.width - 8))}
       </text>
       <text>
         {"  "}<span>{formatNumber(props.row.logical)} steps</span>
-        <span style={{ fg: themeV2.text.subdued }}> · </span>
-        <span style={{ fg: themeV2.text.feedback.info.default }}>{tokenTotalLabel(props.row, compactNumber)} tokens</span>
-        <span style={{ fg: themeV2.text.subdued }}> · </span>
-        <span style={{ fg: themeV2.text.feedback.success.default }}>{tableCost(props.row)}</span>
+        <span style={{ fg: theme.text.subdued }}> · </span>
+        <span style={{ fg: theme.text.feedback.info.default }}>{tokenTotalLabel(props.row, compactNumber)} tokens</span>
+        <span style={{ fg: theme.text.subdued }}> · </span>
+        <span style={{ fg: theme.text.feedback.success.default }}>{tableCost(props.row)}</span>
       </text>
     </box>
   )
@@ -688,19 +688,19 @@ function WideReportRow(props: {
   selected: () => boolean
   width: number
 }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const geometry = reportGeometry(props.width)
   return (
     <text attributes={props.selected() ? TextAttributes.BOLD : undefined}>
-      <span style={{ fg: props.selected() ? themeV2.text.feedback.info.default : themeV2.text.default }}>{`${props.selected() ? ">" : " "} ${Locale.truncate(props.row.label, geometry.name - 2)}`.padEnd(geometry.name)}</span>{" "}
+      <span style={{ fg: props.selected() ? theme.text.feedback.info.default : theme.text.default }}>{`${props.selected() ? ">" : " "} ${Locale.truncate(props.row.label, geometry.name - 2)}`.padEnd(geometry.name)}</span>{" "}
       <span>{compactNumber(props.row.logical).padStart(geometry.steps)}</span>{" "}
-      <span style={{ fg: themeV2.text.feedback.success.default }}>{compactNumber(props.row.tokens.input).padStart(geometry.input)}</span>{" "}
-      <span style={{ fg: themeV2.text.feedback.warning.subdued }}>{compactNumber(props.row.tokens.output).padStart(geometry.output)}</span>{" "}
-      <span style={{ fg: themeV2.text.label }}>{compactNumber(props.row.tokens.reasoning).padStart(geometry.reasoning)}</span>{" "}
-      <span style={{ fg: themeV2.text.feedback.info.default }}>{cacheRead(props.row, compactNumber).padStart(geometry.read)}</span>{" "}
-      <span style={{ fg: themeV2.text.feedback.info.subdued }}>{compactNumber(props.row.tokens.cache.write).padStart(geometry.write)}</span>{" "}
-      <span style={{ fg: themeV2.text.default }}>{tokenTotalLabel(props.row, compactNumber).padStart(geometry.total)}</span>{" "}
-      <span style={{ fg: themeV2.text.feedback.success.subdued }}>{tableCost(props.row).padStart(geometry.cost)}</span>
+      <span style={{ fg: theme.text.feedback.success.default }}>{compactNumber(props.row.tokens.input).padStart(geometry.input)}</span>{" "}
+      <span style={{ fg: theme.text.feedback.warning.subdued }}>{compactNumber(props.row.tokens.output).padStart(geometry.output)}</span>{" "}
+      <span style={{ fg: theme.text.label }}>{compactNumber(props.row.tokens.reasoning).padStart(geometry.reasoning)}</span>{" "}
+      <span style={{ fg: theme.text.feedback.info.default }}>{cacheRead(props.row, compactNumber).padStart(geometry.read)}</span>{" "}
+      <span style={{ fg: theme.text.feedback.info.subdued }}>{compactNumber(props.row.tokens.cache.write).padStart(geometry.write)}</span>{" "}
+      <span style={{ fg: theme.text.default }}>{tokenTotalLabel(props.row, compactNumber).padStart(geometry.total)}</span>{" "}
+      <span style={{ fg: theme.text.feedback.success.subdued }}>{tableCost(props.row).padStart(geometry.cost)}</span>
     </text>
   )
 }

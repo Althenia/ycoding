@@ -3,7 +3,7 @@ import { Effect, Layer } from "effect"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { TaskCompleteTool } from "@ycoding-ai/core/tool/task-complete"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
@@ -32,7 +32,7 @@ describe("TaskCompleteTool", () => {
       expect(definitions.map((item) => item.name)).toContain("task_complete")
       expect(definitions.find((item) => item.name === "task_complete")?.description).toContain("verified")
       const settlement = yield* settleTool(registry, {
-        sessionID: SessionV2.ID.make("ses_complete_test"),
+        sessionID: Session.ID.make("ses_complete_test"),
         ...toolIdentity,
         call: { type: "tool-call", id: "call-complete", name: "task_complete", input: {} },
       })

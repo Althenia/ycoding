@@ -1,22 +1,21 @@
 import { describe, expect } from "bun:test"
 import { Message, SystemPart } from "@ycoding-ai/ai"
 import { DateTime, Effect, Schema } from "effect"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Catalog } from "@ycoding-ai/core/catalog"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { PluginV2 } from "@ycoding-ai/core/plugin"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHooks } from "@ycoding-ai/core/plugin/hooks"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
 import { PluginPromise } from "@ycoding-ai/core/plugin/promise"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionPending } from "@ycoding-ai/core/session/pending"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { Plugin } from "@ycoding-ai/plugin"
 import type { SessionHooks } from "@ycoding-ai/plugin/effect/session"
 import { Model } from "@ycoding-ai/schema/model"
-import { Provider } from "@ycoding-ai/schema/provider"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
 import { host as testHost } from "./host"
@@ -65,7 +64,7 @@ describe("fromPromise", () => {
               SessionPending.Synthetic.make({
                 admittedSeq: 1,
                 id: SessionMessage.ID.make(input.id),
-                sessionID: SessionV2.ID.make(input.sessionID),
+                sessionID: Session.ID.make(input.sessionID),
                 timeCreated: DateTime.makeUnsafe(0),
                 type: "synthetic",
                 data: {
@@ -99,7 +98,7 @@ describe("fromPromise", () => {
 
   it.effect("forwards standard client reads", () =>
     Effect.gen(function* () {
-      const plugin = yield* PluginV2.Service
+      const plugin = yield* PluginRegistry.Service
       const host = yield* PluginHost.make(plugin)
       const seen: string[] = []
       const promisePlugin = Plugin.define({
@@ -128,18 +127,18 @@ describe("fromPromise", () => {
 
   it.effect("forwards direct agent and model reads", () =>
     Effect.gen(function* () {
-      const agents = yield* AgentV2.Service
+      const agents = yield* Agent.Service
       const catalog = yield* Catalog.Service
-      const plugin = yield* PluginV2.Service
+      const plugin = yield* PluginRegistry.Service
       const host = yield* PluginHost.make(plugin)
       yield* agents.transform((draft) =>
-        draft.update(AgentV2.ID.make("reviewer"), (agent) => {
+        draft.update(Agent.ID.make("reviewer"), (agent) => {
           agent.description = "Reviews code"
         }),
       )
       yield* catalog.transform((draft) =>
-        draft.model.update(ProviderV2.ID.make("test"), ModelV2.ID.make("alias"), (model) => {
-          model.modelID = ModelV2.ID.make("gpt-5")
+        draft.model.update(Provider.ID.make("test"), CatalogModel.ID.make("alias"), (model) => {
+          model.modelID = CatalogModel.ID.make("gpt-5")
         }),
       )
 
@@ -159,8 +158,8 @@ describe("fromPromise", () => {
 
   it.effect("loads a promise plugin and registers a transform hook", () =>
     Effect.gen(function* () {
-      const agents = yield* AgentV2.Service
-      const plugin = yield* PluginV2.Service
+      const agents = yield* Agent.Service
+      const plugin = yield* PluginRegistry.Service
       const host = yield* PluginHost.make(plugin)
 
       const promisePlugin = Plugin.define({
@@ -179,7 +178,7 @@ describe("fromPromise", () => {
       const adapted = PluginPromise.fromPromise(promisePlugin)
       yield* adapted.effect({ ...host, options: { mode: "strict" } })
 
-      expect(yield* agents.get(AgentV2.ID.make("reviewer"))).toMatchObject({
+      expect(yield* agents.get(Agent.ID.make("reviewer"))).toMatchObject({
         description: "Reviews code",
         mode: "subagent",
       })
@@ -188,7 +187,7 @@ describe("fromPromise", () => {
 
   it.effect("forwards session context hooks", () =>
     Effect.gen(function* () {
-      const plugin = yield* PluginV2.Service
+      const plugin = yield* PluginRegistry.Service
       const hooks = yield* PluginHooks.Service
       const host = yield* PluginHost.make(plugin)
       yield* PluginPromise.fromPromise(
@@ -203,8 +202,8 @@ describe("fromPromise", () => {
         }),
       ).effect(host)
       const event: SessionHooks["context"] = {
-        sessionID: SessionV2.ID.make("ses_promise_session_context"),
-        agent: AgentV2.ID.make("build"),
+        sessionID: Session.ID.make("ses_promise_session_context"),
+        agent: Agent.ID.make("build"),
         model: Model.Ref.make({ providerID: Provider.ID.make("test"), id: Model.ID.make("model") }),
         system: [SystemPart.make("Initial")],
         messages: [Message.user("Hello")],
@@ -220,8 +219,8 @@ describe("fromPromise", () => {
 
   it.effect("disposes a hook registration on request", () =>
     Effect.gen(function* () {
-      const agents = yield* AgentV2.Service
-      const plugin = yield* PluginV2.Service
+      const agents = yield* Agent.Service
+      const plugin = yield* PluginRegistry.Service
       const host = yield* PluginHost.make(plugin)
 
       const promisePlugin = Plugin.define({
@@ -239,13 +238,13 @@ describe("fromPromise", () => {
       const adapted = PluginPromise.fromPromise(promisePlugin)
       yield* adapted.effect(host)
 
-      expect(yield* agents.get(AgentV2.ID.make("temp"))).toBeUndefined()
+      expect(yield* agents.get(Agent.ID.make("temp"))).toBeUndefined()
     }),
   )
 
   it.effect("runs the setup cleanup when the plugin scope closes", () =>
     Effect.gen(function* () {
-      const plugin = yield* PluginV2.Service
+      const plugin = yield* PluginRegistry.Service
       const host = yield* PluginHost.make(plugin)
       const events: string[] = []
       const promisePlugin = Plugin.define({
@@ -272,7 +271,7 @@ describe("fromPromise", () => {
 
   it.effect("constructs plain Promise tool declarations in the host", () =>
     Effect.gen(function* () {
-      const plugins = yield* PluginV2.Service
+      const plugins = yield* PluginRegistry.Service
       const registry = yield* ToolRegistry.Service
       const host = yield* PluginHost.make(plugins)
       const progress: ToolRegistry.Progress[] = []
@@ -301,8 +300,8 @@ describe("fromPromise", () => {
       expect(materialized.definitions).toContainEqual(expect.objectContaining({ name: "hello", description: "Hello" }))
       expect(
         yield* materialized.settle({
-          sessionID: SessionV2.ID.make("ses_promise_tool"),
-          agent: AgentV2.ID.make("build"),
+          sessionID: Session.ID.make("ses_promise_tool"),
+          agent: Agent.ID.make("build"),
           messageID: SessionMessage.ID.make("msg_promise_tool"),
           progress: (update) => Effect.sync(() => progress.push(update)),
           call: { type: "tool-call", id: "call_promise_tool", name: "hello", input: { name: "world" } },

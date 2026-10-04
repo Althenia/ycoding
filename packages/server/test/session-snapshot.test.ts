@@ -1,15 +1,15 @@
 import { expect, test } from "bun:test"
-import { SessionV2 } from "@ycoding-ai/core/session"
-import { EventV2 } from "@ycoding-ai/core/event"
-import { ProjectV2 } from "@ycoding-ai/core/project"
+import { Session } from "@ycoding-ai/core/session"
+import { EventRuntime } from "@ycoding-ai/core/event"
+import { Project } from "@ycoding-ai/core/project"
 import { Location } from "@ycoding-ai/core/location"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { DateTime, Effect, Schema } from "effect"
 import { sessionHttp, sessionHttpEpoch } from "./session-http"
 
-const sessionID = SessionV2.ID.make("ses_window_http")
+const sessionID = Session.ID.make("ses_window_http")
 
-function fixture(snapshot: SessionV2.Interface["snapshot"], attachmentRead?: SessionV2.Interface["attachmentRead"]) {
+function fixture(snapshot: Session.Interface["snapshot"], attachmentRead?: Session.Interface["attachmentRead"]) {
   const http = sessionHttp({ snapshot, attachmentRead })
   return {
     request: (query = "") => http.request(`/api/session/${sessionID}/snapshot${query}`),
@@ -22,16 +22,16 @@ test("snapshot HTTP forwards bounded window input, preserves watermark, and maps
   const received: unknown[] = []
   await using f = fixture((id, options) => {
     received.push([id, options])
-    if (options?.before === "invalid") return Effect.fail(new SessionV2.InvalidCursorError())
+    if (options?.before === "invalid") return Effect.fail(new Session.InvalidCursorError())
     return Effect.succeed({
-      session: SessionV2.Info.make({
-        id: sessionID, projectID: ProjectV2.ID.global, title: "Window", cost: Schema.decodeUnknownSync(SessionV2.Info.fields.cost)(0),
+      session: Session.Info.make({
+        id: sessionID, projectID: Project.ID.global, title: "Window", cost: Schema.decodeUnknownSync(Session.Info.fields.cost)(0),
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
         time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
         location: Location.Ref.make({ directory: AbsolutePath.make("/project") }),
       }),
       messages: [],
-      watermark: { type: "log.synced" as const, aggregateID: id, seq: EventV2.Seq.make(7) },
+      watermark: { type: "log.synced" as const, aggregateID: id, seq: EventRuntime.Seq.make(7) },
       ...(options?.limit === undefined ? {} : { before: "opaque_cursor" }),
     })
   })
@@ -54,8 +54,8 @@ test("attachment HTTP reads only a scoped digest and maps missing or oversized c
   const received: unknown[] = []
   await using f = fixture(() => Effect.die("unused"), (id, value) => {
     received.push([id, value])
-    if (value === "b".repeat(64)) return Effect.fail(new SessionV2.AttachmentReadError({ reason: "not-found" }))
-    if (value === "c".repeat(64)) return Effect.fail(new SessionV2.AttachmentReadError({ reason: "too-large" }))
+    if (value === "b".repeat(64)) return Effect.fail(new Session.AttachmentReadError({ reason: "not-found" }))
+    if (value === "c".repeat(64)) return Effect.fail(new Session.AttachmentReadError({ reason: "too-large" }))
     return Effect.succeed({ mime: "image/png", bytes: 3, data: "YWJj" })
   })
   const image = await f.attachmentRequest(digest)

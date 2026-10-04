@@ -13,11 +13,11 @@ import {
 } from "../theme"
 import { generateSystem, terminalMode } from "../theme/system"
 import { discoverThemes, themeDirectories } from "../theme/discovery"
-import { createComponentTheme, type ComponentTheme } from "../theme/v2/component"
-import type { ThemeFile } from "../theme/v2"
-import { resolveThemeFile } from "../theme/v2/resolve"
-import { generateSyntax } from "../theme/v2/syntax"
-import { themeModes } from "../theme/v2/select"
+import { createComponentTheme, type ComponentTheme } from "../theme/component"
+import type { ThemeFile } from "../theme"
+import { resolveThemeFile } from "../theme/resolve"
+import { generateSyntax } from "../theme/syntax"
+import { themeModes } from "../theme/select"
 import { createEffect, createMemo, onCleanup, onMount, type Accessor } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { createSimpleContext } from "./helper"
@@ -58,7 +58,7 @@ type State = {
 
 type ContextName = "elevated" | "overlay"
 type ThemeService = {
-  themeV2: ComponentTheme
+  theme: ComponentTheme
   contextual(context: ContextName): ThemeService
   readonly selected: string
   all: typeof allThemes
@@ -143,7 +143,7 @@ export const {
 
     onMount(() => {
       void Promise.allSettled([resolveSystemTheme(store.mode), syncCustomThemes()]).finally(() => {
-        valuesV2()
+        values()
         setStore("ready", true)
       })
     })
@@ -271,34 +271,34 @@ export const {
       if (supported.includes(store.mode)) return store.mode
       return supported[0] ?? store.mode
     }
-    const valuesV2 = createMemo(() => {
+    const values = createMemo(() => {
       const resolveStarted = performance.now()
       const result = resolveThemeFile(file(), mode(), sourceName())
       themePerformance.set("Resolve final theme", duration(performance.now() - resolveStarted))
       return result
     })
-    const themeV2 = createComponentTheme(valuesV2, mode)
-    const contextsV2 = {
+    const theme = createComponentTheme(values, mode)
+    const contexts = {
       elevated: createComponentTheme(() => {
-        const theme = valuesV2().contexts["@context:elevated"]
+        const theme = values().contexts["@context:elevated"]
         if (!theme) throw new Error("Theme context is not defined: elevated")
         return theme
       }, mode),
       overlay: createComponentTheme(() => {
-        const theme = valuesV2().contexts["@context:overlay"]
+        const theme = values().contexts["@context:overlay"]
         if (!theme) throw new Error("Theme context is not defined: overlay")
         return theme
       }, mode),
     }
 
-    createEffect(() => renderer.setBackgroundColor(valuesV2().background.default))
+    createEffect(() => renderer.setBackgroundColor(values().background.default))
 
-    const syntax = createSyntaxStyleMemo(() => generateSyntax(valuesV2(), mode()))
+    const syntax = createSyntaxStyleMemo(() => generateSyntax(values(), mode()))
     function contextual(context: ContextName) {
       return contextualServices[context]
     }
     const service: ThemeService = {
-      themeV2,
+      theme,
       contextual,
       get selected() {
         return store.active
@@ -332,8 +332,8 @@ export const {
       },
     }
     const contextualServices = {
-      elevated: Object.assign(Object.create(service) as ThemeService, { themeV2: contextsV2.elevated }),
-      overlay: Object.assign(Object.create(service) as ThemeService, { themeV2: contextsV2.overlay }),
+      elevated: Object.assign(Object.create(service) as ThemeService, { theme: contexts.elevated }),
+      overlay: Object.assign(Object.create(service) as ThemeService, { theme: contexts.overlay }),
     }
     return service
   },

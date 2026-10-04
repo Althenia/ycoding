@@ -9,7 +9,7 @@ import { FSUtil } from "../fs-util"
 import { Location } from "../location"
 import { Ripgrep } from "../ripgrep"
 import { RelativePath } from "../schema"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { Tool } from "./tool"
 
 export const name = "glob"
@@ -40,7 +40,7 @@ export const Plugin = {
     const fs = yield* FSUtil.Service
     const ripgrep = yield* Ripgrep.Service
     const location = yield* Location.Service
-    const permission = yield* PermissionV2.Service
+    const permission = yield* Permission.Service
 
     yield* ctx.tool
       .transform((draft) =>

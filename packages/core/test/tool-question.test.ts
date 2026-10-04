@@ -2,10 +2,10 @@ import { describe, expect } from "bun:test"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Form } from "@ycoding-ai/core/form"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Permission } from "@ycoding-ai/core/permission"
+import { Session } from "@ycoding-ai/core/session"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { QuestionTool } from "@ycoding-ai/core/tool/question"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
@@ -15,8 +15,8 @@ import { imagePassthrough } from "./lib/image"
 import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
 import { toolIdentity, executeTool, registerToolPlugin, settleTool, toolDefinitions } from "./lib/tool"
 
-const sessionID = SessionV2.ID.make("ses_question_tool_test")
-const assertions: PermissionV2.AssertInput[] = []
+const sessionID = Session.ID.make("ses_question_tool_test")
+const assertions: Permission.AssertInput[] = []
 let captured: Form.CreateInput | undefined
 let reject = false
 let deny = false
@@ -31,15 +31,15 @@ const questionInput = {
   ],
 }
 const permission = Layer.succeed(
-  PermissionV2.Service,
-  PermissionV2.Service.of({
-    evaluateEffective: () => Effect.die(new Error("unused PermissionV2.evaluateEffective")),
+  Permission.Service,
+  Permission.Service.of({
+    evaluateEffective: () => Effect.die(new Error("unused Permission.evaluateEffective")),
     assert: (input) =>
       Effect.sync(() => assertions.push(input)).pipe(
         Effect.andThen(
           deny
             ? Effect.fail(
-                new PermissionV2.BlockedError({
+                new Permission.BlockedError({
                   rules: [],
                   permission: input.action,
                   resources: input.resources,
@@ -80,12 +80,12 @@ const form = Layer.succeed(
 const questionToolNode = makeLocationNode({
   name: "test/question-tool-plugin",
   layer: Layer.effectDiscard(registerToolPlugin(QuestionTool.Plugin)),
-  deps: [ToolRegistry.toolsNode, PermissionV2.node, Form.node],
+  deps: [ToolRegistry.toolsNode, Permission.node, Form.node],
 })
 
 const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, questionToolNode]), [
-    [PermissionV2.node, permission],
+    [Permission.node, permission],
     [Form.node, form],
     [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
     [Image.node, imagePassthrough],
@@ -93,9 +93,9 @@ const it = testEffect(
 )
 const withForms = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, questionToolNode, Form.node, EventV2.node]),
+    LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, questionToolNode, Form.node, EventRuntime.node]),
     [
-      [PermissionV2.node, permission],
+      [Permission.node, permission],
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
       [Image.node, imagePassthrough],
     ],
@@ -108,7 +108,7 @@ describe("QuestionTool", () => {
       deny = false
       const registry = yield* ToolRegistry.Service
       const forms = yield* Form.Service
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const created = yield* Deferred.make<Form.Info>()
       const unsubscribe = yield* events.listen((event) =>
         event.type === Form.Event.Created.type

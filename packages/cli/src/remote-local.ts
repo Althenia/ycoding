@@ -7,7 +7,7 @@ import {
   type FormInfo,
   type AgentInfo,
   type ModelInfo,
-  type ProviderV2Info,
+  type ProviderInfo,
   type CommandInfo,
   type SkillInfo,
   type ReferenceInfo,
@@ -91,7 +91,7 @@ export type LocalServer = {
   readonly agentList: (location: LocalLocation) => Promise<readonly AgentInfo[]>
   readonly modelList: (location: LocalLocation) => Promise<readonly ModelInfo[]>
   readonly modelDefault: (location: LocalLocation) => Promise<ModelInfo | null>
-  readonly providerList: (location: LocalLocation) => Promise<readonly ProviderV2Info[]>
+  readonly providerList: (location: LocalLocation) => Promise<readonly ProviderInfo[]>
   readonly commandList: (location: LocalLocation) => Promise<readonly CommandInfo[]>
   readonly skillList: (location: LocalLocation) => Promise<readonly SkillInfo[]>
   readonly referenceList: (location: LocalLocation) => Promise<readonly ReferenceInfo[]>

@@ -48,15 +48,15 @@ const upgrade = {
   "sec-websocket-version": "13",
   "sec-websocket-key": btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))),
 }
-const agentSocket = await fetch(`${origin}/ws/v3/agent`, { headers: upgrade })
-expect(agentSocket.status === 401, `/ws/v3/agent without a credential returned ${agentSocket.status}`)
-checks.push("GET /ws/v3/agent without credential 401")
+const agentSocket = await fetch(`${origin}/ws/v4/agent`, { headers: upgrade })
+expect(agentSocket.status === 401, `/ws/v4/agent without a credential returned ${agentSocket.status}`)
+checks.push("GET /ws/v4/agent without credential 401")
 
-const clientSocket = await fetch(`${origin}/ws/v3/client?device=dev_unknown`, { headers: upgrade })
-expect(clientSocket.status === 403, `/ws/v3/client without an Origin returned ${clientSocket.status}`)
-checks.push("GET /ws/v3/client without Origin 403")
+const clientSocket = await fetch(`${origin}/ws/v4/client?device=dev_unknown`, { headers: upgrade })
+expect(clientSocket.status === 403, `/ws/v4/client without an Origin returned ${clientSocket.status}`)
+checks.push("GET /ws/v4/client without Origin 403")
 
-for (const retired of ["/ws/smoke/agent", "/ws/smoke/client", "/ws"])
+for (const retired of ["/ws/v3/agent", "/ws/v3/client", "/ws/smoke/agent", "/ws/smoke/client", "/ws"])
   expect((await fetch(`${origin}${retired}`)).status === 404, `${retired} is still routed`)
 checks.push("no unauthenticated relay route")
 

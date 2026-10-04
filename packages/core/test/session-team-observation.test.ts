@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
-import { AgentV2 } from "@ycoding-ai/core/agent"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Agent } from "@ycoding-ai/core/agent"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { renderTeamObservation, renderTeamView } from "@ycoding-ai/core/session/orchestration-view"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { QuestionID, Task } from "@ycoding-ai/schema/session-orchestration"
@@ -10,8 +10,8 @@ const task = Task.make({
   sessionID: SessionSchema.ID.make("ses_review"),
   parentID: SessionSchema.ID.make("ses_parent"),
   description: "Review changes",
-  agent: AgentV2.ID.make("build"),
-  model: ModelV2.Ref.make({ providerID: ProviderV2.ID.make("fake"), id: ModelV2.ID.make("fake-model") }),
+  agent: Agent.ID.make("build"),
+  model: CatalogModel.Ref.make({ providerID: Provider.ID.make("fake"), id: CatalogModel.ID.make("fake-model") }),
   background: true,
   state: "running",
   progress: { text: "Checking tests", time: 1 },

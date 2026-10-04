@@ -7,12 +7,12 @@ import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { Global } from "@ycoding-ai/core/global"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigToolOutput } from "@ycoding-ai/core/config/tool-output"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { testEffect } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
 
-const sessionID = SessionV2.ID.make("ses_tool_output_store")
+const sessionID = Session.ID.make("ses_tool_output_store")
 
 const withStore = <A, E, R>(
   body: (input: { root: string; store: ToolOutputStore.Interface; fs: FSUtil.Interface }) => Effect.Effect<A, E, R>,

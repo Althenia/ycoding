@@ -6,7 +6,7 @@ import { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
 import { AppNodeBuilder } from "../src/effect/app-node-builder"
 import { LayerNode } from "../src/effect/layer-node"
 import { Database } from "../src/database/database"
-import { EventV2 } from "../src/event"
+import { EventRuntime } from "../src/event"
 import { EventSequenceTable, EventTable } from "../src/event/sql"
 import { LocationServiceMap } from "../src/location-service-map"
 import type { LocationServices } from "../src/location-services"
@@ -1014,7 +1014,7 @@ describe("ContextManifest activation integration", () => {
       }).pipe(
         Effect.scoped,
         Effect.provide(
-          AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionContextState.node]), [
+          AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionContextState.node]), [
             [LocationServiceMap.node, contextLocations],
           ]),
         ),
@@ -1099,7 +1099,7 @@ describe("ContextManifest activation integration", () => {
       }).pipe(
         Effect.scoped,
         Effect.provide(
-          AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionContextState.node]), [
+          AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionContextState.node]), [
             [LocationServiceMap.node, contextLocations],
           ]),
         ),
@@ -1139,7 +1139,7 @@ describe("ContextManifest activation integration", () => {
       }).pipe(
         Effect.scoped,
         Effect.provide(
-          AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionContextState.node]), [
+          AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionContextState.node]), [
             [LocationServiceMap.node, contextLocations],
           ]),
         ),
@@ -1174,7 +1174,7 @@ describe("ContextManifest activation integration", () => {
       }).pipe(
         Effect.scoped,
         Effect.provide(
-          AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionContextState.node]), [
+          AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionContextState.node]), [
             [LocationServiceMap.node, contextLocations],
           ]),
         ),
@@ -1205,7 +1205,7 @@ describe("ContextManifest activation integration", () => {
       }).pipe(
         Effect.scoped,
         Effect.provide(
-          AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionContextState.node]), [
+          AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionContextState.node]), [
             [LocationServiceMap.node, contextLocations],
           ]),
         ),
@@ -1273,7 +1273,7 @@ describe("ContextManifest activation integration", () => {
       }).pipe(
         Effect.scoped,
         Effect.provide(
-          AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionContextState.node]), [
+          AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionContextState.node]), [
             [LocationServiceMap.node, contextLocations],
           ]),
         ),
@@ -1340,7 +1340,7 @@ describe("ContextManifest activation integration", () => {
         Effect.scoped,
         Effect.provide(
           AppNodeBuilder.build(
-            LayerNode.group([Database.node, EventV2.node, SessionCompactionJob.node, SessionContextState.node]),
+            LayerNode.group([Database.node, EventRuntime.node, SessionCompactionJob.node, SessionContextState.node]),
             [[LocationServiceMap.node, contextLocations]],
           ),
         ),

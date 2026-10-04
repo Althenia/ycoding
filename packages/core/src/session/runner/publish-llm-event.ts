@@ -1,14 +1,14 @@
 import { ToolOutput, type LLMEvent, type ProviderMetadata, type ToolResultValue } from "@ycoding-ai/ai"
 import { Effect } from "effect"
-import { EventV2 } from "../../event"
-import { ModelV2 } from "../../model"
+import { EventRuntime } from "../../event"
+import { CatalogModel } from "../../model"
 import { SessionEvent } from "../event"
 import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
 import { SessionError } from "@ycoding-ai/schema/session-error"
 import { Session } from "@ycoding-ai/schema/session"
 import { Money } from "@ycoding-ai/schema/money"
-import { AgentV2 } from "../../agent"
+import { Agent } from "../../agent"
 import { Snapshot } from "../../snapshot"
 import { RelativePath } from "../../schema"
 import { SessionUsage } from "../usage"
@@ -16,8 +16,8 @@ import type { ContextBreakdown } from "@ycoding-ai/schema/session-cache-diagnost
 
 type Input = {
   readonly sessionID: SessionSchema.ID
-  readonly agent: AgentV2.ID
-  readonly model: ModelV2.Ref
+  readonly agent: Agent.ID
+  readonly model: CatalogModel.Ref
   readonly providerMetadataKey: string
   readonly snapshot?: Snapshot.ID
   readonly assistantMessageID?: SessionMessage.ID
@@ -80,7 +80,7 @@ const fileChanges = (tool: string, structured: Record<string, unknown>) => {
 }
 
 /** Persist one step without executing tools or starting a continuation step. */
-export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish">, input: Input) => {
+export const createLLMEventPublisher = (events: Pick<EventRuntime.Interface, "publish">, input: Input) => {
   const tools = new Map<
     string,
     {

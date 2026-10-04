@@ -42,7 +42,7 @@ export function SessionIsolatedBrowserCommand(props: Props) {
 export function DialogChromeConnection(props: { sessionID: string }) {
   const client = useClient()
   const dialog = useDialog()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const baseUrl = client.baseUrl()
   const address = baseUrl && URL.canParse(baseUrl) ? new URL(baseUrl) : undefined
   const localAddress =
@@ -189,7 +189,7 @@ export function DialogChromeConnection(props: { sessionID: string }) {
             </box>
           )}
         </Show>
-        <text fg={themeV2.text.subdued} wrapMode="word">
+        <text fg={theme.text.subdued} wrapMode="word">
           Pairing lets YCoding use eligible Chrome tabs, including the active tab. Model actions still require site
           permission.
         </text>
@@ -208,7 +208,7 @@ export function DialogChromeConnection(props: { sessionID: string }) {
           {(code) => <text wrapMode="word">Pairing code (expires in two minutes): {code()}</text>}
         </Show>
         <Show when={failure()}>
-          <text fg={themeV2.text.feedback.error.default}>
+          <text fg={theme.text.feedback.error.default}>
             Unable to load or create Chrome pairing. Press r to refresh.
           </text>
         </Show>
@@ -229,7 +229,7 @@ export function DialogChromeConnection(props: { sessionID: string }) {
 export function DialogSessionBrowser(props: Props) {
   const client = useClient()
   const dialog = useDialog()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const [status, setStatus] = createSignal<IsolatedBrowserStatus>()
   const [loading, setLoading] = createSignal(true)
   const [failure, setFailure] = createSignal<string>()
@@ -387,39 +387,39 @@ export function DialogSessionBrowser(props: Props) {
     <box paddingBottom={1} flexDirection="column">
       <DialogHeader title={<DialogTitle>Isolated browser</DialogTitle>} />
       <box paddingLeft={4} paddingRight={4} paddingTop={1} gap={1} flexDirection="column">
-        <text fg={themeV2.text.feedback.warning.default} wrapMode="word">
+        <text fg={theme.text.feedback.warning.default} wrapMode="word">
           Temporary disposable Chrome profile. Do not sign in to personal accounts; closing this dialog does not stop
           it.
         </text>
-        <text fg={themeV2.text.subdued} wrapMode="word">
+        <text fg={theme.text.subdued} wrapMode="word">
           Isolated mode only. It never uses or changes selected-extension pairing. Stop it before switching browser
           modes in this Session.
         </text>
-        <text attributes={TextAttributes.BOLD} fg={themeV2.text.default}>
+        <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
           {stateLabel()}
         </text>
         <Show when={target()}>{(value) => <text wrapMode="word">Target {value()}</text>}</Show>
         <Show when={status()?.state === "paused"}>
-          <text fg={themeV2.text.feedback.warning.default} wrapMode="word">
+          <text fg={theme.text.feedback.warning.default} wrapMode="word">
             Pause blocks new actions; in-flight work and page scripts may continue. Stop to end the browser.
           </text>
         </Show>
         <Show when={conflict()}>
-          <text fg={themeV2.text.feedback.error.default} wrapMode="word">
+          <text fg={theme.text.feedback.error.default} wrapMode="word">
             Selected extension mode conflicts with isolated mode. Stop before switching modes in this Session.
           </text>
         </Show>
         <Show when={tabUncertain()}>
-          <text fg={themeV2.text.feedback.warning.default} wrapMode="word">
+          <text fg={theme.text.feedback.warning.default} wrapMode="word">
             Current tab is stale or unreported. Stop and start fresh before browser actions.
           </text>
         </Show>
         <Show when={notice()}>
-          <text fg={themeV2.text.feedback.warning.default} wrapMode="word">
+          <text fg={theme.text.feedback.warning.default} wrapMode="word">
             {notice()}
           </text>
         </Show>
-        <Show when={failure()}>{(message) => <text fg={themeV2.text.feedback.error.default}>{message()}</text>}</Show>
+        <Show when={failure()}>{(message) => <text fg={theme.text.feedback.error.default}>{message()}</text>}</Show>
         <box flexDirection="row" gap={2} paddingTop={1}>
           <Show when={canStart()}>
             <text>
@@ -450,7 +450,7 @@ export function DialogSessionBrowser(props: Props) {
 function DialogIsolatedBrowserStart(props: Omit<Props, "notice">) {
   const client = useClient()
   const dialog = useDialog()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const [busy, setBusy] = createSignal(false)
   const [stopping, setStopping] = createSignal(false)
   const [error, setError] = createSignal<string>()
@@ -514,11 +514,11 @@ function DialogIsolatedBrowserStart(props: Omit<Props, "notice">) {
       onConfirm={start}
       description={() => (
         <box flexDirection="column" paddingBottom={1}>
-          <text fg={themeV2.text.feedback.warning.default} wrapMode="word">
+          <text fg={theme.text.feedback.warning.default} wrapMode="word">
             Uses a fresh temporary Chrome profile. Do not sign in to personal accounts. Nothing is persisted
             intentionally.
           </text>
-          <Show when={error()}>{(message) => <text fg={themeV2.text.feedback.error.default}>{message()}</text>}</Show>
+          <Show when={error()}>{(message) => <text fg={theme.text.feedback.error.default}>{message()}</text>}</Show>
         </box>
       )}
     />

@@ -1,4 +1,4 @@
-import { AgentV2 } from "../agent"
+import { Agent } from "../agent"
 import { Database } from "../database/database"
 import { SessionSchema } from "./schema"
 import { SessionTaskTable } from "./sql"
@@ -83,7 +83,7 @@ export const taskFromRow = (row: typeof SessionTaskTable.$inferSelect): Task =>
     sessionID: row.session_id,
     parentID: row.parent_id,
     description: row.description,
-    agent: AgentV2.ID.make(row.agent),
+    agent: Agent.ID.make(row.agent),
     model: row.model,
     background: row.background,
     state: row.state,

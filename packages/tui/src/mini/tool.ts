@@ -157,7 +157,7 @@ function text(v: unknown): string {
 }
 
 export function toolOutputText(name: string, content: ReadonlyArray<{ type: string; text?: string }>) {
-  // V2 shell content appends model-only status after the user-visible command output.
+  // Shell content appends model-only status after the user-visible command output.
   if (canonicalToolName(name) === "shell") return content.find((item) => item.type === "text")?.text ?? ""
   return content.flatMap((item) => (item.type === "text" && item.text ? [item.text] : [])).join("\n")
 }

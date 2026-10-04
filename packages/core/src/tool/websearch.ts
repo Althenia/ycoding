@@ -7,7 +7,7 @@ import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { makeLocationNode } from "../effect/app-node"
 import { InstallationVersion } from "../installation/version"
 import { PositiveInt } from "../schema"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { Tool } from "./tool"
 import { collectBoundedResponseBody } from "./http-body"
 import { checksum } from "../util/encode"
@@ -21,7 +21,7 @@ export const MAX_CONTEXT_CHARACTERS = 50_000
 export const MAX_RESPONSE_BYTES = 256 * 1024
 
 /**
- * Provider-independent local web search retained in V2 core for launch parity.
+ * Provider-independent local web search.
  * This invokes the legacy Exa/Parallel product backends itself. It is distinct
  * from provider-hosted web search tools, which remain route-owned and execute
  * at the model provider. Ownership of this compromise can be revisited later.
@@ -64,7 +64,7 @@ export interface Config {
   readonly parallelApiKey?: string
 }
 
-export class ConfigService extends Context.Service<ConfigService, Config>()("@ycoding/v2/WebSearchConfig") {}
+export class ConfigService extends Context.Service<ConfigService, Config>()("@ycoding/WebSearchConfig") {}
 
 /** Isolates the retained product environment contract from the generic tool implementation. */
 export const defaultConfigLayer = Layer.sync(ConfigService, () =>
@@ -196,7 +196,7 @@ export const Plugin = {
   effect: Effect.fn("WebSearchTool.Plugin")(function* (ctx: PluginContext) {
     const http = yield* HttpClient.HttpClient
     const config = yield* ConfigService
-    const permission = yield* PermissionV2.Service
+    const permission = yield* Permission.Service
 
     yield* ctx.tool
       .transform((draft) =>
@@ -238,7 +238,7 @@ export const Plugin = {
                           objective: input.query,
                           search_queries: [input.query],
                           session_id: context.sessionID,
-                          // V2 invocation context does not safely expose the model yet.
+                          // Invocation context does not safely expose the model yet.
                         },
                         {
                           "User-Agent": `ycoding/${InstallationVersion}`,

@@ -28,7 +28,7 @@ export const ProviderUsageGroup = HttpApiGroup.make("server.providerUsage")
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.providerUsage.list",
+          identifier: "providerUsage.list",
           summary: "List provider usage",
           description: "Retrieve normalized quota and credit snapshots for configured providers.",
         }),
@@ -44,7 +44,7 @@ export const ProviderUsageGroup = HttpApiGroup.make("server.providerUsage")
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.providerUsage.get",
+          identifier: "providerUsage.get",
           summary: "Get provider usage",
           description: "Retrieve one normalized provider quota snapshot.",
         }),

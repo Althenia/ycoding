@@ -5,7 +5,7 @@ import type { Disp, Proc } from "#pty"
 import { Context, Effect, Layer, Schema, Types } from "effect"
 import { Pty } from "@ycoding-ai/schema/pty"
 import { Config } from "./config"
-import { EventV2 } from "./event"
+import { EventRuntime } from "./event"
 import { Location } from "./location"
 import { PtyID } from "./pty/schema"
 import { ShellSelect } from "./shell/select"
@@ -133,12 +133,12 @@ export interface Interface {
   ) => Effect.Effect<Attachment, NotFoundError | OwnershipError | ExitedError | FenceError | ResourceLimitError>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/Pty") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/Pty") {}
 
 export const layer = (options?: ShellSelect.Options) => Layer.effect(
   Service,
   Effect.gen(function* () {
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const location = yield* Location.Service
     const config = yield* Config.Service
     const context = yield* Effect.context()
@@ -484,7 +484,7 @@ export const layer = (options?: ShellSelect.Options) => Layer.effect(
 )
 
 export function configured(options?: ShellSelect.Options) {
-  return makeLocationNode({ service: Service, layer: layer(options), deps: [EventV2.node, Location.node, Config.node] })
+  return makeLocationNode({ service: Service, layer: layer(options), deps: [EventRuntime.node, Location.node, Config.node] })
 }
 
 export const node = configured()

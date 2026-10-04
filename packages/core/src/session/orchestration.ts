@@ -10,18 +10,18 @@ import {
   type Change,
   type State,
 } from "@ycoding-ai/schema/session-orchestration"
-import { AgentV2 } from "../agent"
+import { Agent } from "../agent"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { KeyedMutex } from "../effect/keyed-mutex"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { Hash } from "../util/hash"
 import { canonicalJSON } from "./context-manifest"
 import { Context, Effect, Layer, Schema } from "effect"
 import { SqlError } from "effect/unstable/sql/SqlError"
 import { and, asc, count, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm"
-import { SessionV2 } from "../session"
+import { Session } from "../session"
 import { SessionExecution } from "./execution"
 import { SessionAutonomy } from "./autonomy"
 import { SessionEvent } from "./event"
@@ -89,7 +89,7 @@ export const page = Effect.fn("SessionOrchestration.page")(function* (
           .where(eq(SessionTable.id, input.parentID))
           .get()
           .pipe(Effect.orDie)
-        if (!parent) return yield* new SessionV2.NotFoundError({ sessionID: input.parentID })
+        if (!parent) return yield* new Session.NotFoundError({ sessionID: input.parentID })
 
         const summary = yield* db
           .select({
@@ -190,7 +190,7 @@ export const snapshot = Effect.fn("SessionOrchestration.snapshot")(function* (
           .where(eq(SessionTable.id, parentID))
           .get()
           .pipe(Effect.orDie)
-        if (!parent) return yield* new SessionV2.NotFoundError({ sessionID: parentID })
+        if (!parent) return yield* new Session.NotFoundError({ sessionID: parentID })
         const versions = yield* db
           .select({ sessionID: SessionTaskTable.session_id, revision: SessionTaskTable.revision })
           .from(SessionTaskTable)
@@ -239,7 +239,7 @@ export class QuestionNotFoundError extends Schema.TaggedErrorClass<QuestionNotFo
 ) {}
 
 export interface ModelSource {
-  readonly agent: AgentV2.ID
+  readonly agent: Agent.ID
   readonly messageID: SessionMessage.ID
   readonly callID: string
 }
@@ -248,7 +248,7 @@ export interface LaunchInput {
   readonly parentID: SessionSchema.ID
   readonly parentAssistantMessageID: SessionMessage.ID
   readonly toolCallID: string
-  readonly agent: AgentV2.ID
+  readonly agent: Agent.ID
   readonly description: string
   readonly prompt: string
   readonly background: boolean
@@ -257,16 +257,16 @@ export interface LaunchInput {
 }
 
 export interface Prepared {
-  readonly target: AgentV2.Info
-  readonly caller: AgentV2.Info
+  readonly target: Agent.Info
+  readonly caller: Agent.Info
   readonly resolved: SessionRunnerModel.Resolved
 }
 
 export const preflight = Effect.fn("SessionOrchestration.preflight")(function* (
   parent: SessionSchema.Info,
-  input: { readonly agent: AgentV2.ID; readonly model?: Model.Ref; readonly caller?: AgentV2.ID },
+  input: { readonly agent: Agent.ID; readonly model?: Model.Ref; readonly caller?: Agent.ID },
 ) {
-  const agents = yield* AgentV2.Service
+  const agents = yield* Agent.Service
   const target = yield* agents.resolve(input.agent)
   if (!target) return yield* new InvalidRequestError({ message: `Unknown agent: ${input.agent}` })
   if (target.mode === "primary")
@@ -282,10 +282,10 @@ export const preflight = Effect.fn("SessionOrchestration.preflight")(function* (
 
 export const authorize = Effect.fn("SessionOrchestration.authorize")(function* (
   parentID: SessionSchema.ID,
-  target: AgentV2.ID,
+  target: Agent.ID,
   source: ModelSource,
 ) {
-  const permission = yield* PermissionV2.Service
+  const permission = yield* Permission.Service
   yield* permission.assert({
     action: "subagent",
     resources: [target],
@@ -301,14 +301,14 @@ export interface Interface {
   readonly get: (
     parentID: SessionSchema.ID,
     childID: SessionSchema.ID,
-  ) => Effect.Effect<Task, SessionV2.NotFoundError | NotFoundError | ForbiddenError>
+  ) => Effect.Effect<Task, Session.NotFoundError | NotFoundError | ForbiddenError>
   readonly launch: (input: LaunchInput) => Effect.Effect<Task, LaunchError>
-  readonly list: (parentID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Task>, SessionV2.NotFoundError>
+  readonly list: (parentID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Task>, Session.NotFoundError>
   readonly page: (input: {
     readonly parentID: SessionSchema.ID
     readonly limit?: number
     readonly cursor?: ListAnchor
-  }) => Effect.Effect<Page, SessionV2.NotFoundError>
+  }) => Effect.Effect<Page, Session.NotFoundError>
   readonly send: (input: {
     readonly parentID: SessionSchema.ID
     readonly childID: SessionSchema.ID
@@ -347,12 +347,12 @@ export interface Interface {
   readonly background: (childID: SessionSchema.ID) => Effect.Effect<Task, TaskNotFoundError | ConflictError>
   readonly teamView: (
     parentID: SessionSchema.ID,
-  ) => Effect.Effect<ReturnType<typeof renderTeamView>, SessionV2.NotFoundError>
+  ) => Effect.Effect<ReturnType<typeof renderTeamView>, Session.NotFoundError>
   readonly recover: Effect.Effect<void>
 }
 
 export type Error =
-  | SessionV2.NotFoundError
+  | Session.NotFoundError
   | NotFoundError
   | TaskNotFoundError
   | ForbiddenError
@@ -360,22 +360,22 @@ export type Error =
   | InvalidRequestError
   | ServiceUnavailableError
   | QuestionNotFoundError
-  | PermissionV2.Error
+  | Permission.Error
 
-export type OwnershipError = SessionV2.NotFoundError | NotFoundError | ForbiddenError
-export type LaunchError = SessionV2.NotFoundError | ConflictError | InvalidRequestError
+export type OwnershipError = Session.NotFoundError | NotFoundError | ForbiddenError
+export type LaunchError = Session.NotFoundError | ConflictError | InvalidRequestError
 export type ControlError = OwnershipError | ConflictError
 export type AnswerError = ControlError | InvalidRequestError | QuestionNotFoundError
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionOrchestration") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionOrchestration") {}
 
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const execution = yield* SessionExecution.Service
-    const sessions = yield* SessionV2.Service
+    const sessions = yield* Session.Service
     const autonomy = yield* SessionAutonomy.Service
     const locks = KeyedMutex.makeUnsafe<SessionSchema.ID>()
 
@@ -409,7 +409,7 @@ const layer = Layer.effect(
       events.publish(
         SessionEvent.Task.Updated,
         { sessionID: childID, change },
-        { id: id ? EventV2.ID.make(id) : undefined },
+        { id: id ? EventRuntime.ID.make(id) : undefined },
       )
 
     const current = Effect.fn("SessionOrchestration.current")(function* (childID: SessionSchema.ID) {
@@ -816,5 +816,5 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [Database.node, EventV2.node, SessionAutonomy.node, SessionExecution.node, SessionV2.node],
+  deps: [Database.node, EventRuntime.node, SessionAutonomy.node, SessionExecution.node, Session.node],
 })

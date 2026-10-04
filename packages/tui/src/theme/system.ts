@@ -1,6 +1,6 @@
 import { RGBA, type TerminalColors } from "@opentui/core"
 import { ansiToRgba, tint } from "./color"
-import type { HueStep, ThemeFile } from "./v2"
+import type { HueStep, ThemeFile } from "./schema"
 
 const steps = [100, 200, 300, 400, 500, 600, 700, 800, 900] as const satisfies readonly HueStep[]
 

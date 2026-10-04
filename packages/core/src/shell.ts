@@ -10,7 +10,7 @@ import { makeLocationNode } from "./effect/app-node"
 import { AppProcess } from "./process"
 import { Config } from "./config"
 import { ConfigShell } from "./config/shell"
-import { EventV2 } from "./event"
+import { EventRuntime } from "./event"
 import { Location } from "./location"
 import { Global } from "./global"
 import { ShellSandbox } from "./shell-sandbox"
@@ -154,13 +154,13 @@ export interface Interface {
   readonly remove: (id: Shell.ID) => Effect.Effect<void, NotFoundError>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/Shell") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/Shell") {}
 
 export const layer = (options?: ShellSelect.Options) =>
   Layer.effect(
     Service,
     Effect.gen(function* () {
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const location = yield* Location.Service
       const config = yield* Config.Service
       const global = yield* Global.Service
@@ -551,7 +551,7 @@ export function configured(options?: ShellSelect.Options) {
   return makeLocationNode({
     service: Service,
     layer: layer(options),
-    deps: [EventV2.node, Location.node, Config.node, Global.node, AppProcess.node, ShellSandbox.node],
+    deps: [EventRuntime.node, Location.node, Config.node, Global.node, AppProcess.node, ShellSandbox.node],
   })
 }
 

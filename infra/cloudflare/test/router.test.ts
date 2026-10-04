@@ -718,11 +718,33 @@ describe("router: websocket upgrades", () => {
     expect(h.relayCalls).toEqual([])
   })
 
-  test("rejects missing, old, and unknown WebSocket protocol routes before upgrade", async () => {
+  test("rejects missing and unknown WebSocket protocol routes before upgrade", async () => {
     const h = await harness()
-    for (const path of ["/ws/client", "/ws/agent", "/ws/v1/client", "/ws/v1/agent", "/ws/v2/client", "/ws/v2/agent", "/ws/v4/client", "/ws/v4/agent"])
+    for (const path of ["/ws/client", "/ws/agent", "/ws/v1/client", "/ws/v1/agent", "/ws/v2/client", "/ws/v2/agent", "/ws/v5/client", "/ws/v5/agent"])
       expect((await h.router(new Request(`${origin}${path}`, { headers: { upgrade: "websocket" } }))).status).toBe(404)
     expect(h.relayCalls).toEqual([])
+  })
+
+  test("rejects v3 and forwards only authenticated v4 browser and agent sockets", async () => {
+    const h = await harness()
+    const owner = await signIn(h, "version-owner")
+    const device = await enrollDevice(h, owner.userID)
+    const issued = await h.service.issueCredentials(device.deviceID)
+    if (!issued.ok) throw new Error("issue failed")
+    const clientHeaders = { upgrade: "websocket", origin, ...sessionCookie(owner.token) }
+    const agentHeaders = { upgrade: "websocket", authorization: `Bearer ${issued.value.accessToken}` }
+
+    const statuses = [
+      (await h.router(new Request(`${origin}/ws/v3/client?device=${device.deviceID}`, { headers: clientHeaders }))).status,
+      (await h.router(new Request(`${origin}/ws/v3/agent`, { headers: agentHeaders }))).status,
+      (await h.router(new Request(`${origin}/ws/v4/client?device=${device.deviceID}`, { headers: clientHeaders }))).status,
+      (await h.router(new Request(`${origin}/ws/v4/agent`, { headers: agentHeaders }))).status,
+    ]
+    expect(statuses).toEqual([404, 404, 200, 200])
+    expect(h.relayCalls.map((call) => ({ name: call.name, role: call.request.headers.get("x-ycoding-role") }))).toEqual([
+      { name: `${owner.userID}:${device.deviceID}`, role: "client" },
+      { name: `${owner.userID}:${device.deviceID}`, role: "agent" },
+    ])
   })
 })
 

@@ -2,23 +2,22 @@ import path from "path"
 import { describe, expect } from "bun:test"
 import { NodeFileSystem } from "@effect/platform-node"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
-import { Session } from "@ycoding-ai/schema/session"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigGuardrail } from "@ycoding-ai/core/config/guardrail"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { Global } from "@ycoding-ai/core/global"
 import { Location } from "@ycoding-ai/core/location"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { PermissionSaved } from "@ycoding-ai/core/permission/saved"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
@@ -91,7 +90,7 @@ function harness(input?: {
         ),
       ),
     ),
-    Layer.mock(EventV2.Service, {
+    Layer.mock(EventRuntime.Service, {
       publish: (definition, data) => {
         const gated = definition.type === Guardrail.Event.Replied.type && input?.replyGate && !replyGated
         if (gated) replyGated = true
@@ -104,10 +103,10 @@ function harness(input?: {
             : Effect.void
         ).pipe(
           Effect.as({
-            id: EventV2.ID.create(),
+            id: EventRuntime.ID.create(),
             type: definition.type,
             data,
-          } as EventV2.Payload<typeof definition>),
+          } as EventRuntime.Payload<typeof definition>),
         )
       },
     }),
@@ -161,7 +160,7 @@ function reject(service: SessionGuardrail.Interface, input: SessionGuardrail.Eva
   })
 }
 
-const autonomousSessionID = SessionV2.ID.make("ses_guardrail_service_autonomous")
+const autonomousSessionID = Session.ID.make("ses_guardrail_service_autonomous")
 const autonomousLocation = Layer.succeed(
   Location.Service,
   Location.Service.of(location({ directory: AbsolutePath.make("/project") })),
@@ -170,12 +169,12 @@ const autonomousRuntime = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       Database.node,
-      EventV2.node,
+      EventRuntime.node,
       SessionStore.node,
       SessionAutonomy.node,
       PermissionSaved.node,
-      AgentV2.node,
-      PermissionV2.node,
+      Agent.node,
+      Permission.node,
       SessionGuardrail.node,
     ]),
     [[Location.node, autonomousLocation]],
@@ -254,15 +253,15 @@ autonomousRuntime.effect(
         .onConflictDoNothing()
         .run()
         .pipe(Effect.orDie)
-      const agents = yield* AgentV2.Service
+      const agents = yield* Agent.Service
       yield* agents.transform((editor) =>
-        editor.update(AgentV2.ID.make("guardrail-autonomy-test"), (agent) => {
+        editor.update(Agent.ID.make("guardrail-autonomy-test"), (agent) => {
           agent.permissions = []
         }),
       )
       const autonomy = yield* SessionAutonomy.Service
-      const events = yield* EventV2.Service
-      const permission = yield* PermissionV2.Service
+      const events = yield* EventRuntime.Service
+      const permission = yield* Permission.Service
       const guardrail = yield* SessionGuardrail.Service
 
       for (const mode of ["yolo", "goal"] as const) {
@@ -333,7 +332,7 @@ autonomousRuntime.effect("requires human review for broad deletion at YOLO 0-3 a
       .run()
       .pipe(Effect.orDie)
     const autonomy = yield* SessionAutonomy.Service
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const guardrail = yield* SessionGuardrail.Service
     const review = Effect.fn("SessionGuardrailTest.reviewHardDeletion")(function* () {
       const asked = yield* Deferred.make<void>()

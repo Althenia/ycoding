@@ -15,10 +15,12 @@ sources:
 - id: guardrail-ops
   resource: repo:///docs/guardrails-and-provider-usage.md
 - id: spec-v2
-  resource: repo:///specs/v2/session-guardrails.md
+  resource: repo:///specs/session-guardrails.md
 - id: arch-doc
   resource: repo:///docs/architecture.md
 ---
+
+
 
 ## Independence from Permissions
 
@@ -59,5 +61,5 @@ After a 500 ms pending-review checkpoint, the TUI emits a root-owned Guardrail a
 - [Package Architecture](./architecture.md)
 
 [^runtime-doc]: repo:///docs/runtime.md
-[^spec-v2]: repo:///specs/v2/session-guardrails.md
+[^spec-v2]: repo:///specs/session-guardrails.md
 [^guardrail-ops]: repo:///docs/guardrails-and-provider-usage.md

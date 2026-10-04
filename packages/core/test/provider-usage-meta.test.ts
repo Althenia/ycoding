@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { MetaUsage } from "@ycoding-ai/core/provider-usage/meta"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 
-const providerID = ProviderV2.ID.make("meta")
+const providerID = Provider.ID.make("meta")
 
 describe("MetaUsage", () => {
   test("normalizes reported current-month costs into the current bill and preserves request and token windows", () => {

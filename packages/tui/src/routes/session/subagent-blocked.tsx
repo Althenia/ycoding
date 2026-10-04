@@ -17,7 +17,7 @@ export function SubagentBlockedSurface(props: {
   blockedAt?: number
   question: string
 }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const activity = createMemo(() => {
     const match = /^(.*?)\s{2,}(\d+\s+\S+)$/.exec(props.activity ?? "")
     return { description: match?.[1] ?? props.activity, result: match?.[2] }
@@ -28,53 +28,53 @@ export function SubagentBlockedSurface(props: {
 
   return (
     <box flexDirection="column" paddingTop={1} paddingBottom={1} paddingLeft={1} flexShrink={0}>
-      <text fg={themeV2.text.feedback.info.default}>
+      <text fg={theme.text.feedback.info.default}>
         <b>{props.title.toUpperCase()} SUBAGENT</b>
       </text>
       <Show when={props.body}>
         {(body) => (
           <box marginTop={1}>
-            <text fg={themeV2.text.default}>{body()}</text>
+            <text fg={theme.text.default}>{body()}</text>
           </box>
         )}
       </Show>
       <Show when={props.activity}>
         <box height={1} marginTop={3} flexDirection="row">
-          <text fg={themeV2.text.feedback.success.default}>ok</text>
+          <text fg={theme.text.feedback.success.default}>ok</text>
           <box width={5} flexShrink={0} />
-          <text fg={themeV2.text.default}>{activity().description}</text>
+          <text fg={theme.text.default}>{activity().description}</text>
           <Show when={activity().result}>
             {(result) => (
               <>
                 <box flexGrow={1} />
-                <text fg={themeV2.text.subdued}>{result()}</text>
+                <text fg={theme.text.subdued}>{result()}</text>
               </>
             )}
           </Show>
         </box>
       </Show>
       <box height={1} marginTop={2} flexDirection="row">
-        <text fg={themeV2.text.feedback.warning.default}>?</text>
+        <text fg={theme.text.feedback.warning.default}>?</text>
         <box width={5} flexShrink={0} />
-        <text fg={themeV2.text.default}>awaiting decision</text>
+        <text fg={theme.text.default}>awaiting decision</text>
         <Show when={blocked()}>
           {(duration) => (
             <>
               <box flexGrow={1} />
-              <text fg={themeV2.text.feedback.warning.default}>blocked {duration()}</text>
+              <text fg={theme.text.feedback.warning.default}>blocked {duration()}</text>
             </>
           )}
         </Show>
       </box>
       <box marginTop={5} paddingLeft={3}>
-        <text fg={themeV2.text.feedback.warning.default}>{props.question}</text>
+        <text fg={theme.text.feedback.warning.default}>{props.question}</text>
       </box>
     </box>
   )
 }
 
 export function SubagentQuestionNotice(props: { task: SessionOrchestrationTask }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const route = useRoute()
   const shortcut = Keymap.useShortcut("session.child.first")
   return (
@@ -85,17 +85,17 @@ export function SubagentQuestionNotice(props: { task: SessionOrchestrationTask }
       flexShrink={0}
       onMouseUp={() => route.navigate({ type: "session", sessionID: props.task.sessionID })}
     >
-      <text fg={themeV2.text.feedback.warning.default}>
+      <text fg={theme.text.feedback.warning.default}>
         ? {props.task.agent} awaiting input{" "}
-        <span style={{ fg: themeV2.text.subdued }}>· {shortcut()?.replaceAll("ctrl+", "⌃")} subagents</span>
+        <span style={{ fg: theme.text.subdued }}>· {shortcut()?.replaceAll("ctrl+", "⌃")} subagents</span>
       </text>
-      <text fg={themeV2.text.feedback.warning.default}>{props.task.question?.text}</text>
+      <text fg={theme.text.feedback.warning.default}>{props.task.question?.text}</text>
     </box>
   )
 }
 
 export function SubagentAnswerComposer(props: { task: SessionOrchestrationTask }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const client = useClient()
   const data = useData()
   const dialog = useDialog()
@@ -162,17 +162,17 @@ export function SubagentAnswerComposer(props: { task: SessionOrchestrationTask }
           value.focus()
         }}
         placeholder="Enter answer"
-        placeholderColor={themeV2.text.subdued}
-        textColor={themeV2.text.default}
-        focusedTextColor={themeV2.text.default}
-        cursorColor={themeV2.text.default}
+        placeholderColor={theme.text.subdued}
+        textColor={theme.text.default}
+        focusedTextColor={theme.text.default}
+        cursorColor={theme.text.default}
         focusedBackgroundColor="transparent"
         minHeight={1}
         maxHeight={6}
         onSubmit={() => void submit()}
       />
       <Show when={submitting() || feedback()}>
-        <text fg={themeV2.text.subdued}>{submitting() ? "Sending answer…" : feedback()}</text>
+        <text fg={theme.text.subdued}>{submitting() ? "Sending answer…" : feedback()}</text>
       </Show>
     </box>
   )

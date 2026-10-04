@@ -28,7 +28,7 @@ export interface Interface {
   readonly load: (sessionID: SessionSchema.ID) => Effect.Effect<Instructions.Instructions>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/InstructionEntry") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/InstructionEntry") {}
 
 const renderValue = (value: Schema.Json) => (typeof value === "string" ? value : JSON.stringify(value, null, 2))
 

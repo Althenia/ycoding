@@ -1,14 +1,14 @@
 import { expect } from "bun:test"
 import { LLMClient, LLMEvent, Model, type LLMRequest } from "@ycoding-ai/ai"
 import { OpenAIChat } from "@ycoding-ai/ai/protocols"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { llmClient } from "@ycoding-ai/core/effect/app-node-platform"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
@@ -17,7 +17,7 @@ import { SessionProviderRequestTable, SessionTable } from "@ycoding-ai/core/sess
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { SessionHelperPolicy, localTitle } from "@ycoding-ai/core/session/helper-policy"
 import { SessionTitle } from "@ycoding-ai/core/session/title"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
@@ -105,10 +105,10 @@ const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       Database.node,
-      EventV2.node,
+      EventRuntime.node,
       SessionProjector.node,
       SessionStore.node,
-      AgentV2.node,
+      Agent.node,
       SessionHelperPolicy.node,
       SessionTitle.node,
     ]),
@@ -121,7 +121,7 @@ const it = testEffect(
   ),
 )
 
-const insertSession = (id: SessionV2.ID) =>
+const insertSession = (id: Session.ID) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     yield* db
@@ -143,9 +143,9 @@ const insertSession = (id: SessionV2.ID) =>
       .pipe(Effect.orDie)
   })
 
-const prompt = (sessionID: SessionV2.ID, text: string) =>
+const prompt = (sessionID: Session.ID, text: string) =>
   Effect.gen(function* () {
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const messageID = SessionMessage.ID.create()
     yield* events.publish(SessionEvent.InputAdmitted, {
       sessionID,
@@ -162,7 +162,7 @@ it.effect("uses a deterministic local title by default without a provider call",
   Effect.gen(function* () {
     requests = []
     titleMode = "local"
-    const sessionID = SessionV2.ID.make("ses_title_local")
+    const sessionID = Session.ID.make("ses_title_local")
     yield* insertSession(sessionID)
     yield* prompt(sessionID, "# Help me debug the failing build\nIgnore this line")
 
@@ -184,15 +184,15 @@ it.effect("preserves model-generated titles when explicitly enabled", () =>
   Effect.gen(function* () {
     requests = []
     titleMode = "model"
-    const agentService = yield* AgentV2.Service
+    const agentService = yield* Agent.Service
     yield* agentService.transform((editor) => {
-      editor.update(AgentV2.ID.make("title"), (agent) => {
+      editor.update(Agent.ID.make("title"), (agent) => {
         agent.mode = "primary"
         agent.hidden = true
         agent.system = "You are a title generator."
       })
     })
-    const sessionID = SessionV2.ID.make("ses_title_generate")
+    const sessionID = Session.ID.make("ses_title_generate")
     yield* insertSession(sessionID)
     yield* prompt(sessionID, "Help me debug the failing build")
 
@@ -235,7 +235,7 @@ it.effect("leaves the generated title unchanged when title generation is off", (
   Effect.gen(function* () {
     requests = []
     titleMode = "off"
-    const sessionID = SessionV2.ID.make("ses_title_off")
+    const sessionID = Session.ID.make("ses_title_off")
     yield* insertSession(sessionID)
     yield* prompt(sessionID, "Help me debug the failing build")
 
@@ -254,15 +254,15 @@ it.effect("does not generate once a second user message exists", () =>
   Effect.gen(function* () {
     requests = []
     titleMode = "local"
-    const agentService = yield* AgentV2.Service
+    const agentService = yield* Agent.Service
     yield* agentService.transform((editor) => {
-      editor.update(AgentV2.ID.make("title"), (agent) => {
+      editor.update(Agent.ID.make("title"), (agent) => {
         agent.mode = "primary"
         agent.hidden = true
         agent.system = "You are a title generator."
       })
     })
-    const sessionID = SessionV2.ID.make("ses_title_second_message")
+    const sessionID = Session.ID.make("ses_title_second_message")
     yield* insertSession(sessionID)
     yield* prompt(sessionID, "First message")
     yield* prompt(sessionID, "Second message")
@@ -284,15 +284,15 @@ it.effect("does not generate for a child session", () =>
   Effect.gen(function* () {
     requests = []
     titleMode = "local"
-    const agentService = yield* AgentV2.Service
+    const agentService = yield* Agent.Service
     yield* agentService.transform((editor) => {
-      editor.update(AgentV2.ID.make("title"), (agent) => {
+      editor.update(Agent.ID.make("title"), (agent) => {
         agent.mode = "primary"
         agent.hidden = true
         agent.system = "You are a title generator."
       })
     })
-    const sessionID = SessionV2.ID.make("ses_title_child")
+    const sessionID = Session.ID.make("ses_title_child")
     const { db } = yield* Database.Service
     yield* db
       .insert(ProjectTable)
@@ -305,7 +305,7 @@ it.effect("does not generate for a child session", () =>
       .values({
         id: sessionID,
         project_id: Project.ID.global,
-        parent_id: SessionV2.ID.make("ses_title_parent"),
+        parent_id: Session.ID.make("ses_title_parent"),
         directory: "/project",
         title: "Child session - fake",
       })
@@ -329,7 +329,7 @@ it.effect("falls back to local title in model mode when the title agent is remov
   Effect.gen(function* () {
     requests = []
     titleMode = "model"
-    const sessionID = SessionV2.ID.make("ses_title_no_agent")
+    const sessionID = Session.ID.make("ses_title_no_agent")
     yield* insertSession(sessionID)
     yield* prompt(sessionID, "Help me debug the failing build")
 

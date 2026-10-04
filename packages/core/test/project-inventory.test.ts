@@ -5,26 +5,26 @@ import { Effect, Layer } from "effect"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Database } from "@ycoding-ai/core/database/database"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Location } from "@ycoding-ai/core/location"
-import { ProjectV2 } from "@ycoding-ai/core/project"
+import { Project } from "@ycoding-ai/core/project"
 import { ProjectDirectories } from "@ycoding-ai/core/project/directories"
 import { ProjectInventory } from "@ycoding-ai/core/project/inventory"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
-const alpha = ProjectV2.ID.make("prj_alpha")
-const beta = ProjectV2.ID.make("prj_beta")
+const alpha = Project.ID.make("prj_alpha")
+const beta = Project.ID.make("prj_beta")
 const roots = { alpha: "", beta: "" }
 
 const projects = Layer.succeed(
-  ProjectV2.Service,
-  ProjectV2.Service.of({
+  Project.Service,
+  Project.Service.of({
     list: () => Effect.succeed([]),
     resolve: (directory) =>
       Effect.succeed(
@@ -42,16 +42,16 @@ const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       Database.node,
-      EventV2.node,
+      EventRuntime.node,
       SessionProjector.node,
       SessionStore.node,
-      SessionV2.node,
+      Session.node,
       SessionExecution.node,
       ProjectDirectories.node,
       ProjectInventory.node,
     ]),
     [
-      [ProjectV2.node, projects],
+      [Project.node, projects],
       [SessionExecution.node, SessionExecution.noopLayer],
     ],
   ),
@@ -75,7 +75,7 @@ describe("ProjectInventory", () => {
   it.live("lists recorded and Session directories grouped by project with counts and availability", () =>
     Effect.gen(function* () {
       yield* workspace
-      const sessions = yield* SessionV2.Service
+      const sessions = yield* Session.Service
       const directories = yield* ProjectDirectories.Service
       const inventory = yield* ProjectInventory.Service
       const copy = AbsolutePath.make(path.join(roots.alpha, ".worktrees", "gone"))
@@ -127,7 +127,7 @@ describe("ProjectInventory", () => {
   it.live("pages with a keyset anchor and filters by search", () =>
     Effect.gen(function* () {
       yield* workspace
-      const sessions = yield* SessionV2.Service
+      const sessions = yield* Session.Service
       const inventory = yield* ProjectInventory.Service
       yield* sessions.create({ location: at(roots.alpha) })
       yield* sessions.create({ location: at(path.join(roots.alpha, "packages", "tui")) })
@@ -154,7 +154,7 @@ describe("ProjectInventory", () => {
   it.live("forget deletes the project's Sessions in the directory with their children and removes the record", () =>
     Effect.gen(function* () {
       yield* workspace
-      const sessions = yield* SessionV2.Service
+      const sessions = yield* Session.Service
       const directories = yield* ProjectDirectories.Service
       const inventory = yield* ProjectInventory.Service
       const directory = AbsolutePath.make(roots.alpha)
@@ -165,8 +165,8 @@ describe("ProjectInventory", () => {
 
       yield* inventory.forget({ projectID: alpha, directory })
 
-      expect(yield* sessions.get(root.id).pipe(Effect.flip)).toBeInstanceOf(SessionV2.NotFoundError)
-      expect(yield* sessions.get(child.id).pipe(Effect.flip)).toBeInstanceOf(SessionV2.NotFoundError)
+      expect(yield* sessions.get(root.id).pipe(Effect.flip)).toBeInstanceOf(Session.NotFoundError)
+      expect(yield* sessions.get(child.id).pipe(Effect.flip)).toBeInstanceOf(Session.NotFoundError)
       expect((yield* sessions.get(other.id)).id).toBe(other.id)
       expect(yield* directories.contains({ projectID: alpha, directory })).toBe(false)
       expect((yield* inventory.list({ limit: 50 })).data.map((entry) => entry.directory)).toEqual([

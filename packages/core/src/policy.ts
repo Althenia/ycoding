@@ -21,7 +21,7 @@ export interface Interface {
   readonly hasStatements: () => boolean
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/Policy") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/Policy") {}
 
 export const make = (): Interface => {
   let statements: readonly Info[] = []

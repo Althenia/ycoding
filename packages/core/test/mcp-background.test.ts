@@ -1,13 +1,13 @@
 import { describe, expect } from "bun:test"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Image } from "@ycoding-ai/core/image"
 import { Job } from "@ycoding-ai/core/job"
 import { MCP } from "@ycoding-ai/core/mcp/index"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { McpTool } from "@ycoding-ai/core/tool/mcp"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
@@ -19,7 +19,7 @@ import { settleTool, toolDefinitions, toolIdentity, waitForTool } from "./lib/to
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionPending } from "@ycoding-ai/core/session/pending"
 
-const sessionID = SessionV2.ID.make("ses_mcp_background")
+const sessionID = Session.ID.make("ses_mcp_background")
 
 const state: {
   latch?: Deferred.Deferred<void>
@@ -134,19 +134,19 @@ const runtime = Layer.effect(
   }),
 )
 
-const permissions = Layer.mock(PermissionV2.Service, { assert: () => Effect.void })
+const permissions = Layer.mock(Permission.Service, { assert: () => Effect.void })
 const guardrails = Layer.mock(SessionGuardrail.Service, {
   assert: () => Effect.succeed({ release: Effect.void }),
 })
-const events = Layer.mock(EventV2.Service, { subscribe: () => Stream.never })
+const events = Layer.mock(EventRuntime.Service, { subscribe: () => Stream.never })
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, Job.node, McpTool.node]),
     [
       [MCP.node, mcp],
-      [PermissionV2.node, permissions],
+      [Permission.node, permissions],
       [SessionGuardrail.node, guardrails],
-      [EventV2.node, events],
+      [EventRuntime.node, events],
       [PluginRuntime.node, runtime],
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
       [Image.node, imagePassthrough],

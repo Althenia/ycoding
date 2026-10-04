@@ -4,7 +4,7 @@ import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
 import { configure } from "@ycoding-ai/ai/providers/openai"
 import type { OpenAIResponsesBody } from "@ycoding-ai/ai/protocols/openai-responses"
 import { LLMClient } from "@ycoding-ai/ai/route"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { SessionRunnerCache } from "@ycoding-ai/core/session/runner/cache"
 import { ExecuteTool } from "@ycoding-ai/core/tool/execute"
 import { Tool } from "@ycoding-ai/core/tool/tool"
@@ -18,7 +18,7 @@ const base = {
   modelID: "gpt-5.6",
   apiModelID: "gpt-5.6",
   policyRevision: CACHE_POLICY_REVISION,
-  permissions: [{ action: "read", resource: "**", effect: "allow" }] satisfies PermissionV2.Ruleset,
+  permissions: [{ action: "read", resource: "**", effect: "allow" }] satisfies Permission.Ruleset,
   system: [SystemPart.make("System after hook")],
   tools: [
     ToolDefinition.make({

@@ -3,24 +3,24 @@ import { asc, eq } from "drizzle-orm"
 import { DateTime, Effect, Schema } from "effect"
 import { Database } from "@ycoding-ai/core/database/database"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { EventRuntime } from "@ycoding-ai/core/event"
+import { Agent } from "@ycoding-ai/core/agent"
 import { EventTable } from "@ycoding-ai/core/event/sql"
-import { ModelV2 } from "@ycoding-ai/core/model"
+import { CatalogModel } from "@ycoding-ai/core/model"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionTable, SessionMessageTable } from "@ycoding-ai/core/session/sql"
 import { testEffect } from "./lib/effect"
 
-const it = testEffect(LayerNode.compile(LayerNode.group([Database.node, EventV2.node, SessionProjector.node])))
+const it = testEffect(LayerNode.compile(LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node])))
 const timestamp = DateTime.makeUnsafe(1)
-const model = { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") }
+const model = { id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("provider") }
 
 const content = (text: string) => [{ type: "text" as const, text }]
 
@@ -28,8 +28,8 @@ describe("Tool.Progress", () => {
   it.effect("projects durable progress and keeps final settlements durable", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
-      const service = yield* EventV2.Service
-      const sessionID = SessionV2.ID.make("ses_tool_progress_projector")
+      const service = yield* EventRuntime.Service
+      const sessionID = Session.ID.make("ses_tool_progress_projector")
       yield* db
         .insert(ProjectTable)
         .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
@@ -50,7 +50,7 @@ describe("Tool.Progress", () => {
       yield* service.publish(SessionEvent.Step.Started, {
         sessionID,
         assistantMessageID,
-        agent: AgentV2.ID.make("build"),
+        agent: Agent.ID.make("build"),
         model,
       })
       const readAssistant = Effect.gen(function* () {
@@ -141,9 +141,9 @@ describe("Tool.Progress", () => {
         .orderBy(asc(EventTable.seq))
         .all()
         .pipe(Effect.orDie)
-      expect(rows.map((row) => row.type)).toContain(EventV2.versionedType(SessionEvent.Tool.Progress.type, 1))
-      expect(rows.map((row) => row.type)).toContain(EventV2.versionedType(SessionEvent.Tool.Success.type, 1))
-      expect(rows.map((row) => row.type)).toContain(EventV2.versionedType(SessionEvent.Tool.Failed.type, 1))
+      expect(rows.map((row) => row.type)).toContain(EventRuntime.versionedType(SessionEvent.Tool.Progress.type, 1))
+      expect(rows.map((row) => row.type)).toContain(EventRuntime.versionedType(SessionEvent.Tool.Success.type, 1))
+      expect(rows.map((row) => row.type)).toContain(EventRuntime.versionedType(SessionEvent.Tool.Failed.type, 1))
     }),
   )
 })

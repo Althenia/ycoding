@@ -1,4 +1,4 @@
-export * as ProviderUsageV2 from "./provider-usage"
+export * as ProviderUsageRuntime from "./provider-usage"
 export { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
 
 import { Config } from "./config"
@@ -104,7 +104,7 @@ export class RequestError extends Schema.TaggedErrorClass<RequestError>()("Provi
   retryAfter: Schema.Number.pipe(Schema.optional),
 }) {}
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/ProviderUsage") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/ProviderUsage") {}
 
 export function make(input: MakeInput): Interface {
   const now = input.now ?? Date.now

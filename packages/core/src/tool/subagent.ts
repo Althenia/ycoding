@@ -4,15 +4,15 @@ import { ToolFailure } from "@ycoding-ai/ai"
 import type { Context as PluginContext } from "@ycoding-ai/plugin/effect/plugin"
 import { DescriptionText, PromptText } from "@ycoding-ai/schema/session-orchestration"
 import { Cause, Effect, Schedule, Schema } from "effect"
-import { AgentV2 } from "../agent"
+import { Agent } from "../agent"
 import { Config } from "../config"
 import { PluginRuntime } from "../plugin/runtime"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { PositiveInt } from "../schema"
 import { SessionGuardrail } from "../session/guardrail"
 import { SessionSchema } from "../session/schema"
 import { SessionMessage } from "../session/message"
-import { ModelV2 } from "../model"
+import { CatalogModel } from "../model"
 import { SessionOrchestration } from "../session/orchestration"
 import { SessionRunnerModel } from "../session/runner/model"
 import { ProjectArtifactSource } from "../project-artifact/source"
@@ -39,7 +39,7 @@ export const Input = Schema.Struct({
   background: Schema.Boolean.pipe(Schema.optional).annotate({
     description: "Deprecated. Subagents always run in the background.",
   }),
-  model: ModelV2.Ref.pipe(Schema.optional).annotate({
+  model: CatalogModel.Ref.pipe(Schema.optional).annotate({
     description: "Optional canonical provider, model, and variant override for this child",
   }),
   timeout: PositiveInt.check(Schema.isLessThanOrEqualTo(MAX_TIMEOUT_MS)).pipe(Schema.optional).annotate({
@@ -62,10 +62,10 @@ export const description = [
 ].join("\n")
 
 export const availableAgents = Effect.fn("SubagentTool.availableAgents")(function* (input: {
-  readonly permission: Pick<PermissionV2.Interface, "evaluateEffective">
+  readonly permission: Pick<Permission.Interface, "evaluateEffective">
   readonly sessionID: SessionSchema.ID
-  readonly agent: AgentV2.ID
-  readonly candidates: ReadonlyArray<AgentV2.Info>
+  readonly agent: Agent.ID
+  readonly candidates: ReadonlyArray<Agent.Info>
 }) {
   const evaluated = yield* Effect.forEach(input.candidates, (candidate) => {
     if (candidate.mode === "primary" || candidate.hidden) return Effect.succeed(undefined)
@@ -79,7 +79,7 @@ export const availableAgents = Effect.fn("SubagentTool.availableAgents")(functio
       .pipe(Effect.map((effect) => (effect === "deny" ? undefined : candidate)))
   })
   return evaluated
-    .filter((candidate): candidate is AgentV2.Info => candidate !== undefined)
+    .filter((candidate): candidate is Agent.Info => candidate !== undefined)
     .toSorted((left, right) => left.id.localeCompare(right.id))
 })
 
@@ -87,9 +87,9 @@ export const Plugin = {
   id: "ycoding.tool.subagent",
   effect: Effect.fn("SubagentTool.Plugin")(function* (ctx: PluginContext) {
     const runtime = yield* PluginRuntime.Service
-    const agents = yield* AgentV2.Service
+    const agents = yield* Agent.Service
     const config = yield* Config.Service
-    const permission = yield* PermissionV2.Service
+    const permission = yield* Permission.Service
     const guardrail = yield* SessionGuardrail.Service
     const models = yield* SessionRunnerModel.Service
     const orchestration = runtime.orchestration
@@ -147,11 +147,11 @@ export const Plugin = {
                     message: `Subagent depth limit reached (${limit}). Increase "experimental.subagent_depth" to allow nested subagents.`,
                   })
                 const prepared = yield* SessionOrchestration.preflight(parent, {
-                  agent: AgentV2.ID.make(input.agent),
+                  agent: Agent.ID.make(input.agent),
                   model: input.model,
                   caller: context.agent,
                 }).pipe(
-                  Effect.provideService(AgentV2.Service, agents),
+                  Effect.provideService(Agent.Service, agents),
                   Effect.provideService(SessionRunnerModel.Service, models),
                   Effect.mapError((error) => new ToolFailure({ message: error.message, error })),
                 )
@@ -160,7 +160,7 @@ export const Plugin = {
                   messageID: context.messageID,
                   callID: context.callID,
                 }).pipe(
-                  Effect.provideService(PermissionV2.Service, permission),
+                  Effect.provideService(Permission.Service, permission),
                   Effect.mapError(
                     (error) => new ToolFailure({ message: `Subagent denied: ${prepared.target.id}`, error }),
                   ),
@@ -182,7 +182,7 @@ export const Plugin = {
                     parentID: context.sessionID,
                     parentAssistantMessageID: context.messageID,
                     toolCallID: context.callID,
-                    agent: AgentV2.ID.make(input.agent),
+                    agent: Agent.ID.make(input.agent),
                     description: input.description,
                     prompt: input.prompt,
                     background: true,
@@ -211,7 +211,7 @@ export const Plugin = {
                     kind: "agent",
                     id: input.agent,
                     sessionID: context.sessionID,
-                    agentID: AgentV2.ID.make(input.agent),
+                    agentID: Agent.ID.make(input.agent),
                     source: "subagent-launch",
                     messageID: context.messageID,
                     callID: context.callID,

@@ -90,14 +90,14 @@ export function RailSection(
     attention?: boolean
   }>,
 ) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const rail = useRail()
   const metrics = createMemo(() => railMetrics(dimensions().width))
   const expanded = createMemo(() => (rail ? rail.expanded(props.section) : true))
   const headerColor = createMemo(() => {
-    if (props.attention) return themeV2.text.feedback.warning.default
-    return expanded() ? themeV2.text.feedback.success.default : themeV2.text.feedback.info.default
+    if (props.attention) return theme.text.feedback.warning.default
+    return expanded() ? theme.text.feedback.success.default : theme.text.feedback.info.default
   })
   const titleText = createMemo(() => Locale.truncate(String(props.title ?? "").trim() || "—", 80))
   const summaryText = createMemo(() => {
@@ -119,7 +119,7 @@ export function RailSection(
         paddingLeft={rail ? metrics().paddingLeft : 0}
         paddingRight={rail ? metrics().paddingRight : 0}
         marginLeft={rail?.leftRule ? -1 : 0}
-        backgroundColor={themeV2.background.surface.overlay}
+        backgroundColor={theme.background.surface.overlay}
         onMouseUp={toggle}
       >
         <text fg={headerColor()} wrapMode="none" flexShrink={0}>
@@ -132,7 +132,7 @@ export function RailSection(
         </box>
         <Show when={summaryText()}>
           <text
-            fg={props.attention ? themeV2.text.feedback.warning.default : themeV2.text.subdued}
+            fg={props.attention ? theme.text.feedback.warning.default : theme.text.subdued}
             wrapMode="none"
             flexShrink={0}
           >
@@ -158,23 +158,23 @@ export function RailSection(
 }
 
 export function RailSubheading(props: ParentProps) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const text = () => Locale.truncate(String(props.children ?? "").trim() || "—", 80)
 
-  return <text fg={themeV2.text.label}>{text()}</text>
+  return <text fg={theme.text.label}>{text()}</text>
 }
 
 export function RailRow(props: { label: string; value: string; valueColor?: RGBA }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const label = () => Locale.truncate(String(props.label ?? "").trim() || "—", 120)
   const value = () => Locale.truncate(String(props.value ?? "").trim() || "—", 80)
 
   return (
     <box width="100%" flexDirection="row" justifyContent="space-between" gap={1}>
-      <text fg={themeV2.text.subdued} wrapMode="none" truncate flexGrow={1} flexShrink={1}>
+      <text fg={theme.text.subdued} wrapMode="none" truncate flexGrow={1} flexShrink={1}>
         {label()}
       </text>
-      <text fg={props.valueColor ?? themeV2.text.default} wrapMode="none" flexShrink={0}>
+      <text fg={props.valueColor ?? theme.text.default} wrapMode="none" flexShrink={0}>
         {value()}
       </text>
     </box>

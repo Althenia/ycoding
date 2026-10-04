@@ -4,11 +4,11 @@ import { randomUUID } from "node:crypto"
 import { Effect } from "effect"
 import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
 import { KeyedMutex } from "../effect/keyed-mutex"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import type { FSUtil } from "../fs-util"
 import { ProjectArtifactAccounting } from "../project-artifact/accounting"
 import type { ProjectArtifactSource } from "../project-artifact/source"
-import { SkillV2 } from "../skill"
+import { Skill } from "../skill"
 import { SkillTool } from "../tool/skill"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
@@ -36,20 +36,20 @@ export function selected(metadata: Record<string, unknown> | undefined) {
   return skills.flatMap((skill: unknown) => {
     if (!skill || typeof skill !== "object" || !("id" in skill) || typeof skill.id !== "string" || !skill.id.trim())
       return []
-    return [SkillV2.ID.make(skill.id)]
+    return [Skill.ID.make(skill.id)]
   })
 }
 
 export const activate = Effect.fn("SessionSkill.activate")(function* (
   services: {
-    events: EventV2.Interface
+    events: EventRuntime.Interface
     store: SessionStore.Interface
     accounting: ProjectArtifactAccounting.Interface
     fs: FSUtil.Interface
   },
   input: {
     session: SessionSchema.Info
-    skill: SkillV2.Info
+    skill: Skill.Info
     id?: SessionMessage.ID
     provenance?: ProjectArtifactSource.Provenance
   },
@@ -81,7 +81,7 @@ export const activate = Effect.fn("SessionSkill.activate")(function* (
             : undefined,
         },
         {
-          id: input.id ? EventV2.ID.make(input.id.replace(/^msg_/, "evt_")) : undefined,
+          id: input.id ? EventRuntime.ID.make(input.id.replace(/^msg_/, "evt_")) : undefined,
           commit: provenance
             ? (seq) =>
                 services.accounting

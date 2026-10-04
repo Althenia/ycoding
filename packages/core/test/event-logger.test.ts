@@ -3,7 +3,7 @@ import { Effect, Layer, Logger } from "effect"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Database } from "@ycoding-ai/core/database/database"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { EventLogger } from "@ycoding-ai/core/event-logger"
 import { Agent } from "@ycoding-ai/schema/agent"
 import { Catalog } from "@ycoding-ai/schema/catalog"
@@ -11,7 +11,7 @@ import { Command } from "@ycoding-ai/schema/command"
 import { Config } from "@ycoding-ai/schema/config"
 import { McpEvent } from "@ycoding-ai/schema/mcp-event"
 
-const UnlistedUpdated = EventV2.ephemeral({ type: "test.updated", schema: {} })
+const UnlistedUpdated = EventRuntime.ephemeral({ type: "test.updated", schema: {} })
 
 describe("EventLogger", () => {
   test("logs explicitly listed updated events", async () => {
@@ -21,7 +21,7 @@ describe("EventLogger", () => {
     })
 
     await Effect.gen(function* () {
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       yield* events.publish(Agent.Event.Updated, {})
       yield* events.publish(Catalog.Event.Updated, {})
       yield* events.publish(Command.Event.Updated, {})
@@ -29,7 +29,7 @@ describe("EventLogger", () => {
       yield* events.publish(McpEvent.StatusChanged, { server: "example" })
       yield* events.publish(UnlistedUpdated, {})
     }).pipe(
-      Effect.provide(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, EventLogger.node]))),
+      Effect.provide(AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, EventLogger.node]))),
       Effect.provide(Logger.layer([logger])),
       Effect.scoped,
       Effect.runPromise,

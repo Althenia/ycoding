@@ -3,11 +3,11 @@ import { Catalog } from "@ycoding-ai/core/catalog"
 import { Credential } from "@ycoding-ai/core/credential"
 import { CursorModels } from "@ycoding-ai/core/cursor/models"
 import { Integration } from "@ycoding-ai/core/integration"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { PluginV2 } from "@ycoding-ai/core/plugin"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
 import { CursorPlugin, oauth, oauthCredential, reconcileInterval, syncCatalog } from "@ycoding-ai/core/plugin/provider/cursor"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import type { LanguageModelV3 } from "@ai-sdk/provider"
 import { beforeEach, describe, expect, mock } from "bun:test"
 import { State } from "@ycoding-ai/core/state"
@@ -54,7 +54,7 @@ beforeEach(() => {
 })
 
 const addPlugin = Effect.fn(function* () {
-  const plugin = yield* PluginV2.Service
+  const plugin = yield* PluginRegistry.Service
   const host = yield* PluginHost.make(plugin)
   yield* CursorPlugin.effect(host)
 })
@@ -88,9 +88,9 @@ const cursorModelIDs = Effect.fn(function* (catalog: Catalog.Interface) {
 })
 
 const cursorModel = (id: string) =>
-  ModelV2.Info.make({
-    ...ModelV2.Info.empty(CursorModels.providerID, ModelV2.ID.make(id)),
-    package: ProviderV2.aisdk(CursorModels.packageName),
+  CatalogModel.Info.make({
+    ...CatalogModel.Info.empty(CursorModels.providerID, CatalogModel.ID.make(id)),
+    package: Provider.aisdk(CursorModels.packageName),
   })
 
 describe("CursorPlugin", () => {
@@ -223,7 +223,7 @@ describe("CursorPlugin", () => {
       const catalog = yield* Catalog.Service
       yield* addPlugin()
       yield* catalog.transform((draft) => {
-        draft.model.update(CursorModels.providerID, ModelV2.ID.make("stale"), (model) =>
+        draft.model.update(CursorModels.providerID, CatalogModel.ID.make("stale"), (model) =>
           Object.assign(model, cursorModel("stale")),
         )
       })
@@ -231,13 +231,13 @@ describe("CursorPlugin", () => {
         syncCatalog(
           {
             provider: {
-              get: (providerID) => draft.provider.get(ProviderV2.ID.make(providerID)),
-              update: (providerID, update) => draft.provider.update(ProviderV2.ID.make(providerID), update),
+              get: (providerID) => draft.provider.get(Provider.ID.make(providerID)),
+              update: (providerID, update) => draft.provider.update(Provider.ID.make(providerID), update),
             },
             model: {
-              remove: (providerID, modelID) => draft.model.remove(ProviderV2.ID.make(providerID), ModelV2.ID.make(modelID)),
+              remove: (providerID, modelID) => draft.model.remove(Provider.ID.make(providerID), CatalogModel.ID.make(modelID)),
               update: (providerID, modelID, update) =>
-                draft.model.update(ProviderV2.ID.make(providerID), ModelV2.ID.make(modelID), update),
+                draft.model.update(Provider.ID.make(providerID), CatalogModel.ID.make(modelID), update),
             },
           },
           [cursorModel("composer-2.5")],

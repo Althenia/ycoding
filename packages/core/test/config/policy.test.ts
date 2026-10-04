@@ -3,10 +3,10 @@ import { Config as ConfigSchema } from "@ycoding-ai/schema/config"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigPolicyPlugin } from "@ycoding-ai/core/config/plugin/policy"
-import { EventV2 } from "@ycoding-ai/core/event"
-import { PluginV2 } from "@ycoding-ai/core/plugin"
+import { EventRuntime } from "@ycoding-ai/core/event"
+import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { Effect, Schema } from "effect"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "../plugin/fixture"
@@ -25,7 +25,7 @@ const policies = (...items: { effect: "allow" | "deny"; resource: string }[]) =>
   })
 
 const addPlugin = Effect.fn(function* (entries: () => Config.Entry[]) {
-  const plugin = yield* PluginV2.Service
+  const plugin = yield* PluginRegistry.Service
   const host = yield* PluginHost.make(plugin)
   yield* ConfigPolicyPlugin.Plugin.effect(host).pipe(
     Effect.provideService(
@@ -40,9 +40,9 @@ describe("ConfigPolicyPlugin.Plugin", () => {
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service
       yield* catalog.transform((catalog) => {
-        catalog.provider.update(ProviderV2.ID.openai, () => {})
-        catalog.provider.update(ProviderV2.ID.anthropic, () => {})
-        catalog.provider.update(ProviderV2.ID.make("company-internal"), () => {})
+        catalog.provider.update(Provider.ID.openai, () => {})
+        catalog.provider.update(Provider.ID.anthropic, () => {})
+        catalog.provider.update(Provider.ID.make("company-internal"), () => {})
       })
       yield* addPlugin(() => [
         policies(
@@ -52,38 +52,38 @@ describe("ConfigPolicyPlugin.Plugin", () => {
         ),
       ])
 
-      expect(yield* catalog.provider.get(ProviderV2.ID.openai)).toBeUndefined()
-      expect(yield* catalog.provider.get(ProviderV2.ID.anthropic)).toBeDefined()
-      expect(yield* catalog.provider.get(ProviderV2.ID.make("company-internal"))).toBeDefined()
+      expect(yield* catalog.provider.get(Provider.ID.openai)).toBeUndefined()
+      expect(yield* catalog.provider.get(Provider.ID.anthropic)).toBeDefined()
+      expect(yield* catalog.provider.get(Provider.ID.make("company-internal"))).toBeDefined()
     }),
   )
 
   it.effect("prevents project policy from overriding user-global policy", () =>
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service
-      yield* catalog.transform((catalog) => catalog.provider.update(ProviderV2.ID.openai, () => {}))
+      yield* catalog.transform((catalog) => catalog.provider.update(Provider.ID.openai, () => {}))
       yield* addPlugin(() => [
         policies({ effect: "deny", resource: "openai" }),
         policies({ effect: "allow", resource: "openai" }),
       ])
 
-      expect(yield* catalog.provider.get(ProviderV2.ID.openai)).toBeUndefined()
+      expect(yield* catalog.provider.get(Provider.ID.openai)).toBeUndefined()
     }),
   )
 
   it.live("reloads changed policies", () =>
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       let entries: Config.Entry[] = [policies({ effect: "deny", resource: "openai" })]
-      yield* catalog.transform((catalog) => catalog.provider.update(ProviderV2.ID.openai, () => {}))
+      yield* catalog.transform((catalog) => catalog.provider.update(Provider.ID.openai, () => {}))
       yield* addPlugin(() => entries)
-      expect(yield* catalog.provider.get(ProviderV2.ID.openai)).toBeUndefined()
+      expect(yield* catalog.provider.get(Provider.ID.openai)).toBeUndefined()
 
       entries = [policies({ effect: "allow", resource: "openai" })]
       yield* events.publish(ConfigSchema.Event.Updated, {})
       yield* waitUntil(
-        catalog.provider.get(ProviderV2.ID.openai).pipe(Effect.map((provider) => provider !== undefined)),
+        catalog.provider.get(Provider.ID.openai).pipe(Effect.map((provider) => provider !== undefined)),
       )
     }),
   )

@@ -18,7 +18,7 @@ export const makeGuardrailGroup = <
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
           OpenApi.annotations({
-            identifier: "v2.session.guardrail.status",
+            identifier: "session.guardrail.status",
             summary: "Get Session guardrail status",
             description: "Retrieve the active root-Session guardrail profile, counters, and diagnostics.",
           }),
@@ -33,7 +33,7 @@ export const makeGuardrailGroup = <
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
           OpenApi.annotations({
-            identifier: "v2.session.guardrail.request.list",
+            identifier: "session.guardrail.request.list",
             summary: "List Session guardrail reviews",
             description: "Retrieve pending guardrail reviews for the Session root family.",
           }),
@@ -53,7 +53,7 @@ export const makeGuardrailGroup = <
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
           OpenApi.annotations({
-            identifier: "v2.session.guardrail.request.reply",
+            identifier: "session.guardrail.request.reply",
             summary: "Reply to Session guardrail review",
             description:
               "Approve once, grant Always approval for exact matching asks and metadata in this root Session family and current Location process, or reject. Always approval is neither durable nor global.",

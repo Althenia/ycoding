@@ -183,7 +183,7 @@ export function SubagentFooterContent(props: {
   siblingEconomics?: Readonly<Record<string, string | undefined>>
   blocked?: boolean
 }) {
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const keymap = Keymap.use()
   const shortcuts = Keymap.useShortcuts()
   const [hover, setHover] = createSignal<"parent" | "prev" | "next" | null>(null)
@@ -191,7 +191,7 @@ export function SubagentFooterContent(props: {
   const compact = createMemo(() => dimensions().width < 60)
   const siblings = createMemo(() => props.siblings ?? [])
   const currentTask = createMemo(() => siblings().find((task) => task.sessionID === props.currentSessionID))
-  const borderColor = createMemo(() => props.blocked ? themeV2.text.feedback.warning.default : themeV2.border.default)
+  const borderColor = createMemo(() => props.blocked ? theme.text.feedback.warning.default : theme.border.default)
 
   return (
     <box flexShrink={0}>
@@ -204,34 +204,34 @@ export function SubagentFooterContent(props: {
         border={["left"]}
         borderColor={borderColor()}
         flexShrink={0}
-        backgroundColor={themeV2.background.default}
+        backgroundColor={theme.background.default}
       >
         <box flexDirection="row" flexWrap="wrap" justifyContent="space-between" gap={1}>
           <box flexDirection="row" flexWrap="wrap" gap={1} flexGrow={1} minWidth={0}>
-            <text fg={props.blocked ? themeV2.text.feedback.warning.default : themeV2.text.default}>
+            <text fg={props.blocked ? theme.text.feedback.warning.default : theme.text.default}>
               <b>{props.title}</b>
             </text>
             <Show when={props.usage()}>
               {(item) => (
                 <box flexDirection="column" minWidth={0} flexGrow={1}>
-                  <text fg={themeV2.text.subdued} wrapMode="none">
+                  <text fg={theme.text.subdued} wrapMode="none">
                     {[item().model, item().context, item().cache, item().cost].filter(Boolean).join(" · ")}
                   </text>
                 </box>
               )}
             </Show>
             <Show when={props.economics?.summary}>
-              {(summary) => <text fg={themeV2.text.default} wrapMode="none">{summary()}</text>}
+              {(summary) => <text fg={theme.text.default} wrapMode="none">{summary()}</text>}
             </Show>
           </box>
           <Show when={props.economics?.strip.length}>
             <box flexDirection="row" flexWrap="wrap" gap={1} flexShrink={1} minWidth={0}>
-              <For each={props.economics?.strip}>{(item) => <text fg={themeV2.text.subdued} wrapMode="none">{item}</text>}</For>
+              <For each={props.economics?.strip}>{(item) => <text fg={theme.text.subdued} wrapMode="none">{item}</text>}</For>
             </box>
           </Show>
           <Show when={currentTask()?.question?.text}>
             {(question) => (
-              <text fg={themeV2.text.feedback.warning.default} wrapMode="none">
+              <text fg={theme.text.feedback.warning.default} wrapMode="none">
                 ? {question()}
               </text>
             )}
@@ -240,9 +240,9 @@ export function SubagentFooterContent(props: {
             <box flexDirection="row" flexWrap="wrap" gap={1}>
               <box
                 onMouseUp={() => keymap.dispatch("session.parent")}
-                backgroundColor={themeV2.background.default}
+                backgroundColor={theme.background.default}
               >
-                <text fg={themeV2.text.action.primary.default} wrapMode="none">
+                <text fg={theme.text.action.primary.default} wrapMode="none">
                   ↑ {props.parentTitle ?? "Parent"}
                 </text>
               </box>
@@ -253,22 +253,22 @@ export function SubagentFooterContent(props: {
                     <box
                       onMouseUp={() => props.onNavigate?.(task.sessionID)}
                       backgroundColor={
-                        attached() ? themeV2.background.action.primary.focused : themeV2.background.default
+                        attached() ? theme.background.action.primary.focused : theme.background.default
                       }
                     >
                       <text
-                        fg={attached() ? themeV2.text.action.primary.focused : themeV2.text.feedback.info.default}
+                        fg={attached() ? theme.text.action.primary.focused : theme.text.feedback.info.default}
                         wrapMode="none"
                       >
                         <Show when={task.question?.text}>
-                          <span style={{ fg: themeV2.text.feedback.warning.default }}>? </span>
+                          <span style={{ fg: theme.text.feedback.warning.default }}>? </span>
                         </Show>
                         ◦ {Locale.titlecase(task.agent)}
                         <Show when={props.siblingEconomics?.[task.sessionID]}>
-                          {(economics) => <span style={{ fg: themeV2.text.subdued }}> {economics()}</span>}
+                          {(economics) => <span style={{ fg: theme.text.subdued }}> {economics()}</span>}
                         </Show>
                         <Show when={formatDiagnosticsModel(task.model)}>
-                          {(model) => <span style={{ fg: themeV2.text.subdued }}> · {model()}</span>}
+                          {(model) => <span style={{ fg: theme.text.subdued }}> · {model()}</span>}
                         </Show>
                       </text>
                     </box>
@@ -283,12 +283,12 @@ export function SubagentFooterContent(props: {
               onMouseOut={() => setHover(null)}
               onMouseUp={() => keymap.dispatch("session.parent")}
               backgroundColor={
-                hover() === "parent" ? themeV2.background.action.primary.hovered : themeV2.background.default
+                hover() === "parent" ? theme.background.action.primary.hovered : theme.background.default
               }
             >
-              <text fg={themeV2.text.default}>
+              <text fg={theme.text.default}>
                 {compact() ? "↖" : "Parent"}{" "}
-                <span style={{ fg: themeV2.text.subdued }}>{shortcuts.get("session.parent")}</span>
+                <span style={{ fg: theme.text.subdued }}>{shortcuts.get("session.parent")}</span>
               </text>
             </box>
             <box
@@ -296,12 +296,12 @@ export function SubagentFooterContent(props: {
               onMouseOut={() => setHover(null)}
               onMouseUp={() => keymap.dispatch("session.child.previous")}
               backgroundColor={
-                hover() === "prev" ? themeV2.background.action.primary.hovered : themeV2.background.default
+                hover() === "prev" ? theme.background.action.primary.hovered : theme.background.default
               }
             >
-              <text fg={themeV2.text.default}>
+              <text fg={theme.text.default}>
                 {compact() ? "←" : `${siblings().findIndex((task) => task.sessionID === props.currentSessionID) + 1}/${siblings().length} ←`}{" "}
-                <span style={{ fg: themeV2.text.subdued }}>{shortcuts.get("session.child.previous")}</span>
+                <span style={{ fg: theme.text.subdued }}>{shortcuts.get("session.child.previous")}</span>
               </text>
             </box>
             <box
@@ -309,12 +309,12 @@ export function SubagentFooterContent(props: {
               onMouseOut={() => setHover(null)}
               onMouseUp={() => keymap.dispatch("session.child.next")}
               backgroundColor={
-                hover() === "next" ? themeV2.background.action.primary.hovered : themeV2.background.default
+                hover() === "next" ? theme.background.action.primary.hovered : theme.background.default
               }
             >
-              <text fg={themeV2.text.default}>
+              <text fg={theme.text.default}>
                 {compact() ? "→" : "→"}{" "}
-                <span style={{ fg: themeV2.text.subdued }}>{shortcuts.get("session.child.next")}</span>
+                <span style={{ fg: theme.text.subdued }}>{shortcuts.get("session.child.next")}</span>
               </text>
             </box>
           </box>
@@ -361,7 +361,7 @@ export function SubagentFooter(props: { reviewing?: boolean }) {
     return `${total.split(" / ")[0]} (${percent})`
   })
   const blocked = createMemo(() => currentTask()?.state === "waiting" && Boolean(currentTask()?.question))
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
 
   return (
     <box height={2} paddingLeft={3} paddingRight={3} alignItems="flex-start" flexDirection="row" flexShrink={0}>
@@ -370,20 +370,20 @@ export function SubagentFooter(props: { reviewing?: boolean }) {
         fallback={
           <>
             <box width={21} flexShrink={0}>
-              <text fg={themeV2.text.default} wrapMode="none">{agent()} ({current()} of {total()})</text>
+              <text fg={theme.text.default} wrapMode="none">{agent()} ({current()} of {total()})</text>
             </box>
             <box width={13} flexShrink={0}>
-              <text fg={themeV2.text.subdued} wrapMode="none">{context()}</text>
+              <text fg={theme.text.subdued} wrapMode="none">{context()}</text>
             </box>
             <box width={10} flexShrink={0}>
-              <text fg={themeV2.text.subdued} wrapMode="none">{economics()?.cacheHit} hit</text>
+              <text fg={theme.text.subdued} wrapMode="none">{economics()?.cacheHit} hit</text>
             </box>
             <box flexShrink={0}>
-              <text fg={themeV2.text.subdued} wrapMode="none">{economics()?.spent} · durable · resumable</text>
+              <text fg={theme.text.subdued} wrapMode="none">{economics()?.spent} · durable · resumable</text>
             </box>
             <box flexGrow={1} />
             <text
-              fg={themeV2.text.action.primary.default}
+              fg={theme.text.action.primary.default}
               wrapMode="none"
               onMouseUp={() => {
                 const id = parentID()
@@ -407,20 +407,20 @@ export function SubagentFooter(props: { reviewing?: boolean }) {
       >
         <>
           <box width={23} flexShrink={0}>
-            <text fg={themeV2.text.default} wrapMode="none">{agent()} ({current()} of {total()})</text>
+            <text fg={theme.text.default} wrapMode="none">{agent()} ({current()} of {total()})</text>
           </box>
           <box width={14} flexShrink={0}>
-            <text fg={themeV2.text.subdued} wrapMode="none">{context()}</text>
+            <text fg={theme.text.subdued} wrapMode="none">{context()}</text>
           </box>
           <box width={10} flexShrink={0}>
-            <text fg={themeV2.text.subdued} wrapMode="none">{economics()?.cacheHit} hit</text>
+            <text fg={theme.text.subdued} wrapMode="none">{economics()?.cacheHit} hit</text>
           </box>
           <box width={8} flexShrink={0}>
-            <text fg={themeV2.text.subdued} wrapMode="none">{economics()?.spent}</text>
+            <text fg={theme.text.subdued} wrapMode="none">{economics()?.spent}</text>
           </box>
-          <text fg={themeV2.text.feedback.warning.default} wrapMode="none">awaiting input</text>
+          <text fg={theme.text.feedback.warning.default} wrapMode="none">awaiting input</text>
           <box flexGrow={1} />
-          <text fg={themeV2.text.action.primary.default} wrapMode="none">
+          <text fg={theme.text.action.primary.default} wrapMode="none">
             {props.reviewing ? "Review pending" : "Enter answer"}
           </text>
         </>

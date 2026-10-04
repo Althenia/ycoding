@@ -14,7 +14,7 @@ export const MessageGroup = HttpApiGroup.make("server.message")
       error: [SessionNotFoundError, UnknownError],
     }).annotateMerge(
       OpenApi.annotations({
-        identifier: "v2.message.list",
+        identifier: "message.list",
         summary: "Get session messages",
         description: "Retrieve every current projected message for a session in canonical ascending order.",
       }),

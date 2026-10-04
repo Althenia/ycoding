@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProjectV2 } from "@ycoding-ai/core/project"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Project } from "@ycoding-ai/core/project"
+import { Provider } from "@ycoding-ai/core/provider"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { localTitle, make, selectHelperModel, settings } from "@ycoding-ai/core/session/helper-policy"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
@@ -12,10 +12,10 @@ import { Money } from "@ycoding-ai/schema/money"
 import { DateTime, Effect, Schema } from "effect"
 
 const ref = (providerID: string, id: string, variant?: string) =>
-  ModelV2.Ref.make({
-    providerID: ProviderV2.ID.make(providerID),
-    id: ModelV2.ID.make(id),
-    ...(variant === undefined ? {} : { variant: ModelV2.VariantID.make(variant) }),
+  CatalogModel.Ref.make({
+    providerID: Provider.ID.make(providerID),
+    id: CatalogModel.ID.make(id),
+    ...(variant === undefined ? {} : { variant: CatalogModel.VariantID.make(variant) }),
   })
 
 test("local title produces one terminal-safe line without a provider call", () => {
@@ -74,7 +74,7 @@ test("compaction model selection uses the owner Session scope before the hidden 
   const main = ref("openai", "gpt-5.6-main", "high")
   const subagent = ref("openai", "gpt-5.6-subagent", "low")
   const pinned = ref("anthropic", "claude-pinned")
-  const selected: ModelV2.Ref[] = []
+  const selected: CatalogModel.Ref[] = []
   const policy = make(
     {
       titleMode: "local",
@@ -93,7 +93,7 @@ test("compaction model selection uses the owner Session scope before the hidden 
   const session = (id: SessionSchema.ID, parentID?: SessionSchema.ID) =>
     SessionSchema.Info.make({
       id,
-      projectID: ProjectV2.ID.global,
+      projectID: Project.ID.global,
       cost: Money.USD.zero,
       tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
       time: { created: DateTime.makeUnsafe(1), updated: DateTime.makeUnsafe(1) },
@@ -101,8 +101,8 @@ test("compaction model selection uses the owner Session scope before the hidden 
       location: { directory: AbsolutePath.make("/project") },
       ...(parentID === undefined ? {} : { parentID }),
     })
-  const agent = AgentV2.Info.make({
-    ...AgentV2.Info.empty(AgentV2.ID.make("compaction")),
+  const agent = Agent.Info.make({
+    ...Agent.Info.empty(Agent.ID.make("compaction")),
     mode: "primary",
     hidden: true,
     model: pinned,

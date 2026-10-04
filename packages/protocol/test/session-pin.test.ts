@@ -8,7 +8,7 @@ class SessionLocationMiddleware extends HttpApiMiddleware.Service<SessionLocatio
   "test/SessionLocationMiddleware",
 ) {}
 
-test("pin endpoints use the session-scoped V2 contract", () => {
+test("pin endpoints use the session-scoped contract", () => {
   const group = makeSessionGroup(SessionLocationMiddleware)
   const pin = group.endpoints["session.pin"]
   const unpin = group.endpoints["session.unpin"]

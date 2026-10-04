@@ -2,19 +2,19 @@ import { expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { Database } from "@ycoding-ai/core/database/database"
 import { makeGlobalNode } from "@ycoding-ai/core/effect/app-node"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Location } from "@ycoding-ai/core/location"
 import { LocationServiceMap } from "@ycoding-ai/core/location-services"
 import { SdkPlugins } from "@ycoding-ai/core/plugin/sdk"
 import { PluginSupervisor } from "@ycoding-ai/core/plugin/supervisor"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { Plugin } from "@ycoding-ai/plugin/effect"
@@ -277,8 +277,8 @@ test("controls arbitrary tools through scoped SDK overlays", async () => {
           const progress: ToolRegistry.Progress[] = []
           const settle = (callID: string, query: string) =>
             materialized.settle({
-              sessionID: SessionV2.ID.make("ses_simulated_tools"),
-              agent: AgentV2.ID.make("build"),
+              sessionID: Session.ID.make("ses_simulated_tools"),
+              agent: Agent.ID.make("build"),
               messageID: SessionMessage.ID.make("msg_simulated_tools"),
               progress: (update) => Effect.sync(() => progress.push(update)),
               call: {
@@ -610,8 +610,8 @@ test("controls arbitrary tools through scoped SDK overlays", async () => {
           expect(secondaryNames).not.toContain("lookup")
           const routed = yield* replaced
             .settle({
-              sessionID: SessionV2.ID.make("ses_simulated_tools"),
-              agent: AgentV2.ID.make("build"),
+              sessionID: Session.ID.make("ses_simulated_tools"),
+              agent: Agent.ID.make("build"),
               messageID: SessionMessage.ID.make("msg_simulated_tools"),
               call: {
                 type: "tool-call",
@@ -639,8 +639,8 @@ test("controls arbitrary tools through scoped SDK overlays", async () => {
           expect((yield* Fiber.join(routed)).result).toEqual({ type: "text", value: "routed" })
           expect(
             yield* materialized.settle({
-              sessionID: SessionV2.ID.make("ses_simulated_tools"),
-              agent: AgentV2.ID.make("build"),
+              sessionID: Session.ID.make("ses_simulated_tools"),
+              agent: Agent.ID.make("build"),
               messageID: SessionMessage.ID.make("msg_simulated_tools"),
               call: {
                 type: "tool-call",
@@ -698,7 +698,7 @@ const toolLifecycleLayer = (endpoint: string) => {
     deps: [SdkPlugins.node],
   })
   return AppNodeBuilder.build(
-    LayerNode.group([Database.node, EventV2.node, SdkPlugins.node, LocationServiceMap.node, provider]),
+    LayerNode.group([Database.node, EventRuntime.node, SdkPlugins.node, LocationServiceMap.node, provider]),
     [
       [
         Config.node,

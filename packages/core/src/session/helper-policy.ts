@@ -1,19 +1,19 @@
 export * as SessionHelperPolicy from "./helper-policy"
 
 import { Context, Effect, Layer } from "effect"
-import { AgentV2 } from "../agent"
+import { Agent } from "../agent"
 import { Config } from "../config"
 import { ConfigEfficiency } from "../config/efficiency"
 import { makeLocationNode } from "../effect/app-node"
-import { ModelV2 } from "../model"
-import { ProviderV2 } from "../provider"
+import { CatalogModel } from "../model"
+import { Provider } from "../provider"
 import { SessionRunnerModel } from "./runner/model"
 import { SessionSchema } from "./schema"
 
 export type TitleMode = "local" | "model" | "off"
 export type Role = "title" | "goal" | "compaction"
 export type CompactionScope = "main" | "subagent"
-export type ModelSelection = ModelV2.Ref | "session"
+export type ModelSelection = CatalogModel.Ref | "session"
 
 export interface Settings {
   readonly titleMode: TitleMode
@@ -22,9 +22,9 @@ export interface Settings {
 }
 
 export interface SelectHelperModelInput {
-  readonly agentModel?: ModelV2.Ref
+  readonly agentModel?: CatalogModel.Ref
   readonly roleModel?: ModelSelection
-  readonly sessionModel?: ModelV2.Ref
+  readonly sessionModel?: CatalogModel.Ref
 }
 
 const ANSI_CSI = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/g
@@ -66,8 +66,8 @@ export const selectHelperModel = (input: SelectHelperModelInput) =>
 const selectCompactionModel = (
   scopes: NonNullable<Settings["compactionScopes"]>,
   session: SessionSchema.Info,
-  agent?: AgentV2.Info,
-): ModelV2.Ref | undefined => {
+  agent?: Agent.Info,
+): CatalogModel.Ref | undefined => {
   const roleModel = scopes[session.parentID ? "subagent" : "main"]
   if (roleModel !== undefined && roleModel !== "session") return roleModel
   return agent?.model ?? session.model
@@ -77,10 +77,10 @@ const configuredModel = (
   selected: "session" | { readonly providerID: string; readonly model: string; readonly variant?: string } | undefined,
 ) => {
   if (!selected || selected === "session") return selected
-  return ModelV2.Ref.make({
-    providerID: ProviderV2.ID.make(selected.providerID),
-    id: ModelV2.ID.make(selected.model),
-    ...(selected.variant === undefined ? {} : { variant: ModelV2.VariantID.make(selected.variant) }),
+  return CatalogModel.Ref.make({
+    providerID: Provider.ID.make(selected.providerID),
+    id: CatalogModel.ID.make(selected.model),
+    ...(selected.variant === undefined ? {} : { variant: CatalogModel.VariantID.make(selected.variant) }),
   })
 }
 
@@ -109,11 +109,11 @@ export interface Interface {
   readonly resolveModel: (
     session: SessionSchema.Info,
     role: Role,
-    agent?: AgentV2.Info,
+    agent?: Agent.Info,
   ) => Effect.Effect<SessionRunnerModel.Resolved | undefined>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionHelperPolicy") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionHelperPolicy") {}
 
 export const make = (policy: Settings, models: SessionRunnerModel.Interface): Interface => ({
   settings: policy,

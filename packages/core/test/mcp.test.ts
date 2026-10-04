@@ -16,15 +16,15 @@ import { Config } from "@ycoding-ai/core/config"
 import { Credential } from "@ycoding-ai/core/credential"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Form } from "@ycoding-ai/core/form"
 import { Integration } from "@ycoding-ai/core/integration"
 import { Location } from "@ycoding-ai/core/location"
 import { MCP } from "@ycoding-ai/core/mcp/index"
 import { MCPClient } from "@ycoding-ai/core/mcp/client"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { McpTool } from "@ycoding-ai/core/tool/mcp"
@@ -37,8 +37,8 @@ import { imagePassthrough } from "./lib/image"
 import { location } from "./fixture/location"
 import { settleTool, toolDefinitions, toolIdentity, waitForTool } from "./lib/tool"
 
-let assertion: Deferred.Deferred<PermissionV2.AssertInput> | undefined
-let decision: Effect.Effect<void, PermissionV2.Error> = Effect.void
+let assertion: Deferred.Deferred<Permission.AssertInput> | undefined
+let decision: Effect.Effect<void, Permission.Error> = Effect.void
 let calls = 0
 
 type ResourcePage = {
@@ -202,14 +202,14 @@ function resourceMcpLayer(
         Layer.mock(SessionAutonomy.Service, {
           get: () => Effect.succeed(SessionAutonomy.defaultState),
         }),
-        Layer.mock(EventV2.Service, {
+        Layer.mock(EventRuntime.Service, {
           subscribe: () => Stream.never,
           publish: (definition, data) => {
             const event = {
-              id: EventV2.ID.create(),
+              id: EventRuntime.ID.create(),
               type: definition.type,
               data,
-            } as EventV2.Payload<typeof definition>
+            } as EventRuntime.Payload<typeof definition>
             if (event.type !== Form.Event.Created.type || !onFormCreated) return Effect.succeed(event)
             return onFormCreated(Schema.decodeUnknownSync(Form.Event.Created.data)(data).form).pipe(Effect.as(event))
           },
@@ -275,7 +275,7 @@ const mcp = Layer.mock(MCP.Service, {
       })
     }),
 })
-const permissions = Layer.mock(PermissionV2.Service, {
+const permissions = Layer.mock(Permission.Service, {
   assert: (input) =>
     Effect.gen(function* () {
       if (!assertion) return yield* Effect.die("Permission test is not initialized")
@@ -286,13 +286,13 @@ const permissions = Layer.mock(PermissionV2.Service, {
 const guardrail = Layer.mock(SessionGuardrail.Service, {
   assert: () => Effect.succeed({ release: Effect.void }),
 })
-const events = Layer.mock(EventV2.Service, { subscribe: () => Stream.never })
+const events = Layer.mock(EventRuntime.Service, { subscribe: () => Stream.never })
 const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, McpTool.node]), [
     [MCP.node, mcp],
-    [PermissionV2.node, permissions],
+    [Permission.node, permissions],
     [SessionGuardrail.node, guardrail],
-    [EventV2.node, events],
+    [EventRuntime.node, events],
     [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
     [Image.node, imagePassthrough],
   ]),
@@ -821,7 +821,7 @@ it.effect("exposes MCP output schemas through Code Mode search", () =>
     const registry = yield* ToolRegistry.Service
     yield* waitForTool(registry, "execute")
     const settlement = yield* settleTool(registry, {
-      sessionID: SessionV2.ID.make("ses_mcp_discovery"),
+      sessionID: Session.ID.make("ses_mcp_discovery"),
       ...toolIdentity,
       call: {
         type: "tool-call",
@@ -853,14 +853,14 @@ it.effect("advertises MCP tools directly when Code Mode is disabled for the serv
 it.effect("waits for permission before calling an MCP tool", () =>
   Effect.gen(function* () {
     calls = 0
-    assertion = yield* Deferred.make<PermissionV2.AssertInput>()
+    assertion = yield* Deferred.make<Permission.AssertInput>()
     const permission = yield* Deferred.make<void>()
     decision = Deferred.await(permission)
     const registry = yield* ToolRegistry.Service
     yield* waitForTool(registry, "execute")
 
     const fiber = yield* settleTool(registry, {
-      sessionID: SessionV2.ID.make("ses_mcp_permission"),
+      sessionID: Session.ID.make("ses_mcp_permission"),
       ...toolIdentity,
       call: {
         type: "tool-call",
@@ -874,7 +874,7 @@ it.effect("waits for permission before calling an MCP tool", () =>
       resources: ["*"],
       save: ["*"],
       metadata: {},
-      sessionID: SessionV2.ID.make("ses_mcp_permission"),
+      sessionID: Session.ID.make("ses_mcp_permission"),
       agent: toolIdentity.agent,
       source: {
         type: "tool",
@@ -893,13 +893,13 @@ it.effect("waits for permission before calling an MCP tool", () =>
 it.effect("does not call MCP when permission is blocked", () =>
   Effect.gen(function* () {
     calls = 0
-    assertion = yield* Deferred.make<PermissionV2.AssertInput>()
-    decision = Effect.fail(new PermissionV2.BlockedError({ rules: [], permission: "demo_search", resources: ["*"] }))
+    assertion = yield* Deferred.make<Permission.AssertInput>()
+    decision = Effect.fail(new Permission.BlockedError({ rules: [], permission: "demo_search", resources: ["*"] }))
     const registry = yield* ToolRegistry.Service
     yield* waitForTool(registry, "execute")
 
     const settlement = yield* settleTool(registry, {
-      sessionID: SessionV2.ID.make("ses_mcp_blocked"),
+      sessionID: Session.ID.make("ses_mcp_blocked"),
       ...toolIdentity,
       call: {
         type: "tool-call",

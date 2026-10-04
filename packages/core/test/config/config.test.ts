@@ -14,11 +14,11 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Credential } from "@ycoding-ai/core/credential"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { Watcher } from "@ycoding-ai/core/filesystem/watcher"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Global } from "@ycoding-ai/core/global"
 import { Location } from "@ycoding-ai/core/location"
 import { Project } from "@ycoding-ai/core/project"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { WellKnown } from "@ycoding-ai/core/wellknown"
 import { Integration } from "@ycoding-ai/schema/integration"
@@ -81,7 +81,7 @@ function testLayer(
       ),
     ),
   )
-  return AppNodeBuilder.build(LayerNode.group([Config.node, EventV2.node]), [
+  return AppNodeBuilder.build(LayerNode.group([Config.node, EventRuntime.node]), [
     [Config.node, Config.configured(options)],
     [Location.node, locationLayer],
     [
@@ -331,7 +331,7 @@ describe("Config", () => {
 
           return yield* Effect.gen(function* () {
             const config = yield* Config.Service
-            const events = yield* EventV2.Service
+            const events = yield* EventRuntime.Service
             const changed = yield* events
               .subscribe(ConfigSchema.Event.Updated)
               .pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped({ startImmediately: true }))
@@ -376,7 +376,7 @@ describe("Config", () => {
 
           return yield* Effect.gen(function* () {
             const config = yield* Config.Service
-            const events = yield* EventV2.Service
+            const events = yield* EventRuntime.Service
             yield* config.entries()
             const changed = yield* events
               .subscribe(ConfigSchema.Event.Updated)
@@ -412,7 +412,7 @@ describe("Config", () => {
 
           return yield* Effect.gen(function* () {
             const config = yield* Config.Service
-            const events = yield* EventV2.Service
+            const events = yield* EventRuntime.Service
             expect(Config.latest(yield* config.entries(), "shell")).toBe("global")
             const changed = yield* events
               .subscribe(ConfigSchema.Event.Updated)
@@ -517,7 +517,7 @@ describe("Config", () => {
 
           return yield* Effect.gen(function* () {
             const config = yield* Config.Service
-            const events = yield* EventV2.Service
+            const events = yield* EventRuntime.Service
             expect(Config.latest(yield* config.entries(), "shell")).toBe("secret")
             const updated = yield* events
               .subscribe(ConfigSchema.Event.Updated)

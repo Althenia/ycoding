@@ -7,15 +7,15 @@ import { Money } from "@ycoding-ai/schema/money"
 import type { FailureCode } from "@ycoding-ai/schema/session-compaction"
 import { and, asc, eq, lte } from "drizzle-orm"
 import { Cause, Clock, Context, Data, Duration, Effect, Layer, Option, Schema, Stream } from "effect"
-import { AgentV2 } from "../agent"
+import { Agent } from "../agent"
 import { Config } from "../config"
 import { ConfigCompaction } from "../config/compaction"
 import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
 import { llmClient } from "../effect/app-node-platform"
-import { EventV2 } from "../event"
-import { ModelV2 } from "../model"
-import { ProviderV2 } from "../provider"
+import { EventRuntime } from "../event"
+import { CatalogModel } from "../model"
+import { Provider } from "../provider"
 import { Hash } from "../util/hash"
 import { Token } from "../util/token"
 import { SessionCompactionJob } from "./compaction-job"
@@ -75,13 +75,13 @@ export interface Interface {
 type OwnerPrepared = {
   readonly request: LLMRequest
   readonly cache: { readonly promptCacheKey: string; readonly systemDigest: string; readonly toolDigest: string }
-  readonly cost: ModelV2.Info["cost"]
-  readonly modelRef?: ModelV2.Ref
+  readonly cost: CatalogModel.Info["cost"]
+  readonly modelRef?: CatalogModel.Ref
   readonly contextRevision: number
 }
 export type OwnerRequestBuilder = (job: SessionCompactionJob.Job) => Effect.Effect<OwnerPrepared, unknown>
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionCompaction") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionCompaction") {}
 
 export class ManifestError extends Data.TaggedError("SessionCompaction.ManifestError")<{
   readonly code: FailureCode
@@ -93,14 +93,14 @@ type Dependencies = {
   readonly llm: {
     readonly stream: (request: LLMRequest) => Stream.Stream<LLMEvent, LLMError>
   }
-  readonly agents: AgentV2.Interface
+  readonly agents: Agent.Interface
   readonly helpers: SessionHelperPolicy.Interface
   readonly requests: SessionProviderRequest.Interface
   readonly config: ConfigCompaction.Resolved
   readonly configService: Config.Interface
   readonly store: SessionStore.Interface
   readonly liveState: SessionLiveState.Interface
-  readonly events: EventV2.Interface
+  readonly events: EventRuntime.Interface
 }
 
 const make = (dependencies: Dependencies): Interface => {
@@ -149,7 +149,7 @@ const make = (dependencies: Dependencies): Interface => {
     const tracker = yield* dependencies.requests.next({
       sessionID: input.session.id,
       source: "compaction",
-      agent: AgentV2.ID.make("compaction"),
+      agent: Agent.ID.make("compaction"),
       model: modelRef,
       routeID: input.resolved.model.route.id,
       promptCacheKey: cache.promptCacheKey,
@@ -237,7 +237,7 @@ const make = (dependencies: Dependencies): Interface => {
           kind: "message",
           messageID: row.id,
           position,
-          terminalSeq: EventV2.Seq.make(row.seq),
+          terminalSeq: EventRuntime.Seq.make(row.seq),
           inputKind: row.type,
           payload: row.data,
           tokens: Token.estimateJson(row.data),
@@ -260,14 +260,14 @@ const make = (dependencies: Dependencies): Interface => {
           const tokens = Token.estimateJson(row.data)
           if (retainedTokens + tokens > 64_000) return []
           retainedTokens += tokens
-          return [{ messageID: entry.message.id, seq: EventV2.Seq.make(entry.seq), digest: ContextManifest.payloadDigest(row.data) }]
+          return [{ messageID: entry.message.id, seq: EventRuntime.Seq.make(entry.seq), digest: ContextManifest.payloadDigest(row.data) }]
         }).toReversed()
         const currentLiveState = yield* dependencies.liveState.load(job.sessionID).pipe(
           Effect.mapError(() => new ManifestError({ code: "migration_failed" })),
         )
         return ContextManifest.remote({
           baseContextRevision: job.baseContextRevision,
-          coveredThrough: { messageID: job.requestedThrough.messageID, seq: EventV2.Seq.make(job.requestedThrough.seq) },
+          coveredThrough: { messageID: job.requestedThrough.messageID, seq: EventRuntime.Seq.make(job.requestedThrough.seq) },
           protectedState: SessionLiveState.toProtectedState(currentLiveState.sources),
           retained,
           provider: owner.request.model.provider,
@@ -279,7 +279,7 @@ const make = (dependencies: Dependencies): Interface => {
         })
       }
     }
-    const agent = yield* dependencies.agents.get(AgentV2.ID.make("compaction"))
+    const agent = yield* dependencies.agents.get(Agent.ID.make("compaction"))
     const resolved = yield* dependencies.helpers.resolveModel(session, "compaction", agent)
     const helperSession = resolved ? yield* ensureHelperSession(dependencies, session, job, resolved.ref) : undefined
     const targetMaxInputTokens = job.targetMaxInputTokens ?? 0
@@ -312,7 +312,7 @@ const make = (dependencies: Dependencies): Interface => {
       baseContextRevision: job.baseContextRevision,
       coveredThrough: {
         messageID: job.requestedThrough.messageID,
-        seq: EventV2.Seq.make(job.requestedThrough.seq),
+        seq: EventRuntime.Seq.make(job.requestedThrough.seq),
       },
       items,
       settlements: [],
@@ -433,8 +433,8 @@ const remoteCompaction = Effect.fn("SessionCompaction.remote")(function* (
     const tracker = yield* dependencies.requests.next({
       sessionID: session.id,
       source: "compaction",
-      agent: session.agent ?? AgentV2.defaultID,
-      model: model ?? ModelV2.Ref.make({ providerID: ProviderV2.ID.make(owner.request.model.provider), id: ModelV2.ID.make(owner.request.model.id) }),
+      agent: session.agent ?? Agent.defaultID,
+      model: model ?? CatalogModel.Ref.make({ providerID: Provider.ID.make(owner.request.model.provider), id: CatalogModel.ID.make(owner.request.model.id) }),
       routeID: owner.request.model.route.id,
       ...owner.cache,
     })
@@ -1117,7 +1117,7 @@ const ensureHelperSession = Effect.fnUntraced(function* (
   dependencies: Dependencies,
   owner: SessionSchema.Info,
   job: SessionCompactionJob.Job,
-  model: ModelV2.Ref,
+  model: CatalogModel.Ref,
 ) {
   const id = SessionSchema.ID.make(`ses_compaction_${Hash.sha256(job.id).slice(0, 24)}`)
   const existing = yield* dependencies.store.get(id)
@@ -1128,7 +1128,7 @@ const ensureHelperSession = Effect.fnUntraced(function* (
     projectID: owner.projectID,
     location: owner.location,
     parentID: owner.id,
-    agent: AgentV2.ID.make("compaction"),
+    agent: Agent.ID.make("compaction"),
     model,
     permissionCeiling: owner.permissionCeiling,
     title: `Compaction ${job.id}`,
@@ -1144,7 +1144,7 @@ function startStreamed(
   dependencies: Dependencies,
   request: LLMRequest,
   hooks: {
-    readonly cost: ModelV2.Info["cost"]
+    readonly cost: CatalogModel.Info["cost"]
     readonly chunks: string[]
     readonly updateUsage: (step: SessionUsage.Recorded, timing: ReturnType<typeof SessionUsage.timing>) => void
     readonly setFailure: (code: FailureCode) => void
@@ -1173,12 +1173,12 @@ export const layer = (options?: SessionModelHeaders.Options) =>
     Effect.gen(function* () {
       const llm = yield* LLMClient.Service
       const config = yield* Config.Service
-      const agents = yield* AgentV2.Service
+      const agents = yield* Agent.Service
       const helpers = yield* SessionHelperPolicy.Service
       const requests = yield* SessionProviderRequest.Service
       const store = yield* SessionStore.Service
       const liveState = yield* SessionLiveState.Service
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const { db } = yield* Database.Service
       return make({
         db,
@@ -1207,12 +1207,12 @@ export function configured(options?: SessionModelHeaders.Options) {
     deps: [
       llmClient,
       Config.node,
-      AgentV2.node,
+      Agent.node,
       SessionHelperPolicy.node,
       SessionProviderRequest.node,
       SessionStore.node,
       SessionLiveState.node,
-      EventV2.node,
+      EventRuntime.node,
       Database.node,
     ],
   })

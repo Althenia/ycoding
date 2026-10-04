@@ -15,7 +15,7 @@ import { RailProvider, RailRow, RailSection } from "./rail-section"
 export function Sidebar(props: { sessionID: string; autonomy: SessionAutonomyState; overlay?: boolean }) {
   const pluginRuntime = usePluginRuntime()
   const data = useData()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const config = useConfig().data
   const dimensions = useTerminalDimensions()
   const session = createMemo(() => data.session.get(props.sessionID))
@@ -25,9 +25,9 @@ export function Sidebar(props: { sessionID: string; autonomy: SessionAutonomySta
   return (
     <Show when={session()}>
       <box
-        backgroundColor={themeV2.background.default}
+        backgroundColor={theme.background.default}
         border={["left"]}
-        borderColor={themeV2.border.default}
+        borderColor={theme.border.default}
         width={railWidth(dimensions().width)}
         height="100%"
         paddingBottom={1}
@@ -43,7 +43,7 @@ export function Sidebar(props: { sessionID: string; autonomy: SessionAutonomySta
             right: 0,
             trackOptions: {
               backgroundColor: "transparent",
-              foregroundColor: themeV2.scrollbar.default,
+              foregroundColor: theme.scrollbar.default,
             },
           }}
         >
@@ -81,7 +81,7 @@ export function Sidebar(props: { sessionID: string; autonomy: SessionAutonomySta
                         label={plugin.id}
                         value={plugin.active ? "active" : "inactive"}
                         valueColor={
-                          plugin.active ? themeV2.text.feedback.success.default : themeV2.text.subdued
+                          plugin.active ? theme.text.feedback.success.default : theme.text.subdued
                         }
                       />
                     )}
@@ -114,11 +114,11 @@ export function SessionRailContent(props: { sessionID: string; title: string; ch
 }
 
 function SessionRailIdentity(props: { title: string }) {
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
 
   return (
     <>
-      <text fg={themeV2.text.default}>
+      <text fg={theme.text.default}>
         <b>{props.title}</b>
       </text>
     </>
@@ -126,7 +126,7 @@ function SessionRailIdentity(props: { title: string }) {
 }
 
 export function AutonomyRailContent(props: { autonomy: SessionAutonomyState }) {
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const level = createMemo(() => yoloLevel(props.autonomy))
 
   return (
@@ -134,12 +134,12 @@ export function AutonomyRailContent(props: { autonomy: SessionAutonomyState }) {
       <Show when={props.autonomy.goal?.status === "active" ? props.autonomy.goal : undefined}>
         {(goal) => (
           <RailSection section="goal" title="GOAL" summary={goal().status}>
-            <text fg={themeV2.text.default}>{goal().text}</text>
+            <text fg={theme.text.default}>{goal().text}</text>
             <box height={1} flexShrink={0} />
             <RailRow
               label="Status"
               value={goal().status}
-              valueColor={themeV2.text.feedback.success.default}
+              valueColor={theme.text.feedback.success.default}
             />
           </RailSection>
         )}
@@ -149,16 +149,16 @@ export function AutonomyRailContent(props: { autonomy: SessionAutonomyState }) {
           <RailRow
             label="Approvals"
             value={level() > 0 ? `auto · YOLO ${level()}` : "manual"}
-            valueColor={level() > 0 ? themeV2.text.feedback.warning.default : themeV2.text.default}
+            valueColor={level() > 0 ? theme.text.feedback.warning.default : theme.text.default}
           />
           <RailRow
             label="Guardrails"
             value={level() === 3 ? "auto · YOLO 3" : "enforced"}
             valueColor={
-              level() === 3 ? themeV2.text.feedback.warning.default : themeV2.text.feedback.success.default
+              level() === 3 ? theme.text.feedback.warning.default : theme.text.feedback.success.default
             }
           />
-          <RailRow label="Hard reviews" value="human only" valueColor={themeV2.text.feedback.success.default} />
+          <RailRow label="Hard reviews" value="human only" valueColor={theme.text.feedback.success.default} />
         </RailSection>
       </Show>
     </>

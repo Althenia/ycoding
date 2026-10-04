@@ -2,7 +2,7 @@ import { expect } from "bun:test"
 import { Context, Effect, Layer } from "effect"
 import { Database } from "@ycoding-ai/core/database/database"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
-import { ProjectV2 } from "@ycoding-ai/core/project"
+import { Project } from "@ycoding-ai/core/project"
 import { SessionContinuation } from "@ycoding-ai/core/session/runner/continuation"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { SessionContextRevisionTable, SessionTable } from "@ycoding-ai/core/session/sql"
@@ -242,7 +242,7 @@ function makeContinuation() {
 function seedSessions() {
   return Effect.gen(function* () {
     const db = (yield* Database.Service).db
-    const projectID = ProjectV2.ID.make("project-continuation")
+    const projectID = Project.ID.make("project-continuation")
     yield* db.insert(ProjectTable).values([{ id: projectID, worktree: AbsolutePath.make("/tmp"), sandboxes: [] }])
     yield* db.insert(SessionTable).values([
       { id: sessionID, project_id: projectID, directory: "/tmp", title: "Continuation" },

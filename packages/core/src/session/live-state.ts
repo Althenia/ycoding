@@ -7,7 +7,7 @@ import { and, asc, desc, eq, inArray } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { EventTable } from "../event/sql"
 import { Hash } from "../util/hash"
 import { SessionAutonomy } from "./autonomy"
@@ -59,7 +59,7 @@ export interface Interface {
   readonly load: (sessionID: Session.ID) => Effect.Effect<Snapshot, SessionErrors.NotFoundError>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionLiveState") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionLiveState") {}
 
 export const sourceOrder = [
   "instructions",
@@ -102,24 +102,24 @@ export function toDatabaseProtectedState(
 }
 
 const instructionEventTypes = [
-  EventV2.versionedType(SessionEvent.InstructionsUpdated.type, SessionEvent.InstructionsUpdated.durable.version),
-  EventV2.versionedType(SessionEvent.Compaction.EndedV1.type, SessionEvent.Compaction.EndedV1.durable.version),
-  EventV2.versionedType(SessionEvent.Compaction.Ended.type, SessionEvent.Compaction.Ended.durable.version),
-  EventV2.versionedType(SessionEvent.Moved.type, SessionEvent.Moved.durable.version),
-  EventV2.versionedType(SessionEvent.RevertEvent.Committed.type, SessionEvent.RevertEvent.Committed.durable.version),
+  EventRuntime.versionedType(SessionEvent.InstructionsUpdated.type, SessionEvent.InstructionsUpdated.durable.version),
+  EventRuntime.versionedType(SessionEvent.Compaction.EndedV1.type, SessionEvent.Compaction.EndedV1.durable.version),
+  EventRuntime.versionedType(SessionEvent.Compaction.Ended.type, SessionEvent.Compaction.Ended.durable.version),
+  EventRuntime.versionedType(SessionEvent.Moved.type, SessionEvent.Moved.durable.version),
+  EventRuntime.versionedType(SessionEvent.RevertEvent.Committed.type, SessionEvent.RevertEvent.Committed.durable.version),
 ]
 
 const pendingEventTypes = [
-  EventV2.versionedType(SessionEvent.InputAdmitted.type, SessionEvent.InputAdmitted.durable.version),
-  EventV2.versionedType(SessionEvent.InputPromoted.type, SessionEvent.InputPromoted.durable.version),
-  EventV2.versionedType(SessionEvent.Compaction.AdmittedV1.type, SessionEvent.Compaction.AdmittedV1.durable.version),
-  EventV2.versionedType(SessionEvent.Compaction.EndedV1.type, SessionEvent.Compaction.EndedV1.durable.version),
-  EventV2.versionedType(SessionEvent.Compaction.FailedV1.type, SessionEvent.Compaction.FailedV1.durable.version),
+  EventRuntime.versionedType(SessionEvent.InputAdmitted.type, SessionEvent.InputAdmitted.durable.version),
+  EventRuntime.versionedType(SessionEvent.InputPromoted.type, SessionEvent.InputPromoted.durable.version),
+  EventRuntime.versionedType(SessionEvent.Compaction.AdmittedV1.type, SessionEvent.Compaction.AdmittedV1.durable.version),
+  EventRuntime.versionedType(SessionEvent.Compaction.EndedV1.type, SessionEvent.Compaction.EndedV1.durable.version),
+  EventRuntime.versionedType(SessionEvent.Compaction.FailedV1.type, SessionEvent.Compaction.FailedV1.durable.version),
 ]
 
 const permissionEventTypes = [
-  EventV2.versionedType(SessionEvent.Created.type, SessionEvent.Created.durable.version),
-  EventV2.versionedType(SessionEvent.Forked.type, SessionEvent.Forked.durable.version),
+  EventRuntime.versionedType(SessionEvent.Created.type, SessionEvent.Created.durable.version),
+  EventRuntime.versionedType(SessionEvent.Forked.type, SessionEvent.Forked.durable.version),
 ]
 
 export const captureDatabase = Effect.fn("SessionLiveState.captureDatabase")(function* (

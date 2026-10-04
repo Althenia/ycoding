@@ -3,21 +3,21 @@ import { Effect, Layer } from "effect"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Database } from "@ycoding-ai/core/database/database"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Location } from "@ycoding-ai/core/location"
-import { ProjectV2 } from "@ycoding-ai/core/project"
+import { Project } from "@ycoding-ai/core/project"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { testEffect } from "./lib/effect"
 
 const projects = Layer.succeed(
-  ProjectV2.Service,
-  ProjectV2.Service.of({
+  Project.Service,
+  Project.Service.of({
     list: () => Effect.succeed([]),
-    resolve: (directory) => Effect.succeed({ id: ProjectV2.ID.global, directory }),
+    resolve: (directory) => Effect.succeed({ id: Project.ID.global, directory }),
     directories: () => Effect.succeed([]),
     recordOpened: () => Effect.void,
     commit: () => Effect.void,
@@ -25,19 +25,19 @@ const projects = Layer.succeed(
 )
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionStore.node, SessionV2.node]),
+    LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node, SessionStore.node, Session.node]),
     [
-      [ProjectV2.node, projects],
+      [Project.node, projects],
       [SessionExecution.node, SessionExecution.noopLayer],
     ],
   ),
 )
 const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 
-describe("SessionV2.remove", () => {
+describe("Session.remove", () => {
   it.effect("removes a session and its children", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       const parent = yield* session.create({ location })
       const child = yield* session.create({ parentID: parent.id })
 
@@ -51,8 +51,8 @@ describe("SessionV2.remove", () => {
 
   it.effect("fails when the session does not exist", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const sessionID = SessionV2.ID.make("ses_missing")
+      const session = yield* Session.Service
+      const sessionID = Session.ID.make("ses_missing")
 
       expect(yield* Effect.result(session.remove(sessionID))).toMatchObject({
         _tag: "Failure",

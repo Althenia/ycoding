@@ -1,8 +1,8 @@
 import { LLMError, ToolFailure } from "@ycoding-ai/ai"
 import { Tool } from "@ycoding-ai/plugin/effect/tool"
 import { SessionError } from "@ycoding-ai/schema/session-error"
-import { PermissionV2 } from "../permission"
-import { QuestionV2 } from "../question"
+import { Permission } from "../permission"
+import { Question } from "../question"
 import { Integration } from "../integration"
 import { ToolOutputStore } from "../tool-output-store"
 import { AgentNotFoundError, StepFailedError, UserInterruptedError } from "./error"
@@ -37,8 +37,8 @@ export function toSessionError(cause: unknown): SessionError.Error {
       }
     }
   }
-  if (cause instanceof PermissionV2.BlockedError) return { type: "permission.rejected", message: cause.message }
-  if (cause instanceof QuestionV2.RejectedError) return { type: "aborted", message: cause.message }
+  if (cause instanceof Permission.BlockedError) return { type: "permission.rejected", message: cause.message }
+  if (cause instanceof Question.RejectedError) return { type: "aborted", message: cause.message }
   if (cause instanceof ToolFailure || cause instanceof Tool.Failure)
     return cause.error === undefined ? { type: "tool.execution", message: cause.message } : toSessionError(cause.error)
   if (cause instanceof StepFailedError) return cause.error

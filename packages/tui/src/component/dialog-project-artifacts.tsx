@@ -45,7 +45,7 @@ export type DialogProjectArtifactsProps = {
 export function DialogProjectArtifacts(props: DialogProjectArtifactsProps) {
   const client = useClient()
   const dialog = useDialog()
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const [scope, setScope] = createSignal<ArtifactScope>("project")
   const [stage, setStage] = createSignal<ArtifactStage | "all">("all")
   const [selected, setSelected] = createSignal<ArtifactListItem>()
@@ -82,14 +82,14 @@ export function DialogProjectArtifacts(props: DialogProjectArtifactsProps) {
       return {
         title: artifact.name,
         titleView: status?.loaded === false ? (
-          <span style={{ fg: themeV2.text.subdued }}>{artifact.name}</span>
+          <span style={{ fg: theme.text.subdued }}>{artifact.name}</span>
         ) : undefined,
         description: artifact.description,
         footer:
           status === undefined ? undefined : status.loaded ? (
-            <span style={{ fg: themeV2.text.action.primary.focused }}>{status.label}</span>
+            <span style={{ fg: theme.text.action.primary.focused }}>{status.label}</span>
           ) : (
-            <span style={{ fg: themeV2.text.subdued }}>{status.label}</span>
+            <span style={{ fg: theme.text.subdued }}>{status.label}</span>
           ),
         state: status === undefined ? undefined : status.loaded ? "connected" : "disabled",
         category: isTrashArtifact(artifact) ? "Trash" : artifact.kind === "plugin" ? "Plugins" : artifactKindLabel(artifact.kind),
@@ -155,7 +155,7 @@ export function DialogProjectArtifacts(props: DialogProjectArtifactsProps) {
             },
           ]}
           footer={
-            <text fg={themeV2.text.subdued}>
+            <text fg={theme.text.subdued}>
               {labels().scope}
               <Show when={scope() !== "trash"}> · {labels().stage}</Show>
             </text>
@@ -164,30 +164,30 @@ export function DialogProjectArtifacts(props: DialogProjectArtifactsProps) {
             <Switch
               fallback={
                 <box paddingLeft={4} paddingRight={4} paddingTop={1}>
-                  <text fg={themeV2.text.subdued}>No project artifacts</text>
+                  <text fg={theme.text.subdued}>No project artifacts</text>
                 </box>
               }
             >
               <Match when={loadError()}>
                 <box paddingLeft={4} paddingRight={4} paddingTop={1}>
-                  <text fg={themeV2.text.feedback.error.default} attributes={TextAttributes.BOLD}>
+                  <text fg={theme.text.feedback.error.default} attributes={TextAttributes.BOLD}>
                     Could not load project artifacts
                   </text>
-                  <text fg={themeV2.text.subdued} wrapMode="word">
+                  <text fg={theme.text.subdued} wrapMode="word">
                     {errorMessage(loadError())}
                   </text>
                 </box>
               </Match>
               <Match when={artifacts.loading}>
                 <box paddingLeft={4} paddingRight={4} paddingTop={1}>
-                  <text fg={themeV2.text.subdued}>Loading project artifacts…</text>
+                  <text fg={theme.text.subdued}>Loading project artifacts…</text>
                 </box>
               </Match>
             </Switch>
           }
           noMatchView={
             <box paddingLeft={4} paddingRight={4} paddingTop={1}>
-              <text fg={themeV2.text.subdued}>No matching project artifacts</text>
+              <text fg={theme.text.subdued}>No matching project artifacts</text>
             </box>
           }
         />
@@ -303,7 +303,7 @@ function DialogProjectArtifactDetails(props: {
 }) {
   const client = useClient()
   const toast = useToast()
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const [loadError, setLoadError] = createSignal<unknown>()
   const [working, setWorking] = createSignal(false)
   const [selectedVersion, setSelectedVersion] = createSignal<ProjectArtifactVersion>()
@@ -525,23 +525,23 @@ function DialogProjectArtifactDetails(props: {
             <Switch
               fallback={
                 <box paddingLeft={4} paddingRight={4} paddingTop={1}>
-                  <text fg={themeV2.text.subdued}>No versions available</text>
+                  <text fg={theme.text.subdued}>No versions available</text>
                 </box>
               }
             >
               <Match when={loadError()}>
                 <box paddingLeft={4} paddingRight={4} paddingTop={1}>
-                  <text fg={themeV2.text.feedback.error.default} attributes={TextAttributes.BOLD}>
+                  <text fg={theme.text.feedback.error.default} attributes={TextAttributes.BOLD}>
                     Could not load artifact details
                   </text>
-                  <text fg={themeV2.text.subdued} wrapMode="word">
+                  <text fg={theme.text.subdued} wrapMode="word">
                     {errorMessage(loadError())}
                   </text>
                 </box>
               </Match>
               <Match when={loaded.loading}>
                 <box paddingLeft={4} paddingRight={4} paddingTop={1}>
-                  <text fg={themeV2.text.subdued}>Loading artifact details…</text>
+                  <text fg={theme.text.subdued}>Loading artifact details…</text>
                 </box>
               </Match>
             </Switch>
@@ -629,7 +629,7 @@ function ArtifactConfirmation(props: {
   onBack: () => void
   onConfirm: () => void
 }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   return (
     <DialogSelect
       title={props.title}
@@ -649,7 +649,7 @@ function ArtifactConfirmation(props: {
       ]}
       emptyView={
         <box paddingLeft={4} paddingRight={4} paddingTop={1}>
-          <text fg={themeV2.text.subdued} wrapMode="word">
+          <text fg={theme.text.subdued} wrapMode="word">
             {props.message}
           </text>
         </box>
@@ -659,12 +659,12 @@ function ArtifactConfirmation(props: {
 }
 
 function ArtifactLines(props: { lines: ReadonlyArray<string> }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   return (
     <box paddingLeft={4} paddingRight={4} paddingTop={1} flexDirection="column">
       <For each={props.lines}>
         {(line) => (
-          <text fg={themeV2.text.subdued} wrapMode="word">
+          <text fg={theme.text.subdued} wrapMode="word">
             {line}
           </text>
         )}

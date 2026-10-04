@@ -10,8 +10,8 @@ import type {
   YCodingClient,
   YCodingEvent,
   PermissionSavedInfo,
-  PermissionV2Request,
-  ProviderV2Info,
+  PermissionRequest,
+  ProviderInfo,
   ReferenceInfo,
   SessionInfo,
   SessionDiagnosticsOutput,
@@ -68,7 +68,7 @@ export interface Data {
       invalidate(sessionID: string): void
     }
     readonly permission: {
-      list(sessionID: string): PermissionV2Request[] | undefined
+      list(sessionID: string): PermissionRequest[] | undefined
       sync(sessionID: string): Promise<void>
       invalidate(sessionID: string): void
     }
@@ -103,7 +103,7 @@ export interface Data {
       readonly resource: LocationCollection<McpResource>
     }
     readonly model: LocationCollection<ModelInfo>
-    readonly provider: LocationCollection<ProviderV2Info>
+    readonly provider: LocationCollection<ProviderInfo>
     readonly reference: LocationCollection<ReferenceInfo>
     readonly skill: LocationCollection<SkillInfo>
   }

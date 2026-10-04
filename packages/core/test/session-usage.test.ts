@@ -1,5 +1,5 @@
 import { Usage } from "@ycoding-ai/ai"
-import { ModelV2 } from "@ycoding-ai/core/model"
+import { CatalogModel } from "@ycoding-ai/core/model"
 import { SessionUsage } from "@ycoding-ai/core/session/usage"
 import { Money } from "@ycoding-ai/schema/money"
 import { expect, test } from "bun:test"
@@ -14,7 +14,7 @@ const costs = (input: number, output: number) =>
         write: Money.USDPerMillionTokens.zero,
       },
     },
-  ] satisfies ModelV2.Info["cost"]
+  ] satisfies CatalogModel.Info["cost"]
 
 test("preserves whether provider cache categories were reported", () => {
   expect(SessionUsage.providerCache(undefined)).toEqual({ readReported: false, writeReported: false })
@@ -89,7 +89,7 @@ test("prices Anthropic one-hour cache writes at twice input while preserving agg
     input: Money.USDPerMillionTokens.make(4),
     output: Money.USDPerMillionTokens.make(0),
     cache: { read: Money.USDPerMillionTokens.zero, write: Money.USDPerMillionTokens.make(5) },
-  }] satisfies ModelV2.Info["cost"]
+  }] satisfies CatalogModel.Info["cost"]
   const usage = (oneHour: unknown) => new Usage({
     inputTokens: 2_000,
     nonCachedInputTokens: 0,

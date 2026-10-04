@@ -5,7 +5,7 @@ import { mcpStatusPresentation, type McpTone } from "../../mcp-presentation"
 import { RailRow, RailSection } from "../../routes/session/rail-section"
 
 function View(props: { context: Plugin.Context; sessionID: string }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const session = createMemo(() => props.context.data.session.get(props.sessionID))
   const list = createMemo(() => props.context.data.location.mcp.server.list(session()?.location) ?? [])
   const summary = createMemo(() => {
@@ -16,10 +16,10 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
   })
 
   const color = (tone: McpTone) => {
-    if (tone === "success") return themeV2.text.feedback.success.default
-    if (tone === "warning") return themeV2.text.feedback.warning.default
-    if (tone === "error") return themeV2.text.feedback.error.default
-    return themeV2.text.subdued
+    if (tone === "success") return theme.text.feedback.success.default
+    if (tone === "warning") return theme.text.feedback.warning.default
+    if (tone === "error") return theme.text.feedback.error.default
+    return theme.text.subdued
   }
 
   return (

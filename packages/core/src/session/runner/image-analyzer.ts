@@ -12,7 +12,7 @@ import { ConfigImageAnalyzer } from "../../config/image-analyzer"
 import { Credential } from "../../credential"
 import { Integration } from "../../integration"
 import { IntegrationConnection } from "../../integration/connection"
-import { ModelV2 } from "../../model"
+import { CatalogModel } from "../../model"
 import { SessionRunnerModel } from "./model"
 
 export const IMAGE_ANALYSIS_SCHEMA_VERSION = "1"
@@ -142,7 +142,7 @@ export interface AnalyzeInput {
 }
 
 export interface Interface {
-  readonly isMultimodalModel: (model: ModelV2.Info) => boolean
+  readonly isMultimodalModel: (model: CatalogModel.Info) => boolean
   readonly standardPrompt: string
   readonly analyze: (
     inputs: readonly AnalyzeInput[],
@@ -150,7 +150,7 @@ export interface Interface {
   ) => Effect.Effect<ReadonlyMap<string, string>>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/ImageAnalyzer") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/ImageAnalyzer") {}
 
 export const createAnalysisMemo = () => {
   const analyses = new Map<string, string>()
@@ -194,11 +194,11 @@ const layer = Layer.effect(
       const selection = ConfigImageAnalyzer.resolveSelection(info)
       if (!selection) return undefined
       const modelInfo = yield* catalog.model.get(selection.providerID, selection.model).pipe(
-        Effect.orElseSucceed(() => undefined as unknown as ModelV2.Info | undefined),
+        Effect.orElseSucceed(() => undefined as unknown as CatalogModel.Info | undefined),
       )
       if (!modelInfo) return undefined
       const provider = yield* catalog.provider.get(modelInfo.providerID).pipe(
-        Effect.orElseSucceed(() => undefined as unknown as import("../../provider").ProviderV2.Info | undefined),
+        Effect.orElseSucceed(() => undefined as unknown as import("../../provider").Provider.Info | undefined),
       )
       const connection = yield* integrations.connection
         .active(provider?.integrationID ?? Integration.ID.make(modelInfo.providerID))

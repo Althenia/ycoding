@@ -1,7 +1,7 @@
 import type { SessionAutonomyState } from "@ycoding-ai/client"
 import { For } from "solid-js"
 import { useTheme } from "../../context/theme"
-import { readableForeground } from "../../theme/v2/component"
+import { readableForeground } from "../../theme/component"
 import { yoloLevel } from "../../util/session-autonomy"
 
 export type ModeChip = { key: "goal" | "yolo"; label: string; tone: "off" | "on" | "warning" | "danger" }
@@ -29,20 +29,20 @@ export function modeChips(input: { autonomy?: SessionAutonomyState; guardrailPen
 }
 
 export function ModeChips(props: { autonomy?: SessionAutonomyState; guardrailPending?: boolean }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const style = (tone: ModeChip["tone"]) => {
     if (tone === "danger")
       return {
-        fg: readableForeground(themeV2.text.action.destructive.default, themeV2.background.action.destructive.default),
-        bg: themeV2.background.action.destructive.default,
+        fg: readableForeground(theme.text.action.destructive.default, theme.background.action.destructive.default),
+        bg: theme.background.action.destructive.default,
       }
-    if (tone === "on") return { fg: themeV2.text.action.primary.focused, bg: themeV2.background.action.primary.focused }
+    if (tone === "on") return { fg: theme.text.action.primary.focused, bg: theme.background.action.primary.focused }
     if (tone === "warning")
       return {
-        fg: readableForeground(themeV2.text.action.primary.focused, themeV2.text.feedback.warning.default),
-        bg: themeV2.text.feedback.warning.default,
+        fg: readableForeground(theme.text.action.primary.focused, theme.text.feedback.warning.default),
+        bg: theme.text.feedback.warning.default,
       }
-    return { fg: themeV2.text.subdued }
+    return { fg: theme.text.subdued }
   }
 
   return (
@@ -60,10 +60,10 @@ export function ModeChips(props: { autonomy?: SessionAutonomyState; guardrailPen
 }
 
 function FilledWarningChip(props: { label: string }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const style = {
-    fg: readableForeground(themeV2.text.action.primary.focused, themeV2.text.feedback.warning.default),
-    bg: themeV2.text.feedback.warning.default,
+    fg: readableForeground(theme.text.action.primary.focused, theme.text.feedback.warning.default),
+    bg: theme.text.feedback.warning.default,
   }
   return (
     <text wrapMode="none" flexShrink={0} fg={style.fg}>

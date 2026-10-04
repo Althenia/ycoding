@@ -32,7 +32,7 @@ import {
 import type { FileSystemEntry } from "@ycoding-ai/client"
 import { stringWidth } from "../../util/string-width"
 import { parseFileLineRange, stripFileLineRange } from "../../prompt/parse"
-import type { ComponentTheme } from "../../theme/v2/component"
+import type { ComponentTheme } from "../../theme/component"
 
 export type AutocompleteRef = {
   onInput: (value: string) => void
@@ -85,8 +85,8 @@ export function Autocomplete(props: {
   const data = useData()
   const keymap = Keymap.use()
   const keymapCommands = Keymap.useCommands()
-  const { themeV2 } = useTheme()
-  const selection = autocompleteSelectionColors(themeV2)
+  const { theme } = useTheme()
+  const selection = autocompleteSelectionColors(theme)
   const dimensions = useTerminalDimensions()
   const frecency = useFrecency()
   const paths = useTuiPaths()
@@ -829,8 +829,8 @@ export function Autocomplete(props: {
         width={popupWidth()}
         zIndex={100}
         {...SplitBorder}
-        backgroundColor={store.visible === "/" ? themeV2.background.surface.offset : undefined}
-        borderColor={themeV2.border.default}
+        backgroundColor={store.visible === "/" ? theme.background.surface.offset : undefined}
+        borderColor={theme.border.default}
         flexDirection="column"
       >
         <Show when={store.visible === "/"}>
@@ -842,15 +842,15 @@ export function Autocomplete(props: {
               paddingRight={textRightInset()}
               height={1}
             >
-              <text fg={themeV2.text.label}>/ COMMANDS</text>
-              <text fg={themeV2.text.label} flexShrink={0}>{`${options().length} of ${commands().length}`}</text>
+              <text fg={theme.text.label}>/ COMMANDS</text>
+              <text fg={theme.text.label} flexShrink={0}>{`${options().length} of ${commands().length}`}</text>
             </box>
-            <text fg={themeV2.border.default}>{"─".repeat(Math.max(1, popupWidth() - 2))}</text>
+            <text fg={theme.border.default}>{"─".repeat(Math.max(1, popupWidth() - 2))}</text>
           </>
         </Show>
         <box
           backgroundColor={
-            store.visible === "/" ? themeV2.background.surface.offset : themeV2.background.surface.overlay
+            store.visible === "/" ? theme.background.surface.offset : theme.background.surface.overlay
           }
           height={height()}
           onMouseScroll={(event) => {
@@ -863,7 +863,7 @@ export function Autocomplete(props: {
             each={renderWindow().options}
             fallback={
               <box paddingLeft={1} paddingRight={1}>
-                <text fg={emptyError() ? themeV2.text.feedback.error.default : themeV2.text.subdued}>
+                <text fg={emptyError() ? theme.text.feedback.error.default : theme.text.subdued}>
                   {emptyMessage()}
                 </text>
               </box>
@@ -872,7 +872,7 @@ export function Autocomplete(props: {
             {(option, index) => (
               <box
                 backgroundColor={
-                  store.visible === "/" ? themeV2.background.surface.offset : themeV2.background.surface.overlay
+                  store.visible === "/" ? theme.background.surface.offset : theme.background.surface.overlay
                 }
                 height={1}
                 flexDirection="column"
@@ -890,8 +890,8 @@ export function Autocomplete(props: {
                     renderWindow().start + index() === store.selected
                       ? selection.fill
                       : store.visible === "/"
-                        ? themeV2.background.surface.offset
-                        : themeV2.background.surface.overlay
+                        ? theme.background.surface.offset
+                        : theme.background.surface.overlay
                   }
                   flexDirection="row"
                 >
@@ -902,7 +902,7 @@ export function Autocomplete(props: {
                   >
                     <text
                       fg={
-                        renderWindow().start + index() === store.selected ? selection.foreground : themeV2.text.default
+                        renderWindow().start + index() === store.selected ? selection.foreground : theme.text.default
                       }
                       flexShrink={0}
                     >
@@ -917,16 +917,16 @@ export function Autocomplete(props: {
                         foreground={
                           renderWindow().start + index() === store.selected
                             ? selection.foreground
-                            : themeV2.text.default
+                            : theme.text.default
                         }
                         background={
                           renderWindow().start + index() === store.selected
                             ? selection.fill
                             : store.visible === "/"
-                              ? themeV2.background.surface.offset
-                              : themeV2.background.surface.overlay
+                              ? theme.background.surface.offset
+                              : theme.background.surface.overlay
                         }
-                        accent={themeV2.text.feedback.success.default}
+                        accent={theme.text.feedback.success.default}
                       />
                     </text>
                   </box>
@@ -935,7 +935,7 @@ export function Autocomplete(props: {
                       fg={
                         renderWindow().start + index() === store.selected
                           ? selection.foreground
-                          : themeV2.text.feedback.warning.default
+                          : theme.text.feedback.warning.default
                       }
                       flexShrink={0}
                     >
@@ -945,7 +945,7 @@ export function Autocomplete(props: {
                   <Show when={option.description}>
                     <text
                       fg={
-                        renderWindow().start + index() === store.selected ? selection.foreground : themeV2.text.subdued
+                        renderWindow().start + index() === store.selected ? selection.foreground : theme.text.subdued
                       }
                       wrapMode="none"
                     >
@@ -954,13 +954,13 @@ export function Autocomplete(props: {
                           fg:
                             renderWindow().start + index() === store.selected
                               ? selection.foreground
-                              : themeV2.text.subdued,
+                              : theme.text.subdued,
                           bg:
                             renderWindow().start + index() === store.selected
                               ? selection.fill
                               : store.visible === "/"
-                                ? themeV2.background.surface.offset
-                                : themeV2.background.surface.overlay,
+                                ? theme.background.surface.offset
+                                : theme.background.surface.overlay,
                         }}
                       >
                         {" " + option.description?.trimStart()}
@@ -974,9 +974,9 @@ export function Autocomplete(props: {
         </box>
         <Show when={store.visible === "/"}>
           <>
-            <text fg={themeV2.border.default}>{"─".repeat(Math.max(1, popupWidth() - 2))}</text>
+            <text fg={theme.border.default}>{"─".repeat(Math.max(1, popupWidth() - 2))}</text>
             <box paddingLeft={textLeftInset()} paddingRight={textRightInset()} height={1}>
-              <text fg={themeV2.text.subdued}>↑↓ move Enter accept Tab complete Esc close</text>
+              <text fg={theme.text.subdued}>↑↓ move Enter accept Tab complete Esc close</text>
             </box>
           </>
         </Show>

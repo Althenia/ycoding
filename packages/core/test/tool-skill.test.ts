@@ -7,12 +7,12 @@ import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Location } from "@ycoding-ai/core/location"
 import { MCP } from "@ycoding-ai/core/mcp/index"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
-import { SkillV2 } from "@ycoding-ai/core/skill"
+import { Skill } from "@ycoding-ai/core/skill"
 import { SkillTool } from "@ycoding-ai/core/tool/skill"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
@@ -34,9 +34,9 @@ const skillToolNode = makeLocationNode({
   deps: [
     ToolRegistry.toolsNode,
     FSUtil.node,
-    SkillV2.node,
+    Skill.node,
     MCP.node,
-    PermissionV2.node,
+    Permission.node,
     PluginRuntime.node,
     ProjectArtifactSource.node,
     LocationMutation.node,
@@ -44,7 +44,7 @@ const skillToolNode = makeLocationNode({
   ],
 })
 
-const sessionID = SessionV2.ID.make("ses_skill_tool_test")
+const sessionID = Session.ID.make("ses_skill_tool_test")
 
 describe("SkillTool", () => {
   it.live("lists available skills, authorizes the selected ID, and loads model-facing content", () =>
@@ -78,12 +78,12 @@ describe("SkillTool", () => {
             ]),
           )
 
-          const info: SkillV2.Info = {
-            id: SkillV2.ID.make("effect"),
-            name: SkillV2.Name.make("Effect"),
+          const info: Skill.Info = {
+            id: Skill.ID.make("effect"),
+            name: Skill.Name.make("Effect"),
             description: "Use Effect",
             conflicts: {
-              skills: [SkillV2.ID.make("other")],
+              skills: [Skill.ID.make("other")],
               instructions: [],
             },
             location: AbsolutePath.make(location),
@@ -91,27 +91,27 @@ describe("SkillTool", () => {
           }
           let current = [info]
           let active = false
-          const assertions: PermissionV2.AssertInput[] = []
+          const assertions: Permission.AssertInput[] = []
           const sourceActivations: Parameters<ProjectArtifactSource.Interface["activate"]>[0][] = []
           let permissionFailure: "denied" | "corrected" | "cancelled" | undefined
-          const authorize = (input: PermissionV2.AssertInput): Effect.Effect<void, PermissionV2.Error> => {
+          const authorize = (input: Permission.AssertInput): Effect.Effect<void, Permission.Error> => {
             if (permissionFailure === "denied")
               return Effect.fail(
-                new PermissionV2.BlockedError({
+                new Permission.BlockedError({
                   rules: [],
                   permission: input.action,
                   resources: input.resources,
                 }),
               )
             if (permissionFailure === "corrected")
-              return Effect.fail(new PermissionV2.CorrectedError({ feedback: "Use another skill" }))
+              return Effect.fail(new Permission.CorrectedError({ feedback: "Use another skill" }))
             if (permissionFailure === "cancelled") return Effect.interrupt
             return Effect.void
           }
           const permission = Layer.succeed(
-            PermissionV2.Service,
-            PermissionV2.Service.of({
-              evaluateEffective: () => Effect.die(new Error("unused PermissionV2.evaluateEffective")),
+            Permission.Service,
+            Permission.Service.of({
+              evaluateEffective: () => Effect.die(new Error("unused Permission.evaluateEffective")),
               assert: (input) =>
                 Effect.sync(() => assertions.push(input)).pipe(
                   Effect.asVoid,
@@ -125,8 +125,8 @@ describe("SkillTool", () => {
             }),
           )
           const skills = Layer.succeed(
-            SkillV2.Service,
-            SkillV2.Service.of({
+            Skill.Service,
+            Skill.Service.of({
               transform: (_transform) => Effect.die("unused"),
               reload: () => Effect.die("unused"),
               sources: () => Effect.die("unused"),
@@ -216,8 +216,8 @@ describe("SkillTool", () => {
           const skillToolLayer = AppNodeBuilder.build(
             LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, skillToolNode]),
             [
-              [PermissionV2.node, permission],
-              [SkillV2.node, skills],
+              [Permission.node, permission],
+              [Skill.node, skills],
               [MCP.node, Layer.mock(MCP.Service, {})],
               [
                 Location.node,
@@ -313,10 +313,10 @@ describe("SkillTool", () => {
             })
             permissionFailure = undefined
             expect(assertions.at(-1)).toMatchObject({ action: "read", resources: ["effect/reference.md"] })
-            const externalInfo: SkillV2.Info = {
+            const externalInfo: Skill.Info = {
               ...info,
-              id: SkillV2.ID.make("external"),
-              name: SkillV2.Name.make("External"),
+              id: Skill.ID.make("external"),
+              name: Skill.Name.make("External"),
               location: AbsolutePath.make(externalSkillFile),
             }
             current = [info, externalInfo]
@@ -380,9 +380,9 @@ describe("SkillTool", () => {
             ).toBe("Failure")
             expect(sourceActivations).toHaveLength(2)
             permissionFailure = undefined
-            const flat = SkillV2.Info.make({
-              id: SkillV2.ID.make("public"),
-              name: SkillV2.Name.make("Public"),
+            const flat = Skill.Info.make({
+              id: Skill.ID.make("public"),
+              name: Skill.Name.make("Public"),
               description: "Public guidance",
               location: AbsolutePath.make(path.join(tmp.path, "public.md")),
               content: "Public",

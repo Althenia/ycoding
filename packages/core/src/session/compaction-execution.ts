@@ -26,13 +26,13 @@ export interface Interface {
   ) => Effect.Effect<CompactionSchema.Result, SessionCompactionJob.Conflict | SessionCompactionJob.Ownership, R>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionCompactionExecution") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionCompactionExecution") {}
 
 export class Unbound extends Data.TaggedError("SessionCompactionExecution.Unbound")<{
   readonly message: string
 }> {}
 
-const Current = Context.Reference<Interface | undefined>("@ycoding/v2/SessionCompactionExecution/Current", {
+const Current = Context.Reference<Interface | undefined>("@ycoding/SessionCompactionExecution/Current", {
   defaultValue: () => undefined,
 })
 

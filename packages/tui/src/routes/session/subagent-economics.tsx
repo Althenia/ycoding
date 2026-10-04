@@ -4,7 +4,7 @@ import { useTheme } from "../../context/theme"
 import type { SubagentEconomics } from "./subagent-footer"
 
 export function SubagentEconomicsSurface(props: { economics?: SubagentEconomics }) {
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const dimensions = useTerminalDimensions()
   const columns = () => [
     ["Context", props.economics?.context],
@@ -18,11 +18,11 @@ export function SubagentEconomicsSurface(props: { economics?: SubagentEconomics 
   return (
     <Show when={props.economics}>
       <box height={7} flexDirection="column" flexShrink={0}>
-        <text fg={themeV2.border.default} wrapMode="none">
+        <text fg={theme.border.default} wrapMode="none">
           {"─".repeat(dimensions().width)}
         </text>
         <box paddingLeft={3} flexDirection="column">
-          <text fg={themeV2.text.feedback.info.default} wrapMode="none">
+          <text fg={theme.text.feedback.info.default} wrapMode="none">
             <b>SUBAGENT ECONOMICS</b>
           </text>
           <box height={1} />
@@ -34,7 +34,7 @@ export function SubagentEconomicsSurface(props: { economics?: SubagentEconomics 
                   flexGrow={index() === 5 ? 1 : 0}
                   flexShrink={0}
                 >
-                  <text fg={themeV2.text.subdued} wrapMode="none">{label}</text>
+                  <text fg={theme.text.subdued} wrapMode="none">{label}</text>
                 </box>
               )}
             </For>
@@ -48,7 +48,7 @@ export function SubagentEconomicsSurface(props: { economics?: SubagentEconomics 
                   flexGrow={index() === 5 ? 1 : 0}
                   flexShrink={0}
                 >
-                  <text fg={themeV2.text.default} wrapMode="none">{value ?? "unreported"}</text>
+                  <text fg={theme.text.default} wrapMode="none">{value ?? "unreported"}</text>
                 </box>
               )}
             </For>

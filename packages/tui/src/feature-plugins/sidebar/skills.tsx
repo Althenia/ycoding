@@ -24,7 +24,7 @@ export function SkillsRailContent(props: {
   sessionID?: string
   refetch?: () => unknown
 }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const rail = useRail()
   const dimensions = useTerminalDimensions()
   const active = createMemo(() => props.skills.filter((skill) => skill.state === "active").length)
@@ -44,11 +44,11 @@ export function SkillsRailContent(props: {
       <RailSection section="skills" title="SKILLS" summary={summary()} attention={conflicts().length > 0}>
         <Show when={conflicts().length > 0}>
           <text wrapMode="none">
-            <span style={{ fg: themeV2.text.feedback.error.default }}>{getGlyph("failed").glyph} </span>
-            <span style={{ fg: themeV2.text.default }}>
+            <span style={{ fg: theme.text.feedback.error.default }}>{getGlyph("failed").glyph} </span>
+            <span style={{ fg: theme.text.default }}>
               {conflicts().length} conflict{conflicts().length === 1 ? "" : "s"}
             </span>
-            <span style={{ fg: themeV2.text.separator }}> {"\u00b7"} </span>
+            <span style={{ fg: theme.text.separator }}> {"\u00b7"} </span>
             <Show when={props.sessionID && props.refetch}>
               <SkillConflictControls
                 conflicts={conflicts}
@@ -59,7 +59,7 @@ export function SkillsRailContent(props: {
           </text>
         </Show>
         <For each={props.skills}>
-          {(skill) => <RailRow label={skill.name} value={skillStatus(skill, conflicted())} valueColor={skillStatusColor(skill, conflicted(), themeV2)} />}
+          {(skill) => <RailRow label={skill.name} value={skillStatus(skill, conflicted())} valueColor={skillStatusColor(skill, conflicted(), theme)} />}
         </For>
       </RailSection>
     </Show>
@@ -72,7 +72,7 @@ function SkillConflictControls(props: {
   refetch: () => unknown
 }) {
   const dialog = useDialog()
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const shortcut = Keymap.useShortcut(RESOLVE_SKILL_CONFLICT_COMMAND)
 
   Keymap.createLayer(() => ({
@@ -95,7 +95,7 @@ function SkillConflictControls(props: {
 
   return (
     <Show when={shortcut()}>
-      {(value) => <span style={{ fg: themeV2.text.label }}>{value().replaceAll("ctrl+", "\u2303")}</span>}
+      {(value) => <span style={{ fg: theme.text.label }}>{value().replaceAll("ctrl+", "\u2303")}</span>}
     </Show>
   )
 }
@@ -172,10 +172,10 @@ function skillStatus(skill: SessionSkill, conflicted: ReadonlySet<string>) {
   return "INACTIVE"
 }
 
-function skillStatusColor(skill: SessionSkill, conflicted: ReadonlySet<string>, themeV2: ReturnType<typeof useTheme>["themeV2"]) {
-  if (conflicted.has(skill.id)) return themeV2.text.feedback.warning.default
-  if (skill.state === "active") return themeV2.text.feedback.success.default
-  return themeV2.text.subdued
+function skillStatusColor(skill: SessionSkill, conflicted: ReadonlySet<string>, theme: ReturnType<typeof useTheme>["theme"]) {
+  if (conflicted.has(skill.id)) return theme.text.feedback.warning.default
+  if (skill.state === "active") return theme.text.feedback.success.default
+  return theme.text.subdued
 }
 
 function isSkillConflictNotFound(error: unknown): error is { _tag: "SkillConflictNotFoundError" } {

@@ -8,7 +8,7 @@ import type {
   SessionOrchestrationTask,
 } from "@ycoding-ai/client"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { createEffect, onMount, type ParentProps } from "solid-js"
 import { ClientProvider, useClient } from "../../../src/context/client"
 import { DataProvider as DataProviderBase, useData } from "../../../src/context/data"
@@ -84,7 +84,7 @@ function subagentPage(data: SessionOrchestrationTask[], cursor: { previous?: str
   }
 }
 
-test("releases rows through a completed V2 compaction boundary after each canonical reconcile", async () => {
+test("releases rows through a completed compaction boundary after each canonical reconcile", async () => {
   const sessionID = "session-v2-compaction-resident"
   const resident: SessionMessageInfo[] = [
     {
@@ -818,7 +818,7 @@ test("reconnects the event stream and resyncs active data", async () => {
   const calls = createFetch((url) => {
     if (url.pathname === "/api/event") {
       requests.event++
-      return events.v2()
+      return events.connect()
     }
     if (url.pathname === "/api/session/active") {
       requests.active++
@@ -1125,7 +1125,7 @@ test("removes committed revert messages from local state", async () => {
   try {
     for (const [seq, inputID] of ["msg_001", "msg_002", "msg_003"].entries()) {
       emitEvent(events, {
-        id: EventV2.ID.create(),
+        id: EventRuntime.ID.create(),
         created: seq,
         type: "session.input.admitted",
         durable: durable(sessionID, seq),
@@ -1139,7 +1139,7 @@ test("removes committed revert messages from local state", async () => {
     await wait(() => data.session.message.list(sessionID).length === 3)
 
     emitEvent(events, {
-      id: EventV2.ID.create(),
+      id: EventRuntime.ID.create(),
       created: 3,
       type: "session.revert.committed",
       durable: durable(sessionID, 3),
@@ -2096,7 +2096,7 @@ test("adds and dismisses permission requests from live events", async () => {
     emitEvent(events, {
       id: "evt_permission_asked_1",
       created: 0,
-      type: "permission.v2.asked",
+      type: "permission.asked",
       data: {
         id: "per_1",
         sessionID: "ses_1",
@@ -2107,7 +2107,7 @@ test("adds and dismisses permission requests from live events", async () => {
     emitEvent(events, {
       id: "evt_permission_asked_2",
       created: 0,
-      type: "permission.v2.asked",
+      type: "permission.asked",
       data: {
         id: "per_2",
         sessionID: "ses_1",
@@ -2120,7 +2120,7 @@ test("adds and dismisses permission requests from live events", async () => {
     emitEvent(events, {
       id: "evt_permission_replied_1",
       created: 0,
-      type: "permission.v2.replied",
+      type: "permission.replied",
       data: { sessionID: "ses_1", requestID: "per_1", reply: "once" },
     })
     await wait(() => data.session.permission.list("ses_1")?.length === 1)
@@ -2129,7 +2129,7 @@ test("adds and dismisses permission requests from live events", async () => {
     emitEvent(events, {
       id: "evt_permission_replied_2",
       created: 0,
-      type: "permission.v2.replied",
+      type: "permission.replied",
       data: { sessionID: "ses_1", requestID: "per_2", reply: "reject" },
     })
     await wait(() => data.session.permission.list("ses_1")?.length === 0)
@@ -3180,7 +3180,7 @@ test("skips initial instruction state and projects later updates with their mess
     await wait(() => sync.session.message.list("session-1")?.some((message) => message.time.created === 1))
     expect(sync.session.message.list("session-1")).toHaveLength(1)
     expect(sync.session.message.list("session-1")?.[0]).toMatchObject({
-      id: SessionMessage.ID.fromEvent(EventV2.ID.make("evt_instructions_2")),
+      id: SessionMessage.ID.fromEvent(EventRuntime.ID.make("evt_instructions_2")),
       type: "system",
       text: "Instructions updated: core/date",
       time: { created: 1 },

@@ -27,7 +27,7 @@ export function ShellOutput() {
   const data = useData()
   const client = useClient()
   const location = useLocation()
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
 
   const [shellFetch, setShellFetch] = createSignal<ShellInfo | undefined>()
@@ -152,11 +152,11 @@ export function ShellOutput() {
       width={dimensions().width}
       height={dimensions().height}
       flexDirection="column"
-      backgroundColor={themeV2.background.default}
+      backgroundColor={theme.background.default}
     >
       <Show when={shell()} fallback={
         <box flexGrow={1} alignItems="center" justifyContent="center">
-          <text fg={themeV2.text.subdued}>Loading shell data...</text>
+          <text fg={theme.text.subdued}>Loading shell data...</text>
         </box>
       }>
         {(s) => (

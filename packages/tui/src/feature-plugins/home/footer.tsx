@@ -10,7 +10,7 @@ import { stringWidth } from "../../util/string-width"
 import { mcpSummary } from "../../mcp-presentation"
 
 function Directory(props: { context: Plugin.Context; maxWidth: number }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const paths = useTuiPaths()
   const directory = createMemo(() =>
     props.context.location ? abbreviateHome(props.context.location.directory, paths.home) : undefined,
@@ -18,31 +18,31 @@ function Directory(props: { context: Plugin.Context; maxWidth: number }) {
 
   return (
     <Show when={directory()}>
-      {(value) => <FilePath value={value()} maxWidth={props.maxWidth} fg={themeV2.text.subdued} />}
+      {(value) => <FilePath value={value()} maxWidth={props.maxWidth} fg={theme.text.subdued} />}
     </Show>
   )
 }
 
 function Mcp(props: { context: Plugin.Context }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const list = createMemo(() => props.context.data.location.mcp.server.list(props.context.location) ?? [])
   const summary = createMemo(() => mcpSummary(list()))
 
   return (
     <Show when={list().length}>
       <box gap={1} flexDirection="row" flexShrink={0}>
-        <text fg={themeV2.text.default}>
+        <text fg={theme.text.default}>
           <Switch>
             <Match when={summary().attention > 0}>
-              <span style={{ fg: themeV2.text.feedback.error.default }}>⊙ </span>
+              <span style={{ fg: theme.text.feedback.error.default }}>⊙ </span>
             </Match>
             <Match when={summary().pending > 0}>
-              <span style={{ fg: themeV2.text.feedback.warning.default }}>⊙ </span>
+              <span style={{ fg: theme.text.feedback.warning.default }}>⊙ </span>
             </Match>
             <Match when={true}>
               <span
                 style={{
-                  fg: summary().connected > 0 ? themeV2.text.feedback.success.default : themeV2.text.subdued,
+                  fg: summary().connected > 0 ? theme.text.feedback.success.default : theme.text.subdued,
                 }}
               >
                 ⊙{" "}
@@ -51,14 +51,14 @@ function Mcp(props: { context: Plugin.Context }) {
           </Switch>
           {summary().label}
         </text>
-        <text fg={themeV2.text.subdued}>/status</text>
+        <text fg={theme.text.subdued}>/status</text>
       </box>
     </Show>
   )
 }
 
 function View(props: { context: Plugin.Context }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const mcpWidth = createMemo(() => {
     const list = props.context.data.location.mcp.server.list(props.context.location) ?? []
@@ -84,7 +84,7 @@ function View(props: { context: Plugin.Context }) {
       <Mcp context={props.context} />
       <box flexGrow={1} />
       <box flexShrink={0}>
-        <text fg={themeV2.text.subdued}>{InstallationVersion}</text>
+        <text fg={theme.text.subdued}>{InstallationVersion}</text>
       </box>
     </box>
   )

@@ -12,7 +12,7 @@ export interface Interface {
   readonly release: (sessionID: SessionID, mode: Mode) => void
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/BrowserAdmission") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/BrowserAdmission") {}
 
 export const layer = Layer.sync(Service, () => {
   const modes = new Map<SessionID, Mode>()
@@ -31,7 +31,7 @@ export const layer = Layer.sync(Service, () => {
 })
 
 export class CoordinatorService extends Context.Service<CoordinatorService, Interface>()(
-  "@ycoding/v2/BrowserAdmissionCoordinator",
+  "@ycoding/BrowserAdmissionCoordinator",
 ) {}
 
 const coordinatorLayer = Layer.effect(

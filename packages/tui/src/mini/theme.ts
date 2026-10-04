@@ -8,7 +8,7 @@
 import { RGBA, SyntaxStyle, type CliRenderer, type ColorInput, type TerminalColors } from "@opentui/core"
 import { ansiToRgba } from "../theme/color"
 import { terminalMode } from "../theme/system"
-import { generateSyntax } from "../theme/v2/syntax"
+import { generateSyntax } from "../theme/syntax"
 import type { EntryKind, RunTuiConfig } from "./types"
 
 type Tone = {

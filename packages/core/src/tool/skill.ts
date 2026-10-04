@@ -12,8 +12,8 @@ import { FSUtil } from "../fs-util"
 import { LocationMutation } from "../location-mutation"
 import { MCP } from "../mcp"
 import { MCPSkills } from "../mcp/skills"
-import { SkillV2 } from "../skill"
-import { PermissionV2 } from "../permission"
+import { Skill } from "../skill"
+import { Permission } from "../permission"
 import { SessionMessage } from "../session/message"
 import { ProjectArtifactSource } from "../project-artifact/source"
 import { Tool } from "./tool"
@@ -24,7 +24,7 @@ export const name = "skill"
 const FILE_LIMIT = 10
 
 export const Input = Schema.Struct({
-  id: SkillV2.ID.annotate({ description: "The ID of the skill from the available skills list" }),
+  id: Skill.ID.annotate({ description: "The ID of the skill from the available skills list" }),
   resource: Schema.String.pipe(
     Schema.optional,
     Schema.annotate({
@@ -35,11 +35,11 @@ export const Input = Schema.Struct({
 })
 
 export const Output = Schema.Struct({
-  name: SkillV2.Name,
+  name: Skill.Name,
   directory: Schema.String,
   output: Schema.String,
   alreadyActive: Schema.Boolean.pipe(Schema.optional),
-  conflicts: SkillV2.Conflicts.pipe(Schema.optional),
+  conflicts: Skill.Conflicts.pipe(Schema.optional),
   /**
    * The exact MCP entry held for a loaded skill. Durable activation derives this snapshot from the
    * completed tool message; it is not a second registry.
@@ -55,7 +55,7 @@ export const description = [
   "The skill ID must match one of the available skills in the instructions.",
 ].join("\n")
 
-export const toModelOutput = (skill: SkillV2.Info, files: ReadonlyArray<string>) => {
+export const toModelOutput = (skill: Skill.Info, files: ReadonlyArray<string>) => {
   const directory = path.dirname(skill.location)
   return [
     `<skill_content name="${escapeXML(skill.name)}">`,
@@ -74,7 +74,7 @@ export const toModelOutput = (skill: SkillV2.Info, files: ReadonlyArray<string>)
   ].join("\n")
 }
 
-export const instructions = Effect.fn("SkillTool.instructions")(function* (fs: FSUtil.Interface, skill: SkillV2.Info) {
+export const instructions = Effect.fn("SkillTool.instructions")(function* (fs: FSUtil.Interface, skill: Skill.Info) {
   const directory = path.dirname(skill.location)
   const files =
     path.basename(skill.location) === "SKILL.md"
@@ -126,13 +126,13 @@ const escapeXML = (value: string) =>
 const loadMcpSkill = (
   services: {
     readonly mcp: MCP.Interface
-    readonly permission: PermissionV2.Interface
+    readonly permission: Permission.Interface
   },
-  id: SkillV2.ID,
+  id: Skill.ID,
   entry: McpSkill.Entry,
   context: {
-    readonly sessionID: Parameters<PermissionV2.Interface["assert"]>[0]["sessionID"]
-    readonly agent: Parameters<PermissionV2.Interface["assert"]>[0]["agent"]
+    readonly sessionID: Parameters<Permission.Interface["assert"]>[0]["sessionID"]
+    readonly agent: Parameters<Permission.Interface["assert"]>[0]["agent"]
     readonly messageID: string
     readonly callID: string
   },
@@ -168,7 +168,7 @@ const loadMcpSkill = (
       .toSorted()
       .slice(0, FILE_LIMIT)
     return {
-      name: SkillV2.Name.make(entry.frontmatter.name),
+      name: Skill.Name.make(entry.frontmatter.name),
       directory: "",
       output: toMcpModelOutput(entry, parsed?.content ?? "", files),
       entry,
@@ -183,20 +183,20 @@ const loadMcpSkill = (
 const readMcpResource = (
   services: {
     readonly mcp: MCP.Interface
-    readonly permission: PermissionV2.Interface
+    readonly permission: Permission.Interface
   },
-  id: SkillV2.ID,
+  id: Skill.ID,
   reference: string,
   messages: ReadonlyArray<SessionMessage.Info>,
   context: {
-    readonly sessionID: Parameters<PermissionV2.Interface["assert"]>[0]["sessionID"]
-    readonly agent: Parameters<PermissionV2.Interface["assert"]>[0]["agent"]
+    readonly sessionID: Parameters<Permission.Interface["assert"]>[0]["sessionID"]
+    readonly agent: Parameters<Permission.Interface["assert"]>[0]["agent"]
     readonly messageID: string
     readonly callID: string
   },
 ) =>
   Effect.gen(function* () {
-    const origin = SkillV2.mcpSkillOrigin(id)
+    const origin = Skill.mcpSkillOrigin(id)
     if (!origin) return yield* unableToLoad(id)
     const { SessionSkillStatus } = yield* Effect.promise(() => import("../session/skill-status"))
     const activation = SessionSkillStatus.mcpActivation(messages, id)
@@ -254,9 +254,9 @@ export const Plugin = {
   effect: Effect.fn("SkillTool.Plugin")(function* (ctx: PluginContext) {
     const { PluginRuntime } = yield* Effect.promise(() => import("../plugin/runtime"))
     const fs = yield* FSUtil.Service
-    const skills = yield* SkillV2.Service
+    const skills = yield* Skill.Service
     const mcp = yield* MCP.Service
-    const permission = yield* PermissionV2.Service
+    const permission = yield* Permission.Service
     const mutation = yield* LocationMutation.Service
     const reader = yield* ReadToolFileSystem.Service
     const projectArtifactSource = yield* Effect.serviceOption(ProjectArtifactSource.Service)
@@ -280,7 +280,7 @@ export const Plugin = {
                 const active = statuses.find((status) => status.id === input.id && status.state === "active")
                 if (input.resource !== undefined) {
                   if (!active) return yield* unableToLoad(input.id)
-                  if (!SkillV2.mcpSkillOrigin(input.id)) {
+                  if (!Skill.mcpSkillOrigin(input.id)) {
                     const local = (yield* skills.list()).find((skill) => skill.id === input.id)
                     if (!local) return yield* unableToLoad(input.id)
                     const reference = input.resource
@@ -312,7 +312,7 @@ export const Plugin = {
                   }
                   return yield* readMcpResource({ mcp, permission }, input.id, input.resource, messages, context)
                 }
-                const origin = SkillV2.mcpSkillOrigin(input.id)
+                const origin = Skill.mcpSkillOrigin(input.id)
                 if (origin) {
                   const entry = yield* mcp
                     .getSkill({ server: origin.server, uri: origin.uri })

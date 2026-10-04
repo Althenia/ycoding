@@ -186,7 +186,7 @@ export function sessionRetryHeaderState(
 export function Header(
   props: SessionHeaderIdentity & { state: SessionHeaderState; focused?: SessionHeaderSegmentKey; subagent?: boolean; sideChat?: boolean },
 ) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const shortcuts = Keymap.useShortcuts()
   const leaderActive = Keymap.useLeaderActive()
@@ -255,29 +255,29 @@ export function Header(
   const statusColor = createMemo(() => {
     const current = state()
     const active = current.type === "autonomy" ? current.state : current
-    if (current.type === "autonomy") return headerYoloLevel(current.yolo) > 0 ? themeV2.text.feedback.error.default : themeV2.text.feedback.success.default
+    if (current.type === "autonomy") return headerYoloLevel(current.yolo) > 0 ? theme.text.feedback.error.default : theme.text.feedback.success.default
     if (active.type === "provider-error")
-      return themeV2.text.feedback.error.default
+      return theme.text.feedback.error.default
     if (active.type === "retrying" || active.type === "retry-scheduled")
-      return themeV2.text.feedback.warning.default
-    if (active.type === "awaiting-input") return themeV2.text.feedback.warning.default
-    if (active.type === "tool-running" || active.type === "waiting") return themeV2.text.feedback.info.default
+      return theme.text.feedback.warning.default
+    if (active.type === "awaiting-input") return theme.text.feedback.warning.default
+    if (active.type === "tool-running" || active.type === "waiting") return theme.text.feedback.info.default
     if (active.type === "working" || active.type === "thinking")
-      return props.subagent ? themeV2.text.feedback.info.default : themeV2.text.feedback.success.default
-    return themeV2.text.subdued
+      return props.subagent ? theme.text.feedback.info.default : theme.text.feedback.success.default
+    return theme.text.subdued
   })
   // Optional: the header is also mounted standalone by component tests with no LocalProvider.
   const local = useContext(LocalContext)
   const segmentColor = (key: SessionHeaderSegmentKey) => {
-    if (key === "path") return themeV2.text.subdued
-    if (key === "branch") return themeV2.text.feedback.info.default
+    if (key === "path") return theme.text.subdued
+    if (key === "branch") return theme.text.feedback.info.default
     // The profile is credential identity resolved elsewhere, like the model identity, so it stays
     // secondary ink instead of competing with the agent's own configured colour.
-    if (key === "profile") return themeV2.text.subdued
-    if (key === "model") return themeV2.text.subdued
+    if (key === "profile") return theme.text.subdued
+    if (key === "model") return theme.text.subdued
     if (key === "daybreak")
-      return identity().daybreak?.active ? themeV2.text.feedback.info.default : themeV2.text.feedback.warning.default
-    if (key === "variant") return themeV2.text.feedback.success.default
+      return identity().daybreak?.active ? theme.text.feedback.info.default : theme.text.feedback.warning.default
+    if (key === "variant") return theme.text.feedback.success.default
     // The agent carries its own configured colour, so the header names it the way every other
     // agent affordance does instead of rendering it as plain default ink.
     if (key === "agent") {
@@ -287,7 +287,7 @@ export function Header(
       if (agent) return local!.agent.color(agent.id)
     }
     // The branch is info by default, so focused segments retain their roles instead of impersonating it.
-    return themeV2.text.default
+    return theme.text.default
   }
   const hint = (key: SessionHeaderSegmentKey) => {
     const value = SEGMENT_HINT[key]
@@ -308,18 +308,18 @@ export function Header(
         height={3}
         flexShrink={0}
         alignItems="center"
-        backgroundColor={themeV2.background.chrome}
+        backgroundColor={theme.background.chrome}
       >
         <Show
           when={props.subagent || props.sideChat}
           fallback={
             <box flexDirection="row" alignItems="center" gap={1} flexShrink={0}>
               <BrandMark width={2} height={1} />
-              <text fg={themeV2.text.subdued} wrapMode="none">v{InstallationVersion}</text>
+              <text fg={theme.text.subdued} wrapMode="none">v{InstallationVersion}</text>
             </box>
           }
         >
-          <text fg={themeV2.text.feedback.info.default} wrapMode="none">
+          <text fg={theme.text.feedback.info.default} wrapMode="none">
             {props.sideChat ? "BTW" : `${getGlyph("subagent").glyph} subagent`}
           </text>
         </Show>
@@ -328,23 +328,23 @@ export function Header(
             {(segment, index) => (
               <>
                 <Show when={index() > 0}>
-                  <span style={{ fg: themeV2.text.separator }}> {"\u00b7"} </span>
+                  <span style={{ fg: theme.text.separator }}> {"\u00b7"} </span>
                 </Show>
                 <span
                   style={{
                     fg: segmentColor(segment.key),
-                    bg: showHint(segment.key) ? themeV2.background.surface.overlay : undefined,
+                    bg: showHint(segment.key) ? theme.background.surface.overlay : undefined,
                   }}
                 >
                   {segment.label}
                 </span>
                 <Show when={showHint(segment.key) && hint(segment.key)}>
-                  {(value) => <span style={{ fg: themeV2.text.label }}> {value()}</span>}
+                  {(value) => <span style={{ fg: theme.text.label }}> {value()}</span>}
                 </Show>
               </>
             )}
           </For>
-          <For each={pending()}>{(value) => <span style={{ fg: themeV2.text.subdued }}> {"·"} {value}</span>}</For>
+          <For each={pending()}>{(value) => <span style={{ fg: theme.text.subdued }}> {"·"} {value}</span>}</For>
         </text>
         <box flexDirection="row" alignItems="center" gap={1} flexShrink={0}>
           <Show when={(effectiveOperational().type === "working" && !props.subagent) || effectiveOperational().type === "retrying"}>

@@ -7,7 +7,7 @@
 //
 // Data flow through the system:
 //
-//   V2 events / demo actions → StreamCommit[] + FooterEvent[]
+//   Session events / demo actions → StreamCommit[] + FooterEvent[]
 //     → stream.ts bridges to footer API
 //       → footer.ts queues commits and patches the footer view
 //         → OpenTUI split-footer renderer writes to terminal
@@ -17,7 +17,7 @@ import type {
   YCodingClient,
   LocationGetOutput,
   LocationRef,
-  PermissionV2Request,
+  PermissionRequest,
   ReferenceListOutput,
   SessionMessageAssistantTool,
 } from "@ycoding-ai/client/promise"
@@ -254,7 +254,7 @@ export type MiniToolPart = {
   state: MiniToolState
 }
 
-export type MiniPermissionRequest = PermissionV2Request & {
+export type MiniPermissionRequest = PermissionRequest & {
   tool?: SessionMessageAssistantTool
 }
 
@@ -407,7 +407,7 @@ type StreamSource = "assistant" | "reasoning" | "tool" | "system"
 type StreamToolState = "running" | "completed" | "error"
 
 // A single append-only commit to scrollback. The transport produces these from
-// V2 events, and RunFooter.append() queues them for the next
+// Session events, and RunFooter.append() queues them for the next
 // microtask flush. Once flushed, they become immutable terminal scrollback
 // rows -- they cannot be rewritten.
 export type StreamCommit = {

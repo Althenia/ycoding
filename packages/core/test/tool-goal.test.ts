@@ -5,11 +5,11 @@ import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Image } from "@ycoding-ai/core/image"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { GoalTool } from "@ycoding-ai/core/tool/goal"
@@ -23,15 +23,15 @@ const authority = { denied: false }
 const plugin = makeLocationNode({
   name: "test/goal-tool-plugin",
   layer: Layer.effectDiscard(registerToolPlugin(GoalTool.Plugin)),
-  deps: [SessionAutonomy.node, ToolRegistry.toolsNode, PermissionV2.node],
+  deps: [SessionAutonomy.node, ToolRegistry.toolsNode, Permission.node],
 })
 const it = testEffect(AppNodeBuilder.build(
   LayerNode.group([Database.node, SessionAutonomy.node, ToolRegistry.node, plugin]),
   [
-    [PermissionV2.node, Layer.mock(PermissionV2.Service, {
+    [Permission.node, Layer.mock(Permission.Service, {
       evaluateEffective: () => Effect.succeed("ask" as const),
       assert: (input) => authority.denied
-        ? Effect.fail(new PermissionV2.BlockedError({ rules: [], permission: input.action, resources: input.resources }))
+        ? Effect.fail(new Permission.BlockedError({ rules: [], permission: input.action, resources: input.resources }))
         : Effect.void,
     })],
     [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
@@ -45,7 +45,7 @@ it.effect("R7 registered goal tool preserves objective ownership, permissions, a
     const database = yield* Database.Service
     const autonomy = yield* SessionAutonomy.Service
     const registry = yield* ToolRegistry.Service
-    const sessionID = SessionV2.ID.make("ses_goal_tool_ownership")
+    const sessionID = Session.ID.make("ses_goal_tool_ownership")
     yield* database.db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
     yield* database.db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, directory: "/project", title: "Goal tool ownership" }).run().pipe(Effect.orDie)
     const call = (input: Record<string, unknown>) => executeTool(registry, {

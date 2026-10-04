@@ -9,9 +9,9 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { Location } from "@ycoding-ai/core/location"
 import { LocationMutation } from "@ycoding-ai/core/location-mutation"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
@@ -29,13 +29,13 @@ const writeToolNode = makeLocationNode({
     ToolRegistry.toolsNode,
     LocationMutation.node,
     FileMutation.node,
-    PermissionV2.node,
+    Permission.node,
     SessionGuardrail.node,
   ],
 })
 
-const sessionID = SessionV2.ID.make("ses_write_tool_test")
-const assertions: PermissionV2.AssertInput[] = []
+const sessionID = Session.ID.make("ses_write_tool_test")
+const assertions: Permission.AssertInput[] = []
 const writes: string[] = []
 let denyAction: string | undefined
 
@@ -44,15 +44,15 @@ const guardrail = Layer.mock(SessionGuardrail.Service, {
 })
 
 const permission = Layer.succeed(
-  PermissionV2.Service,
-  PermissionV2.Service.of({
-    evaluateEffective: () => Effect.die(new Error("unused PermissionV2.evaluateEffective")),
+  Permission.Service,
+  Permission.Service.of({
+    evaluateEffective: () => Effect.die(new Error("unused Permission.evaluateEffective")),
     assert: (input) =>
       Effect.sync(() => assertions.push(input)).pipe(
         Effect.andThen(
           input.action === denyAction
             ? Effect.fail(
-                new PermissionV2.BlockedError({
+                new Permission.BlockedError({
                   rules: [],
                   permission: input.action,
                   resources: input.resources,
@@ -107,7 +107,7 @@ const withTool = <A, E, R>(directory: string, body: (registry: ToolRegistry.Inte
         [
           [FSUtil.node, filesystem],
           [Location.node, activeLocation],
-          [PermissionV2.node, permission],
+          [Permission.node, permission],
           [SessionGuardrail.node, guardrail],
           [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
         ],

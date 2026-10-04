@@ -56,9 +56,9 @@ async function renderKeepAwake(server: ReturnType<typeof fakeServer>) {
     const dialog = useDialog()
     const theme = useTheme().contextual("elevated")
     colors = () => ({
-      on: theme.themeV2.text.feedback.success.default.toInts(),
-      off: theme.themeV2.text.subdued.toInts(),
-      error: theme.themeV2.text.feedback.error.default.toInts(),
+      on: theme.theme.text.feedback.success.default.toInts(),
+      off: theme.theme.text.subdued.toInts(),
+      error: theme.theme.text.feedback.error.default.toInts(),
     })
     commands = Keymap.useCommands()
     Keymap.createLayer(() => ({ mode: "global", commands: [

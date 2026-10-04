@@ -15,7 +15,7 @@ import {
   UnknownProviderReason,
   ToolFailure,
 } from "@ycoding-ai/ai"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { Tool } from "@ycoding-ai/plugin/effect/tool"
 import { toSessionError } from "@ycoding-ai/core/session/to-session-error"
 import { SessionRunnerRetry } from "@ycoding-ai/core/session/runner/retry"
@@ -56,7 +56,7 @@ describe("toSessionError", () => {
   })
 
   test("preserves the permission rejection type without exposing internal fields", () => {
-    const blocked = new PermissionV2.BlockedError({ rules: [], permission: "external_directory", resources: [] })
+    const blocked = new Permission.BlockedError({ rules: [], permission: "external_directory", resources: [] })
     expect(toSessionError(blocked)).toEqual({
       type: "permission.rejected",
       message: "Permission denied: external_directory",

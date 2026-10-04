@@ -8,7 +8,7 @@ import { SessionRowView } from "../src/routes/session/index"
 import { ConfigProvider } from "../src/config"
 import { ThemeProvider } from "../src/context/theme"
 import { DEFAULT_THEMES } from "../src/theme/builtins"
-import { resolveThemeFile } from "../src/theme/v2/resolve"
+import { resolveThemeFile } from "../src/theme/resolve"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
@@ -174,7 +174,7 @@ describe("transcript row residency", () => {
     app.renderer.destroy()
   })
 
-  test("renders sanitized V2 compaction lifecycle labels", async () => {
+  test("renders sanitized compaction lifecycle labels", async () => {
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
     const lifecycles = [
       {
@@ -255,7 +255,7 @@ describe("transcript row residency", () => {
     }
   })
 
-  test("renders real V1 and V2 failed compactions as zero-line diagnostic-only state", async () => {
+  test("renders failed compactions from versions 1 and 2 as zero-line diagnostic-only state", async () => {
     const legacy: Extract<SessionMessageInfo, { type: "compaction" }> = {
       id: "msg_compaction_failed_v1",
       type: "compaction",

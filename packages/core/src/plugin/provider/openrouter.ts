@@ -1,6 +1,6 @@
 import { Effect } from "effect"
-import { ModelV2 } from "../../model"
-import { ProviderV2 } from "../../provider"
+import { CatalogModel } from "../../model"
+import { Provider } from "../../provider"
 import { define } from "@ycoding-ai/plugin/effect/plugin"
 
 export const OpenRouterPlugin = define({
@@ -8,8 +8,8 @@ export const OpenRouterPlugin = define({
   effect: Effect.fn(function* (ctx) {
     yield* ctx.catalog.transform((evt) => {
       for (const item of evt.provider.list()) {
-        if (!ProviderV2.isAISDK(item.provider.package)) continue
-        if (ProviderV2.packageName(item.provider.package) !== "@openrouter/ai-sdk-provider") continue
+        if (!Provider.isAISDK(item.provider.package)) continue
+        if (Provider.packageName(item.provider.package) !== "@openrouter/ai-sdk-provider") continue
         evt.provider.update(item.provider.id, (provider) => {
           provider.package = "@ycoding-ai/ai/providers/openrouter"
           // App attribution for OpenRouter rankings. User-supplied values win;
@@ -27,7 +27,7 @@ export const OpenRouterPlugin = define({
             draft.package = "@ycoding-ai/ai/providers/openrouter"
           })
         }
-        for (const modelID of [ModelV2.ID.make("gpt-5-chat-latest"), ModelV2.ID.make("openai/gpt-5-chat")]) {
+        for (const modelID of [CatalogModel.ID.make("gpt-5-chat-latest"), CatalogModel.ID.make("openai/gpt-5-chat")]) {
           if (!item.models.has(modelID)) continue
           evt.model.update(item.provider.id, modelID, (model) => {
             // These are OpenRouter-specific OpenAI chat aliases that do not work

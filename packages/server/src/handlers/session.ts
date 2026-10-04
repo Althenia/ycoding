@@ -1,4 +1,4 @@
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { InstructionEntry } from "@ycoding-ai/core/session/instruction-entry"
 import { DateTime, Effect, Schema, Stream } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
@@ -26,7 +26,7 @@ import {
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionTodo } from "@ycoding-ai/core/session/todo"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { ProcessIdentity } from "../process-identity"
 
@@ -35,7 +35,7 @@ const isPublicDurableSessionEvent = Schema.is(SessionEvent.PublicDurable)
 
 export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handlers) =>
   Effect.gen(function* () {
-    const session = yield* SessionV2.Service
+    const session = yield* Session.Service
     const orchestration = yield* SessionOrchestration.Service
     const identity = yield* ProcessIdentity
 
@@ -353,7 +353,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         Effect.fn(function* (ctx) {
           const parent = yield* session.get(ctx.params.parentID).pipe(Effect.mapError(mapSessionNotFound))
           const prepared = yield* SessionOrchestration.preflight(parent, {
-            agent: AgentV2.ID.make(ctx.payload.agent),
+            agent: Agent.ID.make(ctx.payload.agent),
             model: ctx.payload.model,
           }).pipe(Effect.mapError(mapLaunchError))
           return {
@@ -362,7 +362,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 parentID: ctx.params.parentID,
                 parentAssistantMessageID: ctx.payload.parentAssistantMessageID,
                 toolCallID: ctx.payload.toolCallID,
-                agent: AgentV2.ID.make(ctx.payload.agent),
+                agent: Agent.ID.make(ctx.payload.agent),
                 description: ctx.payload.description,
                 prompt: ctx.payload.prompt,
                 background: ctx.payload.background === true,
@@ -1105,12 +1105,12 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
   }),
 )
 
-const mapSessionNotFound = (error: SessionV2.NotFoundError) =>
+const mapSessionNotFound = (error: Session.NotFoundError) =>
   new SessionNotFoundError({ sessionID: error.sessionID, message: `Session not found: ${error.sessionID}` })
 
 export const resolveSkillConflict = (
-  session: SessionV2.Interface,
-  input: Parameters<SessionV2.Interface["resolveSkillConflict"]>[0],
+  session: Session.Interface,
+  input: Parameters<Session.Interface["resolveSkillConflict"]>[0],
 ) =>
   session.resolveSkillConflict(input).pipe(
     Effect.catchTag("Session.NotFoundError", (error) => Effect.fail(mapSessionNotFound(error))),
@@ -1123,7 +1123,7 @@ export const resolveSkillConflict = (
     }),
   )
 
-function modelSwitchFailure(sessionID: SessionV2.ID, category: string, message: string) {
+function modelSwitchFailure(sessionID: Session.ID, category: string, message: string) {
   const ref = `err_${crypto.randomUUID().slice(0, 8)}`
   return Effect.logError("session model switch failed").pipe(
     Effect.annotateLogs({ ref, sessionID, category }),

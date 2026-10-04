@@ -5,11 +5,11 @@ import { Credential } from "@ycoding-ai/core/credential"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { makeGlobalNode } from "@ycoding-ai/core/effect/app-node"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Integration } from "@ycoding-ai/core/integration"
 import { testEffect } from "./lib/effect"
 
-const it = testEffect(AppNodeBuilder.build(LayerNode.group([Integration.node, Credential.node, EventV2.node])))
+const it = testEffect(AppNodeBuilder.build(LayerNode.group([Integration.node, Credential.node, EventRuntime.node])))
 const failingCredentialNode = makeGlobalNode({
   service: Credential.Service,
   layer: Layer.succeed(
@@ -27,7 +27,7 @@ const failingCredentialNode = makeGlobalNode({
   deps: [],
 })
 const failingIt = testEffect(
-  AppNodeBuilder.build(LayerNode.group([Integration.node, EventV2.node]), [[Credential.node, failingCredentialNode]]),
+  AppNodeBuilder.build(LayerNode.group([Integration.node, EventRuntime.node]), [[Credential.node, failingCredentialNode]]),
 )
 
 function eventually<A, E, R>(
@@ -136,7 +136,7 @@ describe("Integration", () => {
     Effect.gen(function* () {
       const integrations = yield* Integration.Service
       const credentials = yield* Credential.Service
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const integrationID = Integration.ID.make("openai")
       yield* integrations.transform((editor) =>
         editor.method.update({

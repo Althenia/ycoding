@@ -5,7 +5,7 @@ import { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { EventTable } from "@ycoding-ai/core/event/sql"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
@@ -23,7 +23,7 @@ import {
 } from "@ycoding-ai/core/session/sql"
 import { testEffect } from "./lib/effect"
 
-const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionCompactionJob.node])))
+const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionCompactionJob.node])))
 
 const CONFIG_A = "a".repeat(64)
 const CONFIG_B = "b".repeat(64)

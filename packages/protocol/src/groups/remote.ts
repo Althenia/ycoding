@@ -8,7 +8,7 @@ export const RemoteGroup = HttpApiGroup.make("server.remote")
     HttpApiEndpoint.get("remote.get", "/api/remote", {
       success: Schema.Struct({ data: Remote.Status }),
     }).annotateMerge(OpenApi.annotations({
-      identifier: "v2.remote.get",
+      identifier: "remote.get",
       summary: "Get machine remote connection",
       description: "Read the server-hosted remote connector state for this machine.",
     })),
@@ -18,7 +18,7 @@ export const RemoteGroup = HttpApiGroup.make("server.remote")
       payload: Schema.Struct({ enabled: Schema.Boolean }),
       success: Schema.Struct({ data: Remote.Status }),
     }).annotateMerge(OpenApi.annotations({
-      identifier: "v2.remote.set",
+      identifier: "remote.set",
       summary: "Set machine remote connection",
       description: "Persist the machine remote switch and start or stop this server's connector.",
     })),

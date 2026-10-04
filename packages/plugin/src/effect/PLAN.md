@@ -208,7 +208,7 @@ type EventMap = {
 }
 ```
 
-Core resolves the public event type string to its internal event definition and delegates to `EventV2.Service.subscribe`.
+Core resolves the public event type string to its internal event definition and delegates to `EventRuntime.Service.subscribe`.
 
 ## Domain State Model
 
@@ -304,7 +304,7 @@ export const ModelsDevPlugin = define({
   effect: (ctx) =>
     Effect.gen(function* () {
       const modelsDev = yield* ModelsDev.Service
-      const event = yield* EventV2.Service
+      const event = yield* EventRuntime.Service
 
       yield* ctx.integration.transform(
         Effect.fn(function* (integration) {
@@ -483,7 +483,7 @@ The Effect implementation remains the canonical runtime. Promise and embedding w
 ### 8. Add Event Adapter
 
 - Build the SDK event discriminant map.
-- Resolve public type strings to internal EventV2 definitions.
+- Resolve public type strings to internal EventRuntime definitions.
 - Return typed Effect streams.
 
 ### 9. Verification

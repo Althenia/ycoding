@@ -13,12 +13,12 @@ import { OpenAIOptions } from "@ycoding-ai/ai/protocols/utils/openai-options"
 import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
 import { SessionError } from "@ycoding-ai/schema/session-error"
 import { Context, Effect, Layer } from "effect"
-import type { AgentV2 } from "../agent"
+import type { Agent } from "../agent"
 import { Config } from "../config"
 import { ConfigEfficiency } from "../config/efficiency"
 import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { PluginHooks } from "../plugin/hooks"
 import { OpenAICodex } from "../plugin/provider/openai-codex"
 import { ToolRegistry } from "../tool/registry"
@@ -92,8 +92,8 @@ export const baseSystem = (context: Pick<SessionContext.Loaded, "agent" | "initi
     .filter((part) => part.length > 0)
     .map(SystemPart.make)
 
-export function toolPermissions(agent: Pick<AgentV2.Info, "mode" | "permissions">, ceiling: PermissionV2.Ruleset) {
-  return PermissionV2.merge(
+export function toolPermissions(agent: Pick<Agent.Info, "mode" | "permissions">, ceiling: Permission.Ruleset) {
+  return Permission.merge(
     agent.permissions,
     ceiling,
     ...(agent.mode === "subagent"
@@ -118,7 +118,7 @@ export interface Interface {
 }
 
 /** Location-scoped outbound model-request preparation. */
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionModelRequest") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionModelRequest") {}
 
 export const layer = (options?: SessionModelHeaders.Options) =>
   Layer.effect(
@@ -175,7 +175,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         let fallbackDescriptions: ReadonlyMap<string, string> | undefined
         if (imageInputs.length > 0) {
           const runningInfo = yield* catalog.model.get(resolved.ref.providerID, resolved.ref.id).pipe(
-            Effect.orElseSucceed(() => undefined as unknown as import("../model").ModelV2.Info | undefined),
+            Effect.orElseSucceed(() => undefined as unknown as import("../model").CatalogModel.Info | undefined),
           )
           const multimodal = runningInfo ? ImageAnalyzer.isMultimodal(runningInfo.capabilities) : false
           if (!multimodal) {

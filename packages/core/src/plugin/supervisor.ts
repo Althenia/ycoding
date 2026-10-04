@@ -14,18 +14,18 @@ import {
 } from "effect";
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
-import { AgentV2 } from "../agent";
+import { Agent } from "../agent";
 import { Browser } from "../browser";
 import { IsolatedBrowser } from "../isolated-browser";
 import { Catalog } from "../catalog";
-import { CommandV2 } from "../command";
+import { Command } from "../command";
 import { Computer } from "../computer";
 import { Config } from "../config";
 import { ConfigPlugin } from "../config/plugin";
 import { Credential } from "../credential";
 import { makeLocationNode } from "../effect/app-node";
 import { httpClient } from "../effect/app-node-platform";
-import { EventV2 } from "../event";
+import { EventRuntime } from "../event";
 import { FileMutation } from "../file-mutation";
 import { FileSystem } from "../filesystem";
 import { Form } from "../form";
@@ -39,9 +39,9 @@ import { ModelsDev } from "../models-dev";
 import { Memory } from "../memory";
 import { MCP } from "../mcp";
 import { Npm } from "../npm";
-import { PermissionV2 } from "../permission";
-import { ProviderUsageV2 } from "../provider-usage";
-import { PluginV2 } from "../plugin";
+import { Permission } from "../permission";
+import { ProviderUsageRuntime } from "../provider-usage";
+import { PluginRegistry } from "../plugin";
 import { PluginPromise } from "../plugin/promise";
 import { Reference } from "../reference";
 import { Ripgrep } from "../ripgrep";
@@ -52,7 +52,7 @@ import { SessionInstructions } from "../session/instructions";
 import { SessionRunnerModel } from "../session/runner/model";
 import { SessionTodo } from "../session/todo";
 import { Shell } from "../shell";
-import { SkillV2 } from "../skill";
+import { Skill } from "../skill";
 import { ReadToolFileSystem } from "../tool/read-filesystem";
 import { ToolRegistry } from "../tool/registry";
 import { WebSearchTool } from "../tool/websearch";
@@ -152,8 +152,8 @@ const scan = Effect.fn("PluginSupervisor.scan")(function* (
 });
 
 const resolve = Effect.fn("PluginSupervisor.resolve")(function* (
-  pre: readonly PluginV2.Versioned[],
-  post: readonly PluginV2.Versioned[],
+  pre: readonly PluginRegistry.Versioned[],
+  post: readonly PluginRegistry.Versioned[],
   operations: readonly Operation[],
 ) {
   const matches = (selector: string, target: string) =>
@@ -163,7 +163,7 @@ const resolve = Effect.fn("PluginSupervisor.resolve")(function* (
       : selector === target);
   const definitions = [...pre, ...post];
   const enabled = new Set(definitions.map((plugin) => plugin.id));
-  const packages = new Map<string, PluginV2.Versioned>();
+  const packages = new Map<string, PluginRegistry.Versioned>();
   const plugins = () => [...definitions, ...packages.values()];
 
   const seen = new Set<string>();
@@ -239,7 +239,7 @@ const load = Effect.fn("PluginSupervisor.load")(function* (
   if (Option.isNone(decoded)) {
     return yield* Effect.fail(
       new Error(
-        `Plugin does not implement the V2 contract: ${operation.target}. Export Plugin.define({ id, setup }) or Plugin.define({ id, effect }); V1 plugins must be migrated.`,
+        `Invalid plugin export: ${operation.target}. Export Plugin.define({ id, setup }) or Plugin.define({ id, effect }).`,
       ),
     );
   }
@@ -249,7 +249,7 @@ const load = Effect.fn("PluginSupervisor.load")(function* (
     id: plugin.id,
     version: JSON.stringify(operation),
     effect: (host) => plugin.effect({ ...host, options: operation.options }),
-  } satisfies PluginV2.Versioned;
+  } satisfies PluginRegistry.Versioned;
 });
 
 function discoverDirectory(fs: FSUtil.Interface, directory: string) {
@@ -281,10 +281,10 @@ export class Service extends Context.Service<Service, Interface>()(
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const registry = yield* PluginV2.Service;
+    const registry = yield* PluginRegistry.Service;
     const sdk = yield* SdkPlugins.Service;
     const config = yield* Config.Service;
-    const events = yield* EventV2.Service;
+    const events = yield* EventRuntime.Service;
     const lock = Semaphore.makeUnsafe(1);
     const ready = yield* Deferred.make<void>();
     let observed = 0;
@@ -371,17 +371,17 @@ export const node = makeLocationNode({
   service: Service,
   layer: nodeLayer,
   deps: [
-    PluginV2.node,
+    PluginRegistry.node,
     SdkPlugins.node,
-    AgentV2.node,
+    Agent.node,
     Browser.node,
     IsolatedBrowser.node,
     Catalog.node,
-    CommandV2.node,
+    Command.node,
     Computer.node,
     Config.node,
     Credential.node,
-    EventV2.node,
+    EventRuntime.node,
     FileMutation.node,
     FileSystem.node,
     FSUtil.node,
@@ -395,8 +395,8 @@ export const node = makeLocationNode({
     Memory.node,
     MCP.node,
     Npm.node,
-    PermissionV2.node,
-    ProviderUsageV2.node,
+    Permission.node,
+    ProviderUsageRuntime.node,
     SessionAutonomy.node,
     SessionGuardrail.node,
     SessionCompaction.node,
@@ -409,7 +409,7 @@ export const node = makeLocationNode({
     SessionRunnerModel.node,
     SessionTodo.node,
     Shell.node,
-    SkillV2.node,
+    Skill.node,
     ProjectArtifactSource.node,
     ProjectArtifactStore.node,
     ToolRegistry.toolsNode,

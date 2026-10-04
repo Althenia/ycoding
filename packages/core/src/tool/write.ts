@@ -1,5 +1,5 @@
 /**
- * Model-facing V2 file-write leaf. Relative paths resolve within the active
+ * Model-facing file-write leaf. Relative paths resolve within the active
  * Location. Absolute paths inside that Location are accepted, while explicit
  * absolute external paths retain mutation capability through a separate
  * external_directory approval before edit approval.
@@ -11,7 +11,7 @@ import { ToolFailure } from "@ycoding-ai/ai"
 import { Effect, Schema } from "effect"
 import { FileMutation } from "../file-mutation"
 import { LocationMutation } from "../location-mutation"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { SessionGuardrail } from "../session/guardrail"
 import { Tool } from "./tool"
 
@@ -37,18 +37,18 @@ export type Output = typeof Output.Type
 export const toModelOutput = (output: Output) =>
   `${output.existed ? "Wrote" : "Created"} file successfully: ${output.resource}`
 
-/** Deferred V2 write UX integrations remain visible at the model-facing seam. */
-// TODO: Add formatter integration after V2 formatter runtime exists.
-// TODO: Publish watcher/file-edit events after V2 watcher integration exists.
+/** Deferred write UX integrations remain visible at the model-facing seam. */
+// TODO: Add formatter integration when its runtime exists.
+// TODO: Publish watcher/file-edit events when that integration exists.
 // TODO: Add snapshots / undo after design exists.
-// TODO: Add LSP notification and diagnostics after V2 LSP runtime exists.
+// TODO: Add LSP notification and diagnostics when that runtime exists.
 
 export const Plugin = {
   id: "ycoding.tool.write",
   effect: Effect.fn("WriteTool.Plugin")(function* (ctx: PluginContext) {
     const mutation = yield* LocationMutation.Service
     const files = yield* FileMutation.Service
-    const permission = yield* PermissionV2.Service
+    const permission = yield* Permission.Service
     const guardrail = yield* SessionGuardrail.Service
 
     yield* ctx.tool

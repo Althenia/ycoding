@@ -8,7 +8,7 @@ import {
 } from "@ycoding-ai/ai"
 import { Effect, Option, Schema } from "effect"
 import type { AttachmentStore } from "../../attachment-store"
-import type { ModelV2 } from "../../model"
+import type { CatalogModel } from "../../model"
 import { SessionMessage } from "../message"
 import type { FileAttachment } from "@ycoding-ai/schema/prompt"
 import { SessionProviderState } from "../provider-state"
@@ -226,7 +226,7 @@ const toolResult = (
 
 const assistant = (
   message: SessionMessage.Assistant,
-  model: ModelV2.Ref,
+  model: CatalogModel.Ref,
   providerMetadataKey: string,
   materialized: ReadonlyMap<string, Record<string, unknown>>,
   attachments?: AttachmentMaterialization,
@@ -336,7 +336,7 @@ const mergeProviderState = (
 
 function toLLMMessage(
   message: SessionMessage.Info,
-  model: ModelV2.Ref,
+  model: CatalogModel.Ref,
   providerMetadataKey: string,
   materialized: ReadonlyMap<string, Record<string, unknown>>,
   attachments?: AttachmentMaterialization,
@@ -415,10 +415,10 @@ ${message.summary}
   }
 }
 
-/** Translate projected V2 Session history into canonical @ycoding-ai/ai context. */
+/** Translate projected Session history into canonical @ycoding-ai/ai context. */
 export const toLLMMessages = (
   messages: readonly SessionMessage.Info[],
-  model: ModelV2.Ref,
+  model: CatalogModel.Ref,
   providerMetadataKey: string = model.providerID,
   materialized: ReadonlyMap<string, Record<string, unknown>> = new Map(),
   attachments?: AttachmentMaterialization,

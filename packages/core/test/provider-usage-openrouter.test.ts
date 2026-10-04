@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { OpenRouterUsage } from "@ycoding-ai/core/provider-usage/openrouter"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
-import { ProviderUsageV2 } from "@ycoding-ai/core/provider-usage"
+import { Provider } from "@ycoding-ai/core/provider"
+import { ProviderUsageRuntime } from "@ycoding-ai/core/provider-usage"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Integration } from "@ycoding-ai/schema/integration"
 import { Effect } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 
-const providerID = ProviderV2.ID.make("openrouter")
+const providerID = Provider.ID.make("openrouter")
 
 describe("OpenRouterUsage", () => {
   test("normalizes key usage and remaining allowance without exposing the key", () => {
@@ -96,7 +96,7 @@ describe("OpenRouterUsage", () => {
         ? Response.json({ error: "forbidden" }, { status: 403 })
         : Response.json({ data: { usage: 4, usage_daily: 0, usage_weekly: 2, usage_monthly: 3 } }))
     }))
-    const snapshot = await Effect.runPromise(ProviderUsageV2.openRouter(http, {
+    const snapshot = await Effect.runPromise(ProviderUsageRuntime.openRouter(http, {
       providerID, label: "OpenRouter", updatedAt: 100,
       credential: new Credential.Info({
         id: Credential.ID.make("cred_openrouter_test"), integrationID: Integration.ID.make("openrouter"),
@@ -117,7 +117,7 @@ describe("OpenRouterUsage", () => {
         ? { data: { total_credits: 80, total_usage: 30 } }
         : { data: { usage_daily: 0, usage_weekly: 8, usage_monthly: 20 } }),
     )))
-    const snapshot = await Effect.runPromise(ProviderUsageV2.openRouter(http, {
+    const snapshot = await Effect.runPromise(ProviderUsageRuntime.openRouter(http, {
       providerID, label: "OpenRouter", updatedAt: 100,
       credential: new Credential.Info({
         id: Credential.ID.make("cred_openrouter_key"), integrationID: Integration.ID.make("openrouter"),
@@ -136,7 +136,7 @@ describe("OpenRouterUsage", () => {
         ? Response.json({ error: "forbidden" }, { status: 403 })
         : Response.json({ data: { total_credits: 10, total_usage: 3 } }),
     )))
-    const snapshot = await Effect.runPromise(ProviderUsageV2.openRouter(http, {
+    const snapshot = await Effect.runPromise(ProviderUsageRuntime.openRouter(http, {
       providerID, label: "OpenRouter", updatedAt: 100,
       credential: new Credential.Info({
         id: Credential.ID.make("cred_openrouter_management"), integrationID: Integration.ID.make("openrouter"),

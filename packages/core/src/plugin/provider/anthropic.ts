@@ -3,11 +3,11 @@ import { ProviderUsage } from "@ycoding-ai/schema/provider-usage";
 import { Effect, Semaphore, Stream } from "effect";
 import { join } from "node:path";
 import { Credential } from "../../credential";
-import { EventV2 } from "../../event";
+import { EventRuntime } from "../../event";
 import { Global } from "../../global";
 import { Integration } from "../../integration";
-import { ProviderV2 } from "../../provider";
-import { ProviderUsageV2 } from "../../provider-usage";
+import { Provider } from "../../provider";
+import { ProviderUsageRuntime } from "../../provider-usage";
 import { ClaudeUsage } from "../../provider-usage/claude";
 import { SessionMessage } from "../../session/message";
 import { SessionSchema } from "../../session/schema";
@@ -48,7 +48,7 @@ export function mergeBetaHeaders(
       .map((value) => value.trim())
       .filter((value) => value.length > 0),
   );
-  return ProviderV2.mergeHeaders(
+  return Provider.mergeHeaders(
     headers,
     values.size === 0
       ? undefined
@@ -103,8 +103,8 @@ export function makeAnthropicPlugin(options: AnthropicPluginOptions = {}) {
         onEvent,
       });
       const credentials = yield* Credential.Service;
-      const providerUsage = yield* ProviderUsageV2.Service;
-      const events = yield* EventV2.Service;
+      const providerUsage = yield* ProviderUsageRuntime.Service;
+      const events = yield* EventRuntime.Service;
       const { PluginRuntime } = yield* Effect.promise(() => import("../runtime"));
       const runtime = yield* PluginRuntime.Service;
       yield* Effect.forEach(
@@ -246,16 +246,16 @@ export function makeAnthropicPlugin(options: AnthropicPluginOptions = {}) {
 
       yield* ctx.catalog.transform((evt) => {
         for (const item of evt.provider.list()) {
-          if (!ProviderV2.isAISDK(item.provider.package)) continue;
+          if (!Provider.isAISDK(item.provider.package)) continue;
           if (
-            ProviderV2.packageName(item.provider.package) !==
+            Provider.packageName(item.provider.package) !==
             "@ai-sdk/anthropic"
           )
             continue;
           evt.provider.update(item.provider.id, (provider) => {
             provider.headers = mergeBetaHeaders(provider.headers, featureBetas);
             if (!activeSource) return;
-            provider.settings = ProviderV2.mergeOverlay(provider.settings, {
+            provider.settings = Provider.mergeOverlay(provider.settings, {
               apiKey: claudeCodeSentinel,
               [claudeCodeSourceSetting]: activeSource,
             });
@@ -312,7 +312,7 @@ export function makeAnthropicPlugin(options: AnthropicPluginOptions = {}) {
               onResponse: async (response) => {
                 const credentials = await store.resolve(source);
                 const snapshot = ClaudeUsage.normalizeHeaders({
-                  providerID: ProviderV2.ID.make("anthropic"),
+                  providerID: Provider.ID.make("anthropic"),
                   label: "Claude",
                   subscriptionType: credentials?.subscriptionType,
                   observedAt: Date.now(),

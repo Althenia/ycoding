@@ -2,18 +2,18 @@ import { describe, expect } from "bun:test"
 import { Deferred, Effect, Exit, Fiber } from "effect"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Form } from "@ycoding-ai/core/form"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { Database } from "@ycoding-ai/core/database/database"
-import { ProjectV2 } from "@ycoding-ai/core/project"
+import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { testEffect } from "./lib/effect"
 
-const forms = AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionAutonomy.node, Form.node]))
+const forms = AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionAutonomy.node, Form.node]))
 const it = testEffect(forms)
 
 const formID = Form.ID.create("frm_test")
@@ -30,7 +30,7 @@ const setupAutonomy = Effect.fn("FormTest.setupAutonomy")(function* (mode: "yolo
   const directory = AbsolutePath.make("/tmp/ycoding-form-autonomy")
   yield* db
     .insert(ProjectTable)
-    .values({ id: ProjectV2.ID.global, worktree: directory, sandboxes: [] })
+    .values({ id: Project.ID.global, worktree: directory, sandboxes: [] })
     .onConflictDoNothing()
     .run()
     .pipe(Effect.orDie)
@@ -38,7 +38,7 @@ const setupAutonomy = Effect.fn("FormTest.setupAutonomy")(function* (mode: "yolo
     .insert(SessionTable)
     .values({
       id: input.sessionID,
-      project_id: ProjectV2.ID.global,
+      project_id: Project.ID.global,
       directory,
       path: "",
       title: "Form autonomy",
@@ -136,7 +136,7 @@ describe("Form", () => {
   it.effect("returns a terminal cancelled state from ask", () =>
     Effect.gen(function* () {
       const service = yield* Form.Service
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const created = yield* Deferred.make<Form.Info>()
       const unsubscribe = yield* events.listen((event) =>
         event.type === Form.Event.Created.type
@@ -425,7 +425,7 @@ describe("Form", () => {
   it.effect("cleans up created forms when event publication fails", () =>
     Effect.gen(function* () {
       const service = yield* Form.Service
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const unsubscribe = yield* events.listen((event) =>
         event.type === Form.Event.Created.type ? Effect.die("create listener failed") : Effect.void,
       )
@@ -442,7 +442,7 @@ describe("Form", () => {
   it.effect("keeps forms pending when reply event publication fails", () =>
     Effect.gen(function* () {
       const service = yield* Form.Service
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       yield* service.create(input)
       const unsubscribe = yield* events.listen((event) =>
         event.type === Form.Event.Replied.type ? Effect.die("reply listener failed") : Effect.void,

@@ -14,10 +14,12 @@ sources:
 - id: runtime-doc
   resource: repo:///docs/runtime.md
 - id: spec-v2
-  resource: repo:///specs/v2/catalog-config-plugin-lifecycle.md
+  resource: repo:///specs/catalog-config-plugin-lifecycle.md
 - id: readme
   resource: repo:///README.md
 ---
+
+
 
 ## Supported Kinds
 

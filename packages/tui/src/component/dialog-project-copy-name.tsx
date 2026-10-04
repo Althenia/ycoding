@@ -7,7 +7,7 @@ import { DialogHeader, DialogSearchRow, DialogTitle, useDialog, type DialogConte
 
 export function DialogProjectCopyName(props: { value?: string; onConfirm: (name: string) => void }) {
   const dialog = useDialog()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const [inputTarget, setInputTarget] = createSignal<InputRenderable>()
   let input: InputRenderable
 
@@ -56,14 +56,14 @@ export function DialogProjectCopyName(props: { value?: string; onConfirm: (name:
           }}
           onSubmit={confirm}
           placeholder="Project copy name"
-          placeholderColor={themeV2.text.subdued}
-          textColor={themeV2.text.formfield.default}
-          focusedTextColor={themeV2.text.formfield.default}
-          cursorColor={themeV2.text.formfield.default}
+          placeholderColor={theme.text.subdued}
+          textColor={theme.text.formfield.default}
+          focusedTextColor={theme.text.formfield.default}
+          cursorColor={theme.text.formfield.default}
         />
       </box>
       <box paddingTop={2} paddingLeft={6} paddingRight={4}>
-        <text fg={themeV2.text.default}>Enter <span style={{ fg: themeV2.text.subdued }}>create</span></text>
+        <text fg={theme.text.default}>Enter <span style={{ fg: theme.text.subdued }}>create</span></text>
       </box>
     </box>
   )

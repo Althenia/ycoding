@@ -5,7 +5,7 @@ import { Locale } from "../util/locale"
 import { Keymap } from "../context/keymap"
 import { useTheme } from "../context/theme"
 import { usePromptStash, type StashEntry } from "../prompt/stash"
-import { readableForeground } from "../theme/v2/component"
+import { readableForeground } from "../theme/component"
 
 function getRelativeTime(timestamp: number): string {
   const now = Date.now()
@@ -31,7 +31,7 @@ function getStashPreview(input: string, maxLength: number = 50): string {
 export function DialogStash(props: { onSelect: (entry: StashEntry) => void }) {
   const dialog = useDialog()
   const stash = usePromptStash()
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const shortcuts = Keymap.useShortcuts()
 
   const [toDelete, setToDelete] = createSignal<number>()
@@ -47,9 +47,9 @@ export function DialogStash(props: { onSelect: (entry: StashEntry) => void }) {
           title: isDeleting
             ? `Press ${shortcuts.get("stash.delete")} again to confirm`
             : getStashPreview(entry.prompt.text),
-          bg: isDeleting ? themeV2.background.action.destructive.default : undefined,
+          bg: isDeleting ? theme.background.action.destructive.default : undefined,
           fg: isDeleting
-            ? readableForeground(themeV2.text.action.destructive.default, themeV2.background.action.destructive.default)
+            ? readableForeground(theme.text.action.destructive.default, theme.background.action.destructive.default)
             : undefined,
           value: index,
           description: getRelativeTime(entry.timestamp),

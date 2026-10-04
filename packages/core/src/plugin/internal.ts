@@ -3,11 +3,11 @@ export * as PluginInternal from "./internal";
 import type { Plugin } from "@ycoding-ai/plugin/effect/plugin";
 import { Context, Effect, Scope } from "effect";
 import { HttpClient } from "effect/unstable/http";
-import { AgentV2 } from "../agent";
+import { Agent } from "../agent";
 import { Browser } from "../browser";
 import { IsolatedBrowser } from "../isolated-browser";
 import { Catalog } from "../catalog";
-import { CommandV2 } from "../command";
+import { Command } from "../command";
 import { Config } from "../config";
 import { Computer } from "../computer";
 import { Credential } from "../credential";
@@ -17,7 +17,7 @@ import { ConfigProviderPlugin } from "../config/plugin/provider";
 import { ConfigPolicyPlugin } from "../config/plugin/policy";
 import { ConfigReferencePlugin } from "../config/plugin/reference";
 import { ConfigSkillPlugin } from "../config/plugin/skill";
-import { EventV2 } from "../event";
+import { EventRuntime } from "../event";
 import { FileMutation } from "../file-mutation";
 import { Form } from "../form";
 import { FileSystem } from "../filesystem";
@@ -31,8 +31,8 @@ import { ModelsDev } from "../models-dev";
 import { Memory } from "../memory";
 import { MCP } from "../mcp";
 import { Npm } from "../npm";
-import { PermissionV2 } from "../permission";
-import { ProviderUsageV2 } from "../provider-usage";
+import { Permission } from "../permission";
+import { ProviderUsageRuntime } from "../provider-usage";
 import { Reference } from "../reference";
 import { Ripgrep } from "../ripgrep";
 import { SessionAutonomy } from "../session/autonomy";
@@ -44,7 +44,7 @@ import { SessionInstructions } from "../session/instructions";
 import { SessionRunnerModel } from "../session/runner/model";
 import { SessionTodo } from "../session/todo";
 import { Shell } from "../shell";
-import { SkillV2 } from "../skill";
+import { Skill } from "../skill";
 import { PatchTool } from "../tool/patch";
 import { EditTool } from "../tool/edit";
 import { GlobTool } from "../tool/glob";
@@ -80,15 +80,15 @@ import { WellKnownPlugin } from "../wellknown/plugin";
 import { ProjectArtifactSource } from "../project-artifact/source";
 
 const services = Effect.fn("PluginInternal.services")(function* () {
-  const agent = yield* AgentV2.Service;
+  const agent = yield* Agent.Service;
   const browser = yield* Browser.Service;
   const isolatedBrowser = yield* IsolatedBrowser.Service;
   const catalog = yield* Catalog.Service;
-  const command = yield* CommandV2.Service;
+  const command = yield* Command.Service;
   const config = yield* Config.Service;
   const computer = yield* Computer.Service;
   const credential = yield* Credential.Service;
-  const events = yield* EventV2.Service;
+  const events = yield* EventRuntime.Service;
   const mutation = yield* FileMutation.Service;
   const filesystem = yield* FileSystem.Service;
   const fs = yield* FSUtil.Service;
@@ -102,8 +102,8 @@ const services = Effect.fn("PluginInternal.services")(function* () {
   const memory = yield* Memory.Service;
   const mcp = yield* MCP.Service;
   const npm = yield* Npm.Service;
-  const permission = yield* PermissionV2.Service;
-  const providerUsage = yield* ProviderUsageV2.Service;
+  const permission = yield* Permission.Service;
+  const providerUsage = yield* ProviderUsageRuntime.Service;
   const guardrail = yield* SessionGuardrail.Service;
   const runtime = yield* PluginRuntime.Service;
   const form = yield* Form.Service;
@@ -115,22 +115,22 @@ const services = Effect.fn("PluginInternal.services")(function* () {
   const todo = yield* SessionTodo.Service;
   const autonomy = yield* SessionAutonomy.Service;
   const shell = yield* Shell.Service;
-  const skill = yield* SkillV2.Service;
+  const skill = yield* Skill.Service;
   const tools = yield* Tools.Service;
   const websearch = yield* WebSearchTool.ConfigService;
   const wellknown = yield* WellKnown.Service;
   const projectArtifactSource = yield* ProjectArtifactSource.Service;
   const projectArtifactStore = yield* ProjectArtifactStore.Service;
   return Context.mergeAll(
-    Context.make(AgentV2.Service, agent),
+    Context.make(Agent.Service, agent),
     Context.make(Browser.Service, browser),
     Context.make(IsolatedBrowser.Service, isolatedBrowser),
     Context.make(Catalog.Service, catalog),
-    Context.make(CommandV2.Service, command),
+    Context.make(Command.Service, command),
     Context.make(Config.Service, config),
     Context.make(Computer.Service, computer),
     Context.make(Credential.Service, credential),
-    Context.make(EventV2.Service, events),
+    Context.make(EventRuntime.Service, events),
     Context.make(FileMutation.Service, mutation),
     Context.make(FileSystem.Service, filesystem),
     Context.make(FSUtil.Service, fs),
@@ -144,8 +144,8 @@ const services = Effect.fn("PluginInternal.services")(function* () {
     Context.make(Memory.Service, memory),
     Context.make(MCP.Service, mcp),
     Context.make(Npm.Service, npm),
-    Context.make(PermissionV2.Service, permission),
-    Context.make(ProviderUsageV2.Service, providerUsage),
+    Context.make(Permission.Service, permission),
+    Context.make(ProviderUsageRuntime.Service, providerUsage),
     Context.make(SessionGuardrail.Service, guardrail),
     Context.make(PluginRuntime.Service, runtime),
     Context.make(Form.Service, form),
@@ -157,7 +157,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
     Context.make(SessionTodo.Service, todo),
     Context.make(SessionAutonomy.Service, autonomy),
     Context.make(Shell.Service, shell),
-    Context.make(SkillV2.Service, skill),
+    Context.make(Skill.Service, skill),
     Context.make(Tools.Service, tools),
     Context.make(WebSearchTool.ConfigService, websearch),
     Context.make(WellKnown.Service, wellknown),

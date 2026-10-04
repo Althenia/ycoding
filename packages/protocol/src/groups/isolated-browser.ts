@@ -32,7 +32,7 @@ export const makeIsolatedBrowserGroup = <SessionLocationId extends HttpApiMiddle
         error: SessionNotFoundError,
       }).annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.isolatedBrowser.status",
+          identifier: "isolatedBrowser.status",
           summary: "Inspect temporary isolated-browser status",
           description: "Return safe process-local lifecycle state without host paths or launch arguments.",
         }),
@@ -46,7 +46,7 @@ export const makeIsolatedBrowserGroup = <SessionLocationId extends HttpApiMiddle
         error: operationErrors,
       }).annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.isolatedBrowser.start",
+          identifier: "isolatedBrowser.start",
           summary: "Start temporary isolated headless Chrome",
           description: "Start one Session-owned disposable browser at an authenticated user-supplied safe URL.",
         }),
@@ -59,7 +59,7 @@ export const makeIsolatedBrowserGroup = <SessionLocationId extends HttpApiMiddle
         error: SessionNotFoundError,
       }).annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.isolatedBrowser.tabs",
+          identifier: "isolatedBrowser.tabs",
           summary: "List the Session-owned isolated tab",
           description: "Return bounded query-free metadata for the temporary isolated page.",
         }),
@@ -73,7 +73,7 @@ export const makeIsolatedBrowserGroup = <SessionLocationId extends HttpApiMiddle
         error: operationErrors,
       }).annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.isolatedBrowser.observe",
+          identifier: "isolatedBrowser.observe",
           summary: "Observe the isolated page semantically",
           description: "Return bounded accessibility metadata without raw DOM, storage, or input values.",
         }),
@@ -87,7 +87,7 @@ export const makeIsolatedBrowserGroup = <SessionLocationId extends HttpApiMiddle
         error: operationErrors,
       }).annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.isolatedBrowser.action",
+          identifier: "isolatedBrowser.action",
           summary: "Run one fenced isolated-browser action",
           description: "Run a strict semantic action without exposing raw CDP or evaluation.",
         }),
@@ -101,7 +101,7 @@ export const makeIsolatedBrowserGroup = <SessionLocationId extends HttpApiMiddle
         error: operationErrors,
       }).annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.isolatedBrowser.control",
+          identifier: "isolatedBrowser.control",
           summary: "Pause or resume isolated-browser control",
           description: "Pause dispatch or resume only after a fresh observation boundary.",
         }),
@@ -114,7 +114,7 @@ export const makeIsolatedBrowserGroup = <SessionLocationId extends HttpApiMiddle
         error: operationErrors,
       }).annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.isolatedBrowser.stop",
+          identifier: "isolatedBrowser.stop",
           summary: "Stop and destroy temporary isolated Chrome",
           description: "Cancel owned work and destroy only the Session-owned disposable context and process.",
         }),

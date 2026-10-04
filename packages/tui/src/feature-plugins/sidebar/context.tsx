@@ -28,7 +28,7 @@ export function SidebarCacheContent(props: {
   selectedModel?: () => SessionCacheDiagnostics["model"] | undefined
   cost?: () => number | undefined
 }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const rail = useRail()
   const diagnostics = createMemo(props.diagnostics)
@@ -131,13 +131,13 @@ export function SidebarCacheContent(props: {
         )}
       </Show>
       <Show when={summarizing()}>
-        <RailRow label="Status" value="Summarizing" valueColor={themeV2.text.feedback.info.default} />
+        <RailRow label="Status" value="Summarizing" valueColor={theme.text.feedback.info.default} />
       </Show>
       <Show when={diagnostics() || pressure()}>
         <RailRow label="Context" value={context()} />
       </Show>
       <Show when={diagnostics()}>
-        <RailRow label="Cache" value={cache()} valueColor={themeV2.text.feedback.success.default} />
+        <RailRow label="Cache" value={cache()} valueColor={theme.text.feedback.success.default} />
       </Show>
       <Show when={speed()}>{(value) => <RailRow label="Speed" value={value()} />}</Show>
       <Show when={hasSpend()}>

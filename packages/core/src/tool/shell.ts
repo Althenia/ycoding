@@ -7,7 +7,7 @@ import { Effect, Fiber, Schedule, Schema, Scope } from "effect"
 import { ConfigShell } from "../config/shell"
 import { FSUtil } from "../fs-util"
 import { LocationMutation } from "../location-mutation"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { PluginRuntime } from "../plugin/runtime"
 import { NonNegativeInt } from "../schema"
 import { SessionGuardrail } from "../session/guardrail"
@@ -76,14 +76,14 @@ const modelOutput = (output: Output): string | undefined => {
 }
 
 /**
- * Minimal V2 core shell boundary. Keep parity debt visible without pulling the
+ * Core shell boundary. Keep parity debt visible without pulling the
  * legacy shell runtime into core.
  */
 // TODO: Port tree-sitter bash / PowerShell parser-based approval reduction.
 // TODO: Port BashArity reusable command-prefix approvals.
 // TODO: Replace token-based command-argument external-directory advisories with parser-based detection.
 // TODO: Restore PowerShell and cmd-specific invocation/path handling on Windows.
-// TODO: Add plugin shell.env environment augmentation once V2 plugin hooks exist.
+// TODO: Add plugin shell.env environment augmentation when its hook exists.
 // TODO: Persist job status and define restart recovery before exposing remote observation.
 // TODO: Add HTTP job observation only after durable status, restart recovery, and authorization are defined.
 // TODO: Revisit process-group cleanup and platform coverage with shell-specific tests if current AppProcess semantics do not fully cover it.
@@ -116,7 +116,7 @@ export const Plugin = {
     const fsUtil = yield* FSUtil.Service
     const mutation = yield* LocationMutation.Service
     const shell = yield* Shell.Service
-    const permission = yield* PermissionV2.Service
+    const permission = yield* Permission.Service
     const guardrail = yield* SessionGuardrail.Service
 
     const notifyWhenDone = Effect.fn("ShellTool.notifyWhenDone")(function* (

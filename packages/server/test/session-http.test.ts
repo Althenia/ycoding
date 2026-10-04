@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SubagentCursor } from "@ycoding-ai/protocol/groups/session"
 import { Effect, Schema } from "effect"
 import { sessionHttp } from "./session-http"
 import { SessionCompaction } from "../../schema/src/session-compaction"
 
-const parentID = SessionV2.ID.make("ses_http_parent")
-const otherID = SessionV2.ID.make("ses_http_other")
+const parentID = Session.ID.make("ses_http_parent")
+const otherID = Session.ID.make("ses_http_other")
 const anchor = { rank: 0, updated: 0, sessionID: otherID, direction: "next" } as const
 
 test("subagent list rejects malformed and cross-parent cursors before the paged read", async () => {
@@ -29,7 +29,7 @@ test("subagent list rejects malformed and cross-parent cursors before the paged 
 })
 
 test("session skills keeps a missing Session as a typed 404", async () => {
-  await using http = sessionHttp({ skills: () => Effect.fail(new SessionV2.NotFoundError({ sessionID: parentID })) })
+  await using http = sessionHttp({ skills: () => Effect.fail(new Session.NotFoundError({ sessionID: parentID })) })
   const response = await http.request(`/api/session/${parentID}/skills`)
 
   expect(response.status).toBe(404)
@@ -37,13 +37,13 @@ test("session skills keeps a missing Session as a typed 404", async () => {
 })
 
 test("compact forwards the job ID and maps a conflicting durable job to 409 by that ID", async () => {
-  const jobID = Schema.decodeUnknownSync(SessionV2.CompactionConflictError.fields.jobID)("cmp_http_test")
+  const jobID = Schema.decodeUnknownSync(Session.CompactionConflictError.fields.jobID)("cmp_http_test")
   const received: unknown[] = []
   await using http = sessionHttp({
     compact: (input) =>
       Effect.sync(() => void received.push(input)).pipe(
         Effect.andThen(
-          Effect.fail(new SessionV2.CompactionConflictError({ sessionID: parentID, jobID, message: "job differs" })),
+          Effect.fail(new Session.CompactionConflictError({ sessionID: parentID, jobID, message: "job differs" })),
         ),
       ),
   })
@@ -70,9 +70,9 @@ test("compact returns the settled durable job rather than a pending input or sum
     timeCreated: 0,
   })
   const received: unknown[] = []
-  function compact(input: SessionV2.AdvisorCompactInput): Effect.Effect<never>
-  function compact(input: SessionV2.ManualCompactInput): Effect.Effect<typeof result>
-  function compact(input: SessionV2.AdvisorCompactInput | SessionV2.ManualCompactInput) {
+  function compact(input: Session.AdvisorCompactInput): Effect.Effect<never>
+  function compact(input: Session.ManualCompactInput): Effect.Effect<typeof result>
+  function compact(input: Session.AdvisorCompactInput | Session.ManualCompactInput) {
     if (input.trigger !== undefined) return Effect.die("unexpected advisor request")
     return Effect.sync(() => {
       received.push(input)

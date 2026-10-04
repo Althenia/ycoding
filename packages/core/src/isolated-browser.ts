@@ -6,7 +6,7 @@ import { Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Stream
 import { BrowserAdmission } from "./browser/admission"
 import { IsolatedBrowserExecutor } from "./browser/isolated-executor"
 import { makeLocationNode } from "./effect/app-node"
-import { EventV2 } from "./event"
+import { EventRuntime } from "./event"
 import { Location } from "./location"
 import { SessionErrors } from "./session/error"
 import { SessionEvent } from "./session/event"
@@ -64,7 +64,7 @@ export interface Interface {
   ) => Effect.Effect<void, SessionErrors.NotFoundError | OwnershipError>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/IsolatedBrowser") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/IsolatedBrowser") {}
 
 export interface Options {
   readonly operationTimeout?: Duration.Input
@@ -103,7 +103,7 @@ export const layer = (options: Options = {}) =>
       const sessions = yield* SessionStore.Service
       const admission = yield* BrowserAdmission.Service
       const executor = yield* IsolatedBrowserExecutor.Service
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const operationTimeout = options.operationTimeout ?? DEFAULT_OPERATION_TIMEOUT
       const settlementLimit = options.settlementLimit ?? DEFAULT_SETTLEMENT_LIMIT
       const instances = new Map<Browser.Tab["sessionID"], Instance>()
@@ -515,7 +515,7 @@ export const layer = (options: Options = {}) =>
 export const node = makeLocationNode({
   service: Service,
   layer: layer(),
-  deps: [BrowserAdmission.node, EventV2.node, IsolatedBrowserExecutor.node, Location.node, SessionStore.node],
+  deps: [BrowserAdmission.node, EventRuntime.node, IsolatedBrowserExecutor.node, Location.node, SessionStore.node],
 })
 
 function applyObservation(instance: Instance, observed: IsolatedBrowserExecutor.Snapshot) {

@@ -7,13 +7,13 @@ import { Money } from "@ycoding-ai/schema/money"
 import type { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import type { SessionCacheDiagnostics as DiagnosticsSchema } from "@ycoding-ai/schema/session-cache-diagnostics"
 import type { TokenUsage } from "@ycoding-ai/schema/token-usage"
-import type { ModelV2 } from "../model"
+import type { CatalogModel } from "../model"
 import { OpenAICodex } from "../plugin/provider/openai-codex"
 import type { SessionMessage } from "./message"
 import { SessionUsage } from "./usage"
 
 export interface CalculateInput {
-  readonly model: ModelV2.Ref
+  readonly model: CatalogModel.Ref
   readonly tokens: TokenUsage.Info
   readonly estimatedCost: Money.USD
   readonly contextLimit?: number
@@ -68,7 +68,7 @@ const ROUTE_MECHANISMS: Record<string, Session.CacheMechanism | undefined> = {
 
 export function mechanism(
   routeID: string,
-  model: ModelV2.Ref,
+  model: CatalogModel.Ref,
   tokens: TokenUsage.Info,
 ): Session.CacheMechanism {
   const known = ROUTE_MECHANISMS[routeID]

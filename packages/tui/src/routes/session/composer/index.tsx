@@ -44,7 +44,7 @@ export type ComposerProps = {
 }
 
 export function Composer(props: ComposerProps) {
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const data = useData()
 
   const [store, setStore] = createStore({
@@ -134,7 +134,7 @@ export function Composer(props: ComposerProps) {
     <ComposerContext.Provider value={ctx}>
       <box flexShrink={0} visible={props.open}>
         <box
-          backgroundColor={themeV2.background.default}
+          backgroundColor={theme.background.default}
           paddingLeft={3}
           paddingRight={4}
           paddingTop={3}
@@ -145,7 +145,7 @@ export function Composer(props: ComposerProps) {
               <Show
                 when={tabList().length > 1}
                 fallback={
-                  <text fg={themeV2.text.feedback.success.default} attributes={TextAttributes.BOLD}>
+                  <text fg={theme.text.feedback.success.default} attributes={TextAttributes.BOLD}>
                     {tabList()[0]?.label ?? ""}
                   </text>
                 }
@@ -160,7 +160,7 @@ export function Composer(props: ComposerProps) {
                             <box width={4} />
                           </Show>
                           <text
-                            fg={isActive() ? themeV2.text.feedback.success.default : themeV2.text.subdued}
+                            fg={isActive() ? theme.text.feedback.success.default : theme.text.subdued}
                             attributes={isActive() ? TextAttributes.BOLD : undefined}
                             onMouseUp={() => setStore("active", tab.id)}
                           >
@@ -168,11 +168,11 @@ export function Composer(props: ComposerProps) {
                           </text>
                           <Show when={tab.id === "subagents"}>
                             <box width={2} />
-                            <text fg={themeV2.text.feedback.warning.default}>{subagents()}</text>
+                            <text fg={theme.text.feedback.warning.default}>{subagents()}</text>
                           </Show>
                           <Show when={tab.id === "shell"}>
                             <box width={1} />
-                            <text fg={themeV2.text.feedback.info.default}>{shells()}</text>
+                            <text fg={theme.text.feedback.info.default}>{shells()}</text>
                           </Show>
                         </>
                       )
@@ -189,10 +189,10 @@ export function Composer(props: ComposerProps) {
                 {(hint) => (
                   <>
                     <text>
-                      <span style={{ fg: themeV2.text.default }}>
+                      <span style={{ fg: theme.text.default }}>
                         <b>{hint.label}</b>{" "}
                       </span>
-                      <span style={{ fg: themeV2.text.subdued }}>{hint.shortcut}</span>
+                      <span style={{ fg: theme.text.subdued }}>{hint.shortcut}</span>
                     </text>
                     <Show when={hint.gapAfter} keyed>
                       {(gap) => <box width={gap} />}

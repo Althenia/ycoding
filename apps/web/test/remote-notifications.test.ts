@@ -420,7 +420,7 @@ describe("remote notification delivery", () => {
     const test = await harness()
     try {
       await test.openSession()
-      test.relay.pushEvent("ses_a", { id: "evt_20", type: "permission.v2.asked", data: { id: "per_1", action: "shell" } })
+      test.relay.pushEvent("ses_a", { id: "evt_20", type: "permission.asked", data: { id: "per_1", action: "shell" } })
       await test.flush()
       test.relay.pushEvent("ses_a", { id: "evt_21", type: "guardrail.asked", data: { id: "grq_1", hardReview: true } })
       await test.flush()

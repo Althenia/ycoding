@@ -8,11 +8,11 @@ import { Flock } from "./util/flock"
 import { Hash } from "./util/hash"
 import { FSUtil } from "./fs-util"
 import { InstallationChannel, InstallationVersion } from "./installation/version"
-import { EventV2 } from "./event"
+import { EventRuntime } from "./event"
 import { makeGlobalNode } from "./effect/app-node"
 import { httpClient } from "./effect/app-node-platform"
-import { ModelV2 } from "./model"
-import { ProviderV2 } from "./provider"
+import { CatalogModel } from "./model"
+import { Provider } from "./provider"
 
 export const CatalogModelStatus = Schema.Literals(["alpha", "beta", "deprecated"])
 export type CatalogModelStatus = typeof CatalogModelStatus.Type
@@ -53,7 +53,7 @@ const Modality = Schema.Literals(["text", "audio", "image", "video", "pdf"])
 type Modality = typeof Modality.Type
 
 const SourceRequest = Schema.Struct({
-  body: Schema.optional(ProviderV2.Settings),
+  body: Schema.optional(Provider.Settings),
   headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 })
 
@@ -123,33 +123,33 @@ const decodeSourceProviders = Schema.decodeUnknownEffect(SourceProviders)
 const decodeSourceProvidersJson = Schema.decodeUnknownEffect(Schema.fromJsonString(SourceProviders))
 
 export type Snapshot = {
-  readonly info: ProviderV2.Info
-  readonly models: readonly ModelV2.Info[]
+  readonly info: Provider.Info
+  readonly models: readonly CatalogModel.Info[]
   readonly environment: readonly string[]
 }
 
 function normalize(input: Record<string, SourceProvider>): readonly Snapshot[] {
   const providers: Snapshot[] = []
   for (const item of Object.values(input)) {
-    const providerID = ProviderV2.ID.make(item.id)
+    const providerID = Provider.ID.make(item.id)
     const info = {
       id: providerID,
       name: item.name,
-      package: item.npm ? ProviderV2.aisdk(item.npm) : "",
+      package: item.npm ? Provider.aisdk(item.npm) : "",
       ...(item.api ? { settings: { baseURL: item.api } } : {}),
-    } satisfies ProviderV2.Info
-    const models: ModelV2.Info[] = []
+    } satisfies Provider.Info
+    const models: CatalogModel.Info[] = []
     for (const model of Object.values(item.models)) {
       const baseCost = cost(model.cost)
       const variants = reasoningVariants(item, model)
-      const id = ModelV2.ID.make(model.id)
+      const id = CatalogModel.ID.make(model.id)
       models.push(modelInfo(providerID, id, model, {
         cost: baseCost,
         variants,
         providerNpm: model.provider?.npm ?? item.npm,
       }))
       for (const [mode, options] of Object.entries(model.experimental?.modes ?? {})) {
-        const modeID = ModelV2.ID.make(`${model.id}-${mode}`)
+        const modeID = CatalogModel.ID.make(`${model.id}-${mode}`)
         models.push(
           modelInfo(providerID, modeID, model, {
             name: modeName(model, mode),
@@ -175,10 +175,10 @@ function ensureDaybreakAlias(snapshots: readonly Snapshot[]): readonly Snapshot[
   if (hasAlias) return snapshots
   const sol = openai.models.find((model) => (model.id as string) === "gpt-5.6-sol")
   if (!sol) return snapshots
-  const alias: ModelV2.Info = {
+  const alias: CatalogModel.Info = {
     ...sol,
-    id: ModelV2.ID.make(DAYBREAK_ALIAS),
-    modelID: ModelV2.ID.make(DAYBREAK_ALIAS),
+    id: CatalogModel.ID.make(DAYBREAK_ALIAS),
+    modelID: CatalogModel.ID.make(DAYBREAK_ALIAS),
     name: "Daybreak Blue",
     family: sol.family,
     capabilities: { ...sol.capabilities, input: [...sol.capabilities.input], output: [...sol.capabilities.output] },
@@ -289,18 +289,18 @@ function ensureDeepseekFallback(
         },
       },
     }
-    const providerID = ProviderV2.ID.make(syntheticProvider.id)
+    const providerID = Provider.ID.make(syntheticProvider.id)
     const info = {
       id: providerID,
       name: syntheticProvider.name,
-      package: ProviderV2.aisdk(syntheticProvider.npm!),
+      package: Provider.aisdk(syntheticProvider.npm!),
       settings: { baseURL: syntheticProvider.api! },
-    } satisfies ProviderV2.Info
-    const models: ModelV2.Info[] = []
+    } satisfies Provider.Info
+    const models: CatalogModel.Info[] = []
     for (const model of Object.values(syntheticProvider.models)) {
       const baseCost = cost(model.cost)
       const variants = reasoningVariants(syntheticProvider, model)
-      models.push(modelInfo(providerID, ModelV2.ID.make(model.id), model, { cost: baseCost, variants }))
+      models.push(modelInfo(providerID, CatalogModel.ID.make(model.id), model, { cost: baseCost, variants }))
     }
     for (const dated of DEEPSEEK_DATED) {
       const baseEntry = syntheticProvider.models[dated.base]
@@ -315,7 +315,7 @@ function ensureDeepseekFallback(
         cost: dated.cost as SourceModel["cost"],
       })
       models.push(
-        modelInfo(providerID, ModelV2.ID.make(dated.id), {
+        modelInfo(providerID, CatalogModel.ID.make(dated.id), {
           ...baseEntry,
           id: dated.id,
           name: dated.name,
@@ -349,8 +349,8 @@ function ensureDeepseekFallback(
     }
     const baseCost = cost(target.cost)
     const variants = reasoningVariants(providerRaw, target)
-    const full = modelInfo(existing.info.id, ModelV2.ID.make(dated.id), target, { cost: baseCost, variants })
-    ;(existing.models as ModelV2.Info[]).push(full)
+    const full = modelInfo(existing.info.id, CatalogModel.ID.make(dated.id), target, { cost: baseCost, variants })
+    ;(existing.models as CatalogModel.Info[]).push(full)
   }
   return result
 }
@@ -360,7 +360,7 @@ function released(date: string) {
   return Number.isFinite(time) ? time : 0
 }
 
-function cost(input: SourceModel["cost"]): ModelV2.Info["cost"] {
+function cost(input: SourceModel["cost"]): CatalogModel.Info["cost"] {
   if (!input) return []
   const base = {
     input: input.input,
@@ -397,13 +397,13 @@ function cost(input: SourceModel["cost"]): ModelV2.Info["cost"] {
   ]
 }
 
-function mergeCost(base: ModelV2.Info["cost"], override: SourceModel["cost"] | undefined) {
+function mergeCost(base: CatalogModel.Info["cost"], override: SourceModel["cost"] | undefined) {
   if (!override) return base
   const next = cost(override)
   const [baseDefault, ...baseTiers] = base
   const [nextDefault, ...nextTiers] = next
-  const tierKey = (item: ModelV2.Info["cost"][number]) => `${item.tier?.type ?? "base"}:${item.tier?.size ?? 0}`
-  const merge = (left: ModelV2.Info["cost"][number], right: ModelV2.Info["cost"][number]) => ({
+  const tierKey = (item: CatalogModel.Info["cost"][number]) => `${item.tier?.type ?? "base"}:${item.tier?.size ?? 0}`
+  const merge = (left: CatalogModel.Info["cost"][number], right: CatalogModel.Info["cost"][number]) => ({
     ...left,
     ...right,
     tier: right.tier ?? left.tier,
@@ -430,7 +430,7 @@ function mergeCost(base: ModelV2.Info["cost"], override: SourceModel["cost"] | u
 const OPENAI_INCLUDE_ENCRYPTED_REASONING = ["reasoning.encrypted_content"]
 const OUTPUT_TOKEN_MAX = 32_000
 
-function reasoningVariants(provider: SourceProvider, model: SourceModel): NonNullable<ModelV2.Info["variants"]> {
+function reasoningVariants(provider: SourceProvider, model: SourceModel): NonNullable<CatalogModel.Info["variants"]> {
   const npm = model.provider?.npm ?? provider.npm
   const options = model.reasoning_options
   if (!options?.length || npm === undefined) return []
@@ -445,7 +445,7 @@ function reasoningVariants(provider: SourceProvider, model: SourceModel): NonNul
         if (id === undefined) return []
         if (id === "none" && off.length > 0) return []
         const settings = settingsForEffort(npm, model.id, id)
-        return settings ? [{ id: ModelV2.VariantID.make(id), settings }] : []
+        return settings ? [{ id: CatalogModel.VariantID.make(id), settings }] : []
       }),
     ]
     return [...new Map(variants.map((variant) => [variant.id, variant])).values()]
@@ -460,7 +460,7 @@ function reasoningVariants(provider: SourceProvider, model: SourceModel): NonNul
   return []
 }
 
-function settingsForEffort(npm: string, modelID: string, effort: string): ProviderV2.Settings | undefined {
+function settingsForEffort(npm: string, modelID: string, effort: string): Provider.Settings | undefined {
   // DeepSeek's OpenAI-format API accepts the requested effort and maps it
   // server-side; Chat lowering reads `reasoningEffort` and `thinking`.
   if (npm === "@ai-sdk/openai-compatible" && modelID.includes("deepseek")) {
@@ -537,7 +537,7 @@ function budgetVariants(
   npm: string,
   model: SourceModel,
   option: Extract<NonNullable<SourceModel["reasoning_options"]>[number], { type: "budget_tokens" }>,
-): NonNullable<ModelV2.Info["variants"]> {
+): NonNullable<CatalogModel.Info["variants"]> {
   const maximum = Math.min(option.max ?? OUTPUT_TOKEN_MAX - 1, model.limit.output - 1, OUTPUT_TOKEN_MAX - 1)
   if (maximum <= 0) return []
   const high = Math.min(Math.max(option.min ?? 0, Math.floor((maximum + 1) / 2)), maximum)
@@ -546,16 +546,16 @@ function budgetVariants(
     { id: "max", budget: maximum },
   ].flatMap((item) => {
     const settings = settingsForBudget(npm, model.id, item.budget)
-    return settings ? [{ id: ModelV2.VariantID.make(item.id), settings }] : []
+    return settings ? [{ id: CatalogModel.VariantID.make(item.id), settings }] : []
   })
 }
 
-function toggleVariants(npm: string, modelID: string): NonNullable<ModelV2.Info["variants"]> {
+function toggleVariants(npm: string, modelID: string): NonNullable<CatalogModel.Info["variants"]> {
   if (npm === "@ai-sdk/openai-compatible" && modelID.includes("deepseek"))
     return [
-      { id: ModelV2.VariantID.make("none"), settings: { thinking: { type: "disabled" } } },
+      { id: CatalogModel.VariantID.make("none"), settings: { thinking: { type: "disabled" } } },
       {
-        id: ModelV2.VariantID.make("thinking"),
+        id: CatalogModel.VariantID.make("thinking"),
         settings: { thinking: { type: "enabled" }, reasoningEffort: "high" },
       },
     ]
@@ -564,25 +564,25 @@ function toggleVariants(npm: string, modelID: string): NonNullable<ModelV2.Info[
     if (upstream) return toggleVariants(upstream, modelID)
     return [
       {
-        id: ModelV2.VariantID.make("none"),
+        id: CatalogModel.VariantID.make("none"),
         settings: { reasoning: { enabled: false } },
       },
       {
-        id: ModelV2.VariantID.make("thinking"),
+        id: CatalogModel.VariantID.make("thinking"),
         settings: { reasoning: { enabled: true } },
       },
     ]
   }
   if (npm === "@openrouter/ai-sdk-provider")
     return [
-      { id: ModelV2.VariantID.make("none"), settings: { reasoning: { enabled: false } } },
-      { id: ModelV2.VariantID.make("thinking"), settings: { reasoning: { enabled: true } } },
+      { id: CatalogModel.VariantID.make("none"), settings: { reasoning: { enabled: false } } },
+      { id: CatalogModel.VariantID.make("thinking"), settings: { reasoning: { enabled: true } } },
     ]
   if (npm === "@ai-sdk/anthropic" || npm === "@ai-sdk/google-vertex/anthropic")
     return [
-      { id: ModelV2.VariantID.make("none"), settings: { thinking: { type: "disabled" } } },
+      { id: CatalogModel.VariantID.make("none"), settings: { thinking: { type: "disabled" } } },
       {
-        id: ModelV2.VariantID.make("thinking"),
+        id: CatalogModel.VariantID.make("thinking"),
         settings: {
           thinking: { type: "adaptive", display: "summarized" },
         },
@@ -591,11 +591,11 @@ function toggleVariants(npm: string, modelID: string): NonNullable<ModelV2.Info[
   if (npm === "@ai-sdk/google" || npm === "@ai-sdk/google-vertex")
     return [
       {
-        id: ModelV2.VariantID.make("none"),
+        id: CatalogModel.VariantID.make("none"),
         settings: { thinkingConfig: { includeThoughts: false, thinkingBudget: 0 } },
       },
       {
-        id: ModelV2.VariantID.make("thinking"),
+        id: CatalogModel.VariantID.make("thinking"),
         settings: { thinkingConfig: { includeThoughts: true, thinkingBudget: -1 } },
       },
     ]
@@ -603,7 +603,7 @@ function toggleVariants(npm: string, modelID: string): NonNullable<ModelV2.Info[
     const anthropic = modelID.includes("anthropic")
     return [
       {
-        id: ModelV2.VariantID.make("none"),
+        id: CatalogModel.VariantID.make("none"),
         settings: {
           additionalModelRequestFields: anthropic
             ? { thinking: { type: "disabled" } }
@@ -611,7 +611,7 @@ function toggleVariants(npm: string, modelID: string): NonNullable<ModelV2.Info[
         },
       },
       {
-        id: ModelV2.VariantID.make("thinking"),
+        id: CatalogModel.VariantID.make("thinking"),
         settings: {
           additionalModelRequestFields: anthropic
             ? { thinking: { type: "adaptive", display: "summarized" } }
@@ -622,58 +622,58 @@ function toggleVariants(npm: string, modelID: string): NonNullable<ModelV2.Info[
   }
   if (npm === "@ai-sdk/alibaba")
     return [
-      { id: ModelV2.VariantID.make("none"), settings: { enableThinking: false } },
-      { id: ModelV2.VariantID.make("high"), settings: { enableThinking: true } },
+      { id: CatalogModel.VariantID.make("none"), settings: { enableThinking: false } },
+      { id: CatalogModel.VariantID.make("high"), settings: { enableThinking: true } },
     ]
   if (npm === "@ai-sdk/cohere")
     return [
-      { id: ModelV2.VariantID.make("none"), settings: { thinking: { type: "disabled" } } },
-      { id: ModelV2.VariantID.make("high"), settings: { thinking: { type: "enabled" } } },
+      { id: CatalogModel.VariantID.make("none"), settings: { thinking: { type: "disabled" } } },
+      { id: CatalogModel.VariantID.make("high"), settings: { thinking: { type: "enabled" } } },
     ]
   if (npm === "@jerome-benoit/sap-ai-provider-v2") {
     if (modelID.includes("gemini"))
       return [
         {
-          id: ModelV2.VariantID.make("none"),
+          id: CatalogModel.VariantID.make("none"),
           settings: { modelParams: { thinkingConfig: { includeThoughts: false, thinkingBudget: 0 } } },
         },
         {
-          id: ModelV2.VariantID.make("thinking"),
+          id: CatalogModel.VariantID.make("thinking"),
           settings: { modelParams: { thinkingConfig: { includeThoughts: true, thinkingBudget: -1 } } },
         },
       ]
     if (modelID.includes("cohere"))
       return [
         {
-          id: ModelV2.VariantID.make("none"),
+          id: CatalogModel.VariantID.make("none"),
           settings: { modelParams: { thinking: { type: "disabled" } } },
         },
         {
-          id: ModelV2.VariantID.make("thinking"),
+          id: CatalogModel.VariantID.make("thinking"),
           settings: { modelParams: { thinking: { type: "enabled" } } },
         },
       ]
     if (modelID.includes("amazon--nova"))
       return [
         {
-          id: ModelV2.VariantID.make("none"),
+          id: CatalogModel.VariantID.make("none"),
           settings: { modelParams: { additionalModelRequestFields: { thinking: { type: "disabled" } } } },
         },
         {
-          id: ModelV2.VariantID.make("thinking"),
+          id: CatalogModel.VariantID.make("thinking"),
           settings: { modelParams: { additionalModelRequestFields: { thinking: { type: "enabled" } } } },
         },
       ]
     if (modelID.includes("anthropic"))
       return [
         {
-          id: ModelV2.VariantID.make("none"),
+          id: CatalogModel.VariantID.make("none"),
           settings: {
             modelParams: { additionalModelRequestFields: { thinking: { type: "disabled" } } },
           },
         },
         {
-          id: ModelV2.VariantID.make("thinking"),
+          id: CatalogModel.VariantID.make("thinking"),
           settings: {
             modelParams: {
               additionalModelRequestFields: {
@@ -687,7 +687,7 @@ function toggleVariants(npm: string, modelID: string): NonNullable<ModelV2.Info[
   return []
 }
 
-function settingsForBudget(npm: string, modelID: string, budget: number): ProviderV2.Settings | undefined {
+function settingsForBudget(npm: string, modelID: string, budget: number): Provider.Settings | undefined {
   if (npm === "@openrouter/ai-sdk-provider") return { reasoning: { max_tokens: budget } }
   if (npm === "@ai-sdk/anthropic" || npm === "@ai-sdk/google-vertex/anthropic")
     return { thinking: { type: "enabled", budgetTokens: budget } }
@@ -738,24 +738,24 @@ function modeName(model: SourceModel, mode: string) {
 }
 
 function modelInfo(
-  providerID: ProviderV2.ID,
-  id: ModelV2.ID,
+  providerID: Provider.ID,
+  id: CatalogModel.ID,
   model: SourceModel,
   input: {
     readonly name?: string
-    readonly cost?: ModelV2.Info["cost"]
+    readonly cost?: CatalogModel.Info["cost"]
     readonly request?: NonNullable<NonNullable<SourceModel["experimental"]>["modes"]>[string]["provider"]
-    readonly variants?: NonNullable<ModelV2.Info["variants"]>
+    readonly variants?: NonNullable<CatalogModel.Info["variants"]>
     readonly providerNpm?: string
   } = {},
-): ModelV2.Info {
+): CatalogModel.Info {
   return {
     id,
-    modelID: ModelV2.ID.make(model.id),
+    modelID: CatalogModel.ID.make(model.id),
     providerID,
     name: input.name ?? model.name,
-    family: model.family ? ModelV2.Family.make(model.family) : undefined,
-    package: model.provider?.npm ? ProviderV2.aisdk(model.provider.npm) : undefined,
+    family: model.family ? CatalogModel.Family.make(model.family) : undefined,
+    package: model.provider?.npm ? Provider.aisdk(model.provider.npm) : undefined,
     settings:
       model.provider?.api || (input.providerNpm === "@ai-sdk/openai" && model.reasoning)
         ? {
@@ -808,7 +808,7 @@ export const layer = (options?: Options) => Layer.effect(
   Service,
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const http = HttpClient.filterStatusOk(
       (yield* HttpClient.HttpClient).pipe(
         HttpClient.retryTransient({
@@ -922,7 +922,7 @@ export const layer = (options?: Options) => Layer.effect(
 )
 
 export function configured(options?: Options) {
-  return makeGlobalNode({ service: Service, layer: layer(options), deps: [FSUtil.node, EventV2.node, httpClient] })
+  return makeGlobalNode({ service: Service, layer: layer(options), deps: [FSUtil.node, EventRuntime.node, httpClient] })
 }
 
 export const node = configured()

@@ -3,18 +3,18 @@ import type { LanguageModelV3 } from "@ai-sdk/provider"
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
 import { Integration } from "@ycoding-ai/core/integration"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { PluginV2 } from "@ycoding-ai/core/plugin"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
 import { XAIPlugin } from "@ycoding-ai/core/plugin/provider/xai"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
 
 const it = testEffect(PluginTestLayer)
 
 const addPlugin = Effect.fn(function* () {
-  const plugin = yield* PluginV2.Service
+  const plugin = yield* PluginRegistry.Service
   const host = yield* PluginHost.make(plugin)
   yield* XAIPlugin.effect(host)
 })
@@ -62,9 +62,9 @@ describe("XAIPlugin", () => {
 
       yield* addPlugin()
       const result = yield* aisdk.runLanguage({
-        model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(ProviderV2.ID.make("xai"), ModelV2.ID.make("alias")),
-          modelID: ModelV2.ID.make("grok-4"),
+        model: CatalogModel.Info.make({
+          ...CatalogModel.Info.empty(Provider.ID.make("xai"), CatalogModel.ID.make("alias")),
+          modelID: CatalogModel.ID.make("grok-4"),
           package: "aisdk:@ai-sdk/xai",
         }),
         sdk: fakeSelectorSdk(calls),
@@ -83,9 +83,9 @@ describe("XAIPlugin", () => {
 
       yield* addPlugin()
       const result = yield* aisdk.runLanguage({
-        model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(ProviderV2.ID.openai, ModelV2.ID.make("grok-4")),
-          modelID: ModelV2.ID.make("grok-4"),
+        model: CatalogModel.Info.make({
+          ...CatalogModel.Info.empty(Provider.ID.openai, CatalogModel.ID.make("grok-4")),
+          modelID: CatalogModel.ID.make("grok-4"),
           package: "aisdk:@ai-sdk/xai",
         }),
         sdk: fakeSelectorSdk(calls),

@@ -4,8 +4,8 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { Schema } from "effect"
 import ycoding from "../src/theme/assets/ycoding.json" with { type: "json" }
-import { ThemeFile } from "../src/theme/v2"
-import { resolveThemeFile } from "../src/theme/v2/resolve"
+import { ThemeFile } from "../src/theme"
+import { resolveThemeFile } from "../src/theme/resolve"
 
 const ROLE_TO_THEME_KEY: Record<string, string> = {
   primary: "text.feedback.info.default",

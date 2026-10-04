@@ -2,9 +2,9 @@ export * as ToolRegistry from "./registry"
 
 import { ToolOutput, type ToolCall, type ToolDefinition, type ToolResultValue } from "@ycoding-ai/ai"
 import { Context, Effect, Layer, Scope, Semaphore } from "effect"
-import type { AgentV2 } from "../agent"
+import type { Agent } from "../agent"
 import { Image } from "../image"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { SessionMessage } from "../session/message"
 import { SessionSchema } from "../session/schema"
 import { ToolOutputStore } from "../tool-output-store"
@@ -27,7 +27,7 @@ import { toSessionError } from "../session/to-session-error"
 
 export type ExecuteInput = {
   readonly sessionID: SessionSchema.ID
-  readonly agent: AgentV2.ID
+  readonly agent: Agent.ID
   readonly messageID: SessionMessage.ID
   readonly call: ToolCall
   readonly progress?: (update: Progress) => Effect.Effect<void>
@@ -39,7 +39,7 @@ export interface Progress {
 }
 
 export interface Interface {
-  readonly materialize: (permissions?: PermissionV2.Ruleset) => Effect.Effect<Materialization>
+  readonly materialize: (permissions?: Permission.Ruleset) => Effect.Effect<Materialization>
   /** Internal registration capability exposed publicly only through Tools.Service. */
   readonly register: (
     tools: Readonly<Record<string, AnyTool>>,
@@ -66,7 +66,7 @@ export interface Settlement {
   readonly error?: SessionError.Error
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/ToolRegistry") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/ToolRegistry") {}
 
 const registryLayer = Layer.effect(
   Service,
@@ -313,7 +313,7 @@ const layer = Layer.effect(
   ),
 ).pipe(Layer.provideMerge(registryLayer))
 
-function whollyDisabled(action: string, rules: PermissionV2.Ruleset) {
+function whollyDisabled(action: string, rules: Permission.Ruleset) {
   const rule = rules.findLast((rule) => Wildcard.match(action, rule.action))
   return rule?.resource === "*" && rule.effect === "deny"
 }

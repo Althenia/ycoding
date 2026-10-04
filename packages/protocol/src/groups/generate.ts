@@ -20,7 +20,7 @@ export const GenerateGroup = HttpApiGroup.make("server.generate")
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.generate.text",
+          identifier: "generate.text",
           summary: "Generate text",
           description:
             "Run one stateless model generation at the requested location and return the assistant text. Uses the location's default model when none is specified.",

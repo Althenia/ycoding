@@ -50,7 +50,7 @@ test("publishes the additive location-owned usage report OpenAPI operation", () 
   const operation = document.paths["/api/session/{sessionID}/usage/report"]?.get
 
   expect(endpoint.middlewares.has(SessionLocationMiddleware)).toBe(true)
-  expect(operation?.operationId).toBe("v2.session.usageReport")
+  expect(operation?.operationId).toBe("session.usageReport")
   expect(operation?.parameters?.map((parameter) => "$ref" in parameter ? parameter.$ref : parameter.name)).toEqual([
     "sessionID",
     "group",

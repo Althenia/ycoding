@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test"
-import { ProviderUsage, ProviderUsageV2 } from "@ycoding-ai/core/provider-usage"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { ProviderUsage, ProviderUsageRuntime } from "@ycoding-ai/core/provider-usage"
+import { Provider } from "@ycoding-ai/core/provider"
 import { Location } from "@ycoding-ai/core/location"
-import { ProjectV2 } from "@ycoding-ai/core/project"
+import { Project } from "@ycoding-ai/core/project"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Authorization } from "@ycoding-ai/protocol/middleware/authorization"
 import { SchemaErrorMiddleware } from "@ycoding-ai/protocol/middleware/schema-error"
@@ -13,7 +13,7 @@ import { getProviderUsage, listProviderUsage, ProviderUsageHandler } from "../sr
 import { Api } from "../src/api"
 import { LocationMiddleware, type LocationServices } from "../src/location"
 
-const openai = ProviderV2.ID.make("openai")
+const openai = Provider.ID.make("openai")
 const snapshot = new ProviderUsage.Snapshot({
   providerID: openai,
   label: "Codex",
@@ -26,7 +26,7 @@ const snapshot = new ProviderUsage.Snapshot({
 
 test("provider usage handlers forward refresh and return normalized snapshots", async () => {
   const calls: unknown[] = []
-  const service = ProviderUsageV2.Service.of({
+  const service = ProviderUsageRuntime.Service.of({
     get: (input) =>
       Effect.sync(() => {
         calls.push(["get", input])
@@ -53,8 +53,8 @@ test("provider usage HTTP routes decode refresh and encode normalized quota with
   const calls: unknown[] = []
   const context = Context.make(Location.Service, new Location.Info({
     directory: AbsolutePath.make("/fixture"),
-    project: { id: ProjectV2.ID.make("prj_usage"), directory: AbsolutePath.make("/fixture") },
-  })).pipe(Context.add(ProviderUsageV2.Service, ProviderUsageV2.Service.of({
+    project: { id: Project.ID.make("prj_usage"), directory: AbsolutePath.make("/fixture") },
+  })).pipe(Context.add(ProviderUsageRuntime.Service, ProviderUsageRuntime.Service.of({
     list: (input) => Effect.sync(() => { calls.push(input); return [snapshot] }),
     get: (input) => Effect.sync(() => { calls.push(input); return snapshot }),
     observe: () => Effect.die("unused"),

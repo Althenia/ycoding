@@ -12,7 +12,7 @@ Use this order when sources disagree:
 2. Public contracts in `packages/schema` and `packages/protocol`.
 3. Runtime implementation in `packages/core`, `packages/server`, and `packages/ai`.
 4. Terminal implementation in `packages/cli` and `packages/tui`.
-5. Current documentation in `docs` and accepted contracts in `specs/v2`.
+5. Current documentation in `docs` and accepted contracts in `specs`.
 6. Package-level `AGENTS.md` guidance.
 
 A plan, deleted package, or stale generated file does not override current code.
@@ -35,7 +35,7 @@ A plan, deleted package, or stale generated file does not override current code.
 | [`guardrails-and-provider-usage.md`](./guardrails-and-provider-usage.md) | Operator configuration for agent permissions, custom guardrail sources, caps, replies, transient approval reuse, and provider quota sources. |
 | [`ycoding-migration.md`](./ycoding-migration.md)                         | Canonical YCoding identifiers and external-provider exceptions.                                                                              |
 | [`releases/`](./releases/)                                               | Shared TUI and web release notes (`v<version>.md`); the file matching the tag ships as the TUI GitHub Release notes and asset.               |
-| [`../specs/v2/README.md`](../specs/v2/README.md)                         | Detailed cross-module contracts and accepted decisions.                                                                                      |
+| [`../specs/README.md`](../specs/README.md)                               | Detailed cross-module contracts and accepted decisions.                                                                                      |
 | [`../DESIGN.md`](../DESIGN.md)                                           | Brand identity, repository-wide design principles, binding UI rules, verification, and maintenance. |
 | [`../apps/web/DESIGN.md`](../apps/web/DESIGN.md)                         | Web design system: tokens checked against `tokens.css`, components, layout, motion, and web rules. |
 | [`../packages/tui/DESIGN.md`](../packages/tui/DESIGN.md)                 | Terminal design system: theme roles checked against the default theme, layout, components, and TUI rules. |
@@ -43,7 +43,7 @@ A plan, deleted package, or stale generated file does not override current code.
 
 ## Documentation placement
 
-Use `docs` for maintained product, contributor, and operator behavior. Use `specs/v2` for detailed cross-module contracts and accepted architectural decisions that are difficult to recover from one source file.
+Use `docs` for maintained product, contributor, and operator behavior. Use `specs` for detailed cross-module contracts and accepted architectural decisions that are difficult to recover from one source file.
 
 The public site at `https://ycoding.althenia.app` contains curated user documentation maintained in `apps/web`, not an automatic publication of this engineering documentation directory. Public content must exclude internal architecture, infrastructure topology, implementation plans, and private configuration. Build it with `bun run build:web`; Vite writes `apps/web/dist` including the generated `sitemap.xml`, then `script/build-web-assets.ts` adds the maintained installer, the runtime-generated configuration JSON Schema, the public configuration example, and the bundled font license at `/fonts/OFL.txt`.
 
@@ -68,7 +68,7 @@ Open `http://127.0.0.1:4174/`. Stop the preview with Ctrl-C. Use another free po
 | Package ownership or dependency direction                                                              | `architecture.md` and root `AGENTS.md`                     |
 | Session, autonomy, subagent, skill, artifact, cache, guardrail, provider-usage, or transcript behavior | `runtime.md`                                               |
 | Provider request amplification, cache/continuation capability, diagnostics, or efficiency measurement  | `provider-efficiency.md` and `runtime.md`                  |
-| Public HTTP operation or Schema                                                                        | relevant `specs/v2` contract and regenerated Client output |
+| Public HTTP operation or Schema                                                                        | relevant `specs` contract and regenerated Client output |
 | Runtime, CLI/TUI, service, provider, MCP, permission, or environment configuration                     | `configuration.md`                                         |
 | Agent, command, skill, plugin, hook, tool, theme, or repository resource discovery                     | `repository-resources.md`                                  |
 | Product identity, path, environment, or provider exception                                             | `ycoding-migration.md`                                     |
@@ -83,4 +83,4 @@ Write product documentation as specifications of current behavior, configuration
 - State functional limitations in the relevant specification section. Keep functional state values (`pending`, `connected`, `rejected`, `uncertain`) as specified behavior.
 - Never present proposals, historical plans, or unverified behavior as current capabilities; keep proposals separate from current product guides.
 
-Documents that record history or proposals (`ycoding-migration.md`, `tui-redesign-backlog.md`, `specs/v2/schema-changelog.md`, and the decision records under `specs/v2`) are exempt and are not current product guides.
+Documents that record history or proposals (`ycoding-migration.md`, `tui-redesign-backlog.md`, `specs/schema-changelog.md`, and the decision records under `specs`) are exempt and are not current product guides.

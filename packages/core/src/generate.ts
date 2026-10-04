@@ -7,14 +7,14 @@ import { Catalog } from "./catalog"
 import { makeLocationNode } from "./effect/app-node"
 import { llmClient } from "./effect/app-node-platform"
 import { Integration } from "./integration"
-import { ModelV2 } from "./model"
+import { CatalogModel } from "./model"
 import { Npm } from "./npm"
-import { ProviderV2 } from "./provider"
+import { Provider } from "./provider"
 import { SessionRunnerModel } from "./session/runner/model"
 
 export interface TextInput {
   readonly prompt: string
-  readonly model?: ModelV2.Ref
+  readonly model?: CatalogModel.Ref
 }
 
 export class ModelSelectionError extends Schema.TaggedErrorClass<ModelSelectionError>()(
@@ -33,7 +33,7 @@ export interface Interface {
   readonly text: (input: TextInput) => Effect.Effect<string, Error>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/Generate") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/Generate") {}
 
 export const layer = Layer.effect(
   Service,
@@ -44,7 +44,7 @@ export const layer = Layer.effect(
     const llm = yield* LLMClient.Service
     const npm = yield* Npm.Service
 
-    const selectModel = Effect.fn("Generate.selectModel")(function* (requested?: ModelV2.Ref) {
+    const selectModel = Effect.fn("Generate.selectModel")(function* (requested?: CatalogModel.Ref) {
       const selected = requested
         ? yield* catalog.model.get(requested.providerID, requested.id)
         : yield* catalog.model.default().pipe(
@@ -81,7 +81,7 @@ export const layer = Layer.effect(
         selected,
         credential,
         {
-          loadPackage: (specifier) => ProviderV2.loadPackage(specifier, npm),
+          loadPackage: (specifier) => Provider.loadPackage(specifier, npm),
           loadAISDK: (model) => aisdk.model(model),
         },
         connection,

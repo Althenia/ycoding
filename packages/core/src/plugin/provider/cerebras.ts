@@ -1,14 +1,14 @@
 import { Effect } from "effect"
 import { define } from "@ycoding-ai/plugin/effect/plugin"
-import { ProviderV2 } from "../../provider"
+import { Provider } from "../../provider"
 
 export const CerebrasPlugin = define({
   id: "ycoding.provider.cerebras",
   effect: Effect.fn(function* (ctx) {
     yield* ctx.catalog.transform((evt) => {
       for (const item of evt.provider.list()) {
-        if (!ProviderV2.isAISDK(item.provider.package)) continue
-        if (ProviderV2.packageName(item.provider.package) !== "@ai-sdk/cerebras") continue
+        if (!Provider.isAISDK(item.provider.package)) continue
+        if (Provider.packageName(item.provider.package) !== "@ai-sdk/cerebras") continue
         evt.provider.update(item.provider.id, (provider) => {
           provider.headers = { ...provider.headers, "X-Cerebras-3rd-Party-Integration": "ycoding" }
         })

@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { SystemPart } from "@ycoding-ai/ai"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Catalog } from "@ycoding-ai/core/catalog"
-import { PluginV2 } from "@ycoding-ai/core/plugin"
+import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHooks } from "@ycoding-ai/core/plugin/hooks"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
 import { SystemPromptPlugin } from "@ycoding-ai/core/plugin/system-prompt"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import type { SessionHooks } from "@ycoding-ai/plugin/effect/session"
 import { Model } from "@ycoding-ai/schema/model"
 import { Provider } from "@ycoding-ai/schema/provider"
@@ -18,13 +18,13 @@ import PROMPT_DEFAULT from "../../src/session/runner/prompt/base.txt"
 const it = testEffect(PluginTestLayer)
 const fallback = PROMPT_DEFAULT
 const makeHost = Effect.gen(function* () {
-  const plugins = yield* PluginV2.Service
+  const plugins = yield* PluginRegistry.Service
   return yield* PluginHost.make(plugins)
 })
 
 const context = (id: string, system = fallback): SessionHooks["context"] => ({
-  sessionID: SessionV2.ID.make("ses_system_prompt"),
-  agent: AgentV2.ID.make("build"),
+  sessionID: Session.ID.make("ses_system_prompt"),
+  agent: Agent.ID.make("build"),
   model: Model.Ref.make({ providerID: Provider.ID.make("test"), id: Model.ID.make(id) }),
   system: [SystemPart.make(system)],
   messages: [],
@@ -32,7 +32,7 @@ const context = (id: string, system = fallback): SessionHooks["context"] => ({
 })
 
 describe("SystemPromptPlugin", () => {
-  it.effect("gives Meta models a prompt in V2 tool vocabulary", () =>
+  it.effect("gives Meta models a prompt in current tool vocabulary", () =>
     Effect.gen(function* () {
       const hooks = yield* PluginHooks.Service
       yield* SystemPromptPlugin.MetaPlugin.effect(yield* makeHost)
@@ -100,10 +100,10 @@ describe("SystemPromptPlugin", () => {
 
   it.effect("preserves an explicit agent system prompt", () =>
     Effect.gen(function* () {
-      const agents = yield* AgentV2.Service
+      const agents = yield* Agent.Service
       const hooks = yield* PluginHooks.Service
       yield* agents.transform((draft) =>
-        draft.update(AgentV2.ID.make("build"), (agent) => {
+        draft.update(Agent.ID.make("build"), (agent) => {
           agent.system = "Custom agent prompt"
         }),
       )

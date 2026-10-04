@@ -2,15 +2,15 @@ import { HttpRecorder } from "@ycoding-ai/http-recorder";
 import { CacheHint, LLM, type Usage } from "@ycoding-ai/ai";
 import { LLMClient, RequestExecutor } from "@ycoding-ai/ai/route";
 import { AISDK } from "@ycoding-ai/core/aisdk";
-import { ModelV2 } from "@ycoding-ai/core/model";
-import { PluginV2 } from "@ycoding-ai/core/plugin";
+import { CatalogModel } from "@ycoding-ai/core/model";
+import { PluginRegistry } from "@ycoding-ai/core/plugin";
 import { PluginHost } from "@ycoding-ai/core/plugin/host";
 import { makeAnthropicPlugin } from "@ycoding-ai/core/plugin/provider/anthropic";
 import {
   createSystemClaudeCodeCredentialSource,
   type ClaudeCodeCredentialSource,
 } from "@ycoding-ai/core/plugin/provider/anthropic-claude-code";
-import { ProviderV2 } from "@ycoding-ai/core/provider";
+import { Provider } from "@ycoding-ai/core/provider";
 import { expect } from "bun:test";
 import { Effect, Layer } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
@@ -67,7 +67,7 @@ recorded("reads the provider prompt cache through Claude Code OAuth", () =>
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient;
     const aisdk = yield* AISDK.Service;
-    const host = yield* PluginHost.make(yield* PluginV2.Service);
+    const host = yield* PluginHost.make(yield* PluginRegistry.Service);
     let bearer = false;
     let apiKey = false;
     let beta = false;
@@ -105,13 +105,13 @@ recorded("reads the provider prompt cache through Claude Code OAuth", () =>
     }).effect(host);
     if (!selectedSource)
       throw new Error("No Claude Code account source is available");
-    const runtime = ModelV2.Info.make({
-      ...ModelV2.Info.empty(
-        ProviderV2.ID.anthropic,
-        ModelV2.ID.make("claude-haiku-4-5-20251001"),
+    const runtime = CatalogModel.Info.make({
+      ...CatalogModel.Info.empty(
+        Provider.ID.anthropic,
+        CatalogModel.ID.make("claude-haiku-4-5-20251001"),
       ),
-      modelID: ModelV2.ID.make("claude-haiku-4-5-20251001"),
-      package: ProviderV2.aisdk("@ai-sdk/anthropic"),
+      modelID: CatalogModel.ID.make("claude-haiku-4-5-20251001"),
+      package: Provider.aisdk("@ai-sdk/anthropic"),
       settings: { apiKey: "claude-code", claudeCodeSource: selectedSource },
       limit: { context: 200_000, output: 8_192 },
     });

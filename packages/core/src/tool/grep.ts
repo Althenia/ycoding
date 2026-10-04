@@ -8,7 +8,7 @@ import { FileSystem } from "../filesystem"
 import { FSUtil } from "../fs-util"
 import { Global } from "../global"
 import { Location } from "../location"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { Ripgrep } from "../ripgrep"
 import { RelativePath } from "../schema"
 import { ToolOutputStore } from "../tool-output-store"
@@ -57,7 +57,7 @@ export const Plugin = {
     const ripgrep = yield* Ripgrep.Service
     const location = yield* Location.Service
     const global = yield* Global.Service
-    const permission = yield* PermissionV2.Service
+    const permission = yield* Permission.Service
 
     yield* ctx.tool
       .transform((draft) =>

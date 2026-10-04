@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { ClaudeUsage } from "@ycoding-ai/core/provider-usage/claude"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 
-const providerID = ProviderV2.ID.make("anthropic")
+const providerID = Provider.ID.make("anthropic")
 
 describe("ClaudeUsage", () => {
   test("normalizes unified response headers as live percentages", () => {

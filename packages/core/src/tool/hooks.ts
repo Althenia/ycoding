@@ -42,7 +42,7 @@ export interface Interface {
   readonly runAfter: (event: AfterEvent) => Effect.Effect<AfterEvent>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/ToolHooks") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/ToolHooks") {}
 
 const layer = Layer.effect(
   Service,

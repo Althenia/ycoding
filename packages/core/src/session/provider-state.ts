@@ -39,7 +39,7 @@ export interface Interface {
   readonly rebase: (sessionID: SessionSchema.ID, through: SessionCompaction.Boundary) => Effect.Effect<void>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionProviderState") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionProviderState") {}
 
 export const key = (messageID: SessionMessage.ID, partOrdinal: number, partKind: string) =>
   `${messageID}:${partOrdinal}:${partKind}`

@@ -1,8 +1,8 @@
-# V2 specifications
+# Current specifications
 
-These documents explain V2 behavior that is difficult to recover from one source file. They are current cross-module contracts or explicit design records; they are not API reference, a product roadmap, or an implementation backlog.
+These documents explain current behavior that is difficult to recover from one source file. They are cross-module contracts or explicit design records; they are not API reference, a product roadmap, or an implementation backlog.
 
-Start with the fork documentation index at [`../../docs/README.md`](../../docs/README.md) for product direction and operator-facing behavior.
+Start with the documentation index at [`../docs/README.md`](../docs/README.md) for product direction and operator-facing behavior.
 
 ## Authority
 
@@ -11,12 +11,12 @@ Authority follows the concern:
 | Concern                                                     | Owner                                                                                                         |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | Executable behavior                                         | Current implementation and targeted tests                                                                     |
-| Public domain shapes and durable event payloads             | [`packages/schema`](../../packages/schema/src)                                                                |
-| HTTP operations, middleware placement, and transport errors | [`packages/protocol`](../../packages/protocol/src), assembled by Server `HttpApi`                             |
-| Runtime behavior and persistence                            | [`packages/core`](../../packages/core/src)                                                                    |
-| Product direction and maintained behavior                   | [`docs/product-direction.md`](../../docs/product-direction.md) and [`docs/runtime.md`](../../docs/runtime.md) |
-| Package boundaries and dependency direction                 | [`docs/architecture.md`](../../docs/architecture.md)                                                          |
-| Contributor-critical regression guardrails                  | Root [`AGENTS.md`](../../AGENTS.md)                                                                           |
+| Public domain shapes and durable event payloads             | [`packages/schema`](../packages/schema/src)                                                                |
+| HTTP operations, middleware placement, and transport errors | [`packages/protocol`](../packages/protocol/src), assembled by Server `HttpApi`                             |
+| Runtime behavior and persistence                            | [`packages/core`](../packages/core/src)                                                                    |
+| Product direction and maintained behavior                   | [`docs/product-direction.md`](../docs/product-direction.md) and [`docs/runtime.md`](../docs/runtime.md) |
+| Package boundaries and dependency direction                 | [`docs/architecture.md`](../docs/architecture.md)                                                          |
+| Contributor-critical regression guardrails                  | Root [`AGENTS.md`](../AGENTS.md)                                                                           |
 
 Current specifications explain cross-module contracts without copying exact types. Decision records explain why a design was selected. Historical documents describe earlier states and may use obsolete names.
 

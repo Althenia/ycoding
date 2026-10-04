@@ -1,4 +1,4 @@
-# YCoding V2 Effect Plugin API
+# YCoding Effect Plugin API
 
 The Effect plugin API grants plugins two in-process capabilities:
 

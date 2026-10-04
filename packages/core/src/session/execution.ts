@@ -2,7 +2,7 @@ export * as SessionExecution from "./execution"
 
 import { Cause, Context, Effect, Exit, Layer, Option } from "effect"
 import { LLMError } from "@ycoding-ai/ai"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { LocationServiceMap } from "../location-service-map"
 import { makeGlobalNode } from "../effect/app-node"
 import { SessionEvent } from "./event"
@@ -50,7 +50,7 @@ export interface Interface {
 }
 
 /** Routes execution from a Session ID to the runner owned by that Session's Location. */
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionExecution") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionExecution") {}
 
 type InterruptReason = "user" | "shutdown" | "superseded"
 
@@ -68,7 +68,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const store = yield* SessionStore.Service
     const locations = yield* LocationServiceMap.Service
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const db = (yield* Database.Service).db
     const autonomy = yield* SessionAutonomy.Service
     const compactionExecution = yield* SessionCompactionExecution.Service
@@ -325,7 +325,7 @@ export const node = makeGlobalNode({
     SessionCompactionExecution.node,
     SessionStore.node,
     LocationServiceMap.node,
-    EventV2.node,
+    EventRuntime.node,
     Job.node,
   ],
 })

@@ -3,21 +3,21 @@ import fs from "fs/promises"
 import path from "path"
 import { DateTime, Effect, Layer } from "effect"
 import { Message } from "@ycoding-ai/ai"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Config } from "@ycoding-ai/core/config"
 import { Database } from "@ycoding-ai/core/database/database"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { Global } from "@ycoding-ai/core/global"
 import { Image } from "@ycoding-ai/core/image"
 import { Location } from "@ycoding-ai/core/location"
 import { LocationMutation } from "@ycoding-ai/core/location-mutation"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
-import { ProjectV2 } from "@ycoding-ai/core/project"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Permission } from "@ycoding-ai/core/permission"
+import { Project } from "@ycoding-ai/core/project"
+import { Provider } from "@ycoding-ai/core/provider"
 import { ReadTool } from "@ycoding-ai/core/tool/read"
 import { ReadToolFileSystem } from "@ycoding-ai/core/tool/read-filesystem"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
@@ -26,7 +26,7 @@ import { SessionInstructions } from "@ycoding-ai/core/session/instructions"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionStore } from "@ycoding-ai/core/session/store"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { toLLMMessages } from "@ycoding-ai/core/session/runner/to-llm-message"
 import { ToolHooks } from "@ycoding-ai/core/tool/hooks"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
@@ -44,7 +44,7 @@ const readToolNode = makeLocationNode({
     ReadToolFileSystem.node,
     LocationMutation.node,
     Image.node,
-    PermissionV2.node,
+    Permission.node,
     SessionInstructions.node,
     FSUtil.node,
     Location.node,
@@ -52,19 +52,19 @@ const readToolNode = makeLocationNode({
 })
 
 const projects = Layer.succeed(
-  ProjectV2.Service,
-  ProjectV2.Service.of({
+  Project.Service,
+  Project.Service.of({
     list: () => Effect.succeed([]),
-    resolve: (directory) => Effect.succeed({ id: ProjectV2.ID.global, directory }),
+    resolve: (directory) => Effect.succeed({ id: Project.ID.global, directory }),
     directories: () => Effect.succeed([]),
     recordOpened: () => Effect.void,
     commit: () => Effect.void,
   }),
 )
 const permission = Layer.succeed(
-  PermissionV2.Service,
-  PermissionV2.Service.of({
-    evaluateEffective: () => Effect.die(new Error("unused PermissionV2.evaluateEffective")),
+  Permission.Service,
+  Permission.Service.of({
+    evaluateEffective: () => Effect.die(new Error("unused Permission.evaluateEffective")),
     assert: () => Effect.void,
     ask: () => Effect.die("unused"),
     reply: () => Effect.die("unused"),
@@ -82,10 +82,10 @@ const imageLayer = AppNodeBuilder.build(Image.node, [[Config.node, config]])
 const testLayer = AppNodeBuilder.build(
   LayerNode.group([
     Database.node,
-    EventV2.node,
+    EventRuntime.node,
     SessionProjector.node,
     SessionStore.node,
-    SessionV2.node,
+    Session.node,
     Location.node,
     FSUtil.node,
     LocationMutation.node,
@@ -100,10 +100,10 @@ const testLayer = AppNodeBuilder.build(
     Image.node,
   ]),
   [
-    [ProjectV2.node, projects],
+    [Project.node, projects],
     [SessionExecution.node, SessionExecution.noopLayer],
     [Location.node, tempLocationLayer],
-    [PermissionV2.node, permission],
+    [Permission.node, permission],
     [Config.node, config],
     [Image.node, imageLayer],
     [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
@@ -113,10 +113,10 @@ const testLayer = AppNodeBuilder.build(
 const it = testEffect(testLayer)
 
 const identity = {
-  agent: AgentV2.ID.make("build"),
+  agent: Agent.ID.make("build"),
   messageID: SessionMessage.ID.make("msg_nearby"),
 }
-const readCall = (sessionID: SessionV2.ID, id: string, readPath: string): ToolRegistry.ExecuteInput => ({
+const readCall = (sessionID: Session.ID, id: string, readPath: string): ToolRegistry.ExecuteInput => ({
   sessionID,
   ...identity,
   call: { type: "tool-call", id, name: "read", input: { path: readPath } },
@@ -125,7 +125,7 @@ const readCall = (sessionID: SessionV2.ID, id: string, readPath: string): ToolRe
 const writeAgents = (file: string, content: string) => Effect.promise(() => fs.writeFile(file, content))
 const mkdir = (dir: string) => Effect.promise(() => fs.mkdir(dir, { recursive: true }))
 
-const synthetics = (sessionID: SessionV2.ID) =>
+const synthetics = (sessionID: Session.ID) =>
   Effect.gen(function* () {
     const store = yield* SessionStore.Service
     return (yield* store.context(sessionID)).filter((message) => message.type === "synthetic")
@@ -133,9 +133,9 @@ const synthetics = (sessionID: SessionV2.ID) =>
 
 // Seed a prior synthetic message with an instruction dedup ledger, simulating a prior turn
 // after the Location layer was reopened (in-memory set empty).
-const seedSynthetic = (sessionID: SessionV2.ID, paths: string[]) =>
+const seedSynthetic = (sessionID: Session.ID, paths: string[]) =>
   Effect.gen(function* () {
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     yield* events.publish(SessionEvent.Synthetic, {
       sessionID,
       text: `Instructions from: ${paths[0]}\nprior`,
@@ -162,7 +162,7 @@ describe("SessionInstructions", () => {
       yield* Effect.promise(() => fs.writeFile(path.resolve(dir, "sub", "deep", "file.txt"), "file content"))
       yield* Effect.promise(() => fs.writeFile(path.resolve(dir, "sub", "other", "file2.txt"), "file content 2"))
 
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       const registry = yield* ToolRegistry.Service
       const sessionID = (yield* session.create({ location: Location.Ref.make({ directory: dir }) })).id
 
@@ -206,7 +206,7 @@ describe("SessionInstructions", () => {
       yield* writeAgents(subPath, "sub-instructions")
       yield* Effect.promise(() => fs.writeFile(path.resolve(dir, "sub", "file.txt"), "content"))
 
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       const registry = yield* ToolRegistry.Service
       const sessionID = (yield* session.create({ location: Location.Ref.make({ directory: dir }) })).id
 
@@ -235,7 +235,7 @@ describe("SessionInstructions", () => {
         yield* writeAgents(pkgPath, "pkg-instructions")
         yield* Effect.promise(() => fs.writeFile(path.resolve(dir, "packages", "foo", "file.txt"), "content"))
 
-        const session = yield* SessionV2.Service
+        const session = yield* Session.Service
         const registry = yield* ToolRegistry.Service
         const sessionID = (yield* session.create({ location: Location.Ref.make({ directory: dir }) })).id
 
@@ -268,7 +268,7 @@ describe("SessionInstructions", () => {
       yield* writeAgents(rootPath, "root-instructions")
       yield* writeAgents(subPath, "sub-instructions")
 
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       const registry = yield* ToolRegistry.Service
       const sessionID = (yield* session.create({ location: Location.Ref.make({ directory: dir }) })).id
 
@@ -289,7 +289,7 @@ describe("SessionInstructions", () => {
       yield* mkdir(path.resolve(dir, "sub"))
       yield* writeAgents(subPath, secret)
 
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       const sessionInstructions = yield* SessionInstructions.Service
       const sessionID = (yield* session.create({ location: Location.Ref.make({ directory: dir }) })).id
 
@@ -314,7 +314,7 @@ describe("SessionInstructions", () => {
       yield* mkdir(path.resolve(dir, "sub"))
       yield* writeAgents(subPath, "sub-instructions")
 
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       const sessionInstructions = yield* SessionInstructions.Service
       const sessionID = (yield* session.create({ location: Location.Ref.make({ directory: dir }) })).id
 
@@ -330,7 +330,7 @@ describe("SessionInstructions", () => {
 
   test("toLLMMessages does not forward synthetic metadata to the provider", () => {
     const created = DateTime.makeUnsafe(0)
-    const model = ModelV2.Ref.make({ id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") })
+    const model = CatalogModel.Ref.make({ id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("provider") })
     const synthetic = SessionMessage.Synthetic.make({
       id: SessionMessage.ID.make("msg_synthetic"),
       type: "synthetic",

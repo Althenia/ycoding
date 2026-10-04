@@ -15,7 +15,7 @@ export interface Interface {
   readonly set: (enabled: boolean) => Effect.Effect<Status>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/KeepAwake") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/KeepAwake") {}
 
 export interface Options {
   readonly spawner: ChildProcessSpawner["Service"]

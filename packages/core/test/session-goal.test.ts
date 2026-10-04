@@ -1,20 +1,19 @@
 import { expect } from "bun:test"
 import { LLMClient, LLMEvent, Model, type LLMRequest } from "@ycoding-ai/ai"
 import { OpenAIChat } from "@ycoding-ai/ai/protocols"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { llmClient } from "@ycoding-ai/core/effect/app-node-platform"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Location } from "@ycoding-ai/core/location"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import type { LocationServices } from "@ycoding-ai/core/location-services"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
-import { ProjectV2 } from "@ycoding-ai/core/project"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
@@ -26,7 +25,7 @@ import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionProviderRequestTable, SessionTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { Money } from "@ycoding-ai/schema/money"
 import { Deferred, Effect, Fiber, Layer, LayerMap, Stream } from "effect"
 import { eq } from "drizzle-orm"
@@ -118,10 +117,10 @@ const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       Database.node,
-      EventV2.node,
+      EventRuntime.node,
       SessionProjector.node,
       SessionStore.node,
-      AgentV2.node,
+      Agent.node,
       SessionAutonomy.node,
       SessionHelperPolicy.node,
       SessionGoal.node,
@@ -137,10 +136,10 @@ const it = testEffect(
 
 const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const projects = Layer.succeed(
-  ProjectV2.Service,
-  ProjectV2.Service.of({
+  Project.Service,
+  Project.Service.of({
     list: () => Effect.succeed([]),
-    resolve: (directory) => Effect.succeed({ id: ProjectV2.ID.global, directory }),
+    resolve: (directory) => Effect.succeed({ id: Project.ID.global, directory }),
     directories: () => Effect.succeed([]),
     recordOpened: () => Effect.void,
     commit: () => Effect.void,
@@ -186,16 +185,16 @@ const locations = Layer.effect(
 )
 const setIt = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionStore.node, SessionAutonomy.node, SessionV2.node]),
+    LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node, SessionStore.node, SessionAutonomy.node, Session.node]),
     [
       [LocationServiceMap.node, locations],
-      [ProjectV2.node, projects],
+      [Project.node, projects],
       [SessionExecution.node, SessionExecution.noopLayer],
     ],
   ),
 )
 
-const insertSession = (id: SessionV2.ID) =>
+const insertSession = (id: Session.ID) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     yield* db
@@ -217,9 +216,9 @@ const insertSession = (id: SessionV2.ID) =>
       .pipe(Effect.orDie)
   })
 
-const prompt = (sessionID: SessionV2.ID, text: string) =>
+const prompt = (sessionID: Session.ID, text: string) =>
   Effect.gen(function* () {
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const messageID = SessionMessage.ID.create()
     yield* events.publish(SessionEvent.InputAdmitted, {
       sessionID,
@@ -230,9 +229,9 @@ const prompt = (sessionID: SessionV2.ID, text: string) =>
   })
 
 const configureGoalAgent = Effect.gen(function* () {
-  const agents = yield* AgentV2.Service
+  const agents = yield* Agent.Service
   yield* agents.transform((editor) => {
-    editor.update(AgentV2.ID.make("goal"), (agent) => {
+    editor.update(Agent.ID.make("goal"), (agent) => {
       agent.mode = "primary"
       agent.hidden = true
       agent.system = "Infer the user goal."
@@ -245,7 +244,7 @@ it.effect("synthesizes the goal through the configured goal model without a loca
     requests = []
     modelAvailable = true
     yield* configureGoalAgent
-    const sessionID = SessionV2.ID.make("ses_goal_local")
+    const sessionID = Session.ID.make("ses_goal_local")
     yield* insertSession(sessionID)
     yield* prompt(sessionID, "The project uses SQLite for durable state.")
     const store = yield* SessionStore.Service
@@ -278,7 +277,7 @@ it.effect("fails with goal.model_unavailable instead of falling back to the Sess
     requests = []
     modelAvailable = false
     yield* configureGoalAgent
-    const sessionID = SessionV2.ID.make("ses_goal_unavailable")
+    const sessionID = Session.ID.make("ses_goal_unavailable")
     yield* insertSession(sessionID)
     const session = yield* (yield* SessionStore.Service)
       .get(sessionID)
@@ -298,7 +297,7 @@ it.effect("preserves conversation-aware goal synthesis", () =>
     requests = []
     modelAvailable = true
     yield* configureGoalAgent
-    const sessionID = SessionV2.ID.make("ses_goal_synthesis")
+    const sessionID = Session.ID.make("ses_goal_synthesis")
     yield* insertSession(sessionID)
     yield* prompt(sessionID, "The project uses SQLite for durable state.")
     const store = yield* SessionStore.Service
@@ -330,7 +329,7 @@ it.effect("generates a concise contextual user-proxy steer without changing the 
     requests = []
     modelAvailable = true
     yield* configureGoalAgent
-    const sessionID = SessionV2.ID.make("ses_goal_steer")
+    const sessionID = Session.ID.make("ses_goal_steer")
     yield* insertSession(sessionID)
     yield* prompt(sessionID, "The project uses SQLite for durable state.")
     const store = yield* SessionStore.Service
@@ -376,7 +375,7 @@ it.effect("fails with goal.calculation_failed for provider failure or empty outp
   Effect.gen(function* () {
     modelAvailable = true
     yield* configureGoalAgent
-    const sessionID = SessionV2.ID.make("ses_goal_fallback")
+    const sessionID = Session.ID.make("ses_goal_fallback")
     yield* insertSession(sessionID)
     const session = yield* (yield* SessionStore.Service)
       .get(sessionID)
@@ -396,7 +395,7 @@ it.effect("fails with goal.calculation_failed when the stream ends without provi
   Effect.gen(function* () {
     modelAvailable = true
     yield* configureGoalAgent
-    const sessionID = SessionV2.ID.make("ses_goal_unsettled")
+    const sessionID = Session.ID.make("ses_goal_unsettled")
     yield* insertSession(sessionID)
     const session = yield* (yield* SessionStore.Service)
       .get(sessionID)
@@ -414,7 +413,7 @@ it.effect("fails with goal.calculation_failed when the stream ends without provi
 it.effect("uses agent reports only as no-progress retry attempts", () =>
   Effect.gen(function* () {
     const service = yield* SessionAutonomy.Service
-    const sessionID = SessionV2.ID.make("ses_goal_iteration")
+    const sessionID = Session.ID.make("ses_goal_iteration")
     yield* insertSession(sessionID)
     yield* service.setGoal({ sessionID, text: "Ship the fix", maxNoProgress: 3 })
 
@@ -440,8 +439,8 @@ setIt.effect(
   "stores synthesized goals without changing the admitted user prompt and preserves state on failure",
   () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const created = yield* session.create({ location })
       const inputID = SessionMessage.ID.create()
       const rawText = "Fix the migration failure and run the relevant checks."
@@ -490,7 +489,7 @@ setIt.effect(
 
 setIt.effect("does not activate or admit a goal when user-proxy steer generation fails", () =>
   Effect.gen(function* () {
-    const session = yield* SessionV2.Service
+    const session = yield* Session.Service
     const created = yield* session.create({ location })
     const before = yield* session.pending(created.id)
 
@@ -506,7 +505,7 @@ setIt.effect("does not activate or admit a goal when user-proxy steer generation
 
 setIt.effect("propagates goal synthesis interruption without storing a raw-text fallback", () =>
   Effect.gen(function* () {
-    const session = yield* SessionV2.Service
+    const session = yield* Session.Service
     const created = yield* session.create({ location })
     const outcome = yield* session.autonomy
       .set({ sessionID: created.id, goal: "Interrupt synthesis" })
@@ -519,7 +518,7 @@ setIt.effect("propagates goal synthesis interruption without storing a raw-text 
 
 setIt.effect("R7 ordinary prompts preserve the user-owned goal and accumulated no-progress count", () =>
   Effect.gen(function* () {
-    const session = yield* SessionV2.Service
+    const session = yield* Session.Service
     const autonomy = yield* SessionAutonomy.Service
     const created = yield* session.create({ location })
 
@@ -551,7 +550,7 @@ setIt.effect("R7 ordinary prompts preserve the user-owned goal and accumulated n
 
 setIt.effect("R7 resumes the retained goal without synthesis and admits its continuation", () =>
   Effect.gen(function* () {
-    const session = yield* SessionV2.Service
+    const session = yield* Session.Service
     const autonomy = yield* SessionAutonomy.Service
     const created = yield* session.create({ location })
     synthesisCalls.length = 0
@@ -582,7 +581,7 @@ setIt.effect("R7 resumes the retained goal without synthesis and admits its cont
 
 setIt.effect("R7 refuses resume without a retained goal and commits combined YOLO only with successful calculation", () =>
   Effect.gen(function* () {
-    const session = yield* SessionV2.Service
+    const session = yield* Session.Service
     const created = yield* session.create({ location })
     expect(yield* session.autonomy.set({ sessionID: created.id, goal: true }).pipe(Effect.flip)).toMatchObject({ code: "goal.no_retained_goal" })
     expect(yield* session.pending(created.id)).toEqual([])
@@ -597,7 +596,7 @@ setIt.effect("R7 refuses resume without a retained goal and commits combined YOL
 
 setIt.effect("R7 stopping during calculation prevents late reactivation and continuation admission", () =>
   Effect.gen(function* () {
-    const session = yield* SessionV2.Service
+    const session = yield* Session.Service
     const created = yield* session.create({ location })
     yield* session.autonomy.set({ sessionID: created.id, goal: "Initial objective" })
     const before = yield* session.pending(created.id)

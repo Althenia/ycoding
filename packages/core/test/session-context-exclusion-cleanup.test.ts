@@ -6,11 +6,11 @@ import { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionContextExclusionCleanup } from "@ycoding-ai/core/session/context-exclusion-cleanup"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
@@ -23,7 +23,7 @@ import {
 } from "@ycoding-ai/core/session/sql"
 import { testEffect } from "./lib/effect"
 
-const active = new Set<SessionV2.ID>()
+const active = new Set<Session.ID>()
 const execution = Layer.succeed(
   SessionExecution.Service,
   SessionExecution.Service.of({
@@ -36,7 +36,7 @@ const execution = Layer.succeed(
   }),
 )
 const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionContextExclusionCleanup.node]), [
+  AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionContextExclusionCleanup.node]), [
     [SessionExecution.node, execution],
   ]),
 )
@@ -46,7 +46,7 @@ const stale = now - 30 * 24 * 60 * 60 * 1000 - 1
 const recent = now - 30 * 24 * 60 * 60 * 1000
 const manifestDigest = "a".repeat(64)
 
-const insert = (id: SessionV2.ID, timeUpdated = stale) =>
+const insert = (id: Session.ID, timeUpdated = stale) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     yield* db
@@ -93,7 +93,7 @@ const insert = (id: SessionV2.ID, timeUpdated = stale) =>
       .pipe(Effect.orDie)
   })
 
-const exclusions = (sessionID: SessionV2.ID) =>
+const exclusions = (sessionID: Session.ID) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     return yield* db
@@ -107,9 +107,9 @@ const exclusions = (sessionID: SessionV2.ID) =>
 describe("SessionContextExclusionCleanup", () => {
   it.effect("prunes only stale inactive context exclusions", () =>
     Effect.gen(function* () {
-      const staleID = SessionV2.ID.make("ses_context_exclusion_stale")
-      const recentID = SessionV2.ID.make("ses_context_exclusion_recent")
-      const activeID = SessionV2.ID.make("ses_context_exclusion_active")
+      const staleID = Session.ID.make("ses_context_exclusion_stale")
+      const recentID = Session.ID.make("ses_context_exclusion_recent")
+      const activeID = Session.ID.make("ses_context_exclusion_active")
       yield* insert(staleID)
       yield* insert(recentID, recent)
       yield* insert(activeID)
@@ -126,9 +126,9 @@ describe("SessionContextExclusionCleanup", () => {
 
   it.effect("retains canonical messages and durable compaction history after projection cleanup", () =>
     Effect.gen(function* () {
-      const sessionID = SessionV2.ID.make("ses_context_exclusion_replay")
+      const sessionID = Session.ID.make("ses_context_exclusion_replay")
       const { db } = yield* Database.Service
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const message = Schema.encodeSync(SessionMessage.Info)(
         SessionMessage.User.make({
           id: SessionMessage.ID.make("msg_context_exclusion_replay"),
@@ -172,7 +172,7 @@ describe("SessionContextExclusionCleanup", () => {
       ).toHaveLength(1)
       expect(
         Array.from(yield* Stream.runCollect(events.log({ aggregateID: sessionID }))).some(
-          (event) => !EventV2.isSynced(event) && event.type === SessionEvent.Compaction.Ended.type,
+          (event) => !EventRuntime.isSynced(event) && event.type === SessionEvent.Compaction.Ended.type,
         ),
       ).toBe(true)
     }),

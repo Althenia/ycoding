@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { normalizeTool, toolInlineInfo, toolOutputText, toolPath } from "../../src/mini/tool"
 
 describe("Mini tool presentation", () => {
-  test("uses V2 shell output without the model-facing status", () => {
+  test("uses shell output without the model-facing status", () => {
     expect(
       toolOutputText("shell", [
         { type: "text", text: "mini-output\n" },

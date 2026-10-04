@@ -45,7 +45,7 @@ export function SubagentRailContent(props: {
   onLoadOlder?: () => void
   onLoadNewer?: () => void
 }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const rail = useRail()
   const waiting = createMemo(() => props.summary?.waiting ?? props.tasks.filter((task) => task.question?.text?.trim()).length)
   const summary = createMemo(
@@ -79,7 +79,7 @@ export function SubagentRailContent(props: {
                   <RailRow
                     label={label()}
                     value={value()}
-                    valueColor={blocked() ? themeV2.text.feedback.warning.default : themeV2.text.feedback.info.default}
+                    valueColor={blocked() ? theme.text.feedback.warning.default : theme.text.feedback.info.default}
                   />
                 </box>
                 <Show when={rail?.allExpanded() && index() < props.tasks.length - 1}>

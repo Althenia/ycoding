@@ -12,18 +12,18 @@
 // and reconnect, then continue from live deltas using the same
 // projected-prefix dedup the parent transport uses.
 //
-// Per-child interruption uses `v2.session.interrupt(childID)`. Per-child
+// Per-child interruption uses `session.interrupt(childID)`. Per-child
 // backgrounding is intentionally absent: subagent jobs block the parent
-// session, so only whole-session `v2.session.background(parentID)` exists.
+// session, so only whole-session `session.background(parentID)` exists.
 import type {
   EventSubscribeOutput,
   YCodingClient,
-  PermissionV2Request,
+  PermissionRequest,
   SessionMessageAssistantTool,
   SessionMessageInfo,
 } from "@ycoding-ai/client/promise"
 import { Locale } from "../util/locale"
-import { createFragmentReconciler, fragmentRef, type FragmentReconciler } from "./stream-v2.fragment"
+import { createFragmentReconciler, fragmentRef, type FragmentReconciler } from "./stream.fragment"
 import type {
   FooterSubagentDetail,
   FooterSubagentState,
@@ -42,7 +42,7 @@ const BLOCKER_RETRY_INITIAL_MS = 50
 const BLOCKER_RETRY_MAX_MS = 2_000
 const FALLBACK_LABEL = "Subagent"
 
-type V2Event = EventSubscribeOutput
+type ServerEvent = EventSubscribeOutput
 
 export function toolCommit(
   input: SessionMessageAssistantTool,
@@ -127,8 +127,8 @@ export type SubagentTrackerInput = {
 }
 
 export type SubagentTracker = {
-  main(sdk: YCodingClient, event: V2Event, signal?: AbortSignal): void
-  foreign(sdk: YCodingClient, sessionID: string, event: V2Event, signal?: AbortSignal): void
+  main(sdk: YCodingClient, event: ServerEvent, signal?: AbortSignal): void
+  foreign(sdk: YCodingClient, sessionID: string, event: ServerEvent, signal?: AbortSignal): void
   hydrate(next: {
     sdk: YCodingClient
     messages: SessionMessageInfo[]
@@ -166,14 +166,14 @@ function sourceKey(messageID: string, callID: string) {
   return `${messageID}\u0000${callID}`
 }
 
-function permissionTool(request: PermissionV2Request, tools: Map<string, SessionMessageAssistantTool>) {
+function permissionTool(request: PermissionRequest, tools: Map<string, SessionMessageAssistantTool>) {
   if (request.source?.type !== "tool") return request
   const tool = tools.get(sourceKey(request.source.messageID, request.source.callID))
   return tool ? { ...request, tool } : request
 }
 
-function blockerCategory(event: V2Event): "permission" | "form" | undefined {
-  if (event.type === "permission.v2.asked" || event.type === "permission.v2.replied") return "permission"
+function blockerCategory(event: ServerEvent): "permission" | "form" | undefined {
+  if (event.type === "permission.asked" || event.type === "permission.replied") return "permission"
   if (event.type === "form.created" || event.type === "form.replied" || event.type === "form.cancelled") return "form"
 }
 
@@ -210,11 +210,11 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
   const checked = new Set<string>()
   // Foreign events buffered while a session.get discovery is in flight, so a
   // fast child (including its settled event) is not lost mid-discovery.
-  const pendingEvents = new Map<string, V2Event[]>()
-  const hydrationEvents = new Map<string, V2Event[]>()
+  const pendingEvents = new Map<string, ServerEvent[]>()
+  const hydrationEvents = new Map<string, ServerEvent[]>()
   const hydrationOverflow = new Set<string>()
   const hydrations = new Map<string, Promise<void>>()
-  const blockerEvents = new Map<string, V2Event[]>()
+  const blockerEvents = new Map<string, ServerEvent[]>()
   const blockerHydrations = new Map<string, Promise<void>>()
   const blockerRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const blockerRetryAttempts = new Map<string, number>()
@@ -474,7 +474,7 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
   const resolvePermissionTools = async (
     sdk: YCodingClient,
     child: ChildState,
-    permissions: PermissionV2Request[],
+    permissions: PermissionRequest[],
     epoch: number,
     signal = input.signal,
   ) => {
@@ -681,7 +681,7 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
     return task
   }
 
-  const reduce = (child: ChildState, event: V2Event) => {
+  const reduce = (child: ChildState, event: ServerEvent) => {
     if (event.type === "session.input.admitted") {
       if (event.data.input.type === "user") child.prompts.set(event.data.inputID, event.data.input.data.text)
       return
@@ -905,13 +905,13 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
       notifyDetail(child)
       return
     }
-    if (event.type === "permission.v2.asked") {
+    if (event.type === "permission.asked") {
       if (!child.permissions.some((item) => item.id === event.data.id))
         child.permissions.push(permissionTool(event.data, child.toolSources))
       input.emit()
       return
     }
-    if (event.type === "permission.v2.replied") {
+    if (event.type === "permission.replied") {
       child.permissions = child.permissions.filter((item) => item.id !== event.data.requestID)
       input.emit()
       return

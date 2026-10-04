@@ -164,7 +164,7 @@ test("surfaces a live subagent permission in the subagent view", async () => {
     await screen.waitForEventStream()
     screen.events.emit({
       id: "evt_child_permission",
-      type: "permission.v2.asked",
+      type: "permission.asked",
       created: Date.now(),
       data: childPermission,
     } satisfies YCodingEvent)

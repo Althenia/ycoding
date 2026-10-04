@@ -8,22 +8,22 @@ import {
   type FormInfo,
   type MessageListOutput,
   type YCodingClient,
-  type PermissionV2Request,
+  type PermissionRequest,
 } from "@ycoding-ai/client/promise"
-import { createSessionTransport } from "../../src/mini/stream-v2.transport"
+import { createSessionTransport } from "../../src/mini/stream.transport"
 import type { FooterEvent, StreamCommit } from "../../src/mini/types"
 import { createFooterApiFixture } from "./fixture/footer-api"
 import { canonicalToolPart } from "./fixture/tool-part"
 import { tmpdir } from "../fixture/fixture"
 
-type RunV2Event = EventSubscribeOutput
+type RunEvent = EventSubscribeOutput
 
 function feed() {
-  const values: Array<{ value: RunV2Event; consumed: () => void }> = []
+  const values: Array<{ value: RunEvent; consumed: () => void }> = []
   let closed = false
   let wake: (() => void) | undefined
   let flushed = Promise.resolve()
-  const stream = (async function* (): AsyncGenerator<RunV2Event, void, unknown> {
+  const stream = (async function* (): AsyncGenerator<RunEvent, void, unknown> {
     while (!closed || values.length > 0) {
       if (values.length === 0) {
         await new Promise<void>((resolve) => {
@@ -40,7 +40,7 @@ function feed() {
   })()
   return {
     stream,
-    push(value: RunV2Event) {
+    push(value: RunEvent) {
       let consumed!: () => void
       flushed = new Promise<void>((resolve) => {
         consumed = resolve
@@ -80,7 +80,7 @@ function defer<T = void>() {
 }
 
 function connected(id = "evt_connected") {
-  return { id, type: "server.connected", data: {}, sourceEpoch: "source_test" } satisfies RunV2Event
+  return { id, type: "server.connected", data: {}, sourceEpoch: "source_test" } satisfies RunEvent
 }
 
 function durable(sessionID: string, seq?: number): { aggregateID: string; seq: number; version: 1 }
@@ -146,8 +146,8 @@ function form(id: string, sessionID: string, title = id): FormInfo {
   }
 }
 
-function eventForm(info: FormInfo): Extract<RunV2Event, { type: "form.created" }>["data"]["form"] {
-  return info as Extract<RunV2Event, { type: "form.created" }>["data"]["form"]
+function eventForm(info: FormInfo): Extract<RunEvent, { type: "form.created" }>["data"]["form"] {
+  return info as Extract<RunEvent, { type: "form.created" }>["data"]["form"]
 }
 
 function sdk(input: {
@@ -158,7 +158,7 @@ function sdk(input: {
   forms?: Record<string, FormInfo[]>
   globals?: FormInfo[]
   globalLocation?: { directory: string; workspaceID?: string }
-  permissions?: Record<string, PermissionV2Request[]>
+  permissions?: Record<string, PermissionRequest[]>
 }) {
   const client = YCoding.make({ baseUrl: "https://ycoding.test" })
   let subscription = 0
@@ -226,7 +226,7 @@ afterEach(() => {
   mock.restore()
 })
 
-describe("V2 mini transport", () => {
+describe("Mini transport", () => {
   test("recursively hydrates blockers for direct and transitive descendants", async () => {
     const events = feed()
     events.push(connected())
@@ -290,7 +290,7 @@ describe("V2 mini transport", () => {
       ],
       time: { created: 1 },
     }
-    const permission: PermissionV2Request = {
+    const permission: PermissionRequest = {
       id: "per_child_startup",
       sessionID: "ses_child",
       action: "shell",
@@ -784,7 +784,7 @@ describe("V2 mini transport", () => {
     await transport.close()
   })
 
-  test("shows V2 blockers and replies through the runtime-owned session API", async () => {
+  test("shows blockers and replies through the runtime-owned session API", async () => {
     const events = feed()
     events.push(connected())
     const client = sdk({ streams: [events] })
@@ -798,7 +798,7 @@ describe("V2 mini transport", () => {
     events.push({
       id: "evt_permission",
       created: 0,
-      type: "permission.v2.asked",
+      type: "permission.asked",
       data: { id: "per_1", sessionID: "ses_1", action: "read", resources: ["/tmp/file"] },
     })
 
@@ -1983,7 +1983,7 @@ describe("V2 mini transport", () => {
     await transport.close()
   })
 
-  test("runs a shell turn through v2.session.shell and renders live output", async () => {
+  test("runs a shell turn through session.shell and renders live output", async () => {
     const warning = "No enforceable shell sandbox backend was available"
     const events = feed()
     events.push(connected())
@@ -2384,7 +2384,7 @@ describe("V2 mini transport", () => {
     await transport.close()
   })
 
-  test("routes command prompts through v2.session.command", async () => {
+  test("routes command prompts through session.command", async () => {
     const events = feed()
     events.push(connected())
     const client = sdk({ streams: [events] })
@@ -2472,7 +2472,7 @@ describe("V2 mini transport", () => {
     await transport.close()
   })
 
-  test("routes skill prompts through v2.session.skill and settles without promotion", async () => {
+  test("routes skill prompts through session.skill and settles without promotion", async () => {
     const events = feed()
     events.push(connected())
     const client = sdk({ streams: [events] })
@@ -2826,7 +2826,7 @@ describe("V2 mini transport", () => {
     events.push({
       id: "evt_child_permission",
       created: 7,
-      type: "permission.v2.asked",
+      type: "permission.asked",
       data: {
         id: "per_child",
         sessionID: "ses_child_progress",

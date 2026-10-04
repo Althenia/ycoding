@@ -59,7 +59,7 @@ test("session daybreak set publishes the annotated OpenAPI operation", () => {
   const document = OpenApi.fromApi(HttpApi.make("daybreak-test").add(group))
   const operation = document.paths["/api/session/{sessionID}/daybreak"]?.post
 
-  expect(operation?.operationId).toBe("v2.session.daybreak.set")
+  expect(operation?.operationId).toBe("session.daybreak.set")
   expect(operation?.summary).toBe("Set Daybreak")
   expect(operation?.description).toContain("daybreak_blue")
   expect(operation?.description).toContain("daybreak_red")

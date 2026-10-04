@@ -5,7 +5,7 @@ import { AISDK } from "@ycoding-ai/core/aisdk"
 import { Credential } from "@ycoding-ai/core/credential"
 import { CursorModels } from "@ycoding-ai/core/cursor/models"
 import { Integration } from "@ycoding-ai/core/integration"
-import { ModelV2 } from "@ycoding-ai/core/model"
+import { CatalogModel } from "@ycoding-ai/core/model"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { expect } from "bun:test"
 import { Effect, Layer } from "effect"
@@ -56,7 +56,7 @@ const [opus, opusLong] = CursorModels.fromCursor([
 ])
 
 const resolve = (
-  info: ModelV2.Info,
+  info: CatalogModel.Info,
   variant: string | undefined,
   credential: Credential.Value,
   observed: { apiKeys: unknown[]; models: string[] },
@@ -82,7 +82,7 @@ const resolve = (
     })
     const selected = yield* SessionRunnerModel.withVariant(
       info,
-      variant === undefined ? undefined : ModelV2.VariantID.make(variant),
+      variant === undefined ? undefined : CatalogModel.VariantID.make(variant),
     )
     return yield* SessionRunnerModel.fromCatalogModel(selected, credential, { loadAISDK: aisdk.model })
   })
@@ -146,7 +146,7 @@ it.effect("leaves the base Cursor model without parameters when no variant is se
 it.effect("sends the long-context default tuple for the -1m entry under the real Cursor model id", () =>
   Effect.gen(function* () {
     const observed = { apiKeys: [] as unknown[], models: [] as string[] }
-    expect(opusLong.id).toBe(ModelV2.ID.make("claude-opus-4-8-1m"))
+    expect(opusLong.id).toBe(CatalogModel.ID.make("claude-opus-4-8-1m"))
     const prepared = yield* prepare(yield* resolve(opusLong, undefined, oauth, observed))
 
     expect(observed.models).toEqual(["claude-opus-4-8"])
@@ -159,7 +159,7 @@ it.effect("sends the long-context default tuple for the -1m entry under the real
 
 it.effect("rejects a Cursor variant that the catalog entry does not advertise", () =>
   Effect.gen(function* () {
-    const error = yield* SessionRunnerModel.withVariant(opusLong, ModelV2.VariantID.make("Opus 4.8 High")).pipe(
+    const error = yield* SessionRunnerModel.withVariant(opusLong, CatalogModel.VariantID.make("Opus 4.8 High")).pipe(
       Effect.flip,
     )
     expect(error._tag).toBe("SessionRunnerModel.VariantUnavailableError")

@@ -2,12 +2,12 @@ import { expect } from "bun:test"
 import { eq, sql } from "drizzle-orm"
 import { Cause, Clock, DateTime, Effect, Exit, Layer } from "effect"
 import { TestClock } from "effect/testing"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
-import { ModelV2 } from "@ycoding-ai/core/model"
+import { EventRuntime } from "@ycoding-ai/core/event"
+import { CatalogModel } from "@ycoding-ai/core/model"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
@@ -15,7 +15,7 @@ import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionContextState } from "@ycoding-ai/core/session/context-state"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionProviderRequest } from "@ycoding-ai/core/session/provider-request"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import {
   CompactionManifestBlobTable,
   SessionCompactionJobTable,
@@ -26,27 +26,27 @@ import { Hash } from "@ycoding-ai/core/util/hash"
 import { Money } from "@ycoding-ai/schema/money"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionProviderRequest.node]),
+    LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node, SessionProviderRequest.node]),
   ),
 )
 
 const itWithFailingLedger = testEffect(
-  AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionProviderRequest.node]), [
+  AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionProviderRequest.node]), [
     [
-      EventV2.node,
-      Layer.mock(EventV2.Service, {
+      EventRuntime.node,
+      Layer.mock(EventRuntime.Service, {
         publish: () => Effect.die("provider request ledger unavailable"),
       }),
     ],
   ]),
 )
 
-const insertSession = (id: SessionV2.ID) =>
+const insertSession = (id: Session.ID) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     yield* db
@@ -66,7 +66,7 @@ const insertSession = (id: SessionV2.ID) =>
 
 it.effect("rejects step ownership when the prepared context revision is stale", () =>
   Effect.gen(function* () {
-    const sessionID = SessionV2.ID.make("ses_provider_request_stale_context")
+    const sessionID = Session.ID.make("ses_provider_request_stale_context")
     yield* insertSession(sessionID)
 
     const service = yield* SessionProviderRequest.Service
@@ -74,8 +74,8 @@ it.effect("rejects step ownership when the prepared context revision is stale", 
       service.next({
         sessionID,
         source: "step",
-        agent: AgentV2.ID.make("build"),
-        model: ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") }),
+        agent: Agent.ID.make("build"),
+        model: CatalogModel.Ref.make({ id: CatalogModel.ID.make("gpt-5.6"), providerID: Provider.ID.make("openai") }),
         routeID: "openai-responses",
         promptCacheKey: "cache-key",
         systemDigest: "system-digest",
@@ -96,16 +96,16 @@ it.effect("rejects step ownership when the prepared context revision is stale", 
 
 it.effect("reads only the latest eight Step requests for the exact Session in ascending order", () =>
   Effect.gen(function* () {
-    const sessionID = SessionV2.ID.make("ses_provider_request_speed")
-    const otherID = SessionV2.ID.make("ses_provider_request_speed_other")
+    const sessionID = Session.ID.make("ses_provider_request_speed")
+    const otherID = Session.ID.make("ses_provider_request_speed_other")
     yield* insertSession(sessionID)
     yield* insertSession(otherID)
     const service = yield* SessionProviderRequest.Service
-    const model = ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") })
+    const model = CatalogModel.Ref.make({ id: CatalogModel.ID.make("gpt-5.6"), providerID: Provider.ID.make("openai") })
     for (const [index, target, source] of Array.from({ length: 12 }, (_, index) => [
       index, index === 10 ? otherID : sessionID, index === 9 ? "title" : "step",
     ] as const)) {
-      const tracker = yield* service.next({ sessionID: target, source, agent: AgentV2.ID.make("build"), model,
+      const tracker = yield* service.next({ sessionID: target, source, agent: Agent.ID.make("build"), model,
         routeID: "openai-responses", promptCacheKey: "cache-key", systemDigest: "system-digest", toolDigest: "tool-digest" })
       yield* tracker.complete({ continuation: "full", tokens: { input: 0, output: index, reasoning: 0,
         cache: { read: 0, write: 0 } }, timing: { generatedTokens: index + 1, observedGenerationDurationNs: 2_000_000 } })
@@ -120,14 +120,14 @@ it.effect("reads only the latest eight Step requests for the exact Session in as
 
 itWithFailingLedger.effect("contains provider-request persistence defects", () =>
   Effect.gen(function* () {
-    const sessionID = SessionV2.ID.make("ses_provider_request_failure")
+    const sessionID = Session.ID.make("ses_provider_request_failure")
     yield* insertSession(sessionID)
     const service = yield* SessionProviderRequest.Service
     const tracker = yield* service.next({
       sessionID,
       source: "step",
-      agent: AgentV2.ID.make("build"),
-      model: ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") }),
+      agent: Agent.ID.make("build"),
+      model: CatalogModel.Ref.make({ id: CatalogModel.ID.make("gpt-5.6"), providerID: Provider.ID.make("openai") }),
       routeID: "openai-responses",
       promptCacheKey: "cache-key",
       systemDigest: "system-digest",
@@ -147,17 +147,17 @@ itWithFailingLedger.effect("contains provider-request persistence defects", () =
 
 it.effect("keeps unavailable pricing distinct and summarizes the latest bounded namespace", () =>
   Effect.gen(function* () {
-    const sessionID = SessionV2.ID.make("ses_provider_request_unpriced")
+    const sessionID = Session.ID.make("ses_provider_request_unpriced")
     yield* insertSession(sessionID)
     const service = yield* SessionProviderRequest.Service
-    const model = ModelV2.Ref.make({
-      id: ModelV2.ID.make("custom-model"),
-      providerID: ProviderV2.ID.make("custom"),
+    const model = CatalogModel.Ref.make({
+      id: CatalogModel.ID.make("custom-model"),
+      providerID: Provider.ID.make("custom"),
     })
     const first = yield* service.next({
       sessionID,
       source: "step",
-      agent: AgentV2.ID.make("build"),
+      agent: Agent.ID.make("build"),
       model,
       routeID: "openai-responses",
       promptCacheKey: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
@@ -172,7 +172,7 @@ it.effect("keeps unavailable pricing distinct and summarizes the latest bounded 
     const second = yield* service.next({
       sessionID,
       source: "step",
-      agent: AgentV2.ID.make("build"),
+      agent: Agent.ID.make("build"),
       model,
       routeID: "openai-responses",
       promptCacheKey: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
@@ -212,15 +212,15 @@ it.effect("keeps unavailable pricing distinct and summarizes the latest bounded 
 
 it.effect("records logical requests, physical attempts, sources, and token cost without prompt content", () =>
   Effect.gen(function* () {
-    const sessionID = SessionV2.ID.make("ses_provider_request")
+    const sessionID = Session.ID.make("ses_provider_request")
     yield* insertSession(sessionID)
     const service = yield* SessionProviderRequest.Service
     const tracker = yield* service.next({
       sessionID,
       inputID: SessionMessage.ID.make("msg_provider_request"),
       source: "step",
-      agent: AgentV2.ID.make("build"),
-      model: ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") }),
+      agent: Agent.ID.make("build"),
+      model: CatalogModel.Ref.make({ id: CatalogModel.ID.make("gpt-5.6"), providerID: Provider.ID.make("openai") }),
       routeID: "openai-responses",
       promptCacheKey: "cache-key",
       systemDigest: "system-digest",
@@ -313,7 +313,7 @@ it.effect("records logical requests, physical attempts, sources, and token cost 
       cost: Money.USD.make(0.0123),
       models: [
         {
-          model: ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") }),
+          model: CatalogModel.Ref.make({ id: CatalogModel.ID.make("gpt-5.6"), providerID: Provider.ID.make("openai") }),
           requests: 1,
           cost: Money.USD.make(0.0123),
           costProvenance: "recorded",
@@ -330,16 +330,16 @@ it.effect("records logical requests, physical attempts, sources, and token cost 
 
 it.effect("persists true, false, and absent cache-read telemetry", () =>
   Effect.gen(function* () {
-    const sessionID = SessionV2.ID.make("ses_provider_request_cache_read_reported")
+    const sessionID = Session.ID.make("ses_provider_request_cache_read_reported")
     yield* insertSession(sessionID)
     const service = yield* SessionProviderRequest.Service
-    const model = ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") })
+    const model = CatalogModel.Ref.make({ id: CatalogModel.ID.make("gpt-5.6"), providerID: Provider.ID.make("openai") })
 
     for (const cacheReadReported of [true, false, undefined]) {
       const tracker = yield* service.next({
         sessionID,
         source: "step",
-        agent: AgentV2.ID.make("build"),
+        agent: Agent.ID.make("build"),
         model,
         routeID: "openai-responses",
         promptCacheKey: "cache-key",
@@ -359,15 +359,15 @@ it.effect("persists true, false, and absent cache-read telemetry", () =>
 
 it.effect("maintains a token and priced-cost aggregate separate from raw provider-request projections", () =>
   Effect.gen(function* () {
-    const sessionID = SessionV2.ID.make("ses_provider_request_aggregate")
+    const sessionID = Session.ID.make("ses_provider_request_aggregate")
     yield* insertSession(sessionID)
     const service = yield* SessionProviderRequest.Service
-    const model = ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") })
+    const model = CatalogModel.Ref.make({ id: CatalogModel.ID.make("gpt-5.6"), providerID: Provider.ID.make("openai") })
     const record = Effect.fnUntraced(function* (cost: number | undefined, tokens: { input: number; output: number }) {
       const tracker = yield* service.next({
         sessionID,
         source: "step",
-        agent: AgentV2.ID.make("build"),
+        agent: Agent.ID.make("build"),
         model,
         routeID: "openai-responses",
         promptCacheKey: "cache-key",
@@ -409,14 +409,14 @@ it.effect("maintains a token and priced-cost aggregate separate from raw provide
 
 it.effect("retains durable request usage when transcript projections are compacted", () =>
   Effect.gen(function* () {
-    const sessionID = SessionV2.ID.make("ses_provider_request_compacted")
+    const sessionID = Session.ID.make("ses_provider_request_compacted")
     yield* insertSession(sessionID)
     const service = yield* SessionProviderRequest.Service
     const tracker = yield* service.next({
       sessionID,
       source: "step",
-      agent: AgentV2.ID.make("build"),
-      model: ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") }),
+      agent: Agent.ID.make("build"),
+      model: CatalogModel.Ref.make({ id: CatalogModel.ID.make("gpt-5.6"), providerID: Provider.ID.make("openai") }),
       routeID: "openai-responses",
       promptCacheKey: "cache-key",
       systemDigest: "system",
@@ -443,20 +443,20 @@ it.effect("retains durable request usage when transcript projections are compact
 
 it.effect("groups summary spend by model with deterministic ordering and priced partial cost", () =>
   Effect.gen(function* () {
-    const sessionID = SessionV2.ID.make("ses_provider_request_model_spend")
+    const sessionID = Session.ID.make("ses_provider_request_model_spend")
     yield* insertSession(sessionID)
     const service = yield* SessionProviderRequest.Service
     const model = (providerID: string, id: string, variant?: string) =>
-      ModelV2.Ref.make({
-        id: ModelV2.ID.make(id),
-        providerID: ProviderV2.ID.make(providerID),
-        ...(variant === undefined ? {} : { variant: ModelV2.VariantID.make(variant) }),
+      CatalogModel.Ref.make({
+        id: CatalogModel.ID.make(id),
+        providerID: Provider.ID.make(providerID),
+        ...(variant === undefined ? {} : { variant: CatalogModel.VariantID.make(variant) }),
       })
-    const record = Effect.fnUntraced(function* (selected: ModelV2.Ref, cost?: number) {
+    const record = Effect.fnUntraced(function* (selected: CatalogModel.Ref, cost?: number) {
       const tracker = yield* service.next({
         sessionID,
         source: "step",
-        agent: AgentV2.ID.make("build"),
+        agent: Agent.ID.make("build"),
         model: selected,
         routeID: "openai-responses",
         promptCacheKey: "cache-key",
@@ -538,11 +538,11 @@ it.effect("groups summary spend by model with deterministic ordering and priced 
 
 it.effect("marks a grouped cost current-catalog when any request was derived", () =>
   Effect.sync(() => {
-    const model = ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") })
+    const model = CatalogModel.Ref.make({ id: CatalogModel.ID.make("gpt-5.6"), providerID: Provider.ID.make("openai") })
     const record = {
-      sessionID: SessionV2.ID.make("ses_provider_request_mixed"),
+      sessionID: Session.ID.make("ses_provider_request_mixed"),
       source: "step" as const,
-      agent: AgentV2.ID.make("build"),
+      agent: Agent.ID.make("build"),
       model,
       routeID: "openai-responses",
       promptCacheKey: "cache-key",
@@ -579,18 +579,18 @@ it.effect("marks a grouped cost current-catalog when any request was derived", (
 
 it.effect("summarizes absent, mixed, and explicit-zero cache-read reporting by model", () =>
   Effect.sync(() => {
-    const firstModel = ModelV2.Ref.make({
-      id: ModelV2.ID.make("first"),
-      providerID: ProviderV2.ID.make("openai"),
+    const firstModel = CatalogModel.Ref.make({
+      id: CatalogModel.ID.make("first"),
+      providerID: Provider.ID.make("openai"),
     })
-    const secondModel = ModelV2.Ref.make({
-      id: ModelV2.ID.make("second"),
-      providerID: ProviderV2.ID.make("openai"),
+    const secondModel = CatalogModel.Ref.make({
+      id: CatalogModel.ID.make("second"),
+      providerID: Provider.ID.make("openai"),
     })
     const record = {
-      sessionID: SessionV2.ID.make("ses_provider_request_cache_summary"),
+      sessionID: Session.ID.make("ses_provider_request_cache_summary"),
       source: "step" as const,
-      agent: AgentV2.ID.make("build"),
+      agent: Agent.ID.make("build"),
       routeID: "openai-responses",
       promptCacheKey: "cache-key",
       systemDigest: "system",
@@ -646,24 +646,24 @@ it.effect("summarizes absent, mixed, and explicit-zero cache-read reporting by m
 
 it.effect("prioritizes compaction, model, and provider cache reset diagnostics and treats a variant named default as an ordinary variant", () =>
   Effect.gen(function* () {
-    const sessionID = SessionV2.ID.make("ses_provider_request_resets")
+    const sessionID = Session.ID.make("ses_provider_request_resets")
     yield* insertSession(sessionID)
     const service = yield* SessionProviderRequest.Service
     const model = (id: string, variant?: string) =>
-      ModelV2.Ref.make({
-        id: ModelV2.ID.make(id),
-        providerID: ProviderV2.ID.make("openai"),
-        ...(variant === undefined ? {} : { variant: ModelV2.VariantID.make(variant) }),
+      CatalogModel.Ref.make({
+        id: CatalogModel.ID.make(id),
+        providerID: Provider.ID.make("openai"),
+        ...(variant === undefined ? {} : { variant: CatalogModel.VariantID.make(variant) }),
       })
     const record = Effect.fnUntraced(function* (
       source: "step" | "compaction",
-      selected: ModelV2.Ref,
+      selected: CatalogModel.Ref,
       promptCacheKey: string,
     ) {
       const tracker = yield* service.next({
         sessionID,
         source,
-        agent: AgentV2.ID.make("build"),
+        agent: Agent.ID.make("build"),
         model: selected,
         routeID: "openai-responses",
         promptCacheKey,
@@ -684,10 +684,10 @@ it.effect("prioritizes compaction, model, and provider cache reset diagnostics a
     yield* record("step", model("gpt-5.8", "high"), "variant-switch")
     yield* record(
       "step",
-      ModelV2.Ref.make({
-        id: ModelV2.ID.make("gpt-5.8"),
-        providerID: ProviderV2.ID.make("anthropic"),
-        variant: ModelV2.VariantID.make("high"),
+      CatalogModel.Ref.make({
+        id: CatalogModel.ID.make("gpt-5.8"),
+        providerID: Provider.ID.make("anthropic"),
+        variant: CatalogModel.VariantID.make("high"),
       }),
       "provider-switch",
     )
@@ -706,18 +706,18 @@ it.effect("prioritizes compaction, model, and provider cache reset diagnostics a
 
 it.effect("records a parent cache reset after provider-isolated hidden compaction ends", () =>
   Effect.gen(function* () {
-    const sessionID = SessionV2.ID.make("ses_provider_request_hidden_compaction")
+    const sessionID = Session.ID.make("ses_provider_request_hidden_compaction")
     yield* insertSession(sessionID)
     const service = yield* SessionProviderRequest.Service
-    const model = ModelV2.Ref.make({
-      id: ModelV2.ID.make("gpt-5.6"),
-      providerID: ProviderV2.ID.make("openai"),
+    const model = CatalogModel.Ref.make({
+      id: CatalogModel.ID.make("gpt-5.6"),
+      providerID: Provider.ID.make("openai"),
     })
     const record = Effect.fnUntraced(function* () {
       const tracker = yield* service.next({
         sessionID,
         source: "step",
-        agent: AgentV2.ID.make("build"),
+        agent: Agent.ID.make("build"),
         model,
         routeID: "openai-responses",
         promptCacheKey: "stable-cache-key",

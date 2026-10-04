@@ -7,21 +7,23 @@ import { describe, expect } from "bun:test"
 import { Plugin as EffectPlugin } from "@ycoding-ai/plugin/effect"
 import { Config as ConfigSchema } from "@ycoding-ai/schema/config"
 import { Plugin } from "@ycoding-ai/schema/plugin"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
+import { FileSystem } from "@ycoding-ai/core/filesystem"
+import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { Global } from "@ycoding-ai/core/global"
 import { Location } from "@ycoding-ai/core/location"
 import { LocationServiceMap } from "@ycoding-ai/core/location-services"
-import { PluginV2 } from "@ycoding-ai/core/plugin"
+import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { SdkPlugins } from "@ycoding-ai/core/plugin/sdk"
 import { PluginSupervisor } from "@ycoding-ai/core/plugin/supervisor"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { Cause, Effect, Logger } from "effect"
+import { Cause, Effect, Logger, Option } from "effect"
 import { Database } from "../../src/database/database"
 import { tmpdir } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
@@ -32,7 +34,7 @@ import { fixtureModels } from "../lib/models"
 const globalDirectory = mkdtempSync(path.join(os.tmpdir(), "ycoding-plugin-test-global-"))
 
 const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SdkPlugins.node, LocationServiceMap.node]), [
+  AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SdkPlugins.node, LocationServiceMap.node]), [
     [
       Global.node,
       Global.layerWith({
@@ -50,7 +52,7 @@ describe("PluginSupervisor config", () => {
     withLocation(
       { plugins: ["-ycoding.provider.*", "ycoding.provider.openai"] },
       Effect.gen(function* () {
-        const plugins = yield* PluginV2.Service
+        const plugins = yield* PluginRegistry.Service
         yield* ready()
         expect(
           (yield* plugins.list()).map((plugin) => plugin.id).filter((id) => id.startsWith("ycoding.provider.")),
@@ -72,8 +74,8 @@ describe("PluginSupervisor config", () => {
       },
       Effect.gen(function* () {
         yield* ready()
-        const agents = yield* AgentV2.Service
-        expect(yield* agents.get(AgentV2.ID.make("configured"))).toMatchObject({
+        const agents = yield* Agent.Service
+        expect(yield* agents.get(Agent.ID.make("configured"))).toMatchObject({
           description: "Loaded from config",
           mode: "subagent",
         })
@@ -87,10 +89,10 @@ describe("PluginSupervisor config", () => {
       { plugins: [plugin, "-config-promise-plugin"] },
       Effect.gen(function* () {
         yield* ready()
-        const plugins = yield* PluginV2.Service
-        const agents = yield* AgentV2.Service
+        const plugins = yield* PluginRegistry.Service
+        const agents = yield* Agent.Service
         expect((yield* plugins.list()).map((item) => String(item.id))).not.toContain("config-promise-plugin")
-        expect(yield* agents.get(AgentV2.ID.make("configured"))).toBeUndefined()
+        expect(yield* agents.get(Agent.ID.make("configured"))).toBeUndefined()
       }),
     )
   })
@@ -101,7 +103,7 @@ describe("PluginSupervisor config", () => {
       { plugins: [plugin, `-${plugin}`] },
       Effect.gen(function* () {
         yield* ready()
-        const plugins = yield* PluginV2.Service
+        const plugins = yield* PluginRegistry.Service
         expect((yield* plugins.list()).map((item) => String(item.id))).toContain("config-promise-plugin")
       }),
     )
@@ -120,8 +122,8 @@ describe("PluginSupervisor config", () => {
       },
       Effect.gen(function* () {
         yield* ready()
-        const agents = yield* AgentV2.Service
-        expect(yield* agents.get(AgentV2.ID.make("effect-configured"))).toMatchObject({
+        const agents = yield* Agent.Service
+        expect(yield* agents.get(Agent.ID.make("effect-configured"))).toMatchObject({
           description: "Effect plugin from config",
           mode: "subagent",
         })
@@ -153,16 +155,65 @@ describe("PluginSupervisor config", () => {
       },
       Effect.gen(function* () {
         yield* ready()
-        const agents = yield* AgentV2.Service
-        expect(yield* agents.get(AgentV2.ID.make("configured"))).toMatchObject({
+        const agents = yield* Agent.Service
+        expect(yield* agents.get(Agent.ID.make("configured"))).toMatchObject({
           description: "Loaded after invalid plugins",
         })
         expect(output).toEqual([
           path.join(import.meta.dir, "../plugin/fixtures/missing-plugin.ts"),
           path.join(import.meta.dir, "../plugin/fixtures/invalid-plugin.ts"),
         ])
-        expect(diagnostics.some((message) => message.includes("does not implement the V2 contract"))).toBe(true)
+        expect(diagnostics.some((message) => message.includes("Invalid plugin export"))).toBe(true)
+        expect(diagnostics.join("\n")).not.toContain("V1 plugins must be migrated")
         expect(diagnostics.join("\n")).not.toContain("Expected readonly")
+      }),
+    ).pipe(Effect.provide(Logger.layer([logger])))
+  })
+
+  it.live("settles the initial plugin generation after an invalid configured plugin", () => {
+    const failures: string[] = []
+    const logger = Logger.map(Logger.formatStructured, (entry) => {
+      if (!Array.isArray(entry.message) || entry.message[0] !== "failed to reload plugins") return
+      const details = entry.message[1]
+      if (typeof details !== "object" || details === null || !("cause" in details) || !Cause.isCause(details.cause))
+        return
+      failures.push(
+        ...Cause.prettyErrors(details.cause).map((error) =>
+          [
+            error.name,
+            /^\s*at ([\w.$]+)/m.exec(error.stack ?? "")?.[1] ?? "unknown",
+            /reading '([A-Za-z][A-Za-z0-9_]*)'/.exec(error.message)?.[1] ??
+              /([A-Za-z][A-Za-z0-9_.]*) is not a function/.exec(error.message)?.[1] ??
+              "unknown",
+          ].join(":"),
+        ),
+      )
+    })
+    return withLocation(
+      {
+        plugins: [
+          "-*",
+          path.join(import.meta.dir, "../plugin/fixtures/invalid-plugin.ts"),
+          path.join(import.meta.dir, "../plugin/fixtures/config-promise-plugin.ts"),
+        ],
+      },
+      Effect.gen(function* () {
+        const located = yield* FileSystem.Service
+        const settled = yield* ready().pipe(Effect.timeoutOption("2 seconds"))
+        const agents = yield* Agent.Service
+        expect({
+          keys: [FSUtil.Service.key, FileSystem.Service.key],
+          read: typeof located.read,
+          ready: Option.isSome(settled),
+          loaded: (yield* agents.get(Agent.ID.make("configured")))?.mode,
+          failures,
+        }).toEqual({
+          keys: ["@ycoding/FileSystem", "@ycoding/LocationFileSystem"],
+          read: "function",
+          ready: true,
+          loaded: "subagent",
+          failures: [],
+        })
       }),
     ).pipe(Effect.provide(Logger.layer([logger])))
   })
@@ -188,8 +239,8 @@ describe("PluginSupervisor config", () => {
       undefined,
       Effect.gen(function* () {
         yield* ready()
-        const agents = yield* AgentV2.Service
-        expect(yield* agents.get(AgentV2.ID.make("directory"))).toMatchObject({
+        const agents = yield* Agent.Service
+        expect(yield* agents.get(Agent.ID.make("directory"))).toMatchObject({
           description: "Loaded from plugin directory",
         })
       }),
@@ -202,15 +253,15 @@ describe("PluginSupervisor config", () => {
       undefined,
       Effect.gen(function* () {
         yield* ready()
-        const agents = yield* AgentV2.Service
-        const events = yield* EventV2.Service
+        const agents = yield* Agent.Service
+        const events = yield* EventRuntime.Service
         const location = yield* Location.Service
-        const plugins = yield* PluginV2.Service
+        const plugins = yield* PluginRegistry.Service
         const file = path.join(location.directory, ".ycoding", "plugin", "mutable.ts")
         const first = (yield* plugins.list()).find((plugin) => plugin.id === "mutable-plugin")?.id
 
         expect(first).toBeDefined()
-        expect((yield* agents.get(AgentV2.ID.make("mutable")))?.description).toBe("first")
+        expect((yield* agents.get(Agent.ID.make("mutable")))?.description).toBe("first")
 
         yield* Effect.promise(async () => {
           await fs.writeFile(file, mutablePlugin("second"))
@@ -221,7 +272,7 @@ describe("PluginSupervisor config", () => {
         yield* waitUntil(
           Effect.gen(function* () {
             const current = (yield* plugins.list()).find((plugin) => plugin.id === "mutable-plugin")?.id
-            return current === first && (yield* agents.get(AgentV2.ID.make("mutable")))?.description === "second"
+            return current === first && (yield* agents.get(Agent.ID.make("mutable")))?.description === "second"
           }),
         )
       }),
@@ -239,8 +290,8 @@ describe("PluginSupervisor config", () => {
       { plugins: ["-*"] },
       Effect.gen(function* () {
         yield* ready()
-        const agents = yield* AgentV2.Service
-        expect(yield* agents.get(AgentV2.ID.make("directory"))).toBeUndefined()
+        const agents = yield* Agent.Service
+        expect(yield* agents.get(Agent.ID.make("directory"))).toBeUndefined()
       }),
       true,
     ),
@@ -259,7 +310,7 @@ describe("PluginSupervisor config", () => {
         },
         Effect.gen(function* () {
           yield* ready()
-          const registry = yield* PluginV2.Service
+          const registry = yield* PluginRegistry.Service
           const ids = (yield* registry.list()).map((plugin) => String(plugin.id))
           expect(ids.indexOf("ycoding.agent")).toBeLessThan(ids.indexOf("sdk-order"))
           expect(ids.indexOf("sdk-order")).toBeLessThan(ids.indexOf("config-promise-plugin"))
@@ -269,7 +320,7 @@ describe("PluginSupervisor config", () => {
 
           const catalog = yield* Catalog.Service
           expect(
-            (yield* catalog.model.get(ProviderV2.ID.make("configured"), ModelV2.ID.make("glm-5.2")))?.variants,
+            (yield* catalog.model.get(Provider.ID.make("configured"), CatalogModel.ID.make("glm-5.2")))?.variants,
           ).toEqual([
             expect.objectContaining({ id: "high", headers: { custom: "true" } }),
             expect.objectContaining({ id: "max", settings: { reasoningEffort: "max" } }),
@@ -286,12 +337,12 @@ describe("PluginSupervisor config", () => {
       },
       Effect.gen(function* () {
         yield* ready()
-        const registry = yield* PluginV2.Service
+        const registry = yield* PluginRegistry.Service
         expect((yield* registry.list()).map((plugin) => String(plugin.id))).not.toContain("ycoding.variant")
 
         const catalog = yield* Catalog.Service
         expect(
-          (yield* catalog.model.get(ProviderV2.ID.make("configured"), ModelV2.ID.make("glm-5.2")))?.variants,
+          (yield* catalog.model.get(Provider.ID.make("configured"), CatalogModel.ID.make("glm-5.2")))?.variants,
         ).toEqual([expect.objectContaining({ id: "high", headers: { custom: "true" } })])
       }),
     ),

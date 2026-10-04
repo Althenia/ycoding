@@ -1,13 +1,13 @@
 import { define } from "@ycoding-ai/plugin/effect/plugin"
 import { Effect, Stream } from "effect"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { ModelsDev } from "../models-dev"
 
 export const ModelsDevPlugin = define({
   id: "ycoding.models-dev",
   effect: Effect.fn(function* (ctx) {
     const modelsDev = yield* ModelsDev.Service
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const loaded = { data: structuredClone(yield* modelsDev.get()) }
     yield* ctx.integration.transform((integrations) => {
       for (const provider of loaded.data) {

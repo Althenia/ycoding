@@ -3,10 +3,10 @@ import { Cause, Deferred, Effect, Exit, Layer, Queue, Schema } from "effect"
 import { Config } from "@ycoding-ai/core/config"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Location } from "@ycoding-ai/core/location"
 import { Pty } from "@ycoding-ai/core/pty"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { PtyID } from "@ycoding-ai/core/pty/schema"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { location } from "../fixture/location"
@@ -20,16 +20,16 @@ const locationLayer = Layer.succeed(
 )
 const configLayer = Layer.mock(Config.Service)({ entries: () => Effect.succeed([]) })
 const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([Pty.node, EventV2.node]), [
+  AppNodeBuilder.build(LayerNode.group([Pty.node, EventRuntime.node]), [
     [Config.node, configLayer],
     [Location.node, locationLayer],
   ]),
 )
 const ptyTest = process.platform === "win32" ? it.live.skip : it.live
-const sessionID = SessionV2.ID.make("ses_pty_test")
+const sessionID = Session.ID.make("ses_pty_test")
 
 const subscribePtyEvents = Effect.fn("PtySessionTest.subscribePtyEvents")(function* () {
-  const source = yield* EventV2.Service
+  const source = yield* EventRuntime.Service
   const events = yield* Queue.unbounded<PtyEvent>()
   const unsubscribe = yield* source.listen((event) => {
     if (event.type === Pty.Event.Created.type && Schema.is(Pty.Event.Created.data)(event.data))
@@ -268,7 +268,7 @@ describe("pty", () => {
     Effect.gen(function* () {
       const pty = yield* Pty.Service
       const info = yield* createPty("cat")
-      const other = SessionV2.ID.make("ses_pty_other")
+      const other = Session.ID.make("ses_pty_other")
       const initialFence = info.control.fence
 
       const crossSession = yield* pty.get(info.id, other).pipe(Effect.exit)
@@ -373,7 +373,7 @@ describe("pty", () => {
 
 const configuredShell = process.platform === "win32" ? undefined : Bun.which("bash")
 const configuredIt = testEffect(
-  AppNodeBuilder.build(LayerNode.group([Pty.node, EventV2.node]), [
+  AppNodeBuilder.build(LayerNode.group([Pty.node, EventRuntime.node]), [
     [
       Config.node,
       Layer.mock(Config.Service)({

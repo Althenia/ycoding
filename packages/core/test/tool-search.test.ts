@@ -9,10 +9,10 @@ import { FileSystem } from "@ycoding-ai/core/filesystem"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { Global } from "@ycoding-ai/core/global"
 import { Location } from "@ycoding-ai/core/location"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { Ripgrep } from "@ycoding-ai/core/ripgrep"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { GlobTool } from "@ycoding-ai/core/tool/glob"
 import { GrepTool } from "@ycoding-ai/core/tool/grep"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
@@ -25,18 +25,18 @@ import { executeTool, registerToolPlugin, settleTool, toolIdentity } from "./lib
 const globToolNode = makeLocationNode({
   name: "test/glob-tool-plugin",
   layer: Layer.effectDiscard(registerToolPlugin(GlobTool.Plugin)),
-  deps: [ToolRegistry.toolsNode, FSUtil.node, Ripgrep.node, Location.node, PermissionV2.node],
+  deps: [ToolRegistry.toolsNode, FSUtil.node, Ripgrep.node, Location.node, Permission.node],
 })
 const grepToolNode = makeLocationNode({
   name: "test/grep-tool-plugin",
   layer: Layer.effectDiscard(registerToolPlugin(GrepTool.Plugin)),
-  deps: [ToolRegistry.toolsNode, FSUtil.node, Ripgrep.node, Location.node, PermissionV2.node, Global.node],
+  deps: [ToolRegistry.toolsNode, FSUtil.node, Ripgrep.node, Location.node, Permission.node, Global.node],
 })
-const permission = (assert: PermissionV2.Interface["assert"] = () => Effect.void) =>
+const permission = (assert: Permission.Interface["assert"] = () => Effect.void) =>
   Layer.succeed(
-    PermissionV2.Service,
-    PermissionV2.Service.of({
-      evaluateEffective: () => Effect.die(new Error("unused PermissionV2.evaluateEffective")),
+    Permission.Service,
+    Permission.Service.of({
+      evaluateEffective: () => Effect.die(new Error("unused Permission.evaluateEffective")),
       assert,
       ask: () => Effect.die("unused"),
       reply: () => Effect.die("unused"),
@@ -45,12 +45,12 @@ const permission = (assert: PermissionV2.Interface["assert"] = () => Effect.void
       list: () => Effect.die("unused"),
     }),
   )
-const sessionID = SessionV2.ID.make("ses_search_tool_test")
+const sessionID = Session.ID.make("ses_search_tool_test")
 
 const withTools = <A, E, R>(
   directory: string,
   body: (registry: ToolRegistry.Interface) => Effect.Effect<A, E, R>,
-  options: { readonly data?: string; readonly assert?: PermissionV2.Interface["assert"] } = {},
+  options: { readonly data?: string; readonly assert?: Permission.Interface["assert"] } = {},
 ) =>
   Effect.gen(function* () {
     return yield* body(yield* ToolRegistry.Service)
@@ -69,7 +69,7 @@ const withTools = <A, E, R>(
             Location.node,
             Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(directory) }))),
           ],
-          [PermissionV2.node, permission(options.assert)],
+          [Permission.node, permission(options.assert)],
           ...(options.data ? [[Global.node, Global.layerWith({ data: options.data })] as const] : []),
           [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
         ],
@@ -184,13 +184,13 @@ describe("search tools", () => {
       (tmp) =>
         Effect.gen(function* () {
           yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, ".env"), "fixture-only-marker\n"))
-          const checks: PermissionV2.AssertInput[] = []
-          const assert: PermissionV2.Interface["assert"] = (input) =>
+          const checks: Permission.AssertInput[] = []
+          const assert: Permission.Interface["assert"] = (input) =>
             Effect.sync(() => checks.push(input)).pipe(
               Effect.andThen(
                 input.action === "read" && input.resources.includes(".env")
                   ? Effect.fail(
-                      new PermissionV2.BlockedError({ rules: [], permission: "read", resources: input.resources }),
+                      new Permission.BlockedError({ rules: [], permission: "read", resources: input.resources }),
                     )
                   : Effect.void,
               ),
@@ -225,7 +225,7 @@ describe("search tools", () => {
       Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
       ([inside, outside]) =>
         Effect.gen(function* () {
-          const checks: PermissionV2.AssertInput[] = []
+          const checks: Permission.AssertInput[] = []
           yield* withTools(
             inside.path,
             (registry) =>

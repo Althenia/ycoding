@@ -114,7 +114,7 @@ test("projects live context observations once as resident chronological messages
   }
 })
 
-test("reconciles V2 compaction rows by jobID through terminal lifecycle events", async () => {
+test("reconciles compaction rows by jobID through terminal lifecycle events", async () => {
   const sessionID = "session-v2-compaction-rows"
   const jobID = "cmp_lifecycle"
   const pressure = { estimatedInputTokens: 600_000, safeInputTokens: 642_000 }
@@ -291,7 +291,7 @@ test("reconciles V2 compaction rows by jobID through terminal lifecycle events",
   }
 })
 
-test("rehydrates one identity-stable V2 compaction row when an event arrives before reconnect fetch", async () => {
+test("rehydrates one identity-stable compaction row when an event arrives before reconnect fetch", async () => {
   const sessionID = "session-v2-compaction-reconnect"
   const jobID = "cmp_reconnect"
   let requests = 0
@@ -391,7 +391,7 @@ test("rehydrates one identity-stable V2 compaction row when an event arrives bef
   }
 })
 
-test("keeps a persisted V2 compaction failure diagnostic-only through reconnect hydration", async () => {
+test("keeps a persisted compaction failure diagnostic-only through reconnect hydration", async () => {
   const sessionID = "session-v2-compaction-failed-reconnect"
   const jobID = "cmp_failed_reconnect"
   let requests = 0
@@ -660,7 +660,7 @@ test("keeps a resident background compaction before newer user and assistant cha
   }
 })
 
-test("keeps a production V2 compaction before newer assistant and tool rows after completion", async () => {
+test("keeps a production compaction before newer assistant and tool rows after completion", async () => {
   const sessionID = "session-v2-compaction-production-order"
   const jobID = "cmp_production_order"
   const assistantMessageID = "msg_assistant_after_compaction"

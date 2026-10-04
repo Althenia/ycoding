@@ -1,18 +1,18 @@
 import { expect, test } from "bun:test"
 import { DateTime } from "effect"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionCacheDiagnostics } from "@ycoding-ai/core/session/cache-diagnostics"
 import { SessionContextPressure } from "@ycoding-ai/core/session/context-pressure"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 
 const model = (providerID: string) =>
-  ModelV2.Ref.make({ id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make(providerID) })
+  CatalogModel.Ref.make({ id: CatalogModel.ID.make("model"), providerID: Provider.ID.make(providerID) })
 
 const namedModel = (providerID: string, id: string) =>
-  ModelV2.Ref.make({ id: ModelV2.ID.make(id), providerID: ProviderV2.ID.make(providerID) })
+  CatalogModel.Ref.make({ id: CatalogModel.ID.make(id), providerID: Provider.ID.make(providerID) })
 
 const tokens = {
   input: 100,
@@ -113,7 +113,7 @@ test("excludes historical buffered bursts without hiding provider-timed samples"
 test("reconstructs the last request breakdown from projected assistant diagnostics", () => {
   const contextBreakdown = { system: 2, tools: 0, user: 4, assistant: 0, reasoning: 0, toolCalls: 0, other: 0 }
   const messages = [SessionMessage.Assistant.make({
-    id: SessionMessage.ID.create(), type: "assistant", agent: AgentV2.defaultID, model: model("openai"), content: [],
+    id: SessionMessage.ID.create(), type: "assistant", agent: Agent.defaultID, model: model("openai"), content: [],
     tokens, cost: Money.USD.zero, diagnostics: { contextBreakdown }, time: { created: DateTime.makeUnsafe(0) },
   })]
   expect(SessionCacheDiagnostics.fromMessages(messages)?.contextBreakdown).toEqual(contextBreakdown)
@@ -273,14 +273,14 @@ test("uses the latest provider telemetry after switching from Claude to GPT", ()
   const created = DateTime.makeUnsafe(0)
   const assistant = (
     id: string,
-    selected: ModelV2.Ref,
+    selected: CatalogModel.Ref,
     cache: { read: number; write: number },
     mechanism: "anthropic-cache-control" | "openai-prefix-cache",
   ) =>
     SessionMessage.Assistant.make({
       id: SessionMessage.ID.make(id),
       type: "assistant",
-      agent: AgentV2.defaultID,
+      agent: Agent.defaultID,
       model: selected,
       content: [],
       tokens: { input: 100, output: 20, reasoning: 0, cache },

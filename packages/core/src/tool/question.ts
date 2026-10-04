@@ -4,8 +4,8 @@ import type { Context as PluginContext } from "@ycoding-ai/plugin/effect/plugin"
 import { ToolFailure } from "@ycoding-ai/ai"
 import { Effect, Schema } from "effect"
 import { Form } from "../form"
-import { PermissionV2 } from "../permission"
-import { QuestionV2 } from "../question"
+import { Permission } from "../permission"
+import { Question } from "../question"
 import { Tool } from "./tool"
 
 export const name = "question"
@@ -26,11 +26,11 @@ Usage notes:
 - Recommend the option that best matches the user's stated requirements and expectations; do not introduce new solutions or problems in the recommendation`
 
 export const Input = Schema.Struct({
-  questions: Schema.NonEmptyArray(QuestionV2.Prompt).annotate({ description: "Questions to ask" }),
+  questions: Schema.NonEmptyArray(Question.Prompt).annotate({ description: "Questions to ask" }),
 })
 
 export const Output = Schema.Struct({
-  answers: Schema.Array(QuestionV2.Answer),
+  answers: Schema.Array(Question.Answer),
 })
 export type Output = typeof Output.Type
 
@@ -41,8 +41,8 @@ export class CancelledError extends Schema.TaggedErrorClass<CancelledError>()("Q
 }
 
 export const toModelOutput = (
-  questions: ReadonlyArray<QuestionV2.Prompt>,
-  answers: ReadonlyArray<QuestionV2.Answer>,
+  questions: ReadonlyArray<Question.Prompt>,
+  answers: ReadonlyArray<Question.Answer>,
 ) => {
   const formatted = questions
     .map(
@@ -57,7 +57,7 @@ export const Plugin = {
   id: "ycoding.tool.question",
   effect: Effect.fn("QuestionTool.Plugin")(function* (ctx: PluginContext) {
     const forms = yield* Form.Service
-    const permission = yield* PermissionV2.Service
+    const permission = yield* Permission.Service
 
     yield* ctx.tool
       .transform((draft) =>
@@ -100,7 +100,7 @@ export const Plugin = {
                   Effect.flatMap((state) => {
                     if (state.status === "cancelled") return Effect.die(new CancelledError())
                     return Effect.succeed({
-                      answers: input.questions.map((_, index): QuestionV2.Answer => {
+                      answers: input.questions.map((_, index): Question.Answer => {
                         const value = state.answer[`q${index}`]
                         if (value === undefined) return []
                         if (typeof value === "object") return Array.from(value)
@@ -117,7 +117,7 @@ export const Plugin = {
   }),
 }
 
-function toField(question: QuestionV2.Prompt, index: number): Form.Field {
+function toField(question: Question.Prompt, index: number): Form.Field {
   return {
     key: `q${index}`,
     title: question.header,

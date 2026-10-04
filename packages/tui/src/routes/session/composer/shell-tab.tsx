@@ -31,7 +31,7 @@ export function ShellRows(props: {
   onSelect: (shell: ShellInfo) => void
   designLabels?: boolean
 }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
 
   return (
@@ -40,7 +40,7 @@ export function ShellRows(props: {
         const unknown = group.owner.label === "Unknown session"
         return (
           <box flexDirection="column">
-            <text fg={unknown ? themeV2.text.feedback.warning.default : themeV2.text.subdued} attributes={TextAttributes.BOLD}>
+            <text fg={unknown ? theme.text.feedback.warning.default : theme.text.subdued} attributes={TextAttributes.BOLD}>
               {props.designLabels ? shellOwnerLabel(group.owner.label) : group.owner.label}
             </text>
             <Show when={!unknown}>
@@ -49,17 +49,17 @@ export function ShellRows(props: {
             <For each={group.shells}>
               {(shell, shellIndex) => {
                 const active = createMemo(() => props.selected === shell.id)
-                const color = () => (active() ? themeV2.text.action.primary.focused : themeV2.text.action.primary.default)
+                const color = () => (active() ? theme.text.action.primary.focused : theme.text.action.primary.default)
                 return (
                   <>
                     <box
                       flexDirection="row"
                       minWidth={0}
-                      backgroundColor={active() ? themeV2.background.action.primary.focused : themeV2.background.action.primary.default}
+                      backgroundColor={active() ? theme.background.action.primary.focused : theme.background.action.primary.default}
                       onMouseOver={() => props.onSelect(shell)}
                     >
                       <box width={16} flexShrink={0}>
-                        <text fg={active() ? themeV2.text.action.primary.focused : statusColor(shell.status, themeV2)} wrapMode="none">
+                        <text fg={active() ? theme.text.action.primary.focused : statusColor(shell.status, theme)} wrapMode="none">
                           {shell.status}
                         </text>
                       </box>
@@ -68,11 +68,11 @@ export function ShellRows(props: {
                       </text>
                       <Show when={dimensions().width >= 100}>
                         <box width={2} flexShrink={0} />
-                        <text fg={active() ? themeV2.text.action.primary.focused : themeV2.text.subdued} wrapMode="none">
+                        <text fg={active() ? theme.text.action.primary.focused : theme.text.subdued} wrapMode="none">
                           · {abbreviateHome(shell.cwd, process.env.HOME ?? "")}
                         </text>
                         <box flexGrow={1} />
-                        <text fg={active() ? themeV2.text.action.primary.focused : themeV2.text.subdued} wrapMode="none">
+                        <text fg={active() ? theme.text.action.primary.focused : theme.text.subdued} wrapMode="none">
                           {shell.status === "running" && shell.pid !== undefined
                             ? `pid ${shell.pid} · ${formatShellElapsed(shell, props.now)}`
                             : `exit — · ${formatShellElapsed(shell, props.now)}`}
@@ -101,7 +101,7 @@ export function ShellTab(props: { sessionID: string }) {
   const location = useLocation()
   const client = useClient()
   const route = useRoute()
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const composer = useComposerTab()
 
   const session = createMemo(() => data.session.get(props.sessionID))
@@ -230,7 +230,7 @@ export function ShellTab(props: { sessionID: string }) {
         paddingTop={2}
         ref={(value: ScrollBoxRenderable) => (scroll = value)}
       >
-        <Show when={groups().length > 0} fallback={<text fg={themeV2.text.subdued}> No shell commands</text>}>
+        <Show when={groups().length > 0} fallback={<text fg={theme.text.subdued}> No shell commands</text>}>
           <ShellRows
             groups={groups()}
             now={now()}
@@ -278,9 +278,9 @@ function shellOwnerLabel(label: string) {
   return `SUBAGENT · ${label.toUpperCase()}`
 }
 
-function statusColor(status: ShellInfo["status"], themeV2: ReturnType<typeof useTheme>["themeV2"]) {
-  if (status === "running") return themeV2.text.feedback.success.default
-  if (status === "exited") return themeV2.text.feedback.success.default
-  if (status === "timeout") return themeV2.text.feedback.warning.default
-  return themeV2.text.feedback.error.default
+function statusColor(status: ShellInfo["status"], theme: ReturnType<typeof useTheme>["theme"]) {
+  if (status === "running") return theme.text.feedback.success.default
+  if (status === "exited") return theme.text.feedback.success.default
+  if (status === "timeout") return theme.text.feedback.warning.default
+  return theme.text.feedback.error.default
 }

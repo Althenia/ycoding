@@ -43,7 +43,7 @@ export const makeBrowserGroup = <SessionLocationId extends HttpApiMiddleware.Any
         error: SessionNotFoundError,
       }).annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.browser.status",
+          identifier: "browser.status",
           summary: "Inspect selected-tab browser bridge status",
           description: "Return safe process-local bridge state for the owning Session.",
         }),
@@ -56,7 +56,7 @@ export const makeBrowserGroup = <SessionLocationId extends HttpApiMiddleware.Any
         error: SessionNotFoundError,
       }).annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.browser.tabs",
+          identifier: "browser.tabs",
           summary: "List explicitly shared Chrome tabs",
           description: "List bounded, query-free metadata for tabs shared with the owning Session.",
         }),
@@ -69,7 +69,7 @@ export const makeBrowserGroup = <SessionLocationId extends HttpApiMiddleware.Any
         error: operationErrors,
       }).annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.browser.start",
+          identifier: "browser.start",
           summary: "Create a one-time Chrome pairing secret",
           description: "Create a short-lived secret for one manually installed extension connection.",
         }),
@@ -83,7 +83,7 @@ export const makeBrowserGroup = <SessionLocationId extends HttpApiMiddleware.Any
         error: operationErrors,
       }).annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.browser.observe",
+          identifier: "browser.observe",
           summary: "Observe one shared tab semantically",
           description: "Read one bounded accessibility observation without raw DOM or input values.",
         }),
@@ -94,7 +94,7 @@ export const makeBrowserGroup = <SessionLocationId extends HttpApiMiddleware.Any
         params: { sessionID: Session.ID }, payload: Schema.Struct(OpenPayload),
         success: Schema.Struct({ data: Browser.Tab }), error: operationErrors,
       }).annotateMerge(OpenApi.annotations({
-        identifier: "v2.browser.open", summary: "Open a new background Chrome tab",
+        identifier: "browser.open", summary: "Open a new background Chrome tab",
         description: "Create only a new Session-owned background tab after extension pairing.",
       })),
     )
@@ -103,7 +103,7 @@ export const makeBrowserGroup = <SessionLocationId extends HttpApiMiddleware.Any
         params: { sessionID: Session.ID }, payload: Schema.Struct(ClosePayload),
         success: HttpApiSchema.NoContent, error: operationErrors,
       }).annotateMerge(OpenApi.annotations({
-        identifier: "v2.browser.close", summary: "Close an agent-created Chrome tab",
+        identifier: "browser.close", summary: "Close an agent-created Chrome tab",
         description: "Close only a tab owned by the caller Session and fenced to the current bridge generation.",
       })),
     )
@@ -112,7 +112,7 @@ export const makeBrowserGroup = <SessionLocationId extends HttpApiMiddleware.Any
         params: { sessionID: Session.ID }, payload: Schema.Struct(ReleasePayload),
         success: HttpApiSchema.NoContent, error: operationErrors,
       }).annotateMerge(OpenApi.annotations({
-        identifier: "v2.browser.release", summary: "Release control of a paired Chrome tab",
+        identifier: "browser.release", summary: "Release control of a paired Chrome tab",
         description: "Detach the caller Session's lease on a paired profile tab after the extension confirms cleanup.",
       })),
     )
@@ -124,7 +124,7 @@ export const makeBrowserGroup = <SessionLocationId extends HttpApiMiddleware.Any
         error: operationErrors,
       }).annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.browser.action",
+          identifier: "browser.action",
           summary: "Run one generation-fenced browser action",
           description:
             "Dispatch one strict semantic action using its original call identity; uncertain mutations are never replayed.",
@@ -139,7 +139,7 @@ export const makeBrowserGroup = <SessionLocationId extends HttpApiMiddleware.Any
         error: operationErrors,
       }).annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.browser.control",
+          identifier: "browser.control",
           summary: "Pause or resume selected-tab automation",
           description: "Pause dispatch or explicitly hand control back after a fresh observation boundary.",
         }),
@@ -152,7 +152,7 @@ export const makeBrowserGroup = <SessionLocationId extends HttpApiMiddleware.Any
         error: operationErrors,
       }).annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.browser.stop",
+          identifier: "browser.stop",
           summary: "Stop the owning browser bridge",
           description: "Revoke only this bridge and its explicitly shared debugger attachments.",
         }),
@@ -165,7 +165,7 @@ export const makeBrowserGroup = <SessionLocationId extends HttpApiMiddleware.Any
         error: operationErrors,
       }).annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.browser.forget",
+          identifier: "browser.forget",
           summary: "Forget the Chrome extension pairing",
           description: "Revoke backend-wide durable extension trust and disconnect its selected-tab bridge.",
         }),
@@ -177,7 +177,7 @@ export const makeBrowserGroup = <SessionLocationId extends HttpApiMiddleware.Any
         error: [ForbiddenError, SessionNotFoundError],
       }).annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.browser.connect",
+          identifier: "browser.connect",
           summary: "Connect the Chrome selected-tab bridge",
           description:
             "Establish a Chrome-extension-origin WebSocket; authentication occurs in its first bounded frame.",

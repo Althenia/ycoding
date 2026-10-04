@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test"
 import { Schema } from "effect"
 import { DEFAULT_THEMES } from "../src/theme"
-import { ThemeFile, type ResolvedThemeView } from "../src/theme/v2"
-import { resolveThemeFile } from "../src/theme/v2/resolve"
-import { selectThemeMode } from "../src/theme/v2/select"
+import { ThemeFile, type ResolvedThemeView } from "../src/theme"
+import { resolveThemeFile } from "../src/theme/resolve"
+import { selectThemeMode } from "../src/theme/select"
 
 const THEME_NAMES = [
   "aura",
@@ -96,7 +96,7 @@ const LEGACY_ROLES = [
   "warning",
 ] as const
 
-const V2_SELECTORS = {
+const SEMANTIC_SELECTORS = {
   accent: (theme, mode) => theme.hue.accent[mode === "light" ? 800 : 200],
   background: (theme) => theme.background.default,
   backgroundElement: (theme) => theme.background.surface.overlay,
@@ -224,8 +224,8 @@ test("the YCoding dark fixture retains independently documented DESIGN colors", 
   })
 })
 
-test("the explicit V2 semantic selectors preserve every frozen legacy role", () => {
-  expect(Object.keys(V2_SELECTORS).sort()).toEqual([...LEGACY_ROLES].sort())
+test("the explicit semantic selectors preserve every frozen legacy role", () => {
+  expect(Object.keys(SEMANTIC_SELECTORS).sort()).toEqual([...LEGACY_ROLES].sort())
   const decode = Schema.decodeUnknownSync(ThemeFile)
   for (const entry of fixture.entries) {
     const file = decode(DEFAULT_THEMES[entry.name])
@@ -234,7 +234,7 @@ test("the explicit V2 semantic selectors preserve every frozen legacy role", () 
     const resolved = resolveThemeFile(file, effectiveMode, entry.name)
     for (const role of LEGACY_ROLES) {
       expect(
-        [...V2_SELECTORS[role](resolved, effectiveMode).toInts()],
+        [...SEMANTIC_SELECTORS[role](resolved, effectiveMode).toInts()],
         `${entry.name}/${entry.requestedMode}/${role}`,
       ).toEqual([...entry.colors[role]])
     }

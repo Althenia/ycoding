@@ -5,8 +5,8 @@ import { and, asc, eq } from "drizzle-orm"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 import { KeyedMutex } from "../effect/keyed-mutex"
-import { EventV2 } from "../event"
-import { SessionV2 } from "../session"
+import { EventRuntime } from "../event"
+import { Session } from "../session"
 import { SessionExecution } from "./execution"
 import { SessionEvent } from "./event"
 import { SessionOrchestrationIdentity } from "./orchestration-identity"
@@ -44,15 +44,15 @@ export function make<Row, E, R>(dependencies: {
   return { dispatch }
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionOrchestrationNotifier") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionOrchestrationNotifier") {}
 
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const execution = yield* SessionExecution.Service
-    const sessions = yield* SessionV2.Service
+    const sessions = yield* Session.Service
 
     const service = make({
       list: (limit) =>
@@ -136,5 +136,5 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [Database.node, EventV2.node, SessionExecution.node, SessionV2.node],
+  deps: [Database.node, EventRuntime.node, SessionExecution.node, Session.node],
 })

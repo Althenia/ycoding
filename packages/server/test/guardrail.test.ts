@@ -1,13 +1,13 @@
 import { expect, test } from "bun:test"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { Effect } from "effect"
 import { sessionHttp } from "./session-http"
 import { Guardrail } from "../../schema/src/guardrail"
 
-const parentID = SessionV2.ID.make("ses_guardrail_parent")
-const childID = SessionV2.ID.make("ses_guardrail_child")
-const unrelatedID = SessionV2.ID.make("ses_guardrail_unrelated")
+const parentID = Session.ID.make("ses_guardrail_parent")
+const childID = Session.ID.make("ses_guardrail_child")
+const unrelatedID = Session.ID.make("ses_guardrail_unrelated")
 const requestID = SessionGuardrail.RequestID.create("grq_guardrail_test")
 
 type GuardrailStatus = Effect.Success<ReturnType<SessionGuardrail.Interface["status"]>>
@@ -36,7 +36,7 @@ const request: GuardrailRequest = new Guardrail.Request({
 
 test("guardrail HTTP routes preserve family ownership, normalized output, and typed failures", async () => {
   const calls: unknown[] = []
-  const snapshot = (sessionID: SessionV2.ID) =>
+  const snapshot = (sessionID: Session.ID) =>
     Effect.succeed({ sequence: 0, digest: sessionID === childID ? parentID : sessionID })
   const service = SessionGuardrail.Service.of({
     evaluate: () => Effect.die("unused"),
@@ -44,7 +44,7 @@ test("guardrail HTTP routes preserve family ownership, normalized output, and ty
     snapshot,
     withSnapshot: (sessionID, use) => snapshot(sessionID).pipe(Effect.flatMap(use)),
     status: (sessionID) => sessionID === unrelatedID
-      ? Effect.fail(new SessionV2.NotFoundError({ sessionID }))
+      ? Effect.fail(new Session.NotFoundError({ sessionID }))
       :
       Effect.sync(() => {
         calls.push(["status", sessionID])

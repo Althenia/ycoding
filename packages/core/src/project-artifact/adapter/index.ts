@@ -1,10 +1,10 @@
 export * as ProjectArtifactAdapterRegistry from "./index"
 
 import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
-import { AgentV2 } from "../../agent"
-import { CommandV2 } from "../../command"
+import { Agent } from "../../agent"
+import { Command } from "../../command"
 import { Global } from "../../global"
-import { SkillV2 } from "../../skill"
+import { Skill } from "../../skill"
 import { AgentAdapter } from "./agent"
 import { CommandAdapter } from "./command"
 import { PluginAdapter } from "./plugin"
@@ -21,9 +21,9 @@ export interface VersionIndex {
 }
 
 export interface RuntimeDraft {
-  readonly skill?: SkillV2.Draft
-  readonly command?: CommandV2.Draft
-  readonly agent?: AgentV2.Draft
+  readonly skill?: Skill.Draft
+  readonly command?: Command.Draft
+  readonly agent?: Agent.Draft
 }
 
 export interface Adapter<Definition extends ProjectArtifact.Definition = ProjectArtifact.Definition> {

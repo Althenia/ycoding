@@ -447,7 +447,7 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
   const client = useClient()
   const toast = useToast()
   const themeState = useTheme()
-  const { themeV2, mode, supports, setMode, locked, lock, unlock } = themeState
+  const { theme, mode, supports, setMode, locked, lock, unlock } = themeState
   const data = useData()
   const location = useLocation()
   const exit = useExit()
@@ -1180,7 +1180,7 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       width={dimensions().width}
       height={dimensions().height}
       flexDirection="column"
-      backgroundColor={themeV2.background.default}
+      backgroundColor={theme.background.default}
     >
       <Show when={config.data.debug?.timing}>
         <TimeToFirstDraw />

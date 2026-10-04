@@ -1,22 +1,22 @@
 import path from "path"
 import { describe, expect } from "bun:test"
 import { Config as ConfigSchema } from "@ycoding-ai/schema/config"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Catalog } from "@ycoding-ai/core/catalog"
-import { CommandV2 } from "@ycoding-ai/core/command"
+import { Command } from "@ycoding-ai/core/command"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigAgentPlugin } from "@ycoding-ai/core/config/plugin/agent"
 import { ConfigCommandPlugin } from "@ycoding-ai/core/config/plugin/command"
 import { ConfigProviderPlugin } from "@ycoding-ai/core/config/plugin/provider"
 import { ConfigReferencePlugin } from "@ycoding-ai/core/config/plugin/reference"
 import { ConfigSkillPlugin } from "@ycoding-ai/core/config/plugin/skill"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Global } from "@ycoding-ai/core/global"
-import { PluginV2 } from "@ycoding-ai/core/plugin"
+import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { Reference } from "@ycoding-ai/core/reference"
-import { SkillV2 } from "@ycoding-ai/core/skill"
+import { Skill } from "@ycoding-ai/core/skill"
 import { Effect, Schema } from "effect"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "../plugin/fixture"
@@ -28,13 +28,13 @@ const document = path.join(import.meta.dir, "ycoding.json")
 describe("config plugin reloads", () => {
   it.live("reloads config-backed domains without reloading external plugins", () =>
     Effect.gen(function* () {
-      const agents = yield* AgentV2.Service
+      const agents = yield* Agent.Service
       const catalog = yield* Catalog.Service
-      const commands = yield* CommandV2.Service
-      const events = yield* EventV2.Service
-      const plugins = yield* PluginV2.Service
+      const commands = yield* Command.Service
+      const events = yield* EventRuntime.Service
+      const plugins = yield* PluginRegistry.Service
       const references = yield* Reference.Service
-      const skills = yield* SkillV2.Service
+      const skills = yield* Skill.Service
       const host = yield* PluginHost.make(plugins)
       let entries: Config.Entry[] = [config("first")]
       const service = Config.Service.of({ reload: () => Effect.void, entries: () => Effect.sync(() => entries) })
@@ -47,26 +47,26 @@ describe("config plugin reloads", () => {
       yield* setup(ConfigReferencePlugin.Plugin.effect(host))
       yield* setup(ConfigProviderPlugin.Plugin.effect(host))
 
-      expect((yield* agents.get(AgentV2.ID.make("first")))?.description).toBe("First agent")
+      expect((yield* agents.get(Agent.ID.make("first")))?.description).toBe("First agent")
       expect((yield* commands.get("first"))?.description).toBe("First command")
       expect(
         (yield* skills.sources()).some((source) => source.type === "directory" && source.path === "/skills/first"),
       ).toBe(true)
       expect((yield* references.list()).map((reference) => reference.name)).toEqual(["first"])
-      expect(yield* catalog.provider.get(ProviderV2.ID.make("first"))).toBeDefined()
+      expect(yield* catalog.provider.get(Provider.ID.make("first"))).toBeDefined()
 
       entries = [config("second")]
       yield* events.publish(ConfigSchema.Event.Updated, {})
       yield* waitUntil(
         Effect.gen(function* () {
           return (
-            (yield* agents.get(AgentV2.ID.make("first"))) === undefined &&
-            (yield* agents.get(AgentV2.ID.make("second")))?.description === "Second agent" &&
+            (yield* agents.get(Agent.ID.make("first"))) === undefined &&
+            (yield* agents.get(Agent.ID.make("second")))?.description === "Second agent" &&
             (yield* commands.get("first")) === undefined &&
             (yield* commands.get("second"))?.description === "Second command" &&
             (yield* references.list()).some((reference) => reference.name === "second") &&
-            (yield* catalog.provider.get(ProviderV2.ID.make("first"))) === undefined &&
-            (yield* catalog.provider.get(ProviderV2.ID.make("second"))) !== undefined
+            (yield* catalog.provider.get(Provider.ID.make("first"))) === undefined &&
+            (yield* catalog.provider.get(Provider.ID.make("second"))) !== undefined
           )
         }),
       )

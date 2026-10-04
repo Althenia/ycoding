@@ -1,6 +1,6 @@
 export * as EventFeed from "./event-feed"
 
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { isYCodingEvent, YCodingEvent } from "@ycoding-ai/protocol/groups/event"
 import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
 import { Cause, Context, Effect, Layer, Queue, Schema, Scope, Stream } from "effect"
@@ -14,7 +14,7 @@ export class SubscriberOverflowError extends Schema.TaggedErrorClass<SubscriberO
 ) {}
 
 export class EncodingError extends Schema.TaggedErrorClass<EncodingError>()("EventFeed.EncodingError", {
-  eventID: EventV2.ID,
+  eventID: EventRuntime.ID,
   eventType: Schema.String,
   cause: Schema.Defect(),
 }) {}
@@ -31,14 +31,14 @@ const encode = Schema.encodeUnknownSync(YCodingEvent)
 
 export function frame(
   sourceEpoch: ServiceStatus.Epoch,
-  event: { readonly id: EventV2.ID; readonly type: string; readonly data: unknown },
+  event: { readonly id: EventRuntime.ID; readonly type: string; readonly data: unknown },
 ) {
   return `data: ${JSON.stringify(encode({ ...event, sourceEpoch }))}\n\n`
 }
 
 export const make = Effect.fn("EventFeed.make")(function* (
   sourceEpoch: ServiceStatus.Epoch,
-  observe: (subscriber: EventV2.Subscriber) => Effect.Effect<EventV2.Unsubscribe>,
+  observe: (subscriber: EventRuntime.Subscriber) => Effect.Effect<EventRuntime.Unsubscribe>,
   options?: { readonly capacity?: number; readonly encode?: (event: YCodingEvent) => string },
 ) {
   const capacity = options?.capacity ?? SubscriberCapacity
@@ -52,7 +52,7 @@ export const make = Effect.fn("EventFeed.make")(function* (
       for (const subscriber of current) Queue.failCauseUnsafe(subscriber, Cause.fail(error))
     })
 
-  const publish = Effect.fnUntraced(function* (event: EventV2.Payload) {
+  const publish = Effect.fnUntraced(function* (event: EventRuntime.Payload) {
     if (!isYCodingEvent(event)) return
     if (subscribers.size === 0) return
     const encoded = yield* Effect.try({
@@ -108,7 +108,7 @@ export const make = Effect.fn("EventFeed.make")(function* (
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const identity = yield* ProcessIdentity
     return yield* make(identity.sourceEpoch, events.listen)
   }),

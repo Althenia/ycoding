@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { Effect } from "effect"
 import { sessionHttp } from "./session-http"
 
-const sessionID = SessionV2.ID.make("ses_usage_report_http")
+const sessionID = Session.ID.make("ses_usage_report_http")
 const metrics = {
   logical: 2,
   physical: 3,
@@ -14,7 +14,7 @@ const metrics = {
   cacheReadReported: true,
 }
 
-function fixture(usageReport: SessionV2.Interface["usageReport"]) {
+function fixture(usageReport: Session.Interface["usageReport"]) {
   const locationCalls = { value: 0 }
   const http = sessionHttp({ usageReport }, { onLocation: () => void locationCalls.value++ })
   return {
@@ -87,7 +87,7 @@ test("rejects invalid ranges and page limits before the Core report read", async
 })
 
 test("retains the typed unknown-Session response", async () => {
-  await using f = fixture(() => Effect.fail(new SessionV2.NotFoundError({ sessionID })))
+  await using f = fixture(() => Effect.fail(new Session.NotFoundError({ sessionID })))
   const response = await f.request("group=project")
 
   expect(response.status).toBe(404)

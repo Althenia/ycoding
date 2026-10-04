@@ -79,7 +79,7 @@ export interface Interface {
   }) => Effect.Effect<Runtime, Error>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/IsolatedBrowserExecutor") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/IsolatedBrowserExecutor") {}
 
 function availability() {
   if (process.platform !== "darwin" || process.arch !== "arm64")

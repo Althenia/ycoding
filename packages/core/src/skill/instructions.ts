@@ -2,14 +2,14 @@ export * as SkillInstructions from "./instructions"
 
 import { makeLocationNode } from "../effect/app-node"
 import { Context, Effect, Layer, Schema } from "effect"
-import { AgentV2 } from "../agent"
-import { SkillV2 } from "../skill"
+import { Agent } from "../agent"
+import { Skill } from "../skill"
 import { Instructions } from "../instructions/index"
 import { optional } from "@ycoding-ai/schema/schema"
 
 const Summary = Schema.Struct({
-  id: SkillV2.ID,
-  name: SkillV2.Name,
+  id: Skill.ID,
+  name: Skill.Name,
   description: Schema.String,
   // Present only for MCP-served skills. The extension requires the originating server to be visible to
   // the model, and requires names to be resolved within a per-origin namespace.
@@ -75,7 +75,7 @@ const update = (previous: ReadonlyArray<Summary>, current: ReadonlyArray<Summary
 }
 
 export interface Interface {
-  readonly load: (agent: AgentV2.Selection) => Effect.Effect<Instructions.Instructions>
+  readonly load: (agent: Agent.Selection) => Effect.Effect<Instructions.Instructions>
 }
 
 /**
@@ -84,18 +84,18 @@ export interface Interface {
  */
 export const renderForTest = (skills: ReadonlyArray<Summary>) => render(skills)
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SkillInstructions") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SkillInstructions") {}
 
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const skills = yield* SkillV2.Service
+    const skills = yield* Skill.Service
 
     return Service.of({
       load: Effect.fn("SkillInstructions.load")(function* (selection) {
         const agent = selection.info
         if (!agent) return Instructions.empty
-        const permitted = SkillV2.available(yield* skills.list(), agent)
+        const permitted = Skill.available(yield* skills.list(), agent)
         const available = permitted.flatMap((skill) =>
           skill.description === undefined || skill.autoinvoke === false
             ? []
@@ -103,7 +103,7 @@ const layer = Layer.effect(
         )
         // MCP-served skills are advertised from their listings alone. The entry's name and description
         // are remote-authored text, so they are escaped at render and tagged with their origin.
-        const mcpAvailable = SkillV2.available(yield* skills.mcp(), agent).map((skill) => ({
+        const mcpAvailable = Skill.available(yield* skills.mcp(), agent).map((skill) => ({
           id: skill.id,
           name: skill.name,
           description: skill.description,
@@ -125,4 +125,4 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeLocationNode({ service: Service, layer, deps: [SkillV2.node] })
+export const node = makeLocationNode({ service: Service, layer, deps: [Skill.node] })

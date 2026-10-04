@@ -1,8 +1,6 @@
 import { expect, test } from "bun:test"
 import { Schema } from "effect"
-import { AgentV2 } from "@ycoding-ai/core/agent"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { CatalogModel } from "@ycoding-ai/core/model"
 import { Agent } from "@ycoding-ai/schema/agent"
 import { Location } from "@ycoding-ai/schema/location"
 import { Model } from "@ycoding-ai/schema/model"
@@ -25,10 +23,10 @@ import { Pty } from "@ycoding-ai/schema/pty"
 import { Reference } from "@ycoding-ai/schema/reference"
 import { Skill } from "@ycoding-ai/schema/skill"
 import { AbsolutePath, optional, statics } from "@ycoding-ai/schema/schema"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
 
 test("Core reuses the canonical shared schemas", async () => {
   const [
+    coreAgent,
     coreCommand,
     coreConnection,
     coreCredential,
@@ -40,13 +38,16 @@ test("Core reuses the canonical shared schemas", async () => {
     coreProjectCopy,
     corePty,
     coreProject,
+    coreProvider,
     coreReference,
+    coreSession,
     coreSessionPending,
     coreSessionMessage,
     coreSkill,
     coreSchema,
     coreWorkspace,
   ] = await Promise.all([
+    import("@ycoding-ai/core/agent"),
     import("@ycoding-ai/core/command"),
     import("@ycoding-ai/core/integration/connection"),
     import("@ycoding-ai/core/credential"),
@@ -58,7 +59,9 @@ test("Core reuses the canonical shared schemas", async () => {
     import("@ycoding-ai/core/project/copy"),
     import("@ycoding-ai/core/pty"),
     import("@ycoding-ai/core/project/schema"),
+    import("@ycoding-ai/core/provider"),
     import("@ycoding-ai/core/reference"),
+    import("@ycoding-ai/core/session"),
     import("@ycoding-ai/core/session/pending"),
     import("@ycoding-ai/core/session/message"),
     import("@ycoding-ai/core/skill"),
@@ -67,10 +70,10 @@ test("Core reuses the canonical shared schemas", async () => {
   ])
 
   const schemas = [
-    [AgentV2.ID, Agent.ID],
-    [AgentV2.Name, Agent.Name],
-    [AgentV2.Color, Agent.Color],
-    [AgentV2.Info, Agent.Info],
+    [coreAgent.ID, Agent.ID],
+    [coreAgent.Name, Agent.Name],
+    [coreAgent.Color, Agent.Color],
+    [coreAgent.Info, Agent.Info],
     [coreCommand.Info, Command.Info],
     [coreConnection.CredentialInfo, Connection.CredentialInfo],
     [coreConnection.EnvInfo, Connection.EnvInfo],
@@ -100,16 +103,16 @@ test("Core reuses the canonical shared schemas", async () => {
     [coreLLM.ToolTextContent, LLM.ToolTextContent],
     [coreLLM.ToolFileContent, LLM.ToolFileContent],
     [coreLLM.ToolContent, LLM.ToolContent],
-    [ModelV2.ID, Model.ID],
-    [ModelV2.VariantID, Model.VariantID],
-    [ModelV2.Ref, Model.Ref],
-    [ModelV2.Family, Model.Family],
-    [ModelV2.Capabilities, Model.Capabilities],
-    [ModelV2.Cost, Model.Cost],
-    [ModelV2.Info, Model.Info],
-    [ProviderV2.ID, Provider.ID],
-    [ProviderV2.Request, Provider.Request],
-    [ProviderV2.Info, Provider.Info],
+    [CatalogModel.ID, Model.ID],
+    [CatalogModel.VariantID, Model.VariantID],
+    [CatalogModel.Ref, Model.Ref],
+    [CatalogModel.Family, Model.Family],
+    [CatalogModel.Capabilities, Model.Capabilities],
+    [CatalogModel.Cost, Model.Cost],
+    [CatalogModel.Info, Model.Info],
+    [coreProvider.ID, Provider.ID],
+    [coreProvider.Request, Provider.Request],
+    [coreProvider.Info, Provider.Info],
     [corePermission.Effect, Permission.Effect],
     [corePermission.Rule, Permission.Rule],
     [corePermission.Ruleset, Permission.Ruleset],
@@ -124,9 +127,9 @@ test("Core reuses the canonical shared schemas", async () => {
     [coreReference.LocalSource, Reference.LocalSource],
     [coreReference.GitSource, Reference.GitSource],
     [coreReference.Source, Reference.Source],
-    [SessionV2.ID, Session.ID],
-    [SessionV2.Info, Session.Info],
-    [SessionV2.ListAnchor, Session.ListAnchor],
+    [coreSession.ID, Session.ID],
+    [coreSession.Info, Session.Info],
+    [coreSession.ListAnchor, Session.ListAnchor],
     [coreSessionPending.Delivery, SessionPending.Delivery],
     [coreSessionPending.Message, SessionPending.Message],
     [coreSessionPending.User, SessionPending.User],
@@ -162,11 +165,11 @@ test("Core reuses the canonical shared schemas", async () => {
   ]
   for (const [core, shared] of schemas) expect(core).toBe(shared)
 
-  expect(Agent.Info.empty(Agent.ID.make("test"))).toEqual(AgentV2.Info.empty(AgentV2.ID.make("test")))
+  expect(Agent.Info.empty(Agent.ID.make("test"))).toEqual(coreAgent.Info.empty(coreAgent.ID.make("test")))
   expect(Model.Info.empty(Provider.ID.make("test"), Model.ID.make("model"))).toEqual(
-    ModelV2.Info.empty(ProviderV2.ID.make("test"), ModelV2.ID.make("model")),
+    CatalogModel.Info.empty(coreProvider.ID.make("test"), CatalogModel.ID.make("model")),
   )
-  expect(Provider.Info.empty(Provider.ID.make("test"))).toEqual(ProviderV2.Info.empty(ProviderV2.ID.make("test")))
+  expect(Provider.Info.empty(Provider.ID.make("test"))).toEqual(coreProvider.Info.empty(coreProvider.ID.make("test")))
   expect(Skill.Source.key(Skill.DirectorySource.make({ type: "directory", path: AbsolutePath.make("/tmp") }))).toBe(
     "directory:/tmp",
   )

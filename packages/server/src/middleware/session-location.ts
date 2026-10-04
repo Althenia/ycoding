@@ -2,9 +2,9 @@ import { Database } from "@ycoding-ai/core/database/database"
 import { LocationServiceMap } from "@ycoding-ai/core/location-services"
 import { Location } from "@ycoding-ai/core/location"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
-import { WorkspaceV2 } from "@ycoding-ai/core/workspace"
+import { Workspace } from "@ycoding-ai/core/workspace"
 import { eq } from "drizzle-orm"
 import { Effect, Layer, Schema } from "effect"
 import { HttpRouter, HttpServerRequest } from "effect/unstable/http"
@@ -20,7 +20,7 @@ export class SessionLocationMiddleware extends HttpApiMiddleware.Service<
   error: [InvalidRequestError, SessionNotFoundError],
 }) {}
 
-const decodeSessionID = Schema.decodeUnknownEffect(SessionV2.ID)
+const decodeSessionID = Schema.decodeUnknownEffect(Session.ID)
 
 export const sessionLocationID = (params: Readonly<Record<string, string | undefined>>) =>
   params.sessionID ?? params.parentID
@@ -65,7 +65,7 @@ export const sessionLocationLayer = Layer.effect(
             locations.get(
               Location.Ref.make({
                 directory: AbsolutePath.make(row.directory),
-                workspaceID: row.workspaceID ? WorkspaceV2.ID.make(row.workspaceID) : undefined,
+                workspaceID: row.workspaceID ? Workspace.ID.make(row.workspaceID) : undefined,
               }),
             ),
           ),

@@ -19,6 +19,8 @@ sources:
   resource: repo:///AGENTS.md
 ---
 
+
+
 ## Dependency Direction
 
 Dependencies flow from Schema to Core and Protocol, then from Core and Protocol to Server, then to Client, CLI, and TUI. UI provides primitives to TUI. AI and plugin packages are consumed by Core.[^arch-doc]
@@ -47,7 +49,7 @@ The active package set is explicit and enforced by `script/ycoding-workspace.ts`
 
 ## Authority Order
 
-When sources disagree, the order is: executable behavior and tests, Schema public shapes, Protocol operations, Core runtime behavior, `docs` documentation and `specs/v2` contracts, package AGENTS.md, generated clients, and upstream material last.[^agents]
+When sources disagree, the order is: executable behavior and tests, Schema public shapes, Protocol operations, Core runtime behavior, `docs` documentation and `specs` contracts, package AGENTS.md, generated clients, and upstream material last.[^agents]
 
 ## Related Concepts
 

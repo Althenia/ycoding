@@ -10,7 +10,7 @@ import { and, asc, desc, eq, gt, gte, lt } from "drizzle-orm"
 import { Cause, Context, Data, DateTime, Effect, Layer, Option, Schema, Semaphore } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { SessionEvent } from "./event"
 import { ProviderRequestObserver } from "./provider-request-observer"
 import {
@@ -68,7 +68,7 @@ export interface Interface {
   readonly summary: (sessionID: ProviderRequest.Record["sessionID"]) => Effect.Effect<ProviderRequest.Summary>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionProviderRequest") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionProviderRequest") {}
 
 type Pending = {
   readonly input: BeginInput
@@ -264,7 +264,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const lock = Semaphore.makeUnsafe(1)
     const pending = new Map<string, Pending>()
 
@@ -512,5 +512,5 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [Database.node, EventV2.node],
+  deps: [Database.node, EventRuntime.node],
 })

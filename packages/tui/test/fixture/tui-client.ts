@@ -14,7 +14,7 @@ export function json(data: unknown, init?: ResponseInit) {
 
 export function createEventStream() {
   const encoder = new TextEncoder()
-  const v2 = new Set<ReadableStreamDefaultController<Uint8Array>>()
+  const streams = new Set<ReadableStreamDefaultController<Uint8Array>>()
   const pending: Uint8Array[] = []
   const response = (
     controllers: Set<ReadableStreamDefaultController<Uint8Array>>,
@@ -52,17 +52,17 @@ export function createEventStream() {
 
   return {
     emit(event: YCodingEvent) {
-      send(v2, pending, event)
+      send(streams, pending, event)
     },
     subscriptions() {
-      return v2.size
+      return streams.size
     },
-    v2() {
-      return response(v2, pending, { id: "evt_connected", type: "server.connected", data: {} })
+    connect() {
+      return response(streams, pending, { id: "evt_connected", type: "server.connected", data: {} })
     },
     disconnect() {
-      for (const controller of v2) controller.close()
-      v2.clear()
+      for (const controller of streams) controller.close()
+      streams.clear()
     },
   }
 }
@@ -77,7 +77,7 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
     if (url.pathname === "/session") session.push(url)
     const overridden = await override?.(url, request)
     if (overridden) return overridden
-    if (url.pathname === "/api/event" && events) return events.v2()
+    if (url.pathname === "/api/event" && events) return events.connect()
 
     if (
       [

@@ -1,6 +1,6 @@
 import { buildLocationServiceMap } from "../location-services"
 import { LocationServiceMap } from "../location-service-map"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { SessionAutonomy } from "../session/autonomy"
 import { SessionStore } from "../session/store"
 import { LayerNode } from "./layer-node"
@@ -15,7 +15,7 @@ export function build<A, E>(root: LayerNode.Node<A, E, any>, replacements: Layer
     const locationMapNode = makeGlobalNode({
       service: LocationServiceMap.Service,
       layer: locationMap,
-      deps: [EventV2.node, SessionStore.node, SessionAutonomy.node],
+      deps: [EventRuntime.node, SessionStore.node, SessionAutonomy.node],
     })
     allReplacements = replacements.concat([[LocationServiceMap.node, locationMapNode]])
   }

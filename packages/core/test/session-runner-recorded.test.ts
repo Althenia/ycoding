@@ -6,18 +6,18 @@ import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNodePlatform } from "@ycoding-ai/core/effect/app-node-platform"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { EventTable } from "@ycoding-ai/core/event/sql"
 import { Job } from "@ycoding-ai/core/job"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Permission } from "@ycoding-ai/core/permission"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { ProjectArtifactInstructions } from "@ycoding-ai/core/project-artifact/instructions"
 import { MemoryInstructions } from "@ycoding-ai/core/memory/instructions"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { Snapshot } from "@ycoding-ai/core/snapshot"
 import { SessionCompaction } from "@ycoding-ai/core/session/compaction"
 import { SessionTitle } from "@ycoding-ai/core/session/title"
@@ -52,7 +52,7 @@ import { agentHost, catalogHost, host } from "./plugin/host"
 
 const cassetteName = "session-runner/openai-chat-streams-text"
 const cassetteDirectory = path.resolve(import.meta.dir, "fixtures/recordings")
-const sessionID = SessionV2.ID.make("ses_runner_recorded")
+const sessionID = Session.ID.make("ses_runner_recorded")
 // provider-native/v8 owns this stable namespace for the recorded prompt; the
 // wire key is scoped to the recorded Session.
 const expectedPromptCacheKey = SessionRunnerCache.promptCacheKeyForGeneration(
@@ -86,9 +86,9 @@ const cassette = HttpRecorder.layerFetch(cassetteName, {
 const executor = RequestExecutor.layer.pipe(Layer.provide(cassette))
 const client = LLMClient.layer.pipe(Layer.provide(executor))
 const permission = Layer.succeed(
-  PermissionV2.Service,
-  PermissionV2.Service.of({
-    evaluateEffective: () => Effect.die(new Error("unused PermissionV2.evaluateEffective")),
+  Permission.Service,
+  Permission.Service.of({
+    evaluateEffective: () => Effect.die(new Error("unused Permission.evaluateEffective")),
     assert: () => Effect.die("unused"),
     ask: () => Effect.die("unused"),
     reply: () => Effect.die("unused"),
@@ -142,7 +142,7 @@ const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [ReferenceInstructions.node, referenceInstructions],
   [McpInstructions.node, mcpInstructions],
   [Config.node, config],
-  [PermissionV2.node, permission],
+  [Permission.node, permission],
   [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
   [PluginSupervisor.node, pluginSupervisor],
 ])
@@ -150,7 +150,7 @@ const execution = Layer.effect(
   SessionExecution.Service,
   Effect.gen(function* () {
     const sessionRunner = yield* SessionRunner.Service
-    const coordinator = yield* SessionRunCoordinator.make<SessionV2.ID, SessionRunner.RunError>({
+    const coordinator = yield* SessionRunCoordinator.make<Session.ID, SessionRunner.RunError>({
       drain: (sessionID, force) => sessionRunner.drain({ sessionID, force }),
     })
     return SessionExecution.Service.of({
@@ -167,10 +167,10 @@ const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       Database.node,
-      EventV2.node,
+      EventRuntime.node,
       SessionProjector.node,
       SessionStore.node,
-      AgentV2.node,
+      Agent.node,
       Catalog.node,
       PluginHooks.node,
       ToolRegistry.node,
@@ -182,11 +182,11 @@ const it = testEffect(
       Config.node,
       Snapshot.node,
       SessionRunnerLLM.node,
-      SessionV2.node,
+      Session.node,
     ]),
     [
       [LayerNodePlatform.llmClient, client],
-      [PermissionV2.node, permission],
+      [Permission.node, permission],
       [Catalog.node, promptCatalog],
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
       [SessionRunnerModel.node, models],
@@ -204,13 +204,13 @@ const it = testEffect(
 )
 
 describe("SessionRunnerLLM recorded", () => {
-  it.effect("executes one recorded V2 prompt through the recorded HTTP transport", () =>
+  it.effect("executes one recorded Session prompt through the recorded HTTP transport", () =>
     Effect.gen(function* () {
-      const agents = yield* AgentV2.Service
+      const agents = yield* Agent.Service
       const catalog = yield* Catalog.Service
       const hooks = yield* PluginHooks.Service
       yield* agents.transform((draft) =>
-        draft.update(AgentV2.ID.make("build"), (agent) => {
+        draft.update(Agent.ID.make("build"), (agent) => {
           agent.mode = "primary"
         }),
       )
@@ -238,7 +238,7 @@ describe("SessionRunnerLLM recorded", () => {
         .onConflictDoNothing()
         .run()
         .pipe(Effect.orDie)
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       yield* SessionContextState.initialize(db, sessionID, Date.now())
       const prompt = yield* session.prompt({
         sessionID,

@@ -7,19 +7,19 @@ import { Credential } from "@ycoding-ai/core/credential";
 import { Generate } from "@ycoding-ai/core/generate";
 import { Integration } from "@ycoding-ai/core/integration";
 import { IntegrationConnection } from "@ycoding-ai/core/integration/connection";
-import { ModelV2 } from "@ycoding-ai/core/model";
+import { CatalogModel } from "@ycoding-ai/core/model";
 import { Npm } from "@ycoding-ai/core/npm";
 import { claudeCodeMethodID } from "@ycoding-ai/core/plugin/provider/anthropic";
-import { ProviderV2 } from "@ycoding-ai/core/provider";
+import { Provider } from "@ycoding-ai/core/provider";
 import { Effect, Layer } from "effect";
 import { it } from "./lib/effect";
 
-const anthropic = ModelV2.Info.make({
-  id: ModelV2.ID.make("claude-sonnet-4-5"),
-  modelID: ModelV2.ID.make("claude-sonnet-4-5-20250929"),
-  providerID: ProviderV2.ID.make("anthropic"),
+const anthropic = CatalogModel.Info.make({
+  id: CatalogModel.ID.make("claude-sonnet-4-5"),
+  modelID: CatalogModel.ID.make("claude-sonnet-4-5-20250929"),
+  providerID: Provider.ID.make("anthropic"),
   name: "Claude Sonnet 4.5",
-  package: ProviderV2.aisdk("@ai-sdk/anthropic"),
+  package: Provider.aisdk("@ai-sdk/anthropic"),
   settings: { baseURL: "https://api.anthropic.com/v1" },
   headers: {},
   body: {},
@@ -68,7 +68,7 @@ const claudeCodeCredential = Credential.OAuth.make({
 const generate = (input: {
   readonly connection: IntegrationConnection.Info;
   readonly credential: Credential.Value;
-  readonly onLoad: (model: ModelV2.Info) => void;
+  readonly onLoad: (model: CatalogModel.Info) => void;
   readonly onGenerate: (model: Model) => void;
 }) =>
   Generate.layer.pipe(
@@ -141,7 +141,7 @@ describe("Generate", () => {
     "generates through the AI SDK adapter for a Claude Code credential source",
     () =>
       Effect.gen(function* () {
-        let runtime: ModelV2.Info | undefined;
+        let runtime: CatalogModel.Info | undefined;
         let requested: Model | undefined;
 
         const text = yield* Generate.Service.use((service) =>

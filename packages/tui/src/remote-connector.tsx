@@ -98,6 +98,6 @@ function RemoteCommands() {
 }
 
 function RemotePaletteStatus(props: { status: () => RemoteStatus }) {
-  const { themeV2 } = useTheme().contextual("elevated")
-  return <span style={{ fg: props.status().state === "on" ? themeV2.text.feedback.success.default : themeV2.text.subdued }}>● {props.status().state}</span>
+  const { theme } = useTheme().contextual("elevated")
+  return <span style={{ fg: props.status().state === "on" ? theme.text.feedback.success.default : theme.text.subdued }}>● {props.status().state}</span>
 }

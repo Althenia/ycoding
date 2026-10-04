@@ -53,7 +53,7 @@ export const ProjectGroup = HttpApiGroup.make("server.project")
       success: Schema.Array(Project.Info),
     }).annotateMerge(
       OpenApi.annotations({
-        identifier: "v2.project.list",
+        identifier: "project.list",
         summary: "List projects",
         description: "List known projects.",
       }),
@@ -69,7 +69,7 @@ export const ProjectGroup = HttpApiGroup.make("server.project")
       error: InvalidCursorError,
     }).annotateMerge(
       OpenApi.annotations({
-        identifier: "v2.project.inventory",
+        identifier: "project.inventory",
         summary: "List known directories",
         description:
           "List every recorded project directory and every Session directory across projects, ordered by project worktree, project ID, and directory. Use cursor.next to load the following page.",
@@ -84,7 +84,7 @@ export const ProjectGroup = HttpApiGroup.make("server.project")
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.project.current",
+          identifier: "project.current",
           summary: "Get current project",
           description: "Resolve the project for the requested location.",
         }),
@@ -99,7 +99,7 @@ export const ProjectGroup = HttpApiGroup.make("server.project")
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.project.directories",
+          identifier: "project.directories",
           summary: "List project directories",
           description: "List known local absolute directories for a project.",
         }),
@@ -112,7 +112,7 @@ export const ProjectGroup = HttpApiGroup.make("server.project")
       success: HttpApiSchema.NoContent,
     }).annotateMerge(
       OpenApi.annotations({
-        identifier: "v2.project.forget",
+        identifier: "project.forget",
         summary: "Forget project directory",
         description:
           "Delete every Session of the project in the directory, including their child Sessions, then remove the directory record. Files on disk are not touched.",

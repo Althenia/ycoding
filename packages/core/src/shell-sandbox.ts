@@ -17,7 +17,7 @@ export interface Interface {
   readonly prepare: (command: ChildProcess.Command) => Effect.Effect<ChildProcess.Command, Unavailable>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/ShellSandbox") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/ShellSandbox") {}
 
 const layer = Layer.succeed(
   Service,

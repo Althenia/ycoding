@@ -11,7 +11,7 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionMessageTable, SessionTable } from "@ycoding-ai/core/session/sql"
@@ -21,11 +21,11 @@ import { testEffect } from "./lib/effect"
 const root = await mkdtemp(path.join(tmpdir(), "ycoding-attachment-read-"))
 afterAll(() => rm(root, { recursive: true, force: true }))
 const store = AttachmentStore.make(root)
-const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, SessionV2.node]), [
+const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, Session.node]), [
   [SessionExecution.node, SessionExecution.noopLayer],
   [AttachmentStore.node, Layer.succeed(AttachmentStore.Service, store)],
 ]))
-const sessionID = SessionV2.ID.make("ses_attachment_owner")
+const sessionID = Session.ID.make("ses_attachment_owner")
 
 it.effect("reads only this Session's managed user files and bounds missing, invalid and oversized references", () =>
   Effect.gen(function* () {
@@ -48,14 +48,14 @@ it.effect("reads only this Session's managed user files and bounds missing, inva
       id: SessionMessage.ID.make("msg_attachment_owner"), type: "user", text: "See image", files, time: { created: DateTime.makeUnsafe(1) },
     }))
     yield* db.insert(SessionMessageTable).values({ id: SessionMessage.ID.make("msg_attachment_owner"), session_id: sessionID, type, seq: 1, time_created: 1, data }).run()
-    const otherSession = SessionV2.ID.make("ses_attachment_other")
+    const otherSession = Session.ID.make("ses_attachment_other")
     yield* db.insert(SessionTable).values({ id: otherSession, project_id: Project.ID.global, directory: "/project", title: "Other Session" }).run()
     const { id: _other, type: otherType, ...otherData } = Schema.encodeSync(SessionMessage.Info)(SessionMessage.User.make({
       id: SessionMessage.ID.make("msg_attachment_other"), type: "user", text: "Other image",
       files: [FileAttachment.create({ content: other, mime: "image/png" })], time: { created: DateTime.makeUnsafe(2) },
     }))
     yield* db.insert(SessionMessageTable).values({ id: SessionMessage.ID.make("msg_attachment_other"), session_id: otherSession, type: otherType, seq: 1, time_created: 2, data: otherData }).run()
-    const sessions = yield* SessionV2.Service
+    const sessions = yield* Session.Service
     expect(yield* sessions.attachmentRead(sessionID, content.digest)).toEqual({ mime: "image/png", bytes: bytes.byteLength, data: bytes.toString("base64") })
     expect(yield* Effect.flip(sessions.attachmentRead(sessionID, other.digest))).toMatchObject({ _tag: "Session.AttachmentReadError", reason: "not-found" })
     expect((yield* sessions.attachmentRead(otherSession, other.digest)).bytes).toBe(Buffer.byteLength("unreferenced bytes"))
@@ -75,15 +75,15 @@ it.effect("reads managed files of an admitted prompt before promotion, only with
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).onConflictDoNothing().run()
-    const pendingSession = SessionV2.ID.make("ses_attachment_pending")
-    const bystander = SessionV2.ID.make("ses_attachment_bystander")
+    const pendingSession = Session.ID.make("ses_attachment_pending")
+    const bystander = Session.ID.make("ses_attachment_bystander")
     yield* db.insert(SessionTable).values([
       { id: pendingSession, project_id: Project.ID.global, directory: "/project", title: "Pending attachment" },
       { id: bystander, project_id: Project.ID.global, directory: "/project", title: "Bystander" },
     ]).run()
     const bytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64")
     const content = yield* store.import(bytes)
-    const sessions = yield* SessionV2.Service
+    const sessions = yield* Session.Service
     yield* sessions.prompt({
       sessionID: pendingSession,
       text: "See the pending image",

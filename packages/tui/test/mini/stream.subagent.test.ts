@@ -1,17 +1,17 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
 import { YCoding, type EventSubscribeOutput, type MessageListOutput } from "@ycoding-ai/client/promise"
-import { createSessionTransport } from "../../src/mini/stream-v2.transport"
+import { createSessionTransport } from "../../src/mini/stream.transport"
 import type { FooterEvent, FooterSubagentState } from "../../src/mini/types"
 import { createFooterApiFixture } from "./fixture/footer-api"
 
-type RunV2Event = EventSubscribeOutput
+type RunEvent = EventSubscribeOutput
 
 function feed() {
-  const values: Array<{ value: RunV2Event; consumed: () => void }> = []
+  const values: Array<{ value: RunEvent; consumed: () => void }> = []
   let closed = false
   let wake: (() => void) | undefined
   let flushed = Promise.resolve()
-  const stream = (async function* (): AsyncGenerator<RunV2Event, void, unknown> {
+  const stream = (async function* (): AsyncGenerator<RunEvent, void, unknown> {
     while (!closed || values.length > 0) {
       if (values.length === 0) {
         await new Promise<void>((resolve) => {
@@ -28,7 +28,7 @@ function feed() {
   })()
   return {
     stream,
-    push(value: RunV2Event) {
+    push(value: RunEvent) {
       let consumed!: () => void
       flushed = new Promise<void>((resolve) => {
         consumed = resolve
@@ -53,7 +53,7 @@ function ok<T>(data: T) {
 }
 
 function connected(id = "evt_connected") {
-  return { id, type: "server.connected", data: {}, sourceEpoch: "source_test" } satisfies RunV2Event
+  return { id, type: "server.connected", data: {}, sourceEpoch: "source_test" } satisfies RunEvent
 }
 
 function durable(sessionID: string, seq = 0) {
@@ -120,7 +120,7 @@ function subagentInputStarted() {
     type: "session.tool.input.started",
     durable: durable("ses_1", 0),
     data: { sessionID: "ses_1", assistantMessageID: MESSAGE_ID, callID: CALL_ID, name: "subagent" },
-  } satisfies RunV2Event
+  } satisfies RunEvent
 }
 
 function subagentCalled(background = false) {
@@ -136,7 +136,7 @@ function subagentCalled(background = false) {
       input: { agent: "explore", description: "Inspect auth", prompt: "go", ...(background ? { background } : {}) },
       executed: true,
     },
-  } satisfies RunV2Event
+  } satisfies RunEvent
 }
 
 function subagentProgress(childID: string) {
@@ -152,7 +152,7 @@ function subagentProgress(childID: string) {
       structured: { sessionID: childID, status: "running" },
       content: [],
     },
-  } satisfies RunV2Event
+  } satisfies RunEvent
 }
 
 function subagentBackgrounded(childID: string) {
@@ -169,7 +169,7 @@ function subagentBackgrounded(childID: string) {
       content: [],
       executed: true,
     },
-  } satisfies RunV2Event
+  } satisfies RunEvent
 }
 
 function subagentToolFailed() {
@@ -185,7 +185,7 @@ function subagentToolFailed() {
       error: { type: "unknown", message: "Subagent cancelled" },
       executed: true,
     },
-  } satisfies RunV2Event
+  } satisfies RunEvent
 }
 
 function parentInterrupted() {
@@ -195,7 +195,7 @@ function parentInterrupted() {
     type: "session.execution.interrupted",
     durable: durable("ses_1", 4),
     data: { sessionID: "ses_1", reason: "user" },
-  } satisfies RunV2Event
+  } satisfies RunEvent
 }
 
 function launchLiveSubagent(events: ReturnType<typeof feed>, background = false, childID = "ses_child") {
@@ -433,7 +433,7 @@ describe("mini subagent tracker family cap", () => {
         agent: "explore",
         model: { providerID: "test", id: "model" },
       },
-    } satisfies RunV2Event
+    } satisfies RunEvent
   }
 
   test("admits a new subagent once the family cap is already full", async () => {

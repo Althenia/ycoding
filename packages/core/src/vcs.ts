@@ -22,7 +22,7 @@ export interface Interface {
   readonly branch: () => Effect.Effect<Branch>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/Vcs") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/Vcs") {}
 
 // Adapter seam: one working-copy implementation per VCS type, selected by the
 // resolved location. Locations without a supported VCS degrade to empty

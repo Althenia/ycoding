@@ -7,17 +7,16 @@ import { and, eq, sql } from "drizzle-orm"
 import { define } from "@ycoding-ai/plugin/effect/plugin"
 import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
 import { Project } from "@ycoding-ai/schema/project"
-import { Agent } from "@ycoding-ai/schema/agent"
 import { Session } from "@ycoding-ai/schema/session"
 import { Context, DateTime, Effect, Exit, Layer, Option, Schema, Scope, Stream } from "effect"
-import { AgentV2 } from "../agent"
-import { CommandV2 } from "../command"
+import { Agent } from "../agent"
+import { Command } from "../command"
 import { makeLocationNode } from "../effect/app-node"
 import { Global } from "../global"
 import { Location } from "../location"
 import { ProjectArtifactStore } from "../project-artifact"
 import { ProjectArtifactAccounting } from "./accounting"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { EventTable } from "../event/sql"
 import { Database } from "../database/database"
 import { SessionEvent } from "../session/event"
@@ -25,7 +24,7 @@ import { SessionStore } from "../session/store"
 import { SessionAutonomy } from "../session/autonomy"
 import { State } from "../state"
 import { Hash } from "../util/hash"
-import { SkillV2 } from "../skill"
+import { Skill } from "../skill"
 import { ProjectArtifactAdapterRegistry, type VersionIndex } from "./adapter/index"
 import { ProjectArtifactPackage } from "./package"
 import { StandardSourceRegistry, registryNode, type Record } from "./source-registry"
@@ -74,16 +73,16 @@ const decodeMarker = Schema.decodeUnknownOption(Schema.fromJsonString(ProjectArt
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const agents = yield* AgentV2.Service
+    const agents = yield* Agent.Service
     const accounting = yield* ProjectArtifactAccounting.Service
-    const commands = yield* CommandV2.Service
+    const commands = yield* Command.Service
     const global = yield* Global.Service
     const location = yield* Location.Service
     const registry = yield* StandardSourceRegistry
-    const skills = yield* SkillV2.Service
+    const skills = yield* Skill.Service
     const store = yield* ProjectArtifactStore.Service
     const sessions = yield* SessionStore.Service
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const db = (yield* Database.Service).db
     const autonomy = yield* SessionAutonomy.Service
     const scope = yield* Scope.Scope
@@ -397,13 +396,13 @@ const layer = Layer.effect(
                         eq(EventTable.aggregate_id, input.sessionID),
                         input.source === "command"
                           ? and(
-                              eq(EventTable.type, EventV2.versionedType(
+                              eq(EventTable.type, EventRuntime.versionedType(
                                 SessionEvent.InputAdmitted.type, SessionEvent.InputAdmitted.durable.version,
                               )),
                               sql`json_extract(${EventTable.data}, '$.inputID') = ${input.messageID}`,
                             )
                           : and(
-                              eq(EventTable.type, EventV2.versionedType(
+                              eq(EventTable.type, EventRuntime.versionedType(
                                 SessionEvent.Tool.Called.type, SessionEvent.Tool.Called.durable.version,
                               )),
                               sql`json_extract(${EventTable.data}, '$.assistantMessageID') = ${input.messageID}`,
@@ -449,18 +448,18 @@ export const node = makeLocationNode({
   service: Service,
   layer,
   deps: [
-    AgentV2.node,
-    CommandV2.node,
+    Agent.node,
+    Command.node,
     Global.node,
     Location.node,
     ProjectArtifactStore.node,
     ProjectArtifactAccounting.node,
-    EventV2.node,
+    EventRuntime.node,
     Database.node,
     SessionStore.node,
     SessionAutonomy.node,
     registryNode,
-    SkillV2.node,
+    Skill.node,
   ],
 })
 
@@ -495,11 +494,11 @@ function sourceScope(input: { readonly location: Location.Interface; readonly pa
 }
 
 function standardSources(input: {
-  readonly agents: AgentV2.Interface
-  readonly commands: CommandV2.Interface
+  readonly agents: Agent.Interface
+  readonly commands: Command.Interface
   readonly global: Global.Interface
   readonly location: Location.Interface
-  readonly skills: SkillV2.Interface
+  readonly skills: Skill.Interface
 }) {
   return Effect.gen(function* () {
     const sources = [

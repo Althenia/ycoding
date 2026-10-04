@@ -6,7 +6,7 @@ import { Context, Data, DateTime, Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 import { KeyedMutex } from "../effect/keyed-mutex"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { SessionEvent } from "./event"
 import { SessionSchema } from "./schema"
 import {
@@ -116,7 +116,7 @@ export interface Interface {
   readonly fail: (input: FailInput) => Effect.Effect<Job, Conflict | Ownership>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionCompactionJob") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionCompactionJob") {}
 
 const admissionLocks = KeyedMutex.makeUnsafe<SessionSchema.ID>()
 const stateLocks = KeyedMutex.makeUnsafe<SessionSchema.ID>()
@@ -125,7 +125,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
 
     const admit: Interface["admit"] = (input) =>
       admissionLocks.withLock(input.sessionID)(stateLocks.withLock(input.sessionID)(admitUnlocked(db, events, input)))
@@ -197,12 +197,12 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   name: "session-compaction-job",
   layer,
-  deps: [Database.node, EventV2.node],
+  deps: [Database.node, EventRuntime.node],
 })
 
 const admitUnlocked = Effect.fn("SessionCompactionJob.admit")(function* (
   db: DatabaseService,
-  events: EventV2.Interface,
+  events: EventRuntime.Interface,
   input: AdmitInput,
 ): Effect.fn.Return<SessionCompaction.Admission, Conflict> {
   if (input.id) {
@@ -232,7 +232,7 @@ const admitUnlocked = Effect.fn("SessionCompactionJob.admit")(function* (
 
 const publishAdmission = Effect.fnUntraced(function* (
   db: DatabaseService,
-  events: EventV2.Interface,
+  events: EventRuntime.Interface,
   input: AdmitInput,
   now: number,
 ): Effect.fn.Return<SessionCompaction.Admission, Conflict> {
@@ -299,7 +299,7 @@ const hasUnchangedDeterministicFailure = Effect.fnUntraced(function* (
 
 const claimUnlocked = Effect.fn("SessionCompactionJob.claim")(function* (
   db: DatabaseService,
-  events: EventV2.Interface,
+  events: EventRuntime.Interface,
   input: ClaimInput,
 ): Effect.fn.Return<Job | undefined, Conflict> {
   if (
@@ -413,7 +413,7 @@ const claimUnlocked = Effect.fn("SessionCompactionJob.claim")(function* (
 
 const endUnlocked = Effect.fn("SessionCompactionJob.end")(function* (
   db: DatabaseService,
-  events: EventV2.Interface,
+  events: EventRuntime.Interface,
   input: EndInput,
 ): Effect.fn.Return<Job, Conflict | Ownership> {
   const row = yield* requireRow(db, input.id)
@@ -490,7 +490,7 @@ const endUnlocked = Effect.fn("SessionCompactionJob.end")(function* (
 
 const failUnlocked = Effect.fn("SessionCompactionJob.fail")(function* (
   db: DatabaseService,
-  events: EventV2.Interface,
+  events: EventRuntime.Interface,
   input: FailInput,
 ): Effect.fn.Return<Job, Conflict | Ownership> {
   const row = yield* requireRow(db, input.id)
@@ -513,7 +513,7 @@ const failUnlocked = Effect.fn("SessionCompactionJob.fail")(function* (
 
 const settleFailed = Effect.fnUntraced(function* (
   db: DatabaseService,
-  events: EventV2.Interface,
+  events: EventRuntime.Interface,
   row: Row,
   input: FailInput,
 ) {
@@ -673,7 +673,7 @@ function fromRow(row: Row): Job {
     trigger: row.trigger,
     requestedThrough: {
       messageID: row.requested_through_message_id,
-      seq: EventV2.Seq.make(row.requested_through_seq),
+      seq: EventRuntime.Seq.make(row.requested_through_seq),
     },
     baseContextRevision: row.base_context_revision,
     ...(row.legacy_input_id === null ? {} : { legacyInputID: row.legacy_input_id }),
@@ -700,7 +700,7 @@ function admissionFromRow(row: Row): SessionCompaction.Admission {
     status: "pending",
     requestedThrough: {
       messageID: row.requested_through_message_id,
-      seq: EventV2.Seq.make(row.requested_through_seq),
+      seq: EventRuntime.Seq.make(row.requested_through_seq),
     },
     timeCreated: DateTime.makeUnsafe(row.time_created),
   }

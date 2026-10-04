@@ -3,7 +3,7 @@ export * as Form from "./form"
 import { Form } from "@ycoding-ai/schema/form"
 import { Cache, Context, Deferred, Duration, Effect, Exit, Layer, Option, Schema } from "effect"
 import { makeLocationNode } from "./effect/app-node"
-import { EventV2 } from "./event"
+import { EventRuntime } from "./event"
 import { SessionAutonomy } from "./session/autonomy"
 import { SessionSchema } from "./session/schema"
 
@@ -101,7 +101,7 @@ interface Entry {
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const autonomy = yield* SessionAutonomy.Service
     const forms = yield* Cache.makeWith<ID, Entry>(
       () => Effect.die(new Error("Form cache must be used via set/getSuccess, never get")),
@@ -235,7 +235,7 @@ export const layer = Layer.effect(
   }),
 )
 
-export const node = makeLocationNode({ service: Service, layer, deps: [EventV2.node, SessionAutonomy.node] })
+export const node = makeLocationNode({ service: Service, layer, deps: [EventRuntime.node, SessionAutonomy.node] })
 
 function automaticAnswer(form: Info): Answer | undefined {
   const answer: Record<string, Form.Value> = {}

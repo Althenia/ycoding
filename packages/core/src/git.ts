@@ -176,7 +176,7 @@ export interface Interface {
   }
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/GitV2") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/Git") {}
 
 const layer = Layer.effect(
   Service,

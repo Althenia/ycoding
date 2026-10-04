@@ -9,7 +9,7 @@ export function SubagentTodos(props: { sessionID: string }) {
   const data = useData()
   const client = useClient()
   const toast = useToast()
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const todos = createMemo(() => data.session.todo.get(props.sessionID))
   const open = createMemo(
     () => todos().filter((todo) => todo.status === "pending" || todo.status === "in_progress").length,
@@ -26,12 +26,12 @@ export function SubagentTodos(props: { sessionID: string }) {
         paddingRight={1}
         paddingTop={1}
         border={["top"]}
-        borderColor={themeV2.border.default}
+        borderColor={theme.border.default}
         flexShrink={0}
       >
-        <text fg={themeV2.text.label}>
+        <text fg={theme.text.label}>
           <b>TODO LIST</b>{" "}
-          <span style={{ fg: themeV2.text.subdued }}>
+          <span style={{ fg: theme.text.subdued }}>
             {" "}
             · {open()}/{todos().length} open
           </span>

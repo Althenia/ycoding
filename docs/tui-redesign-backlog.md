@@ -74,7 +74,7 @@ Approve explicit product and public-contract behavior for the four blocked dialo
 
 Split each board into contract work before UI work:
 
-1. Define user outcome, invocation path, inputs, actions, validation, cancellation, durable effects, errors, and restart behavior in the relevant `specs/v2` contract.
+1. Define user outcome, invocation path, inputs, actions, validation, cancellation, durable effects, errors, and restart behavior in the relevant `specs` contract.
 2. If public behavior changes, implement Schema → Core/Protocol → Server, regenerate Client output with the owning command, and add contract tests.
 3. Only then connect the production TUI component and its real route or command.
 4. Add capture and comparator evidence after the behavior is real.
@@ -105,7 +105,7 @@ Do not satisfy a board with hard-coded fixture options, dummy callbacks, synthet
 - `packages/core/`
 - `packages/server/`
 - `packages/client/`
-- `specs/v2/`
+- `specs/`
 
 ### 3. P1 — Clarify cache-diagnostics scope and measure Pro usage pressure
 

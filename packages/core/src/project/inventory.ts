@@ -6,10 +6,10 @@ import { Project } from "@ycoding-ai/schema/project"
 import { Event } from "@ycoding-ai/schema/project-directories"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { FSUtil } from "../fs-util"
 import { AbsolutePath } from "../schema"
-import { SessionV2 } from "../session"
+import { Session } from "../session"
 import { SessionTable } from "../session/sql"
 import { ProjectDirectories } from "./directories"
 import { ProjectDirectoryTable, ProjectTable } from "./sql"
@@ -45,9 +45,9 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
     const fs = yield* FSUtil.Service
-    const sessions = yield* SessionV2.Service
+    const sessions = yield* Session.Service
     const directories = yield* ProjectDirectories.Service
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
 
     const list = Effect.fn("ProjectInventory.list")(function* (input: ListInput) {
       const rows = yield* db
@@ -142,5 +142,5 @@ function anchorFilter(anchor: Anchor | undefined) {
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [Database.node, FSUtil.node, SessionV2.node, ProjectDirectories.node, EventV2.node],
+  deps: [Database.node, FSUtil.node, Session.node, ProjectDirectories.node, EventRuntime.node],
 })

@@ -305,19 +305,19 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
         context.data.on("form.cancelled", (event) =>
           clearRequest("form", event.data.sessionID, event.data.id, event.location),
         ),
-        context.data.on("question.v2.asked", (event) =>
+        context.data.on("question.asked", (event) =>
           addRequest({ kind: "question", id: event.data.id, sessionID: event.data.sessionID }),
         ),
-        context.data.on("question.v2.replied", (event) =>
+        context.data.on("question.replied", (event) =>
           clearRequest("question", event.data.sessionID, event.data.requestID),
         ),
-        context.data.on("question.v2.rejected", (event) =>
+        context.data.on("question.rejected", (event) =>
           clearRequest("question", event.data.sessionID, event.data.requestID),
         ),
-        context.data.on("permission.v2.asked", (event) =>
+        context.data.on("permission.asked", (event) =>
           addRequest({ kind: "permission", id: event.data.id, sessionID: event.data.sessionID }),
         ),
-        context.data.on("permission.v2.replied", (event) =>
+        context.data.on("permission.replied", (event) =>
           clearRequest("permission", event.data.sessionID, event.data.requestID),
         ),
         context.data.on("guardrail.asked", (event) =>

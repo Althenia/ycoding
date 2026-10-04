@@ -3,12 +3,12 @@ import { Effect, Fiber, Stream } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { KV } from "@ycoding-ai/core/kv"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { WellKnown } from "@ycoding-ai/core/wellknown"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(FetchHttpClient.layer)
-const serviceIt = testEffect(LayerNode.compile(LayerNode.group([WellKnown.node, KV.node, EventV2.node])))
+const serviceIt = testEffect(LayerNode.compile(LayerNode.group([WellKnown.node, KV.node, EventRuntime.node])))
 
 it.live("loads embedded and remote configuration", () =>
   Effect.acquireUseRelease(
@@ -66,7 +66,7 @@ serviceIt.live("persists sources in one KV value", () =>
       Effect.gen(function* () {
         const wellknown = yield* WellKnown.Service
         const kv = yield* KV.Service
-        const events = yield* EventV2.Service
+        const events = yield* EventRuntime.Service
         const changed = yield* events
           .subscribe(WellKnown.Event.Updated)
           .pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
@@ -102,7 +102,7 @@ serviceIt.live("refreshes changed manifests", () =>
     ({ server, update }) =>
       Effect.gen(function* () {
         const wellknown = yield* WellKnown.Service
-        const events = yield* EventV2.Service
+        const events = yield* EventRuntime.Service
         yield* wellknown.add(server.url.origin)
         expect(yield* wellknown.refresh()).toBe(false)
 

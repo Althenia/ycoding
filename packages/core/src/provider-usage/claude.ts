@@ -1,11 +1,11 @@
 export * as ClaudeUsage from "./claude"
 
 import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
-import { ProviderV2 } from "../provider"
+import { Provider } from "../provider"
 import { Schema } from "effect"
 
 export interface NormalizeHeadersInput {
-  readonly providerID: ProviderV2.ID
+  readonly providerID: Provider.ID
   readonly label: string
   readonly subscriptionType?: string
   readonly observedAt: number
@@ -13,7 +13,7 @@ export interface NormalizeHeadersInput {
 }
 
 export interface NormalizeOAuthInput {
-  readonly providerID: ProviderV2.ID
+  readonly providerID: Provider.ID
   readonly label: string
   readonly subscriptionType?: string
   readonly updatedAt: number

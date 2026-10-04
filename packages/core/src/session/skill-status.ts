@@ -1,19 +1,19 @@
 import { Option, Schema } from "effect"
 import { McpSkill } from "@ycoding-ai/schema/mcp-skill"
 import { Conflict, Info, State } from "@ycoding-ai/schema/session-skill-status"
-import { SkillV2 } from "../skill"
+import { Skill } from "../skill"
 import { SkillTool } from "../tool/skill"
 import { SessionMessage } from "./message"
 
 export { Conflict, Info, State } from "@ycoding-ai/schema/session-skill-status"
 
-const emptyDeclarations = { skills: [], instructions: [] } as const satisfies SkillV2.Conflicts
+const emptyDeclarations = { skills: [], instructions: [] } as const satisfies Skill.Conflicts
 
 export function list(
   messages: ReadonlyArray<SessionMessage.Info>,
   instructionKeys: ReadonlyArray<string>,
 ): Info[] {
-  const statuses = messages.reduce<Map<SkillV2.ID, Info>>((result, message) => {
+  const statuses = messages.reduce<Map<Skill.ID, Info>>((result, message) => {
     const applyDeactivations = (deactivations: readonly SessionMessage.SkillDeactivation[] | undefined) =>
       deactivations?.forEach((deactivation) => {
         const status = result.get(deactivation.skill)
@@ -77,8 +77,8 @@ export function list(
   const activeByID = new Map(active.map((status) => [status.id, status]))
   const inbound = active
     .flatMap((status) => status.declarations.skills.map((target) => ({ source: status.id, target })))
-    .reduce<Map<SkillV2.ID, Set<SkillV2.ID>>>((result, declaration) => {
-      const sources = result.get(declaration.target) ?? new Set<SkillV2.ID>()
+    .reduce<Map<Skill.ID, Set<Skill.ID>>>((result, declaration) => {
+      const sources = result.get(declaration.target) ?? new Set<Skill.ID>()
       sources.add(declaration.source)
       result.set(declaration.target, sources)
       return result
@@ -108,7 +108,7 @@ export type MCPActivation = {
 }
 
 /** Returns the held MCP entry from the durable tool message that established the active skill. */
-export function mcpActivation(messages: ReadonlyArray<SessionMessage.Info>, id: SkillV2.ID): MCPActivation | undefined {
+export function mcpActivation(messages: ReadonlyArray<SessionMessage.Info>, id: Skill.ID): MCPActivation | undefined {
   const status = list(messages, []).find((candidate) => candidate.id === id && candidate.state === "active")
   if (!status || status.activatedBy !== "tool") return undefined
   const message = messages.find(

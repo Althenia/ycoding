@@ -30,7 +30,7 @@ export function guardrailPresentation(request: GuardrailRequest) {
 export function GuardrailPrompt(props: { request: GuardrailRequest }) {
   const client = useClient()
   const toast = useToast()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const [submitting, setSubmitting] = createSignal(false)
   const presentation = () => guardrailPresentation(props.request)
   const resource = () => presentation().resources[0] ?? presentation().action
@@ -69,26 +69,26 @@ export function GuardrailPrompt(props: { request: GuardrailRequest }) {
       body={
         <box flexDirection="column">
           <box paddingLeft={3} paddingRight={3}>
-            <text fg={themeV2.text.feedback.info.default}>{presentation().reason}</text>
+            <text fg={theme.text.feedback.info.default}>{presentation().reason}</text>
           </box>
           <box paddingLeft={3} paddingRight={3} flexDirection="row" flexShrink={0}>
-            <text fg={themeV2.text.feedback.warning.default}>!</text>
+            <text fg={theme.text.feedback.warning.default}>!</text>
             <box width={2} flexShrink={0} />
-            <text flexGrow={1} flexShrink={1} fg={themeV2.text.feedback.warning.default}>
+            <text flexGrow={1} flexShrink={1} fg={theme.text.feedback.warning.default}>
               {resource()}
             </text>
             <box flexGrow={1} />
-            <text flexShrink={0} fg={themeV2.text.feedback.warning.default}>Blocked</text>
+            <text flexShrink={0} fg={theme.text.feedback.warning.default}>Blocked</text>
           </box>
           <Show when={needsContext()}>
             <box paddingLeft={6} paddingRight={3} flexDirection="column">
-              <text fg={themeV2.text.subdued}>Actor: {presentation().actor}</text>
-              <text fg={themeV2.text.subdued}>Action: {presentation().action}</text>
+              <text fg={theme.text.subdued}>Actor: {presentation().actor}</text>
+              <text fg={theme.text.subdued}>Action: {presentation().action}</text>
               <For each={presentation().resources.slice(1, 8)}>
-                {(value) => <text fg={themeV2.text.subdued}>Resource: {value}</text>}
+                {(value) => <text fg={theme.text.subdued}>Resource: {value}</text>}
               </For>
               <Show when={presentation().resources.length > 8}>
-                <text fg={themeV2.text.subdued}>+{presentation().resources.length - 8} more</text>
+                <text fg={theme.text.subdued}>+{presentation().resources.length - 8} more</text>
               </Show>
             </box>
           </Show>

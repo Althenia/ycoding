@@ -3,13 +3,13 @@ export * as SessionInterruptedExecution from "./interrupted"
 import { and, eq, gt, inArray, sql } from "drizzle-orm"
 import { Effect, Schema } from "effect"
 import type { Database } from "../../database/database"
-import { EventV2 } from "../../event"
+import { EventRuntime } from "../../event"
 import { EventTable } from "../../event/sql"
 import { SessionEvent } from "../event"
 import { SessionSchema } from "../schema"
 
-const versioned = (definition: Extract<EventV2.Definition, { durability: "durable" }>) =>
-  EventV2.versionedType(definition.type, definition.durable.version)
+const versioned = (definition: Extract<EventRuntime.Definition, { durability: "durable" }>) =>
+  EventRuntime.versionedType(definition.type, definition.durable.version)
 
 const error = { type: "interrupted", message: "The server stopped before this run finished" }
 
@@ -19,7 +19,7 @@ const error = { type: "interrupted", message: "The server stopped before this ru
  */
 export const reconcile = Effect.fn("SessionInterruptedExecution.reconcile")(function* (
   db: Database.Interface["db"],
-  events: EventV2.Interface,
+  events: EventRuntime.Interface,
 ) {
   const latest = db
     .select({ aggregateID: EventTable.aggregate_id, seq: sql<number>`max(${EventTable.seq})`.as("seq") })

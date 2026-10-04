@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { ZAIUsage } from "@ycoding-ai/core/provider-usage/zai"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
-import { ProviderUsageV2 } from "@ycoding-ai/core/provider-usage"
+import { Provider } from "@ycoding-ai/core/provider"
+import { ProviderUsageRuntime } from "@ycoding-ai/core/provider-usage"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Integration } from "@ycoding-ai/schema/integration"
 import { Effect } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 
-const input = { providerID: ProviderV2.ID.make("zai-coding-plan"), label: "Z.ai", updatedAt: 100 }
+const input = { providerID: Provider.ID.make("zai-coding-plan"), label: "Z.ai", updatedAt: 100 }
 
 describe("ZAIUsage", () => {
   test("maps subscription windows by duration and monthly web-search count", () => {
@@ -39,7 +39,7 @@ describe("ZAIUsage", () => {
         ? Response.json({}, { status: 503 })
         : Response.json({ data: { limits: [{ type: "CREDIT_LIMIT", unit: 3, number: 5, percentage: 12 }] } }))
     }))
-    const snapshot = await Effect.runPromise(ProviderUsageV2.zai(http, {
+    const snapshot = await Effect.runPromise(ProviderUsageRuntime.zai(http, {
       ...input, credential: new Credential.Info({
         id: Credential.ID.make("cred_zai_usage"), integrationID: Integration.ID.make("zai-coding-plan"),
         label: "default", value: { type: "key", key: "secret-zai-key" },

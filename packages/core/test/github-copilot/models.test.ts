@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { CopilotModels } from "@ycoding-ai/core/github-copilot/models"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 
 test("defensively syncs advertised Copilot models", async () => {
   const requests: Headers[] = []
@@ -123,35 +123,35 @@ test("defensively syncs advertised Copilot models", async () => {
   })
 
   try {
-    const existing = ModelV2.Info.make({
-      ...ModelV2.Info.empty(ProviderV2.ID.githubCopilot, ModelV2.ID.make("gpt-5")),
-      modelID: ModelV2.ID.make("gpt-5"),
+    const existing = CatalogModel.Info.make({
+      ...CatalogModel.Info.empty(Provider.ID.githubCopilot, CatalogModel.ID.make("gpt-5")),
+      modelID: CatalogModel.ID.make("gpt-5"),
       name: "GPT-5 local",
     })
-    const stale = ModelV2.Info.make({
-      ...ModelV2.Info.empty(ProviderV2.ID.githubCopilot, ModelV2.ID.make("stale")),
-      modelID: ModelV2.ID.make("stale"),
+    const stale = CatalogModel.Info.make({
+      ...CatalogModel.Info.empty(Provider.ID.githubCopilot, CatalogModel.ID.make("stale")),
+      modelID: CatalogModel.ID.make("stale"),
     })
     const models = await CopilotModels.get(server.url.origin, {}, [existing, stale])
-    const model = models.get(ModelV2.ID.make("gpt-5"))
+    const model = models.get(CatalogModel.ID.make("gpt-5"))
 
     expect(requests[0]?.get("Copilot-Integration-Id")).toBe("vscode-chat")
     expect(model?.name).toBe("GPT-5 local")
     expect(model?.settings).toMatchObject({ baseURL: server.url.origin, endpoint: "responses", store: false })
     expect(model?.settings?.contextManagement).toBeUndefined()
     // The official client excludes by model family, so a dated gpt-5.2 id is excluded too.
-    expect(models.get(ModelV2.ID.make("gpt-5.2-2026-02-01"))?.settings?.contextManagement).toBeUndefined()
-    expect(models.get(ModelV2.ID.make("gpt-5.4"))?.settings?.contextManagement).toEqual([
+    expect(models.get(CatalogModel.ID.make("gpt-5.2-2026-02-01"))?.settings?.contextManagement).toBeUndefined()
+    expect(models.get(CatalogModel.ID.make("gpt-5.4"))?.settings?.contextManagement).toEqual([
       { type: "compaction", compactThreshold: 162000 },
     ])
-    expect(models.get(ModelV2.ID.make("gpt-5.3"))?.settings?.contextManagement).toEqual([
+    expect(models.get(CatalogModel.ID.make("gpt-5.3"))?.settings?.contextManagement).toEqual([
       { type: "compaction", compactThreshold: 50000 },
     ])
     expect(model?.settings?.include).toEqual(["reasoning.encrypted_content"])
     expect(model?.cost[0]).toMatchObject({ input: 0, output: 0, cache: { read: 0, write: 0 } })
     expect(model?.variants.map((variant) => variant.id)).toEqual([
-      ModelV2.VariantID.make("low"),
-      ModelV2.VariantID.make("high"),
+      CatalogModel.VariantID.make("low"),
+      CatalogModel.VariantID.make("high"),
     ])
     expect(model?.variants).toMatchObject([
       {
@@ -169,7 +169,7 @@ test("defensively syncs advertised Copilot models", async () => {
         },
       },
     ])
-    expect(models.get(ModelV2.ID.make("claude-sonnet-4.6"))).toMatchObject({
+    expect(models.get(CatalogModel.ID.make("claude-sonnet-4.6"))).toMatchObject({
       package: "aisdk:@ai-sdk/anthropic",
       settings: {
         baseURL: `${server.url.origin}/v1`,
@@ -177,17 +177,17 @@ test("defensively syncs advertised Copilot models", async () => {
         toolStreaming: false,
       },
     })
-    expect(models.get(ModelV2.ID.make("gpt-4.1"))?.settings).toEqual({
+    expect(models.get(CatalogModel.ID.make("gpt-4.1"))?.settings).toEqual({
       baseURL: server.url.origin,
       endpoint: "chat",
     })
-    expect(models.get(ModelV2.ID.make("claude-chat"))?.settings).toEqual({
+    expect(models.get(CatalogModel.ID.make("claude-chat"))?.settings).toEqual({
       baseURL: server.url.origin,
       endpoint: "chat",
     })
-    expect(models.get(ModelV2.ID.make("utility"))?.enabled).toBe(false)
-    expect(models.has(ModelV2.ID.make("stale"))).toBe(false)
-    expect(models.has(ModelV2.ID.make("incomplete"))).toBe(false)
+    expect(models.get(CatalogModel.ID.make("utility"))?.enabled).toBe(false)
+    expect(models.has(CatalogModel.ID.make("stale"))).toBe(false)
+    expect(models.has(CatalogModel.ID.make("incomplete"))).toBe(false)
   } finally {
     await server.stop(true)
   }

@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { GrokUsage } from "@ycoding-ai/core/provider-usage/grok"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
-import { ProviderUsageV2 } from "@ycoding-ai/core/provider-usage"
+import { Provider } from "@ycoding-ai/core/provider"
+import { ProviderUsageRuntime } from "@ycoding-ai/core/provider-usage"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Integration } from "@ycoding-ai/schema/integration"
 import { Effect } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 
-const input = { providerID: ProviderV2.ID.make("xai"), label: "Grok", updatedAt: 100 }
+const input = { providerID: Provider.ID.make("xai"), label: "Grok", updatedAt: 100 }
 
 describe("GrokUsage", () => {
   test("shows the shared weekly pool and pay-as-you-go cap from credits-format billing", () => {
@@ -46,7 +46,7 @@ describe("GrokUsage", () => {
         currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", start: "2026-09-21T00:00:00Z", end: "2026-09-28T00:00:00Z" },
       } }))
     }))
-    const snapshot = await Effect.runPromise(ProviderUsageV2.grok(http, {
+    const snapshot = await Effect.runPromise(ProviderUsageRuntime.grok(http, {
       ...input, credential: new Credential.Info({
         id: Credential.ID.make("cred_grok_usage"), integrationID: Integration.ID.make("xai"), label: "default",
         value: { type: "oauth", methodID: Integration.MethodID.make("device"), access: "secret", refresh: "secret", expires: 0 },

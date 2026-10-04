@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { GoUsage } from "@ycoding-ai/core/provider-usage/go"
-import { ProviderUsageV2 } from "@ycoding-ai/core/provider-usage"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { ProviderUsageRuntime } from "@ycoding-ai/core/provider-usage"
+import { Provider } from "@ycoding-ai/core/provider"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Integration } from "@ycoding-ai/schema/integration"
 import { Effect } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 
-const input = { providerID: ProviderV2.ID.make("opencode-go"), label: "OpenCode Go", updatedAt: 100 }
+const input = { providerID: Provider.ID.make("opencode-go"), label: "OpenCode Go", updatedAt: 100 }
 
 describe("GoUsage", () => {
   test("maps account-wide Go session, weekly, and monthly percent windows", () => {
@@ -33,7 +33,7 @@ describe("GoUsage", () => {
       urls.push(request.url)
       return HttpClientResponse.fromWeb(request, Response.json({ error: { type: "EntitlementError" } }, { status: 403 }))
     }))
-    const snapshot = await Effect.runPromise(ProviderUsageV2.goUsage(http, {
+    const snapshot = await Effect.runPromise(ProviderUsageRuntime.goUsage(http, {
       ...input, credential: new Credential.Info({
         id: Credential.ID.make("cred_go_usage"), integrationID: Integration.ID.make("opencode-go"),
         label: "default", value: { type: "key", key: "secret-go-key" },

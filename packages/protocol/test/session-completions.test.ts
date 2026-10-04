@@ -10,7 +10,7 @@ class CompletionLocation extends HttpApiMiddleware.Service<CompletionLocation>()
 test("exposes bounded root completion receipts without a caller-supplied Location", () => {
   const group = makeSessionGroup(CompletionLocation)
   const operation = OpenApi.fromApi(HttpApi.make("completion-test").add(group)).paths["/api/session/completions"]?.get
-  expect(operation?.operationId).toBe("v2.session.completions")
+  expect(operation?.operationId).toBe("session.completions")
   expect(operation?.parameters?.map((item) => "$ref" in item ? item.$ref : item.name)).toEqual(["after", "limit"])
   const endpoint = group.endpoints["session.completions"]
   expect([...endpoint.middlewares]).toHaveLength(0)

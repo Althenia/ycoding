@@ -6,7 +6,7 @@ import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { EventTable } from "@ycoding-ai/core/event/sql"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import type { LocationServices } from "@ycoding-ai/core/location-services"
@@ -82,7 +82,7 @@ const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       Database.node,
-      EventV2.node,
+      EventRuntime.node,
       SessionCompactionJob.node,
       SessionCompaction.node,
       SessionContextState.node,
@@ -711,7 +711,7 @@ const successfulManifest = Effect.fnUntraced(function* (db: Database.Interface["
     baseContextRevision: job.baseContextRevision,
     coveredThrough: Object.freeze({
       messageID: job.requestedThrough.messageID,
-      seq: EventV2.Seq.make(job.requestedThrough.seq),
+      seq: EventRuntime.Seq.make(job.requestedThrough.seq),
     }),
     protectedState: Object.freeze(
       SessionLiveState.toProtectedState({ ...capture.sources, guardrails: guardrailSnapshot }).map((entry) =>

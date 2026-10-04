@@ -6,13 +6,13 @@ import { abbreviateHome } from "../../runtime"
 import { FilePath } from "../../ui/file-path"
 
 function View(props: { context: Plugin.Context }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const paths = useTuiPaths()
   const directory = createMemo(() =>
     props.context.location ? formatSidebarFooterPath(props.context.location.directory, paths.home) : undefined,
   )
   return (
-    <Show when={directory()}>{(value) => <FilePath value={value()} maxWidth={38} fg={themeV2.text.subdued} />}</Show>
+    <Show when={directory()}>{(value) => <FilePath value={value()} maxWidth={38} fg={theme.text.subdued} />}</Show>
   )
 }
 

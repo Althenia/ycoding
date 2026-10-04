@@ -17,7 +17,7 @@
 import path from "path"
 import type { JsonValue, SessionMessageAssistantTool } from "@ycoding-ai/client/promise"
 import { writeSessionOutput } from "./stream"
-import { toolCommit } from "./stream-v2.subagent"
+import { toolCommit } from "./stream.subagent"
 import type {
   FooterApi,
   FooterView,

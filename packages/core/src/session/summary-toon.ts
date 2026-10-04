@@ -280,7 +280,7 @@ export function parse(input: string, options: ParseOptions): Memory | ParseError
   return result.success
 }
 
-/** True when input is the canonical V2 handoff encoding. */
+/** True when input is the canonical TOON version 2 handoff encoding. */
 export function isCanonical(input: string): boolean {
   if (isFencedDocument(input) || findProseLine(input) !== undefined) return false
   const decoded = decodeToon(input)

@@ -14,7 +14,7 @@ export function Footer(props: {
   autonomy: SessionAutonomyState
   subagent?: boolean
 }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const data = useData()
   const route = useRoute()
   const paletteShortcut = Keymap.useShortcut("command.palette.show")
@@ -60,27 +60,27 @@ export function Footer(props: {
       alignItems="center"
       paddingLeft={3}
       paddingRight={3}
-      backgroundColor={themeV2.background.chrome}
+      backgroundColor={theme.background.chrome}
     >
       <box flexDirection="row" gap={3} flexGrow={1} minWidth={0}>
         <PromptFooterIdentity branch={props.branch} />
         <ModeChips autonomy={props.autonomy} />
-        <text fg={themeV2.text.subdued} wrapMode="none" flexShrink={0}>
+        <text fg={theme.text.subdued} wrapMode="none" flexShrink={0}>
           subagents {subagents()}
         </text>
-        <text fg={themeV2.text.subdued} wrapMode="none" truncate flexShrink={1}>
+        <text fg={theme.text.subdued} wrapMode="none" truncate flexShrink={1}>
           shells {shells()}
         </text>
       </box>
       <box flexDirection="row" gap={3} flexShrink={0}>
-        <text fg={themeV2.text.default} wrapMode="none" flexShrink={0} onMouseUp={openUsage}>
+        <text fg={theme.text.default} wrapMode="none" flexShrink={0} onMouseUp={openUsage}>
           <Show when={usageShortcut()}>{(shortcut) => `${shortcut().replaceAll("ctrl+", "⌃")} `}</Show>
-          <span style={{ fg: themeV2.text.subdued }}>usage</span>
+          <span style={{ fg: theme.text.subdued }}>usage</span>
         </text>
         <Show when={paletteShortcut()}>
           {(shortcut) => (
-            <text fg={themeV2.text.default} wrapMode="none" flexShrink={0}>
-              {shortcut().replaceAll("ctrl+", "⌃")} <span style={{ fg: themeV2.text.subdued }}>commands</span>
+            <text fg={theme.text.default} wrapMode="none" flexShrink={0}>
+              {shortcut().replaceAll("ctrl+", "⌃")} <span style={{ fg: theme.text.subdued }}>commands</span>
             </text>
           )}
         </Show>

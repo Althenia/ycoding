@@ -60,7 +60,7 @@ export interface Interface {
   readonly resolve: (input: ResolveInput) => Effect.Effect<Target, PathError | FSUtil.Error>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/LocationMutation") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/LocationMutation") {}
 
 interface ResolvedPath {
   readonly canonical: string

@@ -1,7 +1,7 @@
 export * as OpenRouterUsage from "./openrouter"
 
 import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
-import { ProviderV2 } from "../provider"
+import { Provider } from "../provider"
 
 interface KeyData {
   readonly usage?: unknown
@@ -19,7 +19,7 @@ interface CreditsData {
 }
 
 export interface NormalizeKeyInput {
-  readonly providerID: ProviderV2.ID
+  readonly providerID: Provider.ID
   readonly label: string
   readonly updatedAt: number
   readonly response: unknown

@@ -20,7 +20,7 @@ import {
 import { Integration } from "@ycoding-ai/schema/integration"
 import { Credential } from "./credential"
 import { State } from "./state"
-import { EventV2 } from "./event"
+import { EventRuntime } from "./event"
 import { IntegrationConnection } from "./integration/connection"
 import { AppProcess } from "./process"
 import { ChildProcess } from "effect/unstable/process"
@@ -224,7 +224,7 @@ export interface Interface extends State.Transformable<Draft> {
   }
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/Integration") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/Integration") {}
 
 const attemptLifetime = Duration.toMillis(Duration.minutes(10))
 const terminalRetention = Duration.toMillis(Duration.minutes(1))
@@ -273,7 +273,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const credentials = yield* Credential.Service
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const processes = yield* AppProcess.Service
     const scope = yield* Scope.Scope
     const attempts = SynchronizedRef.makeUnsafe(new Map<AttemptID, AttemptEntry>())
@@ -825,5 +825,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Credential.node, EventV2.node, AppProcess.node],
+  deps: [Credential.node, EventRuntime.node, AppProcess.node],
 })

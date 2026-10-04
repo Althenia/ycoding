@@ -2,17 +2,17 @@ import { describe, expect } from "bun:test"
 import { DateTime, Effect, Fiber, Option, Schema, Stream } from "effect"
 import { asc, eq, sql } from "drizzle-orm"
 import { Database } from "@ycoding-ai/core/database/database"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { EventTable } from "@ycoding-ai/core/event/sql"
-import { ModelV2 } from "@ycoding-ai/core/model"
+import { CatalogModel } from "@ycoding-ai/core/model"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { Money } from "@ycoding-ai/schema/money"
@@ -35,14 +35,14 @@ import {
 import { testEffect } from "./lib/effect"
 import { Snapshot } from "@ycoding-ai/core/snapshot"
 
-const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionProjector.node])))
-const sessionsLayer = AppNodeBuilder.build(SessionV2.node, [[SessionExecution.node, SessionExecution.noopLayer]])
-const sessionID = SessionV2.ID.make("ses_projector_test")
+const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node])))
+const sessionsLayer = AppNodeBuilder.build(Session.node, [[SessionExecution.node, SessionExecution.noopLayer]])
+const sessionID = Session.ID.make("ses_projector_test")
 const created = DateTime.makeUnsafe(0)
-const model = { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") }
-const previousModel = { ...model, variant: ModelV2.VariantID.make("medium") }
+const model = { id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("provider") }
+const previousModel = { ...model, variant: CatalogModel.VariantID.make("medium") }
 const encodeMessage = Schema.encodeSync(SessionMessage.Info)
-const build = AgentV2.defaultID
+const build = Agent.defaultID
 
 const assistantRow = (
   id: SessionMessage.ID,
@@ -66,7 +66,7 @@ describe("SessionProjector", () => {
       const { db } = yield* Database.Service
       yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).run()
       yield* db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, directory: "/project", title: "test", time_updated: 7 }).run()
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const messageID = SessionMessage.ID.make("msg_activity")
       yield* events.publish(SessionEvent.Step.Started, { sessionID, assistantMessageID: messageID, agent: build, model })
       const cases = [
@@ -140,7 +140,7 @@ describe("SessionProjector", () => {
         })
         .run()
 
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const pressure = { estimatedInputTokens: 7_200, safeInputTokens: 8_000 }
       yield* events.publish(SessionEvent.Compaction.Admitted, { sessionID, jobID, pressure })
       const pending = yield* db
@@ -209,7 +209,7 @@ describe("SessionProjector", () => {
           title: "test",
         })
         .run()
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const inputID = SessionMessage.ID.make("msg_manual_compaction")
       yield* SessionPending.admitCompaction(db, events, { id: inputID, sessionID })
 
@@ -275,7 +275,7 @@ describe("SessionProjector", () => {
       yield* SessionMessageUpdater.update(
         SessionMessageUpdater.memory(state),
         SessionEvent.Compaction.Delta.make({
-          id: EventV2.ID.make("evt_delta"),
+          id: EventRuntime.ID.make("evt_delta"),
           type: "session.compaction.delta",
           created,
           data: { sessionID, text: "summary" },
@@ -343,7 +343,7 @@ describe("SessionProjector", () => {
           current_values: {},
         })
         .run()
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       yield* events.publish(SessionEvent.RevertEvent.Staged, {
         sessionID,
         revert: { messageID: boundary, snapshot: Snapshot.ID.make("tree"), files: [] },
@@ -397,7 +397,7 @@ describe("SessionProjector", () => {
         })
         .run()
         .pipe(Effect.orDie)
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
 
       yield* events.publish(SessionEvent.InputAdmitted, {
         sessionID,
@@ -410,7 +410,7 @@ describe("SessionProjector", () => {
           sessionID,
           inputID: SessionMessage.ID.make("msg_first"),
         },
-        { id: EventV2.ID.make("evt_z") },
+        { id: EventRuntime.ID.make("evt_z") },
       )
       yield* events.publish(SessionEvent.InputAdmitted, {
         sessionID,
@@ -423,10 +423,10 @@ describe("SessionProjector", () => {
           sessionID,
           inputID: SessionMessage.ID.make("msg_second"),
         },
-        { id: EventV2.ID.make("evt_a") },
+        { id: EventRuntime.ID.make("evt_a") },
       )
 
-      const sessions = yield* SessionV2.Service
+      const sessions = yield* Session.Service
       const firstPage = yield* sessions.messages({ sessionID, limit: 1, order: "asc" })
       expect(firstPage.map((message) => (message.type === "user" ? message.text : message.type))).toEqual(["first"])
       const secondPage = yield* sessions.messages({
@@ -465,7 +465,7 @@ describe("SessionProjector", () => {
       expect(projection.watermark).toEqual({
         type: "log.synced",
         aggregateID: sessionID,
-        seq: EventV2.Seq.make(yield* EventV2.latestSequence((yield* Database.Service).db, sessionID)),
+        seq: EventRuntime.Seq.make(yield* EventRuntime.latestSequence((yield* Database.Service).db, sessionID)),
       })
       yield* events.publish(SessionEvent.InputAdmitted, {
         sessionID,
@@ -483,10 +483,10 @@ describe("SessionProjector", () => {
       expect(lastWindow.before).toBeUndefined()
       expect(middleWindow.watermark).toEqual(firstWindow.watermark)
       expect(lastWindow.watermark).toEqual(firstWindow.watermark)
-      expect(firstWindow.watermark.seq).toBe(EventV2.Seq.make(yield* EventV2.latestSequence((yield* Database.Service).db, sessionID)))
+      expect(firstWindow.watermark.seq).toBe(EventRuntime.Seq.make(yield* EventRuntime.latestSequence((yield* Database.Service).db, sessionID)))
       expect((yield* sessions.snapshot(sessionID, { limit: 1, before: newest.before })).messages[0]).toMatchObject({ text: "first" })
       expect((yield* Effect.flip(sessions.snapshot(sessionID, { limit: 1, before: "invalid" })))._tag).toBe("Session.InvalidCursorError")
-      const emptySession = SessionV2.ID.make("ses_empty_window")
+      const emptySession = Session.ID.make("ses_empty_window")
       yield* db.insert(SessionTable).values({ id: emptySession, project_id: Project.ID.global, directory: "/project", title: "Empty" }).run()
       const empty = yield* sessions.snapshot(emptySession, { limit: 10 })
       expect(empty).toMatchObject({ messages: [], watermark: { aggregateID: emptySession } })
@@ -513,7 +513,7 @@ describe("SessionProjector", () => {
         })
         .run()
         .pipe(Effect.orDie)
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const id = SessionMessage.ID.make("msg_admitted")
       const admitted = yield* SessionPending.admit(db, events, {
         id,
@@ -555,7 +555,7 @@ describe("SessionProjector", () => {
         })
         .run()
         .pipe(Effect.orDie)
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
 
       yield* events.publish(SessionEvent.AgentSelected, {
         sessionID,
@@ -725,7 +725,7 @@ describe("SessionProjector", () => {
         })
         .run()
         .pipe(Effect.orDie)
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const id = SessionMessage.ID.make("msg_creator_collision")
       const { id: _, type, ...data } = encodeMessage({ id, type: "synthetic", text: "existing", time: { created } })
       yield* db
@@ -792,7 +792,7 @@ describe("SessionProjector", () => {
         })
         .run()
         .pipe(Effect.orDie)
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const first = SessionMessage.ID.make("msg_retry_first")
       const second = SessionMessage.ID.make("msg_retry_second")
       yield* events.publish(SessionEvent.Step.Started, { sessionID, assistantMessageID: first, agent: build, model })
@@ -857,7 +857,7 @@ describe("SessionProjector", () => {
         })
         .run()
         .pipe(Effect.orDie)
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const suspended = () =>
         db
           .select({ timeSuspended: SessionTable.time_suspended })
@@ -901,7 +901,7 @@ describe("SessionProjector", () => {
         .run()
         .pipe(Effect.orDie)
 
-      const service = yield* EventV2.Service
+      const service = yield* EventRuntime.Service
       const usageUpdated = yield* service
         .subscribe(SessionEvent.UsageUpdated)
         .pipe(Stream.runHead, Effect.forkScoped({ startImmediately: true }))
@@ -979,7 +979,7 @@ describe("SessionProjector", () => {
         .run()
         .pipe(Effect.orDie)
 
-      const service = yield* EventV2.Service
+      const service = yield* EventRuntime.Service
       yield* service.publish(SessionEvent.Text.Started, {
         sessionID,
         assistantMessageID: SessionMessage.ID.make("msg_assistant_completed"),

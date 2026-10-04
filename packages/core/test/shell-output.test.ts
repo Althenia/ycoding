@@ -7,7 +7,7 @@ import { AppProcess } from "@ycoding-ai/core/process"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Config } from "@ycoding-ai/core/config"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Global } from "@ycoding-ai/core/global"
 import { Location } from "@ycoding-ai/core/location"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
@@ -95,7 +95,7 @@ const layer = AppNodeBuilder.build(
   LayerNode.group([
     AppProcess.node,
     Config.node,
-    EventV2.node,
+    EventRuntime.node,
     Global.node,
     Location.node,
     ShellSandbox.node,

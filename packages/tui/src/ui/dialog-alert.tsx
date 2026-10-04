@@ -12,7 +12,7 @@ export type DialogAlertProps = {
 
 export function DialogAlert(props: DialogAlertProps) {
   const dialog = useDialog()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const dimensions = useTerminalDimensions()
   const lines = createMemo(() => dialogMessageLines(props.message))
 
@@ -38,7 +38,7 @@ export function DialogAlert(props: DialogAlertProps) {
         <For each={lines()}>
           {(line) => (
             <box height={2}>
-              <text fg={themeV2.text.subdued}>{line}</text>
+              <text fg={theme.text.subdued}>{line}</text>
             </box>
           )}
         </For>
@@ -56,9 +56,9 @@ export function DialogAlert(props: DialogAlertProps) {
           width={dialogPanelWidth(dimensions().width)}
           paddingLeft={6}
           paddingRight={4}
-          backgroundColor={themeV2.background.action.primary.focused}
+          backgroundColor={theme.background.action.primary.focused}
         >
-          <text fg={themeV2.text.action.primary.focused}>Dismiss</text>
+          <text fg={theme.text.action.primary.focused}>Dismiss</text>
         </box>
       </box>
     </box>

@@ -760,7 +760,6 @@ function clientOperationKey(group: Group, endpoint: Endpoint) {
 
 function clientEndpointPath(group: string, name: string) {
   const parts = name.split(".")
-  if (parts[0] === "v2") parts.shift()
   const index = parts.lastIndexOf(group.slice(group.lastIndexOf(".") + 1))
   const result = index < 0 ? parts : parts.slice(index + 1)
   if (result.length === 0 || result.some((part) => part.length === 0)) {

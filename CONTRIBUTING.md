@@ -74,7 +74,7 @@ Update documentation in the same change when behavior or public contracts change
 - Product scope: `README.md` and `docs/product-direction.md`
 - Package ownership or dependency direction: `docs/architecture.md`
 - Runtime behavior: `docs/runtime.md`
-- Public schema or API behavior: the relevant `specs/v2` document
+- Public schema or API behavior: the relevant `specs` document
 - Migration or legacy-name handling: `docs/ycoding-migration.md`
 
 ## Commits

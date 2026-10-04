@@ -55,10 +55,10 @@ type ToolState = StartedPart & {
   content: LLMToolContent[]
 }
 
-type V2Event = EventSubscribeOutput
-type FormRequest = Extract<V2Event, { type: "form.created" }>["data"]["form"]
-type QuestionRequest = Extract<V2Event, { type: "question.v2.asked" }>["data"]
-type GuardrailRequest = Extract<V2Event, { type: "guardrail.asked" }>["data"]
+type ServerEvent = EventSubscribeOutput
+type FormRequest = Extract<ServerEvent, { type: "form.created" }>["data"]["form"]
+type QuestionRequest = Extract<ServerEvent, { type: "question.asked" }>["data"]
+type GuardrailRequest = Extract<ServerEvent, { type: "guardrail.asked" }>["data"]
 
 // MCP elicitations are temporarily owned by the "global" sentinel instead of a real
 // session. An exclusive local process may treat them as this run's blockers; an
@@ -171,11 +171,11 @@ export async function runNonInteractivePrompt(input: Input) {
       }
       const event = next.value
 
-      if (event.type === "permission.v2.asked" && submitted && event.data.sessionID === input.sessionID) {
+      if (event.type === "permission.asked" && submitted && event.data.sessionID === input.sessionID) {
         await rejectPermission(event.data)
         continue
       }
-      if (event.type === "question.v2.asked" && submitted && event.data.sessionID === input.sessionID) {
+      if (event.type === "question.asked" && submitted && event.data.sessionID === input.sessionID) {
         await rejectQuestion(event.data)
         continue
       }

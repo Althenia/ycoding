@@ -2,7 +2,7 @@ export * as EventLogger from "./event-logger"
 
 import { Effect, Layer } from "effect"
 import { makeGlobalNode } from "./effect/app-node"
-import { EventV2 } from "./event"
+import { EventRuntime } from "./event"
 
 const Types = new Set([
   "agent.updated",
@@ -13,7 +13,7 @@ const Types = new Set([
 
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const unsubscribe = yield* events.listen((event) =>
       Types.has(event.type) ? Effect.logInfo("event", { event }) : Effect.void,
     )
@@ -21,4 +21,4 @@ export const layer = Layer.effectDiscard(
   }),
 )
 
-export const node = makeGlobalNode({ name: "event-logger", layer, deps: [EventV2.node] })
+export const node = makeGlobalNode({ name: "event-logger", layer, deps: [EventRuntime.node] })

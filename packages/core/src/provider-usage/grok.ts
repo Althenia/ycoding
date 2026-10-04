@@ -1,13 +1,13 @@
 export * as GrokUsage from "./grok"
 
 import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
-import { ProviderV2 } from "../provider"
+import { Provider } from "../provider"
 import { Schema } from "effect"
 
 const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown))
 
 export function normalize(input: {
-  readonly providerID: ProviderV2.ID
+  readonly providerID: Provider.ID
   readonly label: string
   readonly updatedAt: number
   readonly response: unknown

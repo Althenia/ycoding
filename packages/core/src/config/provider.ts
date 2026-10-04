@@ -3,7 +3,7 @@ export * as ConfigProvider from "./provider"
 import { Schema } from "effect"
 import { API } from "@ycoding-ai/schema/model"
 import { Money } from "@ycoding-ai/schema/money"
-import { ModelV2 } from "../model"
+import { CatalogModel } from "../model"
 
 const JsonRecord = Schema.Record(Schema.String, Schema.Json)
 
@@ -13,17 +13,17 @@ export const Overlays = {
   body: JsonRecord.pipe(Schema.optional),
 }
 
-export class Request extends Schema.Class<Request>("ConfigV2.Provider.Request")({
+export class Request extends Schema.Class<Request>("Config.Provider.Request")({
   headers: Overlays.headers,
   body: Overlays.body,
 }) {}
 
-class Cache extends Schema.Class<Cache>("ConfigV2.Model.Cost.Cache")({
+class Cache extends Schema.Class<Cache>("Config.Model.Cost.Cache")({
   read: Money.USDPerMillionTokens.pipe(Schema.optional),
   write: Money.USDPerMillionTokens.pipe(Schema.optional),
 }) {}
 
-class Cost extends Schema.Class<Cost>("ConfigV2.Model.Cost")({
+class Cost extends Schema.Class<Cost>("Config.Model.Cost")({
   tier: Schema.Struct({
     type: Schema.Literal("context"),
     size: Schema.Int,
@@ -33,27 +33,27 @@ class Cost extends Schema.Class<Cost>("ConfigV2.Model.Cost")({
   cache: Cache.pipe(Schema.optional),
 }) {}
 
-class Limit extends Schema.Class<Limit>("ConfigV2.Model.Limit")({
+class Limit extends Schema.Class<Limit>("Config.Model.Limit")({
   context: Schema.Int.pipe(Schema.optional),
   input: Schema.Int.pipe(Schema.optional),
   output: Schema.Int.pipe(Schema.optional),
 }) {}
 
-class Capabilities extends Schema.Class<Capabilities>("ConfigV2.Model.Capabilities")({
+class Capabilities extends Schema.Class<Capabilities>("Config.Model.Capabilities")({
   tools: Schema.Boolean.pipe(Schema.optional),
   input: Schema.Array(Schema.String).pipe(Schema.optional),
   output: Schema.Array(Schema.String).pipe(Schema.optional),
 }) {}
 
-class Model extends Schema.Class<Model>("ConfigV2.Model")({
-  modelID: ModelV2.ID.pipe(Schema.optional),
-  family: ModelV2.Family.pipe(Schema.optional),
+class Model extends Schema.Class<Model>("Config.Model")({
+  modelID: CatalogModel.ID.pipe(Schema.optional),
+  family: CatalogModel.Family.pipe(Schema.optional),
   name: Schema.String.pipe(Schema.optional),
   package: Schema.String.pipe(Schema.optional),
   ...Overlays,
   capabilities: Capabilities.pipe(Schema.optional),
   variants: Schema.Struct({
-    id: ModelV2.VariantID,
+    id: CatalogModel.VariantID,
     ...Overlays,
   }).pipe(Schema.Array, Schema.optional),
   cost: Schema.Union([Cost, Cost.pipe(Schema.Array)]).pipe(Schema.optional),
@@ -62,11 +62,11 @@ class Model extends Schema.Class<Model>("ConfigV2.Model")({
   limit: Limit.pipe(Schema.optional),
 }) {}
 
-class CatalogSource extends Schema.Class<CatalogSource>("ConfigV2.Provider.Catalog")({
+class CatalogSource extends Schema.Class<CatalogSource>("Config.Provider.Catalog")({
   source: Schema.Literal("openai-models"),
 }) {}
 
-export class Info extends Schema.Class<Info>("ConfigV2.Provider")({
+export class Info extends Schema.Class<Info>("Config.Provider")({
   name: Schema.String.pipe(Schema.optional),
   env: Schema.String.pipe(Schema.Array, Schema.optional),
   package: Schema.String.pipe(Schema.optional),

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { CursorUsage } from "@ycoding-ai/core/provider-usage/cursor"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 
-const input = { providerID: ProviderV2.ID.make("cursor"), label: "Cursor", updatedAt: 100 }
+const input = { providerID: Provider.ID.make("cursor"), label: "Cursor", updatedAt: 100 }
 
 const usage = {
   billingCycleStart: "1790828591000",

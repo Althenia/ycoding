@@ -1,26 +1,26 @@
 import { expect } from "bun:test"
 import { LLMClient, LLMEvent, LLMResponse, Model, SystemPart, type LLMRequest } from "@ycoding-ai/ai"
 import { OpenAIChat } from "@ycoding-ai/ai/protocols"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { llmClient } from "@ycoding-ai/core/effect/app-node-platform"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { EventTable } from "@ycoding-ai/core/event/sql"
 import { InstructionDiscovery } from "@ycoding-ai/core/instruction-discovery"
 import { Instructions } from "@ycoding-ai/core/instructions"
 import { InstructionBuiltIns } from "@ycoding-ai/core/instructions/builtins"
 import { Location } from "@ycoding-ai/core/location"
 import { McpInstructions } from "@ycoding-ai/core/mcp/instructions"
-import { ModelV2 } from "@ycoding-ai/core/model"
+import { CatalogModel } from "@ycoding-ai/core/model"
 import { PluginHooks } from "@ycoding-ai/core/plugin/hooks"
 import { PluginSupervisor } from "@ycoding-ai/core/plugin/supervisor"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { ProjectArtifactInstructions } from "@ycoding-ai/core/project-artifact/instructions"
 import { MemoryInstructions } from "@ycoding-ai/core/memory/instructions"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { ReferenceInstructions } from "@ycoding-ai/core/reference/instructions"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
@@ -109,10 +109,10 @@ const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       Database.node,
-      EventV2.node,
+      EventRuntime.node,
       SessionProjector.node,
       SessionStore.node,
-      AgentV2.node,
+      Agent.node,
       InstructionBuiltIns.node,
       PluginHooks.node,
       SessionGenerateNode.node,
@@ -138,7 +138,7 @@ const reset = () => {
 
 const durableState = (db: Database.Interface["db"], id: SessionSchema.ID) =>
   Effect.all({
-    sequence: EventV2.latestSequence(db, id),
+    sequence: EventRuntime.latestSequence(db, id),
     events: db
       .select()
       .from(EventTable)
@@ -179,11 +179,11 @@ const userTexts = (request: LLMRequest) =>
 
 const setup = Effect.gen(function* () {
   const { db } = yield* Database.Service
-  const events = yield* EventV2.Service
-  const agents = yield* AgentV2.Service
+  const events = yield* EventRuntime.Service
+  const agents = yield* Agent.Service
   const instructionBuiltIns = yield* InstructionBuiltIns.Service
   yield* agents.transform((draft) =>
-    draft.update(AgentV2.ID.make("build"), (agent) => {
+    draft.update(Agent.ID.make("build"), (agent) => {
       agent.mode = "primary"
     }),
   )
@@ -199,7 +199,7 @@ const setup = Effect.gen(function* () {
       project_id: Project.ID.global,
       directory: "/project",
       title: "Generate test",
-      agent: AgentV2.ID.make("build"),
+      agent: Agent.ID.make("build"),
     })
     .run()
     .pipe(Effect.orDie)
@@ -273,8 +273,8 @@ it.effect("generates from fresh settled Session context without durable mutation
     yield* events.publish(SessionEvent.Step.Started, {
       sessionID,
       assistantMessageID: settledAssistant,
-      agent: AgentV2.ID.make("build"),
-      model: { id: ModelV2.ID.make("generate-model"), providerID: ProviderV2.ID.make("test") },
+      agent: Agent.ID.make("build"),
+      model: { id: CatalogModel.ID.make("generate-model"), providerID: Provider.ID.make("test") },
     })
     yield* events.publish(SessionEvent.Text.Started, {
       sessionID,
@@ -291,8 +291,8 @@ it.effect("generates from fresh settled Session context without durable mutation
     yield* events.publish(SessionEvent.Step.Started, {
       sessionID,
       assistantMessageID: activeAssistant,
-      agent: AgentV2.ID.make("build"),
-      model: { id: ModelV2.ID.make("generate-model"), providerID: ProviderV2.ID.make("test") },
+      agent: Agent.ID.make("build"),
+      model: { id: CatalogModel.ID.make("generate-model"), providerID: Provider.ID.make("test") },
     })
     yield* events.publish(SessionEvent.Tool.Input.Started, {
       sessionID,

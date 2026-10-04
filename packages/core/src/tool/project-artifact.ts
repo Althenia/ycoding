@@ -6,7 +6,7 @@ import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
 import { Project } from "@ycoding-ai/schema/project"
 import { Effect, Schema } from "effect"
 import { Location } from "../location"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { ProjectArtifactStore } from "../project-artifact"
 import { ProjectArtifactSource } from "../project-artifact/source"
 import { SessionGuardrail } from "../session/guardrail"
@@ -84,7 +84,7 @@ export const Plugin = {
   id: "ycoding.tool.project-artifact",
   effect: Effect.fn("ProjectArtifactTool.Plugin")(function* (ctx: PluginContext) {
     const location = yield* Location.Service
-    const permission = yield* PermissionV2.Service
+    const permission = yield* Permission.Service
     const guardrail = yield* SessionGuardrail.Service
     const store = yield* ProjectArtifactStore.Service
     const source = yield* ProjectArtifactSource.Service

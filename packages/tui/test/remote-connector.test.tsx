@@ -46,7 +46,7 @@ async function renderRemote(server: ReturnType<typeof fakeServer>) {
     const keymap = Keymap.use()
     const dialog = useDialog()
     const theme = useTheme().contextual("elevated")
-    colors = () => ({ active: theme.themeV2.text.feedback.success.default.toInts(), inactive: theme.themeV2.text.subdued.toInts() })
+    colors = () => ({ active: theme.theme.text.feedback.success.default.toInts(), inactive: theme.theme.text.subdued.toInts() })
     commands = Keymap.useCommands()
     Keymap.createLayer(() => ({ mode: "global", commands: [
       { id: "command.palette.show", title: "Show command palette", run: () => dialog.replace(() => <CommandPaletteDialog />) },

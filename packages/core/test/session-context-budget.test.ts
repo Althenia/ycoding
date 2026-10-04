@@ -1,27 +1,27 @@
 import { describe, expect, test } from "bun:test"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { SessionContextBudget } from "@ycoding-ai/core/session/context-budget"
 
 // Real registry values from the bundled models.dev snapshot: claude-sonnet-4-5 and gpt-4o.
 const registry = [
   {
-    ...ModelV2.Info.empty(ProviderV2.ID.make("anthropic"), ModelV2.ID.make("claude-sonnet-4-5")),
+    ...CatalogModel.Info.empty(Provider.ID.make("anthropic"), CatalogModel.ID.make("claude-sonnet-4-5")),
     limit: { context: 1_000_000, output: 64_000 },
   },
   {
-    ...ModelV2.Info.empty(ProviderV2.ID.make("openai"), ModelV2.ID.make("gpt-4o")),
+    ...CatalogModel.Info.empty(Provider.ID.make("openai"), CatalogModel.ID.make("gpt-4o")),
     limit: { context: 128_000, output: 16_384 },
   },
-] satisfies readonly ModelV2.Info[]
+] satisfies readonly CatalogModel.Info[]
 
 describe("resolveCapabilities", () => {
   test("derives capabilities from registry limits for a known model", () => {
     expect(
       SessionContextBudget.resolveCapabilities(
         registry,
-        ProviderV2.ID.make("anthropic"),
-        ModelV2.ID.make("claude-sonnet-4-5"),
+        Provider.ID.make("anthropic"),
+        CatalogModel.ID.make("claude-sonnet-4-5"),
       ),
     ).toEqual({
       contextWindowTokens: 1_000_000,
@@ -34,8 +34,8 @@ describe("resolveCapabilities", () => {
     expect(
       SessionContextBudget.resolveCapabilities(
         registry,
-        ProviderV2.ID.make("anthropic"),
-        ModelV2.ID.make("no-such-model"),
+        Provider.ID.make("anthropic"),
+        CatalogModel.ID.make("no-such-model"),
       ),
     ).toBeUndefined()
   })
@@ -44,8 +44,8 @@ describe("resolveCapabilities", () => {
     expect(
       SessionContextBudget.resolveCapabilities(
         registry,
-        ProviderV2.ID.make("no-such-provider"),
-        ModelV2.ID.make("gpt-4o"),
+        Provider.ID.make("no-such-provider"),
+        CatalogModel.ID.make("gpt-4o"),
       ),
     ).toBeUndefined()
   })
@@ -53,8 +53,8 @@ describe("resolveCapabilities", () => {
   test("applies an explicit safety margin override", () => {
     const result = SessionContextBudget.resolveCapabilities(
       registry,
-      ProviderV2.ID.make("openai"),
-      ModelV2.ID.make("gpt-4o"),
+      Provider.ID.make("openai"),
+      CatalogModel.ID.make("gpt-4o"),
       { safetyMarginTokens: 4_096 },
     )
     expect(result?.contextSafetyMarginTokens).toBe(4_096)

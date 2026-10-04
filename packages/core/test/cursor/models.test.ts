@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { ModelInfo } from "../../src/cursor/provider/models"
 import { CursorModels } from "@ycoding-ai/core/cursor/models"
-import { ModelV2 } from "@ycoding-ai/core/model"
+import { CatalogModel } from "@ycoding-ai/core/model"
 import { Money } from "@ycoding-ai/schema/money"
 
 const opus: ModelInfo = {
@@ -95,7 +95,7 @@ describe("CursorModels.fromCursor", () => {
     expect(base?.settings).toBeUndefined()
     expect(base?.variants).toEqual([
       {
-        id: ModelV2.VariantID.make("Opus 4.8 High"),
+        id: CatalogModel.VariantID.make("Opus 4.8 High"),
         settings: {
           cursorVariantParameters: [
             { id: "effort", value: "high" },
@@ -104,7 +104,7 @@ describe("CursorModels.fromCursor", () => {
         },
       },
       {
-        id: ModelV2.VariantID.make("Opus 4.8 High Fast"),
+        id: CatalogModel.VariantID.make("Opus 4.8 High Fast"),
         settings: {
           cursorVariantParameters: [
             { id: "effort", value: "high" },
@@ -144,7 +144,7 @@ describe("CursorModels.fromCursor", () => {
     const models = byID(CursorModels.fromCursor([composer]))
 
     expect([...models.keys()]).toEqual(["composer-2.5", "composer-2.5-fast"])
-    expect(models.get("composer-2.5")?.variants.map((variant) => variant.id)).toEqual([ModelV2.VariantID.make("Composer 2.5 default")])
+    expect(models.get("composer-2.5")?.variants.map((variant) => variant.id)).toEqual([CatalogModel.VariantID.make("Composer 2.5 default")])
     expect(models.get("composer-2.5")?.settings).toBeUndefined()
     expect(models.get("composer-2.5-fast")).toMatchObject({
       modelID: "composer-2.5",

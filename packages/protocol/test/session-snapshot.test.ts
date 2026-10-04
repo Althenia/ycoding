@@ -45,7 +45,7 @@ test("Session-scoped managed attachment reads publish a bounded base64 result", 
   const digest = "a".repeat(64)
   const document = OpenApi.fromApi(HttpApi.make("session-attachment-test").add(group))
   const operation = document.paths["/api/session/{sessionID}/attachment/{digest}"]?.get
-  expect(operation?.operationId).toBe("v2.session.attachment.read")
+  expect(operation?.operationId).toBe("session.attachment.read")
   expect(document.components?.schemas?.["Prompt.Base64"]).toEqual({
     type: "string",
     allOf: [{ pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$" }],

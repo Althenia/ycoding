@@ -1,5 +1,5 @@
 import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqlite-core"
-import type { EventV2 } from "../event"
+import type { EventRuntime } from "../event"
 
 export const EventSequenceTable = sqliteTable("event_sequence", {
   aggregate_id: text().notNull().primaryKey(),
@@ -10,7 +10,7 @@ export const EventSequenceTable = sqliteTable("event_sequence", {
 export const EventTable = sqliteTable(
   "event",
   {
-    id: text().$type<EventV2.ID>().primaryKey(),
+    id: text().$type<EventRuntime.ID>().primaryKey(),
     aggregate_id: text()
       .notNull()
       .references(() => EventSequenceTable.aggregate_id, { onDelete: "cascade" }),

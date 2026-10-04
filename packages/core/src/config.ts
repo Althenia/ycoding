@@ -9,7 +9,7 @@ import { Permission } from "@ycoding-ai/schema/permission"
 import { Event } from "@ycoding-ai/schema/config"
 import { Integration } from "@ycoding-ai/schema/integration"
 import { Credential } from "./credential"
-import { EventV2 } from "./event"
+import { EventRuntime } from "./event"
 import { Watcher } from "./filesystem/watcher"
 import { FSUtil } from "./fs-util"
 import { Global } from "./global"
@@ -195,7 +195,7 @@ export const Options = Schema.Struct({
 })
 export type Options = typeof Options.Type
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/Config") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/Config") {}
 
 export const layer = (options?: Options) =>
   Layer.effect(
@@ -206,7 +206,7 @@ export const layer = (options?: Options) =>
       const location = yield* Location.Service
       const policy = yield* Policy.Service
       const watcher = yield* Watcher.Service
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const credentials = yield* Credential.Service
       const wellknown = yield* WellKnown.Service
       const names = ["ycoding.json", "ycoding.jsonc"]
@@ -525,7 +525,7 @@ export function configured(options?: Options) {
     layer: layer(options),
     deps: [
       Watcher.node,
-      EventV2.node,
+      EventRuntime.node,
       FSUtil.node,
       Global.node,
       Location.node,

@@ -2,14 +2,14 @@ import { Database } from "@ycoding-ai/core/database/database"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { httpClient } from "@ycoding-ai/core/effect/app-node-platform"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { EventLogger } from "@ycoding-ai/core/event-logger"
 import { FileSystemSearch } from "@ycoding-ai/core/filesystem/search"
 import { Observability } from "@ycoding-ai/core/observability"
 import { KeepAwake } from "@ycoding-ai/core/keep-awake"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Config } from "@ycoding-ai/core/config"
-import { CommandV2 } from "@ycoding-ai/core/command"
+import { Command } from "@ycoding-ai/core/command"
 import { PermissionSaved } from "@ycoding-ai/core/permission/saved"
 import { PtyTicket } from "@ycoding-ai/core/pty/ticket"
 import { Pty } from "@ycoding-ai/core/pty"
@@ -17,7 +17,7 @@ import { Project } from "@ycoding-ai/core/project"
 import { ProjectInventory } from "@ycoding-ai/core/project/inventory"
 import { ProjectArtifactStore } from "@ycoding-ai/core/project-artifact"
 import { ProjectArtifactAccounting } from "@ycoding-ai/core/project-artifact/accounting"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionCompaction } from "@ycoding-ai/core/session/compaction"
 import { SessionGenerateNode } from "@ycoding-ai/core/session/generate-node"
 import { SessionModelRequest } from "@ycoding-ai/core/session/model-request"
@@ -57,7 +57,7 @@ import { RemoteConnection } from "./remote-connection"
 
 const applicationServices = LayerNode.group([
   Database.node,
-  EventV2.node,
+  EventRuntime.node,
   EventLogger.node,
   httpClient,
   ToolOutputStore.cleanupNode,
@@ -66,7 +66,7 @@ const applicationServices = LayerNode.group([
   ProjectInventory.node,
   ProjectArtifactStore.node,
   ProjectArtifactAccounting.node,
-  SessionV2.node,
+  Session.node,
   PluginRuntime.providerNode,
   SdkPlugins.node,
   PermissionSaved.node,
@@ -128,7 +128,7 @@ function makeRoutes<AuthError, AuthServices>(
       }),
     ],
     [InstructionDiscovery.node, InstructionDiscovery.configured({ project: options.config?.project })],
-    [CommandV2.node, CommandV2.configured({ gitbash: options.windows?.gitbash })],
+    [Command.node, Command.configured({ gitbash: options.windows?.gitbash })],
     [Pty.node, Pty.configured({ gitbash: options.windows?.gitbash })],
     [Shell.node, Shell.configured({ gitbash: options.windows?.gitbash })],
     [SessionCompaction.node, SessionCompaction.configured({ client: options.client })],

@@ -149,7 +149,7 @@ async function mount(
   } = {},
 ) {
   let skills = initial
-  let separator: ReturnType<typeof useTheme>["themeV2"]["text"]["separator"]
+  let separator: ReturnType<typeof useTheme>["theme"]["text"]["separator"]
   const api = {
     session: {
       skills: async (_input: { sessionID: string }) => skills,
@@ -162,7 +162,7 @@ async function mount(
   } as unknown as YCodingClient
 
   function Rail() {
-    separator = useTheme().themeV2.text.separator
+    separator = useTheme().theme.text.separator
     const [loaded, setLoaded] = createSignal(initial)
     const refetch = async () => setLoaded(await api.session.skills({ sessionID: "ses_1" }))
     return <SkillsRailContent skills={loaded()} sessionID="ses_1" refetch={refetch} />

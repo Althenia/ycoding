@@ -383,7 +383,7 @@ describe("remote bridge", () => {
       expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status").at(-1)).toEqual({ type: "status", running: ["ses_2"], attention: ["ses_1", "ses_2"], failed: ["ses_1", "ses_2"],
         details: [{ sessionID: "ses_1", title: "One" }, { sessionID: "ses_2", title: "Two" }] })
       requests = [{ id: "per_1", sessionID: "ses_2" }]
-      test.streams[0].stream.onEvent({ type: "permission.v2.asked", data: { sessionID: "ses_2" } })
+      test.streams[0].stream.onEvent({ type: "permission.asked", data: { sessionID: "ses_2" } })
       await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status" && frame.failed?.join() === "ses_1"))
       expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status").at(-1)).toEqual({ type: "status", running: ["ses_2"], attention: ["ses_1", "ses_2"], failed: ["ses_1"],
         details: [{ sessionID: "ses_1", title: "One" }, { sessionID: "ses_2", title: "Two", need: "permission" }] })
@@ -641,7 +641,7 @@ describe("remote bridge", () => {
       for (let index = 0; index < 30; index += 1) {
         active = index % 2 === 0 || index === 29 ? ["ses_1"] : []
         permissions = index === 29 ? [{ id: "per_1", sessionID: "ses_1" }] : []
-        stream.onEvent({ type: index % 2 === 0 ? "session.step.started" : "permission.v2.asked", data: { sessionID: "ses_1" } })
+        stream.onEvent({ type: index % 2 === 0 ? "session.step.started" : "permission.asked", data: { sessionID: "ses_1" } })
       }
       await waitFor(() => sentFrames(test.records[0]).filter((frame) => frame.type === "status").length === 2 ? true : undefined, 1_000)
       expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status")).toEqual([

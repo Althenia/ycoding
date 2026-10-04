@@ -5,7 +5,7 @@ import { Integration } from "./integration.js"
 import { optional, statics } from "./schema.js"
 
 export const ID = Schema.String.pipe(
-  Schema.brand("ProviderV2.ID"),
+  Schema.brand("Provider.ID"),
   statics((schema) => ({
     opencode: schema.make("opencode"), // YCODING_EXTERNAL_OPENCODE: external provider ID
     anthropic: schema.make("anthropic"),
@@ -50,7 +50,7 @@ export const Info = Schema.Struct({
   package: Package,
   ...Overlays,
 })
-  .annotate({ identifier: "ProviderV2.Info" })
+  .annotate({ identifier: "Provider.Info" })
   .pipe(
     statics(() => ({
       empty: (id: ID): Info => ({ id, name: id, package: "" }),

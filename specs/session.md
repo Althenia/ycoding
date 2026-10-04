@@ -1,6 +1,6 @@
-# V2 Session Contract
+# Session contract
 
-Protocol owns public operations, Schema owns public shapes and durable events, and Core owns execution and persistence behavior. See [runtime behavior](../../docs/runtime.md) for the maintained product overview.
+Protocol owns public operations, Schema owns public shapes and durable events, and Core owns execution and persistence behavior. See [runtime behavior](../docs/runtime.md) for the maintained product overview.
 
 `Session.Info.time.updated` is the Session record update and list order/cursor key. Optional `Session.Info.time.active` is the millisecond creation time of the latest terminal `session.step.ended.1`, `session.step.failed.1`, `session.execution.succeeded.1`, `session.execution.failed.1`, or `session.execution.interrupted.1` event. Terminal projection updates `time.active` without changing `time.updated`; existing records are backfilled from those events and remain without activity when none exists. The remote connector forwards this optional field in Session list/get data and forwards the original event creation time on live events.
 
@@ -10,7 +10,7 @@ Protocol owns public operations, Schema owns public shapes and durable events, a
 
 State transitions publish version-2 `session.archived` or `session.unarchived` events containing only `{ sessionID }`. The projector sets or clears `time_archived` without changing `time_updated`. Archive does not delete history or remove the Session from the default list. Unarchive clears archive state; it cannot restore a Session already explicitly deleted.
 
-Automatic retention deletion is deferred for v0.1.1 pending cross-process safety. See [archive and unarchive](../../docs/runtime.md#archive-and-unarchive). Archiving does not start a deletion timer.
+Automatic retention deletion is deferred for v0.1.1 pending cross-process safety. See [archive and unarchive](../docs/runtime.md#archive-and-unarchive). Archiving does not start a deletion timer.
 
 ## Pin Is Shared Session State
 
@@ -20,7 +20,7 @@ State transitions publish version-1 `session.pinned` or `session.unpinned` event
 
 ## Prompt Admission Precedes Execution
 
-`SessionV2.prompt(...)` records one durable `session.input.admitted` fact and one `session_pending` row before advisory execution begins. Pending input remains outside model-visible Session History until promotion. The promotion transaction publishes `session.input.promoted`, projects the visible message, and consumes the pending row atomically.
+`Session.prompt(...)` records one durable `session.input.admitted` fact and one `session_pending` row before advisory execution begins. Pending input remains outside model-visible Session History until promotion. The promotion transaction publishes `session.input.promoted`, projects the visible message, and consumes the pending row atomically.
 
 Known explicit local `$skill-id` references are captured in the existing prompt `metadata.skills` as requested IDs after discovery is ready. Explicit skill metadata supplied by clients has the same meaning. At the input's serialized promotion boundary, the runner verifies availability and effective denies, records missing active skill content through `session.skill.activated`, and only then promotes the input and assembles its model request. Queued skill requirements do not activate during an earlier input's steps. A denied or unavailable recorded requirement fails execution with the input still pending and no provider request. Active skill status remains derived from transcript history; repeated references and retries do not create duplicate active records. Direct `session.skill` activation also enforces effective denies before reading skill content, returning the existing unavailable-skill error on denial.
 
@@ -171,7 +171,7 @@ MCP-served skills use a collision-safe identity derived from the configured serv
 
 The completed `skill` tool message retains the verified MCP entry as the durable activation authority. Later supporting-resource calls require that active activation, resolve only references contained by its held manifest, repeat the content-bound permission assertion, and verify the returned bytes against that manifest. They do not create a second activation or retrieve unlisted resources.
 
-`SessionV2.resolveSkillConflict({ sessionID, winner, loser })` accepts two currently active skills only when the derived status reports a skill conflict between them. It appends `session.skill.deactivated.1` with the losing skill ID, its activation message ID, and reason `conflict_resolved`. The projector adds that deactivation fact to the existing activation message; it does not create a second skill-status store.
+`Session.resolveSkillConflict({ sessionID, winner, loser })` accepts two currently active skills only when the derived status reports a skill conflict between them. It appends `session.skill.deactivated.1` with the losing skill ID, its activation message ID, and reason `conflict_resolved`. The projector adds that deactivation fact to the existing activation message; it does not create a second skill-status store.
 
 `SessionSkillStatus` folds activation messages, tool activations, agent switches, completed compactions, and projected conflict resolutions in order. A resolved loser is inactive with `conflict_resolved`, has no reported conflicts, and can become active again only through a later ordinary activation. The winner remains active with its original instruction content. A conflict-free Session rejects resolution without a durable event or projection change, and resolution never resumes Session execution.
 

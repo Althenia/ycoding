@@ -16,16 +16,18 @@ sources:
 - id: product-dir
   resource: repo:///docs/product-direction.md
 - id: spec-v2
-  resource: repo:///specs/v2/session.md
+  resource: repo:///specs/session.md
 - id: agents
   resource: repo:///AGENTS.md
 ---
+
+
 
 ## Durable Admission
 
 A prompt is durably admitted before execution is scheduled; the pending row represents unconsumed work only and promotion into the visible transcript happens at a safe execution boundary.[^runtime-doc]
 
-Reusing a Session ID adopts the existing session; reusing a prompt message ID is accepted only for an exact retry with matching session, content, and delivery mode, and conflicting reuse fails.[^runtime-doc]
+Reusing a Session ID adopts the existing session; reusing a prompt message ID returns the first admitted durable record and wakes execution. Reuse across Sessions or input kinds is rejected, but sending a prompt never fails solely on ID reuse.[^runtime-doc]
 
 Attachments admitted as URIs are normalized into managed content-addressed references; durable attachment records carry digest, byte count, and managed path, never base64 payloads or source URIs.[^runtime-doc]
 
@@ -55,7 +57,7 @@ Promoting new user input resets the selected agent step allowance; a batch of st
 
 ## Autonomy Modes
 
-Session autonomy is durable with normal, yolo levels 1-3, and goal modes; yolo 1 auto-answers questions and forms, yolo 2 also auto-approves ask permissions, yolo 3 also auto-approves guardrail reviews, and active goal auto-answers questions and permissions but still requires yolo 3 for guardrails.[^runtime-doc]
+Session autonomy is durable with normal, yolo levels 0-3, and goal modes; yolo 1 auto-answers questions and forms, yolo 2 also auto-approves ask permissions, yolo 3 also auto-approves guardrail reviews, and active goal auto-answers questions and permissions but still requires yolo 3 for guardrails.[^runtime-doc]
 
 Goal mode terminates explicitly as completed, stopped, or exhausted; reports are reserved for unresolved blockers after reasonable self-resolution and each accepted report consumes one no-progress attempt.[^runtime-doc]
 
@@ -78,5 +80,5 @@ Runtime observations for session-state, team-view, and step-limit sources are ap
 - [Project Artifacts](./project-artifacts.md)
 
 [^runtime-doc]: repo:///docs/runtime.md
-[^spec-v2]: repo:///specs/v2/session.md
+[^spec-v2]: repo:///specs/session.md
 [^agents]: repo:///AGENTS.md

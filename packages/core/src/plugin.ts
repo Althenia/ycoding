@@ -1,20 +1,20 @@
-export * as PluginV2 from "./plugin"
+export * as PluginRegistry from "./plugin"
 
 import type { Plugin } from "@ycoding-ai/plugin/effect/plugin"
 import { Event, ID, type Info } from "@ycoding-ai/schema/plugin"
 import { makeLocationNode } from "./effect/app-node"
 import { Context, Effect, Exit, Layer, Scope, Semaphore } from "effect"
-import { AgentV2 } from "./agent"
+import { Agent } from "./agent"
 import { AISDK } from "./aisdk"
 import { Catalog } from "./catalog"
-import { CommandV2 } from "./command"
-import { EventV2 } from "./event"
+import { Command } from "./command"
+import { EventRuntime } from "./event"
 import { Integration } from "./integration"
 import { Location } from "./location"
 import { PluginHost } from "./plugin/host"
 import { PluginRuntime } from "./plugin/runtime"
 import { Reference } from "./reference"
-import { SkillV2 } from "./skill"
+import { Skill } from "./skill"
 import { State } from "./state"
 import { ToolRegistry } from "./tool/registry"
 import { ToolHooks } from "./tool/hooks"
@@ -29,12 +29,12 @@ export interface Versioned extends Plugin {
   readonly version: string
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/Plugin") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/Plugin") {}
 
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const scope = yield* Scope.make()
     const active = new Map<typeof ID.Type, { readonly plugin: Versioned; readonly scope: Scope.Closeable }>()
     const lock = Semaphore.makeUnsafe(1)
@@ -143,15 +143,15 @@ export const node = makeLocationNode({
   service: Service,
   layer,
   deps: [
-    EventV2.node,
-    AgentV2.node,
+    EventRuntime.node,
+    Agent.node,
     AISDK.node,
     Catalog.node,
-    CommandV2.node,
+    Command.node,
     Integration.node,
     Location.node,
     Reference.node,
-    SkillV2.node,
+    Skill.node,
     ToolRegistry.toolsNode,
     ToolHooks.node,
     PluginHooks.node,

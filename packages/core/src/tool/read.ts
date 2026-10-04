@@ -8,7 +8,7 @@ import { FileSystem } from "../filesystem"
 import { FSUtil } from "../fs-util"
 import { Location } from "../location"
 import { LocationMutation } from "../location-mutation"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { SessionInstructions } from "../session/instructions"
 import { AbsolutePath } from "../schema"
 import { ReadToolFileSystem } from "./read-filesystem"
@@ -32,13 +32,13 @@ const Output = Schema.Union([FileSystem.Content, ReadToolFileSystem.TextPage, Re
 export const authorize = Effect.fn("ReadTool.authorize")(function* (
   services: {
     readonly mutation: LocationMutation.Interface
-    readonly permission: PermissionV2.Interface
+    readonly permission: Permission.Interface
     readonly reader: ReadToolFileSystem.Interface
   },
   file: string,
   context: {
-    readonly sessionID: Parameters<PermissionV2.Interface["assert"]>[0]["sessionID"]
-    readonly agent: Parameters<PermissionV2.Interface["assert"]>[0]["agent"]
+    readonly sessionID: Parameters<Permission.Interface["assert"]>[0]["sessionID"]
+    readonly agent: Parameters<Permission.Interface["assert"]>[0]["agent"]
     readonly messageID: string
     readonly callID: string
   },
@@ -70,7 +70,7 @@ export const Plugin = {
   effect: Effect.fn("ReadTool.Plugin")(function* (ctx: PluginContext) {
     const reader = yield* ReadToolFileSystem.Service
     const mutation = yield* LocationMutation.Service
-    const permission = yield* PermissionV2.Service
+    const permission = yield* Permission.Service
     const sessionInstructions = yield* SessionInstructions.Service
     const fs = yield* FSUtil.Service
     const location = yield* Location.Service

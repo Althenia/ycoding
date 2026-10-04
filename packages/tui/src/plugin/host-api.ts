@@ -1,9 +1,9 @@
 import type {
   McpServer,
   YCodingClient,
-  PermissionV2Request,
-  ProviderV2Info,
-  QuestionV2Request,
+  PermissionRequest,
+  ProviderInfo,
+  QuestionRequest,
   SessionInfo,
   SessionMessageAssistant,
   SessionMessageInfo,
@@ -13,9 +13,6 @@ import type { Info as TuiConfigInfo } from "../config"
 
 type LspStatus = { id: string; root: string; status: string }
 type McpStatus = McpServer["status"]
-type Provider = ProviderV2Info
-type PermissionRequest = PermissionV2Request
-type QuestionRequest = QuestionV2Request
 type Session = SessionInfo
 type Message = SessionMessageInfo
 type Part = SessionMessageAssistant["content"][number]
@@ -29,7 +26,7 @@ import type { CliRenderer, KeyEvent, Renderable, SlotMode } from "@opentui/core"
 import type { Binding, Keymap } from "@opentui/keymap"
 import type { KeySequenceFormatPart, SequenceBindingLike } from "@opentui/keymap/extras"
 import type { JSX, SolidPlugin } from "@opentui/solid"
-import type { ComponentTheme } from "../theme/v2/component"
+import type { ComponentTheme } from "../theme/component"
 
 export type { CliRenderer, KeyEvent, Renderable, SlotMode } from "@opentui/core"
 export type { Binding } from "@opentui/keymap"
@@ -253,7 +250,7 @@ export type TuiTheme = {
   readonly ready: boolean
 }
 
-/** @deprecated Persistent TUI KV storage is not supported in V2. */
+/** @deprecated Persistent TUI KV storage is not supported. */
 export type TuiKV = {
   get: <Value = unknown>(key: string, fallback?: Value) => Value
   set: (key: string, value: unknown) => void
@@ -263,7 +260,7 @@ export type TuiKV = {
 export type TuiState = {
   readonly ready: boolean
   readonly config: SdkConfig
-  readonly provider: ReadonlyArray<Provider>
+  readonly provider: ReadonlyArray<ProviderInfo>
   readonly path: {
     state: string
     config: string
@@ -513,7 +510,7 @@ export type TuiPluginApi = {
     dialog: TuiDialogStack
   }
   readonly tuiConfig: Frozen<TuiConfigView>
-  /** @deprecated Persistent TUI KV storage is not supported in V2. */
+  /** @deprecated Persistent TUI KV storage is not supported. */
   kv: TuiKV
   state: TuiState
   theme: TuiTheme

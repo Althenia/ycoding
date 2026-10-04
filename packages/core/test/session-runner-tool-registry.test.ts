@@ -1,10 +1,10 @@
 import { describe, expect } from "bun:test"
 import { Tool } from "@ycoding-ai/core/tool/tool"
-import { AgentV2 } from "@ycoding-ai/core/agent"
-import type { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Agent } from "@ycoding-ai/core/agent"
+import type { Permission } from "@ycoding-ai/core/permission"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { Image } from "@ycoding-ai/core/image"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionModelRequest } from "@ycoding-ai/core/session/model-request"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
@@ -54,10 +54,10 @@ const registryLayer = AppNodeBuilder.build(ToolRegistry.node, [
 ])
 const it = testEffect(registryLayer)
 const identity = {
-  agent: AgentV2.ID.make("build"),
+  agent: Agent.ID.make("build"),
   messageID: SessionMessage.ID.make("msg_registry"),
 }
-const sessionID = SessionV2.ID.make("ses_registry")
+const sessionID = Session.ID.make("ses_registry")
 const call = (name: string, id = `call-${name}`): ToolRegistry.ExecuteInput => ({
   sessionID,
   ...identity,
@@ -129,7 +129,7 @@ describe("ToolRegistry", () => {
         edit: make("edit"),
         write: make("edit"),
       }, { codemode: false })
-      const names = (permissions: PermissionV2.Ruleset) =>
+      const names = (permissions: Permission.Ruleset) =>
         toolDefinitions(service, permissions).pipe(Effect.map((definitions) => definitions.map((tool) => tool.name)))
 
       expect(yield* names([{ action: "question", resource: "*", effect: "deny" }])).toEqual(["bash", "edit", "write"])

@@ -8,10 +8,10 @@
  *
  * Two WebSocket surfaces use one envelope vocabulary:
  *
- * - Browser: `GET /ws/v3/client?device=<deviceID>` authenticated by the browser
+ * - Browser: `GET /ws/v4/client?device=<deviceID>` authenticated by the browser
  *   session cookie, then device selection. Client frames are `request` and `ping`
  *   (plus the `pong` heartbeat reply).
- * - Local agent: `GET /ws/v3/agent` authenticated by `Authorization: Bearer <access
+ * - Local agent: `GET /ws/v4/agent` authenticated by `Authorization: Bearer <access
  *   token>` from the device challenge flow. Agent frames are `response`, `event`,
  *   `sessions`, and `ping`/`pong`.
  *
@@ -25,7 +25,7 @@
  */
 
 /** Envelope revision. Bump only with a coordinated relay/agent/client release. */
-export const RemoteProtocolVersion = 3
+export const RemoteProtocolVersion = 4
 
 /** Versioned WebSocket routes derived from the envelope revision. */
 export const RemoteWebSocketPath = {

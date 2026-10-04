@@ -10,12 +10,12 @@ import {
   HttpIncomingMessage,
 } from "effect/unstable/http"
 import { Credential } from "../../credential"
-import { EventV2 } from "../../event"
+import { EventRuntime } from "../../event"
 import { InstallationVersion } from "../../installation/version"
 import { Integration } from "../../integration"
-import { ModelV2 } from "../../model"
+import { CatalogModel } from "../../model"
 import { OauthCallbackPage } from "../../oauth/page"
-import { ProviderV2 } from "../../provider"
+import { Provider } from "../../provider"
 import type { PluginInternal } from "../internal"
 import { OpenAICodex } from "./openai-codex"
 
@@ -174,7 +174,7 @@ const headless = {
 export const OpenAIPlugin = define({
   id: "ycoding.provider.openai",
   effect: Effect.fn(function* (ctx) {
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const http = yield* HttpClient.HttpClient
     const loading = Semaphore.makeUnsafe(1)
     let chatgpt = false
@@ -239,17 +239,17 @@ export const OpenAIPlugin = define({
     const initial = yield* load()
     yield* ctx.catalog.transform((evt) => {
       for (const item of evt.provider.list()) {
-        if (!ProviderV2.isAISDK(item.provider.package)) continue
-        if (ProviderV2.packageName(item.provider.package) !== "@ai-sdk/openai") continue
-        if (!item.models.has(ModelV2.ID.make("gpt-5-chat-latest"))) continue
-        evt.model.update(item.provider.id, ModelV2.ID.make("gpt-5-chat-latest"), (model) => {
+        if (!Provider.isAISDK(item.provider.package)) continue
+        if (Provider.packageName(item.provider.package) !== "@ai-sdk/openai") continue
+        if (!item.models.has(CatalogModel.ID.make("gpt-5-chat-latest"))) continue
+        evt.model.update(item.provider.id, CatalogModel.ID.make("gpt-5-chat-latest"), (model) => {
           // OpenAIPlugin sends OpenAI models through Responses; this alias is a
           // chat-completions-only model, so hide it only from OpenAI's catalog.
           model.enabled = false
         })
       }
       if (!chatgpt) return
-      const item = evt.provider.get(ProviderV2.ID.openai)
+      const item = evt.provider.get(Provider.ID.openai)
       if (!item) return
       for (const model of [...item.models.values()]) {
         // ChatGPT-plan tokens only authorize codex-eligible models. Catalog
@@ -295,7 +295,7 @@ export const OpenAIPlugin = define({
     yield* ctx.aisdk.hook(
       "language",
       Effect.fn(function* (evt) {
-        if (evt.model.providerID !== ProviderV2.ID.openai) return
+        if (evt.model.providerID !== Provider.ID.openai) return
         evt.language = evt.sdk.responses(evt.model.modelID ?? evt.model.id)
       }),
     )

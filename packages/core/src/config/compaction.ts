@@ -18,7 +18,7 @@ export const Advisory = Schema.Union([
 ])
 export type Advisory = typeof Advisory.Type
 
-export class Info extends Schema.Class<Info>("ConfigV2.Compaction")({
+export class Info extends Schema.Class<Info>("Config.Compaction")({
   keep_recent_messages: NonNegativeInt.pipe(Schema.optional),
   reserved_output_tokens: NonNegativeInt.pipe(Schema.optional),
   context_safety_margin_tokens: NonNegativeInt.pipe(Schema.optional),

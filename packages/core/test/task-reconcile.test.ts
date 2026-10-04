@@ -1,16 +1,16 @@
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
 import { eq, inArray } from "drizzle-orm"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Project } from "@ycoding-ai/core/project"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { SessionTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
@@ -20,16 +20,16 @@ import { SessionStore } from "@ycoding-ai/core/session/store"
 import { testEffect } from "./lib/effect"
 import { rmSync } from "node:fs"
 
-const model = ModelV2.Ref.make({
-  providerID: ProviderV2.ID.make("openai"),
-  id: ModelV2.ID.make("gpt-5.6"),
-  variant: ModelV2.VariantID.make("high"),
+const model = CatalogModel.Ref.make({
+  providerID: Provider.ID.make("openai"),
+  id: CatalogModel.ID.make("gpt-5.6"),
+  variant: CatalogModel.VariantID.make("high"),
 })
 
 const staleStates = ["starting", "running", "waiting", "cancelling"] as const
 
 describe("SessionTask.reconcileStaleTasks", () => {
-  const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionProjector.node])))
+  const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node])))
 
   it.effect("fails stale tasks and bumps parent orchestration revision idempotently", () =>
     Effect.gen(function* () {
@@ -83,7 +83,7 @@ describe("SessionTask.reconcileStaleTasks", () => {
             tool_call_id: `call_${idx}`,
             input_id: SessionMessage.ID.make(`msg_input_${idx}`),
             description: `task ${state}`,
-            agent: AgentV2.ID.make("build"),
+            agent: Agent.ID.make("build"),
             model,
             prompt_digest: `digest_${idx}`,
             background: true,
@@ -122,7 +122,7 @@ describe("SessionTask.reconcileStaleTasks", () => {
           tool_call_id: "call_term",
           input_id: SessionMessage.ID.make("msg_input_term"),
           description: "terminal",
-          agent: AgentV2.ID.make("build"),
+          agent: Agent.ID.make("build"),
           model,
           prompt_digest: "digest_term",
           background: true,
@@ -188,7 +188,7 @@ describe("SessionTask.reconcileStaleTasks", () => {
           tool_call_id: "call_new",
           input_id: SessionMessage.ID.make("msg_input_new"),
           description: "new running",
-          agent: AgentV2.ID.make("build"),
+          agent: Agent.ID.make("build"),
           model,
           prompt_digest: "digest_new",
           background: true,
@@ -239,7 +239,7 @@ describe("SessionTask.reconcileStaleTasks", () => {
             tool_call_id: "call_restart",
             input_id: SessionMessage.ID.make("msg_restart_input"),
             description: "stale running",
-            agent: AgentV2.ID.make("build"),
+            agent: Agent.ID.make("build"),
             model,
             prompt_digest: "digest_restart",
             background: true,
@@ -255,7 +255,7 @@ describe("SessionTask.reconcileStaleTasks", () => {
 
       // Second boot: SessionStore init should auto-reconcile
       const secondLayer = AppNodeBuilder.build(
-        LayerNode.group([Database.configured({ path: tmpPath }), EventV2.node, SessionProjector.node, SessionStore.node]),
+        LayerNode.group([Database.configured({ path: tmpPath }), EventRuntime.node, SessionProjector.node, SessionStore.node]),
       )
       yield* Effect.gen(function* () {
         const db = (yield* Database.Service).db

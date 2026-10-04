@@ -1,5 +1,5 @@
 /**
- * Model-facing V2 exact-edit leaf. Relative paths resolve within the active
+ * Model-facing exact-edit leaf. Relative paths resolve within the active
  * Location. Absolute paths inside that Location are accepted, while explicit
  * absolute external paths retain mutation capability through a separate
  * external_directory approval before edit approval.
@@ -14,7 +14,7 @@ import { Effect, Schema } from "effect"
 import { FileMutation } from "../file-mutation"
 import { FSUtil } from "../fs-util"
 import { LocationMutation } from "../location-mutation"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { SessionGuardrail } from "../session/guardrail"
 import { Tool } from "./tool"
 
@@ -79,12 +79,12 @@ export const toModelOutput = (output: Output, oldString: string, newString: stri
     "```",
   ].join("\n")
 
-/** Deferred V2 edit behavior and UX integrations remain visible at the model-facing seam. */
+/** Deferred edit behavior and UX integrations remain visible at the model-facing seam. */
 // TODO: Port V1 fuzzy correction strategies only after exact-edit behavior is established: line-trimmed matching, block-anchor fallback, indentation correction, and similarity-threshold review.
-// TODO: Add formatter integration after V2 formatter runtime exists.
-// TODO: Publish watcher/file-edit events after V2 watcher integration exists.
+// TODO: Add formatter integration when its runtime exists.
+// TODO: Publish watcher/file-edit events when that integration exists.
 // TODO: Add snapshots / undo after design exists.
-// TODO: Add LSP notification and diagnostics after V2 LSP runtime exists.
+// TODO: Add LSP notification and diagnostics when that runtime exists.
 
 export const Plugin = {
   id: "ycoding.tool.edit",
@@ -92,7 +92,7 @@ export const Plugin = {
     const mutation = yield* LocationMutation.Service
     const files = yield* FileMutation.Service
     const fs = yield* FSUtil.Service
-    const permission = yield* PermissionV2.Service
+    const permission = yield* Permission.Service
     const guardrail = yield* SessionGuardrail.Service
 
     yield* ctx.tool

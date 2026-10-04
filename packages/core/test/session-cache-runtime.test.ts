@@ -2,13 +2,13 @@ import { expect } from "bun:test"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Database } from "@ycoding-ai/core/database/database"
-import { ModelV2 } from "@ycoding-ai/core/model"
+import { CatalogModel } from "@ycoding-ai/core/model"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { SessionRunnerCache } from "@ycoding-ai/core/session/runner/cache"
 import { SessionCacheRuntime } from "@ycoding-ai/core/session/runner/cache-runtime"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
@@ -19,9 +19,9 @@ const database = Database.layer({ path: ":memory:" })
 const it = testEffect(Layer.provideMerge(SessionCacheRuntime.layer, database))
 const sessionID = SessionSchema.ID.make("ses_cache_runtime")
 
-const adaptiveModel = ModelV2.Ref.make({
-  providerID: ProviderV2.ID.make("openai"),
-  id: ModelV2.ID.make("gpt-5.6"),
+const adaptiveModel = CatalogModel.Ref.make({
+  providerID: Provider.ID.make("openai"),
+  id: CatalogModel.ID.make("gpt-5.6"),
 })
 const adaptiveNow = SessionRunnerCache.PROMPT_CACHE_ROTATION_INTERVAL_MS * 5 + 1_000
 const adaptiveBaseline = "c".repeat(64)
@@ -69,7 +69,7 @@ const insertAdaptiveSteps = (rows: ReadonlyArray<{
           id: ProviderRequest.ID.make(`prq_adaptive_${existing.length + index}`),
           session_id: sessionID,
           source: "step" as const,
-          agent: AgentV2.ID.make("build"),
+          agent: Agent.ID.make("build"),
           model: adaptiveModel,
           route_id: "openai-responses",
           prompt_cache_key: row.promptCacheKey ?? adaptiveBaseline,

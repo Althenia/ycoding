@@ -1,56 +1,56 @@
 import { describe, expect } from "bun:test"
 import { DateTime, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { Database } from "@ycoding-ai/core/database/database"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Location } from "@ycoding-ai/core/location"
-import { ProjectV2 } from "@ycoding-ai/core/project"
+import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionProviderRequest } from "@ycoding-ai/core/session/provider-request"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { Money } from "@ycoding-ai/schema/money"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { testEffect } from "./lib/effect"
 import { eq } from "drizzle-orm"
 
 const projects = Layer.succeed(
-  ProjectV2.Service,
-  ProjectV2.Service.of({
+  Project.Service,
+  Project.Service.of({
     list: () =>
       Effect.succeed([
         {
-          id: ProjectV2.ID.make("report-other"),
+          id: Project.ID.make("report-other"),
           worktree: "/report-other",
           name: "Report other",
           time: { created: 0, updated: 0 },
           sandboxes: [],
         },
         {
-          id: ProjectV2.ID.make("usage-first"),
+          id: Project.ID.make("usage-first"),
           worktree: "/usage-first",
           name: "Usage first",
           time: { created: 0, updated: 0 },
           sandboxes: [],
         },
         {
-          id: ProjectV2.ID.make("usage-second"),
+          id: Project.ID.make("usage-second"),
           worktree: "/usage-second",
           time: { created: 0, updated: 0 },
           sandboxes: [],
         },
       ]),
-    resolve: (directory) => Effect.succeed({ id: ProjectV2.ID.global, directory }),
+    resolve: (directory) => Effect.succeed({ id: Project.ID.global, directory }),
     directories: () => Effect.succeed([]),
     recordOpened: () => Effect.void,
     commit: () => Effect.void,
@@ -61,10 +61,10 @@ const catalog = Layer.mock(Catalog.Service, {
   model: {
     get: (providerID, modelID) => {
       const cost =
-        providerID === ProviderV2.ID.make("openai") && modelID === ModelV2.ID.make("provider-priced")
+        providerID === Provider.ID.make("openai") && modelID === CatalogModel.ID.make("provider-priced")
           ? 2
           :
-              providerID === ProviderV2.ID.openrouter &&
+              providerID === Provider.ID.openrouter &&
                 ["anthropic/fallback-priced", "openai/provider-priced"].includes(modelID)
             ? 20
             : undefined
@@ -72,7 +72,7 @@ const catalog = Layer.mock(Catalog.Service, {
         cost === undefined
           ? undefined
           : {
-              ...ModelV2.Info.empty(providerID, modelID),
+              ...CatalogModel.Info.empty(providerID, modelID),
               cost: [
                 {
                   input: Money.USDPerMillionTokens.make(cost),
@@ -91,9 +91,9 @@ const catalog = Layer.mock(Catalog.Service, {
 })
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionStore.node, SessionProviderRequest.node, Catalog.node, SessionV2.node]),
+    LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node, SessionStore.node, SessionProviderRequest.node, Catalog.node, Session.node]),
     [
-      [ProjectV2.node, projects],
+      [Project.node, projects],
       [SessionExecution.node, SessionExecution.noopLayer],
       [Catalog.node, catalog],
     ],
@@ -101,20 +101,20 @@ const it = testEffect(
 )
 const location = Location.Ref.make({ directory: AbsolutePath.make(process.cwd()) })
 
-describe("SessionV2.log", () => {
+describe("Session.log", () => {
   it.effect("reads durable provider usage through the Session service", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const created = yield* session.create({ location })
       yield* events.publish(SessionEvent.ProviderRequestRecorded, {
         id: ProviderRequest.ID.make("prq_session_usage"),
         sessionID: created.id,
         source: "step",
-        agent: AgentV2.ID.make("build"),
-        model: ModelV2.Ref.make({
-          providerID: ProviderV2.ID.make("openai"),
-          id: ModelV2.ID.make("gpt-5.6"),
+        agent: Agent.ID.make("build"),
+        model: CatalogModel.Ref.make({
+          providerID: Provider.ID.make("openai"),
+          id: CatalogModel.ID.make("gpt-5.6"),
         }),
         routeID: "openai-responses",
         promptCacheKey: "cache-key",
@@ -142,18 +142,18 @@ describe("SessionV2.log", () => {
 
   it.effect("aggregates root families and estimates missing costs from provider then OpenRouter catalogs", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const root = yield* session.create({ location })
       const child = yield* session.create({ parentID: root.id })
       const grandchild = yield* session.create({ parentID: child.id })
-      const record = Effect.fnUntraced(function* (sessionID: SessionV2.ID, id: string, providerID: string, model: string) {
+      const record = Effect.fnUntraced(function* (sessionID: Session.ID, id: string, providerID: string, model: string) {
         yield* events.publish(SessionEvent.ProviderRequestRecorded, {
           id: ProviderRequest.ID.make(`prq_${id}`),
           sessionID,
           source: "step",
-          agent: AgentV2.ID.make("build"),
-          model: ModelV2.Ref.make({ providerID: ProviderV2.ID.make(providerID), id: ModelV2.ID.make(model) }),
+          agent: Agent.ID.make("build"),
+          model: CatalogModel.Ref.make({ providerID: Provider.ID.make(providerID), id: CatalogModel.ID.make(model) }),
           routeID: "test",
           promptCacheKey: `${id}-cache-key`,
           systemDigest: "system",
@@ -197,13 +197,13 @@ describe("SessionV2.log", () => {
 
   it.effect("reports family usage by model, agent, session, and project without leaking ledger internals", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const database = yield* Database.Service
       const root = yield* session.create({ location, title: "Root report" })
       const child = yield* session.create({ parentID: root.id, title: "Child report" })
       const grandchild = yield* session.create({ parentID: child.id, title: "Grandchild report" })
-      const otherProject = ProjectV2.ID.make("report-other")
+      const otherProject = Project.ID.make("report-other")
       yield* database.db
         .insert(ProjectTable)
         .values({ id: otherProject, worktree: AbsolutePath.make("/report-other"), sandboxes: [] })
@@ -222,7 +222,7 @@ describe("SessionV2.log", () => {
         .run()
         .pipe(Effect.orDie)
       const record = Effect.fnUntraced(function* (input: {
-        sessionID: SessionV2.ID
+        sessionID: Session.ID
         id: string
         source: ProviderRequest.Source
         agent: string
@@ -239,10 +239,10 @@ describe("SessionV2.log", () => {
           id: ProviderRequest.ID.make(`prq_${input.id}`),
           sessionID: input.sessionID,
           source: input.source,
-          agent: AgentV2.ID.make(input.agent),
-          model: ModelV2.Ref.make({
-            providerID: ProviderV2.ID.make(input.providerID),
-            id: ModelV2.ID.make(input.model),
+          agent: Agent.ID.make(input.agent),
+          model: CatalogModel.Ref.make({
+            providerID: Provider.ID.make(input.providerID),
+            id: CatalogModel.ID.make(input.model),
           }),
           routeID: `secret-route-${input.id}`,
           promptCacheKey: `secret-cache-${input.id}`,
@@ -375,8 +375,8 @@ describe("SessionV2.log", () => {
 
   it.effect("uses UTC buckets, exclusive upper bounds, and page-independent totals", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const created = yield* session.create({ location })
       const times = [
         Date.UTC(2026, 0, 31, 23, 59, 59, 999),
@@ -389,8 +389,8 @@ describe("SessionV2.log", () => {
           id: ProviderRequest.ID.make(`prq_time_${index}`),
           sessionID: created.id,
           source: "step",
-          agent: AgentV2.ID.make("build"),
-          model: ModelV2.Ref.make({ providerID: ProviderV2.ID.make("custom"), id: ModelV2.ID.make("missing") }),
+          agent: Agent.ID.make("build"),
+          model: CatalogModel.Ref.make({ providerID: Provider.ID.make("custom"), id: CatalogModel.ID.make("missing") }),
           routeID: "private-route",
           promptCacheKey: "private-cache",
           systemDigest: "private-system",
@@ -457,15 +457,15 @@ describe("SessionV2.log", () => {
 
   it.effect("reports retained usage across independent roots, children, projects, locations, and archives", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const database = yield* Database.Service
       const secondLocation = Location.Ref.make({ directory: AbsolutePath.make(`${process.cwd()}/..`) })
       const firstRoot = yield* session.create({ location, title: "First root" })
       const child = yield* session.create({ parentID: firstRoot.id, title: "Archived child" })
       const secondRoot = yield* session.create({ location: secondLocation, title: "Second root" })
-      const firstProject = ProjectV2.ID.make("usage-first")
-      const secondProject = ProjectV2.ID.make("usage-second")
+      const firstProject = Project.ID.make("usage-first")
+      const secondProject = Project.ID.make("usage-second")
       yield* database.db
         .insert(ProjectTable)
         .values([
@@ -504,10 +504,10 @@ describe("SessionV2.log", () => {
             id: ProviderRequest.ID.make(`prq_global_${item.id}`),
             sessionID: item.sessionID,
             source: "step",
-            agent: AgentV2.ID.make("build"),
-            model: ModelV2.Ref.make({
-              providerID: ProviderV2.ID.make("openai"),
-              id: ModelV2.ID.make("provider-priced"),
+            agent: Agent.ID.make("build"),
+            model: CatalogModel.Ref.make({
+              providerID: Provider.ID.make("openai"),
+              id: CatalogModel.ID.make("provider-priced"),
             }),
             routeID: "private-route",
             promptCacheKey: "private-cache",
@@ -558,8 +558,8 @@ describe("SessionV2.log", () => {
 
   it.effect("groups local usage through a DST transition and a non-hour-offset day and month boundary", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const created = yield* session.create({ location })
       const times = [
         Date.UTC(2026, 2, 8, 4, 30), Date.UTC(2026, 2, 8, 5, 30),
@@ -572,8 +572,8 @@ describe("SessionV2.log", () => {
         id: ProviderRequest.ID.make(`prq_zoned_${index}`),
         sessionID: created.id,
         source: "step",
-        agent: AgentV2.ID.make("build"),
-        model: ModelV2.Ref.make({ providerID: ProviderV2.ID.make("openai"), id: ModelV2.ID.make("provider-priced") }),
+        agent: Agent.ID.make("build"),
+        model: CatalogModel.Ref.make({ providerID: Provider.ID.make("openai"), id: CatalogModel.ID.make("provider-priced") }),
         routeID: "test-route",
         promptCacheKey: "test-cache",
         systemDigest: "test-system",
@@ -603,17 +603,17 @@ describe("SessionV2.log", () => {
 
   it.effect("replays public session events and marks synced at the aggregate watermark", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const created = yield* session.create({ location })
       yield* events.publish(SessionEvent.ProviderRequestRecorded, {
         id: ProviderRequest.ID.make("prq_hidden_log_record"),
         sessionID: created.id,
         source: "step",
-        agent: AgentV2.ID.make("build"),
-        model: ModelV2.Ref.make({
-          providerID: ProviderV2.ID.make("openai"),
-          id: ModelV2.ID.make("gpt-5.6"),
+        agent: Agent.ID.make("build"),
+        model: CatalogModel.Ref.make({
+          providerID: Provider.ID.make("openai"),
+          id: CatalogModel.ID.make("gpt-5.6"),
         }),
         routeID: "openai-responses",
         promptCacheKey: "prompt-cache-secret-that-must-not-reach-the-public-log",
@@ -640,7 +640,7 @@ describe("SessionV2.log", () => {
 
   it.effect("continues with live public events when following", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       const created = yield* session.create({ location })
       const fiber = yield* session
         .log({ sessionID: created.id, follow: true })
@@ -656,52 +656,52 @@ describe("SessionV2.log", () => {
 
   it.effect("fails with NotFound for an unknown session", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const error = yield* Effect.flip(Stream.runCollect(session.log({ sessionID: SessionV2.ID.create() })))
+      const session = yield* Session.Service
+      const error = yield* Effect.flip(Stream.runCollect(session.log({ sessionID: Session.ID.create() })))
       expect(error._tag).toBe("Session.NotFoundError")
     }),
   )
 
   it.effect("reads across undecodable gaps in aggregate order and marks the true log position", () =>
     Effect.gen(function* () {
-      const GapEvent = EventV2.durable({
+      const GapEvent = EventRuntime.durable({
         type: "test.session.log.gap",
         durable: { aggregate: "sessionID", version: 1 },
-        schema: { sessionID: SessionV2.ID, value: Schema.String },
+        schema: { sessionID: Session.ID, value: Schema.String },
       })
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const created = yield* session.create({ location })
-      yield* session.switchAgent({ sessionID: created.id, agent: AgentV2.ID.make("one") })
+      yield* session.switchAgent({ sessionID: created.id, agent: Agent.ID.make("one") })
       // Not in the durable manifest, so reads must skip it without failing.
       yield* events.publish(GapEvent, { sessionID: created.id, value: "filtered" })
-      yield* session.switchAgent({ sessionID: created.id, agent: AgentV2.ID.make("two") })
-      yield* session.switchAgent({ sessionID: created.id, agent: AgentV2.ID.make("three") })
+      yield* session.switchAgent({ sessionID: created.id, agent: Agent.ID.make("two") })
+      yield* session.switchAgent({ sessionID: created.id, agent: Agent.ID.make("three") })
 
       const items = Array.from(yield* Stream.runCollect(session.log({ sessionID: created.id, after: 1 })))
 
       expect(
-        items.map((item): number | string | undefined => (EventV2.isSynced(item) ? item.type : item.durable?.seq)),
+        items.map((item): number | string | undefined => (EventRuntime.isSynced(item) ? item.type : item.durable?.seq)),
       ).toEqual([3, 4, "log.synced"])
-      expect(items.at(-1)).toEqual({ type: "log.synced", aggregateID: created.id, seq: EventV2.Seq.make(4) })
+      expect(items.at(-1)).toEqual({ type: "log.synced", aggregateID: created.id, seq: EventRuntime.Seq.make(4) })
     }),
   )
 
   it.effect("completes with a bare synced marker for a migrated Session with no event sequence", () =>
     Effect.gen(function* () {
       const db = (yield* Database.Service).db
-      const session = yield* SessionV2.Service
-      const sessionID = SessionV2.ID.make("ses_empty_log")
+      const session = yield* Session.Service
+      const sessionID = Session.ID.make("ses_empty_log")
       yield* db
         .insert(ProjectTable)
-        .values({ id: ProjectV2.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
         .onConflictDoNothing()
         .run()
       yield* db
         .insert(SessionTable)
         .values({
           id: sessionID,
-          project_id: ProjectV2.ID.global,
+          project_id: Project.ID.global,
           directory: "/project",
           title: "Empty log",
         })

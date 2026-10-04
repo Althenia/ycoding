@@ -6,7 +6,7 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 import { isDeepStrictEqual } from "node:util"
 import { makeGlobalNode } from "./effect/app-node"
 import { httpClient } from "./effect/app-node-platform"
-import { EventV2 } from "./event"
+import { EventRuntime } from "./event"
 import { KV } from "./kv"
 
 export interface Auth extends Schema.Schema.Type<typeof Auth> {}
@@ -51,10 +51,10 @@ export interface Interface {
   readonly resolve: (entry: Entry, variables: Readonly<Record<string, string>>) => Effect.Effect<Config[], Error>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/WellKnown") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/WellKnown") {}
 
 export const Event = {
-  Updated: EventV2.ephemeral({ type: "wellknown.updated", schema: {} }),
+  Updated: EventRuntime.ephemeral({ type: "wellknown.updated", schema: {} }),
 }
 
 export const inspect = Effect.fn("WellKnown.inspect")(function* (origin: string) {
@@ -103,7 +103,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient
     const kv = yield* KV.Service
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const cache = yield* Ref.make(new Map<string, Entry>())
     const lock = Semaphore.makeUnsafe(1)
 
@@ -191,4 +191,4 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeGlobalNode({ service: Service, layer, deps: [httpClient, KV.node, EventV2.node] })
+export const node = makeGlobalNode({ service: Service, layer, deps: [httpClient, KV.node, EventRuntime.node] })

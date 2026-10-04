@@ -1,4 +1,4 @@
-export * as EventV2 from "./event"
+export * as EventRuntime from "./event"
 
 import { Cause, Context, DateTime, Effect, Layer, Option, PubSub, Schema, Stream } from "effect"
 import { Event } from "@ycoding-ai/schema/event"
@@ -23,7 +23,7 @@ export type { Data, Definition, Payload } from "@ycoding-ai/schema/event"
 export type Subscriber<D extends Definition = Definition> = (event: Payload<D>) => Effect.Effect<void>
 export type Unsubscribe = Effect.Effect<void>
 
-export const latestSequence = Effect.fn("EventV2.latestSequence")(function* (
+export const latestSequence = Effect.fn("EventRuntime.latestSequence")(function* (
   db: Database.Interface["db"],
   aggregateID: string,
 ) {
@@ -36,7 +36,7 @@ export const latestSequence = Effect.fn("EventV2.latestSequence")(function* (
   return row?.seq ?? -1
 })
 
-export const reserveSequence = Effect.fn("EventV2.reserveSequence")(function* (
+export const reserveSequence = Effect.fn("EventRuntime.reserveSequence")(function* (
   db: Database.Interface["db"],
   aggregateID: string,
   seq: number,
@@ -62,7 +62,7 @@ export type SerializedEvent = {
 }
 
 export class InvalidDurableEventError extends Schema.TaggedErrorClass<InvalidDurableEventError>()(
-  "EventV2.InvalidDurableEvent",
+  "EventRuntime.InvalidDurableEvent",
   {
     type: Schema.String,
     message: Schema.String,

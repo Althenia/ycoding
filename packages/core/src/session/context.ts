@@ -2,7 +2,7 @@ export * as SessionContext from "./context"
 
 import { Context, Effect, Layer } from "effect"
 import { eq } from "drizzle-orm"
-import { AgentV2 } from "../agent"
+import { Agent } from "../agent"
 import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
 import { InstructionDiscovery } from "../instruction-discovery"
@@ -27,13 +27,13 @@ import { SessionStore } from "./store"
 
 export interface Selection {
   readonly session: SessionSchema.Info
-  readonly agent: AgentV2.Selection & { readonly info: AgentV2.Info }
+  readonly agent: Agent.Selection & { readonly info: Agent.Info }
   readonly instructions: Instructions.Instructions
 }
 
 export interface Loaded {
   readonly session: SessionSchema.Info
-  readonly agent: AgentV2.Selection & { readonly info: AgentV2.Info }
+  readonly agent: Agent.Selection & { readonly info: Agent.Info }
   readonly model: SessionRunnerModel.Resolved
   readonly contextRevision: number
   readonly initial: string
@@ -56,12 +56,12 @@ export interface Interface {
 }
 
 /** Location-scoped model-context loader for durable Session Steps. */
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionContext") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionContext") {}
 
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const agents = yield* AgentV2.Service
+    const agents = yield* Agent.Service
     const builtins = yield* InstructionBuiltIns.Service
     const db = (yield* Database.Service).db
     const discovery = yield* InstructionDiscovery.Service
@@ -137,7 +137,7 @@ export const node = makeLocationNode({
   service: Service,
   layer,
   deps: [
-    AgentV2.node,
+    Agent.node,
     Database.node,
     InstructionBuiltIns.node,
     InstructionDiscovery.node,

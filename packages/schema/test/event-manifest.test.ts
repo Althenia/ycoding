@@ -10,6 +10,7 @@ import {
   Location,
   Permission,
   Project,
+  Question,
   Reference,
   Session,
   SessionCompaction,
@@ -78,6 +79,11 @@ describe("public event manifest", () => {
     expect(FileSystem.Event.Definitions).toEqual([FileSystem.Event.Changed])
     expect(Integration.Event.Definitions).toEqual([Integration.Event.Updated, Integration.Event.ConnectionUpdated])
     expect(Permission.Event.Definitions).toEqual([Permission.Event.Asked, Permission.Event.Replied])
+    expect(EventManifest.Latest.get("permission.asked")).toBe(Permission.Event.Asked)
+    expect(EventManifest.Latest.get("permission.replied")).toBe(Permission.Event.Replied)
+    expect(EventManifest.Latest.get("question.asked")).toBe(Question.Event.Asked)
+    expect(EventManifest.Latest.get("question.replied")).toBe(Question.Event.Replied)
+    expect(EventManifest.Latest.get("question.rejected")).toBe(Question.Event.Rejected)
     expect(Form.Event.Definitions).toEqual([Form.Event.Created, Form.Event.Replied, Form.Event.Cancelled])
     expect(Reference.Event.Definitions).toEqual([Reference.Event.Updated])
     expect(Plugin.Event.Definitions).toEqual([Plugin.Event.Added, Plugin.Event.Updated])
@@ -142,10 +148,6 @@ describe("public event manifest", () => {
       "message.removed",
       "message.part.updated",
       "message.part.removed",
-      "permission.asked",
-      "permission.replied",
-      "question.asked",
-      "question.replied",
       "session.error",
       "file.edited",
     ]) {

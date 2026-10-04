@@ -27,7 +27,7 @@ export function guardrailSummary(status: GuardrailStatusOutput) {
 }
 
 export function GuardrailContent(props: { status: Accessor<GuardrailStatusOutput | undefined> }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   return (
     <Show when={props.status()}>
       {(value) => {
@@ -39,13 +39,13 @@ export function GuardrailContent(props: { status: Accessor<GuardrailStatusOutput
             summary={summary().header}
             attention={Boolean(summary().invalid)}
           >
-            <text fg={themeV2.text.default}>{summary().profile}</text>
-            <text fg={themeV2.text.subdued}>{summary().decisions}</text>
-            <Show when={summary().shells}>{(line) => <text fg={themeV2.text.subdued}>{line()}</text>}</Show>
-            <Show when={summary().subagents}>{(line) => <text fg={themeV2.text.subdued}>{line()}</text>}</Show>
-            <Show when={summary().reviews}>{(line) => <text fg={themeV2.text.subdued}>{line()}</text>}</Show>
+            <text fg={theme.text.default}>{summary().profile}</text>
+            <text fg={theme.text.subdued}>{summary().decisions}</text>
+            <Show when={summary().shells}>{(line) => <text fg={theme.text.subdued}>{line()}</text>}</Show>
+            <Show when={summary().subagents}>{(line) => <text fg={theme.text.subdued}>{line()}</text>}</Show>
+            <Show when={summary().reviews}>{(line) => <text fg={theme.text.subdued}>{line()}</text>}</Show>
             <Show when={summary().invalid}>
-              {(line) => <text fg={themeV2.text.feedback.warning.default}>{line()}</text>}
+              {(line) => <text fg={theme.text.feedback.warning.default}>{line()}</text>}
             </Show>
           </RailSection>
         )

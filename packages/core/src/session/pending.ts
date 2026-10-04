@@ -15,7 +15,7 @@ import {
 } from "@ycoding-ai/schema/session-pending"
 import { Event } from "@ycoding-ai/schema/event"
 import type { Database } from "../database/database"
-import type { EventV2 } from "../event"
+import type { EventRuntime } from "../event"
 import { EventTable } from "../event/sql"
 import { KeyedMutex } from "../effect/keyed-mutex"
 import { SessionEvent } from "./event"
@@ -159,7 +159,7 @@ export const lookup = Effect.fn("SessionPending.lookup")(function* (
 
 export const admit = Effect.fn("SessionPending.admit")(function* (
   db: DatabaseService,
-  events: EventV2.Interface,
+  events: EventRuntime.Interface,
   request: {
     readonly id: SessionMessage.ID
     readonly sessionID: SessionSchema.ID
@@ -207,7 +207,7 @@ export const admit = Effect.fn("SessionPending.admit")(function* (
 
 export const admitCompaction = Effect.fn("SessionPending.admitCompaction")(function* (
   db: DatabaseService,
-  events: EventV2.Interface,
+  events: EventRuntime.Interface,
   input: { readonly id: SessionMessage.ID; readonly sessionID: SessionSchema.ID },
 ) {
   return yield* inboxLocks.withLock(input.sessionID)(
@@ -389,7 +389,7 @@ export const has = Effect.fn("SessionPending.has")(function* (
 
 const publish = Effect.fn("SessionPending.publish")(function* <E = never>(
   db: DatabaseService,
-  events: EventV2.Interface,
+  events: EventRuntime.Interface,
   sessionID: SessionSchema.ID,
   rows: ReadonlyArray<typeof SessionPendingTable.$inferSelect>,
   prepare?: (entry: Info) => Effect.Effect<void, E>,
@@ -430,7 +430,7 @@ const publish = Effect.fn("SessionPending.publish")(function* <E = never>(
 
 export const promoteSteers = Effect.fn("SessionPending.promoteSteers")(function* <E = never>(
   db: DatabaseService,
-  events: EventV2.Interface,
+  events: EventRuntime.Interface,
   sessionID: SessionSchema.ID,
   prepare?: (entry: Info) => Effect.Effect<void, E>,
   promoted?: (entry: Info) => Effect.Effect<void, E>,
@@ -448,7 +448,7 @@ export const promoteSteers = Effect.fn("SessionPending.promoteSteers")(function*
 
 export const promoteNextQueued = Effect.fn("SessionPending.promoteNextQueued")(function* <E = never>(
   db: DatabaseService,
-  events: EventV2.Interface,
+  events: EventRuntime.Interface,
   sessionID: SessionSchema.ID,
   prepare?: (entry: Info) => Effect.Effect<void, E>,
   promoted?: (entry: Info) => Effect.Effect<void, E>,

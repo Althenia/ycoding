@@ -13,8 +13,8 @@ import { describe, expect } from "bun:test"
 import { Effect } from "effect"
 import { createVenice } from "venice-ai-sdk-provider"
 import { AISDK } from "@ycoding-ai/core/aisdk"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { PluginV2 } from "@ycoding-ai/core/plugin"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
 import { AlibabaPlugin } from "@ycoding-ai/core/plugin/provider/alibaba"
 import { CoherePlugin } from "@ycoding-ai/core/plugin/provider/cohere"
@@ -28,7 +28,7 @@ import { TogetherAIPlugin } from "@ycoding-ai/core/plugin/provider/togetherai"
 import { VenicePlugin } from "@ycoding-ai/core/plugin/provider/venice"
 import { VercelPlugin } from "@ycoding-ai/core/plugin/provider/vercel"
 import { XAIPlugin } from "@ycoding-ai/core/plugin/provider/xai"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
 
@@ -58,9 +58,9 @@ const runSDK = Effect.fn(function* (
 ) {
   const aisdk = yield* AISDK.Service
   return yield* aisdk.runSDK({
-    model: ModelV2.Info.make({
-      ...ModelV2.Info.empty(ProviderV2.ID.make(name), ModelV2.ID.make("model")),
-      modelID: ModelV2.ID.make("model"),
+    model: CatalogModel.Info.make({
+      ...CatalogModel.Info.empty(Provider.ID.make(name), CatalogModel.ID.make("model")),
+      modelID: CatalogModel.ID.make("model"),
       package: `aisdk:${pkg}`,
     }),
     package: pkg,
@@ -69,7 +69,7 @@ const runSDK = Effect.fn(function* (
 })
 
 const addPlugin = Effect.fn(function* (plugin: (typeof bundled)[number]["plugin"]) {
-  yield* plugin.effect(yield* PluginHost.make(yield* PluginV2.Service))
+  yield* plugin.effect(yield* PluginHost.make(yield* PluginRegistry.Service))
 })
 
 describe("bundled AI SDK provider plugins", () => {

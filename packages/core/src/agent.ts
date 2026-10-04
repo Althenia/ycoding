@@ -1,9 +1,9 @@
-export * as AgentV2 from "./agent"
+export * as Agent from "./agent"
 
 import { makeLocationNode } from "./effect/app-node"
 import { Array, Context, Effect, Layer, Types } from "effect"
 import { Agent } from "@ycoding-ai/schema/agent"
-import { EventV2 } from "./event"
+import { EventRuntime } from "./event"
 import { State } from "./state"
 
 export const ID = Agent.ID
@@ -53,12 +53,12 @@ export interface Interface extends State.Transformable<Draft> {
   readonly list: () => Effect.Effect<Info[]>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/Agent") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/Agent") {}
 
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const state = State.create<Data, Draft>({
       name: "agent",
       initial: () => ({ agents: new Map() }),
@@ -97,17 +97,17 @@ const layer = Layer.effect(
     return Service.of({
       transform: state.transform,
       reload: state.reload,
-      get: Effect.fn("AgentV2.get")(function* (id) {
+      get: Effect.fn("Agent.get")(function* (id) {
         return state.get().agents.get(id)
       }),
-      default: Effect.fn("AgentV2.default")(function* () {
+      default: Effect.fn("Agent.default")(function* () {
         return selectedDefault()
       }),
-      resolve: Effect.fn("AgentV2.resolve")(function* (id) {
+      resolve: Effect.fn("Agent.resolve")(function* (id) {
         if (id !== undefined) return state.get().agents.get(ID.make(id))
         return selectedDefault()
       }),
-      select: Effect.fn("AgentV2.select")(function* (id) {
+      select: Effect.fn("Agent.select")(function* (id) {
         if (id !== undefined) {
           const selected = ID.make(id)
           return { id: selected, info: state.get().agents.get(selected) }
@@ -115,7 +115,7 @@ const layer = Layer.effect(
         const info = selectedDefault()
         return { id: info?.id ?? defaultID, info }
       }),
-      list: Effect.fn("AgentV2.list")(function* () {
+      list: Effect.fn("Agent.list")(function* () {
         const agents = Array.fromIterable(state.get().agents.values())
         const first = selectedDefault()
         if (!first) return agents
@@ -125,4 +125,4 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeLocationNode({ service: Service, layer, deps: [EventV2.node] })
+export const node = makeLocationNode({ service: Service, layer, deps: [EventRuntime.node] })

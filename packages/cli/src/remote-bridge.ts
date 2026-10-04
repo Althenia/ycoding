@@ -539,7 +539,7 @@ export class RemoteAgent {
       if (type === "session.work.completed") this.scheduleCompletions()
       if (typeof type === "string" && (type.startsWith("session.step.") || type.startsWith("session.execution.") ||
         type.startsWith("session.task.") || type.startsWith("session.shell.") || type.startsWith("shell.") ||
-        type.startsWith("session.input.") || type.startsWith("permission.v2.") || type.startsWith("form.") || type.startsWith("guardrail."))) {
+        type.startsWith("session.input.") || type.startsWith("permission.") || type.startsWith("form.") || type.startsWith("guardrail."))) {
         if (type.startsWith("session.execution.failed") || type.startsWith("session.execution.started")) {
           const data = Reflect.get(event, "data")
           const sessionID = typeof data === "object" && data !== null ? Reflect.get(data, "sessionID") : undefined
@@ -551,7 +551,7 @@ export class RemoteAgent {
             if (!this.failuresHydrated) this.failureChanges.set(root, failed)
           }
         }
-        if (type.startsWith("permission.v2.") || type.startsWith("form.") || type.startsWith("guardrail.")) {
+        if (type.startsWith("permission.") || type.startsWith("form.") || type.startsWith("guardrail.")) {
           this.attentionStatus = undefined
           this.attentionGeneration++
         }

@@ -4,11 +4,11 @@ import { ToolFailure } from "@ycoding-ai/ai"
 import { McpEvent } from "@ycoding-ai/schema/mcp-event"
 import { Effect, Exit, type JsonSchema, Layer, Ref, Scope, Semaphore, Stream } from "effect"
 import { makeLocationNode } from "../effect/app-node"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { Job } from "../job"
 
 import { MCP } from "../mcp"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { PluginRuntime } from "../plugin/runtime"
 import { SessionGuardrail } from "../session/guardrail"
 import { Tool } from "./tool"
@@ -25,8 +25,8 @@ export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const mcp = yield* MCP.Service
     const tools = yield* Tools.Service
-    const events = yield* EventV2.Service
-    const permission = yield* PermissionV2.Service
+    const events = yield* EventRuntime.Service
+    const permission = yield* Permission.Service
     const guardrail = yield* SessionGuardrail.Service
     const plugin = yield* PluginRuntime.Service
     const runtime = { job: yield* Job.Service, session: plugin.session }
@@ -224,9 +224,9 @@ export const node = makeLocationNode({
   deps: [
     ToolRegistry.toolsNode,
     MCP.node,
-    EventV2.node,
+    EventRuntime.node,
     Job.node,
-    PermissionV2.node,
+    Permission.node,
     SessionGuardrail.node,
     PluginRuntime.node,
   ],

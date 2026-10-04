@@ -2,12 +2,12 @@ import { expect } from "bun:test"
 import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import { Database } from "@ycoding-ai/core/database/database"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { EventSequenceTable, EventTable } from "@ycoding-ai/core/event/sql"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionErrors } from "@ycoding-ai/core/session/error"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
@@ -16,7 +16,7 @@ import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { InstructionStateTable, SessionPendingTable, SessionTable } from "@ycoding-ai/core/session/sql"
 import { testEffect } from "./lib/effect"
 
-const sessionID = SessionV2.ID.make("ses_live_state")
+const sessionID = Session.ID.make("ses_live_state")
 const guardrailDigest = "a".repeat(64)
 const guardrails = Layer.succeed(
   SessionGuardrail.Service,
@@ -50,11 +50,11 @@ const seed = Effect.gen(function* () {
   yield* db
     .insert(EventTable)
     .values({
-      id: EventV2.ID.make("evt_created"),
+      id: EventRuntime.ID.make("evt_created"),
       aggregate_id: sessionID,
       seq: 20,
       created: 1,
-      type: EventV2.versionedType(SessionEvent.Created.type, SessionEvent.Created.durable.version),
+      type: EventRuntime.versionedType(SessionEvent.Created.type, SessionEvent.Created.durable.version),
       data: {},
     })
     .run()
@@ -135,11 +135,11 @@ it.effect("recaptures database authorities from the caller transaction", () =>
         yield* tx
           .insert(EventTable)
           .values({
-            id: EventV2.ID.make("evt_transaction_admitted"),
+            id: EventRuntime.ID.make("evt_transaction_admitted"),
             aggregate_id: sessionID,
             seq: 21,
             created: 21,
-            type: EventV2.versionedType(SessionEvent.InputAdmitted.type, SessionEvent.InputAdmitted.durable.version),
+            type: EventRuntime.versionedType(SessionEvent.InputAdmitted.type, SessionEvent.InputAdmitted.durable.version),
             data: {},
           })
           .run()
@@ -172,11 +172,11 @@ it.effect("uses source-owned sequence fences across protected-state ABA transiti
     yield* db
       .insert(EventTable)
       .values({
-        id: EventV2.ID.make("evt_irrelevant"),
+        id: EventRuntime.ID.make("evt_irrelevant"),
         aggregate_id: sessionID,
         seq: 1,
         created: 1,
-        type: EventV2.versionedType(SessionEvent.Renamed.type, SessionEvent.Renamed.durable.version),
+        type: EventRuntime.versionedType(SessionEvent.Renamed.type, SessionEvent.Renamed.durable.version),
         data: {},
       })
       .run()
@@ -194,11 +194,11 @@ it.effect("uses source-owned sequence fences across protected-state ABA transiti
     yield* db
       .insert(EventTable)
       .values({
-        id: EventV2.ID.make("evt_instruction"),
+        id: EventRuntime.ID.make("evt_instruction"),
         aggregate_id: sessionID,
         seq: 2,
         created: 2,
-        type: EventV2.versionedType(
+        type: EventRuntime.versionedType(
           SessionEvent.InstructionsUpdated.type,
           SessionEvent.InstructionsUpdated.durable.version,
         ),
@@ -213,11 +213,11 @@ it.effect("uses source-owned sequence fences across protected-state ABA transiti
     yield* db
       .insert(EventTable)
       .values({
-        id: EventV2.ID.make("evt_moved"),
+        id: EventRuntime.ID.make("evt_moved"),
         aggregate_id: sessionID,
         seq: 3,
         created: 3,
-        type: EventV2.versionedType(SessionEvent.Moved.type, SessionEvent.Moved.durable.version),
+        type: EventRuntime.versionedType(SessionEvent.Moved.type, SessionEvent.Moved.durable.version),
         data: {},
       })
       .run()
@@ -243,11 +243,11 @@ it.effect("uses source-owned sequence fences across protected-state ABA transiti
     yield* db
       .insert(EventTable)
       .values({
-        id: EventV2.ID.make("evt_admitted"),
+        id: EventRuntime.ID.make("evt_admitted"),
         aggregate_id: sessionID,
         seq: 4,
         created: 4,
-        type: EventV2.versionedType(SessionEvent.InputAdmitted.type, SessionEvent.InputAdmitted.durable.version),
+        type: EventRuntime.versionedType(SessionEvent.InputAdmitted.type, SessionEvent.InputAdmitted.durable.version),
         data: {},
       })
       .run()
@@ -259,11 +259,11 @@ it.effect("uses source-owned sequence fences across protected-state ABA transiti
     yield* db
       .insert(EventTable)
       .values({
-        id: EventV2.ID.make("evt_promoted"),
+        id: EventRuntime.ID.make("evt_promoted"),
         aggregate_id: sessionID,
         seq: 5,
         created: 5,
-        type: EventV2.versionedType(SessionEvent.InputPromoted.type, SessionEvent.InputPromoted.durable.version),
+        type: EventRuntime.versionedType(SessionEvent.InputPromoted.type, SessionEvent.InputPromoted.durable.version),
         data: {},
       })
       .run()
@@ -280,7 +280,7 @@ it.effect("uses source-owned sequence fences across protected-state ABA transiti
 it.effect("returns the tagged missing-session error", () =>
   Effect.gen(function* () {
     const service = yield* SessionLiveState.Service
-    expect(yield* service.load(SessionV2.ID.make("ses_missing_live_state")).pipe(Effect.flip)).toBeInstanceOf(
+    expect(yield* service.load(Session.ID.make("ses_missing_live_state")).pipe(Effect.flip)).toBeInstanceOf(
       SessionErrors.NotFoundError,
     )
   }),

@@ -97,19 +97,19 @@ export type PromptProps = {
 }
 
 export function PromptFooterIdentity(props: { branch?: string; sessionID?: string }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   return (
     <>
       <Show when={props.branch}>
         {(branch) => (
-          <text fg={themeV2.text.subdued} wrapMode="none" truncate flexShrink={1}>
+          <text fg={theme.text.subdued} wrapMode="none" truncate flexShrink={1}>
             {branch()}
           </text>
         )}
       </Show>
       <Show when={props.sessionID}>
         {(sessionID) => (
-          <text fg={themeV2.text.subdued} wrapMode="none" truncate flexShrink={1}>
+          <text fg={theme.text.subdued} wrapMode="none" truncate flexShrink={1}>
             {sessionID().length > 13 ? `${sessionID().slice(0, 13)}…` : sessionID()}
           </text>
         )}
@@ -119,16 +119,16 @@ export function PromptFooterIdentity(props: { branch?: string; sessionID?: strin
 }
 
 export function PromptYoloHint() {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const interruptShortcut = Keymap.useShortcut("session.interrupt")
   const disableYoloShortcut = Keymap.useShortcut("session.autonomy.normal")
   return (
     <>
       <Show when={interruptShortcut()}>
-        {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} interrupt</text>}
+        {(shortcut) => <text fg={theme.text.subdued}>{formatShortcut(shortcut())} interrupt</text>}
       </Show>
       <Show when={disableYoloShortcut()}>
-        {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} disable YOLO</text>}
+        {(shortcut) => <text fg={theme.text.subdued}>{formatShortcut(shortcut())} disable YOLO</text>}
       </Show>
     </>
   )
@@ -292,7 +292,7 @@ export function Prompt(props: PromptProps) {
   )
   const renderer = useRenderer()
   const exit = useExit()
-  const { themeV2, syntax } = useTheme()
+  const { theme, syntax } = useTheme()
   const animationsEnabled = createMemo(() => config.animations ?? true)
   const list = createMemo(() => props.placeholders?.normal ?? defaultPlaceholders)
   const shell = createMemo(() => props.placeholders?.shell ?? [])
@@ -436,8 +436,8 @@ export function Prompt(props: PromptProps) {
 
   createEffect(() => {
     if (!input || input.isDestroyed) return
-    if (props.disabled) input.cursorColor = themeV2.background.surface.offset
-    if (!props.disabled) input.cursorColor = themeV2.text.default
+    if (props.disabled) input.cursorColor = theme.background.surface.offset
+    if (!props.disabled) input.cursorColor = theme.text.default
   })
 
   const [store, setStore] = createStore<{
@@ -2205,15 +2205,15 @@ export function Prompt(props: PromptProps) {
   }
 
   const highlight = createMemo(() => {
-    if (leader()) return themeV2.border.default
-    if (store.mode === "shell") return themeV2.background.action.primary.default
+    if (leader()) return theme.border.default
+    if (store.mode === "shell") return theme.background.action.primary.default
     const agent = local.agent.current()
-    if (!agent) return themeV2.border.default
+    if (!agent) return theme.border.default
     return local.agent.color(agent!.id)
   })
 
   const agentMetaAlpha = createFadeIn(() => !!local.agent.current(), animationsEnabled)
-  const borderHighlight = createMemo(() => tint(themeV2.border.default, highlight(), agentMetaAlpha()))
+  const borderHighlight = createMemo(() => tint(theme.border.default, highlight(), agentMetaAlpha()))
 
   const placeholderText = createMemo(() => {
     if (props.showPlaceholder === false) return undefined
@@ -2227,7 +2227,7 @@ export function Prompt(props: PromptProps) {
     // `Ask anything... "Message YCoding…"` on the landing screen.
     return list()[store.placeholder % list().length]
   })
-  const promptBg = themeV2.background.default
+  const promptBg = theme.background.default
 
   return (
     <>
@@ -2248,8 +2248,8 @@ export function Prompt(props: PromptProps) {
             props.landing
               ? borderHighlight()
               : yoloLevel(props.autonomy ?? ({ yolo: 0 } as unknown as SessionAutonomyState)) > 0
-                ? themeV2.text.feedback.error.default
-                : themeV2.text.feedback.success.default
+                ? theme.text.feedback.error.default
+                : theme.text.feedback.success.default
           }
         >
           <box
@@ -2265,9 +2265,9 @@ export function Prompt(props: PromptProps) {
             <textarea
               width="100%"
               placeholder={placeholderText()}
-              placeholderColor={themeV2.text.subdued}
-              textColor={leader() ? themeV2.text.subdued : themeV2.text.default}
-              focusedTextColor={leader() ? themeV2.text.subdued : themeV2.text.default}
+              placeholderColor={theme.text.subdued}
+              textColor={leader() ? theme.text.subdued : theme.text.default}
+              focusedTextColor={leader() ? theme.text.subdued : theme.text.default}
               minHeight={1}
               maxHeight={MAX_VISIBLE_INPUT_ROWS}
               onContentChange={() => {
@@ -2332,7 +2332,7 @@ export function Prompt(props: PromptProps) {
                 setTimeout(() => {
                   // setTimeout is a workaround and needs to be addressed properly
                   if (!input || input.isDestroyed) return
-                  input.cursorColor = themeV2.text.default
+                  input.cursorColor = theme.text.default
                 }, 0)
               }}
               onMouseDown={(r: MouseEvent) => {
@@ -2340,7 +2340,7 @@ export function Prompt(props: PromptProps) {
                 r.target?.focus()
               }}
               focusedBackgroundColor="transparent"
-              cursorColor={props.disabled ? themeV2.background.surface.offset : themeV2.text.default}
+              cursorColor={props.disabled ? theme.background.surface.offset : theme.text.default}
               syntaxStyle={syntax()}
             />
           </box>
@@ -2352,7 +2352,7 @@ export function Prompt(props: PromptProps) {
                 flexShrink={0}
               >
                 <text
-                  fg={feedback()?.error ? themeV2.text.feedback.error.default : themeV2.text.subdued}
+                  fg={feedback()?.error ? theme.text.feedback.error.default : theme.text.subdued}
                   wrapMode="none"
                   truncate
                 >

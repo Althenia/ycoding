@@ -1,15 +1,15 @@
 import { describe, expect } from "bun:test"
 import { SystemPart } from "@ycoding-ai/ai"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { PluginV2 } from "@ycoding-ai/core/plugin"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHooks } from "@ycoding-ai/core/plugin/hooks"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { ConversationCompactTool } from "@ycoding-ai/core/tool/conversation-compact"
@@ -20,8 +20,8 @@ import { testEffect } from "./lib/effect"
 import { PluginTestLayer } from "./plugin/fixture"
 
 const it = testEffect(PluginTestLayer)
-const providerID = ProviderV2.ID.make("advisor-test")
-const modelID = ModelV2.ID.make("advisor-test")
+const providerID = Provider.ID.make("advisor-test")
+const modelID = CatalogModel.ID.make("advisor-test")
 const advisorSessionID = SessionSchema.ID.make("ses_conversation_compact_advisor")
 const advisorConfig = Config.Service.of({
   reload: () => Effect.void,
@@ -46,7 +46,7 @@ describe("conversation compaction advisor scheduling", () => {
     return advisorHarness(
       (trigger, calls) =>
         Effect.gen(function* () {
-          yield* trigger("consider", AgentV2.ID.make("compaction"))
+          yield* trigger("consider", Agent.ID.make("compaction"))
           expect(calls).toEqual([])
           yield* trigger("normal")
           yield* trigger("consider")
@@ -92,7 +92,7 @@ function advisorHarness(
   run: (
     trigger: (
       level: "normal" | "consider" | "advised" | "mandatory",
-      agent?: AgentV2.ID,
+      agent?: Agent.ID,
     ) => Effect.Effect<void, never, Scope.Scope>,
     calls: ReadonlyArray<"consider" | "advised">,
   ) => Effect.Effect<void, never, Scope.Scope>,
@@ -102,7 +102,7 @@ function advisorHarness(
   return Effect.gen(function* () {
     const catalog = yield* Catalog.Service
     const hooks = yield* PluginHooks.Service
-    const plugins = yield* PluginV2.Service
+    const plugins = yield* PluginRegistry.Service
     const host = yield* PluginHost.make(plugins)
     const calls: Array<"consider" | "advised"> = []
     yield* catalog.transform((draft) => {
@@ -123,7 +123,7 @@ function advisorHarness(
       Effect.provideService(Config.Service, advisorConfig),
       Effect.provideService(PluginRuntime.Service, runtime),
     )
-    const trigger = (level: "normal" | "consider" | "advised" | "mandatory", agent?: AgentV2.ID) =>
+    const trigger = (level: "normal" | "consider" | "advised" | "mandatory", agent?: Agent.ID) =>
       Effect.gen(function* () {
         yield* catalog.transform((draft) =>
           draft.model.update(providerID, modelID, (model) => {
@@ -146,11 +146,11 @@ function contextWindow(level: "normal" | "consider" | "advised" | "mandatory") {
   return 60
 }
 
-function advisorEvent(agent = AgentV2.ID.make("build")): SessionHooks["context"] {
+function advisorEvent(agent = Agent.ID.make("build")): SessionHooks["context"] {
   return {
     sessionID: advisorSessionID,
     agent,
-    model: ModelV2.Ref.make({ providerID, id: modelID }),
+    model: CatalogModel.Ref.make({ providerID, id: modelID }),
     system: [SystemPart.make("x".repeat(240))],
     messages: [],
     tools: {},

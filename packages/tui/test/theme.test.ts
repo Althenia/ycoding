@@ -3,10 +3,10 @@ import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type { TerminalColors } from "@opentui/core"
 import { DEFAULT_THEMES, addTheme, allThemes, hasTheme } from "../src/theme"
-import { resolveThemeFile } from "../src/theme/v2/resolve"
+import { resolveThemeFile } from "../src/theme/resolve"
 import { discoverThemes, themeDirectories } from "../src/theme/discovery"
 import { terminalMode } from "../src/theme/system"
-import type { ThemeFile } from "../src/theme/v2"
+import type { ThemeFile } from "../src/theme"
 import { tmpdir } from "./fixture/fixture"
 
 test("default themes export ycoding without inherited OC theme identifiers", () => {

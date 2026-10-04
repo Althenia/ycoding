@@ -219,7 +219,7 @@ test("keeps the latest speed on one narrow row without a wrapping trend", async 
   }
 })
 
-test("derives active background compaction from V2 lifecycle instead of conversation_summarize", async () => {
+test("derives active background compaction from lifecycle instead of conversation_summarize", async () => {
   const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
     import("../../../src/config"),
     import("../../../src/context/theme"),

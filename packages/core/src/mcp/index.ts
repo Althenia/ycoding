@@ -10,7 +10,7 @@ import { makeLocationNode } from "../effect/app-node"
 import { Config } from "../config"
 import { ConfigMCP } from "../config/mcp"
 import { Credential } from "../credential"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { Form } from "../form"
 import { Integration } from "../integration"
 import { IntegrationConnection } from "../integration/connection"
@@ -214,14 +214,14 @@ export interface Interface {
   }) => Effect.Effect<McpSkill.File, NotFoundError | SkillUnavailableError | SkillVerificationError>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/MCP") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/MCP") {}
 
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const config = yield* Config.Service
     const location = yield* Location.Service
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const forms = yield* Form.Service
     const integration = yield* Integration.Service
     const credentials = yield* Credential.Service
@@ -918,7 +918,7 @@ export const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Config.node, Location.node, EventV2.node, Form.node, Integration.node, Credential.node],
+  deps: [Config.node, Location.node, EventRuntime.node, Form.node, Integration.node, Credential.node],
 })
 
 // Schema `optional` strips undefined-valued properties on encode, so fields can assign

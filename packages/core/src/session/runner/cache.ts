@@ -6,7 +6,7 @@ import { cacheProfile } from "@ycoding-ai/ai/cache-profile"
 import { OpenAIOptions } from "@ycoding-ai/ai/protocols/utils/openai-options"
 import { Schema } from "effect"
 import type { ConfigEfficiency } from "../../config/efficiency"
-import type { PermissionV2 } from "../../permission"
+import type { Permission } from "../../permission"
 import { Hash } from "../../util/hash"
 
 export interface PromptCacheNamespaceInput {
@@ -18,7 +18,7 @@ export interface PromptCacheNamespaceInput {
   readonly modelID: string
   readonly variant?: string
   readonly policyRevision: string
-  readonly permissions: PermissionV2.Ruleset
+  readonly permissions: Permission.Ruleset
   readonly system: LLMRequest["system"]
   readonly tools: LLMRequest["tools"]
 }

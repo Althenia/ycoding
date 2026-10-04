@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { SessionRunnerCache } from "@ycoding-ai/core/session/runner/cache"
 
 const input = {
@@ -11,7 +11,7 @@ const input = {
   modelID: "gpt-5.6",
   apiModelID: "gpt-5.6",
   policyRevision: CACHE_POLICY_REVISION,
-  permissions: [{ action: "read", resource: "**", effect: "allow" }] satisfies PermissionV2.Ruleset,
+  permissions: [{ action: "read", resource: "**", effect: "allow" }] satisfies Permission.Ruleset,
   system: [],
   tools: [],
   sessionID: "session",

@@ -1,17 +1,17 @@
 export * as PluginRuntime from "./runtime"
 
 import { Context, Effect, Layer } from "effect"
-import { AgentV2 } from "../agent"
+import { Agent } from "../agent"
 import { makeGlobalNode } from "../effect/app-node"
 import { Job } from "../job"
 import { Location } from "../location"
 import { LocationServiceMap } from "../location-service-map"
-import { SessionV2 } from "../session"
+import { Session } from "../session"
 import { SessionOrchestration } from "../session/orchestration"
 
 export interface Interface {
   readonly session: Pick<
-    SessionV2.Interface,
+    Session.Interface,
     "get" | "create" | "messages" | "prompt" | "generate" | "command" | "resume" | "interrupt" | "synthetic" | "compact"
   >
   readonly job: Pick<Job.Interface, "start" | "wait" | "block" | "background" | "cancel" | "noticeAdmitted">
@@ -20,7 +20,7 @@ export interface Interface {
     readonly agent: {
       readonly list: (
         ref: Location.Ref,
-      ) => Effect.Effect<{ readonly location: Location.Info; readonly data: AgentV2.Info[] }>
+      ) => Effect.Effect<{ readonly location: Location.Info; readonly data: Agent.Info[] }>
     }
   }
 }
@@ -57,10 +57,10 @@ export const layerWithCell = (cell: Cell) =>
         resume: (sessionID) => require(cell, (runtime) => runtime.session.resume(sessionID)),
         interrupt: (sessionID) => require(cell, (runtime) => runtime.session.interrupt(sessionID)),
         synthetic: (input) => require(cell, (runtime) => runtime.session.synthetic(input)),
-        compact: ((input: SessionV2.AdvisorCompactInput | SessionV2.ManualCompactInput) => {
+        compact: ((input: Session.AdvisorCompactInput | Session.ManualCompactInput) => {
           if (input.trigger === undefined) return require(cell, (runtime) => runtime.session.compact(input))
           return require(cell, (runtime) => runtime.session.compact(input))
-        }) as SessionV2.Interface["compact"],
+        }) as Session.Interface["compact"],
       },
       job: {
         start: (input) => require(cell, (runtime) => runtime.job.start(input)),
@@ -99,7 +99,7 @@ export const layerWithCell = (cell: Cell) =>
 export const providerLayerWithCell = (cell: Cell) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
-      const sessions = yield* SessionV2.Service
+      const sessions = yield* Session.Service
       const jobs = yield* Job.Service
       const locations = yield* LocationServiceMap.Service
       const orchestration = yield* SessionOrchestration.Service
@@ -112,7 +112,7 @@ export const providerLayerWithCell = (cell: Cell) =>
             list: (ref) =>
               Effect.gen(function* () {
                 const location = yield* Location.Service
-                const agents = yield* AgentV2.Service
+                const agents = yield* Agent.Service
                 return {
                   location: new Location.Info({
                     directory: location.directory,
@@ -145,7 +145,7 @@ export const providerNodeWithCell = (cell: Cell) =>
   makeGlobalNode({
     name: "plugin-runtime-provider",
     layer: providerLayerWithCell(cell),
-    deps: [node, SessionV2.node, Job.node, LocationServiceMap.node, SessionOrchestration.node],
+    deps: [node, Session.node, Job.node, LocationServiceMap.node, SessionOrchestration.node],
   })
 
 export const providerNode = providerNodeWithCell(defaultCell)

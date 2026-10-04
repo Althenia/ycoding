@@ -44,7 +44,7 @@ export function DialogModel(props: {
   const local = useLocal()
   const data = useData()
   const dialog = useDialog()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const [query, setQuery] = createSignal("")
   let settled = false
   let selectingVariant = false
@@ -147,7 +147,7 @@ export function DialogModel(props: {
             categoryView:
               model.enabled || !connected() ? undefined : (
                 <box height={1}>
-                  <text fg={themeV2.text.feedback.info.default} attributes={TextAttributes.BOLD}>
+                  <text fg={theme.text.feedback.info.default} attributes={TextAttributes.BOLD}>
                     {provider?.name ?? model.providerID}
                   </text>
                 </box>

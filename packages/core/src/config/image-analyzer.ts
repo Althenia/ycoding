@@ -4,7 +4,7 @@ import { Schema } from "effect"
 import { ConfigModel } from "./model"
 import { PositiveInt } from "../schema"
 
-export class Info extends Schema.Class<Info>("ConfigV2.ImageAnalyzer")({
+export class Info extends Schema.Class<Info>("Config.ImageAnalyzer")({
   enabled: Schema.Boolean.pipe(Schema.optional),
   model: Schema.String.pipe(Schema.optional),
   provider: Schema.String.pipe(Schema.optional),

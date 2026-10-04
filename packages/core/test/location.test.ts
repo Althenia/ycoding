@@ -4,10 +4,10 @@ import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { Location } from "@ycoding-ai/core/location"
 import { Project } from "@ycoding-ai/core/project"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { WorkspaceV2 } from "@ycoding-ai/core/workspace"
+import { Workspace } from "@ycoding-ai/core/workspace"
 import { testEffect } from "./lib/effect"
 
-const workspaceID = WorkspaceV2.ID.make("wrk_test")
+const workspaceID = Workspace.ID.make("wrk_test")
 const ref = { directory: AbsolutePath.make("/repo/packages/core"), workspaceID }
 const projectLayer = Layer.succeed(
   Project.Service,

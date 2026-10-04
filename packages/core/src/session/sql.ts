@@ -16,9 +16,9 @@ import { ProjectTable } from "../project/sql"
 import type { SessionMessage } from "./message"
 import type { SessionPending } from "./pending"
 import { Permission } from "@ycoding-ai/schema/permission"
-import { ProjectV2 } from "../project"
+import { Project } from "../project"
 import type { SessionSchema } from "./schema"
-import { WorkspaceV2 } from "../workspace"
+import { Workspace } from "../workspace"
 import { Timestamps } from "../database/schema.sql"
 import type { Instruction } from "@ycoding-ai/schema/instruction"
 import type { Session } from "@ycoding-ai/schema/session"
@@ -47,10 +47,10 @@ export const SessionTable = sqliteTable(
   {
     id: text().$type<SessionSchema.ID>().primaryKey(),
     project_id: text()
-      .$type<ProjectV2.ID>()
+      .$type<Project.ID>()
       .notNull()
       .references(() => ProjectTable.id, { onDelete: "cascade" }),
-    workspace_id: text().$type<WorkspaceV2.ID>(),
+    workspace_id: text().$type<Workspace.ID>(),
     parent_id: text().$type<SessionSchema.ID>(),
     fork_session_id: text().$type<SessionSchema.ID>(),
     fork_message_id: text().$type<SessionMessage.ID>(),

@@ -92,6 +92,6 @@ test("keep-awake is a local authenticated operation with stable OpenAPI identifi
   expect(group.endpoints["keepAwake.get"].middlewares.has(Authorization)).toBe(true)
   expect(group.endpoints["keepAwake.set"].middlewares.has(Authorization)).toBe(true)
   const path = OpenApi.fromApi(Api).paths["/api/keep-awake"]
-  expect(path?.get?.operationId).toBe("v2.keepAwake.get")
-  expect(path?.put?.operationId).toBe("v2.keepAwake.set")
+  expect(path?.get?.operationId).toBe("keepAwake.get")
+  expect(path?.put?.operationId).toBe("keepAwake.set")
 })

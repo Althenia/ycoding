@@ -6,9 +6,9 @@ import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNodePlatform } from "@ycoding-ai/core/effect/app-node-platform"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Global } from "@ycoding-ai/core/global"
-import { ModelV2 } from "@ycoding-ai/core/model"
+import { CatalogModel } from "@ycoding-ai/core/model"
 import { ModelsDev } from "@ycoding-ai/core/models-dev"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { it } from "./lib/effect"
 import { readFile, rm, writeFile, utimes, mkdir } from "fs/promises"
 import path from "path"
@@ -39,15 +39,15 @@ const fixture = {
 const fixtureSnapshot = [
   {
     info: {
-      id: ProviderV2.ID.make("acme"),
+      id: Provider.ID.make("acme"),
       name: "Acme",
-      package: ProviderV2.aisdk("@ai-sdk/openai-compatible"),
+      package: Provider.aisdk("@ai-sdk/openai-compatible"),
     },
     models: [
       {
-        id: ModelV2.ID.make("acme-1"),
-        modelID: ModelV2.ID.make("acme-1"),
-        providerID: ProviderV2.ID.make("acme"),
+        id: CatalogModel.ID.make("acme-1"),
+        modelID: CatalogModel.ID.make("acme-1"),
+        providerID: Provider.ID.make("acme"),
         name: "Acme One",
         family: undefined,
         package: undefined,
@@ -91,15 +91,15 @@ const fixture2 = {
 const fixture2Snapshot = [
   {
     info: {
-      id: ProviderV2.ID.make("beta"),
+      id: Provider.ID.make("beta"),
       name: "Beta",
-      package: ProviderV2.aisdk("@ai-sdk/openai-compatible"),
+      package: Provider.aisdk("@ai-sdk/openai-compatible"),
     },
     models: [
       {
-        id: ModelV2.ID.make("beta-1"),
-        modelID: ModelV2.ID.make("beta-1"),
-        providerID: ProviderV2.ID.make("beta"),
+        id: CatalogModel.ID.make("beta-1"),
+        modelID: CatalogModel.ID.make("beta-1"),
+        providerID: Provider.ID.make("beta"),
         name: "Beta One",
         family: undefined,
         package: undefined,
@@ -293,10 +293,10 @@ describe("ModelsDev Service", () => {
       const state = yield* Ref.make(initialState)
       const result = yield* provided(state, ModelsDev.Service.use((service) => service.get()))
       const snapshot = result.find((entry) => entry.info.id === "openai")
-      const sol = snapshot?.models.find((model) => model.id === ModelV2.ID.make("gpt-5.6-sol"))
-      const daybreak = snapshot?.models.find((model) => model.id === ModelV2.ID.make("gpt-daybreak-blue-latest"))
+      const sol = snapshot?.models.find((model) => model.id === CatalogModel.ID.make("gpt-5.6-sol"))
+      const daybreak = snapshot?.models.find((model) => model.id === CatalogModel.ID.make("gpt-daybreak-blue-latest"))
       expect(sol?.limit).toEqual({ context: 1_050_000, input: 922_000, output: 128_000 })
-      expect(daybreak?.modelID).toBe(ModelV2.ID.make("gpt-daybreak-blue-latest"))
+      expect(daybreak?.modelID).toBe(CatalogModel.ID.make("gpt-daybreak-blue-latest"))
       expect(daybreak?.limit).toEqual(sol?.limit)
       expect(daybreak?.cost).toEqual(sol?.cost)
     }),

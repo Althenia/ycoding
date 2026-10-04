@@ -95,7 +95,7 @@ export interface Interface {
   readonly checkout: (snapshot: ID) => Effect.Effect<void, Error>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/Snapshot") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/Snapshot") {}
 
 const layer = Layer.effect(
   Service,

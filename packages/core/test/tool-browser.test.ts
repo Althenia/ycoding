@@ -5,8 +5,8 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
 import { Image } from "@ycoding-ai/core/image"
 import { IsolatedBrowser } from "@ycoding-ai/core/isolated-browser"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Permission } from "@ycoding-ai/core/permission"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { BrowserTool } from "@ycoding-ai/core/tool/browser"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
@@ -16,10 +16,10 @@ import { imagePassthrough } from "./lib/image"
 import { executeTool, registerToolPlugin, settleTool, toolIdentity } from "./lib/tool"
 import { testEffect } from "./lib/effect"
 
-const sessionID = SessionV2.ID.make("ses_browser_tool")
+const sessionID = Session.ID.make("ses_browser_tool")
 const tabID = Browser.TabID.make("btab_browser_tool")
 const sequence: string[] = []
-const requests: PermissionV2.AssertInput[] = []
+const requests: Permission.AssertInput[] = []
 const guardrailRequests: SessionGuardrail.EvaluateInput[] = []
 
 const tab: Browser.Tab = {
@@ -82,7 +82,7 @@ const isolatedBrowser = Layer.mock(IsolatedBrowser.Service, {
       }
     }),
 })
-const permission = Layer.mock(PermissionV2.Service, {
+const permission = Layer.mock(Permission.Service, {
   assert: (input) => Effect.sync(() => {
     requests.push(input)
     sequence.push(`permission:${input.action}:${input.resources[0]}`)
@@ -99,7 +99,7 @@ const guardrail = Layer.mock(SessionGuardrail.Service, {
 const browserToolNode = makeLocationNode({
   name: "test/browser-tool-plugin",
   layer: Layer.effectDiscard(registerToolPlugin(BrowserTool.Plugin)),
-  deps: [ToolRegistry.toolsNode, Browser.node, IsolatedBrowser.node, PermissionV2.node, SessionGuardrail.node],
+  deps: [ToolRegistry.toolsNode, Browser.node, IsolatedBrowser.node, Permission.node, SessionGuardrail.node],
 })
 const browserTests = (permissionLayer: typeof permission, guardrailLayer: typeof guardrail = guardrail,
   browserLayer: typeof browser = browser) =>
@@ -107,7 +107,7 @@ const browserTests = (permissionLayer: typeof permission, guardrailLayer: typeof
     AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, browserToolNode]), [
       [Browser.node, browserLayer],
       [IsolatedBrowser.node, isolatedBrowser],
-      [PermissionV2.node, permissionLayer],
+      [Permission.node, permissionLayer],
       [SessionGuardrail.node, guardrailLayer],
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
       [Image.node, imagePassthrough],
@@ -115,10 +115,10 @@ const browserTests = (permissionLayer: typeof permission, guardrailLayer: typeof
   )
 const it = browserTests(permission)
 const denied = browserTests(
-  Layer.mock(PermissionV2.Service, {
+  Layer.mock(Permission.Service, {
     assert: (input) =>
       input.action === "browser_read"
-        ? Effect.fail(new PermissionV2.CorrectedError({ feedback: "Browser metadata access denied" }))
+        ? Effect.fail(new Permission.CorrectedError({ feedback: "Browser metadata access denied" }))
         : Effect.void,
   }),
 )
@@ -229,9 +229,9 @@ describe("BrowserTool", () => {
       expect(sequence).toContain("action:profile-group")
     }),
   )
-  const profileSiteDenied = browserTests(Layer.mock(PermissionV2.Service, {
+  const profileSiteDenied = browserTests(Layer.mock(Permission.Service, {
     assert: (input) => input.resources.some((resource) => resource.startsWith("https://other.test"))
-      ? Effect.fail(new PermissionV2.CorrectedError({ feedback: "Profile site denied" }))
+      ? Effect.fail(new Permission.CorrectedError({ feedback: "Profile site denied" }))
       : Effect.sync(() => sequence.push(`permission:${input.action}:${input.resources[0]}`)),
   }))
   profileSiteDenied.effect("does not group when one granted member site is denied", () =>
@@ -348,9 +348,9 @@ describe("BrowserTool", () => {
       expect(sequence).not.toContain("open:denied-owned")
     }),
   )
-  const returnedPageDenied = browserTests(Layer.mock(PermissionV2.Service, {
+  const returnedPageDenied = browserTests(Layer.mock(Permission.Service, {
     assert: (input) => input.action === "browser_read" && input.resources[0] === "https://example.test/new"
-      ? Effect.fail(new PermissionV2.CorrectedError({ feedback: "Returned page denied" }))
+      ? Effect.fail(new Permission.CorrectedError({ feedback: "Returned page denied" }))
       : Effect.sync(() => sequence.push(`permission:${input.action}:${input.resources[0]}`)),
   }))
   returnedPageDenied.effect("closes the inactive owned tab when returned page access is denied", () =>
@@ -368,9 +368,9 @@ describe("BrowserTool", () => {
       expect(JSON.stringify(result)).not.toContain("https://example.test/new")
     }),
   )
-  const activeReturnedDenied = browserTests(Layer.mock(PermissionV2.Service, {
+  const activeReturnedDenied = browserTests(Layer.mock(Permission.Service, {
     assert: (input) => input.action === "browser_read" && input.resources[0] === "https://example.test/new"
-      ? Effect.fail(new PermissionV2.CorrectedError({ feedback: "Returned page denied" }))
+      ? Effect.fail(new Permission.CorrectedError({ feedback: "Returned page denied" }))
       : Effect.void,
   }), guardrail, Layer.mock(Browser.Service, {
     open: () => Effect.succeed({ ...ownedTab, page: { origin: "https://example.test", path: "/new" }, status: "paused" }),
@@ -453,9 +453,9 @@ describe("BrowserTool", () => {
     }),
   )
 
-  const destinationDenied = browserTests(Layer.mock(PermissionV2.Service, {
+  const destinationDenied = browserTests(Layer.mock(Permission.Service, {
     assert: (input) => input.resources[0]?.startsWith("https://other.test")
-      ? Effect.fail(new PermissionV2.CorrectedError({ feedback: "Destination site denied" }))
+      ? Effect.fail(new Permission.CorrectedError({ feedback: "Destination site denied" }))
       : Effect.sync(() => sequence.push(`permission:${input.action}:${input.resources[0]}`)),
   }))
   destinationDenied.effect("does not dispatch cross-site click when destination approval is denied", () =>
@@ -528,9 +528,9 @@ describe("BrowserTool", () => {
     }),
   )
 
-  const changedPathDenied = browserTests(Layer.mock(PermissionV2.Service, {
+  const changedPathDenied = browserTests(Layer.mock(Permission.Service, {
     assert: (input) => input.resources[0] === "https://example.test/changed"
-      ? Effect.fail(new PermissionV2.CorrectedError({ feedback: "Read denied" }))
+      ? Effect.fail(new Permission.CorrectedError({ feedback: "Read denied" }))
       : Effect.sync(() => sequence.push(`permission:${input.action}:${input.resources[0]}`)),
   }))
   changedPathDenied.effect("checks changed same-site observation path before returning it", () =>

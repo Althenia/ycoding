@@ -1,7 +1,7 @@
 export * as MetaUsage from "./meta"
 
 import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
-import { ProviderV2 } from "../provider"
+import { Provider } from "../provider"
 
 // The standalone Meta adapter consumes organization usage and cost buckets
 // with start_time/end_time/results. Per-request usage from OpenAI-compatible
@@ -15,7 +15,7 @@ interface Bucket {
 }
 
 export interface NormalizeInput {
-  readonly providerID: ProviderV2.ID
+  readonly providerID: Provider.ID
   readonly label: string
   readonly updatedAt: number
   readonly weekStart: number

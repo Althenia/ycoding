@@ -22,14 +22,14 @@ function statusError(status: McpServer["status"]) {
 }
 
 function Status(props: { status: McpServer["status"]["status"]; loading: boolean }) {
-  const { themeV2 } = useTheme().contextual("elevated")
-  if (props.loading) return <span style={{ fg: themeV2.text.subdued }}>Connecting</span>
+  const { theme } = useTheme().contextual("elevated")
+  if (props.loading) return <span style={{ fg: theme.text.subdued }}>Connecting</span>
   const presentation = () => mcpStatusPresentation(props.status)
   const color = (tone: McpTone) => {
-    if (tone === "success") return themeV2.text.feedback.success.default
-    if (tone === "warning") return themeV2.text.feedback.warning.default
-    if (tone === "error") return themeV2.text.feedback.error.default
-    return themeV2.text.subdued
+    if (tone === "success") return theme.text.feedback.success.default
+    if (tone === "warning") return theme.text.feedback.warning.default
+    if (tone === "error") return theme.text.feedback.error.default
+    return theme.text.subdued
   }
   return (
     <span
@@ -63,7 +63,7 @@ export function DialogMcp() {
   const dialog = useDialog()
   const client = useClient()
   const toast = useToast()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const [focused, setFocused] = createSignal<string>()
   const [detail, setDetail] = createSignal<McpServer>()
   const [loading, setLoading] = createSignal<string | null>(null)
@@ -185,21 +185,21 @@ export function DialogMcp() {
                     <Show
                       when={focusedError()}
                       fallback={
-                        <text fg={themeV2.text.subdued} onMouseUp={toggleFocused}>
+                        <text fg={theme.text.subdued} onMouseUp={toggleFocused}>
                           space toggle
                         </text>
                       }
                     >
                       <box flexDirection="row" gap={2}>
-                        <text fg={themeV2.text.subdued}>enter to view error</text>
-                        <text fg={themeV2.text.subdued} onMouseUp={toggleFocused}>
+                        <text fg={theme.text.subdued}>enter to view error</text>
+                        <text fg={theme.text.subdued} onMouseUp={toggleFocused}>
                           space toggle
                         </text>
                       </box>
                     </Show>
                   }
                 >
-                  <text fg={themeV2.text.feedback.warning.default} onMouseUp={toggleFocused}>
+                  <text fg={theme.text.feedback.warning.default} onMouseUp={toggleFocused}>
                     enter or space to authorize in browser
                   </text>
                 </Show>
@@ -226,8 +226,8 @@ function DialogMcpError(props: { server: McpServer; onBack: () => void }) {
   const dialog = useDialog()
   const clipboard = useClipboard()
   const toast = useToast()
-  const { themeV2 } = useTheme().contextual("elevated")
-  const { themeV2: overlayTheme } = useTheme().contextual("overlay")
+  const { theme } = useTheme().contextual("elevated")
+  const { theme: overlayTheme } = useTheme().contextual("overlay")
   const dimensions = useTerminalDimensions()
   const config = useConfig().data
   const [copied, setCopied] = createSignal(false)
@@ -263,14 +263,14 @@ function DialogMcpError(props: { server: McpServer; onBack: () => void }) {
   return (
     <box paddingLeft={4} paddingRight={4} paddingBottom={1} gap={1}>
       <box flexDirection="row" justifyContent="space-between">
-        <text attributes={TextAttributes.BOLD} fg={themeV2.text.default}>
+        <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
           MCP server: {props.server.name}
         </text>
-        <text fg={themeV2.text.subdued} onMouseUp={props.onBack}>
+        <text fg={theme.text.subdued} onMouseUp={props.onBack}>
           esc back
         </text>
       </box>
-      <text fg={themeV2.text.feedback.error.default}>✗ Failed</text>
+      <text fg={theme.text.feedback.error.default}>✗ Failed</text>
       <box
         backgroundColor={overlayTheme.background.default}
         paddingLeft={2}
@@ -290,8 +290,8 @@ function DialogMcpError(props: { server: McpServer; onBack: () => void }) {
         </scrollbox>
       </box>
       <box flexDirection="row" justifyContent="space-between">
-        <text fg={themeV2.text.subdued}>↑↓ scroll</text>
-        <text fg={themeV2.text.subdued} onMouseUp={copy}>
+        <text fg={theme.text.subdued}>↑↓ scroll</text>
+        <text fg={theme.text.subdued} onMouseUp={copy}>
           {copied() ? "✓ copied" : "c copy details"}
         </text>
       </box>

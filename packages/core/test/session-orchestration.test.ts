@@ -1,15 +1,15 @@
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
 import { eq } from "drizzle-orm"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
-import { ModelV2 } from "@ycoding-ai/core/model"
+import { EventRuntime } from "@ycoding-ai/core/event"
+import { CatalogModel } from "@ycoding-ai/core/model"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
@@ -22,13 +22,13 @@ import { SessionOrchestration as SessionOrchestrationSchema } from "@ycoding-ai/
 import { Money } from "@ycoding-ai/schema/money"
 import { testEffect } from "./lib/effect"
 
-const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionProjector.node])))
+const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node])))
 const parentID = SessionSchema.ID.make("ses_parent")
 const childID = SessionSchema.ID.make("ses_child")
-const model = ModelV2.Ref.make({
-  providerID: ProviderV2.ID.make("openai"),
-  id: ModelV2.ID.make("gpt-5.6"),
-  variant: ModelV2.VariantID.make("high"),
+const model = CatalogModel.Ref.make({
+  providerID: Provider.ID.make("openai"),
+  id: CatalogModel.ID.make("gpt-5.6"),
+  variant: CatalogModel.VariantID.make("high"),
 })
 
 const seed = Effect.gen(function* () {
@@ -52,7 +52,7 @@ const seed = Effect.gen(function* () {
 })
 
 const update = (change: SessionOrchestrationSchema.Change) =>
-  EventV2.Service.use((events) => events.publish(SessionEvent.Task.Updated, { sessionID: childID, change }))
+  EventRuntime.Service.use((events) => events.publish(SessionEvent.Task.Updated, { sessionID: childID, change }))
 
 const launch = (background = true) =>
   update({
@@ -62,7 +62,7 @@ const launch = (background = true) =>
     toolCallID: "call_1",
     inputID: SessionMessage.ID.make("msg_input"),
     description: "Implement projection",
-    agent: AgentV2.ID.make("build"),
+    agent: Agent.ID.make("build"),
     model,
     promptDigest: "digest",
     background,
@@ -103,7 +103,7 @@ describe("Session orchestration projection", () => {
       yield* update({ type: "progressed", progress: { text: "halfway", time: 3 } })
       expect((yield* SessionOrchestration.snapshot(db, parentID)).sequence).toBe(3)
 
-      yield* (yield* EventV2.Service).publish(SessionEvent.Deleted, { sessionID: childID })
+      yield* (yield* EventRuntime.Service).publish(SessionEvent.Deleted, { sessionID: childID })
       const deleted = yield* SessionOrchestration.snapshot(db, parentID)
       expect(deleted).toEqual({ sequence: 4, digest: initial.digest })
 
@@ -207,11 +207,11 @@ describe("Session orchestration projection", () => {
       yield* launch()
       yield* update({ type: "started" })
       yield* update({ type: "progressed", progress: { text: "stale", time: 3 } })
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       yield* events.publish(SessionEvent.Step.Started, {
         sessionID: childID,
         assistantMessageID: SessionMessage.ID.make("msg_reused_assistant"),
-        agent: AgentV2.ID.make("build"),
+        agent: Agent.ID.make("build"),
         model,
       })
       yield* update({ type: "completed", excerpt: "done" })
@@ -279,12 +279,12 @@ describe("Session orchestration projection", () => {
       yield* seed
       yield* launch()
       yield* update({ type: "started" })
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const assistantMessageID = SessionMessage.ID.make("msg_assistant")
       yield* events.publish(SessionEvent.Step.Started, {
         sessionID: childID,
         assistantMessageID,
-        agent: AgentV2.ID.make("build"),
+        agent: Agent.ID.make("build"),
         model,
       })
       const db = (yield* Database.Service).db
@@ -359,7 +359,7 @@ describe("Session orchestration helpers", () => {
                 tool_call_id: `call_page_${index}`,
                 input_id: SessionMessage.ID.make(`msg_page_input_${index}`),
                 description: id,
-                agent: AgentV2.ID.make("build"),
+                agent: Agent.ID.make("build"),
                 model,
                 prompt_digest: `digest_${index}`,
                 background: true,
@@ -417,9 +417,9 @@ describe("Session orchestration helpers", () => {
 
   it.effect("uses spawn, agent, parent, then catalog model precedence", () =>
     Effect.sync(() => {
-      const spawn = ModelV2.Ref.make({ providerID: ProviderV2.ID.make("p"), id: ModelV2.ID.make("spawn") })
-      const agent = ModelV2.Ref.make({ providerID: ProviderV2.ID.make("p"), id: ModelV2.ID.make("agent") })
-      const parent = ModelV2.Ref.make({ providerID: ProviderV2.ID.make("p"), id: ModelV2.ID.make("parent") })
+      const spawn = CatalogModel.Ref.make({ providerID: Provider.ID.make("p"), id: CatalogModel.ID.make("spawn") })
+      const agent = CatalogModel.Ref.make({ providerID: Provider.ID.make("p"), id: CatalogModel.ID.make("agent") })
+      const parent = CatalogModel.Ref.make({ providerID: Provider.ID.make("p"), id: CatalogModel.ID.make("parent") })
       expect(SessionOrchestration.selectModel(spawn, agent, parent)).toBe(spawn)
       expect(SessionOrchestration.selectModel(undefined, agent, parent)).toBe(agent)
       expect(SessionOrchestration.selectModel(undefined, undefined, parent)).toBe(parent)
@@ -464,7 +464,7 @@ describe("Session orchestration helpers", () => {
           sessionID: SessionSchema.ID.make(`ses_${String(index).padStart(2, "0")}`),
           parentID,
           description: `task ${index} ${"d".repeat(900)}`,
-          agent: AgentV2.ID.make("build"),
+          agent: Agent.ID.make("build"),
           model,
           background: true,
           state: index % 3 === 0 ? "running" : "completed",

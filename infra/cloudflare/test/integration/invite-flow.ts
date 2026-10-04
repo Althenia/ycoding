@@ -70,7 +70,7 @@ try {
   if (enrolled.status !== 200) throw new Error(`Device enrollment returned ${enrolled.status}`)
   const device: unknown = await enrolled.json()
   if (!isRecord(device) || typeof device.deviceID !== "string") throw new Error("Device ID missing")
-  socket = new WebSocket(`ws://127.0.0.1:${port}/ws/v3/client?device=${device.deviceID}`, { headers: { cookie: firstCookie, origin } })
+  socket = new WebSocket(`ws://127.0.0.1:${port}/ws/v4/client?device=${device.deviceID}`, { headers: { cookie: firstCookie, origin } })
   await Promise.race([new Promise<void>((resolve, reject) => {
     socket?.addEventListener("open", () => resolve(), { once: true })
     socket?.addEventListener("error", () => reject(new Error("Client socket failed to open")), { once: true })

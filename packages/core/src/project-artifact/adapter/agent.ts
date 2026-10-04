@@ -2,11 +2,10 @@ export * as AgentAdapter from "./agent"
 
 import path from "path"
 import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
-import { Permission } from "@ycoding-ai/schema/permission"
 import { Schema } from "effect"
-import { AgentV2 } from "../../agent"
+import { Agent } from "../../agent"
 import { ConfigMarkdown } from "../../config/markdown"
-import { PermissionV2 } from "../../permission"
+import { Permission } from "../../permission"
 import { AbsolutePath } from "../../schema"
 import type { Adapter } from "./index"
 
@@ -49,15 +48,15 @@ export const adapter: Adapter<ProjectArtifact.AgentDefinition> = {
   activate: (version, draft) => {
     const definition = version.definition
     if (definition.kind !== "agent") return
-    draft.agent?.update(AgentV2.ID.make(version.id), (agent) => {
-      agent.name = AgentV2.Name.make(definition.name)
+    draft.agent?.update(Agent.ID.make(version.id), (agent) => {
+      agent.name = Agent.Name.make(definition.name)
       agent.description = definition.description
       agent.system = definition.system
       agent.mode = "subagent"
       agent.hidden = false
       agent.model = undefined
       agent.request = { settings: {}, headers: {}, body: {} }
-      agent.permissions = [...PermissionV2.merge(managedDefaults, definition.permissions)]
+      agent.permissions = [...Permission.merge(managedDefaults, definition.permissions)]
       agent.locations = [AbsolutePath.make(version.contentPath)]
     })
   },

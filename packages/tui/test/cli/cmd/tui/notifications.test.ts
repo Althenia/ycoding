@@ -182,11 +182,11 @@ async function setup(options: {
     emit(event: YCodingEvent) {
       if (event.type === "form.created") forms.set(event.data.form.id, event.data.form)
       if (event.type === "form.replied" || event.type === "form.cancelled") forms.delete(event.data.id)
-      if (event.type === "question.v2.asked") questions.set(event.data.id, event.data)
-      if (event.type === "question.v2.replied" || event.type === "question.v2.rejected")
+      if (event.type === "question.asked") questions.set(event.data.id, event.data)
+      if (event.type === "question.replied" || event.type === "question.rejected")
         questions.delete(event.data.requestID)
-      if (event.type === "permission.v2.asked") permissions.set(event.data.id, event.data)
-      if (event.type === "permission.v2.replied") permissions.delete(event.data.requestID)
+      if (event.type === "permission.asked") permissions.set(event.data.id, event.data)
+      if (event.type === "permission.replied") permissions.delete(event.data.requestID)
       if (event.type === "guardrail.asked") guardrails.set(event.data.id, event.data)
       if (event.type === "guardrail.replied") guardrails.delete(event.data.requestID)
       for (const handler of handlers.get(event.type) ?? []) handler(event)
@@ -194,7 +194,7 @@ async function setup(options: {
   }
 }
 
-function question(id: string, sessionID = "session"): Extract<YCodingEvent, { type: "question.v2.asked" }>["data"] {
+function question(id: string, sessionID = "session"): Extract<YCodingEvent, { type: "question.asked" }>["data"] {
   return {
     id,
     sessionID,
@@ -246,7 +246,7 @@ function form(id: string, sessionID = "session"): Extract<YCodingEvent, { type: 
   }
 }
 
-function permission(id: string, sessionID = "session"): Extract<YCodingEvent, { type: "permission.v2.asked" }>["data"] {
+function permission(id: string, sessionID = "session"): Extract<YCodingEvent, { type: "permission.asked" }>["data"] {
   return {
     id,
     sessionID,
@@ -446,8 +446,8 @@ describe("internal notifications TUI plugin", () => {
           terminal.stdin.emit("data", Buffer.from("\u001b[?1004;1$y"))
           terminal.stdin.emit("data", Buffer.from(focus === "focused" ? "\u001b[I" : "\u001b[O"))
         }
-        harness.emit({ id: "permission-root", created: 0, type: "permission.v2.asked", data: permission("permission-root") })
-        harness.emit({ id: "permission-child", created: 0, type: "permission.v2.asked", data: permission("permission-child", "subagent") })
+        harness.emit({ id: "permission-root", created: 0, type: "permission.asked", data: permission("permission-root") })
+        harness.emit({ id: "permission-child", created: 0, type: "permission.asked", data: permission("permission-child", "subagent") })
         harness.emit({ id: "guardrail-child", created: 0, type: "guardrail.asked", data: guardrail("guardrail-child", "subagent", "session") })
         await harness.flush()
         expect(terminal.notifications()).toHaveLength(focus === "focused" ? 0 : 2)
@@ -455,7 +455,7 @@ describe("internal notifications TUI plugin", () => {
           expect(terminal.output()).toContain("\u001b]777;notify;Demo session;Permission needs input\u001b\\")
           expect(terminal.output()).toContain("\u001b]777;notify;Demo session;Guardrail approval needed\u001b\\")
         }
-        harness.emit({ id: "duplicate", created: 0, type: "permission.v2.asked", data: permission("permission-root") })
+        harness.emit({ id: "duplicate", created: 0, type: "permission.asked", data: permission("permission-root") })
         await harness.flush()
         expect(terminal.notifications()).toHaveLength(focus === "focused" ? 0 : 2)
       } finally {
@@ -471,7 +471,7 @@ describe("internal notifications TUI plugin", () => {
       const harness = await setup({ attention: terminal.attention })
       try {
         harness.emit(kind === "permission"
-          ? { id: "asked", created: 0, type: "permission.v2.asked", data: permission("pending-1") }
+          ? { id: "asked", created: 0, type: "permission.asked", data: permission("pending-1") }
           : { id: "asked", created: 0, type: "guardrail.asked", data: guardrail("pending-1", "subagent", "session") })
         await harness.flush()
         expect(terminal.notifications()).toHaveLength(0)
@@ -491,7 +491,7 @@ describe("internal notifications TUI plugin", () => {
       const terminal = await notificationTerminal()
       const harness = await setup({ attention: terminal.attention })
       const asked: YCodingEvent = kind === "permission"
-        ? { id: "asked", created: 0, type: "permission.v2.asked", data: permission("request-1") }
+        ? { id: "asked", created: 0, type: "permission.asked", data: permission("request-1") }
         : { id: "asked", created: 0, type: "guardrail.asked", data: guardrail("request-1", "subagent", "session") }
       try {
         harness.emit(asked)
@@ -517,7 +517,7 @@ describe("internal notifications TUI plugin", () => {
       const harness = await setup({ attention: terminal.attention })
       try {
         harness.emit(kind === "permission"
-          ? { id: "asked", created: 0, type: "permission.v2.asked", data: permission("resolved-1") }
+          ? { id: "asked", created: 0, type: "permission.asked", data: permission("resolved-1") }
           : { id: "asked", created: 0, type: "guardrail.asked", data: guardrail("resolved-1") })
         await harness.flush()
         expect(harness.notifications).toHaveLength(1)
@@ -541,7 +541,7 @@ describe("internal notifications TUI plugin", () => {
       terminal.stdin.emit("data", Buffer.from("\u001bP>|ghostty 1.1.3\u001b\\"))
       terminal.stdin.emit("data", Buffer.from("\u001b[?1004;1$y"))
       terminal.stdin.emit("data", Buffer.from("\u001b[I"))
-      harness.emit({ id: "asked", created: 0, type: "permission.v2.asked", data: permission("focused-1") })
+      harness.emit({ id: "asked", created: 0, type: "permission.asked", data: permission("focused-1") })
       await harness.flush()
       expect(terminal.notifications()).toHaveLength(0)
       terminal.stdin.emit("data", Buffer.from("\u001b[O"))
@@ -559,7 +559,7 @@ describe("internal notifications TUI plugin", () => {
       ok: true, notification: supported, sound: input.sound !== false,
     }) })
     try {
-      const asked: YCodingEvent = { id: "asked", created: 0, type: "permission.v2.asked", data: permission("permission-1") }
+      const asked: YCodingEvent = { id: "asked", created: 0, type: "permission.asked", data: permission("permission-1") }
       harness.emit(asked)
       await harness.flush()
       supported = true
@@ -590,7 +590,7 @@ describe("internal notifications TUI plugin", () => {
       return result
     } })
     try {
-      harness.emit({ id: "asked", created: 0, type: "permission.v2.asked", data: permission("pending-1") })
+      harness.emit({ id: "asked", created: 0, type: "permission.asked", data: permission("pending-1") })
       const sending = harness.flush()
       await started.promise
       terminal.stdin.emit("data", Buffer.from("\u001bP>|ghostty 1.1.3\u001b\\"))
@@ -607,12 +607,12 @@ describe("internal notifications TUI plugin", () => {
       terminal.dispose()
     }
   })
-  test("uses only the V2 plugin runtime", () => {
+  test("uses only the current plugin runtime", () => {
     expect("setup" in Notifications).toBe(true)
     expect(createBuiltinPlugins().some((plugin) => plugin.id === "internal:notifications")).toBe(false)
   })
 
-  test("registers notifications in the active V2 builtin list", () => {
+  test("registers notifications in the active built-in list", () => {
     expect(builtins.filter((plugin) => plugin.id === "internal:notifications")).toHaveLength(1)
   })
 
@@ -624,7 +624,7 @@ describe("internal notifications TUI plugin", () => {
   test("alerts only after a request remains pending for 500ms", async () => {
     const harness = await setup()
 
-    harness.emit({ id: "event-1", created: 0, type: "permission.v2.asked", data: permission("permission-1") })
+    harness.emit({ id: "event-1", created: 0, type: "permission.asked", data: permission("permission-1") })
 
     expect(harness.notifications).toEqual([])
     expect(harness.scheduled.map((item) => item.delay)).toEqual([500])
@@ -637,11 +637,11 @@ describe("internal notifications TUI plugin", () => {
   test("suppresses requests resolved automatically before the checkpoint", async () => {
     const harness = await setup()
 
-    harness.emit({ id: "event-1", created: 0, type: "permission.v2.asked", data: permission("permission-1") })
+    harness.emit({ id: "event-1", created: 0, type: "permission.asked", data: permission("permission-1") })
     harness.emit({
       id: "event-2",
       created: 0,
-      type: "permission.v2.replied",
+      type: "permission.replied",
       data: { sessionID: "session", requestID: "permission-1", reply: "once" },
     })
     await harness.flush()
@@ -980,7 +980,7 @@ describe("internal notifications TUI plugin", () => {
 
   test("cancels pending attention work and listeners on cleanup", async () => {
     const harness = await setup()
-    harness.emit({ id: "event-1", created: 0, type: "permission.v2.asked", data: permission("permission-1") })
+    harness.emit({ id: "event-1", created: 0, type: "permission.asked", data: permission("permission-1") })
 
     expect(harness.listenerCount()).toBeGreaterThan(0)
     await harness.cleanup()
@@ -994,15 +994,15 @@ describe("internal notifications TUI plugin", () => {
   test("contains notification failures and continues handling later attention", async () => {
     const harness = await setup({ rejectFirstNotification: true })
 
-    harness.emit({ id: "event-1", created: 0, type: "permission.v2.asked", data: permission("permission-1") })
+    harness.emit({ id: "event-1", created: 0, type: "permission.asked", data: permission("permission-1") })
     await harness.flush()
     harness.emit({
       id: "event-2",
       created: 0,
-      type: "permission.v2.replied",
+      type: "permission.replied",
       data: { sessionID: "session", requestID: "permission-1", reply: "once" },
     })
-    harness.emit({ id: "event-3", created: 0, type: "permission.v2.asked", data: permission("permission-2") })
+    harness.emit({ id: "event-3", created: 0, type: "permission.asked", data: permission("permission-2") })
     await harness.flush()
 
     expect(harness.notifications).toEqual([permissionNotification, permissionNotification])
@@ -1017,8 +1017,8 @@ describe("internal notifications TUI plugin", () => {
       type: "form.created",
       data: { form: { ...form("form-1"), title: "Confirm deployment" } },
     })
-    harness.emit({ id: "event-2", created: 0, type: "question.v2.asked", data: question("question-1") })
-    harness.emit({ id: "event-3", created: 0, type: "permission.v2.asked", data: permission("permission-1") })
+    harness.emit({ id: "event-2", created: 0, type: "question.asked", data: question("question-1") })
+    harness.emit({ id: "event-3", created: 0, type: "permission.asked", data: permission("permission-1") })
     await harness.flush()
 
     expect(harness.notifications).toEqual([titledFormNotification, questionNotification, permissionNotification])
@@ -1027,11 +1027,11 @@ describe("internal notifications TUI plugin", () => {
   test("ignores auto-resolved question", async () => {
     const harness = await setup()
     harness.autonomy.set("session", { mode: "normal", yolo: 1 })
-    harness.emit({ id: "asked", created: 0, type: "question.v2.asked", data: question("question-1") })
+    harness.emit({ id: "asked", created: 0, type: "question.asked", data: question("question-1") })
     harness.emit({
       id: "answered",
       created: 0,
-      type: "question.v2.replied",
+      type: "question.replied",
       data: { sessionID: "session", requestID: "question-1", answers: [] },
     })
     await harness.flush()
@@ -1093,25 +1093,25 @@ describe("internal notifications TUI plugin", () => {
     })
     harness.emit({ id: "event-4", created: 0, type: "form.created", data: { form: form("form-1") } })
 
-    harness.emit({ id: "event-5", created: 0, type: "question.v2.asked", data: question("question-1") })
-    harness.emit({ id: "event-6", created: 0, type: "question.v2.asked", data: question("question-1") })
+    harness.emit({ id: "event-5", created: 0, type: "question.asked", data: question("question-1") })
+    harness.emit({ id: "event-6", created: 0, type: "question.asked", data: question("question-1") })
     harness.emit({
       id: "event-7",
       created: 0,
-      type: "question.v2.replied",
+      type: "question.replied",
       data: { sessionID: "session", requestID: "question-1", answers: [] },
     })
-    harness.emit({ id: "event-8", created: 0, type: "question.v2.asked", data: question("question-1") })
+    harness.emit({ id: "event-8", created: 0, type: "question.asked", data: question("question-1") })
 
-    harness.emit({ id: "event-9", created: 0, type: "permission.v2.asked", data: permission("permission-1") })
-    harness.emit({ id: "event-10", created: 0, type: "permission.v2.asked", data: permission("permission-1") })
+    harness.emit({ id: "event-9", created: 0, type: "permission.asked", data: permission("permission-1") })
+    harness.emit({ id: "event-10", created: 0, type: "permission.asked", data: permission("permission-1") })
     harness.emit({
       id: "event-11",
       created: 0,
-      type: "permission.v2.replied",
+      type: "permission.replied",
       data: { sessionID: "session", requestID: "permission-1", reply: "once" },
     })
-    harness.emit({ id: "event-12", created: 0, type: "permission.v2.asked", data: permission("permission-1") })
+    harness.emit({ id: "event-12", created: 0, type: "permission.asked", data: permission("permission-1") })
     await harness.flush()
 
     expect(harness.notifications).toEqual([formNotification, questionNotification, permissionNotification])

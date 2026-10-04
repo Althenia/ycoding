@@ -105,12 +105,12 @@ function KeepAwakeCommands() {
 }
 
 function KeepAwakePaletteStatus(props: { status: () => KeepAwakeStatus | undefined }) {
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const color = () =>
     props.status()?.state === "on"
-      ? themeV2.text.feedback.success.default
+      ? theme.text.feedback.success.default
       : props.status()?.state === "error"
-        ? themeV2.text.feedback.error.default
-        : themeV2.text.subdued
+        ? theme.text.feedback.error.default
+        : theme.text.subdued
   return <span style={{ fg: color() }}>● {props.status()?.state ?? "Checking"}</span>
 }

@@ -150,14 +150,14 @@ describe("HttpApiCodegen.generate", () => {
     const source = HttpApi.make("test").add(
       HttpApiGroup.make("server.session").add(
         HttpApiEndpoint.get("internal.stage", "/session/revert/stage", { success: Schema.String }).annotateMerge(
-          OpenApi.annotations({ identifier: "v2.session.revert.stage" }),
+          OpenApi.annotations({ identifier: "session.revert.stage" }),
         ),
       ),
     )
     const contract = compileContract(source, { groupNames: { "server.session": "session" } })
 
     expect(contract.groups[0]?.endpoints[0]?.clientPath).toEqual(["revert", "stage"])
-    expect(OpenApi.fromApi(source).paths["/session/revert/stage"]?.get?.operationId).toBe("v2.session.revert.stage")
+    expect(OpenApi.fromApi(source).paths["/session/revert/stage"]?.get?.operationId).toBe("session.revert.stage")
   })
 
   test("uses nested OpenAPI operation IDs across emitters", () => {
@@ -165,17 +165,17 @@ describe("HttpApiCodegen.generate", () => {
       HttpApiGroup.make("server.session")
         .add(
           HttpApiEndpoint.get("list", "/session/instructions", { success: Schema.String }).annotateMerge(
-            OpenApi.annotations({ identifier: "v2.session.instructions.list" }),
+            OpenApi.annotations({ identifier: "session.instructions.list" }),
           ),
         )
         .add(
           HttpApiEndpoint.put("put", "/session/instructions", { success: Schema.String }).annotateMerge(
-            OpenApi.annotations({ identifier: "v2.session.instructions.put" }),
+            OpenApi.annotations({ identifier: "session.instructions.put" }),
           ),
         )
         .add(
           HttpApiEndpoint.delete("remove", "/session/instructions", { success: Schema.String }).annotateMerge(
-            OpenApi.annotations({ identifier: "v2.session.instructions.remove" }),
+            OpenApi.annotations({ identifier: "session.instructions.remove" }),
           ),
         ),
     )

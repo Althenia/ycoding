@@ -21,7 +21,7 @@ type JsonValue = null | boolean | number | string | Array<JsonValue> | { [key: s
 
 /**
  * Adapts a Promise plugin into an Effect plugin so the existing Effect-only
- * loader (`PluginV2` / `PluginSupervisor`) can run it unchanged.
+ * loader (`PluginRegistry` / `PluginSupervisor`) can run it unchanged.
  *
  * Hook registrations created during the async `setup` attach to the plugin's
  * scope, so unloading the plugin disposes them. The captured fiber context

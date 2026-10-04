@@ -139,7 +139,7 @@ export function ProviderUsageScreenContent(props: {
   initialTab?: ProviderUsageView
   loadReport?: (input: ProviderUsageReportInput) => Promise<ProviderRequestReport>
 }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const backShortcut = Keymap.useShortcut("provider-usage.back")
   const refreshShortcut = Keymap.useShortcut("provider-usage.refresh")
@@ -211,16 +211,16 @@ export function ProviderUsageScreenContent(props: {
     bindings: ["provider-usage.back", "provider-usage.refresh"],
   }))
   return (
-    <box width={dimensions().width} height={dimensions().height} flexDirection="column" backgroundColor={themeV2.background.default}>
-      <box height={3} flexShrink={0} alignItems="center" flexDirection="row" paddingLeft={3} paddingRight={3} backgroundColor={themeV2.background.chrome}>
+    <box width={dimensions().width} height={dimensions().height} flexDirection="column" backgroundColor={theme.background.default}>
+      <box height={3} flexShrink={0} alignItems="center" flexDirection="row" paddingLeft={3} paddingRight={3} backgroundColor={theme.background.chrome}>
         <BrandMark width={2} height={1} />
         <text> Usage</text>
         <box flexGrow={1} />
         <box flexDirection="row" gap={2}>
-          <text fg={themeV2.text.feedback.info.default} onMouseUp={refresh}>
+          <text fg={theme.text.feedback.info.default} onMouseUp={refresh}>
             {refreshShortcut() ? `${refreshShortcut()} ` : ""}refresh
           </text>
-          <text fg={themeV2.text.feedback.info.default} onMouseUp={back}>
+          <text fg={theme.text.feedback.info.default} onMouseUp={back}>
             {backShortcut() ? `${backShortcut()} ` : ""}back
           </text>
         </box>
@@ -229,10 +229,10 @@ export function ProviderUsageScreenContent(props: {
       <box flexShrink={0} height={3} flexDirection="row" alignItems="center">
         <For each={visibleViews()}>{(item, index) => (
           <>
-            <Show when={index() > 0}><text flexShrink={0} fg={themeV2.border.default}>│</text></Show>
+            <Show when={index() > 0}><text flexShrink={0} fg={theme.border.default}>│</text></Show>
             <box width={NAV_CELL_WIDTH} height={1} flexShrink={0} alignItems="center" onMouseUp={() => selectView(item)}>
               <text
-                fg={view() === item ? themeV2.text.feedback.info.default : themeV2.text.subdued}
+                fg={view() === item ? theme.text.feedback.info.default : theme.text.subdued}
                 attributes={view() === item ? TextAttributes.BOLD : undefined}
               >
                 {providerUsageViewLabel(item)}
@@ -249,20 +249,20 @@ export function ProviderUsageScreenContent(props: {
         horizontalScrollbarOptions={{ visible: false }}
         verticalScrollbarOptions={{
           trackOptions: {
-            backgroundColor: themeV2.background.default,
-            foregroundColor: themeV2.scrollbar.default,
+            backgroundColor: theme.background.default,
+            foregroundColor: theme.scrollbar.default,
           },
         }}
         paddingBottom={1}
       >
         <Show when={view() === "overview" && props.backendUsageRefreshing?.() && props.backendUsage?.()}>
-          <text fg={themeV2.text.feedback.warning.default}>Refreshing YCoding backend usage · showing previous data</text>
+          <text fg={theme.text.feedback.warning.default}>Refreshing YCoding backend usage · showing previous data</text>
         </Show>
         <Show when={view() === "overview" && props.backendUsageFailed?.() && props.backendUsage?.()}>
-          <text fg={themeV2.text.feedback.error.default}>YCoding backend usage refresh failed · showing stale data</text>
+          <text fg={theme.text.feedback.error.default}>YCoding backend usage refresh failed · showing stale data</text>
         </Show>
         <Show when={view() === "usage" && props.failed?.()}>
-          <text fg={themeV2.text.feedback.warning.default}>Some provider usage could not be refreshed.</text>
+          <text fg={theme.text.feedback.warning.default}>Some provider usage could not be refreshed.</text>
         </Show>
         <Show when={view() === "overview" && aggregateUsage()}>
           {(items) => <OverviewTable items={items()} width={dimensions().width} sorting={overviewSorting} onSort={changeOverviewSort} />}
@@ -271,12 +271,12 @@ export function ProviderUsageScreenContent(props: {
           {(snapshot) => <QuotaSection snapshot={snapshot} now={props.now?.() ?? Date.now()} />}
         </For></Show>
         <Show when={view() === "usage" && visibleProviderSnapshots(props.snapshots()).length === 0}>
-          <text fg={themeV2.text.subdued}>{props.refreshing?.() ? "Loading provider quotas..." : props.failed?.() ? "Provider quotas could not be loaded." : "No provider quotas are reported."}</text>
+          <text fg={theme.text.subdued}>{props.refreshing?.() ? "Loading provider quotas..." : props.failed?.() ? "Provider quotas could not be loaded." : "No provider quotas are reported."}</text>
         </Show>
         <Show
           when={view() === "overview" && !aggregateUsage()}
         >
-          <text fg={themeV2.text.subdued}>
+          <text fg={theme.text.subdued}>
             {props.backendUsageFailed?.()
               ? "YCoding backend usage could not be loaded."
               : props.backendUsageRefreshing?.()
@@ -295,12 +295,12 @@ export function ProviderUsageScreenContent(props: {
         />
       )}</Show>
       </box>
-      <box height={3} flexShrink={0} alignItems="center" flexDirection="row" paddingLeft={3} paddingRight={3} backgroundColor={themeV2.background.chrome}>
-        <text fg={themeV2.text.subdued}>
+      <box height={3} flexShrink={0} alignItems="center" flexDirection="row" paddingLeft={3} paddingRight={3} backgroundColor={theme.background.chrome}>
+        <text fg={theme.text.subdued}>
           {reportView() ? "Local report cost · not a provider bill" : view() === "overview" ? "YCoding backend · All sessions · lifetime retained usage" : "Provider-reported quota windows"}
         </text>
         <box flexGrow={1} />
-        <text fg={themeV2.text.subdued}>←→/Tab views · ↑↓ {reportView() ? "select" : "scroll"} · {refreshShortcut() ? `${refreshShortcut()} refresh` : "refresh"} · {backShortcut() ? `${backShortcut()} back` : "back"}</text>
+        <text fg={theme.text.subdued}>←→/Tab views · ↑↓ {reportView() ? "select" : "scroll"} · {refreshShortcut() ? `${refreshShortcut()} refresh` : "refresh"} · {backShortcut() ? `${backShortcut()} back` : "back"}</text>
       </box>
     </box>
   )
@@ -319,7 +319,7 @@ function OverviewTable(props: {
   sorting: () => { sort: OverviewSort; order: "asc" | "desc" }
   onSort: (sort: OverviewSort) => void
 }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const geometry = () => overviewGeometry(props.width)
   const narrow = () => !geometry().fits
   const orderedItems = createMemo(() => {
@@ -333,12 +333,12 @@ function OverviewTable(props: {
     })].filter((item): item is OverviewItem => item !== undefined)
   })
   return <box flexDirection="column" paddingTop={1}>
-    <text fg={themeV2.text.subdued}>LIFETIME MODEL BREAKDOWN · YCODING BACKEND</text>
-    <text fg={themeV2.border.default}>{"─".repeat(Math.max(1, Math.min(props.width - 6, 96)))}</text>
+    <text fg={theme.text.subdued}>LIFETIME MODEL BREAKDOWN · YCODING BACKEND</text>
+    <text fg={theme.border.default}>{"─".repeat(Math.max(1, Math.min(props.width - 6, 96)))}</text>
     <Show when={!narrow()}><OverviewHeader geometry={geometry()} sorting={props.sorting} onSort={props.onSort} /></Show>
     <For each={orderedItems()}>{(item, index) => {
       const identity = index() === 0 ? "Total" : item.model
-      if (narrow()) return <box flexDirection="column" paddingTop={1}><text fg={index() === 0 ? themeV2.text.feedback.info.default : themeV2.text.default}>{identity} · {item.input} in · {item.output} out · {item.spent}</text><text fg={themeV2.text.subdued}>  steps {item.steps} · reasoning {item.reasoning} · cache {item.cacheRead}/{item.cacheWrite}</text></box>
+      if (narrow()) return <box flexDirection="column" paddingTop={1}><text fg={index() === 0 ? theme.text.feedback.info.default : theme.text.default}>{identity} · {item.input} in · {item.output} out · {item.spent}</text><text fg={theme.text.subdued}>  steps {item.steps} · reasoning {item.reasoning} · cache {item.cacheRead}/{item.cacheWrite}</text></box>
       return <OverviewRow item={item} identity={identity} geometry={geometry()} total={index() === 0} />
     }}</For>
   </box>
@@ -360,12 +360,12 @@ function OverviewHeader(props: {
     { key: "cacheRead" as const, label: "CACHE R/W", width: props.geometry.cache },
     { key: "cost" as const, label: "COST", width: props.geometry.cost },
   ]
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   return <box flexDirection="row">
     <For each={columns}>{(column, index) => {
       const selected = createMemo(() => props.sorting().sort === column.key)
       const label = column.key === "key" ? column.label.padEnd(column.width - 1) : column.label.padStart(column.width - 1)
-      return <text width={column.width + (index() > 0 ? 1 : 0)} fg={themeV2.text.subdued} onMouseUp={() => props.onSort(column.key)}>
+      return <text width={column.width + (index() > 0 ? 1 : 0)} fg={theme.text.subdued} onMouseUp={() => props.onSort(column.key)}>
         {index() > 0 ? "\u00a0" : ""}{label}
         <Show when={selected()}><span>{props.sorting().order === "asc" ? "▲" : "▼"}</span></Show>
         <Show when={!selected()}><span>{"\u00a0"}</span></Show>
@@ -394,27 +394,27 @@ function OverviewRow(props: {
   geometry: OverviewGeometry
   total: boolean
 }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   return (
     <box width="100%" flexShrink={0}>
       <text>
-        <span style={{ fg: props.total ? themeV2.text.feedback.info.default : themeV2.text.default }}>{Locale.truncate(props.identity, props.geometry.name).padEnd(props.geometry.name)}</span>{" "}
+        <span style={{ fg: props.total ? theme.text.feedback.info.default : theme.text.default }}>{Locale.truncate(props.identity, props.geometry.name).padEnd(props.geometry.name)}</span>{" "}
         <span>{props.item.steps.padStart(props.geometry.steps)}</span>{" "}
-        <span style={{ fg: themeV2.text.feedback.success.default }}>{props.item.input.padStart(props.geometry.input)}</span>{" "}
-        <span style={{ fg: themeV2.text.feedback.warning.subdued }}>{props.item.output.padStart(props.geometry.output)}</span>{" "}
-        <span style={{ fg: themeV2.text.label }}>{props.item.reasoning.padStart(props.geometry.reasoning)}</span>{" "}
-        <span style={{ fg: themeV2.text.feedback.info.default }}>{`${props.item.cacheRead}/${props.item.cacheWrite}`.padStart(props.geometry.cache)}</span>{" "}
-        <span style={{ fg: themeV2.text.feedback.success.subdued }}>{props.item.spent.padStart(props.geometry.cost)}</span>
+        <span style={{ fg: theme.text.feedback.success.default }}>{props.item.input.padStart(props.geometry.input)}</span>{" "}
+        <span style={{ fg: theme.text.feedback.warning.subdued }}>{props.item.output.padStart(props.geometry.output)}</span>{" "}
+        <span style={{ fg: theme.text.label }}>{props.item.reasoning.padStart(props.geometry.reasoning)}</span>{" "}
+        <span style={{ fg: theme.text.feedback.info.default }}>{`${props.item.cacheRead}/${props.item.cacheWrite}`.padStart(props.geometry.cache)}</span>{" "}
+        <span style={{ fg: theme.text.feedback.success.subdued }}>{props.item.spent.padStart(props.geometry.cost)}</span>
       </text>
     </box>
   )
 }
 
 function QuotaSection(props: { snapshot: ProviderUsageSnapshot; now: number }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   return (
     <box flexDirection="column" paddingBottom={1}>
-      <text fg={themeV2.text.feedback.info.default}>
+      <text fg={theme.text.feedback.info.default}>
         {props.snapshot.label}{props.snapshot.profile ? ` · ${props.snapshot.profile}` : ""} ·{" "}
         {props.snapshot.status === "available" || props.snapshot.status === "stale"
           ? freshnessLabel(props.snapshot, props.now)
@@ -430,10 +430,10 @@ function QuotaSection(props: { snapshot: ProviderUsageSnapshot; now: number }) {
               : formatReset(window.resetAt, props.now)
           const color =
             usageSeverity(ratio) === "error"
-              ? themeV2.text.feedback.error.default
+              ? theme.text.feedback.error.default
               : usageSeverity(ratio) === "warning"
-                ? themeV2.text.feedback.warning.default
-                : themeV2.text.feedback.success.default
+                ? theme.text.feedback.warning.default
+                : theme.text.feedback.success.default
           return (
             <box flexDirection="column" paddingBottom={1}>
               <text>
@@ -447,10 +447,10 @@ function QuotaSection(props: { snapshot: ProviderUsageSnapshot; now: number }) {
         }}
       </For>
       <Show when={props.snapshot.message}>
-        {(message) => <text fg={themeV2.text.subdued}> {message()}</text>}
+        {(message) => <text fg={theme.text.subdued}> {message()}</text>}
       </Show>
       <Show when={!props.snapshot.message && props.snapshot.windows.length === 0}>
-        <text fg={themeV2.text.subdued}> Quota information is not reported.</text>
+        <text fg={theme.text.subdued}> Quota information is not reported.</text>
       </Show>
     </box>
   )

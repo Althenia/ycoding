@@ -6,7 +6,7 @@ import { FileSystem } from "@ycoding-ai/schema/filesystem"
 import os from "os"
 import path from "path"
 import { Config } from "../config"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { FSUtil } from "../fs-util"
 import { Git } from "../git"
 import { Location } from "../location"
@@ -30,7 +30,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const location = yield* Location.Service
     const watcher = yield* Watcher.Service
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const fs = yield* FSUtil.Service
     const git = yield* Git.Service
     const configService = yield* Config.Service
@@ -86,5 +86,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Watcher.node, FSUtil.node, Location.node, Config.node, Git.node, EventV2.node],
+  deps: [Watcher.node, FSUtil.node, Location.node, Config.node, Git.node, EventRuntime.node],
 })

@@ -3,48 +3,48 @@ export * as CursorModels from "./models"
 import { Money } from "@ycoding-ai/schema/money"
 import type { ModelInfo, ModelParameterValue, ModelVariant } from "./provider/models"
 import { getCursorModelCost, hasCursorFastPricing } from "./provider/pricing"
-import { ModelV2 } from "../model"
-import { ProviderV2 } from "../provider"
+import { CatalogModel } from "../model"
+import { Provider } from "../provider"
 
-export const providerID = ProviderV2.ID.make("cursor")
+export const providerID = Provider.ID.make("cursor")
 export const packageName = "cursor-opencode-provider"
 export const variantParametersKey = "cursorVariantParameters"
 
 type Tier = "base" | "long"
 type Group = { tier: Tier; fast: boolean; variants: ModelVariant[]; suffix: string }
 
-export function fromCursor(models: readonly ModelInfo[]): ModelV2.Info[] {
+export function fromCursor(models: readonly ModelInfo[]): CatalogModel.Info[] {
   const ambiguous = thinkingSuffixNames(models)
   const used = new Set(models.map((model) => model.id))
   return models.flatMap((model) => {
     const thinking = !!model.supportsThinking && ambiguous.has(label(model.displayName ?? model.id))
     const groups = tierGroups(model)
     if (groups.length === 0)
-      return [info(model, ModelV2.ID.make(model.id), { tier: "base", fast: false, variants: [], suffix: "" }, thinking)]
+      return [info(model, CatalogModel.ID.make(model.id), { tier: "base", fast: false, variants: [], suffix: "" }, thinking)]
     const primary = Math.max(
       groups.findIndex((group) => group.suffix === ""),
       0,
     )
     return groups.map((group, index) =>
-      info(model, ModelV2.ID.make(index === primary ? model.id : uniqueID(used, model.id, group.suffix)), group, thinking),
+      info(model, CatalogModel.ID.make(index === primary ? model.id : uniqueID(used, model.id, group.suffix)), group, thinking),
     )
   })
 }
 
-function info(model: ModelInfo, id: ModelV2.ID, group: Group, thinking: boolean): ModelV2.Info {
+function info(model: ModelInfo, id: CatalogModel.ID, group: Group, thinking: boolean): CatalogModel.Info {
   const images = model.supportsImages ?? false
   const defaults = id === model.id && group.tier === "base" && !group.fast ? undefined : defaultVariant(group)
-  return ModelV2.Info.make({
-    ...ModelV2.Info.empty(providerID, id),
-    modelID: ModelV2.ID.make(model.id),
-    ...(model.family ? { family: ModelV2.Family.make(model.family) } : {}),
+  return CatalogModel.Info.make({
+    ...CatalogModel.Info.empty(providerID, id),
+    modelID: CatalogModel.ID.make(model.id),
+    ...(model.family ? { family: CatalogModel.Family.make(model.family) } : {}),
     name: [
       label(model.displayName ?? model.id),
       ...(thinking ? ["Thinking"] : []),
       ...(group.fast ? ["Fast"] : []),
       ...(group.tier === "long" ? ["1M"] : []),
     ].join(" "),
-    package: ProviderV2.aisdk(packageName),
+    package: Provider.aisdk(packageName),
     ...(defaults ? { settings: { [variantParametersKey]: parameters(defaults.parameterValues) } } : {}),
     capabilities: {
       tools: model.supportsAgent ?? true,
@@ -62,7 +62,7 @@ function info(model: ModelInfo, id: ModelV2.ID, group: Group, thinking: boolean)
   })
 }
 
-function costs(cost: ReturnType<typeof getCursorModelCost>): ModelV2.Info["cost"] {
+function costs(cost: ReturnType<typeof getCursorModelCost>): CatalogModel.Info["cost"] {
   if (!cost) return []
   const row = (rate: NonNullable<typeof cost>) => ({
     input: Money.USDPerMillionTokens.make(rate.input),
@@ -103,7 +103,7 @@ function defaultVariant(group: Group) {
   )
 }
 
-function variants(model: ModelInfo, input: readonly ModelVariant[]): ModelV2.Info["variants"] {
+function variants(model: ModelInfo, input: readonly ModelVariant[]): CatalogModel.Info["variants"] {
   const base = label(model.displayName ?? model.id)
   const used = new Set<string>()
   return input.map((variant) => {
@@ -117,7 +117,7 @@ function variants(model: ModelInfo, input: readonly ModelVariant[]): ModelV2.Inf
       : candidate
     used.add(id)
     return {
-      id: ModelV2.VariantID.make(id),
+      id: CatalogModel.VariantID.make(id),
       settings: { [variantParametersKey]: parameters(variant.parameterValues) },
     }
   })

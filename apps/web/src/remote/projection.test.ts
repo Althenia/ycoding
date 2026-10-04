@@ -504,7 +504,7 @@ describe("requests", () => {
 
   test("tracks permission, guardrail, and native form asks and their replies", () => {
     let view = createSessionView("ses_a")
-    view = apply(view, "permission.v2.asked", { id: "per_1", action: "edit", resources: ["src/**"] })
+    view = apply(view, "permission.asked", { id: "per_1", action: "edit", resources: ["src/**"] })
     view = apply(view, "guardrail.asked", {
       id: "grq_1",
       action: "rm -rf build",
@@ -526,14 +526,14 @@ describe("requests", () => {
     const guardrail = view.requests.find((request) => request.kind === "guardrail")
     expect(guardrail).toMatchObject({ hardReview: true, reason: "Deletion needs review", metadata: { workdir: "/fixture/project" } })
 
-    view = apply(view, "permission.v2.replied", { requestID: "per_1", reply: "once" })
+    view = apply(view, "permission.replied", { requestID: "per_1", reply: "once" })
     view = apply(view, "guardrail.replied", { requestID: "grq_1", reply: "reject" })
     view = apply(view, "form.replied", { id: "frm_1", sessionID: "ses_a", answer: { q0: "core" } })
     expect(view.requests).toHaveLength(0)
   })
 
   test("ignores a reply for an unknown request instead of inventing one", () => {
-    const view = apply(createSessionView("ses_a"), "permission.v2.replied", { requestID: "per_missing", reply: "once" })
+    const view = apply(createSessionView("ses_a"), "permission.replied", { requestID: "per_missing", reply: "once" })
     expect(view.requests).toHaveLength(0)
   })
 })

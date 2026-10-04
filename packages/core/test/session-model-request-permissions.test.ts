@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { SessionModelRequest } from "@ycoding-ai/core/session/model-request"
 
 const configured = [
@@ -10,11 +10,11 @@ const configured = [
 test("subagents retain configured tools except nested orchestration tools", () => {
   const permissions = SessionModelRequest.toolPermissions({ mode: "subagent", permissions: configured }, [])
 
-  expect(PermissionV2.evaluate("shell", "pwd", permissions).effect).toBe("allow")
-  expect(PermissionV2.evaluate("read", "README.md", permissions).effect).toBe("allow")
-  expect(PermissionV2.evaluate("edit", "README.md", permissions).effect).toBe("deny")
-  expect(PermissionV2.evaluate("subagent", "general", permissions).effect).toBe("deny")
-  expect(PermissionV2.evaluate("subagent_control", "send", permissions).effect).toBe("deny")
+  expect(Permission.evaluate("shell", "pwd", permissions).effect).toBe("allow")
+  expect(Permission.evaluate("read", "README.md", permissions).effect).toBe("allow")
+  expect(Permission.evaluate("edit", "README.md", permissions).effect).toBe("deny")
+  expect(Permission.evaluate("subagent", "general", permissions).effect).toBe("deny")
+  expect(Permission.evaluate("subagent_control", "send", permissions).effect).toBe("deny")
 })
 
 test("primary agents retain configured orchestration tools and inherited ceilings", () => {
@@ -23,7 +23,7 @@ test("primary agents retain configured orchestration tools and inherited ceiling
     [{ action: "shell", resource: "*", effect: "deny" }],
   )
 
-  expect(PermissionV2.evaluate("subagent", "general", permissions).effect).toBe("allow")
-  expect(PermissionV2.evaluate("subagent_control", "send", permissions).effect).toBe("allow")
-  expect(PermissionV2.evaluate("shell", "pwd", permissions).effect).toBe("deny")
+  expect(Permission.evaluate("subagent", "general", permissions).effect).toBe("allow")
+  expect(Permission.evaluate("subagent_control", "send", permissions).effect).toBe("allow")
+  expect(Permission.evaluate("shell", "pwd", permissions).effect).toBe("deny")
 })

@@ -13,8 +13,8 @@ test("declares local-runtime global usage summary and report operations", () => 
   expect(report.path).toBe("/api/usage/report")
   expect(report.method).toBe("GET")
   expect(report.middlewares.size).toBe(0)
-  expect(document.paths["/api/usage"]?.get?.operationId).toBe("v2.usage.get")
-  expect(document.paths["/api/usage/report"]?.get?.operationId).toBe("v2.usage.report")
+  expect(document.paths["/api/usage"]?.get?.operationId).toBe("usage.get")
+  expect(document.paths["/api/usage/report"]?.get?.operationId).toBe("usage.report")
   expect(
     document.paths["/api/usage/report"]?.get?.parameters?.map((parameter) =>
       "$ref" in parameter ? parameter.$ref : parameter.name,

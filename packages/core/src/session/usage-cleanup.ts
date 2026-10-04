@@ -13,7 +13,7 @@ export interface Interface {
   readonly cleanup: (now?: number) => Effect.Effect<number>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionUsageCleanup") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionUsageCleanup") {}
 
 const layer = Layer.effect(
   Service,

@@ -1,9 +1,9 @@
-export * as QuestionV2 from "./question"
+export * as Question from "./question"
 
 import { makeLocationNode } from "./effect/app-node"
 import { Context, Deferred, Effect, Layer, Schema } from "effect"
 import { Question } from "@ycoding-ai/schema/question"
-import { EventV2 } from "./event"
+import { EventRuntime } from "./event"
 import { SessionSchema } from "./session/schema"
 import { SessionAutonomy } from "./session/autonomy"
 
@@ -33,13 +33,13 @@ export type Reply = typeof Reply.Type
 
 export const Event = Question.Event
 
-export class RejectedError extends Schema.TaggedErrorClass<RejectedError>()("QuestionV2.RejectedError", {}) {
+export class RejectedError extends Schema.TaggedErrorClass<RejectedError>()("Question.RejectedError", {}) {
   override get message() {
     return "The user dismissed this question"
   }
 }
 
-export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("QuestionV2.NotFoundError", {
+export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Question.NotFoundError", {
   requestID: ID,
 }) {}
 
@@ -61,7 +61,7 @@ export interface Interface {
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/Question") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/Question") {}
 
 interface Pending {
   readonly request: Request
@@ -76,7 +76,7 @@ interface Pending {
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const autonomy = yield* SessionAutonomy.Service
     const pending = new Map<ID, Pending>()
 
@@ -92,7 +92,7 @@ const layer = Layer.effect(
       ),
     )
 
-    const ask = Effect.fn("QuestionV2.ask")((input: AskInput) =>
+    const ask = Effect.fn("Question.ask")((input: AskInput) =>
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const autonomous = yield* autonomy
@@ -120,7 +120,7 @@ const layer = Layer.effect(
       ),
     )
 
-    const reply = Effect.fn("QuestionV2.reply")((input: ReplyInput) =>
+    const reply = Effect.fn("Question.reply")((input: ReplyInput) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           const existing = pending.get(input.requestID)
@@ -136,7 +136,7 @@ const layer = Layer.effect(
       ),
     )
 
-    const reject = Effect.fn("QuestionV2.reject")((requestID: ID) =>
+    const reject = Effect.fn("Question.reject")((requestID: ID) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           const existing = pending.get(requestID)
@@ -151,7 +151,7 @@ const layer = Layer.effect(
       ),
     )
 
-    const list = Effect.fn("QuestionV2.list")(function* () {
+    const list = Effect.fn("Question.list")(function* () {
       return Array.from(pending.values(), (item) => item.request)
     })
 
@@ -159,4 +159,4 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeLocationNode({ service: Service, layer, deps: [EventV2.node, SessionAutonomy.node] })
+export const node = makeLocationNode({ service: Service, layer, deps: [EventRuntime.node, SessionAutonomy.node] })

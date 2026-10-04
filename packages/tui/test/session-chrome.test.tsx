@@ -23,7 +23,7 @@ import { PromptFooterIdentity } from "../src/component/prompt"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 import { DEFAULT_THEMES } from "../src/theme/builtins"
-import { resolveThemeFile } from "../src/theme/v2/resolve"
+import { resolveThemeFile } from "../src/theme/resolve"
 import { getGlyph } from "../src/ui/glyph"
 
 const identity = {

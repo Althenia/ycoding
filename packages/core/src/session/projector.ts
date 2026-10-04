@@ -3,9 +3,9 @@ export * as SessionProjector from "./projector"
 import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from "drizzle-orm"
 import { DateTime, Effect, Layer, Schema, Stream } from "effect"
 import { Database } from "../database/database"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { makeGlobalNode } from "../effect/app-node"
-import { ModelV2 } from "../model"
+import { CatalogModel } from "../model"
 import { SessionEvent } from "./event"
 import { WorkspaceTable } from "../control-plane/workspace.sql"
 import { SessionMessage } from "./message"
@@ -13,7 +13,7 @@ import { SessionSchema } from "./schema"
 import { SessionMessageUpdater } from "./message-updater"
 import { SessionPending } from "./pending"
 import { SessionPermissionCeiling } from "./permission-ceiling"
-import { WorkspaceV2 } from "../workspace"
+import { Workspace } from "../workspace"
 import { InstructionState } from "./instruction-state"
 import {
   SessionPendingTable,
@@ -103,7 +103,7 @@ function applyUsage(db: DatabaseService, sessionID: SessionSchema.ID, value: Usa
 
 const publishSessionUsage = Effect.fn("SessionProjector.publishUsage")(function* (
   db: DatabaseService,
-  events: EventV2.Interface,
+  events: EventRuntime.Interface,
   sessionID: (typeof SessionEvent.Step.Ended.Type)["data"]["sessionID"],
 ) {
   const row = yield* db
@@ -282,7 +282,7 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
 
     cursor = rows.at(-1)!.seq
   }
-  yield* EventV2.reserveSequence(db, event.data.sessionID, event.data.parentSeq)
+  yield* EventRuntime.reserveSequence(db, event.data.sessionID, event.data.parentSeq)
   yield* SessionContextState.initialize(db, event.data.sessionID, DateTime.toEpochMillis(event.created))
   yield* InstructionState.rebuild(db, event.data.sessionID)
 })
@@ -318,7 +318,7 @@ function run(db: DatabaseService, event: MessageEvent) {
           .get()
           .pipe(
             Effect.orDie,
-            Effect.map((row) => (row?.model ? Schema.decodeUnknownSync(ModelV2.Ref)(row.model) : undefined)),
+            Effect.map((row) => (row?.model ? Schema.decodeUnknownSync(CatalogModel.Ref)(row.model) : undefined)),
           )
       },
       getCurrentAssistant() {
@@ -743,7 +743,7 @@ const markTaskAttempt = (db: DatabaseService, sessionID: SessionSchema.ID, attem
 
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const db = (yield* Database.Service).db
     yield* events.project(SessionEvent.Created, (event) =>
       Effect.gen(function* () {
@@ -760,7 +760,7 @@ const layer = Layer.effectDiscard(
           .values({
             id: event.data.sessionID,
             project_id: event.data.projectID,
-            workspace_id: event.data.location.workspaceID ? WorkspaceV2.ID.make(event.data.location.workspaceID) : null,
+            workspace_id: event.data.location.workspaceID ? Workspace.ID.make(event.data.location.workspaceID) : null,
             parent_id: event.data.parentID,
             daybreak: parentDaybreak?.daybreak ?? null,
             directory: event.data.location.directory,
@@ -805,7 +805,7 @@ const layer = Layer.effectDiscard(
             directory: event.data.location.directory,
             path: event.data.subpath,
             ...(event.data.projectID ? { project_id: event.data.projectID } : {}),
-            workspace_id: event.data.location.workspaceID ? WorkspaceV2.ID.make(event.data.location.workspaceID) : null,
+            workspace_id: event.data.location.workspaceID ? Workspace.ID.make(event.data.location.workspaceID) : null,
             time_updated: DateTime.toEpochMillis(event.created),
           })
           .where(eq(SessionTable.id, event.data.sessionID))
@@ -1314,4 +1314,4 @@ export const selectTranscriptForSession = (sessionID: SessionSchema.ID) =>
     return yield* selectTranscript(db, sessionID)
   })
 
-export const node = makeGlobalNode({ name: "session-projector", layer, deps: [EventV2.node, Database.node] })
+export const node = makeGlobalNode({ name: "session-projector", layer, deps: [EventRuntime.node, Database.node] })

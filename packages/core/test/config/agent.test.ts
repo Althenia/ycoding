@@ -2,39 +2,39 @@ import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { Effect, Schema } from "effect"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigAgentPlugin } from "@ycoding-ai/core/config/plugin/agent"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { Global } from "@ycoding-ai/core/global"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { tmpdir } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 import { agentHost, host } from "../plugin/host"
 
-const it = testEffect(AppNodeBuilder.build(LayerNode.group([AgentV2.node, FSUtil.node, Global.node])))
+const it = testEffect(AppNodeBuilder.build(LayerNode.group([Agent.node, FSUtil.node, Global.node])))
 const decode = Schema.decodeUnknownSync(Config.Info)
 const defaultPermissions = [
   { action: "*", resource: "*", effect: "allow" },
   { action: "external_directory", resource: "*", effect: "ask" },
-] satisfies PermissionV2.Ruleset
+] satisfies Permission.Ruleset
 
 describe("ConfigAgentPlugin.Plugin", () => {
   it.effect("matches POSIX paths against home-relative permissions", () =>
     Effect.gen(function* () {
       const permissions = yield* loadHomePermissions("/home/test")
-      expect(PermissionV2.evaluate("external_directory", "/home/test/p/ycoding/src/*", permissions).effect).toBe(
+      expect(Permission.evaluate("external_directory", "/home/test/p/ycoding/src/*", permissions).effect).toBe(
         "allow",
       )
-      expect(PermissionV2.evaluate("external_directory", "/home/test/cache/files/*", permissions).effect).toBe("deny")
-      expect(PermissionV2.evaluate("external_directory", "/some/~/path", permissions).effect).toBe("deny")
-      expect(PermissionV2.evaluate("external_directory", "$HOMELESS/private/*", permissions).effect).toBe("deny")
+      expect(Permission.evaluate("external_directory", "/home/test/cache/files/*", permissions).effect).toBe("deny")
+      expect(Permission.evaluate("external_directory", "/some/~/path", permissions).effect).toBe("deny")
+      expect(Permission.evaluate("external_directory", "$HOMELESS/private/*", permissions).effect).toBe("deny")
       expect(permissions).toContainEqual({ action: "shell", resource: "$HOME/private/**", effect: "deny" })
       expect(permissions).not.toContainEqual({ action: "shell", resource: "/home/test/private/**", effect: "deny" })
-      expect(PermissionV2.evaluate("shell", "$HOME/private/key", permissions).effect).toBe("deny")
+      expect(Permission.evaluate("shell", "$HOME/private/key", permissions).effect).toBe("deny")
     }),
   )
 
@@ -42,9 +42,9 @@ describe("ConfigAgentPlugin.Plugin", () => {
     Effect.gen(function* () {
       const permissions = yield* loadHomePermissions("C:\\Users\\test")
       expect(
-        PermissionV2.evaluate("external_directory", "C:\\Users\\test\\p\\ycoding\\src\\*", permissions).effect,
+        Permission.evaluate("external_directory", "C:\\Users\\test\\p\\ycoding\\src\\*", permissions).effect,
       ).toBe("allow")
-      expect(PermissionV2.evaluate("external_directory", "C:\\Users\\test\\cache\\files\\*", permissions).effect).toBe(
+      expect(Permission.evaluate("external_directory", "C:\\Users\\test\\cache\\files\\*", permissions).effect).toBe(
         "deny",
       )
     }),
@@ -52,8 +52,8 @@ describe("ConfigAgentPlugin.Plugin", () => {
 
   it.effect("applies all global permissions before agent-specific permissions", () =>
     Effect.gen(function* () {
-      const agents = yield* AgentV2.Service
-      const build = AgentV2.ID.make("build")
+      const agents = yield* Agent.Service
+      const build = Agent.ID.make("build")
       yield* agents.transform((editor) =>
         editor.update(build, (agent) => {
           agent.mode = "primary"
@@ -115,10 +115,10 @@ describe("ConfigAgentPlugin.Plugin", () => {
         { action: "read", resource: "*", effect: "allow" },
         { action: "bash", resource: "git *", effect: "allow" },
       ])
-      expect(PermissionV2.evaluate("bash", "git status", buildAgent.permissions).effect).toBe("allow")
-      expect(PermissionV2.evaluate("bash", "bun test", buildAgent.permissions).effect).toBe("ask")
+      expect(Permission.evaluate("bash", "git status", buildAgent.permissions).effect).toBe("allow")
+      expect(Permission.evaluate("bash", "bun test", buildAgent.permissions).effect).toBe("ask")
 
-      const reviewer = yield* agents.get(AgentV2.ID.make("reviewer"))
+      const reviewer = yield* agents.get(Agent.ID.make("reviewer"))
       if (!reviewer) throw new Error("expected configured reviewer agent")
       expect(reviewer).toMatchObject({
         description: "Review changes",
@@ -133,20 +133,20 @@ describe("ConfigAgentPlugin.Plugin", () => {
         { action: "edit", resource: "*", effect: "deny" },
         { action: "read", resource: "*", effect: "deny" },
       ])
-      expect(PermissionV2.evaluate("read", "README.md", reviewer.permissions).effect).toBe("deny")
-      expect((yield* agents.get(AgentV2.ID.make("late")))?.permissions).toEqual([
+      expect(Permission.evaluate("read", "README.md", reviewer.permissions).effect).toBe("deny")
+      expect((yield* agents.get(Agent.ID.make("late")))?.permissions).toEqual([
         ...defaultPermissions,
         { action: "bash", resource: "*", effect: "ask" },
         { action: "read", resource: "*", effect: "allow" },
         { action: "edit", resource: "*", effect: "allow" },
       ])
-      expect(yield* agents.get(AgentV2.ID.make("removed"))).toBeUndefined()
+      expect(yield* agents.get(Agent.ID.make("removed"))).toBeUndefined()
     }),
   )
 
   it.effect("maps configured agent fields and preserves an unspecified model variant", () =>
     Effect.gen(function* () {
-      const agents = yield* AgentV2.Service
+      const agents = yield* Agent.Service
       const config = Config.Service.of({
         reload: () => Effect.void,
         entries: () =>
@@ -191,7 +191,7 @@ describe("ConfigAgentPlugin.Plugin", () => {
         Effect.provideService(Config.Service, config),
       )
 
-      const reviewer = yield* agents.get(AgentV2.ID.make("reviewer"))
+      const reviewer = yield* agents.get(Agent.ID.make("reviewer"))
       if (!reviewer) throw new Error("expected configured reviewer agent")
       expect(reviewer).toMatchObject({
         system: "Review carefully.",
@@ -212,8 +212,8 @@ describe("ConfigAgentPlugin.Plugin", () => {
 
   it.effect("removes a built-in agent disabled by configuration", () =>
     Effect.gen(function* () {
-      const agents = yield* AgentV2.Service
-      const build = AgentV2.ID.make("build")
+      const agents = yield* Agent.Service
+      const build = Agent.ID.make("build")
       yield* agents.transform((editor) => editor.update(build, () => {}))
 
       const config = Config.Service.of({
@@ -279,7 +279,7 @@ Use current fields.`,
             )
             await fs.writeFile(path.join(tmp.path, "agents", "disabled.md"), "---\ndisabled: true\n---\nDisabled")
           })
-          const agents = yield* AgentV2.Service
+          const agents = yield* Agent.Service
           const config = Config.Service.of({
             reload: () => Effect.void,
             entries: () =>
@@ -296,7 +296,7 @@ Use current fields.`,
             Effect.provideService(Config.Service, config),
           )
 
-          expect(yield* agents.get(AgentV2.ID.make("reviewer"))).toMatchObject({
+          expect(yield* agents.get(Agent.ID.make("reviewer"))).toMatchObject({
             model: { providerID: "openrouter", id: "openai/gpt-5" },
             system: "Review carefully.",
             description: "Markdown description",
@@ -304,17 +304,17 @@ Use current fields.`,
             request: { body: { temperature: 0.5 } },
             permissions: [...defaultPermissions, { action: "edit", resource: "*", effect: "deny" }],
           })
-          expect(yield* agents.get(AgentV2.ID.make("team/helper"))).toMatchObject({
+          expect(yield* agents.get(Agent.ID.make("team/helper"))).toMatchObject({
             system: "Help the team.",
             locations: [path.join(tmp.path, "agents", "team", "helper.md")],
           })
-          expect(yield* agents.get(AgentV2.ID.make("native"))).toMatchObject({
+          expect(yield* agents.get(Agent.ID.make("native"))).toMatchObject({
             system: "Use current fields.",
             locations: [path.join(tmp.path, "agents", "native.md")],
             request: { headers: { "x-agent": "native" }, body: { effort: "high" } },
             permissions: [...defaultPermissions, { action: "edit", resource: "*", effect: "deny" }],
           })
-          expect(yield* agents.get(AgentV2.ID.make("disabled"))).toBeUndefined()
+          expect(yield* agents.get(Agent.ID.make("disabled"))).toBeUndefined()
         }),
       ),
     ),
@@ -323,8 +323,8 @@ Use current fields.`,
 
 function loadHomePermissions(home: string) {
   return Effect.gen(function* () {
-    const agents = yield* AgentV2.Service
-    const build = AgentV2.ID.make("build")
+    const agents = yield* Agent.Service
+    const build = Agent.ID.make("build")
     yield* agents.transform((editor) => editor.update(build, () => {}))
     const config = Config.Service.of({
       reload: () => Effect.void,

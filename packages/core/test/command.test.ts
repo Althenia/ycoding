@@ -1,27 +1,27 @@
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
-import { CommandV2 } from "@ycoding-ai/core/command"
+import { Command } from "@ycoding-ai/core/command"
 import { Config } from "@ycoding-ai/core/config"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { Location } from "@ycoding-ai/core/location"
 import { MCP } from "@ycoding-ai/core/mcp/index"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { emptyConfigLayer, emptyMcpLayer, testLocationLayer } from "./fixture/mcp"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(
-  AppNodeBuilder.build(CommandV2.node, [
+  AppNodeBuilder.build(Command.node, [
     [MCP.node, emptyMcpLayer],
     [Config.node, emptyConfigLayer],
     [Location.node, testLocationLayer],
   ]),
 )
 
-describe("CommandV2", () => {
+describe("Command", () => {
   it.effect("applies command transforms and preserves later overrides", () =>
     Effect.gen(function* () {
-      const command = yield* CommandV2.Service
+      const command = yield* Command.Service
       yield* command.transform((editor) => {
         editor.update("review", (command) => {
           command.template = "First"
@@ -30,34 +30,34 @@ describe("CommandV2", () => {
         editor.update("review", (command) => {
           command.template = "Second"
           command.model = {
-            id: ModelV2.ID.make("claude"),
-            providerID: ProviderV2.ID.make("anthropic"),
-            variant: ModelV2.VariantID.make("high"),
+            id: CatalogModel.ID.make("claude"),
+            providerID: Provider.ID.make("anthropic"),
+            variant: CatalogModel.VariantID.make("high"),
           }
         })
       })
 
       expect(yield* command.get("review")).toEqual(
-        CommandV2.Info.make({
+        Command.Info.make({
           name: "review",
           template: "Second",
           description: "Review code",
           model: {
-            id: ModelV2.ID.make("claude"),
-            providerID: ProviderV2.ID.make("anthropic"),
-            variant: ModelV2.VariantID.make("high"),
+            id: CatalogModel.ID.make("claude"),
+            providerID: Provider.ID.make("anthropic"),
+            variant: CatalogModel.VariantID.make("high"),
           },
         }),
       )
       expect(yield* command.list()).toEqual([
-        CommandV2.Info.make({
+        Command.Info.make({
           name: "review",
           template: "Second",
           description: "Review code",
           model: {
-            id: ModelV2.ID.make("claude"),
-            providerID: ProviderV2.ID.make("anthropic"),
-            variant: ModelV2.VariantID.make("high"),
+            id: CatalogModel.ID.make("claude"),
+            providerID: Provider.ID.make("anthropic"),
+            variant: CatalogModel.VariantID.make("high"),
           },
         }),
       ])
@@ -66,7 +66,7 @@ describe("CommandV2", () => {
 
   it.effect("evaluates command template shell blocks", () =>
     Effect.gen(function* () {
-      const command = yield* CommandV2.Service
+      const command = yield* Command.Service
       yield* command.transform((editor) => {
         editor.update("review", (command) => {
           command.template = "Output: !`echo command-output`"

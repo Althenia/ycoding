@@ -1,4 +1,4 @@
-import type { ThemeFile } from "./v2"
+import type { ThemeFile } from "./schema"
 import aura from "./assets/aura.json" with { type: "json" }
 import ayu from "./assets/ayu.json" with { type: "json" }
 import carbonfox from "./assets/carbonfox.json" with { type: "json" }

@@ -851,7 +851,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         todos = reuseTodos(todos, eventTodoList)
         if (todoRead?.sessionID === item.sessionID) todoRead.live = todos
       }
-      if (type === "permission.v2.asked" || type === "permission.v2.replied" ||
+      if (type === "permission.asked" || type === "permission.replied" ||
         type === "guardrail.asked" || type === "guardrail.replied" ||
         type === "form.created" || type === "form.replied" || type === "form.cancelled") {
         for (const read of requestReads) {

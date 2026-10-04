@@ -19,7 +19,7 @@ export type DialogPromptProps = {
 
 export function DialogPrompt(props: DialogPromptProps) {
   const dialog = useDialog()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const shortcuts = Keymap.useShortcuts()
   const [textareaTarget, setTextareaTarget] = createSignal<TextareaRenderable>()
   let textarea: TextareaRenderable
@@ -86,21 +86,21 @@ export function DialogPrompt(props: DialogPromptProps) {
           }}
           initialValue={props.value}
           placeholder={props.placeholder ?? "Search"}
-          placeholderColor={themeV2.text.subdued}
-          textColor={props.busy ? themeV2.text.formfield.disabled : themeV2.text.formfield.default}
-          focusedTextColor={props.busy ? themeV2.text.formfield.disabled : themeV2.text.formfield.default}
-          cursorColor={props.busy ? themeV2.text.subdued : themeV2.text.feedback.info.default}
+          placeholderColor={theme.text.subdued}
+          textColor={props.busy ? theme.text.formfield.disabled : theme.text.formfield.default}
+          focusedTextColor={props.busy ? theme.text.formfield.disabled : theme.text.formfield.default}
+          cursorColor={props.busy ? theme.text.subdued : theme.text.feedback.info.default}
         />
         <Show when={props.busy}>
-          <Spinner color={themeV2.text.subdued}>{props.busyText ?? "Working..."}</Spinner>
+          <Spinner color={theme.text.subdued}>{props.busyText ?? "Working..."}</Spinner>
         </Show>
       </box>
       <box paddingTop={1} paddingLeft={6} paddingRight={4} flexDirection="row">
-        <Show when={!props.busy} fallback={<text fg={themeV2.text.subdued}>processing...</text>}>
+        <Show when={!props.busy} fallback={<text fg={theme.text.subdued}>processing...</text>}>
           <Show when={shortcuts.get("dialog.prompt.submit")}>
             {(shortcut) => (
-              <text fg={themeV2.text.default}>
-                {Locale.titlecase(shortcut())} <span style={{ fg: themeV2.text.subdued }}>confirm</span>
+              <text fg={theme.text.default}>
+                {Locale.titlecase(shortcut())} <span style={{ fg: theme.text.subdued }}>confirm</span>
               </text>
             )}
           </Show>

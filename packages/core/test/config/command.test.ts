@@ -3,18 +3,18 @@ import path from "path"
 import { describe, expect } from "bun:test"
 import { Effect, PubSub, Schema, Stream } from "effect"
 import { Config as ConfigSchema } from "@ycoding-ai/schema/config"
-import { CommandV2 } from "@ycoding-ai/core/command"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Command } from "@ycoding-ai/core/command"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigCommandPlugin } from "@ycoding-ai/core/config/plugin/command"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Location } from "@ycoding-ai/core/location"
 import { MCP } from "@ycoding-ai/core/mcp/index"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { emptyConfigLayer, emptyMcpLayer, testLocationLayer } from "../fixture/mcp"
 import { tmpdir } from "../fixture/tmpdir"
@@ -22,7 +22,7 @@ import { testEffect } from "../lib/effect"
 import { host } from "../plugin/host"
 
 const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([CommandV2.node, EventV2.node, FSUtil.node]), [
+  AppNodeBuilder.build(LayerNode.group([Command.node, EventRuntime.node, FSUtil.node]), [
     [MCP.node, emptyMcpLayer],
     [Config.node, emptyConfigLayer],
     [Location.node, testLocationLayer],
@@ -54,8 +54,8 @@ Review files`,
             await fs.writeFile(path.join(tmp.path, "commands", "empty.md"), "")
           })
 
-          const command = yield* CommandV2.Service
-          const events = yield* EventV2.Service
+          const command = yield* Command.Service
+          const events = yield* EventRuntime.Service
           const update = yield* events.publish(ConfigSchema.Event.Updated, {})
           const updates = yield* PubSub.unbounded<typeof update>({ replay: 1 })
           yield* ConfigCommandPlugin.Plugin.effect(
@@ -85,25 +85,25 @@ Review files`,
           )
 
           expect(yield* command.list()).toEqual([
-            CommandV2.Info.make({
+            Command.Info.make({
               name: "review",
               template: "Review files",
               description: "File review",
-              agent: AgentV2.ID.make("reviewer"),
+              agent: Agent.ID.make("reviewer"),
               model: {
-                providerID: ProviderV2.ID.make("anthropic"),
-                id: ModelV2.ID.make("claude"),
-                variant: ModelV2.VariantID.make("high"),
+                providerID: Provider.ID.make("anthropic"),
+                id: CatalogModel.ID.make("claude"),
+                variant: CatalogModel.VariantID.make("high"),
               },
               subtask: true,
               locations: [AbsolutePath.make(path.join(tmp.path, "commands", "review.md"))],
             }),
-            CommandV2.Info.make({
+            Command.Info.make({
               name: "empty",
               template: "",
               locations: [AbsolutePath.make(path.join(tmp.path, "commands", "empty.md"))],
             }),
-            CommandV2.Info.make({
+            Command.Info.make({
               name: "nested/docs",
               template: "Write docs",
               locations: [AbsolutePath.make(path.join(tmp.path, "commands", "nested", "docs.md"))],

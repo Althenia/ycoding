@@ -16,14 +16,16 @@ sources:
 - id: product-dir
   resource: repo:///docs/product-direction.md
 - id: spec-v2
-  resource: repo:///specs/v2/session.md
+  resource: repo:///specs/session.md
 ---
+
+
 
 ## Durable Admission
 
 A prompt is durably admitted before execution is scheduled. The durable pending row represents unconsumed work only. Promotion into the visible transcript occurs at a safe execution boundary.[^runtime-doc]
 
-Reusing a Session ID adopts the existing session. Reusing a prompt message ID is accepted only for an exact retry with matching session, content, and delivery mode; conflicting reuse fails.[^runtime-doc]
+Reusing a Session ID adopts the existing session. Reusing a prompt message ID returns the first admitted durable record and wakes execution; sending a prompt never fails solely on ID reuse. Reuse across Sessions or input kinds is rejected.[^runtime-doc]
 
 ## Execution Ownership
 
@@ -33,11 +35,11 @@ A drain discovers the session's Location when execution starts. Clustered execut
 
 ## Steps and Provider Attempts
 
-One step is one logical LLM request. Retryable pre-output failures reuse the same logical request ID; each transport start increments its physical-attempt count. A tool-result continuation is a new logical request. Context-overflow recovery completes the old request as a fallback, compacts the context, and rebuilds a new logical request.[^runtime-doc]
+One step is one logical LLM request. Retryable pre-output failures reuse the same logical request ID; each transport start increments its physical-attempt count. A tool-result continuation is a new logical request. Overflow-triggered compaction recovery may rebuild the same logical step for a second physical attempt.[^runtime-doc]
 
 The durable provider-request ledger stores identifiers, model and route identity, stable prompt/cache digests, attempt counts, normalized tokens, cost, continuation mode, and invalidation reason. It does not store prompt, message, tool-result, or response text.[^runtime-doc]
 
-The runtime reloads projected history before durable continuation. It does not delegate V2 orchestration to a legacy in-memory prompt loop.[^runtime-doc]
+The runtime reloads projected history before durable continuation. It does not delegate Session orchestration to an in-memory prompt loop.[^runtime-doc]
 
 ## Helper Model Traffic
 
@@ -79,7 +81,7 @@ Terminal goal states are `completed`, `stopped`, and `exhausted`. A tool-only tu
 
 ## TUI Transcript History
 
-The hot transcript window holds the latest 50 completed messages plus every active or incomplete boundary. Archive page requests use `MESSAGE_PAGE_LIMIT` of 1000. Archived messages render through the same typed transcript components when expanded, and collapsed placeholders retain cursor and page metadata but no transcript payload.[^product-dir]
+The TUI fetches a Session's complete current projected transcript in canonical ascending order and retains it while that Session is resident. Navigation, resume, reconnect, and eviction invalidate or release that resident view without changing durable history.[^runtime-doc]
 
 ## Related Concepts
 
@@ -90,4 +92,3 @@ The hot transcript window holds the latest 50 completed messages plus every acti
 - [Project Artifacts](./project-artifacts.md) — session skills derive from project artifacts
 
 [^runtime-doc]: repo:///docs/runtime.md
-[^product-dir]: repo:///docs/product-direction.md

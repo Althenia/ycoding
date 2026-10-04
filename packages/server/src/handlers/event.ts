@@ -1,4 +1,4 @@
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Effect, Stream } from "effect"
 import { HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -13,7 +13,7 @@ export const EventHandler = HttpApiBuilder.group(Api, "server.event", (handlers)
     return handlers.handleRaw("event.subscribe", () =>
       Effect.gen(function* () {
         const connected = {
-          id: EventV2.ID.create(),
+          id: EventRuntime.ID.create(),
           type: "server.connected",
           data: {},
         } as const

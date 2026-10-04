@@ -589,8 +589,8 @@ describe("remote operations", () => {
     expect(requireSession("session.compact")).toBe(true)
     expect(requireSession("machine.keepAwake.get")).toBe(false)
     expect(requireSession("machine.keepAwake.set")).toBe(false)
-    expect(RemoteProtocolVersion).toBe(3)
-    expect(RemoteWebSocketPath).toEqual({ client: "/ws/v3/client", agent: "/ws/v3/agent" })
+    expect(RemoteProtocolVersion).toBe(4)
+    expect(RemoteWebSocketPath).toEqual({ client: "/ws/v4/client", agent: "/ws/v4/agent" })
     expect(parseClientMessage('{"type":"request","id":"r","operation":"session.question.list","sessionID":"ses_1"}').ok).toBe(false)
   })
 

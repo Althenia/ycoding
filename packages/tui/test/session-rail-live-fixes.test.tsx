@@ -127,10 +127,10 @@ test("renders each skill as a name row with a colour-coded status value", async 
       state: "active",
     },
   ]
-  const [themeV2, setThemeV2] = createSignal<ReturnType<typeof useTheme>["themeV2"]>()
+  const [theme, setTheme] = createSignal<ReturnType<typeof useTheme>["theme"]>()
   const app = await mount(
     () => {
-      setThemeV2(useTheme().themeV2)
+      setTheme(useTheme().theme)
       return <SkillsRailContent skills={skills} />
     },
     { width: 40, height: 16 },
@@ -150,10 +150,10 @@ test("renders each skill as a name row with a colour-coded status value", async 
     expect(lineOf("reviewer")?.trimEnd().endsWith("INACTIVE")).toBe(true)
     expect(frame).not.toContain("COMPACTED")
     expect(frame).not.toContain("AGENT SWITCH")
-    expect(colorOf("ACTIVE")).toEqual(themeV2()!.text.feedback.success.default.toInts())
-    expect(colorOf("CONFLICT")).toEqual(themeV2()!.text.feedback.warning.default.toInts())
-    expect(colorOf("INACTIVE")).toEqual(themeV2()!.text.subdued.toInts())
-    expect(colorOf("writer")).toEqual(themeV2()!.text.subdued.toInts())
+    expect(colorOf("ACTIVE")).toEqual(theme()!.text.feedback.success.default.toInts())
+    expect(colorOf("CONFLICT")).toEqual(theme()!.text.feedback.warning.default.toInts())
+    expect(colorOf("INACTIVE")).toEqual(theme()!.text.subdued.toInts())
+    expect(colorOf("writer")).toEqual(theme()!.text.subdued.toInts())
   } finally {
     app.renderer.destroy()
   }
@@ -166,10 +166,10 @@ test("colours every todo marker and label by status", async () => {
     { content: "Drop stale probe", status: "cancelled", priority: "low" },
     { content: "Write report", status: "pending", priority: "low" },
   ]
-  const [themeV2, setThemeV2] = createSignal<ReturnType<typeof useTheme>["themeV2"]>()
+  const [theme, setTheme] = createSignal<ReturnType<typeof useTheme>["theme"]>()
   const app = await mount(
     () => {
-      setThemeV2(useTheme().themeV2)
+      setTheme(useTheme().theme)
       return <TodoRailContent list={todos} />
     },
     { width: 40, height: 20 },
@@ -193,14 +193,14 @@ test("colours every todo marker and label by status", async () => {
       "xx",
       "--",
     ])
-    expect(completed.marker?.fg.toInts()).toEqual(themeV2()!.text.feedback.success.default.toInts())
-    expect(completed.content?.fg.toInts()).toEqual(themeV2()!.text.subdued.toInts())
-    expect(active.marker?.fg.toInts()).toEqual(themeV2()!.text.feedback.warning.default.toInts())
-    expect(active.content?.fg.toInts()).toEqual(themeV2()!.text.feedback.warning.default.toInts())
-    expect(cancelled.marker?.fg.toInts()).toEqual(themeV2()!.text.feedback.error.default.toInts())
-    expect(cancelled.content?.fg.toInts()).toEqual(themeV2()!.text.feedback.error.default.toInts())
-    expect(pending.marker?.fg.toInts()).toEqual(themeV2()!.text.subdued.toInts())
-    expect(pending.content?.fg.toInts()).toEqual(themeV2()!.text.subdued.toInts())
+    expect(completed.marker?.fg.toInts()).toEqual(theme()!.text.feedback.success.default.toInts())
+    expect(completed.content?.fg.toInts()).toEqual(theme()!.text.subdued.toInts())
+    expect(active.marker?.fg.toInts()).toEqual(theme()!.text.feedback.warning.default.toInts())
+    expect(active.content?.fg.toInts()).toEqual(theme()!.text.feedback.warning.default.toInts())
+    expect(cancelled.marker?.fg.toInts()).toEqual(theme()!.text.feedback.error.default.toInts())
+    expect(cancelled.content?.fg.toInts()).toEqual(theme()!.text.feedback.error.default.toInts())
+    expect(pending.marker?.fg.toInts()).toEqual(theme()!.text.subdued.toInts())
+    expect(pending.content?.fg.toInts()).toEqual(theme()!.text.subdued.toInts())
   } finally {
     app.renderer.destroy()
   }
@@ -402,13 +402,13 @@ async function mountSidebar(
 ) {
   const events = createEventStream()
   const calls = createFetch((url) => override?.(url) ?? route(url, mcp), events)
-  const [canvas, setCanvas] = createSignal<ReturnType<typeof useTheme>["themeV2"]>()
-  const [rail, setRail] = createSignal<ReturnType<typeof useTheme>["themeV2"]>()
+  const [canvas, setCanvas] = createSignal<ReturnType<typeof useTheme>["theme"]>()
+  const [rail, setRail] = createSignal<ReturnType<typeof useTheme>["theme"]>()
 
   function Probe() {
     const theme = useTheme()
-    setCanvas(theme.themeV2)
-    setRail(theme.contextual("elevated").themeV2)
+    setCanvas(theme.theme)
+    setRail(theme.contextual("elevated").theme)
     return null
   }
 

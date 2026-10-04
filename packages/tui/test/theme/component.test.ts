@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test"
 import { createSignal } from "solid-js"
 import { RGBA } from "@opentui/core"
-import { createComponentTheme } from "../../../src/theme/v2/component"
-import { DEFAULT_THEMES } from "../../../src/theme/builtins"
-import { DEFAULT_THEME } from "../../../src/theme/v2/defaults"
-import { resolveTheme, resolveThemeFile } from "../../../src/theme/v2/resolve"
-import { selectTheme } from "../../../src/theme/v2/select"
-import type { ContextKey } from "../../../src/theme/v2"
+import { createComponentTheme } from "../../src/theme/component"
+import { DEFAULT_THEMES } from "../../src/theme/builtins"
+import { DEFAULT_THEME } from "../../src/theme/defaults"
+import { resolveTheme, resolveThemeFile } from "../../src/theme/resolve"
+import { selectTheme } from "../../src/theme/select"
+import type { ContextKey } from "../../src/theme"
 
 test("provides reactive properties, states, contexts, and color operations", () => {
   const [resolved, setResolved] = createSignal(resolveTheme(selectTheme(DEFAULT_THEME, "light")))

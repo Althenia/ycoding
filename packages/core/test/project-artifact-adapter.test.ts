@@ -2,20 +2,20 @@ import fs from "fs/promises"
 import path from "path"
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { ConfigAgent } from "@ycoding-ai/core/config/agent"
 import { ConfigCommand } from "@ycoding-ai/core/config/command"
 import { ConfigMarkdown } from "@ycoding-ai/core/config/markdown"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
 import { ProjectArtifactAdapterRegistry } from "@ycoding-ai/core/project-artifact/adapter/index"
 import { managedDefaults } from "@ycoding-ai/core/project-artifact/adapter/agent"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SkillV2 } from "@ycoding-ai/core/skill"
+import { Skill } from "@ycoding-ai/core/skill"
 import { SkillDiscovery } from "@ycoding-ai/core/skill/discovery"
 import { MCP } from "@ycoding-ai/core/mcp/index"
 import { emptyMcpLayer } from "./fixture/mcp"
@@ -29,7 +29,7 @@ const discovery = Layer.succeed(
 )
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([SkillV2.node, AgentV2.node, EventV2.node, FSUtil.node]),
+    LayerNode.group([Skill.node, Agent.node, EventRuntime.node, FSUtil.node]),
     [
       [SkillDiscovery.node, discovery],
       [MCP.node, emptyMcpLayer],
@@ -182,7 +182,7 @@ describe("ProjectArtifactAdapterRegistry", () => {
     expect(ProjectArtifactAdapterRegistry.parse(kind, rendered)).toEqual(definition)
   })
 
-  it.live("loads adapter bytes through SkillV2 and the standard Command and Agent markdown decoders", () =>
+  it.live("loads adapter bytes through Skill and the standard Command and Agent markdown decoders", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir("project-artifact-adapter-")),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
@@ -223,7 +223,7 @@ describe("ProjectArtifactAdapterRegistry", () => {
             }
           })
 
-          const skills = yield* SkillV2.Service
+          const skills = yield* Skill.Service
           const skillPath = ProjectArtifactAdapterRegistry.get("skill").projectPath(tmp.path, "core-review")
           yield* skills.transform((draft) =>
             ProjectArtifactAdapterRegistry.get("skill").activate(version("core-review", skillPath, skillDefinition), {
@@ -232,8 +232,8 @@ describe("ProjectArtifactAdapterRegistry", () => {
           )
           expect(yield* skills.list()).toContainEqual(
             expect.objectContaining({
-              id: SkillV2.ID.make("core-review"),
-              name: SkillV2.Name.make("Core review skill"),
+              id: Skill.ID.make("core-review"),
+              name: Skill.Name.make("Core review skill"),
               description: "Discovers a rendered skill",
               content: "Run focused Core checks.",
             }),
@@ -267,7 +267,7 @@ describe("ProjectArtifactAdapterRegistry", () => {
           expect(discoveredAgent?.model).toBeUndefined()
           expect(discoveredAgent?.permissions).toEqual([])
 
-          const agents = yield* AgentV2.Service
+          const agents = yield* Agent.Service
           yield* agents.transform((draft) =>
             ProjectArtifactAdapterRegistry.get("agent").activate(
               version(
@@ -278,8 +278,8 @@ describe("ProjectArtifactAdapterRegistry", () => {
               { agent: draft },
             ),
           )
-          expect(yield* agents.get(AgentV2.ID.make("reviewer"))).toMatchObject({
-            name: AgentV2.Name.make(agentDefinition.name),
+          expect(yield* agents.get(Agent.ID.make("reviewer"))).toMatchObject({
+            name: Agent.Name.make(agentDefinition.name),
             permissions: managedDefaults,
             model: undefined,
             request: { settings: {}, headers: {}, body: {} },

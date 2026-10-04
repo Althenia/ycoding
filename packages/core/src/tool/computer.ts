@@ -8,7 +8,7 @@ import { Computer } from "../computer"
 import { MacOSComputer } from "../computer/macos"
 import { WindowPlacement } from "../computer/types"
 import { LocationMutation } from "../location-mutation"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { SessionGuardrail } from "../session/guardrail"
 import { Tool } from "./tool"
 
@@ -225,7 +225,7 @@ export const Plugin = {
   effect: Effect.fn("ComputerTool.Plugin")(function* (ctx: PluginContext) {
     const computer = yield* Computer.Service
     const mutation = yield* LocationMutation.Service
-    const permission = yield* PermissionV2.Service
+    const permission = yield* Permission.Service
     const guardrail = yield* SessionGuardrail.Service
 
     yield* ctx.tool

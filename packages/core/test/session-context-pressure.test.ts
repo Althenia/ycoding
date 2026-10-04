@@ -1,28 +1,28 @@
 import { expect, test } from "bun:test"
 import { Message, SystemPart } from "@ycoding-ai/ai"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { SessionContextPressure } from "@ycoding-ai/core/session/context-pressure"
 import { SessionModelRequest } from "@ycoding-ai/core/session/model-request"
 import type { SessionContext } from "@ycoding-ai/core/session/context"
 
 const systemFor = (initial: string) => {
-  const agent = AgentV2.ID.make("build")
+  const agent = Agent.ID.make("build")
   return SessionModelRequest.baseSystem({
-    agent: { id: agent, info: AgentV2.Info.empty(agent) },
+    agent: { id: agent, info: Agent.Info.empty(agent) },
     initial,
   } satisfies Pick<SessionContext.Loaded, "agent" | "initial">)
 }
 
-const providerID = ProviderV2.ID.make("test")
-const modelID = ModelV2.ID.make("test-model")
+const providerID = Provider.ID.make("test")
+const modelID = CatalogModel.ID.make("test-model")
 
 const models = (context: number) => [
   {
-    ...ModelV2.Info.empty(providerID, modelID),
+    ...CatalogModel.Info.empty(providerID, modelID),
     limit: { context, output: 0 },
   },
 ]
@@ -40,7 +40,7 @@ const resolvedPolicy = (input?: {
 
 const context = (input: { readonly context: number; readonly policy?: ConfigCompaction.Resolved }) => ({
   models: models(input.context),
-  model: ModelV2.Ref.make({ providerID, id: modelID }),
+  model: CatalogModel.Ref.make({ providerID, id: modelID }),
   policy: input.policy ?? resolvedPolicy(),
   system: [SystemPart.make("x".repeat(240))],
   tools: [],

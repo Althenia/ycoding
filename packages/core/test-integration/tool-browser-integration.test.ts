@@ -9,10 +9,10 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Image } from "@ycoding-ai/core/image"
 import { IsolatedBrowser } from "@ycoding-ai/core/isolated-browser"
 import { Location } from "@ycoding-ai/core/location"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
@@ -25,7 +25,7 @@ import { testEffect } from "../test/lib/effect"
 import { imagePassthrough } from "../test/lib/image"
 import { registerToolPlugin, settleTool, toolIdentity } from "../test/lib/tool"
 
-const sessionID = SessionV2.ID.make("ses_browser_integration")
+const sessionID = Session.ID.make("ses_browser_integration")
 const privateMarkers = [
   "private-query-marker-7b31",
   "private-fragment-marker-2a46",
@@ -39,7 +39,7 @@ const selectedBrowserFixture = Layer.mock(Browser.Service, {
   status: () => Effect.succeed({ state: "unavailable" }),
   list: () => Effect.succeed([]),
 })
-const recordingPermissionFixture = Layer.mock(PermissionV2.Service, {
+const recordingPermissionFixture = Layer.mock(Permission.Service, {
   assert: (input) =>
     Effect.sync(() => {
       permissionChecks.push({ action: input.action, resource: input.resources[0] ?? "" })
@@ -55,7 +55,7 @@ const recordingGuardrailFixture = Layer.mock(SessionGuardrail.Service, {
 const browserToolNode = makeLocationNode({
   name: "test/browser-tool-real-isolated-plugin",
   layer: Layer.effectDiscard(registerToolPlugin(BrowserTool.Plugin)),
-  deps: [ToolRegistry.toolsNode, Browser.node, IsolatedBrowser.node, PermissionV2.node, SessionGuardrail.node],
+  deps: [ToolRegistry.toolsNode, Browser.node, IsolatedBrowser.node, Permission.node, SessionGuardrail.node],
 })
 const it = testEffect(
   AppNodeBuilder.build(
@@ -73,7 +73,7 @@ const it = testEffect(
     [
       [Location.node, tempLocationLayer],
       [Browser.node, selectedBrowserFixture],
-      [PermissionV2.node, recordingPermissionFixture],
+      [Permission.node, recordingPermissionFixture],
       [SessionGuardrail.node, recordingGuardrailFixture],
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
       [Image.node, imagePassthrough],

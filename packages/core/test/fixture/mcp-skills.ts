@@ -8,7 +8,7 @@ import { ConfigMCP } from "@ycoding-ai/core/config/mcp"
 import { Credential } from "@ycoding-ai/core/credential"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Form } from "@ycoding-ai/core/form"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { Integration } from "@ycoding-ai/core/integration"
@@ -17,7 +17,7 @@ import { MCP } from "@ycoding-ai/core/mcp/index"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SkillDiscovery } from "@ycoding-ai/core/skill/discovery"
-import { SkillV2 } from "@ycoding-ai/core/skill"
+import { Skill } from "@ycoding-ai/core/skill"
 import { Effect, Layer, Stream } from "effect"
 import { location } from "./location"
 
@@ -27,7 +27,7 @@ type SkillFile = {
   readonly mimeType?: string
 }
 
-export type Skill = {
+export type McpSkillFixture = {
   readonly uri: string
   /** Rendered into the served `SKILL.md` body and into the entry's frontmatter copy. */
   readonly frontmatter: Record<string, unknown>
@@ -36,7 +36,7 @@ export type Skill = {
 
 export type SkillServerOptions = {
   /** Skill entries this server publishes; each `files` set includes `SKILL.md` first. */
-  readonly skills?: ReadonlyArray<Skill>
+  readonly skills?: ReadonlyArray<McpSkillFixture>
   /** Raw `skills/list` entries to publish instead of computed ones. */
   readonly rawSkills?: ReadonlyArray<unknown>
   /** Omit the `io.modelcontextprotocol/skills` capability entirely. */
@@ -105,7 +105,7 @@ export function skillServer(input: SkillServerOptions = {}) {
       const state = { listCalls: 0, getCalls: 0, readCalls: 0, directoryCalls: 0 }
       let current = [...(input.skills ?? [])]
 
-      const manifest = async (skill: Skill) => {
+      const manifest = async (skill: McpSkillFixture) => {
         if (input.dynamic) return "dynamic" as const
         if (input.overflowResources) {
           return Array.from({ length: 513 }, (_, index) => ({
@@ -128,7 +128,7 @@ export function skillServer(input: SkillServerOptions = {}) {
         return entries
       }
 
-      const entry = async (skill: Skill) => ({
+      const entry = async (skill: McpSkillFixture) => ({
         uri: skill.uri,
         frontmatter: input.corruptFrontmatter ? { ...skill.frontmatter, description: "tampered" } : skill.frontmatter,
         resources: await manifest(skill),
@@ -271,7 +271,7 @@ export function skillServer(input: SkillServerOptions = {}) {
       return {
         state,
         url: http.url.toString(),
-        replaceSkills: (next: ReadonlyArray<Skill>) => {
+        replaceSkills: (next: ReadonlyArray<McpSkillFixture>) => {
           current = [...next]
         },
         close: async () => {
@@ -289,7 +289,7 @@ export const skillBody = (frontmatter: Record<string, unknown>, body: string) =>
   `${frontmatterText(frontmatter)}${body}`
 
 /**
- * Replacement set that runs the real `SkillV2` service against one fixture MCP server. The MCP,
+ * Replacement set that runs the real `Skill` service against one fixture MCP server. The MCP,
  * filesystem, discovery, and event nodes are replaced so the projection is exercised without a full
  * Location graph.
  */
@@ -298,24 +298,24 @@ export const skillsMcpReplacements = (url: string) =>
     [MCP.node, skillsMcpLayer(url)],
     [SkillDiscovery.node, Layer.mock(SkillDiscovery.Service, {})],
     [
-      EventV2.node,
-      Layer.mock(EventV2.Service, {
+      EventRuntime.node,
+      Layer.mock(EventRuntime.Service, {
         subscribe: () => Stream.never,
         publish: (definition, data) =>
           Effect.succeed({
-            id: EventV2.ID.create(),
+            id: EventRuntime.ID.create(),
             type: definition.type,
             data,
-          } as EventV2.Payload<typeof definition>),
+          } as EventRuntime.Payload<typeof definition>),
       }),
     ],
   ] satisfies LayerNode.Replacements
 
 /**
- * Builds the real `SkillV2` service against one fixture MCP server. Skill discovery and the
+ * Builds the real `Skill` service against one fixture MCP server. Skill discovery and the
  * filesystem are not exercised: only the MCP projection is.
  */
-export const skillsNode = (url: string) => AppNodeBuilder.build(SkillV2.node, skillsMcpReplacements(url))
+export const skillsNode = (url: string) => AppNodeBuilder.build(Skill.node, skillsMcpReplacements(url))
 
 /**
  * MCP service layer connected to one fixture server, mirroring the resource-server layer in
@@ -348,14 +348,14 @@ export const skillsMcpLayer = (url: string) => {
         ),
         Layer.succeed(Location.Service, Location.Service.of(location({ directory }))),
         Layer.mock(SessionAutonomy.Service, { get: () => Effect.succeed(SessionAutonomy.defaultState) }),
-        Layer.mock(EventV2.Service, {
+        Layer.mock(EventRuntime.Service, {
           subscribe: () => Stream.never,
           publish: (definition, data) =>
             Effect.succeed({
-              id: EventV2.ID.create(),
+              id: EventRuntime.ID.create(),
               type: definition.type,
               data,
-            } as EventV2.Payload<typeof definition>),
+            } as EventRuntime.Payload<typeof definition>),
         }),
         Layer.mock(Integration.Service, {
           connection: {

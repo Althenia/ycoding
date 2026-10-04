@@ -1,4 +1,4 @@
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { SessionNotFoundError, UnknownError } from "@ycoding-ai/protocol/errors"
@@ -6,7 +6,7 @@ import { Api } from "../api"
 
 export const MessageHandler = HttpApiBuilder.group(Api, "server.message", (handlers) =>
   Effect.gen(function* () {
-    const session = yield* SessionV2.Service
+    const session = yield* Session.Service
 
     return handlers.handle(
       "session.messages",

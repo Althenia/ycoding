@@ -10,7 +10,7 @@ export type ProviderSettings = { [x: string]: JsonValue }
 
 export type AgentColor = string | "primary" | "secondary" | "accent" | "success" | "warning" | "error" | "info"
 
-export type PermissionV2Effect = "allow" | "deny" | "ask"
+export type PermissionEffect = "allow" | "deny" | "ask"
 
 export type PluginInfo = { id: string }
 
@@ -237,7 +237,7 @@ export type ModelAPI = "chat" | "responses"
 
 export type GenerateTextResponse = { data: { text: string } }
 
-export type ProviderV2Info = {
+export type ProviderInfo = {
   id: string
   integrationID?: string
   name: string
@@ -376,13 +376,13 @@ export type FormExternalField = { key: string; type: "external"; url: string; ti
 
 export type FormValue = string | number | boolean | Array<string>
 
-export type PermissionV2Source = { type: "tool"; messageID: string; callID: string }
+export type PermissionSource = { type: "tool"; messageID: string; callID: string }
 
 export type PermissionSavedInfo = { id: string; projectID: string; action: string; resource: string }
 
 export type FileSystemEntry = { path: string; type: "file" | "directory" }
 
-export type PermissionV2Reply = "once" | "always" | "reject"
+export type PermissionReply = "once" | "always" | "reject"
 
 export type GuardrailReply = "once" | "always" | "reject"
 
@@ -390,11 +390,11 @@ export type GuardrailDecision = "allow" | "ask" | "deny" | "cap_exceeded"
 
 export type PtySize = { rows: number; cols: number }
 
-export type QuestionV2Option = { label: string; description: string }
+export type QuestionOption = { label: string; description: string }
 
-export type QuestionV2Tool = { messageID: string; callID: string }
+export type QuestionTool = { messageID: string; callID: string }
 
-export type QuestionV2Answer = Array<string>
+export type QuestionAnswer = Array<string>
 
 export type FormMetadata1 = { [x: string]: any }
 
@@ -541,7 +541,7 @@ export type ProviderRequest = {
   body: { [x: string]: JsonValue }
 }
 
-export type PermissionV2Rule = { action: string; resource: string; effect: PermissionV2Effect }
+export type PermissionRule = { action: string; resource: string; effect: PermissionEffect }
 
 export type SessionMessageCompactionCompletedV1 = {
   type: "compaction"
@@ -1152,12 +1152,12 @@ export type ShellDeleted = {
   data: { id: string }
 }
 
-export type QuestionV2Rejected = {
+export type QuestionRejected = {
   id: string
   created: number
   metadata?: { [x: string]: any }
   sourceEpoch?: string
-  type: "question.v2.rejected"
+  type: "question.rejected"
   location?: LocationRef
   data: { sessionID: string; requestID: string }
 }
@@ -1297,7 +1297,7 @@ export type McpResourcesChanged = {
   data: { server: string }
 }
 
-export type V2EventServerConnected = {
+export type ServerEventServerConnected = {
   id: string
   metadata?: { [x: string]: any } | undefined
   location?: LocationRef | undefined
@@ -1919,22 +1919,22 @@ export type FormMultiselectField = {
 
 export type FormAnswer = { [x: string]: FormValue }
 
-export type PermissionV2Request = {
+export type PermissionRequest = {
   id: string
   sessionID: string
   action: string
   resources: Array<string>
   save?: Array<string>
   metadata?: { [x: string]: JsonValue }
-  source?: PermissionV2Source
+  source?: PermissionSource
 }
 
-export type PermissionV2Asked = {
+export type PermissionAsked = {
   id: string
   created: number
   metadata?: { [x: string]: any }
   sourceEpoch?: string
-  type: "permission.v2.asked"
+  type: "permission.asked"
   location?: LocationRef
   data: {
     id: string
@@ -1943,18 +1943,18 @@ export type PermissionV2Asked = {
     resources: Array<string>
     save?: Array<string>
     metadata?: { [x: string]: any }
-    source?: PermissionV2Source
+    source?: PermissionSource
   }
 }
 
-export type PermissionV2Replied = {
+export type PermissionReplied = {
   id: string
   created: number
   metadata?: { [x: string]: any }
   sourceEpoch?: string
-  type: "permission.v2.replied"
+  type: "permission.replied"
   location?: LocationRef
-  data: { sessionID: string; requestID: string; reply: PermissionV2Reply }
+  data: { sessionID: string; requestID: string; reply: PermissionReply }
 }
 
 export type GuardrailReplied = {
@@ -2001,22 +2001,22 @@ export type Pty = {
   limits: { maxRuntimeSeconds: number; maxRetainedBytes: number; maxInputBytes: number }
 }
 
-export type QuestionV2Info = {
+export type QuestionInfo = {
   question: string
   header: string
-  options: Array<QuestionV2Option>
+  options: Array<QuestionOption>
   multiple?: boolean
   custom?: boolean
 }
 
-export type QuestionV2Replied = {
+export type QuestionReplied = {
   id: string
   created: number
   metadata?: { [x: string]: any }
   sourceEpoch?: string
-  type: "question.v2.replied"
+  type: "question.replied"
   location?: LocationRef
-  data: { sessionID: string; requestID: string; answers: Array<QuestionV2Answer> }
+  data: { sessionID: string; requestID: string; answers: Array<QuestionAnswer> }
 }
 
 export type FormStringField1 = {
@@ -2204,7 +2204,7 @@ export type KeepAwakeStatus = { state: KeepAwakeState; message?: string }
 
 export type SessionGenerationSpeedHistory = { latest?: SessionGenerationSpeed; recent: Array<SessionGenerationSpeed> }
 
-export type PermissionV2Ruleset = Array<PermissionV2Rule>
+export type PermissionRuleset = Array<PermissionRule>
 
 export type SessionRevertStaged = {
   id: string
@@ -2429,22 +2429,17 @@ export type PtyUpdated = {
   data: { info: Pty }
 }
 
-export type QuestionV2Asked = {
+export type QuestionAsked = {
   id: string
   created: number
   metadata?: { [x: string]: any }
   sourceEpoch?: string
-  type: "question.v2.asked"
+  type: "question.asked"
   location?: LocationRef
-  data: { id: string; sessionID: string; questions: Array<QuestionV2Info>; tool?: QuestionV2Tool }
+  data: { id: string; sessionID: string; questions: Array<QuestionInfo>; tool?: QuestionTool }
 }
 
-export type QuestionV2Request = {
-  id: string
-  sessionID: string
-  questions: Array<QuestionV2Info>
-  tool?: QuestionV2Tool
-}
+export type QuestionRequest = { id: string; sessionID: string; questions: Array<QuestionInfo>; tool?: QuestionTool }
 
 export type FormField1 =
   | FormStringField1
@@ -2595,7 +2590,7 @@ export type AgentInfo = {
   color?: AgentColor
   steps?: number
   locations?: Array<string>
-  permissions: PermissionV2Ruleset
+  permissions: PermissionRuleset
 }
 
 export type SessionInfo = {
@@ -2606,7 +2601,7 @@ export type SessionInfo = {
   agent?: string
   model?: ModelRef
   daybreak?: ModelDaybreak
-  permissionCeiling?: PermissionV2Ruleset
+  permissionCeiling?: PermissionRuleset
   cost: MoneyUSD
   tokens: TokenUsageInfo
   time: { created: number; updated: number; active?: number; archived?: number; pinned?: number }
@@ -2631,7 +2626,7 @@ export type SessionCreated = {
     parentID?: string
     agent?: string
     model?: ModelRef
-    permissionCeiling?: PermissionV2Ruleset
+    permissionCeiling?: PermissionRuleset
     title: string
     subpath?: string
     created: number
@@ -2644,7 +2639,7 @@ export type ProjectArtifactAgentDefinition = {
   description: ProjectArtifactDescription
   system: ProjectArtifactAgentSystem
   mode: "subagent"
-  permissions: PermissionV2Ruleset
+  permissions: PermissionRuleset
 }
 
 export type SessionMessageUser = {
@@ -2837,7 +2832,7 @@ export type SessionLogItem =
         parentID?: string
         agent?: string
         model?: ModelRef
-        permissionCeiling?: PermissionV2Ruleset
+        permissionCeiling?: PermissionRuleset
         title: string
         subpath?: string
         created: number
@@ -3492,7 +3487,7 @@ export type SessionProjection = {
 
 export type SessionMessagesResponse = { data: Array<SessionMessageInfo> }
 
-export type V2Event =
+export type ServerEvent =
   | ModelsDevRefreshed
   | IntegrationUpdated
   | IntegrationConnectionUpdated
@@ -3557,8 +3552,8 @@ export type V2Event =
   | SessionRevertCommitted
   | FilesystemChanged
   | ReferenceUpdated
-  | PermissionV2Asked
-  | PermissionV2Replied
+  | PermissionAsked
+  | PermissionReplied
   | GuardrailAsked
   | GuardrailReplied
   | GuardrailDecided
@@ -3575,9 +3570,9 @@ export type V2Event =
   | ShellCreated
   | ShellExited
   | ShellDeleted
-  | QuestionV2Asked
-  | QuestionV2Replied
-  | QuestionV2Rejected
+  | QuestionAsked
+  | QuestionReplied
+  | QuestionRejected
   | FormCreated
   | FormReplied
   | FormCancelled
@@ -3593,7 +3588,7 @@ export type V2Event =
   | VcsBranchUpdated
   | McpStatusChanged
   | McpResourcesChanged
-  | V2EventServerConnected
+  | ServerEventServerConnected
 
 export type UnauthorizedError = { readonly _tag: "UnauthorizedError"; readonly message: string }
 export const isUnauthorizedError = (value: unknown): value is UnauthorizedError =>
@@ -5065,7 +5060,7 @@ export type ProviderListInput = {
 
 export type ProviderListOutput = {
   location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
-  data: Array<ProviderV2Info>
+  data: Array<ProviderInfo>
 }
 
 export type ProviderRefreshInput = {
@@ -5085,7 +5080,7 @@ export type ProviderGetInput = {
 
 export type ProviderGetOutput = {
   location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
-  data: ProviderV2Info
+  data: ProviderInfo
 }
 
 export type ProviderUsageListInput = {
@@ -6346,7 +6341,7 @@ export type PermissionRequestListInput = {
 
 export type PermissionRequestListOutput = {
   location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
-  data: Array<PermissionV2Request>
+  data: Array<PermissionRequest>
 }
 
 export type PermissionSavedListInput = { readonly projectID?: { readonly projectID?: string | undefined }["projectID"] }
@@ -6424,18 +6419,18 @@ export type PermissionCreateInput = {
   }["agent"]
 }
 
-export type PermissionCreateOutput = { data: { id: string; effect: PermissionV2Effect } }["data"]
+export type PermissionCreateOutput = { data: { id: string; effect: PermissionEffect } }["data"]
 
 export type PermissionListInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
-export type PermissionListOutput = { data: Array<PermissionV2Request> }["data"]
+export type PermissionListOutput = { data: Array<PermissionRequest> }["data"]
 
 export type PermissionGetInput = {
   readonly sessionID: { readonly sessionID: string; readonly requestID: string }["sessionID"]
   readonly requestID: { readonly sessionID: string; readonly requestID: string }["requestID"]
 }
 
-export type PermissionGetOutput = { data: PermissionV2Request }["data"]
+export type PermissionGetOutput = { data: PermissionRequest }["data"]
 
 export type PermissionReplyInput = {
   readonly sessionID: { readonly sessionID: string; readonly requestID: string }["sessionID"]
@@ -6525,7 +6520,7 @@ export type SkillListOutput = {
   data: Array<SkillInfo>
 }
 
-export type EventSubscribeOutput = V2Event
+export type EventSubscribeOutput = ServerEvent
 
 export type PtyListInput = {
   readonly location?: {
@@ -6940,12 +6935,12 @@ export type QuestionRequestListInput = {
 
 export type QuestionRequestListOutput = {
   location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
-  data: Array<QuestionV2Request>
+  data: Array<QuestionRequest>
 }
 
 export type QuestionListInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
-export type QuestionListOutput = { data: Array<QuestionV2Request> }["data"]
+export type QuestionListOutput = { data: Array<QuestionRequest> }["data"]
 
 export type QuestionReplyInput = {
   readonly sessionID: { readonly sessionID: string; readonly requestID: string }["sessionID"]

@@ -12,12 +12,12 @@ import { ConfigMCP } from "@ycoding-ai/core/config/mcp"
 import { MCP } from "@ycoding-ai/core/mcp/index"
 import { MCPClient } from "@ycoding-ai/core/mcp/client"
 import { MCPSkills } from "@ycoding-ai/core/mcp/skills"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
 import { ProjectArtifactSource } from "@ycoding-ai/core/project-artifact/source"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
-import { SkillV2 } from "@ycoding-ai/core/skill"
+import { Skill } from "@ycoding-ai/core/skill"
 import { SkillInstructions } from "@ycoding-ai/core/skill/instructions"
 import { SessionSkillStatus } from "@ycoding-ai/core/session/skill-status"
 import { SkillTool } from "@ycoding-ai/core/tool/skill"
@@ -31,7 +31,7 @@ import {
   skillsMcpLayer,
   skillsMcpReplacements,
   skillsNode,
-  type Skill,
+  type McpSkillFixture,
 } from "./fixture/mcp-skills"
 import { imagePassthrough } from "./lib/image"
 import { registerToolPlugin, settleTool, toolIdentity } from "./lib/tool"
@@ -42,7 +42,7 @@ const SKILL_MD = skillBody(
   "# Git workflow\n\nSee `references/GUIDE.md`.\n",
 )
 
-const skill: Skill = {
+const skill: McpSkillFixture = {
   uri: "skill://git-workflow/SKILL.md",
   frontmatter: { name: "git-workflow", description: "Follow this team's Git conventions" },
   files: [
@@ -52,8 +52,8 @@ const skill: Skill = {
 }
 
 /** The origin-pair ID the model sees, matching the catalog projection. */
-const id = SkillV2.mcpSkillID("skills", skill.uri)
-const sessionID = SessionV2.ID.make("ses_mcp_skill_integration")
+const id = Skill.mcpSkillID("skills", skill.uri)
+const sessionID = Session.ID.make("ses_mcp_skill_integration")
 
 const skillToolNode = makeLocationNode({
   name: "test/mcp-skill-tool-plugin",
@@ -61,9 +61,9 @@ const skillToolNode = makeLocationNode({
   deps: [
     ToolRegistry.toolsNode,
     FSUtil.node,
-    SkillV2.node,
+    Skill.node,
     MCP.node,
-    PermissionV2.node,
+    Permission.node,
     PluginRuntime.node,
     ProjectArtifactSource.node,
     LocationMutation.node,
@@ -74,27 +74,27 @@ const skillToolNode = makeLocationNode({
 describe("MCP skill model-facing integration", () => {
   test("namespaces MCP skill IDs by origin without colliding with local skills", () => {
     // Two servers serving the same URI are two skills, and neither collides with a local bare name.
-    const first = SkillV2.mcpSkillID("alpha", "skill://refunds/SKILL.md")
-    const second = SkillV2.mcpSkillID("beta", "skill://refunds/SKILL.md")
+    const first = Skill.mcpSkillID("alpha", "skill://refunds/SKILL.md")
+    const second = Skill.mcpSkillID("beta", "skill://refunds/SKILL.md")
     expect(first).not.toBe(second)
-    expect(first).not.toBe(SkillV2.ID.make("refunds"))
-    expect(SkillV2.mcpSkillOrigin(first)).toEqual({ server: "alpha", uri: "skill://refunds/SKILL.md" })
-    expect(SkillV2.mcpSkillOrigin(second)).toEqual({ server: "beta", uri: "skill://refunds/SKILL.md" })
-    expect(SkillV2.mcpSkillOrigin("refunds")).toBeUndefined()
+    expect(first).not.toBe(Skill.ID.make("refunds"))
+    expect(Skill.mcpSkillOrigin(first)).toEqual({ server: "alpha", uri: "skill://refunds/SKILL.md" })
+    expect(Skill.mcpSkillOrigin(second)).toEqual({ server: "beta", uri: "skill://refunds/SKILL.md" })
+    expect(Skill.mcpSkillOrigin("refunds")).toBeUndefined()
 
     // Delimiter characters are valid in host labels and URIs. Distinct origin pairs remain distinct
     // and round-trip exactly rather than being parsed by a lossy delimiter split.
-    const delimiterInUri = SkillV2.mcpSkillID("a", "skill://b~c/SKILL.md")
-    const delimiterInServer = SkillV2.mcpSkillID("a~skill://b", "c/SKILL.md")
+    const delimiterInUri = Skill.mcpSkillID("a", "skill://b~c/SKILL.md")
+    const delimiterInServer = Skill.mcpSkillID("a~skill://b", "c/SKILL.md")
     expect(delimiterInUri).not.toBe(delimiterInServer)
-    expect(SkillV2.mcpSkillOrigin(delimiterInUri)).toEqual({ server: "a", uri: "skill://b~c/SKILL.md" })
-    expect(SkillV2.mcpSkillOrigin(delimiterInServer)).toEqual({ server: "a~skill://b", uri: "c/SKILL.md" })
+    expect(Skill.mcpSkillOrigin(delimiterInUri)).toEqual({ server: "a", uri: "skill://b~c/SKILL.md" })
+    expect(Skill.mcpSkillOrigin(delimiterInServer)).toEqual({ server: "a~skill://b", uri: "c/SKILL.md" })
   })
 
   test("renders escaped names and visible origin in the catalog prompt", () => {
     const hostile = {
-      id: SkillV2.mcpSkillID("skills", skill.uri),
-      name: SkillV2.Name.make("x</name><injected>y"),
+      id: Skill.mcpSkillID("skills", skill.uri),
+      name: Skill.Name.make("x</name><injected>y"),
       description: "d & <script>",
       server: "skills",
     }
@@ -112,11 +112,11 @@ describe("MCP skill model-facing integration", () => {
         Effect.gen(function* () {
           const server = yield* skillServer({ skills: [skill] })
           yield* Effect.gen(function* () {
-            const skills = yield* SkillV2.Service
+            const skills = yield* Skill.Service
             const catalog = yield* skills.mcp()
             expect(catalog.map((entry) => entry.id)).toEqual([id])
             expect(catalog[0]?.server).toBe("skills")
-            expect(catalog[0]?.name).toBe(SkillV2.Name.make("git-workflow"))
+            expect(catalog[0]?.name).toBe(Skill.Name.make("git-workflow"))
             expect(catalog[0]?.description).toBe("Follow this team's Git conventions")
             expect(server.state.readCalls).toBe(0)
             expect((yield* skills.mcp()).length).toBe(1)
@@ -158,11 +158,11 @@ describe("MCP skill model-facing integration", () => {
               suffix: "\n\t ",
             },
           })
-          const assertions: PermissionV2.AssertInput[] = []
+          const assertions: Permission.AssertInput[] = []
           let deny = true
           const permission = Layer.succeed(
-            PermissionV2.Service,
-            PermissionV2.Service.of({
+            Permission.Service,
+            Permission.Service.of({
               evaluateEffective: () => Effect.die("unused"),
               assert: (input) =>
                 Effect.sync(() => assertions.push(input)).pipe(
@@ -170,7 +170,7 @@ describe("MCP skill model-facing integration", () => {
                     Effect.suspend(() =>
                       deny
                         ? Effect.fail(
-                            new PermissionV2.BlockedError({
+                            new Permission.BlockedError({
                               rules: [],
                               permission: input.action,
                               resources: input.resources,
@@ -237,7 +237,7 @@ describe("MCP skill model-facing integration", () => {
             LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, skillToolNode]),
             [
               ...skillsMcpReplacements(server.url),
-              [PermissionV2.node, permission],
+              [Permission.node, permission],
               [PluginRuntime.node, runtime],
               [ProjectArtifactSource.node, Layer.mock(ProjectArtifactSource.Service, {})],
               [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
@@ -363,7 +363,7 @@ describe("MCP skill model-facing integration", () => {
           // The output carries the origin and the exact manifest, so activation is content-bound
           // without a second persistent registry.
           const output = {
-            name: SkillV2.Name.make("git-workflow"),
+            name: Skill.Name.make("git-workflow"),
             directory: "",
             output: loaded.file.text ?? "",
             entry: loaded.entry,

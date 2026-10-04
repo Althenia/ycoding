@@ -1,5 +1,5 @@
-import { AgentV2 } from "@ycoding-ai/core/agent"
-import type { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Agent } from "@ycoding-ai/core/agent"
+import type { Permission } from "@ycoding-ai/core/permission"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { Tool } from "@ycoding-ai/core/tool/tool"
@@ -9,11 +9,11 @@ import { Effect, type Scope } from "effect"
 import { host } from "../plugin/host"
 
 export const toolIdentity = {
-  agent: AgentV2.ID.make("build"),
+  agent: Agent.ID.make("build"),
   messageID: SessionMessage.ID.make("msg_tool_test"),
 }
 
-export const toolDefinitions = (registry: ToolRegistry.Interface, permissions?: PermissionV2.Ruleset) =>
+export const toolDefinitions = (registry: ToolRegistry.Interface, permissions?: Permission.Ruleset) =>
   registry.materialize(permissions).pipe(Effect.map((materialized) => materialized.definitions))
 
 export function waitForTool(

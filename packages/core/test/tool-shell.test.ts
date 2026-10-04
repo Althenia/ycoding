@@ -12,23 +12,23 @@ import { makeGlobalNode, makeLocationNode } from "@ycoding-ai/core/effect/app-no
 import { filesystem } from "@ycoding-ai/core/effect/app-node-platform"
 import { Config } from "@ycoding-ai/core/config"
 import { Database } from "@ycoding-ai/core/database/database"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { Global } from "@ycoding-ai/core/global"
 import { Location } from "@ycoding-ai/core/location"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Job } from "@ycoding-ai/core/job"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionPendingTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
 import { Shell } from "@ycoding-ai/core/shell"
 import { ShellSandbox } from "@ycoding-ai/core/shell-sandbox"
@@ -40,8 +40,8 @@ import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 import { toolIdentity, executeTool, settleTool, toolDefinitions, waitForTool } from "./lib/tool"
 
-const sessionID = SessionV2.ID.make("ses_shell_tool_test")
-const sessionModel = ModelV2.Ref.make({ id: ModelV2.ID.make("test"), providerID: ProviderV2.ID.make("test") })
+const sessionID = Session.ID.make("ses_shell_tool_test")
+const sessionModel = CatalogModel.Ref.make({ id: CatalogModel.ID.make("test"), providerID: Provider.ID.make("test") })
 const testShell = process.platform === "win32" ? (process.env.COMSPEC ?? "cmd.exe") : "/bin/sh"
 const configDocument = (shellSandbox?: "disabled" | "optional" | "required", shellMemoryLimitMb?: number) =>
   new Config.Document({
@@ -52,10 +52,10 @@ const configDocument = (shellSandbox?: "disabled" | "optional" | "required", she
       shell_memory_limit_mb: shellMemoryLimitMb,
     }),
   })
-const assertions: PermissionV2.AssertInput[] = []
+const assertions: Permission.AssertInput[] = []
 let configEntries: Config.Entry[] = [configDocument()]
 let denyAction: string | undefined
-let afterPermission = (_input: PermissionV2.AssertInput): Effect.Effect<void> => Effect.void
+let afterPermission = (_input: Permission.AssertInput): Effect.Effect<void> => Effect.void
 let sandboxPrepare: ShellSandbox.Interface["prepare"] = () =>
   Effect.fail(new ShellSandbox.Unavailable({ message: "No enforceable shell sandbox backend" }))
 const fakeShellState: {
@@ -80,16 +80,16 @@ const config = Layer.succeed(
 )
 
 const permission = Layer.succeed(
-  PermissionV2.Service,
-  PermissionV2.Service.of({
-    evaluateEffective: () => Effect.die(new Error("unused PermissionV2.evaluateEffective")),
+  Permission.Service,
+  Permission.Service.of({
+    evaluateEffective: () => Effect.die(new Error("unused Permission.evaluateEffective")),
     assert: (input) =>
       Effect.sync(() => assertions.push(input)).pipe(
         Effect.andThen(Effect.suspend(() => afterPermission(input))),
         Effect.andThen(
           input.action === denyAction
             ? Effect.fail(
-                new PermissionV2.BlockedError({
+                new Permission.BlockedError({
                   rules: [],
                   permission: input.action,
                   resources: input.resources,
@@ -262,16 +262,16 @@ const executionNode = makeGlobalNode({
   layer: Layer.effect(
     SessionExecution.Service,
     Effect.gen(function* () {
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const store = yield* SessionStore.Service
-      const complete = Effect.fn("ShellTest.complete")(function* (id: SessionV2.ID) {
+      const complete = Effect.fn("ShellTest.complete")(function* (id: Session.ID) {
         const session = yield* store.get(id)
         if (!session) return
         const assistantMessageID = SessionMessage.ID.create()
         yield* events.publish(SessionEvent.Step.Started, {
           sessionID: id,
           assistantMessageID,
-          agent: session.agent ?? AgentV2.ID.make("code"),
+          agent: session.agent ?? Agent.ID.make("code"),
           model: sessionModel,
         })
         yield* events.publish(SessionEvent.Text.Started, {
@@ -303,16 +303,16 @@ const executionNode = makeGlobalNode({
       })
     }),
   ),
-  deps: [EventV2.node, SessionStore.node],
+  deps: [EventRuntime.node, SessionStore.node],
 })
 
 const layer = AppNodeBuilder.build(
   LayerNode.group([
     Database.node,
-    EventV2.node,
+    EventRuntime.node,
     Job.node,
     ToolOutputStore.cleanupNode,
-    SessionV2.node,
+    Session.node,
     SessionExecution.node,
     PluginRuntime.providerNode,
     LocationServiceMap.node,
@@ -324,7 +324,7 @@ const layer = AppNodeBuilder.build(
   [
     [SessionExecution.node, executionNode],
     [Config.node, config],
-    [PermissionV2.node, permission],
+    [Permission.node, permission],
     [ShellSandbox.node, sandboxNode],
   ],
 )
@@ -332,10 +332,10 @@ const layer = AppNodeBuilder.build(
 const fakeLayer = AppNodeBuilder.build(
   LayerNode.group([
     Database.node,
-    EventV2.node,
+    EventRuntime.node,
     Job.node,
     ToolOutputStore.cleanupNode,
-    SessionV2.node,
+    Session.node,
     SessionExecution.node,
     PluginRuntime.providerNode,
     LocationServiceMap.node,
@@ -347,7 +347,7 @@ const fakeLayer = AppNodeBuilder.build(
   [
     [SessionExecution.node, executionNode],
     [Config.node, config],
-    [PermissionV2.node, permission],
+    [Permission.node, permission],
     [Shell.node, fakeShellNode],
     [ShellSandbox.node, sandboxNode],
   ],
@@ -395,7 +395,7 @@ const withSession = <A, E, R>(
   owner = sessionID,
 ) =>
   Effect.gen(function* () {
-    const sessions = yield* SessionV2.Service
+    const sessions = yield* Session.Service
     const location = Location.Ref.make({ directory: AbsolutePath.make(directory) })
     yield* sessions.create({
       id: owner,
@@ -1001,7 +1001,7 @@ describe("ShellTool", () => {
         reset()
         return withSession(tmp.path, (registry) =>
           Effect.gen(function* () {
-            const events = yield* EventV2.Service
+            const events = yield* EventRuntime.Service
             const admitted = yield* events.subscribe(SessionEvent.InputAdmitted).pipe(
               Stream.filter((event) => event.data.sessionID === sessionID && event.data.input.type === "synthetic"),
               Stream.runHead,
@@ -1039,9 +1039,9 @@ describe("ShellTool", () => {
         reset()
         return withSession(tmp.path, (registry) =>
           Effect.gen(function* () {
-            const sessions = yield* SessionV2.Service
+            const sessions = yield* Session.Service
             const jobs = yield* Job.Service
-            const events = yield* EventV2.Service
+            const events = yield* EventRuntime.Service
             const release = path.join(tmp.path, "release")
             const command = isWindows
               ? `while (!(Test-Path -LiteralPath '${release}')) { Start-Sleep -Milliseconds 50 }; [Console]::Out.Write('done')`
@@ -1163,8 +1163,8 @@ describe("ShellTool", () => {
   )
   ;[
     { owner: sessionID },
-    { owner: SessionV2.ID.make("ses_shell_tool_child_test") },
-    { owner: SessionV2.ID.make("ses_shell_tool_zero_timeout_test"), timeout: 0 },
+    { owner: Session.ID.make("ses_shell_tool_child_test") },
+    { owner: Session.ID.make("ses_shell_tool_zero_timeout_test"), timeout: 0 },
   ].forEach(({ owner, timeout }) =>
     fakeIt.effect(`automatically backgrounds one unchanged shell for ${owner}`, () =>
       Effect.acquireUseRelease(
@@ -1176,7 +1176,7 @@ describe("ShellTool", () => {
             tmp.path,
             (registry) =>
               Effect.gen(function* () {
-                const events = yield* EventV2.Service
+                const events = yield* EventRuntime.Service
                 const jobs = yield* Job.Service
                 const shell = yield* Shell.Service
                 const scope = yield* Scope.Scope
@@ -1271,7 +1271,7 @@ describe("ShellTool", () => {
         reset()
         return withSession(tmp.path, (registry) =>
           Effect.gen(function* () {
-            const events = yield* EventV2.Service
+            const events = yield* EventRuntime.Service
             const scope = yield* Scope.Scope
             const admitted = yield* events.subscribe(SessionEvent.InputAdmitted).pipe(
               Stream.filter((event) => event.data.sessionID === sessionID && event.data.input.type === "synthetic"),
@@ -1303,7 +1303,7 @@ describe("ShellTool", () => {
         reset()
         return withSession(tmp.path, (registry) =>
           Effect.gen(function* () {
-            const events = yield* EventV2.Service
+            const events = yield* EventRuntime.Service
             const jobs = yield* Job.Service
             const scope = yield* Scope.Scope
             const admitted = yield* events.subscribe(SessionEvent.InputAdmitted).pipe(
@@ -1374,7 +1374,7 @@ describe("ShellTool", () => {
         reset()
         return withSession(tmp.path, (registry) =>
           Effect.gen(function* () {
-            const events = yield* EventV2.Service
+            const events = yield* EventRuntime.Service
             const jobs = yield* Job.Service
             const scope = yield* Scope.Scope
             const admitted = yield* events.subscribe(SessionEvent.InputAdmitted).pipe(

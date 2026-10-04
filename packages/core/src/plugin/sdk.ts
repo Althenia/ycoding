@@ -3,10 +3,10 @@ export * as SdkPlugins from "./sdk"
 import type { Plugin } from "@ycoding-ai/plugin/effect/plugin"
 import { Context, Effect, Layer } from "effect"
 import { makeGlobalNode } from "../effect/app-node"
-import { EventV2 } from "../event"
-import type { PluginV2 } from "../plugin"
+import { EventRuntime } from "../event"
+import type { PluginRegistry } from "../plugin"
 
-export const Updated = EventV2.ephemeral({ type: "sdk.plugin.updated", schema: {} })
+export const Updated = EventRuntime.ephemeral({ type: "sdk.plugin.updated", schema: {} })
 
 /**
  * Holds plugins contributed by an embedding host application,
@@ -21,7 +21,7 @@ export const Updated = EventV2.ephemeral({ type: "sdk.plugin.updated", schema: {
  */
 export interface Interface {
   readonly register: (plugin: Plugin) => Effect.Effect<void>
-  readonly all: () => readonly PluginV2.Versioned[]
+  readonly all: () => readonly PluginRegistry.Versioned[]
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/SdkPlugins") {}
@@ -29,8 +29,8 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/Sdk
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const events = yield* EventV2.Service
-    const plugins = new Map<string, PluginV2.Versioned>()
+    const events = yield* EventRuntime.Service
+    const plugins = new Map<string, PluginRegistry.Versioned>()
     let revision = 0
     return Service.of({
       register: (plugin) =>
@@ -42,4 +42,4 @@ export const layer = Layer.effect(
   }),
 )
 
-export const node = makeGlobalNode({ service: Service, layer, deps: [EventV2.node] })
+export const node = makeGlobalNode({ service: Service, layer, deps: [EventRuntime.node] })

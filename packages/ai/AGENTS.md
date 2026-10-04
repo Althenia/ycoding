@@ -23,7 +23,7 @@ This package is an Effect Schema-first LLM core. The Schema classes in `src/sche
 
 Primary in-repo integration points:
 
-- `packages/core/src/session/runner/llm.ts` owns one V2 provider step: orchestration, stream settlement, tool execution, retries, and durable step events.
+- `packages/core/src/session/runner/llm.ts` owns one logical LLM step: orchestration, stream settlement, tool execution, retries, and durable step events.
 - `packages/core/src/session/model-request.ts` lowers selected session history, system context, tools, and stable cache identity into this package's canonical `LLMRequest`.
 - `packages/core/src/session/runner/model.ts` resolves catalog identity, credentials, variants, provider package selection, and executable routes.
 - `packages/core/src/aisdk.ts` is the narrow adapter for explicitly configured AI SDK provider packages; native protocol routes remain the default for supported packages.

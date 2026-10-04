@@ -10,7 +10,7 @@ import { Project } from "../project"
 import { ProjectDirectories } from "./directories"
 import { makeGitWorktreeStrategy } from "./copy-strategies"
 import { Slug } from "../util/slug"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { Database } from "../database/database"
 import { Location } from "../location"
 import { Event } from "@ycoding-ai/schema/project-directories"
@@ -132,7 +132,7 @@ const layer = Layer.effect(
     const git = yield* Git.Service
     const directories = yield* ProjectDirectories.Service
     const db = (yield* Database.Service).db
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
 
     const changed = Effect.fnUntraced(function* (projectID: Project.ID, update: boolean) {
       if (update) yield* events.publish(Event.Updated, { projectID })
@@ -282,7 +282,7 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer: layer,
-  deps: [FSUtil.node, Git.node, ProjectDirectories.node, EventV2.node, Database.node],
+  deps: [FSUtil.node, Git.node, ProjectDirectories.node, EventRuntime.node, Database.node],
 })
 
 export const refreshNode = makeLocationNode({

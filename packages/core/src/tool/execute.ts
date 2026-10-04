@@ -85,7 +85,7 @@ export const create = (registrations: ReadonlyMap<string, Registration>) => {
         const callIndex = yield* Ref.make(0)
         const files = yield* Ref.make<Array<CollectedFiles>>([])
         const calls = yield* Ref.make<Array<ExecuteCall>>([])
-        // TODO: Publish live call-list updates once V2 has a generic tool progress API.
+        // TODO: Publish live call-list updates when a generic tool progress API exists.
         const finalCalls = Ref.get(calls).pipe(
           Effect.map((items) =>
             items.map((call) => (call.status === "running" ? { ...call, status: "error" as const } : call)),

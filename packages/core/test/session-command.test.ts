@@ -1,22 +1,22 @@
 import { describe, expect } from "bun:test"
 import { Effect, Layer, LayerMap } from "effect"
 import path from "node:path"
-import { AgentV2 } from "@ycoding-ai/core/agent"
-import { CommandV2 } from "@ycoding-ai/core/command"
+import { Agent } from "@ycoding-ai/core/agent"
+import { Command } from "@ycoding-ai/core/command"
 import { Config } from "@ycoding-ai/core/config"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Location } from "@ycoding-ai/core/location"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import type { LocationServices } from "@ycoding-ai/core/location-services"
 import { MCP } from "@ycoding-ai/core/mcp/index"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProjectV2 } from "@ycoding-ai/core/project"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Project } from "@ycoding-ai/core/project"
+import { Provider } from "@ycoding-ai/core/provider"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionPending } from "@ycoding-ai/core/session/pending"
@@ -27,12 +27,12 @@ import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
 const location = Location.Ref.make({ directory: AbsolutePath.make(process.cwd()), workspaceID: undefined })
-const wakes: SessionV2.ID[] = []
+const wakes: Session.ID[] = []
 const locations = Layer.effect(
   LocationServiceMap.Service,
   LayerMap.make(
     () =>
-      AppNodeBuilder.build(LayerNode.group([CommandV2.node, AgentV2.node]), [
+      AppNodeBuilder.build(LayerNode.group([Command.node, Agent.node]), [
         [Config.node, emptyConfigLayer],
         [MCP.node, emptyMcpLayer],
         [Location.node, testLocationLayer],
@@ -58,19 +58,19 @@ const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       Database.node,
-      EventV2.node,
+      EventRuntime.node,
       SessionProjector.node,
       SessionStore.node,
-      SessionV2.node,
+      Session.node,
       LocationServiceMap.node,
     ]),
     [
       [LocationServiceMap.node, locations],
       [SessionExecution.node, execution],
       [
-        ProjectV2.node,
-        Layer.mock(ProjectV2.Service, {
-          resolve: (directory) => Effect.succeed({ id: ProjectV2.ID.global, directory }),
+        Project.node,
+        Layer.mock(Project.Service, {
+          resolve: (directory) => Effect.succeed({ id: Project.ID.global, directory }),
         }),
       ],
     ],
@@ -85,20 +85,20 @@ const fixture = Effect.gen(function* () {
   const counter = path.join(temporary.path, "evaluations.txt")
   yield* Effect.promise(() => Bun.write(counter, "seed\n"))
   wakes.length = 0
-  const sessions = yield* SessionV2.Service
+  const sessions = yield* Session.Service
   const session = yield* sessions.create({ location })
   const locations = yield* LocationServiceMap.Service
-  const commands = yield* CommandV2.Service.pipe(Effect.provide(locations.get(location)))
+  const commands = yield* Command.Service.pipe(Effect.provide(locations.get(location)))
   yield* commands.transform((draft) =>
     draft.update("counted", (command) => {
       command.template = `Result: !\`printf 'evaluation\\n' >> ${JSON.stringify(counter)}; printf once\``
-      command.agent = AgentV2.ID.make("reviewer")
+      command.agent = Agent.ID.make("reviewer")
     }),
   )
   return { sessions, session, commands, counter }
 })
 
-describe("SessionV2.command retry admission", () => {
+describe("Session.command retry admission", () => {
   for (const promoted of [false, true])
     it.effect(
       `reconciles ${promoted ? "promoted" : "pending"} command IDs before shell effects or selection changes`,
@@ -114,10 +114,10 @@ describe("SessionV2.command retry admission", () => {
           })
           if (promoted) {
             const database = yield* Database.Service
-            const events = yield* EventV2.Service
+            const events = yield* EventRuntime.Service
             yield* SessionPending.promoteSteers(database.db, events, input.session.id)
           }
-          yield* input.sessions.switchAgent({ sessionID: input.session.id, agent: AgentV2.ID.make("build") })
+          yield* input.sessions.switchAgent({ sessionID: input.session.id, agent: Agent.ID.make("build") })
           const retry = yield* input.sessions.command({
             sessionID: input.session.id,
             id,
@@ -126,7 +126,7 @@ describe("SessionV2.command retry admission", () => {
           })
           expect(retry).toEqual(first)
           expect(yield* Effect.promise(() => Bun.file(input.counter).text())).toBe("seed\nevaluation\n")
-          expect((yield* input.sessions.get(input.session.id)).agent).toBe(AgentV2.ID.make("build"))
+          expect((yield* input.sessions.get(input.session.id)).agent).toBe(Agent.ID.make("build"))
           expect(wakes).toEqual([])
           yield* input.commands.transform((draft) => draft.remove("counted"))
           const awakened = yield* input.sessions.command({
@@ -134,9 +134,9 @@ describe("SessionV2.command retry admission", () => {
             id,
             command: "missing",
             arguments: "changed",
-            model: ModelV2.Ref.make({
-              providerID: ProviderV2.ID.make("unavailable"),
-              id: ModelV2.ID.make("unavailable"),
+            model: CatalogModel.Ref.make({
+              providerID: Provider.ID.make("unavailable"),
+              id: CatalogModel.ID.make("unavailable"),
             }),
           })
           expect(awakened).toEqual(first)
@@ -172,7 +172,7 @@ describe("SessionV2.command retry admission", () => {
           const id = SessionMessage.ID.create()
           yield* input.sessions.command({ sessionID: input.session.id, id, command: "counted", resume: false })
           const database = yield* Database.Service
-          const events = yield* EventV2.Service
+          const events = yield* EventRuntime.Service
           if (promoted) yield* SessionPending.promoteSteers(database.db, events, input.session.id)
           const other = yield* input.sessions.create({ location })
           const crossSession = yield* input.sessions

@@ -5,7 +5,7 @@ import { ToolFailure } from "@ycoding-ai/ai"
 import { Effect, Schema } from "effect"
 import { Memory } from "../memory"
 import { MemoryFormat } from "../memory/format"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { SessionGuardrail } from "../session/guardrail"
 import { Tool } from "./tool"
 
@@ -108,7 +108,7 @@ export const Plugin = {
   id: "ycoding.tool.memory",
   effect: Effect.fn("MemoryTool.Plugin")(function* (ctx: Context) {
     const memory = yield* Memory.Service
-    const permission = yield* PermissionV2.Service
+    const permission = yield* Permission.Service
     const guardrail = yield* SessionGuardrail.Service
     yield* ctx.tool
       .transform((draft) =>

@@ -4,17 +4,17 @@ import { Effect } from "effect"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { Database } from "@ycoding-ai/core/database/database"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionTable, SessionTodoStateTable } from "@ycoding-ai/core/session/sql"
 import { SessionTodo } from "@ycoding-ai/core/session/todo"
 import { testEffect } from "./lib/effect"
 
-const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionTodo.node])))
-const sessionID = SessionV2.ID.make("ses_todo_test")
+const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionTodo.node])))
+const sessionID = Session.ID.make("ses_todo_test")
 
 describe("SessionTodo", () => {
   it.effect("replaces persisted todos in order and publishes updates", () =>

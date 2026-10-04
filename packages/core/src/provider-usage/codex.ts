@@ -2,7 +2,7 @@ export * as CodexUsage from "./codex"
 
 import { Credential } from "@ycoding-ai/schema/credential"
 import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
-import { ProviderV2 } from "../provider"
+import { Provider } from "../provider"
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 
 const chatGPTMethods = new Set(["chatgpt-browser", "chatgpt-headless"])
@@ -21,7 +21,7 @@ export interface AppServerCommand {
 }
 
 export interface LoadAppServerInput {
-  readonly providerID: ProviderV2.ID
+  readonly providerID: Provider.ID
   readonly label: string
   readonly updatedAt: number
   readonly client: AppServerClient
@@ -59,7 +59,7 @@ export function connectAppServer(input: AppServerCommand): AppServerClient {
 }
 
 export interface NormalizeInput {
-  readonly providerID: ProviderV2.ID
+  readonly providerID: Provider.ID
   readonly label: string
   readonly updatedAt: number
   readonly source: ProviderUsage.Source

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { LLMClient, LLMEvent, Model, type LLMClientShape, type LLMRequest } from "@ycoding-ai/ai"
 import { OpenAIChat } from "@ycoding-ai/ai/protocols"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
@@ -10,22 +10,22 @@ import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNodePlatform } from "@ycoding-ai/core/effect/app-node-platform"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { EventTable } from "@ycoding-ai/core/event/sql"
 import { InstructionBuiltIns } from "@ycoding-ai/core/instructions/builtins"
 import { InstructionDiscovery } from "@ycoding-ai/core/instruction-discovery"
 import { Instructions } from "@ycoding-ai/core/instructions"
 import { Location } from "@ycoding-ai/core/location"
 import { McpInstructions } from "@ycoding-ai/core/mcp/instructions"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Permission } from "@ycoding-ai/core/permission"
 import { PluginHooks } from "@ycoding-ai/core/plugin/hooks"
 import { PluginSupervisor } from "@ycoding-ai/core/plugin/supervisor"
 import { Project } from "@ycoding-ai/core/project"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { ReferenceInstructions } from "@ycoding-ai/core/reference/instructions"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionContextBudget } from "@ycoding-ai/core/session/context-budget"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionCompaction } from "@ycoding-ai/core/session/compaction"
@@ -61,22 +61,22 @@ import { testEffect } from "./lib/effect"
 import { FileAttachment } from "@ycoding-ai/schema/prompt"
 
 const createSession = () => {
-  const sessionID = SessionV2.ID.create()
+  const sessionID = Session.ID.create()
   const location = Location.Ref.make({ directory: AbsolutePath.make(process.cwd()) })
   return { sessionID, location }
 }
 
-const messageID = (sessionID: SessionV2.ID, id: SessionMessage.ID) =>
+const messageID = (sessionID: Session.ID, id: SessionMessage.ID) =>
   SessionMessage.ID.make(`${id}_${String(sessionID).replace(/^ses_/, "")}`)
 
 const ref = (providerID: string, id: string) =>
-  ModelV2.Ref.make({ id: ModelV2.ID.make(id), providerID: ProviderV2.ID.make(providerID) })
+  CatalogModel.Ref.make({ id: CatalogModel.ID.make(id), providerID: Provider.ID.make(providerID) })
 const sonnet = ref("anthropic", "claude-sonnet-4-5")
 const haiku = ref("anthropic", "claude-haiku-4-5")
 const gpt = ref("openai", "gpt-5.6")
 
 const info = (providerID: string, id: string, context: number, output: number) => ({
-  ...ModelV2.Info.empty(ProviderV2.ID.make(providerID), ModelV2.ID.make(id)),
+  ...CatalogModel.Info.empty(Provider.ID.make(providerID), CatalogModel.ID.make(id)),
   limit: { context, output },
 })
 const catalogModels = [
@@ -201,9 +201,9 @@ const projects = Layer.mock(Project.Service, {
   resolve: (directory) => Effect.succeed({ id: Project.ID.global, directory }),
 })
 const permission = Layer.succeed(
-  PermissionV2.Service,
-  PermissionV2.Service.of({
-    evaluateEffective: () => Effect.die(new Error("unused PermissionV2.evaluateEffective")),
+  Permission.Service,
+  Permission.Service.of({
+    evaluateEffective: () => Effect.die(new Error("unused Permission.evaluateEffective")),
     assert: () => Effect.die("unused"),
     ask: () => Effect.die("unused"),
     reply: () => Effect.die("unused"),
@@ -295,7 +295,7 @@ const compactionExecution = Layer.effect(
               baseContextRevision: job.baseContextRevision,
               coveredThrough: Object.freeze({
                 messageID: job.requestedThrough.messageID,
-                seq: EventV2.Seq.make(job.requestedThrough.seq),
+                seq: EventRuntime.Seq.make(job.requestedThrough.seq),
               }),
               protectedState: Object.freeze(
                 SessionLiveState.toProtectedState({ ...capture.sources, guardrails: guardrail }).map((entry) =>
@@ -307,7 +307,7 @@ const compactionExecution = Layer.effect(
                 text: summary,
                 coveredThrough: Object.freeze({
                   messageID: job.requestedThrough.messageID,
-                  seq: EventV2.Seq.make(job.requestedThrough.seq),
+                  seq: EventRuntime.Seq.make(job.requestedThrough.seq),
                 }),
                 digest: ContextManifest.payloadDigest(boundaryData),
               }),
@@ -327,14 +327,14 @@ const compactionExecution = Layer.effect(
 // A real coordinator-backed execution so interruption, transition reservation, and settlement
 // are the production ones. The drain itself is a controllable hook: this suite owns the
 // boundary, not the runner.
-let drainHook: (sessionID: SessionV2.ID, force: boolean) => Effect.Effect<void> = () => Effect.void
+let drainHook: (sessionID: Session.ID, force: boolean) => Effect.Effect<void> = () => Effect.void
 let compactionFailure: SessionCompactionJob.Job["errorCode"]
 /** When set, the activated summary is this large, so a completed compaction can still not fit. */
 let compactionSummaryPadding = 0
 const execution = Layer.effect(
   SessionExecution.Service,
   Effect.gen(function* () {
-    const coordinator = yield* SessionRunCoordinator.make<SessionV2.ID, never>({
+    const coordinator = yield* SessionRunCoordinator.make<Session.ID, never>({
       drain: (sessionID, force) => drainHook(sessionID, force),
     })
     return SessionExecution.Service.of({
@@ -358,7 +358,7 @@ const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [ReferenceInstructions.node, referenceInstructions],
   [McpInstructions.node, mcpInstructions],
   [Config.node, config],
-  [PermissionV2.node, permission],
+  [Permission.node, permission],
   [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
   [PluginSupervisor.node, pluginSupervisor],
   [SessionCompaction.node, compaction],
@@ -367,11 +367,11 @@ const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       Database.node,
-      EventV2.node,
+      EventRuntime.node,
       SessionProjector.node,
       SessionStore.node,
       SessionProviderRequest.node,
-      AgentV2.node,
+      Agent.node,
       Catalog.node,
       ToolRegistry.node,
       ToolRegistry.toolsNode,
@@ -390,12 +390,12 @@ const it = testEffect(
       SessionGuardrail.node,
       SessionCompactionExecution.node,
       SessionExecution.node,
-      SessionV2.node,
+      Session.node,
     ]),
     [
       [LayerNodePlatform.llmClient, client],
       [Project.node, projects],
-      [PermissionV2.node, permission],
+      [Permission.node, permission],
       [Catalog.node, promptCatalog],
       [SessionRunnerModel.node, models],
       [InstructionBuiltIns.node, systemContext],
@@ -417,7 +417,7 @@ const it = testEffect(
 
 const encodeMessage = Schema.encodeSync(SessionMessage.Info)
 
-const userRow = (sessionID: SessionV2.ID, id: SessionMessage.ID, seq: number, text: string) => {
+const userRow = (sessionID: Session.ID, id: SessionMessage.ID, seq: number, text: string) => {
   const message = SessionMessage.User.make({
     type: "user",
     id,
@@ -429,11 +429,11 @@ const userRow = (sessionID: SessionV2.ID, id: SessionMessage.ID, seq: number, te
   const { id: _id, type, ...data } = encodeMessage(message)
   return { id, session_id: sessionID, type, seq, time_created: seq * 1000, data }
 }
-const assistantRow = (sessionID: SessionV2.ID, id: SessionMessage.ID, seq: number, text: string) => {
+const assistantRow = (sessionID: Session.ID, id: SessionMessage.ID, seq: number, text: string) => {
   const message = SessionMessage.Assistant.make({
     type: "assistant",
     id,
-    agent: AgentV2.ID.make("build"),
+    agent: Agent.ID.make("build"),
     model: sonnet,
     content: [{ type: "text", text, phase: "final_answer" }],
     time: { created: DateTime.makeUnsafe(0), completed: DateTime.makeUnsafe(1) },
@@ -441,7 +441,7 @@ const assistantRow = (sessionID: SessionV2.ID, id: SessionMessage.ID, seq: numbe
   const { id: _id, type, ...data } = encodeMessage(message)
   return { id, session_id: sessionID, type, seq, time_created: seq * 1000, data }
 }
-const compactionRow = (sessionID: SessionV2.ID, summary: string, recent: string, seq: number) => {
+const compactionRow = (sessionID: Session.ID, summary: string, recent: string, seq: number) => {
   const message = SessionMessage.CompactionCompleted.make({
     type: "compaction",
     id: SessionMessage.ID.make("msg_summary"),
@@ -463,7 +463,7 @@ const compactionRow = (sessionID: SessionV2.ID, summary: string, recent: string,
 }
 
 const seedTranscript = Effect.fnUntraced(function* (input: {
-  readonly sessionID: SessionV2.ID
+  readonly sessionID: Session.ID
   readonly summary: string
   readonly posts: readonly { readonly id: SessionMessage.ID; readonly text: string }[]
 }) {
@@ -482,7 +482,7 @@ const seedTranscript = Effect.fnUntraced(function* (input: {
   })
 })
 
-const eventCountFor = (sessionID: SessionV2.ID, type?: string) =>
+const eventCountFor = (sessionID: Session.ID, type?: string) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     const rows = yield* db
@@ -498,7 +498,7 @@ const eventCountFor = (sessionID: SessionV2.ID, type?: string) =>
     return rows.length
   })
 
-const pendingRows = (sessionID: SessionV2.ID) =>
+const pendingRows = (sessionID: Session.ID) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     return yield* db
@@ -509,11 +509,11 @@ const pendingRows = (sessionID: SessionV2.ID) =>
       .pipe(Effect.orDie)
   })
 
-describe("SessionV2.switchModel context validation", () => {
+describe("Session.switchModel context validation", () => {
   it.effect("applies a fitting switch without compaction, preserving the visible summary and recent transcript", () =>
     Effect.gen(function* () {
       const { sessionID, location } = createSession()
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       yield* session.create({ id: sessionID, location, model: sonnet })
       yield* seedTranscript({
         sessionID,
@@ -540,7 +540,7 @@ describe("SessionV2.switchModel context validation", () => {
   it.effect("succeeds switching to a larger-context model without compaction", () =>
     Effect.gen(function* () {
       const { sessionID, location } = createSession()
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       yield* session.create({ id: sessionID, location, model: haiku })
       yield* seedTranscript({
         sessionID,
@@ -560,7 +560,7 @@ describe("SessionV2.switchModel context validation", () => {
   it.effect("compacts to the target budget and switches when the context does not fit", () =>
     Effect.gen(function* () {
       const { sessionID, location } = createSession()
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       yield* session.create({ id: sessionID, location, model: sonnet })
       yield* seedTranscript({
         sessionID,
@@ -594,7 +594,7 @@ describe("SessionV2.switchModel context validation", () => {
         new ConfigCompaction.Info({ context_safety_margin_tokens: 2_048 }),
       ]
       const { sessionID, location } = createSession()
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       yield* session.create({ id: sessionID, location, model: sonnet })
       yield* seedTranscript({ sessionID, summary: "x".repeat(250_000), posts: [] })
 
@@ -617,7 +617,7 @@ describe("SessionV2.switchModel context validation", () => {
     Effect.gen(function* () {
       compactionConfig = [new ConfigCompaction.Info({ advisory: false })]
       const { sessionID, location } = createSession()
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       yield* session.create({ id: sessionID, location, model: sonnet })
       yield* seedTranscript({ sessionID, summary: "x".repeat(250_000), posts: [] })
 
@@ -637,7 +637,7 @@ describe("SessionV2.switchModel context validation", () => {
     Effect.gen(function* () {
       compactionConfig = []
       const { sessionID, location } = createSession()
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       yield* session.create({ id: sessionID, location, model: sonnet })
       const { db } = yield* Database.Service
       // No completed compaction exists, and the only complete boundary is one large consumed user
@@ -669,7 +669,7 @@ describe("SessionV2.switchModel context validation", () => {
   it.effect("a completed compaction that still cannot fit blocks without selecting", () =>
     Effect.gen(function* () {
       const { sessionID, location } = createSession()
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       yield* session.create({ id: sessionID, location, model: sonnet })
       yield* seedTranscript({ sessionID, summary: "x".repeat(250_000), posts: [] })
       // The job completes and activates a summary that is still larger than the target safe budget,
@@ -688,7 +688,7 @@ describe("SessionV2.switchModel context validation", () => {
   it.effect("a failed compaction retains the prior selection and every durable row", () =>
     Effect.gen(function* () {
       const { sessionID, location } = createSession()
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       yield* session.create({ id: sessionID, location, model: sonnet })
       yield* seedTranscript({ sessionID, summary: "x".repeat(250_000), posts: [] })
       const { db } = yield* Database.Service
@@ -731,7 +731,7 @@ describe("SessionV2.switchModel context validation", () => {
   it.effect("an unresolved complete boundary leaves the selection and rows unchanged", () =>
     Effect.gen(function* () {
       const { sessionID, location } = createSession()
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       yield* session.create({ id: sessionID, location, model: sonnet })
       const { db } = yield* Database.Service
       // A large but still-incomplete user message: no completed boundary exists to compact through.
@@ -779,7 +779,7 @@ describe("SessionV2.switchModel context validation", () => {
             compaction: new ConfigEfficiency.CompactionHelperModels({ main: "session" }),
           }),
         })
-        const session = yield* SessionV2.Service
+        const session = yield* Session.Service
         yield* session.create({ id: sessionID, location, model: sonnet })
         yield* seedTranscript({
           sessionID,
@@ -807,11 +807,11 @@ describe("SessionV2.switchModel context validation", () => {
   )
 })
 
-describe("SessionV2.switchModel in-flight boundary", () => {
+describe("Session.switchModel in-flight boundary", () => {
   it.effect("interrupts the active drain and selects only after terminal settlement", () =>
     Effect.gen(function* () {
       const { sessionID, location } = createSession()
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       yield* session.create({ id: sessionID, location, model: sonnet })
       yield* seedTranscript({
         sessionID,
@@ -845,7 +845,7 @@ describe("SessionV2.switchModel in-flight boundary", () => {
   it.effect("a same-target switch neither interrupts nor selects", () =>
     Effect.gen(function* () {
       const { sessionID, location } = createSession()
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       yield* session.create({ id: sessionID, location, model: sonnet })
       const drainStarted = yield* Deferred.make<void>()
       let interrupted = false
@@ -873,7 +873,7 @@ describe("SessionV2.switchModel in-flight boundary", () => {
   it.effect("an unresolvable target neither interrupts nor changes the selected model", () =>
     Effect.gen(function* () {
       const { sessionID, location } = createSession()
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       yield* session.create({ id: sessionID, location, model: sonnet })
       const drainStarted = yield* Deferred.make<void>()
       let interrupted = false
@@ -905,7 +905,7 @@ describe("SessionV2.switchModel in-flight boundary", () => {
   it.effect("a doorbell raised during the switch waits for the transition and drains once", () =>
     Effect.gen(function* () {
       const { sessionID, location } = createSession()
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       yield* session.create({ id: sessionID, location, model: sonnet })
       yield* seedTranscript({
         sessionID,
@@ -943,7 +943,7 @@ describe("SessionV2.switchModel in-flight boundary", () => {
   it.effect("a selection-only switch leaves the Session idle with no successor drain", () =>
     Effect.gen(function* () {
       const { sessionID, location } = createSession()
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       yield* session.create({ id: sessionID, location, model: sonnet })
       yield* seedTranscript({
         sessionID,
@@ -967,7 +967,7 @@ describe("SessionV2.switchModel in-flight boundary", () => {
     Effect.gen(function* () {
       const first = createSession()
       const second = createSession()
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       yield* session.create({ id: first.sessionID, location: first.location, model: sonnet })
       yield* session.create({ id: second.sessionID, location: second.location, model: sonnet })
       yield* seedTranscript({
@@ -1022,8 +1022,8 @@ describe("SessionModelSwitch decision logic", () => {
       model: sonnet,
       target: SessionContextBudget.resolveCapabilities(
         catalogModels,
-        ProviderV2.ID.make("anthropic"),
-        ModelV2.ID.make("claude-haiku-4-5"),
+        Provider.ID.make("anthropic"),
+        CatalogModel.ID.make("claude-haiku-4-5"),
         { safetyMarginTokens: 0 },
       ),
       messages: [
@@ -1063,8 +1063,8 @@ describe("SessionModelSwitch decision logic", () => {
         model: haiku,
         target: SessionContextBudget.resolveCapabilities(
           catalogModels,
-          ProviderV2.ID.make("anthropic"),
-          ModelV2.ID.make("claude-haiku-4-5"),
+          Provider.ID.make("anthropic"),
+          CatalogModel.ID.make("claude-haiku-4-5"),
         ),
         keepRecentMessages: undefined,
       }),

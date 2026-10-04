@@ -3,8 +3,8 @@ import { CacheHint, LLM, Message, ToolDefinition } from "@ycoding-ai/ai"
 import { LLMClient, RequestExecutor } from "@ycoding-ai/ai/route"
 import { AISDK } from "@ycoding-ai/core/aisdk"
 import { CursorModels } from "@ycoding-ai/core/cursor/models"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { expect } from "bun:test"
 import { Effect, Layer } from "effect"
@@ -30,7 +30,7 @@ const read = ToolDefinition.make({
   inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
 })
 
-const resolve = (info: ModelV2.Info, observed: LanguageModelV3CallOptions[] = []) =>
+const resolve = (info: CatalogModel.Info, observed: LanguageModelV3CallOptions[] = []) =>
   Effect.gen(function* () {
     const aisdk = yield* AISDK.Service
     yield* aisdk.hook.sdk((event) => {
@@ -150,7 +150,7 @@ it.effect("appends one stable Cursor SYSTEM instruction on the actual SDK and se
 
 it.effect("supplies a Cursor SYSTEM instruction without an existing system or Cursor provider label", () =>
   Effect.gen(function* () {
-    const model = yield* resolve(ModelV2.Info.make({ ...cursor, providerID: ProviderV2.ID.make("custom-cursor") }))
+    const model = yield* resolve(CatalogModel.Info.make({ ...cursor, providerID: Provider.ID.make("custom-cursor") }))
     const prepared = yield* LLMClient.prepare<LanguageModelV3CallOptions>(LLM.request({ model, prompt: "Hello" }))
     expect(prepared.body.prompt[0]).toMatchObject({ role: "system", content: expect.stringContaining(identity) })
     expect(prepared.body.prompt[1]).toMatchObject({ role: "user", content: [{ type: "text", text: "Hello" }] })
@@ -159,7 +159,7 @@ it.effect("supplies a Cursor SYSTEM instruction without an existing system or Cu
 
 it.effect("does not add Cursor instructions to another package even when its provider is named Cursor", () =>
   Effect.gen(function* () {
-    const model = yield* resolve(ModelV2.Info.make({ ...cursor, package: ProviderV2.aisdk("@ai-sdk/groq") }))
+    const model = yield* resolve(CatalogModel.Info.make({ ...cursor, package: Provider.aisdk("@ai-sdk/groq") }))
     const prepared = yield* LLMClient.prepare<LanguageModelV3CallOptions>(
       LLM.request({
         model,

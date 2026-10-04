@@ -41,7 +41,7 @@ const externalLinePattern = new RegExp(
     "OpenCode Zen",
     "OpenCode Go",
     "x-opencode-session",
-    "ProviderV2\\.ID\\.opencode",
+    "Provider\\.ID\\.opencode",
     'Integration\\.ID\\.make\\(\\"opencode\\"\\)',
     "integrationID\\s*[:=].*opencode",
     "providerID\\s*[:=].*opencode",

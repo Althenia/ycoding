@@ -5,7 +5,7 @@ import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
 import { Keymap } from "../../context/keymap"
 import type { ActiveKey } from "@opentui/keymap"
 import type { TuiPlugin, TuiPluginApi } from "../../plugin/host-api"
-import type { ResolvedThemeView } from "../../theme/v2"
+import type { ResolvedThemeView } from "../../theme"
 import type { BuiltinTuiPlugin } from "../builtins"
 
 const command = {

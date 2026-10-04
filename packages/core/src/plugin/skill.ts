@@ -5,7 +5,7 @@ export * as SkillPlugin from "./skill"
 import { define } from "@ycoding-ai/plugin/effect/plugin"
 import { Effect } from "effect"
 import { AbsolutePath } from "../schema"
-import { SkillV2 } from "../skill"
+import { Skill } from "../skill"
 import { InstallationChannel, InstallationVersion } from "../installation/version"
 import { Config } from "../config"
 import { Location } from "../location"
@@ -30,11 +30,11 @@ export const Plugin = define({
     const reportContent = yield* reportContentWithDiagnostics()
     yield* ctx.skill.transform((draft) => {
       draft.source(
-        SkillV2.EmbeddedSource.make({
+        Skill.EmbeddedSource.make({
           type: "embedded",
-          skill: SkillV2.Info.make({
-            id: SkillV2.ID.make("ycoding"),
-            name: SkillV2.Name.make("YCoding"),
+          skill: Skill.Info.make({
+            id: Skill.ID.make("ycoding"),
+            name: Skill.Name.make("YCoding"),
             description: YCodingDescription,
             location: AbsolutePath.make("/builtin/ycoding.md"),
             content: YCodingContent,
@@ -42,11 +42,11 @@ export const Plugin = define({
         }),
       )
       draft.source(
-        SkillV2.EmbeddedSource.make({
+        Skill.EmbeddedSource.make({
           type: "embedded",
-          skill: SkillV2.Info.make({
-            id: SkillV2.ID.make("report"),
-            name: SkillV2.Name.make("Report"),
+          skill: Skill.Info.make({
+            id: Skill.ID.make("report"),
+            name: Skill.Name.make("Report"),
             description: REPORT_DESCRIPTION,
             slash: true,
             location: AbsolutePath.make("/builtin/report.md"),

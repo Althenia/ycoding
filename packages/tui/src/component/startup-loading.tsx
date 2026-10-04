@@ -16,7 +16,7 @@ export function StartupGate(props: ParentProps<{ ready: () => boolean }>) {
 }
 
 export function StartupLoading(props: { ready: () => boolean }) {
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const [show, setShow] = createSignal(false)
   const text = createMemo(() => (props.ready() ? "Finishing startup..." : "Loading plugins..."))
   let wait: NodeJS.Timeout | undefined
@@ -67,8 +67,8 @@ export function StartupLoading(props: { ready: () => boolean }) {
   return (
     <Show when={show()}>
       <box position="absolute" zIndex={5000} left={0} right={0} bottom={1} justifyContent="center" alignItems="center">
-        <box backgroundColor={themeV2.background.default} paddingLeft={1} paddingRight={1}>
-          <Spinner color={themeV2.text.subdued}>{text()}</Spinner>
+        <box backgroundColor={theme.background.default} paddingLeft={1} paddingRight={1}>
+          <Spinner color={theme.text.subdued}>{text()}</Spinner>
         </box>
       </box>
     </Show>

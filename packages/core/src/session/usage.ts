@@ -4,7 +4,7 @@ import type { Usage } from "@ycoding-ai/ai"
 import type { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { Money } from "@ycoding-ai/schema/money"
 import type { TokenUsage } from "@ycoding-ai/schema/token-usage"
-import type { ModelV2 } from "../model"
+import type { CatalogModel } from "../model"
 
 const safe = (value: number | undefined) => Math.max(0, Number.isFinite(value) ? (value ?? 0) : 0)
 
@@ -84,7 +84,7 @@ export const generationTiming = (
 
 // TODO(#35765): Use Copilot's reported billed amount once billing has a dedicated typed runtime contract.
 export function estimatedCost(
-  costs: ModelV2.Info["cost"],
+  costs: CatalogModel.Info["cost"],
   usage: TokenUsage.Info,
   oneHourWrites?: number,
 ): Money.USD | undefined {
@@ -111,8 +111,8 @@ export function estimatedCost(
 }
 
 export function estimatedCatalogCost(
-  costs: ModelV2.Info["cost"],
-  openRouterCosts: ModelV2.Info["cost"],
+  costs: CatalogModel.Info["cost"],
+  openRouterCosts: CatalogModel.Info["cost"],
   usage: TokenUsage.Info,
 ) {
   const provider = estimatedCost(costs, usage)
@@ -121,13 +121,13 @@ export function estimatedCatalogCost(
   if (openrouter !== undefined) return { cost: openrouter, source: "openrouter" as const }
 }
 
-export function calculateCost(costs: ModelV2.Info["cost"], usage: TokenUsage.Info, oneHourWrites?: number) {
+export function calculateCost(costs: CatalogModel.Info["cost"], usage: TokenUsage.Info, oneHourWrites?: number) {
   return estimatedCost(costs, usage, oneHourWrites) ?? Money.USD.zero
 }
 
 export type Recorded = { readonly tokens: TokenUsage.Info; readonly cost: Money.USD }
 
-export const record = (usage: Usage | undefined, costs: ModelV2.Info["cost"]): Recorded => {
+export const record = (usage: Usage | undefined, costs: CatalogModel.Info["cost"]): Recorded => {
   const normalized = tokens(usage)
   return { tokens: normalized, cost: calculateCost(costs, normalized, oneHourCacheWrites(usage)) }
 }

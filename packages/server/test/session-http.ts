@@ -1,4 +1,4 @@
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { Authorization } from "@ycoding-ai/protocol/middleware/authorization"
@@ -17,7 +17,7 @@ import { processIdentityLayer } from "../src/process-identity"
 export const sessionHttpEpoch = ServiceStatus.Epoch.make("epoch_session_http")
 
 export function sessionHttp(
-  session: Partial<SessionV2.Interface>,
+  session: Partial<Session.Interface>,
   options: {
     orchestration?: Partial<SessionOrchestration.Interface>
     guardrail?: Partial<SessionGuardrail.Interface>
@@ -26,7 +26,7 @@ export function sessionHttp(
 ) {
   const location = Context.makeUnsafe<LocationServices>(new Map())
   const services = Layer.mergeAll(
-    Layer.mock(SessionV2.Service, {
+    Layer.mock(Session.Service, {
       autonomy: { get: () => Effect.die("unused"), set: () => Effect.die("unused") },
       daybreak: { set: () => Effect.die("unused") },
       revert: {

@@ -2,17 +2,17 @@ import { describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import { TestClock } from "effect/testing"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Session } from "@ycoding-ai/core/session"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionProviderRequestTable, SessionTable, SessionUsageTable } from "@ycoding-ai/core/session/sql"
@@ -20,7 +20,7 @@ import { SessionUsageCleanup } from "@ycoding-ai/core/session/usage-cleanup"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { testEffect } from "./lib/effect"
 
-const active = new Set<SessionV2.ID>()
+const active = new Set<Session.ID>()
 const execution = Layer.succeed(
   SessionExecution.Service,
   SessionExecution.Service.of({
@@ -34,7 +34,7 @@ const execution = Layer.succeed(
 )
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionUsageCleanup.node]),
+    LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node, SessionUsageCleanup.node]),
     [[SessionExecution.node, execution]],
   ),
 )
@@ -42,9 +42,9 @@ const it = testEffect(
 const now = 31 * 24 * 60 * 60 * 1000
 const stale = now - 30 * 24 * 60 * 60 * 1000 - 1
 const recent = now - 30 * 24 * 60 * 60 * 1000
-const model = ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") })
+const model = CatalogModel.Ref.make({ id: CatalogModel.ID.make("gpt-5.6"), providerID: Provider.ID.make("openai") })
 
-const insert = (id: SessionV2.ID, timeUpdated = stale) =>
+const insert = (id: Session.ID, timeUpdated = stale) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     yield* db
@@ -64,7 +64,7 @@ const insert = (id: SessionV2.ID, timeUpdated = stale) =>
         id: ProviderRequest.ID.make(`prq_${id}`),
         session_id: id,
         source: "step",
-        agent: AgentV2.ID.make("build"),
+        agent: Agent.ID.make("build"),
         model,
         route_id: "openai-responses",
         prompt_cache_key: "cache-key",
@@ -102,7 +102,7 @@ const insert = (id: SessionV2.ID, timeUpdated = stale) =>
       .pipe(Effect.orDie)
   })
 
-const counts = (sessionID: SessionV2.ID) =>
+const counts = (sessionID: Session.ID) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     return {
@@ -116,9 +116,9 @@ describe("SessionUsageCleanup", () => {
     Effect.gen(function* () {
       // Let the startup cleanup suspend before inserting the retention-boundary fixtures.
       yield* TestClock.adjust(0)
-      const staleID = SessionV2.ID.make("ses_usage_stale")
-      const recentID = SessionV2.ID.make("ses_usage_recent")
-      const activeID = SessionV2.ID.make("ses_usage_active")
+      const staleID = Session.ID.make("ses_usage_stale")
+      const recentID = Session.ID.make("ses_usage_recent")
+      const activeID = Session.ID.make("ses_usage_active")
       yield* insert(staleID)
       yield* insert(recentID, recent)
       yield* insert(activeID)

@@ -5,14 +5,14 @@ import { MCP } from "@ycoding-ai/core/mcp/index"
 import { MCPClient } from "@ycoding-ai/core/mcp/client"
 import { MCPSkills } from "@ycoding-ai/core/mcp/skills"
 import { Effect } from "effect"
-import { skillBody, skillServer, skillsMcpLayer, type Skill } from "./fixture/mcp-skills"
+import { skillBody, skillServer, skillsMcpLayer, type McpSkillFixture } from "./fixture/mcp-skills"
 
 const SKILL_MD = skillBody(
   { name: "git-workflow", description: "Follow this team's Git conventions" },
   "# Git workflow\n\nSee `references/GUIDE.md`.\n",
 )
 
-const skill: Skill = {
+const skill: McpSkillFixture = {
   uri: "skill://git-workflow/SKILL.md",
   frontmatter: { name: "git-workflow", description: "Follow this team's Git conventions" },
   files: [
@@ -21,7 +21,7 @@ const skill: Skill = {
   ],
 }
 
-const other: Skill = {
+const other: McpSkillFixture = {
   uri: "skill://acme/billing/refunds/SKILL.md",
   frontmatter: { name: "refunds", description: "Process refunds" },
   files: [{ name: "SKILL.md", text: skillBody({ name: "refunds", description: "Process refunds" }, "# Refunds\n") }],

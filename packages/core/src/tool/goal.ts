@@ -3,7 +3,7 @@ export * as GoalTool from "./goal"
 import { ToolFailure } from "@ycoding-ai/ai"
 import type { Context as PluginContext } from "@ycoding-ai/plugin/effect/plugin"
 import { Effect, Schema } from "effect"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { SessionAutonomy } from "../session/autonomy"
 import { Tool } from "./tool"
 
@@ -30,7 +30,7 @@ export const Plugin = {
   id: "ycoding.tool.goal",
   effect: Effect.fn("GoalTool.Plugin")(function* (ctx: PluginContext) {
     const autonomy = yield* SessionAutonomy.Service
-    const permission = yield* PermissionV2.Service
+    const permission = yield* Permission.Service
     yield* ctx.tool
       .transform((draft) =>
         draft.add(

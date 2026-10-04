@@ -6,13 +6,13 @@ import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Location } from "@ycoding-ai/core/location"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import type { LocationServices } from "@ycoding-ai/core/location-services"
-import { ProjectV2 } from "@ycoding-ai/core/project"
+import { Project } from "@ycoding-ai/core/project"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { ManifestError, Service as SessionCompactionService } from "@ycoding-ai/core/session/compaction"
 import { SessionCompactionExecution } from "@ycoding-ai/core/session/compaction-execution"
 import { SessionCompactionJob } from "@ycoding-ai/core/session/compaction-job"
@@ -42,10 +42,10 @@ const advisoryTargetMaxInputTokens = Math.floor(
   (10_000 * (compactionPolicy.advisory === false ? 100 : compactionPolicy.advisory.considerPercent)) / 100,
 )
 const projects = Layer.succeed(
-  ProjectV2.Service,
-  ProjectV2.Service.of({
+  Project.Service,
+  Project.Service.of({
     list: () => Effect.succeed([]),
-    resolve: (directory) => Effect.succeed({ id: ProjectV2.ID.global, directory }),
+    resolve: (directory) => Effect.succeed({ id: Project.ID.global, directory }),
     directories: () => Effect.succeed([]),
     recordOpened: () => Effect.void,
     commit: () => Effect.void,
@@ -98,26 +98,26 @@ const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       Database.node,
-      EventV2.node,
+      EventRuntime.node,
       SessionCompactionExecution.node,
       SessionCompactionJob.node,
       SessionProjector.node,
       SessionStore.node,
-      SessionV2.node,
+      Session.node,
     ]),
     [
       [LocationServiceMap.node, integratedLocations],
-      [ProjectV2.node, projects],
+      [Project.node, projects],
       [SessionExecution.node, execution],
     ],
   ),
 )
 
-describe("SessionV2.compact", () => {
+describe("Session.compact", () => {
   it.effect("claims and executes a stale pending job from an earlier process", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const jobs = yield* SessionCompactionJob.Service
       const created = yield* session.create({ location })
 
@@ -173,8 +173,8 @@ describe("SessionV2.compact", () => {
 
   it.effect("reclaims and executes an expired running job from an earlier process", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const jobs = yield* SessionCompactionJob.Service
       const created = yield* session.create({ location })
       const messageID = SessionMessage.ID.create()
@@ -251,8 +251,8 @@ describe("SessionV2.compact", () => {
 
   it.effect("returns only after foreground compaction reaches a terminal status", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const jobs = yield* SessionCompactionJob.Service
       const created = yield* session.create({ location })
       const messageID = SessionMessage.ID.create()
@@ -287,8 +287,8 @@ describe("SessionV2.compact", () => {
 
   it.effect("returns an advisory admission after its background worker starts and before settlement", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const jobs = yield* SessionCompactionJob.Service
       const created = yield* session.create({ location })
       const messageID = SessionMessage.ID.create()
@@ -396,8 +396,8 @@ describe("SessionV2.compact", () => {
 
   it.effect("keeps background compaction alive when its requesting fiber is interrupted", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const jobs = yield* SessionCompactionJob.Service
       const created = yield* session.create({ location })
       const messageID = SessionMessage.ID.create()
@@ -431,8 +431,8 @@ describe("SessionV2.compact", () => {
 
   it.effect("retries a protected-state manifest race without publishing a failed job", () =>
     Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const jobs = yield* SessionCompactionJob.Service
       const created = yield* session.create({ location })
       const messageID = SessionMessage.ID.create()
@@ -470,8 +470,8 @@ describe("SessionV2.compact", () => {
 })
 
 const setupSession = Effect.fnUntraced(function* (name: string) {
-  const session = yield* SessionV2.Service
-  const events = yield* EventV2.Service
+  const session = yield* Session.Service
+  const events = yield* EventRuntime.Service
   const created = yield* session.create({ location })
   const messageID = SessionMessage.ID.make(`msg_${name}`)
   yield* events.publish(SessionEvent.InputAdmitted, {
@@ -491,7 +491,7 @@ const setupSession = Effect.fnUntraced(function* (name: string) {
   return { session, sessionID: created.id, boundary: { messageID, seq: stored.seq } }
 })
 
-const sessionJobIDs = Effect.fnUntraced(function* (sessionID: SessionV2.ID) {
+const sessionJobIDs = Effect.fnUntraced(function* (sessionID: Session.ID) {
   return (yield* (yield* Database.Service).db
     .select({ id: SessionCompactionJobTable.id })
     .from(SessionCompactionJobTable)

@@ -13,7 +13,7 @@ test("publishes a process-global outstanding read with bounded Session IDs and o
   const operation = OpenApi.fromApi(HttpApi.make("session-outstanding-test").add(group)).paths["/api/session/outstanding"]?.get
   expect(endpoint).toBeDefined()
   expect([...endpoint.middlewares]).toHaveLength(0)
-  expect(operation?.operationId).toBe("v2.session.outstanding")
+  expect(operation?.operationId).toBe("session.outstanding")
   expect(operation?.parameters?.map((item) => "$ref" in item ? item.$ref : item.name)).toEqual(["failures"])
   expect(Schema.decodeUnknownSync(SessionOutstandingQuery)({ failures: "true" })).toEqual({ failures: true })
   expect(() => Schema.decodeUnknownSync(SessionOutstandingQuery)({ failures: "yes" })).toThrow()

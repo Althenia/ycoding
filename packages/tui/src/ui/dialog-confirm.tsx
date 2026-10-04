@@ -18,7 +18,7 @@ type DialogConfirmResult = boolean | undefined
 
 export function DialogConfirm(props: DialogConfirmProps) {
   const dialog = useDialog()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const dimensions = useTerminalDimensions()
   const [store, setStore] = createStore({
     active: "confirm" as "confirm" | "cancel",
@@ -64,7 +64,7 @@ export function DialogConfirm(props: DialogConfirmProps) {
         <For each={lines()}>
           {(line) => (
             <box height={2}>
-              <text fg={themeV2.text.subdued}>{line}</text>
+              <text fg={theme.text.subdued}>{line}</text>
             </box>
           )}
         </For>
@@ -86,9 +86,9 @@ export function DialogConfirm(props: DialogConfirmProps) {
                 width={dialogPanelWidth(dimensions().width)}
                 paddingLeft={6}
                 paddingRight={4}
-                backgroundColor={key === store.active ? themeV2.background.action.primary.focused : undefined}
+                backgroundColor={key === store.active ? theme.background.action.primary.focused : undefined}
               >
-                <text fg={key === store.active ? themeV2.text.action.primary.focused : themeV2.text.subdued}>
+                <text fg={key === store.active ? theme.text.action.primary.focused : theme.text.subdued}>
                   {Locale.titlecase(key === "confirm" ? (props.label ?? key) : key)}
                 </text>
               </box>

@@ -4,7 +4,7 @@ import path from "path"
 import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
 import { Schema } from "effect"
 import { AbsolutePath } from "../../schema"
-import { SkillV2 } from "../../skill"
+import { Skill } from "../../skill"
 import { ConfigMarkdown } from "../../config/markdown"
 import type { Adapter } from "./index"
 
@@ -29,7 +29,7 @@ export const adapter: Adapter<ProjectArtifact.SkillDefinition> = {
   globalPath: (global, id) => path.join(global.home, ".agents", "skills", id, "SKILL.md"),
   activate: (version, draft) => {
     draft.skill?.source(
-      SkillV2.DirectorySource.make({
+      Skill.DirectorySource.make({
         type: "directory",
         path: AbsolutePath.make(path.dirname(path.dirname(version.contentPath))),
       }),

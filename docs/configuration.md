@@ -1193,7 +1193,7 @@ The popup shows **Local service address**, **Pairing code**, and **Connect YCodi
 
 Temporary headless browsing is started explicitly from the current Session's **Isolated browser** command, not by enabling a config key. The implementation requires macOS arm64 and installed Google Chrome major 152 or newer in its standard application location. It does not install Chrome, accept an arbitrary executable or debugging endpoint, or reuse a personal profile. Unsupported environments report unavailable; matching the version does not bypass startup capability checks.
 
-The URL must use HTTP or HTTPS without embedded credentials. Stop the paired Chrome bridge before starting isolated mode, or stop isolated mode before creating extension pairing. Browser permissions and Session guardrails still govern model actions. See the [isolated-browser contract](../specs/v2/isolated-browser.md) for temporary-state semantics, restrictions, and environment-specific validation evidence and limits.
+The URL must use HTTP or HTTPS without embedded credentials. Stop the paired Chrome bridge before starting isolated mode, or stop isolated mode before creating extension pairing. Browser permissions and Session guardrails still govern model actions. See the [isolated-browser contract](../specs/isolated-browser.md) for temporary-state semantics, restrictions, and environment-specific validation evidence and limits.
 
 ## Automatic SQLite space reclamation
 

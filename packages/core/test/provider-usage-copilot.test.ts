@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { CopilotUsage } from "@ycoding-ai/core/provider-usage/copilot"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 
-const providerID = ProviderV2.ID.make("github-copilot")
+const providerID = Provider.ID.make("github-copilot")
 const userStatusPath = "/copilot_internal/user"
 const orgsPath = "/user/orgs"
 const summaryPath = (org: string) => `/orgs/${org}/settings/billing/usage/summary`

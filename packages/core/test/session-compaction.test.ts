@@ -2,22 +2,22 @@ import { expect } from "bun:test"
 import { LLM, LLMClient, LLMError, LLMEvent, Message, Model, TransportReason, type LLMRequest } from "@ycoding-ai/ai"
 import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
 import { OpenAIChat, OpenAIResponses } from "@ycoding-ai/ai/protocols"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { llmClient } from "@ycoding-ai/core/effect/app-node-platform"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { EventSequenceTable, EventTable } from "@ycoding-ai/core/event/sql"
 import { Location } from "@ycoding-ai/core/location"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import type { LocationServices } from "@ycoding-ai/core/location-services"
-import { ModelV2 } from "@ycoding-ai/core/model"
+import { CatalogModel } from "@ycoding-ai/core/model"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionCompaction } from "@ycoding-ai/core/session/compaction"
 import { SessionCompactionExecution } from "@ycoding-ai/core/session/compaction-execution"
@@ -47,7 +47,7 @@ import {
   SessionTodoTable,
 } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
-import { SkillV2 } from "@ycoding-ai/core/skill"
+import { Skill } from "@ycoding-ai/core/skill"
 import { Token } from "@ycoding-ai/core/util/token"
 import { ID } from "@ycoding-ai/schema/session-compaction"
 import { Money } from "@ycoding-ai/schema/money"
@@ -143,7 +143,7 @@ const testWithConfig = (compaction = new ConfigCompaction.Info({ keep_recent_mes
     AppNodeBuilder.build(
       LayerNode.group([
         Database.node,
-        EventV2.node,
+        EventRuntime.node,
         SessionProjector.node,
         SessionStore.node,
         SessionProviderRequest.node,
@@ -235,11 +235,11 @@ const insertMessage = Effect.fnUntraced(function* (
   yield* db
     .insert(EventTable)
     .values({
-      id: EventV2.ID.make(`evt_${sessionID}_${seq}`),
+      id: EventRuntime.ID.make(`evt_${sessionID}_${seq}`),
       aggregate_id: sessionID,
       seq,
       created: seq,
-      type: EventV2.versionedType(SessionEvent.InputPromoted.type, SessionEvent.InputPromoted.durable.version),
+      type: EventRuntime.versionedType(SessionEvent.InputPromoted.type, SessionEvent.InputPromoted.durable.version),
       data: { sessionID, inputID: id },
     })
     .run()
@@ -257,8 +257,8 @@ const insertAssistant = Effect.fnUntraced(function* (
     SessionMessage.Assistant.make({
       id,
       type: "assistant",
-      agent: AgentV2.defaultID,
-      model: ModelV2.Ref.make({ id: ModelV2.ID.make("manifest-model"), providerID: ProviderV2.ID.make("test") }),
+      agent: Agent.defaultID,
+      model: CatalogModel.Ref.make({ id: CatalogModel.ID.make("manifest-model"), providerID: Provider.ID.make("test") }),
       content: [SessionMessage.AssistantText.make({ type: "text", text })],
       finish: "stop",
       time: { created: time, completed: time },
@@ -291,8 +291,8 @@ const insertAssistantTool = Effect.fnUntraced(function* (
     SessionMessage.Assistant.make({
       id,
       type: "assistant",
-      agent: AgentV2.defaultID,
-      model: ModelV2.Ref.make({ id: ModelV2.ID.make("manifest-model"), providerID: ProviderV2.ID.make("test") }),
+      agent: Agent.defaultID,
+      model: CatalogModel.Ref.make({ id: CatalogModel.ID.make("manifest-model"), providerID: Provider.ID.make("test") }),
       content: [
         SessionMessage.AssistantText.make({ type: "text", text: "The evidence collection step completed." }),
         SessionMessage.AssistantTool.make({
@@ -341,8 +341,8 @@ const insertSkill = Effect.fnUntraced(function* (
     SessionMessage.Skill.make({
       id,
       type: "skill",
-      skill: SkillV2.ID.make("semantic-state-skill"),
-      name: SkillV2.Name.make("Semantic State Skill"),
+      skill: Skill.ID.make("semantic-state-skill"),
+      name: Skill.Name.make("Semantic State Skill"),
       text,
       conflicts: { skills: [], instructions: [] },
       time: { created: DateTime.makeUnsafe(seq) },
@@ -468,9 +468,9 @@ it.effect("validates a private remote-v2 manifest without placing ciphertext in 
   Effect.gen(function* () {
     const remote = ContextManifest.remote({
       baseContextRevision: 0,
-      coveredThrough: { messageID: SessionMessage.ID.make("msg_remote_boundary"), seq: EventV2.Seq.make(2) },
+      coveredThrough: { messageID: SessionMessage.ID.make("msg_remote_boundary"), seq: EventRuntime.Seq.make(2) },
       protectedState: [],
-      retained: [{ messageID: SessionMessage.ID.make("msg_remote_user"), seq: EventV2.Seq.make(1), digest: "a".repeat(64) }],
+      retained: [{ messageID: SessionMessage.ID.make("msg_remote_user"), seq: EventRuntime.Seq.make(1), digest: "a".repeat(64) }],
       provider: "openai",
       modelID: "gpt-5.5",
       inputTokens: 1200,
@@ -501,9 +501,9 @@ it.effect("atomically activates an opaque Codex checkpoint without exposing its 
     const live = yield* SessionLiveState.captureDatabase(db, sessionID)
     const manifest = ContextManifest.remote({
       baseContextRevision: 0,
-      coveredThrough: { messageID: latest, seq: EventV2.Seq.make(2) },
+      coveredThrough: { messageID: latest, seq: EventRuntime.Seq.make(2) },
       protectedState: SessionLiveState.toProtectedState({ ...live.sources, guardrails: { sequence: 0, digest: ContextManifest.payloadDigest(null) } }),
-      retained: [{ messageID: latest, seq: EventV2.Seq.make(2), digest: ContextManifest.payloadDigest(row.data) }],
+      retained: [{ messageID: latest, seq: EventRuntime.Seq.make(2), digest: ContextManifest.payloadDigest(row.data) }],
       provider: "openai",
       modelID: "gpt-5.5",
       inputTokens: 2000,
@@ -515,9 +515,9 @@ it.effect("atomically activates an opaque Codex checkpoint without exposing its 
     expect(stored).toHaveLength(1)
     expect(stored[0]?.message_id).toBe(SessionMessage.ID.make(`msg_compaction_${ContextManifest.manifestDigest(manifest)}`))
     expect(JSON.stringify(yield* SessionHistory.forModel(db, sessionID))).not.toContain("private-remote-payload")
-    const selected = yield* SessionHistory.forModel(db, sessionID, ModelV2.Ref.make({ providerID: ProviderV2.ID.make("openai"), id: ModelV2.ID.make("gpt-5.5") }))
+    const selected = yield* SessionHistory.forModel(db, sessionID, CatalogModel.Ref.make({ providerID: Provider.ID.make("openai"), id: CatalogModel.ID.make("gpt-5.5") }))
     expect(selected.map((message) => message.id)).toEqual([latest, SessionMessage.ID.make(`msg_compaction_${ContextManifest.manifestDigest(manifest)}`)])
-    const switched = yield* SessionHistory.forModel(db, sessionID, ModelV2.Ref.make({ providerID: ProviderV2.ID.make("openai"), id: ModelV2.ID.make("gpt-5.4") }))
+    const switched = yield* SessionHistory.forModel(db, sessionID, CatalogModel.Ref.make({ providerID: Provider.ID.make("openai"), id: CatalogModel.ID.make("gpt-5.4") }))
     expect(switched.map((message) => message.id)).toEqual([first, latest])
   }),
 )
@@ -566,7 +566,7 @@ it.effect("runs remote-v2 on the owner route despite a different compaction help
     const sequence = yield* db.select({ seq: EventSequenceTable.seq }).from(EventSequenceTable)
       .where(eq(EventSequenceTable.aggregate_id, sessionID)).get()
     yield* insertMessage(sessionID, next, (sequence?.seq ?? 2) + 1, "After checkpoint")
-    const ref = ModelV2.Ref.make({ providerID: ProviderV2.ID.make("openai"), id: ModelV2.ID.make("codex-owner") })
+    const ref = CatalogModel.Ref.make({ providerID: Provider.ID.make("openai"), id: CatalogModel.ID.make("codex-owner") })
     const selected = yield* SessionHistory.forModel(db, sessionID, ref)
     const materialized = yield* (yield* SessionProviderState.Service).materialize({
       sessionID, provider: "openai", modelID: "codex-owner", stateless: true,
@@ -576,7 +576,7 @@ it.effect("runs remote-v2 on the owner route despite a different compaction help
     expect(lowered[0].content).toMatchObject([{ type: "text", text: "Retained user input" }])
     expect(lowered[1].content).toMatchObject([{ type: "reasoning", providerMetadata: { openai: { opaqueCompactionItem: { encrypted_content: "ciphertext" } } } }])
     expect(lowered[2].content).toMatchObject([{ type: "text", text: "After checkpoint" }])
-    const other = ModelV2.Ref.make({ providerID: ProviderV2.ID.make("openai"), id: ModelV2.ID.make("other-model") })
+    const other = CatalogModel.Ref.make({ providerID: Provider.ID.make("openai"), id: CatalogModel.ID.make("other-model") })
     expect(JSON.stringify(toLLMMessages(yield* SessionHistory.forModel(db, sessionID, other), other, "openai", materialized))).not.toContain("ciphertext")
   }),
 )
@@ -704,7 +704,7 @@ const validateGeneratedManifest = Effect.fnUntraced(function* (
         kind: "message",
         messageID: row.id,
         position,
-        terminalSeq: EventV2.Seq.make(row.seq),
+        terminalSeq: EventRuntime.Seq.make(row.seq),
         inputKind: row.type,
         payload: row.data,
         tokens: Token.estimate(JSON.stringify(row.data)),
@@ -1139,7 +1139,7 @@ itWithTotalTimeout.effect("settles timeout fallback through execution and releas
           eq(EventTable.aggregate_id, sessionID),
           eq(
             EventTable.type,
-            EventV2.versionedType(SessionEvent.Compaction.Ended.type, SessionEvent.Compaction.Ended.durable.version),
+            EventRuntime.versionedType(SessionEvent.Compaction.Ended.type, SessionEvent.Compaction.Ended.durable.version),
           ),
         ),
       )
@@ -2012,7 +2012,7 @@ it.effect("leaves canonical message and source-event rows immutable", () =>
     const sessionID = SessionSchema.ID.make("ses_manifest_immutable")
     const firstID = SessionMessage.ID.make("msg_manifest_immutable_first")
     const boundaryID = SessionMessage.ID.make("msg_manifest_immutable_boundary")
-    const eventIDs = [EventV2.ID.make(`evt_${sessionID}_1`), EventV2.ID.make(`evt_${sessionID}_2`)]
+    const eventIDs = [EventRuntime.ID.make(`evt_${sessionID}_1`), EventRuntime.ID.make(`evt_${sessionID}_2`)]
     yield* seedSession(sessionID, 2)
     yield* insertAssistant(sessionID, firstID, 1, "immutable compacted source ".repeat(200))
     yield* insertMessage(sessionID, boundaryID, 2, "retained boundary")

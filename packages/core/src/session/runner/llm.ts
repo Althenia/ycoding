@@ -14,10 +14,10 @@ import { SessionError } from "@ycoding-ai/schema/session-error"
 import { Cause, Clock, Effect, Exit, Fiber, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
-import { EventV2 } from "../../event"
+import { EventRuntime } from "../../event"
 import { EventTable } from "../../event/sql"
-import { PermissionV2 } from "../../permission"
-import { SkillV2 } from "../../skill"
+import { Permission } from "../../permission"
+import { Skill } from "../../skill"
 import { FSUtil } from "../../fs-util"
 import { ProjectArtifactAccounting } from "../../project-artifact/accounting"
 import { ProjectArtifactSource } from "../../project-artifact/source"
@@ -68,7 +68,7 @@ type AttemptState = {
   attempts: number
   continuationFallback?: boolean
   overflowRecovery?: "pending" | "used"
-  skills?: ReadonlyArray<SkillV2.ID>
+  skills?: ReadonlyArray<Skill.ID>
 }
 
 type RecoveryMode = "normal" | "terminal-response" | "provider"
@@ -88,7 +88,7 @@ export const contextObservationBatches = <Value>(values: ReadonlyArray<Value>) =
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const llm = yield* LLMClient.Service
     const store = yield* SessionStore.Service
     const context = yield* SessionContext.Service
@@ -103,15 +103,15 @@ const layer = Layer.effect(
     const providerRequests = yield* SessionProviderRequest.Service
     const continuation = yield* SessionContinuation.Service
     const liveState = yield* SessionLiveState.Service
-    const skills = yield* SkillV2.Service
+    const skills = yield* Skill.Service
     const fs = yield* FSUtil.Service
-    const permission = yield* PermissionV2.Service
+    const permission = yield* Permission.Service
     const accounting = yield* ProjectArtifactAccounting.Service
     const artifactSource = yield* ProjectArtifactSource.Service
     const resolveRequestedSkills = Effect.fn("SessionRunner.resolveRequestedSkills")(function* (
       selected: SessionContext.Selection,
-      ids: ReadonlyArray<SkillV2.ID>,
-      catalog: ReadonlyArray<SkillV2.Info>,
+      ids: ReadonlyArray<Skill.ID>,
+      catalog: ReadonlyArray<Skill.Info>,
     ) {
       return yield* Effect.forEach(ids, (id) =>
         Effect.gen(function* () {
@@ -138,7 +138,7 @@ const layer = Layer.effect(
     })
     const activateSkills = Effect.fn("SessionRunner.activateSkills")(function* (
       selected: SessionContext.Selection,
-      resolved: ReadonlyArray<SkillV2.Info>,
+      resolved: ReadonlyArray<Skill.Info>,
     ) {
       yield* Effect.forEach(
         resolved,
@@ -155,8 +155,8 @@ const layer = Layer.effect(
     })
     const activateRequestedSkills = Effect.fn("SessionRunner.activateRequestedSkills")(function* (
       selected: SessionContext.Selection,
-      ids: ReadonlyArray<SkillV2.ID>,
-      catalog: ReadonlyArray<SkillV2.Info>,
+      ids: ReadonlyArray<Skill.ID>,
+      catalog: ReadonlyArray<Skill.Info>,
     ) {
       yield* activateSkills(selected, yield* resolveRequestedSkills(selected, ids, catalog))
     })
@@ -193,7 +193,7 @@ const layer = Layer.effect(
       cause.reasons.some(
         (reason) =>
           Cause.isDieReason(reason) &&
-          (reason.defect instanceof PermissionV2.DeclinedError || reason.defect instanceof QuestionTool.CancelledError),
+          (reason.defect instanceof Permission.DeclinedError || reason.defect instanceof QuestionTool.CancelledError),
       )
 
     const appendContextObservations = Effect.fn("SessionRunner.appendContextObservations")(function* (
@@ -229,11 +229,11 @@ const layer = Layer.effect(
                 eq(EventTable.aggregate_id, selected.session.id),
                 eq(
                   EventTable.type,
-                  EventV2.versionedType(SessionEvent.ContextObserved.type, SessionEvent.ContextObserved.durable.version),
+                  EventRuntime.versionedType(SessionEvent.ContextObserved.type, SessionEvent.ContextObserved.durable.version),
                 ),
                 inArray(
                   EventTable.id,
-                  batch.map((candidate) => EventV2.ID.make(String(candidate.id).replace(/^msg_/, "evt_"))),
+                  batch.map((candidate) => EventRuntime.ID.make(String(candidate.id).replace(/^msg_/, "evt_"))),
                 ),
               ),
             )
@@ -256,7 +256,7 @@ const layer = Layer.effect(
             eq(EventTable.aggregate_id, selected.session.id),
             eq(
               EventTable.type,
-              EventV2.versionedType(SessionEvent.ContextObserved.type, SessionEvent.ContextObserved.durable.version),
+              EventRuntime.versionedType(SessionEvent.ContextObserved.type, SessionEvent.ContextObserved.durable.version),
             ),
           ),
         )
@@ -264,7 +264,7 @@ const layer = Layer.effect(
         .pipe(Effect.orDie)
       const observedSources = new Set(observed.flatMap((event) => (isContextSource(event.source) ? [event.source] : [])))
       const latest = candidates.toReversed().reduce((result, candidate) => {
-        const eventID = EventV2.ID.make(String(candidate.id).replace(/^msg_/, "evt_"))
+        const eventID = EventRuntime.ID.make(String(candidate.id).replace(/^msg_/, "evt_"))
         if (trusted.has(`${eventID}\0${candidate.source}\0${candidate.text}`) && !result.has(candidate.source))
           result.set(candidate.source, candidate.text)
         return result
@@ -319,7 +319,7 @@ const layer = Layer.effect(
       yield* InstructionState.prepare(db, events, selected.instructions, selected.session.id)
       let currentStep = step
       let promoted = 0
-      const inputSkills = new Map<string, ReadonlyArray<SkillV2.Info>>()
+      const inputSkills = new Map<string, ReadonlyArray<Skill.Info>>()
       const prepareInput = Effect.fn("SessionRunner.prepareInput")(function* (entry: SessionPending.Info) {
         if (entry.type !== "user") return
         const requested = SessionSkill.selected(entry.data.metadata)
@@ -328,7 +328,7 @@ const layer = Layer.effect(
         const ids = [
           ...new Set([
             ...requested,
-            ...SessionSkill.mentions(entry.data.text, catalog).map((skill) => SkillV2.ID.make(skill.id)),
+            ...SessionSkill.mentions(entry.data.text, catalog).map((skill) => Skill.ID.make(skill.id)),
           ]),
         ]
         inputSkills.set(entry.id, yield* resolveRequestedSkills(selected, ids, catalog))
@@ -1192,7 +1192,7 @@ export const node = makeLocationNode({
   service: Service,
   layer,
   deps: [
-    EventV2.node,
+    EventRuntime.node,
     llmClient,
     SessionContext.node,
     SessionLiveState.node,
@@ -1207,9 +1207,9 @@ export const node = makeLocationNode({
     Config.node,
     Snapshot.node,
     Database.node,
-    SkillV2.node,
+    Skill.node,
     FSUtil.node,
-    PermissionV2.node,
+    Permission.node,
     ProjectArtifactAccounting.node,
     ProjectArtifactSource.node,
   ],

@@ -83,7 +83,7 @@ export function SubagentSiblingSwitcher() {
   })
   const siblings = createMemo(() => page()?.data ?? [])
   const parent = createMemo(() => (parentID() ? data.session.get(parentID()!) : undefined))
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const keymap = Keymap.use()
   const dimensions = useTerminalDimensions()
   const items = createMemo(() => {
@@ -121,11 +121,11 @@ export function SubagentSiblingSwitcher() {
         alignItems="flex-start"
         flexShrink={0}
         flexGrow={0}
-        backgroundColor={themeV2.background.surface.offset}
+        backgroundColor={theme.background.surface.offset}
       >
         <Show when={parent()}>
           <box width={layout().parentWidth} height={1} flexShrink={0} onMouseUp={() => keymap.dispatch("session.parent")}>
-            <text fg={themeV2.text.subdued} wrapMode="none" truncate>
+            <text fg={theme.text.subdued} wrapMode="none" truncate>
               ↑ {layout().parentTitle}
             </text>
           </box>
@@ -144,10 +144,10 @@ export function SubagentSiblingSwitcher() {
                 <text
                   fg={
                       isBlocked()
-                        ? themeV2.text.feedback.warning.default
+                        ? theme.text.feedback.warning.default
                         : attached()
-                          ? themeV2.text.feedback.info.default
-                          : themeV2.text.subdued
+                          ? theme.text.feedback.info.default
+                          : theme.text.subdued
                   }
                   wrapMode="none"
                 >
@@ -159,13 +159,13 @@ export function SubagentSiblingSwitcher() {
           </For>
           <Show when={layout().overflow}>
             {(label) => (
-              <text fg={label().startsWith("?") ? themeV2.text.feedback.warning.default : themeV2.text.subdued} wrapMode="none">
+              <text fg={label().startsWith("?") ? theme.text.feedback.warning.default : theme.text.subdued} wrapMode="none">
                 {label()}
               </text>
             )}
           </Show>
         </box>
-        <text fg={themeV2.text.hint} wrapMode="none" flexShrink={0}>
+        <text fg={theme.text.hint} wrapMode="none" flexShrink={0}>
           {layout().right}
         </text>
       </box>

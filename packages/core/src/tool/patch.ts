@@ -9,7 +9,7 @@ import path from "path"
 import { FSUtil } from "../fs-util"
 import { Location } from "../location"
 import { Patch } from "../patch"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import { SessionGuardrail } from "../session/guardrail"
 import { Tool } from "./tool"
 import DESCRIPTION from "./patch.txt"
@@ -70,7 +70,7 @@ export const Plugin = {
   effect: Effect.fn("PatchTool.Plugin")(function* (ctx: PluginContext) {
     const fs = yield* FSUtil.Service
     const location = yield* Location.Service
-    const permission = yield* PermissionV2.Service
+    const permission = yield* Permission.Service
     const guardrail = yield* SessionGuardrail.Service
 
     yield* ctx.tool

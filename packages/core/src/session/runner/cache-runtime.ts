@@ -19,7 +19,7 @@ export interface Interface {
   readonly generation: (input: GenerationInput) => Effect.Effect<number>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionCacheRuntime") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionCacheRuntime") {}
 
 export const layer = Layer.succeed(Service, Service.of({ generation: () => Effect.succeed(0) }))
 

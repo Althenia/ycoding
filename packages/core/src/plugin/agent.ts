@@ -5,11 +5,11 @@ export * as AgentPlugin from "./agent"
 import path from "path"
 import { define } from "@ycoding-ai/plugin/effect/plugin"
 import { Effect, Schema } from "effect"
-import { AgentV2 } from "../agent"
+import { Agent } from "../agent"
 import { ConfigAgent } from "../config/agent"
 import { ConfigMarkdown } from "../config/markdown"
 import { Global } from "../global"
-import { PermissionV2 } from "../permission"
+import { Permission } from "../permission"
 import gsdContent from "./agent/GSD.md" with { type: "text" }
 import architechContent from "./agent/architech.md" with { type: "text" }
 import godContent from "./agent/god.md" with { type: "text" }
@@ -100,7 +100,7 @@ const PROMPT_SUMMARY = `Write a pull-request-style summary of this conversation.
 - If the conversation ends with an unanswered question or imperative request to the user, preserve it verbatim.`
 
 // ── Standardized YCoding project prompt (empirical, shared by primary + subagent) ──
-const YCODING_PROJECT_PROMPT = `YCoding is the terminal-first V2 runtime (Schema → Core/Protocol → Server, durable SessionV2 events, Location-scoped runner).
+const YCODING_PROJECT_PROMPT = `YCoding is the terminal-first runtime (Schema → Core/Protocol → Server, durable Session events, Location-scoped runner).
 
 Follow the user's prompt or inquiry strictly. Do not perform work the user did not request or introduce ideas the user did not ask for. Do not state details without concrete evidence.
 
@@ -141,13 +141,13 @@ export const Plugin = define({
   id: "ycoding.agent",
   effect: Effect.fn(function* (ctx) {
     const whitelistedDirs = [SHELL_OUTPUT_GLOB, path.join(Global.Path.tmp, "*")]
-    const readonlyExternalDirectory: PermissionV2.Ruleset = [
+    const readonlyExternalDirectory: Permission.Ruleset = [
       { action: "external_directory", resource: "*", effect: "ask" },
       ...whitelistedDirs.map(
-        (resource): PermissionV2.Rule => ({ action: "external_directory", resource, effect: "allow" }),
+        (resource): Permission.Rule => ({ action: "external_directory", resource, effect: "allow" }),
       ),
     ]
-    const defaults: PermissionV2.Ruleset = [
+    const defaults: Permission.Ruleset = [
       { action: "*", resource: "*", effect: "allow" },
       ...readonlyExternalDirectory,
       { action: "question", resource: "*", effect: "deny" },
@@ -161,8 +161,8 @@ export const Plugin = define({
 
     yield* ctx.agent.transform((draft) => {
       for (const definition of builtIns()) {
-        draft.update(AgentV2.ID.make(definition.id), (item) => {
-          item.name = AgentV2.Name.make(definition.id)
+        draft.update(Agent.ID.make(definition.id), (item) => {
+          item.name = Agent.Name.make(definition.id)
           item.description = definition.description
           item.mode = definition.mode
           item.request.body = { temperature: definition.temperature }
@@ -171,7 +171,7 @@ export const Plugin = define({
           item.permissions.splice(
             0,
             item.permissions.length,
-            ...PermissionV2.merge(
+            ...Permission.merge(
               defaults,
               definition.mode === "subagent"
                 ? [
@@ -188,13 +188,13 @@ export const Plugin = define({
         })
       }
 
-      draft.update(AgentV2.ID.make("btw"), (item) => {
-        item.name = AgentV2.Name.make("BTW")
+      draft.update(Agent.ID.make("btw"), (item) => {
+        item.name = Agent.Name.make("BTW")
         item.mode = "subagent"
         item.hidden = false
         item.system = PROMPT_BTW
         item.permissions.push(
-          ...PermissionV2.merge(
+          ...Permission.merge(
             defaults,
             [
               { action: "read", resource: "*", effect: "allow" },
@@ -214,36 +214,36 @@ export const Plugin = define({
         )
       })
 
-      draft.update(AgentV2.ID.make("compaction"), (item) => {
-        item.name = AgentV2.Name.make("Compaction")
+      draft.update(Agent.ID.make("compaction"), (item) => {
+        item.name = Agent.Name.make("Compaction")
         item.mode = "primary"
         item.hidden = true
         item.system = PROMPT_COMPACTION
-        item.permissions.push(...PermissionV2.merge(defaults, [{ action: "*", resource: "*", effect: "deny" }]))
+        item.permissions.push(...Permission.merge(defaults, [{ action: "*", resource: "*", effect: "deny" }]))
       })
 
-      draft.update(AgentV2.ID.make("title"), (item) => {
-        item.name = AgentV2.Name.make("Title")
+      draft.update(Agent.ID.make("title"), (item) => {
+        item.name = Agent.Name.make("Title")
         item.mode = "primary"
         item.hidden = true
         item.system = PROMPT_TITLE
-        item.permissions.push(...PermissionV2.merge(defaults, [{ action: "*", resource: "*", effect: "deny" }]))
+        item.permissions.push(...Permission.merge(defaults, [{ action: "*", resource: "*", effect: "deny" }]))
       })
 
-      draft.update(AgentV2.ID.make("goal"), (item) => {
-        item.name = AgentV2.Name.make("Goal")
+      draft.update(Agent.ID.make("goal"), (item) => {
+        item.name = Agent.Name.make("Goal")
         item.mode = "primary"
         item.hidden = true
         item.system = PROMPT_GOAL
-        item.permissions.push(...PermissionV2.merge(defaults, [{ action: "*", resource: "*", effect: "deny" }]))
+        item.permissions.push(...Permission.merge(defaults, [{ action: "*", resource: "*", effect: "deny" }]))
       })
 
-      draft.update(AgentV2.ID.make("summary"), (item) => {
-        item.name = AgentV2.Name.make("Summary")
+      draft.update(Agent.ID.make("summary"), (item) => {
+        item.name = Agent.Name.make("Summary")
         item.mode = "primary"
         item.hidden = true
         item.system = PROMPT_SUMMARY
-        item.permissions.push(...PermissionV2.merge(defaults, [{ action: "*", resource: "*", effect: "deny" }]))
+        item.permissions.push(...Permission.merge(defaults, [{ action: "*", resource: "*", effect: "deny" }]))
       })
     })
   }),

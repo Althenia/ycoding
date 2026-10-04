@@ -3,13 +3,13 @@ export * as ConfigAgentPlugin from "./agent"
 import { define } from "@ycoding-ai/plugin/effect/plugin"
 import path from "path"
 import { Effect, Option, Schema, Stream } from "effect"
-import { AgentV2 } from "../../agent"
+import { Agent } from "../../agent"
 import { Config } from "../../config"
 import { ConfigAgent } from "../agent"
 import { ConfigMarkdown } from "../markdown"
 import { FSUtil } from "../../fs-util"
 import { Global } from "../../global"
-import { PermissionV2 } from "../../permission"
+import { Permission } from "../../permission"
 import type { LocationMutation } from "../../location-mutation"
 import type { ReadTool } from "../../tool/read"
 import type { EditTool } from "../../tool/edit"
@@ -55,14 +55,14 @@ export const Plugin = define({
         global.home,
       )
       const configuredDefault = Config.latest(loaded.documents, "default_agent")
-      if (configuredDefault !== undefined) draft.default(AgentV2.ID.make(configuredDefault))
+      if (configuredDefault !== undefined) draft.default(Agent.ID.make(configuredDefault))
       for (const current of draft.list()) {
         draft.update(current.id, (agent) => agent.permissions.push(...permissions))
       }
 
       for (const document of loaded.documents) {
         for (const [id, item] of Object.entries(document.info.agents ?? {})) {
-          const agentID = AgentV2.ID.make(id)
+          const agentID = Agent.ID.make(id)
           if (item.disabled) {
             draft.remove(agentID)
             continue
@@ -111,7 +111,7 @@ export const Plugin = define({
   }),
 })
 
-function expandPermissions(rules: PermissionV2.Ruleset, home: string): PermissionV2.Ruleset {
+function expandPermissions(rules: Permission.Ruleset, home: string): Permission.Ruleset {
   // Expand only resources tools resolve as filesystem paths. Bash resources are raw shell text:
   // rewriting `$HOME/private/**` would miss `$HOME/private/key`, and safe expansion needs shell-aware parsing.
   return rules.map((rule) =>

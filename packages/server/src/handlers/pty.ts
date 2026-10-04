@@ -2,7 +2,7 @@ import { Pty } from "@ycoding-ai/core/pty"
 import { PtyProtocol } from "@ycoding-ai/core/pty/protocol"
 import { PtyTicket } from "@ycoding-ai/core/pty/ticket"
 import { Location } from "@ycoding-ai/core/location"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { Effect, Queue } from "effect"
 import { NodeHttpServerRequest } from "@effect/platform-node"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
@@ -75,7 +75,7 @@ export const PtyHandler = HttpApiBuilder.group(Api, "server.pty", (handlers) =>
         Effect.fn(function* (ctx) {
           const pty = yield* Pty.Service
           const location = yield* Location.Service
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const owner = yield* sessions.get(ctx.payload.sessionID).pipe(
             Effect.catchTag(
               "Session.NotFoundError",

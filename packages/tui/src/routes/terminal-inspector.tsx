@@ -24,7 +24,7 @@ export function SessionTerminalInspector() {
   const currentLocation = useLocation()
   const clipboard = useClipboard()
   const dimensions = useTerminalDimensions()
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const [state, setState] = createSignal<TerminalInspectorState>()
   const [terminalLocation, setTerminalLocation] = createSignal<SessionInfo["location"]>()
   const [failed, setFailed] = createSignal(false)
@@ -163,7 +163,7 @@ export function SessionTerminalInspector() {
       width={dimensions().width}
       height={dimensions().height}
       flexDirection="column"
-      backgroundColor={themeV2.background.default}
+      backgroundColor={theme.background.default}
     >
       <Show
         when={state()}

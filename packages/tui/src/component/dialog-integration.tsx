@@ -62,7 +62,7 @@ export function connectionSummary(integration: IntegrationInfo) {
 export function DialogIntegration(props: { onConnected?: OnIntegrationConnected; onCustomEndpoint?: () => void; onRunpodEndpoint?: () => void } = {}) {
   const data = useData()
   const dialog = useDialog()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const options = createMemo(() => {
     const integrations = integrationOptions(data.location.integration.list() ?? []).map((integration) => {
       const methods = connectMethods(integration)
@@ -77,7 +77,7 @@ export function DialogIntegration(props: { onConnected?: OnIntegrationConnected;
         categoryView:
           category === "Services" ? (
             <box position="relative" top={-1}>
-              <text fg={themeV2.text.feedback.info.default} attributes={TextAttributes.BOLD}>
+              <text fg={theme.text.feedback.info.default} attributes={TextAttributes.BOLD}>
                 Services
               </text>
             </box>
@@ -112,12 +112,12 @@ export function DialogIntegration(props: { onConnected?: OnIntegrationConnected;
       options={options()}
       emptyView={
         <box paddingLeft={4} paddingRight={4} paddingTop={1}>
-          <text fg={themeV2.text.subdued}>No integrations available</text>
+          <text fg={theme.text.subdued}>No integrations available</text>
         </box>
       }
       noMatchView={
         <box paddingLeft={4} paddingRight={4} paddingTop={1}>
-          <text fg={themeV2.text.subdued}>No integrations found</text>
+          <text fg={theme.text.subdued}>No integrations found</text>
         </box>
       }
     />
@@ -390,16 +390,16 @@ function CommandPending(props: {
 
 function CommandView(props: { title: string; output: string; message: string }) {
   const dialog = useDialog()
-  const { themeV2 } = useTheme().contextual("elevated")
-  const { themeV2: overlayTheme } = useTheme().contextual("overlay")
+  const { theme } = useTheme().contextual("elevated")
+  const { theme: overlayTheme } = useTheme().contextual("overlay")
   onMount(() => dialog.setSize("large"))
   return (
     <box gap={1} paddingBottom={1}>
       <box flexDirection="row" justifyContent="space-between" paddingLeft={2} paddingRight={2}>
-        <text attributes={TextAttributes.BOLD} fg={themeV2.text.default}>
+        <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
           {props.title}
         </text>
-        <text fg={themeV2.text.subdued} onMouseUp={() => dialog.clear()}>
+        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
           esc close
         </text>
       </box>
@@ -413,7 +413,7 @@ function CommandView(props: { title: string; output: string; message: string }) 
         <text fg={overlayTheme.text.default}>{props.output.trim()}</text>
       </box>
       <box paddingLeft={2} paddingRight={2}>
-        <text fg={themeV2.text.subdued}>{props.message}</text>
+        <text fg={theme.text.subdued}>{props.message}</text>
       </box>
     </box>
   )
@@ -429,7 +429,7 @@ function KeyMethod(props: {
   const dialog = useDialog()
   const client = useClient()
   const toast = useToast()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const [error, setError] = createSignal<string>()
 
   return (
@@ -449,7 +449,7 @@ function KeyMethod(props: {
           .catch((cause) => setError(message(cause)))
       }}
       description={() => (
-        <Show when={error()}>{(value) => <text fg={themeV2.text.feedback.error.default}>{value()}</text>}</Show>
+        <Show when={error()}>{(value) => <text fg={theme.text.feedback.error.default}>{value()}</text>}</Show>
       )}
     />
   )
@@ -608,7 +608,7 @@ function OAuthCode(props: {
   const dialog = useDialog()
   const client = useClient()
   const toast = useToast()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const [error, setError] = createSignal<string>()
   let settled = false
 
@@ -642,9 +642,9 @@ function OAuthCode(props: {
       }}
       description={() => (
         <box gap={1}>
-          <text fg={themeV2.text.subdued}>{props.attempt.instructions}</text>
-          <Link href={props.attempt.url} fg={themeV2.markdown.link} />
-          <Show when={error()}>{(value) => <text fg={themeV2.text.feedback.error.default}>{value()}</text>}</Show>
+          <text fg={theme.text.subdued}>{props.attempt.instructions}</text>
+          <Link href={props.attempt.url} fg={theme.markdown.link} />
+          <Show when={error()}>{(value) => <text fg={theme.text.feedback.error.default}>{value()}</text>}</Show>
         </box>
       )}
     />
@@ -653,31 +653,31 @@ function OAuthCode(props: {
 
 function OAuthView(props: { title: string; url?: string; instructions?: string; message: string; copy?: boolean }) {
   const dialog = useDialog()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   return (
     <box paddingLeft={2} paddingRight={2} gap={1} paddingBottom={1}>
       <box flexDirection="row" justifyContent="space-between">
-        <text attributes={TextAttributes.BOLD} fg={themeV2.text.default}>
+        <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
           {props.title}
         </text>
-        <text fg={themeV2.text.subdued} onMouseUp={() => dialog.clear()}>
+        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
           esc
         </text>
       </box>
       <Show when={props.url}>
         {(url) => (
           <box gap={1}>
-            <Link href={url()} fg={themeV2.markdown.link} />
+            <Link href={url()} fg={theme.markdown.link} />
             <Show when={props.instructions}>
-              {(instructions) => <text fg={themeV2.text.subdued}>{instructions()}</text>}
+              {(instructions) => <text fg={theme.text.subdued}>{instructions()}</text>}
             </Show>
           </box>
         )}
       </Show>
-      <text fg={themeV2.text.subdued}>{props.message}</text>
+      <text fg={theme.text.subdued}>{props.message}</text>
       <Show when={props.copy}>
-        <text fg={themeV2.text.default}>
-          c <span style={{ fg: themeV2.text.subdued }}>copy</span>
+        <text fg={theme.text.default}>
+          c <span style={{ fg: theme.text.subdued }}>copy</span>
         </text>
       </Show>
     </box>

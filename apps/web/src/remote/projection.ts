@@ -991,7 +991,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
     case "session.revert.committed":
       return { ...pushNotice(view, "revert", `Revert committed to ${stringField(data.to) ?? "boundary"}`, now),
         generationSpeed: undefined, contextWindow: undefined }
-    case "permission.v2.asked":
+    case "permission.asked":
       return pushRequest(view, {
         kind: "permission",
         id: stringField(data.id) ?? "permission",
@@ -999,7 +999,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         resources: stringList(data.resources),
         askedAt: now,
       })
-    case "permission.v2.replied":
+    case "permission.replied":
       return removeRequest(view, stringField(data.requestID))
     case "guardrail.asked":
       return pushRequest(view, {
@@ -1659,7 +1659,7 @@ export type SessionSnapshot = {
 }
 
 /**
- * Reads `v2.session.snapshot` (`{ sourceEpoch, session, messages, watermark }`).
+ * Reads `session.snapshot` (`{ sourceEpoch, session, messages, watermark }`).
  * A body that is not a session projection is rejected instead of being read as
  * an empty projection, so a wrong response cannot erase the transcript.
  */

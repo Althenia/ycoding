@@ -3,29 +3,29 @@ import { Context, Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { Database } from "@ycoding-ai/core/database/database"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
-import { QuestionV2 } from "@ycoding-ai/core/question"
+import { Question } from "@ycoding-ai/core/question"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { testEffect } from "./lib/effect"
 
 const questions = AppNodeBuilder.build(
-  LayerNode.group([Database.node, EventV2.node, SessionAutonomy.node, QuestionV2.node]),
+  LayerNode.group([Database.node, EventRuntime.node, SessionAutonomy.node, Question.node]),
 )
 const it = testEffect(questions)
 
-const sessionID = SessionV2.ID.make("ses_question_test")
-const question: QuestionV2.Info = {
+const sessionID = Session.ID.make("ses_question_test")
+const question: Question.Info = {
   question: "Which option?",
   header: "Option",
   options: [{ label: "One", description: "First option" }],
 }
 
-const setupAutonomy = Effect.fn("QuestionV2Test.setupAutonomy")(function* (mode: "yolo" | "goal") {
+const setupAutonomy = Effect.fn("QuestionTest.setupAutonomy")(function* (mode: "yolo" | "goal") {
   const { db } = yield* Database.Service
   const directory = AbsolutePath.make("/project")
   yield* db
@@ -51,15 +51,15 @@ const setupAutonomy = Effect.fn("QuestionV2Test.setupAutonomy")(function* (mode:
     : autonomy.setMode({ sessionID, mode })
 })
 
-const waitForAsk = Effect.fn("QuestionV2Test.waitForAsk")(function* (
-  service: QuestionV2.Interface,
-  input: QuestionV2.AskInput,
+const waitForAsk = Effect.fn("QuestionTest.waitForAsk")(function* (
+  service: Question.Interface,
+  input: Question.AskInput,
 ) {
-  const events = yield* EventV2.Service
-  const asked = yield* Deferred.make<QuestionV2.Request>()
+  const events = yield* EventRuntime.Service
+  const asked = yield* Deferred.make<Question.Request>()
   const unsubscribe = yield* events.listen((event) =>
-    event.type === QuestionV2.Event.Asked.type
-      ? Deferred.succeed(asked, event.data as QuestionV2.Request).pipe(Effect.asVoid)
+    event.type === Question.Event.Asked.type
+      ? Deferred.succeed(asked, event.data as Question.Request).pipe(Effect.asVoid)
       : Effect.void,
   )
   yield* Effect.addFinalizer(() => unsubscribe)
@@ -67,11 +67,11 @@ const waitForAsk = Effect.fn("QuestionV2Test.waitForAsk")(function* (
   return { fiber, request: yield* Deferred.await(asked) }
 })
 
-describe("QuestionV2", () => {
+describe("Question", () => {
   it.effect("auto answers questions in yolo and goal mode without pending requests", () =>
     Effect.gen(function* () {
-      const service = yield* QuestionV2.Service
-      const fallback: QuestionV2.Info = { question: "Continue?", header: "Continue", options: [] }
+      const service = yield* Question.Service
+      const fallback: Question.Info = { question: "Continue?", header: "Continue", options: [] }
 
       for (const mode of ["yolo", "goal"] as const) {
         yield* setupAutonomy(mode)
@@ -86,12 +86,12 @@ describe("QuestionV2", () => {
 
   it.effect("publishes lifecycle events and settles a pending reply", () =>
     Effect.gen(function* () {
-      const service = yield* QuestionV2.Service
-      const events = yield* EventV2.Service
-      const published: EventV2.Payload[] = []
+      const service = yield* Question.Service
+      const events = yield* EventRuntime.Service
+      const published: EventRuntime.Payload[] = []
       const unsubscribe = yield* events.listen((event) =>
         Effect.sync(() => {
-          if (event.type.startsWith("question.v2.")) published.push(event)
+          if (event.type.startsWith("question.")) published.push(event)
         }),
       )
       yield* Effect.addFinalizer(() => unsubscribe)
@@ -104,20 +104,20 @@ describe("QuestionV2", () => {
       expect(yield* Fiber.join(fiber)).toEqual([["One"]])
       expect(yield* service.list()).toEqual([])
       expect(published.map((event) => [event.type, event.data])).toEqual([
-        [QuestionV2.Event.Asked.type, request],
-        [QuestionV2.Event.Replied.type, { sessionID, requestID: request.id, answers: [["One"]] }],
+        [Question.Event.Asked.type, request],
+        [Question.Event.Replied.type, { sessionID, requestID: request.id, answers: [["One"]] }],
       ])
     }),
   )
 
   it.effect("publishes rejection, fails the ask, and rejects unknown IDs", () =>
     Effect.gen(function* () {
-      const service = yield* QuestionV2.Service
-      const events = yield* EventV2.Service
-      const published: EventV2.Payload[] = []
+      const service = yield* Question.Service
+      const events = yield* EventRuntime.Service
+      const published: EventRuntime.Payload[] = []
       const unsubscribe = yield* events.listen((event) =>
         Effect.sync(() => {
-          if (event.type === QuestionV2.Event.Rejected.type) published.push(event)
+          if (event.type === Question.Event.Rejected.type) published.push(event)
         }),
       )
       yield* Effect.addFinalizer(() => unsubscribe)
@@ -126,15 +126,15 @@ describe("QuestionV2", () => {
       yield* service.reject(request.id)
       const exit = yield* Fiber.await(fiber)
       expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isFailure(exit)) expect(exit.cause.toString()).toContain("QuestionV2.RejectedError")
+      if (Exit.isFailure(exit)) expect(exit.cause.toString()).toContain("Question.RejectedError")
       expect(published.map((event) => event.data)).toEqual([{ sessionID, requestID: request.id }])
 
-      const unknown = QuestionV2.ID.ascending("que_unknown")
+      const unknown = Question.ID.ascending("que_unknown")
       expect(yield* service.reply({ requestID: unknown, answers: [] }).pipe(Effect.flip)).toEqual(
-        new QuestionV2.NotFoundError({ requestID: unknown }),
+        new Question.NotFoundError({ requestID: unknown }),
       )
       expect(yield* service.reject(unknown).pipe(Effect.flip)).toEqual(
-        new QuestionV2.NotFoundError({ requestID: unknown }),
+        new Question.NotFoundError({ requestID: unknown }),
       )
     }),
   )
@@ -143,21 +143,21 @@ describe("QuestionV2", () => {
     Effect.gen(function* () {
       const firstScope = yield* Scope.make()
       const secondScope = yield* Scope.make()
-      const first = Context.get(yield* Layer.buildWithScope(Layer.fresh(questions), firstScope), QuestionV2.Service)
-      const second = Context.get(yield* Layer.buildWithScope(Layer.fresh(questions), secondScope), QuestionV2.Service)
+      const first = Context.get(yield* Layer.buildWithScope(Layer.fresh(questions), firstScope), Question.Service)
+      const second = Context.get(yield* Layer.buildWithScope(Layer.fresh(questions), secondScope), Question.Service)
       const fiber = yield* first.ask({ sessionID, questions: [question] }).pipe(Effect.forkScoped)
       yield* Effect.yieldNow
       const request = (yield* first.list())[0]!
 
       expect(yield* second.list()).toEqual([])
       expect(yield* second.reply({ requestID: request.id, answers: [["One"]] }).pipe(Effect.flip)).toEqual(
-        new QuestionV2.NotFoundError({ requestID: request.id }),
+        new Question.NotFoundError({ requestID: request.id }),
       )
 
       yield* Scope.close(firstScope, Exit.void)
       const exit = yield* Fiber.await(fiber)
       expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isFailure(exit)) expect(exit.cause.toString()).toContain("QuestionV2.RejectedError")
+      if (Exit.isFailure(exit)) expect(exit.cause.toString()).toContain("Question.RejectedError")
       yield* Scope.close(secondScope, Exit.void)
     }),
   )

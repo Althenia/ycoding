@@ -1,5 +1,5 @@
 import { Effect, Layer, LayerMap } from "effect"
-import { AgentV2 } from "./agent"
+import { Agent } from "./agent"
 import { AISDK } from "./aisdk"
 import { Browser } from "./browser"
 import { BrowserAdmission } from "./browser/admission"
@@ -7,7 +7,7 @@ import { IsolatedBrowserExecutor } from "./browser/isolated-executor"
 import { IsolatedBrowser } from "./isolated-browser"
 import { Catalog } from "./catalog"
 import { Computer } from "./computer"
-import { CommandV2 } from "./command"
+import { Command } from "./command"
 import { Config } from "./config"
 import { LayerNode } from "./effect/layer-node"
 import { Node } from "./effect/app-node"
@@ -27,14 +27,14 @@ import { Policy } from "./policy"
 import { LocationServiceMap } from "./location-service-map"
 import { MCP } from "./mcp/index"
 import { Memory } from "./memory"
-import { PermissionV2 } from "./permission"
-import { PluginV2 } from "./plugin"
+import { Permission } from "./permission"
+import { PluginRegistry } from "./plugin"
 import { PluginSupervisor } from "./plugin/supervisor"
 import { ProjectCopy } from "./project/copy"
-import { ProviderUsageV2 } from "./provider-usage"
+import { ProviderUsageRuntime } from "./provider-usage"
 import { ProjectArtifactSource } from "./project-artifact/source"
 import { Pty } from "./pty"
-import { QuestionV2 } from "./question"
+import { Question } from "./question"
 import { Shell } from "./shell"
 import { Reference } from "./reference"
 import { ReferenceInstructions } from "./reference/instructions"
@@ -53,7 +53,7 @@ import { SessionRunnerModel } from "./session/runner/model"
 import { SessionProviderState } from "./session/provider-state"
 import { SessionTitle } from "./session/title"
 import { SessionTodo } from "./session/todo"
-import { SkillV2 } from "./skill"
+import { Skill } from "./skill"
 import { SkillInstructions } from "./skill/instructions"
 import { Snapshot } from "./snapshot"
 import { McpTool } from "./tool/mcp"
@@ -68,14 +68,14 @@ const locationServiceNodes = [
   Location.node,
   Policy.node,
   Config.node,
-  AgentV2.node,
-  CommandV2.node,
+  Agent.node,
+  Command.node,
   Reference.node,
   Integration.node,
   Catalog.node,
   AISDK.node,
-  PluginV2.node,
-  ProviderUsageV2.node,
+  PluginRegistry.node,
+  ProviderUsageRuntime.node,
   PluginSupervisor.node,
   ProjectCopy.node,
   ProjectCopy.refreshNode,
@@ -83,7 +83,7 @@ const locationServiceNodes = [
   FileSystem.node,
   Pty.node,
   Shell.node,
-  SkillV2.node,
+  Skill.node,
   ProjectArtifactSource.node,
   InstructionBuiltIns.node,
   InstructionDiscovery.node,
@@ -91,7 +91,7 @@ const locationServiceNodes = [
   FileMutation.node,
   MCP.node,
   Memory.node,
-  PermissionV2.node,
+  Permission.node,
   SessionGuardrail.node,
   BrowserAdmission.node,
   IsolatedBrowserExecutor.node,
@@ -106,7 +106,7 @@ const locationServiceNodes = [
   ReferenceInstructions.node,
   InstructionEntry.node,
   Form.node,
-  QuestionV2.node,
+  Question.node,
   Generate.node,
   SessionGenerateNode.node,
   ReadToolFileSystem.node,

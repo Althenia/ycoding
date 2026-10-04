@@ -14,7 +14,7 @@ Do not add a second executable entry type, registry-owned executor, authorizatio
 
 Tool schemas and projection use `input` and `output` terminology. A tool value carries its schemas, executor, projection, and optional catalog permission directly so separately loaded plugin package instances can exchange it structurally.
 
-Location-scoped built-in layers acquire `PermissionV2.Service` and every other required Location service while the layer is constructed. The executor captures those services. Permission sources are always constructed from the canonical invocation context:
+Location-scoped built-in layers acquire `Permission.Service` and every other required Location service while the layer is constructed. The executor captures those services. Permission sources are always constructed from the canonical invocation context:
 
 ```ts
 const source = {
@@ -42,7 +42,7 @@ Registrations are scoped:
 
 ## Permissions
 
-The registry has no `PermissionV2.Service` dependency and performs no execution authorization. An internal built-in-only operation attaches a permission action solely to preserve whole-tool definition filtering; it is not part of public `Tool.make`. Most tools default to their registered name; `edit`, `write`, and `patch` declare the shared `edit` action.
+The registry has no `Permission.Service` dependency and performs no execution authorization. An internal built-in-only operation attaches a permission action solely to preserve whole-tool definition filtering; it is not part of public `Tool.make`. Most tools default to their registered name; `edit`, `write`, and `patch` declare the shared `edit` action.
 
 Definition filtering is catalog visibility, not execution authorization. A call still executes the captured leaf policy if it reaches settlement.
 

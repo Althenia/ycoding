@@ -3,13 +3,13 @@ import { Browser } from "@ycoding-ai/core/browser"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Location } from "@ycoding-ai/core/location"
 import { Money } from "@ycoding-ai/schema/money"
-import { ProjectV2 } from "@ycoding-ai/core/project"
+import { Project } from "@ycoding-ai/core/project"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { BrowserProtocol } from "@ycoding-ai/core/browser/protocol"
 import { BrowserAdmission } from "@ycoding-ai/core/browser/admission"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { Cause, DateTime, Effect, Exit, Fiber, Layer, PubSub, Queue, Schema, Scope, Stream } from "effect"
 import { location } from "../fixture/location"
@@ -21,14 +21,14 @@ const otherSessionID = SessionSchema.ID.make("ses_browser_other")
 const foreignSessionID = SessionSchema.ID.make("ses_browser_foreign")
 const extensionID = "a".repeat(32)
 const credentials = new Map<Credential.ID, Credential.Info>()
-const lifecycleEvents = Effect.runSync(PubSub.unbounded<EventV2.Payload>())
-const eventLayer = Layer.mock(EventV2.Service, { subscribe: () => Stream.fromPubSub(lifecycleEvents) })
+const lifecycleEvents = Effect.runSync(PubSub.unbounded<EventRuntime.Payload>())
+const eventLayer = Layer.mock(EventRuntime.Service, { subscribe: () => Stream.fromPubSub(lifecycleEvents) })
 
 const lifecycleEvent = (
   definition: typeof SessionEvent.Moved | typeof SessionEvent.Deleted | typeof SessionEvent.Archived,
 ) =>
   Schema.decodeUnknownSync(definition)({
-    id: EventV2.ID.create(),
+    id: EventRuntime.ID.create(),
     created: 1,
     type: definition.type,
     durable: {
@@ -42,7 +42,7 @@ const lifecycleEvent = (
 const session = (id: SessionSchema.ID, sessionDirectory = directory, archived = false) =>
   SessionSchema.Info.make({
     id,
-    projectID: ProjectV2.ID.global,
+    projectID: Project.ID.global,
     cost: Money.USD.zero,
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     time: {
@@ -1061,7 +1061,7 @@ const executionEvent = (
   target = sessionID,
 ) =>
   Schema.decodeUnknownSync(definition)({
-    id: EventV2.ID.create(),
+    id: EventRuntime.ID.create(),
     created: 1,
     type: definition.type,
     durable: { aggregateID: target, seq: 0, version: definition.durable.version },

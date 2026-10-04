@@ -42,10 +42,12 @@ test("supports keyboard-driven catalog/provider selection, model editing, and su
   )
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes("openai-models"))
-  await Bun.sleep(30)
+  await app.waitFor(() => app.renderer.currentFocusedEditor instanceof InputRenderable)
   await app.mockInput.typeText("https://api.example.test/v1")
+  const urlInput = app.renderer.currentFocusedEditor
   app.mockInput.pressKey("n", { ctrl: true })
-  await Bun.sleep(10)
+  await app.waitForFrame((frame) => frame.includes("Model ID"))
+  await app.waitFor(() => app.renderer.currentFocusedEditor instanceof InputRenderable && app.renderer.currentFocusedEditor !== urlInput)
   expect(app.captureCharFrame()).toContain("Model ID")
   await app.mockInput.typeText("model-one")
   app.mockInput.pressKey("TAB")
@@ -55,13 +57,14 @@ test("supports keyboard-driven catalog/provider selection, model editing, and su
   app.mockInput.pressKey("TAB")
   await app.mockInput.typeText("responses")
   app.mockInput.pressKey("d", { ctrl: true })
+  const firstModelInput = app.renderer.currentFocusedEditor
   app.mockInput.pressKey("n", { ctrl: true })
-  await Bun.sleep(10)
+  await app.waitFor(() => app.renderer.currentFocusedEditor instanceof InputRenderable && app.renderer.currentFocusedEditor !== firstModelInput)
   await app.mockInput.typeText("model-two")
   app.mockInput.pressKey("o", { ctrl: true })
   app.mockInput.pressKey("p", { ctrl: true })
   app.mockInput.pressKey("s", { ctrl: true })
-  await Bun.sleep(10)
+  await app.waitFor(() => submitted !== undefined)
   expect(submitted).toEqual({
     baseURL: "https://api.example.test/v1",
     api: "chat",
@@ -300,6 +303,11 @@ test("endpoint choices and actions stay readable in dark and light themes", asyn
     try {
       app.renderer.start()
       await app.waitForFrame((frame) => frame.includes("Save endpoint"))
+      if (mode === "light" && kind === "runpod") {
+        const selected = app.captureSpans().lines.flatMap((line) => line.spans).find((item) => item.text.includes("vllm"))
+        expect(selected?.bg.toInts()).toEqual([59, 125, 216, 255])
+        expect(selected?.fg.toInts()).toEqual([0, 0, 0, 255])
+      }
       for (const label of [...(kind === "runpod" ? ["vllm", "ollama"] : ["none", "openai-models", "Chat", "Responses"]), "+ Add model", "Save endpoint"]) {
         const span = app.captureSpans().lines.flatMap((line) => line.spans).find((item) => item.text.includes(label))
         expect(span, `${mode}/${kind}: ${label} must render`).toBeDefined()

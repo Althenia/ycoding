@@ -6,7 +6,7 @@ import { AppProcess } from "@ycoding-ai/core/process"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Config } from "@ycoding-ai/core/config"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Global } from "@ycoding-ai/core/global"
 import { Location } from "@ycoding-ai/core/location"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
@@ -38,7 +38,7 @@ const it = testEffect(
     LayerNode.group([
       AppProcess.node,
       Config.node,
-      EventV2.node,
+      EventRuntime.node,
       Global.node,
       Location.node,
       ShellSandbox.node,
@@ -61,7 +61,7 @@ const posixIt = process.platform === "win32" ? it.live.skip : it.live
 
 posixIt("publishes shell.created before shell.exited for commands that finish immediately", () =>
   Effect.gen(function* () {
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const shell = yield* Shell.Service
     const seen: string[] = []
     yield* events.listen((event) =>

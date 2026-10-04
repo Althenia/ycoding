@@ -13,10 +13,12 @@ sources:
 - id: guardrail-ops
   resource: repo:///docs/guardrails-and-provider-usage.md
 - id: spec-v2
-  resource: repo:///specs/v2/provider-usage.md
+  resource: repo:///specs/provider-usage.md
 - id: runtime-doc
   resource: repo:///docs/runtime.md
 ---
+
+
 
 ## Snapshot Contract
 
@@ -52,5 +54,5 @@ Unreported steps, reasoning, cache reads, token totals, and report costs render 
 - [Session Execution and Autonomy](./session.md)
 - [Package Architecture](./architecture.md)
 
-[^spec-v2]: repo:///specs/v2/provider-usage.md
+[^spec-v2]: repo:///specs/provider-usage.md
 [^guardrail-ops]: repo:///docs/guardrails-and-provider-usage.md

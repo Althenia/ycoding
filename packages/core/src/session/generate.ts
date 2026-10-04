@@ -18,4 +18,4 @@ export interface Interface {
 }
 
 /** Location-scoped transient generation from Session context. */
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionGenerate") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionGenerate") {}

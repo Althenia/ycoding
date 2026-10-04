@@ -3,10 +3,10 @@ export * as SessionTitle from "./title"
 import { LLM, LLMClient, LLMError, LLMEvent, LLMRequest, Message } from "@ycoding-ai/ai"
 import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
 import { Context, Effect, Layer, Stream } from "effect"
-import { AgentV2 } from "../agent"
+import { Agent } from "../agent"
 import { Config } from "../config"
 import { Database } from "../database/database"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { makeLocationNode } from "../effect/app-node"
 import { llmClient } from "../effect/app-node-platform"
 import { Money } from "@ycoding-ai/schema/money"
@@ -23,11 +23,11 @@ const MAX_LENGTH = 100
 
 type Dependencies = {
   readonly headers?: SessionModelHeaders.Options
-  readonly events: EventV2.Interface
+  readonly events: EventRuntime.Interface
   readonly llm: {
     readonly stream: (request: LLMRequest) => Stream.Stream<LLMEvent, LLMError>
   }
-  readonly agents: AgentV2.Interface
+  readonly agents: Agent.Interface
   readonly config: Config.Interface
   readonly helpers: SessionHelperPolicy.Interface
   readonly requests: SessionProviderRequest.Interface
@@ -38,7 +38,7 @@ export interface Interface {
   readonly generateForFirstPrompt: (session: SessionSchema.Info) => Effect.Effect<void>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionTitle") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionTitle") {}
 
 const truncate = (value: string) => (value.length <= MAX_LENGTH ? value : `${value.slice(0, MAX_LENGTH - 3)}...`)
 
@@ -59,7 +59,7 @@ const make = (dependencies: Dependencies) => {
       })
       return
     }
-    const agent = yield* dependencies.agents.get(AgentV2.ID.make("title"))
+    const agent = yield* dependencies.agents.get(Agent.ID.make("title"))
     if (!agent) {
       yield* dependencies.events.publish(SessionEvent.Renamed, {
         sessionID: session.id,
@@ -203,9 +203,9 @@ export const layer = (options?: SessionModelHeaders.Options) =>
   Layer.effect(
     Service,
     Effect.gen(function* () {
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const llm = yield* LLMClient.Service
-      const agents = yield* AgentV2.Service
+      const agents = yield* Agent.Service
       const config = yield* Config.Service
       const helpers = yield* SessionHelperPolicy.Service
       const requests = yield* SessionProviderRequest.Service
@@ -222,9 +222,9 @@ export function configured(options?: SessionModelHeaders.Options) {
     service: Service,
     layer: layer(options),
     deps: [
-      EventV2.node,
+      EventRuntime.node,
       llmClient,
-      AgentV2.node,
+      Agent.node,
       Config.node,
       SessionHelperPolicy.node,
       SessionProviderRequest.node,

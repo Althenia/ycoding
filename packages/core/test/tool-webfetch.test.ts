@@ -5,8 +5,8 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { LayerNodePlatform } from "@ycoding-ai/core/effect/app-node-platform"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Permission } from "@ycoding-ai/core/permission"
+import { Session } from "@ycoding-ai/core/session"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { WebFetchTool } from "@ycoding-ai/core/tool/webfetch"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
@@ -19,12 +19,12 @@ import { toolIdentity, executeTool, registerToolPlugin, settleTool, toolDefiniti
 const webFetchToolNode = makeLocationNode({
   name: "test/webfetch-tool-plugin",
   layer: Layer.effectDiscard(registerToolPlugin(WebFetchTool.Plugin)),
-  deps: [ToolRegistry.toolsNode, PermissionV2.node, LayerNodePlatform.httpClient],
+  deps: [ToolRegistry.toolsNode, Permission.node, LayerNodePlatform.httpClient],
 })
 
-const sessionID = SessionV2.ID.make("ses_webfetch_test")
+const sessionID = Session.ID.make("ses_webfetch_test")
 const requests: Array<{ readonly url: string; readonly headers: Record<string, string> }> = []
-const assertions: PermissionV2.AssertInput[] = []
+const assertions: Permission.AssertInput[] = []
 let blockedURL: string | undefined
 let respond = (_request: HttpClientRequest.HttpClientRequest) =>
   Effect.succeed(new Response("hello", { headers: { "content-type": "text/plain" } }))
@@ -39,15 +39,15 @@ const http = Layer.succeed(
   ),
 )
 const permission = Layer.succeed(
-  PermissionV2.Service,
-  PermissionV2.Service.of({
-    evaluateEffective: () => Effect.die(new Error("unused PermissionV2.evaluateEffective")),
+  Permission.Service,
+  Permission.Service.of({
+    evaluateEffective: () => Effect.die(new Error("unused Permission.evaluateEffective")),
     assert: (input) =>
       Effect.sync(() => assertions.push(input)).pipe(
         Effect.andThen(
           input.resources.includes(blockedURL ?? "")
             ? Effect.fail(
-                new PermissionV2.BlockedError({ rules: [], permission: input.action, resources: input.resources }),
+                new Permission.BlockedError({ rules: [], permission: input.action, resources: input.resources }),
               )
             : Effect.void,
         ),
@@ -61,7 +61,7 @@ const permission = Layer.succeed(
 )
 const toolLayer = (replacements: LayerNode.Replacements = []) =>
   AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, webFetchToolNode]), [
-    [PermissionV2.node, permission],
+    [Permission.node, permission],
     [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
     [Image.node, imagePassthrough],
     ...replacements,

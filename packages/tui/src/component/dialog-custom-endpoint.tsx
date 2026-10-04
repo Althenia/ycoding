@@ -56,11 +56,9 @@ export function DialogCustomEndpoint(props: {
   onCancel?: () => void
 }) {
   const dialog = useDialog()
-  const theme = useTheme()
-  const { themeV2 } = theme.contextual("elevated")
-  const selectedBackground = () => theme.mode() === "light"
-    ? themeV2.hue.interactive[900]
-    : themeV2.background.action.primary.focused
+  const themeContext = useTheme()
+  const { theme } = themeContext.contextual("elevated")
+  const selectedBackground = () => theme.background.action.primary.focused
   const [baseURL, setBaseURL] = createSignal("")
   const [api, setApi] = createSignal<"chat" | "responses">("chat")
   const [worker, setWorker] = createSignal<"ollama" | "vllm">("vllm")
@@ -285,7 +283,7 @@ export function DialogCustomEndpoint(props: {
       <DialogHeader title={<DialogTitle>{props.kind === "runpod" ? "Runpod Serverless Endpoint" : "Custom OpenAI-Compatible Endpoint"}</DialogTitle>} />
       <box flexDirection="column" paddingTop={1} paddingLeft={6} paddingRight={4}>
         <box flexDirection="column">
-          <text fg={themeV2.text.default} attributes={TextAttributes.BOLD}>
+          <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
             Endpoint URL
           </text>
           <input
@@ -300,45 +298,45 @@ export function DialogCustomEndpoint(props: {
             onKeyDown={handleInputKeyDown}
             onMouseDown={() => focusField(baseURLInput)}
             placeholder={props.kind === "runpod" ? "https://api.runpod.ai/v2/ENDPOINT_ID" : "https://api.example.com/v1"}
-            placeholderColor={themeV2.text.subdued}
-            textColor={themeV2.text.formfield.default}
-            focusedTextColor={themeV2.text.formfield.default}
-            cursorColor={themeV2.text.formfield.default}
+            placeholderColor={theme.text.subdued}
+            textColor={theme.text.formfield.default}
+            focusedTextColor={theme.text.formfield.default}
+            cursorColor={theme.text.formfield.default}
             onSubmit={submit}
           />
           <Show when={error()}>
-            <text fg={themeV2.text.feedback.error.default}>{error()}</text>
+            <text fg={theme.text.feedback.error.default}>{error()}</text>
           </Show>
           <Show when={validURL()}>
-            <text fg={themeV2.text.feedback.success.default}>Valid endpoint URL</text>
+            <text fg={theme.text.feedback.success.default}>Valid endpoint URL</text>
           </Show>
         </box>
 
         <Show when={props.kind === "runpod"}>
           <box flexDirection="column" paddingTop={1}>
-            <text fg={themeV2.text.default} attributes={TextAttributes.BOLD}>Worker</text>
+            <text fg={theme.text.default} attributes={TextAttributes.BOLD}>Worker</text>
             <box flexDirection="row" gap={1}>
               {(["vllm", "ollama"] as const).map((type) => (
                 <box paddingX={1} backgroundColor={worker() === type ? selectedBackground() : undefined} onMouseUp={() => setWorker(type)}>
-                  <text fg={worker() === type ? themeV2.text.action.primary.focused : themeV2.text.default} bg={worker() === type ? selectedBackground() : undefined}>{type}</text>
+                  <text fg={worker() === type ? theme.text.action.primary.focused : theme.text.default} bg={worker() === type ? selectedBackground() : undefined}>{type}</text>
                 </box>
               ))}
             </box>
           </box>
         </Show>
         <Show when={props.kind !== "runpod"}><box flexDirection="column" paddingTop={1}>
-          <text fg={themeV2.text.default} attributes={TextAttributes.BOLD}>Catalog source</text>
+          <text fg={theme.text.default} attributes={TextAttributes.BOLD}>Catalog source</text>
           <box flexDirection="row" gap={1}>
             {(["none", "openai-models"] as const).map((source) => (
               <box paddingX={1} onMouseUp={() => setCatalog(source)} backgroundColor={catalog() === source ? selectedBackground() : RGBA.fromInts(0, 0, 0, 0)}>
-                <text fg={catalog() === source ? themeV2.text.action.primary.focused : themeV2.text.default} bg={catalog() === source ? selectedBackground() : undefined}>{source}</text>
+                <text fg={catalog() === source ? theme.text.action.primary.focused : theme.text.default} bg={catalog() === source ? selectedBackground() : undefined}>{source}</text>
               </box>
             ))}
           </box>
         </box></Show>
 
         <box flexDirection="column" paddingTop={1}>
-          <text fg={themeV2.text.default} attributes={TextAttributes.BOLD}>Models</text>
+          <text fg={theme.text.default} attributes={TextAttributes.BOLD}>Models</text>
           <Index each={models()}>
             {(model, index) => (
             <box flexDirection="column">
@@ -349,57 +347,57 @@ export function DialogCustomEndpoint(props: {
                 onKeyDown={(event) => handleInputKeyDown(event, index)}
                 onMouseDown={() => focusField(modelInputs[index]?.id)}
                 placeholder="Model ID"
-                placeholderColor={themeV2.text.subdued}
-                textColor={themeV2.text.formfield.default}
-                focusedTextColor={themeV2.text.formfield.default}
-                cursorColor={themeV2.text.formfield.default}
+                placeholderColor={theme.text.subdued}
+                textColor={theme.text.formfield.default}
+                focusedTextColor={theme.text.formfield.default}
+                cursorColor={theme.text.formfield.default}
               />
             <input ref={(value: InputRenderable) => { modelInputs[index]!.name = value }} value={model().name}
               onInput={(value) => setModels((current) => current.map((item, i) => i === index ? { ...item, name: value } : item))}
-              onKeyDown={(event) => handleInputKeyDown(event, index)} onMouseDown={() => focusField(modelInputs[index]?.name)} placeholder="Name (optional)" placeholderColor={themeV2.text.subdued}
-              textColor={themeV2.text.formfield.default} focusedTextColor={themeV2.text.formfield.default} cursorColor={themeV2.text.formfield.default} />
+              onKeyDown={(event) => handleInputKeyDown(event, index)} onMouseDown={() => focusField(modelInputs[index]?.name)} placeholder="Name (optional)" placeholderColor={theme.text.subdued}
+              textColor={theme.text.formfield.default} focusedTextColor={theme.text.formfield.default} cursorColor={theme.text.formfield.default} />
             <input ref={(value: InputRenderable) => { modelInputs[index]!.family = value }} value={model().family}
               onInput={(value) => setModels((current) => current.map((item, i) => i === index ? { ...item, family: value } : item))}
-              onKeyDown={(event) => handleInputKeyDown(event, index)} onMouseDown={() => focusField(modelInputs[index]?.family)} placeholder="Family (optional)" placeholderColor={themeV2.text.subdued}
-              textColor={themeV2.text.formfield.default} focusedTextColor={themeV2.text.formfield.default} cursorColor={themeV2.text.formfield.default} />
+              onKeyDown={(event) => handleInputKeyDown(event, index)} onMouseDown={() => focusField(modelInputs[index]?.family)} placeholder="Family (optional)" placeholderColor={theme.text.subdued}
+              textColor={theme.text.formfield.default} focusedTextColor={theme.text.formfield.default} cursorColor={theme.text.formfield.default} />
             <Show when={props.kind !== "runpod"}><input ref={(value: InputRenderable) => { modelInputs[index]!.api = value }} value={model().api}
               onInput={(value) => setModels((current) => current.map((item, i) => i === index ? { ...item, api: value } : item))}
-              onKeyDown={(event) => handleInputKeyDown(event, index)} onMouseDown={() => focusField(modelInputs[index]?.api)} placeholder="API type (chat/responses, optional)" placeholderColor={themeV2.text.subdued}
-              textColor={themeV2.text.formfield.default} focusedTextColor={themeV2.text.formfield.default} cursorColor={themeV2.text.formfield.default} /></Show>
-            <text fg={themeV2.text.default} onMouseUp={() => setModels((current) => current.map((item, i) => i === index ? { ...item, disabled: item.disabled === undefined ? true : !item.disabled } : item))}>
+              onKeyDown={(event) => handleInputKeyDown(event, index)} onMouseDown={() => focusField(modelInputs[index]?.api)} placeholder="API type (chat/responses, optional)" placeholderColor={theme.text.subdued}
+              textColor={theme.text.formfield.default} focusedTextColor={theme.text.formfield.default} cursorColor={theme.text.formfield.default} /></Show>
+            <text fg={theme.text.default} onMouseUp={() => setModels((current) => current.map((item, i) => i === index ? { ...item, disabled: item.disabled === undefined ? true : !item.disabled } : item))}>
               Disabled: {model().disabled ? "yes" : "no"} · Ctrl+D
             </text>
-            <Show when={props.kind === "runpod"}><text fg={themeV2.text.default} onMouseUp={() => setModels((current) => current.map((item, i) => i === index ? { ...item, tools: !item.tools } : item))}>
+            <Show when={props.kind === "runpod"}><text fg={theme.text.default} onMouseUp={() => setModels((current) => current.map((item, i) => i === index ? { ...item, tools: !item.tools } : item))}>
               Tool calling: {model().tools ? "yes" : "no"} · Ctrl+T
             </text></Show>
-            <text fg={themeV2.text.default} onMouseUp={() => setModels((current) => current.filter((_, i) => i !== index))}>Remove model ×</text>
+            <text fg={theme.text.default} onMouseUp={() => setModels((current) => current.filter((_, i) => i !== index))}>Remove model ×</text>
             </box>
             )}
           </Index>
           <box onMouseUp={addModel}>
-            <text fg={themeV2.text.default}>+ Add model · Ctrl+N</text>
+            <text fg={theme.text.default}>+ Add model · Ctrl+N</text>
           </box>
         </box>
 
         <box flexDirection="column" paddingTop={1}>
-          <text fg={themeV2.text.default} attributes={TextAttributes.BOLD}>Credential profile</text>
-          <input ref={(value: InputRenderable) => { profileInput = value }} value={profile()} onInput={setProfile} onKeyDown={handleInputKeyDown} onMouseDown={() => focusField(profileInput)} placeholder="Profile name" placeholderColor={themeV2.text.subdued} textColor={themeV2.text.formfield.default} focusedTextColor={themeV2.text.formfield.default} cursorColor={themeV2.text.formfield.default} />
+          <text fg={theme.text.default} attributes={TextAttributes.BOLD}>Credential profile</text>
+          <input ref={(value: InputRenderable) => { profileInput = value }} value={profile()} onInput={setProfile} onKeyDown={handleInputKeyDown} onMouseDown={() => focusField(profileInput)} placeholder="Profile name" placeholderColor={theme.text.subdued} textColor={theme.text.formfield.default} focusedTextColor={theme.text.formfield.default} cursorColor={theme.text.formfield.default} />
           <Show when={(props.providerOptions?.find((option) => option.id === provider())?.profiles?.length ?? 0) > 0}>
             <box flexDirection="column">
               {props.providerOptions?.find((option) => option.id === provider())?.profiles?.slice(0, 3).map((item) => (
-                <text fg={themeV2.text.default} onMouseUp={() => { setCredentialID(item.id); setProfile(item.label) }}>
+                <text fg={theme.text.default} onMouseUp={() => { setCredentialID(item.id); setProfile(item.label) }}>
                   {Locale.truncateWidth(item.label.replace(/[\x00-\x1f\x7f]/g, " "), 28)}{item.active ? " (active)" : ""}
                 </text>
               ))}
               <Show when={(props.providerOptions?.find((option) => option.id === provider())?.profiles?.length ?? 0) > 3}>
-                <text fg={themeV2.text.subdued}>Manage other profiles via /connect</text>
+                <text fg={theme.text.subdued}>Manage other profiles via /connect</text>
               </Show>
             </box>
           </Show>
         </box>
 
         <Show when={props.kind !== "runpod"}><box flexDirection="column" paddingTop={1}>
-          <text fg={themeV2.text.default} attributes={TextAttributes.BOLD}>
+          <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
             API Type
           </text>
           <box flexDirection="row" gap={1}>
@@ -415,8 +413,8 @@ export function DialogCustomEndpoint(props: {
               <text
                 fg={
                   api() === "chat"
-                    ? themeV2.text.action.primary.focused
-                    : themeV2.text.default
+                    ? theme.text.action.primary.focused
+                    : theme.text.default
                 }
                 bg={api() === "chat" ? selectedBackground() : undefined}
                 attributes={api() === "chat" ? TextAttributes.BOLD : undefined}
@@ -436,8 +434,8 @@ export function DialogCustomEndpoint(props: {
               <text
                 fg={
                   api() === "responses"
-                    ? themeV2.text.action.primary.focused
-                    : themeV2.text.default
+                    ? theme.text.action.primary.focused
+                    : theme.text.default
                 }
                 bg={api() === "responses" ? selectedBackground() : undefined}
                 attributes={api() === "responses" ? TextAttributes.BOLD : undefined}
@@ -449,7 +447,7 @@ export function DialogCustomEndpoint(props: {
         </box></Show>
 
         <box flexDirection="column" paddingTop={1}>
-          <text fg={themeV2.text.default} attributes={TextAttributes.BOLD}>
+          <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
             {props.kind === "runpod" ? "Endpoint name (provider ID)" : "Provider (optional)"}
           </text>
           <input
@@ -459,30 +457,30 @@ export function DialogCustomEndpoint(props: {
             onKeyDown={handleInputKeyDown}
             onMouseDown={() => focusField(providerInput)}
             placeholder={props.kind === "runpod" ? "e.g., runpod-coder" : "e.g., openai"}
-            placeholderColor={themeV2.text.subdued}
-            textColor={themeV2.text.formfield.default}
-            focusedTextColor={themeV2.text.formfield.default}
-            cursorColor={themeV2.text.formfield.default}
+            placeholderColor={theme.text.subdued}
+            textColor={theme.text.formfield.default}
+            focusedTextColor={theme.text.formfield.default}
+            cursorColor={theme.text.formfield.default}
           />
           <Show when={(props.providerOptions?.length ?? 0) > 0}>
             <box flexDirection="column">
               {props.providerOptions?.slice(0, 3).map((option) => (
                 <text
-                  fg={themeV2.text.default}
+                  fg={theme.text.default}
                   onMouseUp={() => setProvider(option.id)}
                 >
                   {Locale.truncateWidth((option.name ?? option.id).replace(/[\x00-\x1f\x7f]/g, " "), 28)}
                 </text>
               ))}
               <Show when={(props.providerOptions?.length ?? 0) > 3}>
-                <text fg={themeV2.text.subdued}>Ctrl+P cycles all providers</text>
+                <text fg={theme.text.subdued}>Ctrl+P cycles all providers</text>
               </Show>
             </box>
           </Show>
         </box>
 
         <box flexDirection="column" paddingTop={1}>
-          <text fg={themeV2.text.default} attributes={TextAttributes.BOLD}>
+          <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
             API Key (optional)
           </text>
           <input
@@ -492,16 +490,16 @@ export function DialogCustomEndpoint(props: {
             onKeyDown={handleInputKeyDown}
             onMouseDown={() => focusField(apiKeyInput)}
             placeholder="sk-..."
-            placeholderColor={themeV2.text.subdued}
-            textColor={themeV2.text.formfield.default}
-            focusedTextColor={themeV2.text.formfield.default}
-            cursorColor={themeV2.text.formfield.default}
+            placeholderColor={theme.text.subdued}
+            textColor={theme.text.formfield.default}
+            focusedTextColor={theme.text.formfield.default}
+            cursorColor={theme.text.formfield.default}
           />
         </box>
       </box>
       <box paddingTop={2} paddingLeft={6} paddingRight={4}>
-        <text fg={themeV2.text.default} onMouseUp={submit}>Save endpoint</text>
-        <text fg={themeV2.text.default}>Ctrl+S <span style={{ fg: themeV2.text.subdued }}>{props.kind === "runpod" ? "save · Ctrl+W worker · Ctrl+N model · Ctrl+T tools · Esc cancel" : "save · Tab next field · Ctrl+O catalog · Ctrl+P provider · Esc cancel"}</span></text>
+        <text fg={theme.text.default} onMouseUp={submit}>Save endpoint</text>
+        <text fg={theme.text.default}>Ctrl+S <span style={{ fg: theme.text.subdued }}>{props.kind === "runpod" ? "save · Ctrl+W worker · Ctrl+N model · Ctrl+T tools · Esc cancel" : "save · Tab next field · Ctrl+O catalog · Ctrl+P provider · Esc cancel"}</span></text>
       </box>
     </box>
   )

@@ -6,10 +6,10 @@ import { Config } from "@ycoding-ai/core/config"
 import { ConfigProviderPlugin } from "@ycoding-ai/core/config/plugin/provider"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Integration } from "@ycoding-ai/core/integration"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { PluginV2 } from "@ycoding-ai/core/plugin"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { LLM, LLMClient } from "@ycoding-ai/ai"
 import { testEffect } from "../lib/effect"
@@ -18,7 +18,7 @@ import { PluginTestLayer } from "../plugin/fixture"
 const it = testEffect(PluginTestLayer)
 
 const addPlugin = Effect.fn(function* (config: Config.Interface) {
-  const plugin = yield* PluginV2.Service
+  const plugin = yield* PluginRegistry.Service
   const host = yield* PluginHost.make(plugin)
   yield* ConfigProviderPlugin.Plugin.effect(host).pipe(Effect.provideService(Config.Service, config))
 })
@@ -83,7 +83,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
         ["runpod-a", "ollama", "runpod-ollama", "https://api.runpod.ai/v2/a/runsync"],
         ["runpod-b", "coder", "runpod-vllm", "https://api.runpod.ai/v2/b/runsync"],
       ] as const) {
-        const entry = required(yield* catalog.model.get(ProviderV2.ID.make(provider), ModelV2.ID.make(modelID)))
+        const entry = required(yield* catalog.model.get(Provider.ID.make(provider), CatalogModel.ID.make(modelID)))
         expect(entry.capabilities.tools).toBe(true)
         const connection = required(yield* integrations.connection.active(Integration.ID.make(provider)))
         const selected = yield* SessionRunnerModel.fromCatalogModel(entry, yield* integrations.connection.resolve(connection))
@@ -164,24 +164,24 @@ describe("ConfigProviderPlugin.Plugin", () => {
           } }),
         })]) }))
         expect(requests).toEqual(["source:Bearer first-key"])
-        expect(yield* catalog.model.get(ProviderV2.ID.make(id), ModelV2.ID.make("first-model"))).toBeDefined()
-        expect(yield* catalog.model.get(ProviderV2.ID.make(blockedID), ModelV2.ID.make("first-model"))).toBeUndefined()
-        expect(JSON.stringify(yield* catalog.provider.get(ProviderV2.ID.make(id)))).not.toContain("first-key")
-        expect(JSON.stringify(yield* catalog.model.get(ProviderV2.ID.make(id), ModelV2.ID.make("first-model")))).not.toContain("first-key")
+        expect(yield* catalog.model.get(Provider.ID.make(id), CatalogModel.ID.make("first-model"))).toBeDefined()
+        expect(yield* catalog.model.get(Provider.ID.make(blockedID), CatalogModel.ID.make("first-model"))).toBeUndefined()
+        expect(JSON.stringify(yield* catalog.provider.get(Provider.ID.make(id)))).not.toContain("first-key")
+        expect(JSON.stringify(yield* catalog.model.get(Provider.ID.make(id), CatalogModel.ID.make("first-model")))).not.toContain("first-key")
 
         yield* integrations.connection.key({ integrationID: id, key: "second-key", label: "Second" })
-        yield* waitFor(() => catalog.model.get(ProviderV2.ID.make(id), ModelV2.ID.make("second-model")).pipe(Effect.map(Boolean)))
+        yield* waitFor(() => catalog.model.get(Provider.ID.make(id), CatalogModel.ID.make("second-model")).pipe(Effect.map(Boolean)))
         expect(requests).toContain("source:Bearer second-key")
-        expect(yield* catalog.model.get(ProviderV2.ID.make(id), ModelV2.ID.make("second-model"))).toBeDefined()
+        expect(yield* catalog.model.get(Provider.ID.make(id), CatalogModel.ID.make("second-model"))).toBeDefined()
         yield* integrations.connection.activate(first.id)
         yield* waitFor(() => Effect.sync(() => requests.filter((request) => request === "source:Bearer first-key").length === 2))
         yield* integrations.connection.key({ integrationID: id, key: "rotated-key", label: "First" })
-        yield* waitFor(() => catalog.model.get(ProviderV2.ID.make(id), ModelV2.ID.make("rotated-model")).pipe(Effect.map(Boolean)))
+        yield* waitFor(() => catalog.model.get(Provider.ID.make(id), CatalogModel.ID.make("rotated-model")).pipe(Effect.map(Boolean)))
         expect(requests).toContain("source:Bearer rotated-key")
         yield* integrations.connection.key({ integrationID: id, key: "redirect-key", label: "Redirect" })
         yield* waitFor(() => Effect.sync(() => requests.includes("source:Bearer redirect-key")))
         expect(requests.some((request) => request.startsWith("destination:"))).toBe(false)
-        expect(yield* catalog.model.get(ProviderV2.ID.make(id), ModelV2.ID.make("redirected-model"))).toBeUndefined()
+        expect(yield* catalog.model.get(Provider.ID.make(id), CatalogModel.ID.make("redirected-model"))).toBeUndefined()
         expect(JSON.stringify(yield* integrations.get(id))).not.toMatch(/first-key|second-key|rotated-key|redirect-key/)
       }),
       ({ source, destination }) => Effect.promise(() => Promise.all([source.stop(true), destination.stop(true)])),
@@ -214,8 +214,8 @@ describe("ConfigProviderPlugin.Plugin", () => {
         expect(requests).toContain("/catalog:Bearer configured-key")
         expect(requests).toContain("/v1/models:Bearer header-key")
         expect(requests).toContain("/catalog:Bearer header-key")
-        expect(yield* catalog.model.get(ProviderV2.ID.make("config-key"), ModelV2.ID.make("key-model"))).toBeDefined()
-        expect(yield* catalog.model.get(ProviderV2.ID.make("config-header"), ModelV2.ID.make("header-model"))).toBeDefined()
+        expect(yield* catalog.model.get(Provider.ID.make("config-key"), CatalogModel.ID.make("key-model"))).toBeDefined()
+        expect(yield* catalog.model.get(Provider.ID.make("config-header"), CatalogModel.ID.make("header-model"))).toBeDefined()
       }),
       ({ server }) => Effect.sync(() => server.stop(true)),
     ),
@@ -252,7 +252,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
         Effect.gen(function* () {
           const catalog = yield* Catalog.Service
           yield* catalog.transform((draft) =>
-            draft.model.update(ProviderV2.ID.openrouter, ModelV2.ID.make("remote-model"), (model) => {
+            draft.model.update(Provider.ID.openrouter, CatalogModel.ID.make("remote-model"), (model) => {
               model.name = "Remote Model"
               model.limit = { context: 200_000, output: 20_000 }
               model.capabilities = { tools: false, input: ["text", "image"], output: ["text"] }
@@ -281,7 +281,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
 
           expect(authorization()).toBe("Bearer secret")
           const model = required(
-            yield* catalog.model.get(ProviderV2.ID.make("discovered"), ModelV2.ID.make("remote-model")),
+            yield* catalog.model.get(Provider.ID.make("discovered"), CatalogModel.ID.make("remote-model")),
           )
           expect(model).toMatchObject({
             name: "Remote Model",
@@ -297,8 +297,8 @@ describe("ConfigProviderPlugin.Plugin", () => {
   it.effect("keeps configured model variant bodies unchanged", () =>
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service
-      const providerID = ProviderV2.ID.opencode
-      const modelID = ModelV2.ID.make("alpha-gpt-next")
+      const providerID = Provider.ID.opencode
+      const modelID = CatalogModel.ID.make("alpha-gpt-next")
       const config = Config.Service.of({
         reload: () => Effect.void,
         entries: () =>
@@ -350,8 +350,8 @@ describe("ConfigProviderPlugin.Plugin", () => {
   it.effect("keeps layered model variant bodies unchanged", () =>
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service
-      const providerID = ProviderV2.ID.opencode
-      const modelID = ModelV2.ID.make("alpha-gpt-next")
+      const providerID = Provider.ID.opencode
+      const modelID = CatalogModel.ID.make("alpha-gpt-next")
       const config = Config.Service.of({
         reload: () => Effect.void,
         entries: () =>
@@ -399,8 +399,8 @@ describe("ConfigProviderPlugin.Plugin", () => {
       Effect.gen(function* () {
         const catalog = yield* Catalog.Service
         const integrations = yield* Integration.Service
-        const providerID = ProviderV2.ID.make("custom")
-        const modelID = ModelV2.ID.make("chat")
+        const providerID = Provider.ID.make("custom")
+        const modelID = CatalogModel.ID.make("chat")
         const config = Config.Service.of({
           reload: () => Effect.void,
           entries: () =>
@@ -486,7 +486,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
 
         const provider = required(yield* catalog.provider.get(providerID))
         const model = required(yield* catalog.model.get(providerID, modelID))
-        expect((yield* catalog.model.default())?.id).toBe(ModelV2.ID.make("default"))
+        expect((yield* catalog.model.default())?.id).toBe(CatalogModel.ID.make("default"))
         expect(provider.name).toBe("Renamed")
         expect((yield* integrations.get(Integration.ID.make("custom")))?.methods).toContainEqual({
           type: "env",
@@ -498,7 +498,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
         expect(provider.settings).toEqual({ baseURL: "https://example.test" })
         expect(provider.headers).toEqual({ first: "first", shared: "last", last: "last" })
         expect(model.id).toBe(modelID)
-        expect(model.modelID).toBe(ModelV2.ID.make("api-chat"))
+        expect(model.modelID).toBe(CatalogModel.ID.make("api-chat"))
         expect(model.name).toBe("Last")
         expect(model.capabilities).toEqual({ tools: true, input: ["text", "image"], output: ["text"] })
         expect(model.enabled).toBe(false)
@@ -517,8 +517,8 @@ describe("ConfigProviderPlugin.Plugin", () => {
         expect(model.settings).toEqual({ baseURL: "https://example.test", retained: true })
         expect(model.headers).toEqual({ first: "first", shared: "last", last: "last" })
         expect(model.variants?.map((variant) => variant.id)).toEqual([
-          ModelV2.VariantID.make("fast"),
-          ModelV2.VariantID.make("slow"),
+          CatalogModel.VariantID.make("fast"),
+          CatalogModel.VariantID.make("slow"),
         ])
         expect(model.variants?.[0]?.headers).toEqual({ first: "first", shared: "last", last: "last" })
         expect(model.variants?.[1]?.headers).toEqual({ slow: "slow" })

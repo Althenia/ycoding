@@ -13,10 +13,12 @@ sources:
 - id: runtime-doc
   resource: repo:///docs/runtime.md
 - id: spec-v2
-  resource: repo:///specs/v2/session-guardrails.md
+  resource: repo:///specs/session-guardrails.md
 - id: arch-doc
   resource: repo:///docs/architecture.md
 ---
+
+
 
 ## Independence from Permissions
 

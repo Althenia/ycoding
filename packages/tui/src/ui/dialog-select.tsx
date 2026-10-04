@@ -104,7 +104,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   type VisibleAction = (Action & { label: string }) | FooterHint
 
   const dialog = useDialog()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const config = useConfig().data
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
 
@@ -536,8 +536,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     if (!isActionItem(action.item))
       return (
         <text>
-          <span style={{ fg: themeV2.text.default }}>{action.item.label} </span>
-          <span style={{ fg: themeV2.text.subdued }}>{action.item.title}</span>
+          <span style={{ fg: theme.text.default }}>{action.item.label} </span>
+          <span style={{ fg: theme.text.subdued }}>{action.item.title}</span>
         </text>
       )
     const item = action.item
@@ -546,17 +546,17 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     return (
       <box
         flexDirection="row"
-        backgroundColor={active() ? themeV2.background.action.primary.focused : RGBA.fromInts(0, 0, 0, 0)}
+        backgroundColor={active() ? theme.background.action.primary.focused : RGBA.fromInts(0, 0, 0, 0)}
         onMouseUp={() => trigger(item)}
       >
         <text
-          fg={disabled() ? themeV2.text.subdued : active() ? themeV2.text.action.primary.focused : themeV2.text.default}
+          fg={disabled() ? theme.text.subdued : active() ? theme.text.action.primary.focused : theme.text.default}
           attributes={active() ? TextAttributes.BOLD : undefined}
         >
           {item.label}
         </text>
         <text
-          fg={disabled() ? themeV2.text.subdued : active() ? themeV2.text.action.primary.focused : themeV2.text.subdued}
+          fg={disabled() ? theme.text.subdued : active() ? theme.text.action.primary.focused : theme.text.subdued}
         >
           {" "}
           {item.title}
@@ -579,8 +579,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
               })
             }}
             focusedBackgroundColor="transparent"
-            cursorColor={themeV2.text.feedback.info.default}
-            focusedTextColor={themeV2.text.default}
+            cursorColor={theme.text.feedback.info.default}
+            focusedTextColor={theme.text.default}
             ref={(r) => {
               filterInput = r
               filterInput.traits = { status: "FILTER" }
@@ -594,11 +594,11 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
               }, 1)
             }}
             placeholder={props.placeholder ?? "Search"}
-            placeholderColor={themeV2.text.subdued}
+            placeholderColor={theme.text.subdued}
           />
           <Show when={store.filter.length === 0}>
-            <box position="absolute" left={6} width={1} backgroundColor={themeV2.background.action.primary.focused}>
-              <text fg={themeV2.text.action.primary.focused}>S</text>
+            <box position="absolute" left={6} width={1} backgroundColor={theme.background.action.primary.focused}>
+              <text fg={theme.text.action.primary.focused}>S</text>
             </box>
           </Show>
         </DialogSearchRow>
@@ -612,14 +612,14 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
               fallback={
                 props.emptyView ?? (
                   <box paddingLeft={6} paddingRight={4}>
-                    <text fg={themeV2.text.subdued}>No items available</text>
+                    <text fg={theme.text.subdued}>No items available</text>
                   </box>
                 )
               }
             >
               {props.noMatchView ?? (
                 <box paddingLeft={6} paddingRight={4}>
-                  <text fg={themeV2.text.subdued}>No results found</text>
+                  <text fg={theme.text.subdued}>No results found</text>
                 </box>
               )}
             </Show>
@@ -643,7 +643,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                       <Show
                         when={options[0]?.categoryView}
                         fallback={
-                          <text fg={themeV2.text.feedback.info.default} attributes={TextAttributes.BOLD}>
+                          <text fg={theme.text.feedback.info.default} attributes={TextAttributes.BOLD}>
                             {category}
                           </text>
                         }
@@ -692,8 +692,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                               backgroundColor={
                                 active()
                                   ? actionFocused()
-                                    ? themeV2.background.surface.overlay
-                                    : (option.bg ?? themeV2.background.action.primary.focused)
+                                    ? theme.background.surface.overlay
+                                    : (option.bg ?? theme.background.action.primary.focused)
                                   : RGBA.fromInts(0, 0, 0, 0)
                               }
                             >
@@ -729,7 +729,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                             {(detail) => (
                               <box paddingLeft={6} paddingRight={4}>
                                 <text
-                                  fg={option.detailsColor ?? themeV2.text.subdued}
+                                  fg={option.detailsColor ?? theme.text.subdued}
                                   wrapMode={option.detailsWrap ? "word" : "none"}
                                 >
                                   {option.detailsWrap
@@ -787,17 +787,17 @@ function Option(props: {
   state?: GlyphName
   onMouseOver?: () => void
 }) {
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   const stateGlyph = createMemo(() => (props.state ? getGlyph(props.state) : undefined))
   const text = createMemo(() => {
-    if (props.active && !props.muted) return props.fg ?? themeV2.text.action.primary.focused
-    if (props.muted && (props.active || props.current)) return themeV2.text.subdued
-    if (props.current) return themeV2.text.feedback.info.default
-    return themeV2.text.default
+    if (props.active && !props.muted) return props.fg ?? theme.text.action.primary.focused
+    if (props.muted && (props.active || props.current)) return theme.text.subdued
+    if (props.current) return theme.text.feedback.info.default
+    return theme.text.default
   })
   const stateColor = createMemo(() => {
-    if (props.active && !props.muted) return props.fg ?? themeV2.text.action.primary.focused
-    return glyphColor(themeV2, stateGlyph())
+    if (props.active && !props.muted) return props.fg ?? theme.text.action.primary.focused
+    return glyphColor(theme, stateGlyph())
   })
 
   return (
@@ -838,7 +838,7 @@ function Option(props: {
           <span
             style={{
               fg:
-                props.active && !props.muted ? (props.fg ?? themeV2.text.action.primary.focused) : themeV2.text.subdued,
+                props.active && !props.muted ? (props.fg ?? theme.text.action.primary.focused) : theme.text.subdued,
             }}
           >
             {" "}
@@ -849,7 +849,7 @@ function Option(props: {
       <Show when={props.footer}>
         <box flexShrink={0}>
           <text
-            fg={props.active && !props.muted ? (props.fg ?? themeV2.text.action.primary.focused) : themeV2.text.subdued}
+            fg={props.active && !props.muted ? (props.fg ?? theme.text.action.primary.focused) : theme.text.subdued}
           >
             {props.footer}
           </text>
@@ -859,17 +859,17 @@ function Option(props: {
   )
 }
 
-function glyphColor(themeV2: ReturnType<typeof useTheme>["themeV2"], glyph: GlyphSlot | undefined) {
+function glyphColor(theme: ReturnType<typeof useTheme>["theme"], glyph: GlyphSlot | undefined) {
   switch (glyph?.token) {
     case "feedback.success":
-      return themeV2.text.feedback.success.default
+      return theme.text.feedback.success.default
     case "feedback.error":
-      return themeV2.text.feedback.error.default
+      return theme.text.feedback.error.default
     case "feedback.warning":
-      return themeV2.text.feedback.warning.default
+      return theme.text.feedback.warning.default
     case "feedback.info":
-      return themeV2.text.feedback.info.default
+      return theme.text.feedback.info.default
     default:
-      return themeV2.text.subdued
+      return theme.text.subdued
   }
 }

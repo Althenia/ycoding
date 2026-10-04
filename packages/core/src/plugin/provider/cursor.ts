@@ -14,12 +14,12 @@ import {
 import { Effect, Schedule, Semaphore, Stream } from "effect"
 import { Credential } from "../../credential"
 import { CursorModels } from "../../cursor/models"
-import { EventV2 } from "../../event"
+import { EventRuntime } from "../../event"
 import { Global } from "../../global"
 import { Integration } from "../../integration"
 import { Location } from "../../location"
-import type { ModelV2 } from "../../model"
-import { ProviderV2 } from "../../provider"
+import type { CatalogModel } from "../../model"
+import { Provider } from "../../provider"
 import type { PluginInternal } from "../internal"
 
 const integrationID = Integration.ID.make("cursor")
@@ -57,12 +57,12 @@ export const oauth = {
 export const CursorPlugin = define({
   id: "ycoding.provider.cursor",
   effect: Effect.fn(function* (ctx) {
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const global = yield* Global.Service
     const location = yield* Location.Service
     const cacheDir = path.join(global.cache, "cursor")
     const loading = Semaphore.makeUnsafe(1)
-    const loaded: { models: readonly ModelV2.Info[]; source?: string } = { models: [] }
+    const loaded: { models: readonly CatalogModel.Info[]; source?: string } = { models: [] }
 
     const activeToken = Effect.fn("CursorPlugin.activeToken")(function* () {
       const connection = yield* ctx.integration.connection.active(integrationID)
@@ -135,10 +135,10 @@ export const CursorPlugin = define({
   }),
 } satisfies PluginInternal.InternalPlugin)
 
-export function syncCatalog(catalog: CursorCatalog, models: readonly ModelV2.Info[]) {
+export function syncCatalog(catalog: CursorCatalog, models: readonly CatalogModel.Info[]) {
   catalog.provider.update(CursorModels.providerID, (provider) => {
     provider.name = "Cursor"
-    provider.package = ProviderV2.aisdk(CursorModels.packageName)
+    provider.package = Provider.aisdk(CursorModels.packageName)
     provider.integrationID = integrationID
   })
   const discovered = new Set<string>(models.map((model) => model.id))

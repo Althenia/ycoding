@@ -121,10 +121,10 @@ test("a fast 2355-delta provider stream preserves explicit completion push witho
       stream?.onEvent({ type: "session.text.delta", data: { sessionID, assistantMessageID: "msg_burst_final", ordinal: 0, delta: "x" } })
     await until(() => closes.length > 0 || clientEvents[0] === deltas, 90_000)
     attention = true
-    stream?.onEvent({ type: "permission.v2.requested", data: { sessionID } })
+    stream?.onEvent({ type: "permission.asked", data: { sessionID } })
     await until(() => pushes.includes("approval-requested"))
     attention = false
-    stream?.onEvent({ type: "permission.v2.replied", data: { sessionID } })
+    stream?.onEvent({ type: "permission.replied", data: { sessionID } })
     await until(() => status?.attention.length === 0)
     outstanding = true
     running = false

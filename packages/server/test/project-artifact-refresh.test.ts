@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { Location } from "@ycoding-ai/core/location"
 import { ProjectArtifactStore } from "@ycoding-ai/core/project-artifact"
 import { ProjectArtifactSource } from "@ycoding-ai/core/project-artifact/source"
-import { ProjectV2 } from "@ycoding-ai/core/project"
+import { Project } from "@ycoding-ai/core/project"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Authorization } from "@ycoding-ai/protocol/middleware/authorization"
 import { SchemaErrorMiddleware } from "@ycoding-ai/protocol/middleware/schema-error"
@@ -130,7 +130,7 @@ function fixture(failed = false) {
       Location.Service,
       new Location.Info({
         directory: AbsolutePath.make("/fixture"),
-        project: { id: ProjectV2.ID.make("prj_artifact"), directory: AbsolutePath.make("/fixture") },
+        project: { id: Project.ID.make("prj_artifact"), directory: AbsolutePath.make("/fixture") },
       }),
     ),
     Context.merge(

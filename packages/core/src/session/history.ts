@@ -10,10 +10,10 @@ import { Instructions } from "../instructions/index"
 import { InstructionState } from "./instruction-state"
 import { SessionMessageTable } from "./sql"
 import { EventTable } from "../event/sql"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { SessionEvent } from "./event"
 import { SessionContextState } from "./context-state"
-import type { ModelV2 } from "../model"
+import type { CatalogModel } from "../model"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -139,7 +139,7 @@ export function visibleForModel<T extends { readonly seq: number; readonly messa
   })
 }
 
-const entriesVisibleForModel = Effect.fnUntraced(function* (db: DatabaseService, sessionID: SessionSchema.ID, model?: ModelV2.Ref) {
+const entriesVisibleForModel = Effect.fnUntraced(function* (db: DatabaseService, sessionID: SessionSchema.ID, model?: CatalogModel.Ref) {
   const canonical = visibleForModel(yield* messageEntries(db, sessionID), yield* latestProjectArtifactBoundary(db, sessionID))
   const selection = yield* SessionContextState.selectEntries(db, sessionID, canonical, model)
   if (selection.remote) {
@@ -200,7 +200,7 @@ export const entriesForModelThrough = Effect.fnUntraced(function* (
 export const forModel = Effect.fn("SessionHistory.forModel")(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
-  model?: ModelV2.Ref,
+  model?: CatalogModel.Ref,
 ) {
   return (yield* entriesVisibleForModel(db, sessionID, model)).map((entry) => entry.message)
 })
@@ -209,7 +209,7 @@ export const entriesForRunner = Effect.fn("SessionHistory.entriesForRunner")(fun
   db: DatabaseService,
   sessionID: SessionSchema.ID,
   instructions: Instructions.Instructions,
-  model?: ModelV2.Ref,
+  model?: CatalogModel.Ref,
 ) {
   return yield* db
     .transaction(() =>
@@ -263,7 +263,7 @@ const latestProjectArtifactBoundary = Effect.fnUntraced(function* (
       .where(
         and(
           eq(EventTable.aggregate_id, sessionID),
-          eq(EventTable.type, EventV2.versionedType(SessionEvent.ProjectArtifactsEnded.type, 1)),
+          eq(EventTable.type, EventRuntime.versionedType(SessionEvent.ProjectArtifactsEnded.type, 1)),
         ),
       )
       .orderBy(desc(EventTable.seq))

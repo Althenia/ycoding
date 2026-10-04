@@ -11,7 +11,7 @@ export const Color = Schema.Union([
   Schema.Literals(["primary", "secondary", "accent", "success", "warning", "error", "info"]),
 ])
 
-export class Info extends Schema.Class<Info>("ConfigV2.Agent")({
+export class Info extends Schema.Class<Info>("Config.Agent")({
   model: ConfigModel.Selection.pipe(Schema.optional),
   request: ConfigProvider.Request.pipe(Schema.optional),
   system: Schema.String.pipe(Schema.optional),

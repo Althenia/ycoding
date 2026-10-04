@@ -5,12 +5,12 @@ import { AISDK } from "@ycoding-ai/core/aisdk"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Integration } from "@ycoding-ai/core/integration"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { PluginV2 } from "@ycoding-ai/core/plugin"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
 import { claudeCodeMethodID, makeAnthropicPlugin } from "@ycoding-ai/core/plugin/provider/anthropic"
 import type { ClaudeCodeCredentialSource } from "@ycoding-ai/core/plugin/provider/anthropic-claude-code"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { Money } from "@ycoding-ai/schema/money"
 import { expect } from "bun:test"
 import { Effect } from "effect"
@@ -41,7 +41,7 @@ const source = (accounts = [account("account-a", "secret-a"), account("account-b
   }) satisfies ClaudeCodeCredentialSource
 
 const addPlugin = Effect.fn(function* (plugin: ReturnType<typeof makeAnthropicPlugin>) {
-  const host = yield* PluginHost.make(yield* PluginV2.Service)
+  const host = yield* PluginHost.make(yield* PluginRegistry.Service)
   yield* plugin.effect(host)
 })
 
@@ -196,11 +196,11 @@ it.effect("prefers an Anthropic API key connection over discovered Claude Code a
         },
       }
       yield* catalog.transform((draft) => {
-        draft.provider.update(ProviderV2.ID.anthropic, (provider) => {
-          provider.package = ProviderV2.aisdk("@ai-sdk/anthropic")
+        draft.provider.update(Provider.ID.anthropic, (provider) => {
+          provider.package = Provider.aisdk("@ai-sdk/anthropic")
           provider.integrationID = Integration.ID.make("anthropic")
         })
-        draft.model.update(ProviderV2.ID.anthropic, ModelV2.ID.make("claude-opus-5"), (model) => {
+        draft.model.update(Provider.ID.anthropic, CatalogModel.ID.make("claude-opus-5"), (model) => {
           model.enabled = true
           model.status = "active"
           model.cost = [priced]
@@ -218,8 +218,8 @@ it.effect("prefers an Anthropic API key connection over discovered Claude Code a
         type: "env",
         name: "ANTHROPIC_API_KEY",
       })
-      const provider = yield* catalog.provider.get(ProviderV2.ID.anthropic)
-      const model = yield* catalog.model.get(ProviderV2.ID.anthropic, ModelV2.ID.make("claude-opus-5"))
+      const provider = yield* catalog.provider.get(Provider.ID.anthropic)
+      const model = yield* catalog.model.get(Provider.ID.anthropic, CatalogModel.ID.make("claude-opus-5"))
       expect(provider?.settings?.apiKey).not.toBe("claude-code")
       expect(model?.cost).toEqual([priced])
     }),
@@ -238,11 +238,11 @@ it.effect("makes Anthropic available from Claude Code while preserving catalog p
       },
     }
     yield* catalog.transform((draft) => {
-      draft.provider.update(ProviderV2.ID.anthropic, (provider) => {
-        provider.package = ProviderV2.aisdk("@ai-sdk/anthropic")
+      draft.provider.update(Provider.ID.anthropic, (provider) => {
+        provider.package = Provider.aisdk("@ai-sdk/anthropic")
         provider.integrationID = Integration.ID.make("anthropic")
       })
-      draft.model.update(ProviderV2.ID.anthropic, ModelV2.ID.make("claude-opus-5"), (model) => {
+      draft.model.update(Provider.ID.anthropic, CatalogModel.ID.make("claude-opus-5"), (model) => {
         model.enabled = true
         model.status = "active"
         model.cost = [priced]
@@ -256,14 +256,14 @@ it.effect("makes Anthropic available from Claude Code while preserving catalog p
       }),
     )
 
-    const provider = yield* catalog.provider.get(ProviderV2.ID.anthropic)
-    const model = yield* catalog.model.get(ProviderV2.ID.anthropic, ModelV2.ID.make("claude-opus-5"))
+    const provider = yield* catalog.provider.get(Provider.ID.anthropic)
+    const model = yield* catalog.model.get(Provider.ID.anthropic, CatalogModel.ID.make("claude-opus-5"))
     expect(provider?.settings).toMatchObject({
       apiKey: "claude-code",
       claudeCodeSource: "account-a",
     })
     expect(model?.cost).toEqual([priced])
-    expect((yield* catalog.provider.available()).map((item) => item.id)).toContain(ProviderV2.ID.anthropic)
+    expect((yield* catalog.provider.available()).map((item) => item.id)).toContain(Provider.ID.anthropic)
   }),
 )
 
@@ -305,10 +305,10 @@ it.effect(
         }),
       )
 
-      const runtime = ModelV2.Info.make({
-        ...ModelV2.Info.empty(ProviderV2.ID.anthropic, ModelV2.ID.make("claude-opus-5")),
-        modelID: ModelV2.ID.make("claude-opus-5"),
-        package: ProviderV2.aisdk("@ai-sdk/anthropic"),
+      const runtime = CatalogModel.Info.make({
+        ...CatalogModel.Info.empty(Provider.ID.anthropic, CatalogModel.ID.make("claude-opus-5")),
+        modelID: CatalogModel.ID.make("claude-opus-5"),
+        package: Provider.aisdk("@ai-sdk/anthropic"),
         settings: { apiKey: "claude-code", claudeCodeSource: "account-a" },
         limit: { context: 1_000_000, output: 128_000 },
       })

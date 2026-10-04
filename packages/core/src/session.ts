@@ -1,4 +1,4 @@
-export * as SessionV2 from "./session"
+export * as Session from "./session"
 export * from "./session/schema"
 
 import { Cause, DateTime, Effect, Layer, Option, Schema, Context, Stream, Scope } from "effect"
@@ -7,10 +7,10 @@ import { Event } from "@ycoding-ai/schema/event"
 import type { Model } from "@ycoding-ai/schema/model"
 import { ID, type Admission, type Result } from "@ycoding-ai/schema/session-compaction"
 import { and, asc, desc, eq, gt, inArray, isNull, like, lt, or, sql, type SQL } from "drizzle-orm"
-import { ProjectV2 } from "./project"
-import { WorkspaceV2 } from "./workspace"
-import { ModelV2 } from "./model"
-import { ProviderV2 } from "./provider"
+import { Project } from "./project"
+import { Workspace } from "./workspace"
+import { CatalogModel } from "./model"
+import { Provider } from "./provider"
 import { Location } from "./location"
 import { SessionMessage } from "./session/message"
 import { InstructionState } from "./session/instruction-state"
@@ -29,7 +29,7 @@ import { SessionGoal } from "./session/goal"
 import { SessionGuardrail } from "./session/guardrail"
 import { Base64, FileAttachment, ManagedAttachmentContent, Prompt } from "@ycoding-ai/schema/prompt"
 import { PromptInput } from "@ycoding-ai/schema/prompt-input"
-import { EventV2 } from "./event"
+import { EventRuntime } from "./event"
 import { EventTable } from "./event/sql"
 import { Database } from "./database/database"
 import { SessionProjector } from "./session/projector"
@@ -39,7 +39,7 @@ import { SessionUsageCleanup } from "./session/usage-cleanup"
 import { SessionFileChangeTable, SessionMessageTable, SessionPendingTable, SessionTable, SessionTaskNotificationTable, SessionTaskTable } from "./session/sql"
 import { SessionSchema } from "./session/schema"
 import { AbsolutePath, PositiveInt, RelativePath } from "./schema"
-import { AgentV2 } from "./agent"
+import { Agent } from "./agent"
 import { ProjectTable } from "./project/sql"
 import path from "path"
 import { fromRow } from "./session/info"
@@ -61,12 +61,12 @@ import { InstructionDiscovery } from "./instruction-discovery"
 import { Instructions } from "./instructions"
 import { Mime } from "./mime"
 import type { EventLog } from "@ycoding-ai/schema/event-log"
-import { SkillV2 } from "./skill"
+import { Skill } from "./skill"
 import { SessionSkill } from "./session/skill"
-import { PermissionV2 } from "./permission"
+import { Permission } from "./permission"
 import { Job } from "./job"
 import { SessionCompletion } from "./session/completion"
-import { CommandV2 } from "./command"
+import { Command } from "./command"
 import { Shell } from "./shell"
 import { ShellSandbox } from "./shell-sandbox"
 import { Global } from "./global"
@@ -102,7 +102,7 @@ export type RevertState = Session.Revert
 export { ListAnchor }
 
 const ListInputBase = {
-  workspaceID: WorkspaceV2.ID.pipe(Schema.optional),
+  workspaceID: Workspace.ID.pipe(Schema.optional),
   search: Schema.String.pipe(Schema.optional),
   limit: PositiveInt.pipe(Schema.optional),
   order: Schema.Literals(["asc", "desc"]).pipe(Schema.optional),
@@ -117,7 +117,7 @@ const ListDirectoryInput = Schema.Struct({
 
 const ListProjectInput = Schema.Struct({
   ...ListInputBase,
-  project: ProjectV2.ID,
+  project: Project.ID,
   subpath: RelativePath.pipe(Schema.optional),
 })
 
@@ -129,8 +129,8 @@ export type ListInput = typeof ListInput.Type
 type CreateBaseInput = {
   id?: SessionSchema.ID
   title?: string
-  agent?: AgentV2.ID
-  model?: ModelV2.Ref
+  agent?: Agent.ID
+  model?: CatalogModel.Ref
   permissionCeiling?: SessionSchema.Info["permissionCeiling"]
 }
 type CreateInput = CreateBaseInput &
@@ -212,13 +212,13 @@ export class BusyError extends Schema.TaggedErrorClass<BusyError>()("Session.Bus
   sessionID: SessionSchema.ID,
 }) {}
 export class SkillNotFoundError extends Schema.TaggedErrorClass<SkillNotFoundError>()("Session.SkillNotFoundError", {
-  skill: SkillV2.ID,
+  skill: Skill.ID,
 }) {}
 export class SkillConflictNotFoundError extends Schema.TaggedErrorClass<SkillConflictNotFoundError>()(
   "Session.SkillConflictNotFoundError",
   {
-    winner: SkillV2.ID,
-    loser: SkillV2.ID,
+    winner: Skill.ID,
+    loser: Skill.ID,
   },
 ) {}
 
@@ -248,8 +248,8 @@ export type Error =
   | SkillConflictNotFoundError
   | DestinationNotFoundError
   | DestinationNotDirectoryError
-  | CommandV2.NotFoundError
-  | CommandV2.EvaluationError
+  | Command.NotFoundError
+  | Command.EvaluationError
   | MessageNotFoundError
   | SessionGenerate.Error
 
@@ -319,11 +319,11 @@ export interface Interface {
   }) => Stream.Stream<SessionEvent.PublicDurableEvent | EventLog.Synced, NotFoundError>
   readonly switchAgent: (input: {
     sessionID: SessionSchema.ID
-    agent: AgentV2.ID
+    agent: Agent.ID
   }) => Effect.Effect<void, NotFoundError>
   readonly switchModel: (input: {
     sessionID: SessionSchema.ID
-    model: ModelV2.Ref
+    model: CatalogModel.Ref
   }) => Effect.Effect<
     SessionModelSwitch.Outcome,
     NotFoundError | MessageDecodeError | SessionRunnerModel.Error | CompactionConflictError
@@ -373,18 +373,18 @@ export interface Interface {
     sessionID: SessionSchema.ID
     command: string
     arguments?: string
-    agent?: AgentV2.ID
-    model?: ModelV2.Ref
+    agent?: Agent.ID
+    model?: CatalogModel.Ref
     files?: PromptInput.Prompt["files"]
     agents?: PromptInput.Prompt["agents"]
     delivery?: SessionPending.Delivery
     resume?: boolean
   }) => Effect.Effect<
     SessionPending.User,
-    NotFoundError | PromptConflictError | AttachmentError | CommandV2.NotFoundError | CommandV2.EvaluationError
+    NotFoundError | PromptConflictError | AttachmentError | Command.NotFoundError | Command.EvaluationError
   >
   readonly shell: (input: {
-    id?: EventV2.ID
+    id?: EventRuntime.ID
     sessionID: SessionSchema.ID
     command: string
   }) => Effect.Effect<
@@ -398,13 +398,13 @@ export interface Interface {
   readonly skill: (input: {
     id?: SessionMessage.ID
     sessionID: SessionSchema.ID
-    skill: SkillV2.ID
+    skill: Skill.ID
     resume?: boolean
   }) => Effect.Effect<void, NotFoundError | SkillNotFoundError>
   readonly resolveSkillConflict: (input: {
     sessionID: SessionSchema.ID
-    winner: SkillV2.ID
-    loser: SkillV2.ID
+    winner: Skill.ID
+    loser: Skill.ID
   }) => Effect.Effect<void, NotFoundError | AgentNotFoundError | MessageDecodeError | SkillConflictNotFoundError>
   readonly compact: Compact
   readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
@@ -440,12 +440,12 @@ export interface Interface {
   }
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/Session") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/Session") {}
 
 function usageReportGroup(
   group: ProviderRequest.ReportGroup,
   item: { readonly record: SessionProviderRequest.CostedRecord; readonly session: SessionSchema.Info },
-  projects: ReadonlyArray<ProjectV2.Info>,
+  projects: ReadonlyArray<Project.Info>,
   formatter?: Intl.DateTimeFormat,
 ) {
   if (group === "model") {
@@ -460,7 +460,7 @@ function usageReportGroup(
   }
   if (group === "session") return { key: item.session.id, label: item.session.title }
   if (group === "project") {
-    if (item.session.projectID === ProjectV2.ID.global)
+    if (item.session.projectID === Project.ID.global)
       return { key: item.session.projectID, label: "Global (no project)" }
     const project = projects.find((project) => project.id === item.session.projectID)
     return {
@@ -515,7 +515,7 @@ function buildUsageReport(
     readonly record: SessionProviderRequest.CostedRecord
     readonly session: SessionSchema.Info
   }>,
-  projects: ReadonlyArray<ProjectV2.Info>,
+  projects: ReadonlyArray<Project.Info>,
 ): ProviderRequest.Report {
   const records = items.filter(({ record }) => {
     const time = DateTime.toEpochMillis(record.time)
@@ -560,8 +560,8 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const database = yield* Database.Service
     const db = database.db
-    const events = yield* EventV2.Service
-    const projects = yield* ProjectV2.Service
+    const events = yield* EventRuntime.Service
+    const projects = yield* Project.Service
     const global = yield* Global.Service
     const execution = yield* SessionExecution.Service
     const autonomy = yield* SessionAutonomy.Service
@@ -589,7 +589,7 @@ const layer = Layer.effect(
         Effect.catchCause(() => Effect.succeed(undefined)),
       )
     })
-    const sameModel = (current: ModelV2.Ref | undefined, target: ModelV2.Ref) =>
+    const sameModel = (current: CatalogModel.Ref | undefined, target: CatalogModel.Ref) =>
       current?.providerID === target.providerID &&
       current.id === target.id &&
       current.variant === target.variant
@@ -608,7 +608,7 @@ const layer = Layer.effect(
     })
     // Context validation for a model switch resolves the target in the Session's
     // Location-scoped registry. The transcript read below is durable database work.
-    const checkModelSwitch = Effect.fnUntraced(function* (session: SessionSchema.Info, targetModel: ModelV2.Ref) {
+    const checkModelSwitch = Effect.fnUntraced(function* (session: SessionSchema.Info, targetModel: CatalogModel.Ref) {
       const resolution = yield* Effect.gen(function* () {
         const catalog = yield* Catalog.Service.pipe(Effect.provide(locations.get(session.location)))
         const compactions = (yield* Config.Service.pipe(
@@ -649,7 +649,7 @@ const layer = Layer.effect(
     // resolver also applies configured helper-model selection, which the switch never changes.
     const validateModelSwitchTarget = Effect.fnUntraced(function* (
       session: SessionSchema.Info,
-      targetModel: ModelV2.Ref,
+      targetModel: CatalogModel.Ref,
     ) {
       yield* SessionRunnerModel.Service.pipe(
         Effect.provide(locations.get(session.location)),
@@ -660,7 +660,7 @@ const layer = Layer.effect(
     // interruption; a nonpositive budget is refused instead of forcing an oversized request.
     const modelSwitchTargetBudget = Effect.fnUntraced(function* (
       session: SessionSchema.Info,
-      targetModel: ModelV2.Ref,
+      targetModel: CatalogModel.Ref,
     ) {
       const policy = yield* compactionPolicy(session)
       const catalog = yield* Catalog.Service.pipe(Effect.provide(locations.get(session.location)))
@@ -683,7 +683,7 @@ const layer = Layer.effect(
     // the switch itself refuses selection afterward unless the reloaded history fits the target.
     const compactForModelSwitch = Effect.fnUntraced(function* (
       session: SessionSchema.Info,
-      targetModel: ModelV2.Ref,
+      targetModel: CatalogModel.Ref,
       targetSafeInputTokens: number,
     ) {
       const policy = yield* compactionPolicy(session)
@@ -767,9 +767,9 @@ const layer = Layer.effect(
         return Effect.gen(function* () {
           const provider = yield* catalog.model.get(record.model.providerID, record.model.id)
           const openrouter = yield* catalog.model.get(
-            ProviderV2.ID.openrouter,
-            ModelV2.ID.make(
-              record.model.providerID === ProviderV2.ID.openrouter
+            Provider.ID.openrouter,
+            CatalogModel.ID.make(
+              record.model.providerID === Provider.ID.openrouter
                 ? record.model.id
                 : `${record.model.providerID}/${record.model.id}`,
             ),
@@ -834,7 +834,7 @@ const layer = Layer.effect(
     })
 
     const result = Service.of({
-      create: Effect.fn("V2Session.create")(function* (input) {
+      create: Effect.fn("Session.create")(function* (input) {
         const sessionID = input.id ?? SessionSchema.ID.create()
         const recorded = yield* store.get(sessionID)
         if (recorded) return recorded
@@ -842,7 +842,7 @@ const layer = Layer.effect(
         if (input.parentID && parent === undefined) return yield* new NotFoundError({ sessionID: input.parentID })
         const location = parent?.location ?? input.location
         if (location === undefined)
-          return yield* Effect.die(new Error("V2Session.create requires either location or an existing parentID"))
+          return yield* Effect.die(new Error("Session.create requires either location or an existing parentID"))
         const project = yield* projects.resolve(location.directory)
         yield* db
           .insert(ProjectTable)
@@ -890,7 +890,7 @@ const layer = Layer.effect(
         // TODO: Restore recorded sessions onto replacement synchronized workspaces in a future API slice.
         return yield* result.get(sessionID).pipe(Effect.orDie)
       }),
-      fork: Effect.fn("V2Session.fork")(function* (input) {
+      fork: Effect.fn("Session.fork")(function* (input) {
         const parent = yield* result.get(input.sessionID)
         const boundary = input.messageID
           ? yield* db
@@ -905,7 +905,7 @@ const layer = Layer.effect(
         if (input.messageID && !boundary)
           return yield* new MessageNotFoundError({ sessionID: input.sessionID, messageID: input.messageID })
         const sessionID = SessionSchema.ID.create()
-        const parentSeq = boundary ? boundary.seq - 1 : yield* EventV2.latestSequence(db, parent.id)
+        const parentSeq = boundary ? boundary.seq - 1 : yield* EventRuntime.latestSequence(db, parent.id)
         yield* events.publish(SessionEvent.Forked, {
           sessionID,
           parentID: parent.id,
@@ -914,12 +914,12 @@ const layer = Layer.effect(
         })
         return yield* result.get(sessionID).pipe(Effect.orDie)
       }),
-      get: Effect.fn("V2Session.get")(function* (sessionID) {
+      get: Effect.fn("Session.get")(function* (sessionID) {
         const session = yield* store.get(sessionID)
         if (!session) return yield* new NotFoundError({ sessionID })
         return session
       }),
-      snapshot: Effect.fn("V2Session.snapshot")(function* (sessionID, options) {
+      snapshot: Effect.fn("Session.snapshot")(function* (sessionID, options) {
         if (options?.limit !== undefined && (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > 200))
           return yield* new InvalidCursorError()
         if (options?.before !== undefined && options.limit === undefined) return yield* new InvalidCursorError()
@@ -931,11 +931,11 @@ const layer = Layer.effect(
               const history = options?.limit === undefined
                 ? { messages: yield* SessionHistory.load(db, sessionID) }
                 : yield* SessionHistory.snapshotWindow(db, sessionID, options.limit, before)
-              const sequence = yield* EventV2.latestSequence(db, sessionID)
+              const sequence = yield* EventRuntime.latestSequence(db, sessionID)
               const watermark: EventLog.Synced = {
                 type: "log.synced",
                 aggregateID: sessionID,
-                ...(sequence < 0 ? {} : { seq: EventV2.Seq.make(sequence) }),
+                ...(sequence < 0 ? {} : { seq: EventRuntime.Seq.make(sequence) }),
               }
               const generationSpeed = SessionCacheDiagnostics.latestAssistant(history.messages, session.revert?.messageID)
                 ? SessionCacheDiagnostics.generationSpeed(yield* providerRequests.recentSteps(sessionID))
@@ -950,7 +950,7 @@ const layer = Layer.effect(
           )
           .pipe(Effect.orDie)
       }),
-      attachmentRead: Effect.fn("V2Session.attachmentRead")(function* (sessionID, digest) {
+      attachmentRead: Effect.fn("Session.attachmentRead")(function* (sessionID, digest) {
         if (!/^[0-9a-f]{64}$/.test(digest)) return yield* new AttachmentReadError({ reason: "invalid" })
         yield* result.get(sessionID)
         const reference = yield* db.get<{ mime: unknown; bytes: unknown; path: unknown }>(sql`
@@ -983,7 +983,7 @@ const layer = Layer.effect(
         })))
         return { mime, bytes: bytes.byteLength, data: Buffer.from(bytes).toString("base64") }
       }),
-      diagnostics: Effect.fn("V2Session.diagnostics")(function* (sessionID) {
+      diagnostics: Effect.fn("Session.diagnostics")(function* (sessionID) {
         const session = yield* result.get(sessionID)
         const diagnostics = SessionCacheDiagnostics.fromMessages(
           yield* store.context(sessionID),
@@ -995,7 +995,7 @@ const layer = Layer.effect(
           ...(generationSpeed === undefined ? {} : { generationSpeed }),
         }
       }),
-      usage: Effect.fn("V2Session.usage")(function* (sessionID) {
+      usage: Effect.fn("Session.usage")(function* (sessionID) {
         const session = yield* result.get(sessionID)
         const records = yield* Effect.forEach(yield* family(session), costedRecords)
         return SessionProviderRequest.summarize(
@@ -1004,7 +1004,7 @@ const layer = Layer.effect(
             .toSorted((left, right) => DateTime.toEpochMillis(left.time) - DateTime.toEpochMillis(right.time)),
         )
       }),
-      usageReport: Effect.fn("V2Session.usageReport")(function* (input) {
+      usageReport: Effect.fn("Session.usageReport")(function* (input) {
         const session = yield* result.get(input.sessionID)
         const projectInfos = input.group === "project" ? yield* projects.list() : []
         return buildUsageReport(
@@ -1015,14 +1015,14 @@ const layer = Layer.effect(
           projectInfos,
         )
       }),
-      usageAll: Effect.fn("V2Session.usageAll")(function* () {
+      usageAll: Effect.fn("Session.usageAll")(function* () {
         return SessionProviderRequest.summarize(
           (yield* globalCostedRecords())
             .map((item) => item.record)
             .toSorted((left, right) => DateTime.toEpochMillis(left.time) - DateTime.toEpochMillis(right.time)),
         )
       }),
-      usageReportAll: Effect.fn("V2Session.usageReportAll")(function* (input) {
+      usageReportAll: Effect.fn("Session.usageReportAll")(function* (input) {
         const projectInfos = input.group === "project" ? yield* projects.list() : []
         return buildUsageReport(
           input,
@@ -1031,13 +1031,13 @@ const layer = Layer.effect(
         )
       }),
       autonomy: {
-        get: Effect.fn("V2Session.autonomy.get")(function* (sessionID) {
+        get: Effect.fn("Session.autonomy.get")(function* (sessionID) {
           yield* result.get(sessionID)
           return yield* autonomy
             .get(sessionID)
             .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.fail(new NotFoundError({ sessionID }))))
         }),
-        set: Effect.fn("V2Session.autonomy.set")(function* (input) {
+        set: Effect.fn("Session.autonomy.set")(function* (input) {
           const session = yield* result.get(input.sessionID)
           let yolo = input.yolo
           const goal = input.goal
@@ -1100,7 +1100,7 @@ const layer = Layer.effect(
             .pipe(notFound)
         }),
       },
-      remove: Effect.fn("V2Session.remove")(function* (sessionID) {
+      remove: Effect.fn("Session.remove")(function* (sessionID) {
         yield* result.get(sessionID)
         yield* execution.interrupt(sessionID)
         yield* execution.awaitIdle(sessionID)
@@ -1109,7 +1109,7 @@ const layer = Layer.effect(
         yield* events.publish(SessionEvent.Deleted, { sessionID })
         yield* events.remove(sessionID)
       }),
-      archive: Effect.fn("V2Session.archive")((sessionID) =>
+      archive: Effect.fn("Session.archive")((sessionID) =>
         db
           .transaction(
             () =>
@@ -1122,7 +1122,7 @@ const layer = Layer.effect(
           )
           .pipe(Effect.catch((error) => (error instanceof NotFoundError ? Effect.fail(error) : Effect.die(error)))),
       ),
-      unarchive: Effect.fn("V2Session.unarchive")((sessionID) =>
+      unarchive: Effect.fn("Session.unarchive")((sessionID) =>
         db
           .transaction(
             () =>
@@ -1135,7 +1135,7 @@ const layer = Layer.effect(
           )
           .pipe(Effect.catch((error) => (error instanceof NotFoundError ? Effect.fail(error) : Effect.die(error)))),
       ),
-      pin: Effect.fn("V2Session.pin")((sessionID) =>
+      pin: Effect.fn("Session.pin")((sessionID) =>
         db
           .transaction(
             () =>
@@ -1148,7 +1148,7 @@ const layer = Layer.effect(
           )
           .pipe(Effect.catch((error) => (error instanceof NotFoundError ? Effect.fail(error) : Effect.die(error)))),
       ),
-      unpin: Effect.fn("V2Session.unpin")((sessionID) =>
+      unpin: Effect.fn("Session.unpin")((sessionID) =>
         db
           .transaction(
             () =>
@@ -1161,7 +1161,7 @@ const layer = Layer.effect(
           )
           .pipe(Effect.catch((error) => (error instanceof NotFoundError ? Effect.fail(error) : Effect.die(error)))),
       ),
-      list: Effect.fn("V2Session.list")(function* (input = {}) {
+      list: Effect.fn("Session.list")(function* (input = {}) {
         const direction = input.anchor?.direction ?? "next"
         const requestedOrder = input.order ?? "desc"
         const order = direction === "previous" ? (requestedOrder === "asc" ? "desc" : "asc") : requestedOrder
@@ -1201,7 +1201,7 @@ const layer = Layer.effect(
         )
         return { data: (direction === "previous" ? rows.toReversed() : rows).map((row) => fromRow(row)) }
       }),
-      messages: Effect.fn("V2Session.messages")(function* (input) {
+      messages: Effect.fn("Session.messages")(function* (input) {
         yield* result.get(input.sessionID)
         const direction = input.cursor?.direction ?? "next"
         const requestedOrder = input.order ?? "desc"
@@ -1235,15 +1235,15 @@ const layer = Layer.effect(
         )
         return yield* Effect.forEach(direction === "previous" ? rows.toReversed() : rows, decode)
       }),
-      message: Effect.fn("V2Session.message")(function* (input) {
+      message: Effect.fn("Session.message")(function* (input) {
         const stored = yield* store.message(input.messageID)
         return stored?.sessionID === input.sessionID ? stored.message : undefined
       }),
-      context: Effect.fn("V2Session.context")(function* (sessionID) {
+      context: Effect.fn("Session.context")(function* (sessionID) {
         yield* result.get(sessionID)
         return yield* store.context(sessionID)
       }),
-      fileChanges: Effect.fn("V2Session.fileChanges")(function* (sessionID) {
+      fileChanges: Effect.fn("Session.fileChanges")(function* (sessionID) {
         yield* result.get(sessionID)
         const rows = yield* db
           .select({
@@ -1265,7 +1265,7 @@ const layer = Layer.effect(
           .pipe(Effect.orDie)
         return rows.map((row) => SessionEvent.FileChange.Info.make(row))
       }),
-      skills: Effect.fn("V2Session.skills")(function* (sessionID) {
+      skills: Effect.fn("Session.skills")(function* (sessionID) {
         const session = yield* result.get(sessionID)
         const rows = yield* db
           .select()
@@ -1285,7 +1285,7 @@ const layer = Layer.effect(
         const keys = yield* InstructionState.activeKeys(db, selection.instructions, sessionID)
         return list(messages, keys)
       }),
-      pending: Effect.fn("V2Session.pending")(function* (sessionID) {
+      pending: Effect.fn("Session.pending")(function* (sessionID) {
         yield* result.get(sessionID)
         return yield* SessionPending.list(db, sessionID)
       }),
@@ -1297,17 +1297,17 @@ const layer = Layer.effect(
         ).pipe(
           Stream.filter(
             (item): item is SessionEvent.PublicDurableEvent | EventLog.Synced =>
-              EventV2.isSynced(item) || isPublicDurableSessionEvent(item),
+              EventRuntime.isSynced(item) || isPublicDurableSessionEvent(item),
           ),
         ),
-      prompt: Effect.fn("V2Session.prompt")((input) =>
+      prompt: Effect.fn("Session.prompt")((input) =>
         Effect.uninterruptible(
           Effect.gen(function* () {
             const session = yield* result.get(input.sessionID)
             // A staged revert must be committed before admitting new input so the prompt
             // continues from the reverted boundary rather than stale post-boundary history.
             if (session.revert)
-              yield* SessionRevert.commit(session).pipe(Effect.provideService(EventV2.Service, events))
+              yield* SessionRevert.commit(session).pipe(Effect.provideService(EventRuntime.Service, events))
             const messageID = input.id ?? SessionMessage.ID.create()
             // A reused prompt message ID is the same input: return the durable record and
             // wake without re-resolving attachments, whose re-derived shape can differ from
@@ -1341,7 +1341,7 @@ const layer = Layer.effect(
                             Effect.provide(locations.get(session.location)),
                           )
                           yield* plugins.flush
-                          const skills = yield* SkillV2.Service.pipe(Effect.provide(locations.get(session.location)))
+                          const skills = yield* Skill.Service.pipe(Effect.provide(locations.get(session.location)))
                           return SessionSkill.mentions(input.text, yield* skills.list())
                         })
                       : []
@@ -1358,7 +1358,7 @@ const layer = Layer.effect(
                                 skills: [
                                   ...(Array.isArray(input.metadata?.skills) ? input.metadata.skills : []),
                                   ...skillMentions.filter(
-                                    (skill) => !SessionSkill.selected(input.metadata).includes(SkillV2.ID.make(skill.id)),
+                                    (skill) => !SessionSkill.selected(input.metadata).includes(Skill.ID.make(skill.id)),
                                   ),
                                 ],
                               }
@@ -1393,12 +1393,12 @@ const layer = Layer.effect(
           }),
         ),
       ),
-      generate: Effect.fn("V2Session.generate")(function* (input) {
+      generate: Effect.fn("Session.generate")(function* (input) {
         const session = yield* result.get(input.sessionID)
         const generate = yield* SessionGenerate.Service.pipe(Effect.provide(locations.get(session.location)))
         return yield* generate.generate(input)
       }),
-      command: Effect.fn("V2Session.command")(function* (input) {
+      command: Effect.fn("Session.command")(function* (input) {
         const session = yield* result.get(input.sessionID)
         if (input.id !== undefined) {
           const messageID = input.id
@@ -1415,11 +1415,11 @@ const layer = Layer.effect(
             return yield* result.prompt({ sessionID: input.sessionID, id: prior.id, text: prior.data.text, resume: input.resume })
           }
         }
-        const commands = yield* CommandV2.Service.pipe(Effect.provide(locations.get(session.location)))
+        const commands = yield* Command.Service.pipe(Effect.provide(locations.get(session.location)))
         const source = yield* projectArtifactSource(session.location)
         const command = yield* commands.get(input.command)
         if (!command)
-          return yield* new CommandV2.NotFoundError({
+          return yield* new Command.NotFoundError({
             command: input.command,
             message: `Command not found: ${input.command}`,
           })
@@ -1429,12 +1429,12 @@ const layer = Layer.effect(
         const agent = command.agent ?? input.agent
         const commandAgent = yield* Effect.gen(function* () {
           if (!command.agent) return undefined
-          const agents = yield* AgentV2.Service.pipe(Effect.provide(locations.get(session.location)))
-          return yield* agents.get(AgentV2.ID.make(command.agent))
+          const agents = yield* Agent.Service.pipe(Effect.provide(locations.get(session.location)))
+          return yield* agents.get(Agent.ID.make(command.agent))
         })
         const model = command.model ?? commandAgent?.model ?? input.model
-        if (agent !== undefined && session.agent !== AgentV2.ID.make(agent))
-          yield* result.switchAgent({ sessionID: input.sessionID, agent: AgentV2.ID.make(agent) })
+        if (agent !== undefined && session.agent !== Agent.ID.make(agent))
+          yield* result.switchAgent({ sessionID: input.sessionID, agent: Agent.ID.make(agent) })
         // A requested command model must be selected before the command is admitted. A failed
         // selection is an explicit command evaluation failure rather than a silent run on the
         // previous model. Transcript corruption is a defect and fails loudly.
@@ -1442,7 +1442,7 @@ const layer = Layer.effect(
           yield* result.switchModel({ sessionID: input.sessionID, model }).pipe(
             Effect.catchTag("Session.MessageDecodeError", Effect.die),
             Effect.mapError(
-              (error) => new CommandV2.EvaluationError({ command: input.command, message: error.message }),
+              (error) => new Command.EvaluationError({ command: input.command, message: error.message }),
             ),
           )
         const provenance = source ? yield* source.provenance("command", input.command) : undefined
@@ -1484,7 +1484,7 @@ const layer = Layer.effect(
             )
         return admitted
       }, (effect, input) => input.id === undefined ? effect : commandLocks.withLock(input.id)(effect)),
-      shell: Effect.fn("V2Session.shell")(function* (input) {
+      shell: Effect.fn("Session.shell")(function* (input) {
         const session = yield* result.get(input.sessionID)
         yield* shellLocks.withLock(input.sessionID)(
           Effect.gen(function* () {
@@ -1552,9 +1552,9 @@ const layer = Layer.effect(
           ),
         )
       }),
-      skill: Effect.fn("V2Session.skill")(function* (input) {
+      skill: Effect.fn("Session.skill")(function* (input) {
         const session = yield* result.get(input.sessionID)
-        const permission = yield* PermissionV2.Service.pipe(Effect.provide(locations.get(session.location)))
+        const permission = yield* Permission.Service.pipe(Effect.provide(locations.get(session.location)))
         const access = yield* permission.evaluateEffective({
           sessionID: session.id,
           agent: session.agent,
@@ -1562,7 +1562,7 @@ const layer = Layer.effect(
           resource: input.skill,
         })
         if (access === "deny") return yield* new SkillNotFoundError({ skill: input.skill })
-        const skills = yield* SkillV2.Service.pipe(Effect.provide(locations.get(session.location)))
+        const skills = yield* Skill.Service.pipe(Effect.provide(locations.get(session.location)))
         const source = yield* projectArtifactSource(session.location)
         const skill = (yield* skills.list()).find((item) => item.id === input.skill)
         if (!skill) return yield* new SkillNotFoundError({ skill: input.skill })
@@ -1576,7 +1576,7 @@ const layer = Layer.effect(
             .resume(input.sessionID)
             .pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true }), Effect.asVoid)
       }),
-      resolveSkillConflict: Effect.fn("V2Session.resolveSkillConflict")(function* (input) {
+      resolveSkillConflict: Effect.fn("Session.resolveSkillConflict")(function* (input) {
         const statuses = yield* result.skills(input.sessionID)
         const winner = statuses.find((status) => status.id === input.winner && status.state === "active")
         const loser = statuses.find((status) => status.id === input.loser && status.state === "active")
@@ -1593,7 +1593,7 @@ const layer = Layer.effect(
           reason: "conflict_resolved",
         })
       }),
-      switchAgent: Effect.fn("V2Session.switchAgent")(function* (input) {
+      switchAgent: Effect.fn("Session.switchAgent")(function* (input) {
         const session = yield* result.get(input.sessionID)
         const source = yield* projectArtifactSource(session.location)
         const provenance = source ? yield* source.provenance("agent", input.agent) : undefined
@@ -1632,7 +1632,7 @@ const layer = Layer.effect(
           },
         )
       }),
-      switchModel: Effect.fn("V2Session.switchModel")(function* (input) {
+      switchModel: Effect.fn("Session.switchModel")(function* (input) {
         return yield* execution.withTransition(
           input.sessionID,
           Effect.gen(function* () {
@@ -1677,7 +1677,7 @@ const layer = Layer.effect(
           }),
         )
       }),
-      rename: Effect.fn("V2Session.rename")(function* (input) {
+      rename: Effect.fn("Session.rename")(function* (input) {
         yield* result.get(input.sessionID)
         yield* events.publish(SessionEvent.Renamed, {
           sessionID: input.sessionID,
@@ -1685,7 +1685,7 @@ const layer = Layer.effect(
         })
       }),
       daybreak: {
-        set: Effect.fn("V2Session.daybreakSet")(function* (input) {
+        set: Effect.fn("Session.daybreakSet")(function* (input) {
           yield* result.get(input.sessionID)
           yield* events.publish(SessionEvent.DaybreakSet, {
             sessionID: input.sessionID,
@@ -1694,7 +1694,7 @@ const layer = Layer.effect(
           return yield* result.get(input.sessionID)
         }),
       },
-      move: Effect.fn("V2Session.move")(function* (input) {
+      move: Effect.fn("Session.move")(function* (input) {
         const current = yield* result.get(input.sessionID)
         const value = input.directory.trim()
         const expanded =
@@ -1731,7 +1731,7 @@ const layer = Layer.effect(
           const destinationServices = locations.get(destination)
           const oldSource = yield* projectArtifactSource(current.location)
           const oldAgent = current.agent && oldSource ? yield* oldSource.provenance("agent", current.agent) : undefined
-          const destinationAgent = yield* AgentV2.Service.pipe(
+          const destinationAgent = yield* Agent.Service.pipe(
             Effect.provide(destinationServices),
             Effect.flatMap((agents) => agents.default()),
           )
@@ -1769,7 +1769,7 @@ const layer = Layer.effect(
           subpath: RelativePath.make(path.relative(project.directory, directory).replaceAll("\\", "/")),
         })
       }),
-      compact: Effect.fn("V2Session.compact")(function* (input: CompactInput) {
+      compact: Effect.fn("Session.compact")(function* (input: CompactInput) {
         const session = yield* result.get(input.sessionID)
         const jobID = input.id ?? ID.create()
         const boundary = yield* latestCompleteBoundary(db, input.sessionID)
@@ -1864,13 +1864,13 @@ const layer = Layer.effect(
             ),
           )
       }) as Compact,
-      wait: Effect.fn("V2Session.wait")(function* (sessionID) {
+      wait: Effect.fn("Session.wait")(function* (sessionID) {
         yield* result.get(sessionID)
         yield* execution.awaitIdle(sessionID)
       }),
       active: execution.active,
       completions: (input) => SessionCompletion.latest(db, input),
-      outstanding: Effect.fn("V2Session.outstanding")(function* (includeFailures = false) {
+      outstanding: Effect.fn("Session.outstanding")(function* (includeFailures = false) {
         const tasks = yield* db.select({ sessionID: SessionTaskTable.parent_id }).from(SessionTaskTable)
           .where(inArray(SessionTaskTable.state, ["starting", "running", "waiting", "cancelling"]))
           .all().pipe(Effect.orDie)
@@ -1915,7 +1915,7 @@ const layer = Layer.effect(
         }
         return { sessions, running, failed }
       }),
-      background: Effect.fn("V2Session.background")(function* (sessionID) {
+      background: Effect.fn("Session.background")(function* (sessionID) {
         yield* result.get(sessionID)
         const backgrounded = yield* jobs.backgroundAll({ sessionID })
         if (backgrounded.length === 0) return
@@ -1933,11 +1933,11 @@ const layer = Layer.effect(
           })
           .pipe(Effect.catchTag("Session.SyntheticConflictError", Effect.die))
       }),
-      resume: Effect.fn("V2Session.resume")(function* (sessionID) {
+      resume: Effect.fn("Session.resume")(function* (sessionID) {
         yield* result.get(sessionID)
         yield* execution.resume(sessionID)
       }),
-      synthetic: Effect.fn("V2Session.synthetic")((input) =>
+      synthetic: Effect.fn("Session.synthetic")((input) =>
         Effect.uninterruptible(
           Effect.gen(function* () {
             yield* result.get(input.sessionID)
@@ -1984,34 +1984,34 @@ const layer = Layer.effect(
           }),
         ),
       ),
-      interrupt: Effect.fn("V2Session.interrupt")((sessionID) =>
+      interrupt: Effect.fn("Session.interrupt")((sessionID) =>
         Effect.uninterruptible(execution.interrupt(sessionID)),
       ),
       revert: {
-        stage: Effect.fn("V2Session.revert.stage")(function* (input) {
+        stage: Effect.fn("Session.revert.stage")(function* (input) {
           const session = yield* result.get(input.sessionID)
           if ((yield* execution.active).has(input.sessionID))
             return yield* new BusyError({ sessionID: input.sessionID })
           return yield* SessionRevert.stage({ session, messageID: input.messageID, files: input.files }).pipe(
             Effect.provideService(Database.Service, database),
-            Effect.provideService(EventV2.Service, events),
+            Effect.provideService(EventRuntime.Service, events),
             Effect.provide(locations.get(session.location)),
           )
         }),
-        clear: Effect.fn("V2Session.revert.clear")(function* (sessionID) {
+        clear: Effect.fn("Session.revert.clear")(function* (sessionID) {
           const session = yield* result.get(sessionID)
           if ((yield* execution.active).has(sessionID)) return yield* new BusyError({ sessionID })
           const revert = yield* SessionRevert.clear(session).pipe(
-            Effect.provideService(EventV2.Service, events),
+            Effect.provideService(EventRuntime.Service, events),
             Effect.provide(locations.get(session.location)),
           )
           yield* execution.wake(sessionID)
           return revert
         }),
-        commit: Effect.fn("V2Session.revert.commit")(function* (sessionID) {
+        commit: Effect.fn("Session.revert.commit")(function* (sessionID) {
           const session = yield* result.get(sessionID)
           if ((yield* execution.active).has(sessionID)) return yield* new BusyError({ sessionID })
-          return yield* SessionRevert.commit(session).pipe(Effect.provideService(EventV2.Service, events))
+          return yield* SessionRevert.commit(session).pipe(Effect.provideService(EventRuntime.Service, events))
         }),
       },
     })
@@ -2040,7 +2040,7 @@ function synthesizeTerminalShellInfo(started: ShellInfo): ShellInfo {
   }
 }
 
-const resolvePrompt = Effect.fn("V2Session.resolvePrompt")(function* (
+const resolvePrompt = Effect.fn("Session.resolvePrompt")(function* (
   input: PromptInput.Prompt,
   image: Effect.Effect<Image.Interface>,
   attachments: AttachmentStore.Interface,
@@ -2081,7 +2081,7 @@ const recordedAttachment = Effect.fnUntraced(function* (db: Database.Interface["
 
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
-const materializeAttachment = Effect.fn("V2Session.materializeAttachment")(function* (
+const materializeAttachment = Effect.fn("Session.materializeAttachment")(function* (
   fs: FSUtil.Interface,
   input: PromptInput.FileAttachment,
   image: Effect.Effect<Image.Interface>,
@@ -2152,7 +2152,7 @@ const materializeAttachment = Effect.fn("V2Session.materializeAttachment")(funct
   })
 })
 
-const normalizeImageAttachment = Effect.fn("V2Session.normalizeImageAttachment")(function* (
+const normalizeImageAttachment = Effect.fn("Session.normalizeImageAttachment")(function* (
   input: PromptInput.FileAttachment,
   bytes: Uint8Array,
   mime: string,
@@ -2174,7 +2174,7 @@ const normalizeImageAttachment = Effect.fn("V2Session.normalizeImageAttachment")
   return { bytes: Buffer.from(normalized.content, "base64"), mime: normalized.mime }
 })
 
-const readFileAttachment = Effect.fn("V2Session.readFileAttachment")(function* (fs: FSUtil.Interface, uri: string) {
+const readFileAttachment = Effect.fn("Session.readFileAttachment")(function* (fs: FSUtil.Interface, uri: string) {
   const url = yield* Effect.try({
     try: () => new URL(uri),
     catch: () => new AttachmentError({ uri, message: `Invalid attachment URI: ${uri}` }),
@@ -2301,8 +2301,8 @@ export const node = makeGlobalNode({
   deps: [
     Job.node,
     Database.node,
-    EventV2.node,
-    ProjectV2.node,
+    EventRuntime.node,
+    Project.node,
     SessionExecution.node,
     SessionAutonomy.node,
     SessionCompactionJob.node,

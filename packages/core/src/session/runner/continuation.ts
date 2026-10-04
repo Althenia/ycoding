@@ -53,7 +53,7 @@ export interface Interface {
   readonly invalidateForContextRevision: (sessionID: SessionSchema.ID, revision: number) => Effect.Effect<void>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionContinuation") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionContinuation") {}
 
 const RESPONSE_ROUTES = new Set(["openai-responses", "openai-responses-websocket"])
 export const isResponsesRoute = (routeID: string) => RESPONSE_ROUTES.has(routeID)

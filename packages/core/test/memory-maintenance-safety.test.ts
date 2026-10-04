@@ -5,9 +5,9 @@ import { Effect, Layer } from "effect"
 import { MemoryTool } from "@ycoding-ai/core/tool/memory"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { Memory } from "@ycoding-ai/core/memory"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { Image } from "@ycoding-ai/core/image"
@@ -37,20 +37,20 @@ interface State {
 }
 
 function harness(f: Awaited<ReturnType<typeof memoryFixture>>, state: State) {
-  const permissions = Layer.mock(PermissionV2.Service, {
+  const permissions = Layer.mock(Permission.Service, {
     evaluateEffective: () => Effect.succeed("ask" as const),
     assert: (input) =>
       Effect.gen(function* () {
         state.actions.push(input.action)
         state.resources.push(...input.resources)
         if (state.denyActions.includes(input.action))
-          return yield* new PermissionV2.BlockedError({
+          return yield* new Permission.BlockedError({
             rules: [],
             permission: input.action,
             resources: input.resources,
           })
         if (input.resources.some((resource) => state.denyResources.some((denied) => resource.includes(denied))))
-          return yield* new PermissionV2.BlockedError({
+          return yield* new Permission.BlockedError({
             rules: [],
             permission: input.action,
             resources: input.resources,
@@ -78,11 +78,11 @@ function harness(f: Awaited<ReturnType<typeof memoryFixture>>, state: State) {
   const plugin = makeLocationNode({
     name: "test/memory-safety-plugin",
     layer: Layer.effectDiscard(registerToolPlugin(MemoryTool.Plugin)),
-    deps: [Memory.node, ToolRegistry.toolsNode, PermissionV2.node, SessionGuardrail.node],
+    deps: [Memory.node, ToolRegistry.toolsNode, Permission.node, SessionGuardrail.node],
   })
   return AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, plugin]), [
     [Memory.node, Layer.succeed(Memory.Service, f.store)],
-    [PermissionV2.node, permissions],
+    [Permission.node, permissions],
     [SessionGuardrail.node, guardrails],
     [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
     [Image.node, imagePassthrough],
@@ -106,7 +106,7 @@ function tool(f: Awaited<ReturnType<typeof memoryFixture>>) {
       Effect.gen(function* () {
         const registry = yield* ToolRegistry.Service
         return yield* executeTool(registry, {
-          sessionID: SessionV2.ID.make("ses_memory_safety"),
+          sessionID: Session.ID.make("ses_memory_safety"),
           ...toolIdentity,
           call: { type: "tool-call", id: `call-${state.actions.length}`, name: "memory", input },
         })

@@ -329,7 +329,7 @@ function WorkspacesScreenContent(props: {
   onOpen: () => void
 }) {
   const dimensions = useTerminalDimensions()
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   let input: InputRenderable | undefined
   onMount(() => setTimeout(() => input?.focus(), 1))
   const details = () => dimensions().width >= 120
@@ -341,22 +341,22 @@ function WorkspacesScreenContent(props: {
       width={dimensions().width}
       height={dimensions().height}
       flexDirection="column"
-      backgroundColor={themeV2.background.default}
+      backgroundColor={theme.background.default}
     >
       <box height={1} flexShrink={0} flexDirection="row" paddingLeft={3} paddingRight={3}>
-        <text attributes={TextAttributes.BOLD} fg={themeV2.text.default}>
+        <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
           Workspaces
         </text>
-        <text fg={themeV2.text.subdued}>
+        <text fg={theme.text.subdued}>
           {" "}
           · {props.entries().length} loaded{props.cursor() ? " · more available" : ""}
         </text>
         <Show when={props.loading()}>
-          <text fg={themeV2.text.subdued}> · </text>
-          <Spinner color={themeV2.text.subdued} />
+          <text fg={theme.text.subdued}> · </text>
+          <Spinner color={theme.text.subdued} />
         </Show>
         <box flexGrow={1} />
-        <text fg={themeV2.text.subdued} onMouseUp={props.onBack}>
+        <text fg={theme.text.subdued} onMouseUp={props.onBack}>
           {hint("back", "esc")}
         </text>
       </box>
@@ -385,8 +385,8 @@ function WorkspacesScreenContent(props: {
             }
           }}
           focusedBackgroundColor="transparent"
-          cursorColor={themeV2.text.feedback.info.default}
-          placeholderColor={themeV2.text.subdued}
+          cursorColor={theme.text.feedback.info.default}
+          placeholderColor={theme.text.subdued}
         />
       </box>
       <box flexGrow={1} minHeight={0} flexDirection="row" paddingTop={1}>
@@ -397,7 +397,7 @@ function WorkspacesScreenContent(props: {
           flexShrink={1}
           paddingLeft={3}
           verticalScrollbarOptions={{
-            trackOptions: { backgroundColor: themeV2.background.default, foregroundColor: themeV2.scrollbar.default },
+            trackOptions: { backgroundColor: theme.background.default, foregroundColor: theme.scrollbar.default },
           }}
         >
           <Show when={!props.loading() || props.entries().length > 0}>
@@ -408,10 +408,10 @@ function WorkspacesScreenContent(props: {
                   when={props.entries().length > 0}
                   fallback={
                     <box flexDirection="column">
-                      <text attributes={TextAttributes.BOLD} fg={themeV2.text.feedback.info.default}>
+                      <text attributes={TextAttributes.BOLD} fg={theme.text.feedback.info.default}>
                         No workspaces found
                       </text>
-                      <text fg={themeV2.text.subdued}>Try another search or refresh the inventory.</text>
+                      <text fg={theme.text.subdued}>Try another search or refresh the inventory.</text>
                     </box>
                   }
                 >
@@ -422,10 +422,10 @@ function WorkspacesScreenContent(props: {
                           <text> </text>
                         </Show>
                         <box flexDirection="row" paddingLeft={3}>
-                          <text attributes={TextAttributes.BOLD} fg={themeV2.text.feedback.info.default}>
+                          <text attributes={TextAttributes.BOLD} fg={theme.text.feedback.info.default}>
                             {group.title}
                           </text>
-                          <text fg={themeV2.text.subdued}> {group.worktree}</text>
+                          <text fg={theme.text.subdued}> {group.worktree}</text>
                         </box>
                         <For each={group.entries}>
                           {(entry) => {
@@ -448,9 +448,9 @@ function WorkspacesScreenContent(props: {
                                 paddingRight={1}
                                 backgroundColor={
                                   destructive()
-                                    ? themeV2.background.action.destructive.default
+                                    ? theme.background.action.destructive.default
                                     : active()
-                                      ? themeV2.background.action.primary.focused
+                                      ? theme.background.action.primary.focused
                                       : undefined
                                 }
                                 onMouseUp={() => {
@@ -462,10 +462,10 @@ function WorkspacesScreenContent(props: {
                                   truncate
                                   fg={
                                     active()
-                                      ? themeV2.text.action.primary.focused
+                                      ? theme.text.action.primary.focused
                                       : entry.available
-                                        ? themeV2.text.default
-                                        : themeV2.text.subdued
+                                        ? theme.text.default
+                                        : theme.text.subdued
                                   }
                                 >
                                   {destructive()
@@ -480,29 +480,29 @@ function WorkspacesScreenContent(props: {
                     )}
                   </For>
                   <Show when={props.loadingMore()}>
-                    <text fg={themeV2.text.subdued}>Loading more…</text>
+                    <text fg={theme.text.subdued}>Loading more…</text>
                   </Show>
                   <Show when={props.error()}>
-                    <text fg={themeV2.text.feedback.error.default}>Could not load more workspaces</text>
-                    <text fg={themeV2.text.subdued}>Press {hint("refresh", "ctrl+r")} to retry</text>
+                    <text fg={theme.text.feedback.error.default}>Could not load more workspaces</text>
+                    <text fg={theme.text.subdued}>Press {hint("refresh", "ctrl+r")} to retry</text>
                   </Show>
                 </Show>
               }
             >
               <box flexDirection="column">
-                <text fg={themeV2.text.feedback.error.default}>Could not load workspaces</text>
-                <text fg={themeV2.text.subdued}>Press {hint("refresh", "ctrl+r")} to retry</text>
+                <text fg={theme.text.feedback.error.default}>Could not load workspaces</text>
+                <text fg={theme.text.subdued}>Press {hint("refresh", "ctrl+r")} to retry</text>
               </box>
             </Show>
           </Show>
           <Show when={props.loading() && props.entries().length === 0}>
-            <Spinner color={themeV2.text.subdued}>Loading workspaces…</Spinner>
+            <Spinner color={theme.text.subdued}>Loading workspaces…</Spinner>
           </Show>
         </scrollbox>
         <Show when={details()}>
-          <text fg={themeV2.border.default}>┃</text>
+          <text fg={theme.border.default}>┃</text>
           <box flexGrow={1} minWidth={0} paddingLeft={2} paddingRight={3} flexDirection="column">
-            <Show when={current()} fallback={<text fg={themeV2.text.subdued}>Select a workspace</text>}>
+            <Show when={current()} fallback={<text fg={theme.text.subdued}>Select a workspace</text>}>
               {(entry) => (
                 <>
                   <For
@@ -516,7 +516,7 @@ function WorkspacesScreenContent(props: {
                   >
                     {(item) => (
                       <box flexDirection="row">
-                        <text width={17} fg={themeV2.text.subdued}>
+                        <text width={17} fg={theme.text.subdued}>
                           {item[0]}
                         </text>
                         <text flexGrow={1} minWidth={0} truncate>
@@ -525,24 +525,24 @@ function WorkspacesScreenContent(props: {
                       </box>
                     )}
                   </For>
-                  <text paddingTop={1} attributes={TextAttributes.BOLD} fg={themeV2.text.feedback.info.default}>
+                  <text paddingTop={1} attributes={TextAttributes.BOLD} fg={theme.text.feedback.info.default}>
                     Recent sessions
                   </text>
                   <Show
                     when={props.recent()?.directory === entry().directory}
-                    fallback={<text fg={themeV2.text.subdued}>Loading sessions…</text>}
+                    fallback={<text fg={theme.text.subdued}>Loading sessions…</text>}
                   >
                     <Show
                       when={!props.recent()?.loading}
-                      fallback={<text fg={themeV2.text.subdued}>Loading sessions…</text>}
+                      fallback={<text fg={theme.text.subdued}>Loading sessions…</text>}
                     >
                       <Show
                         when={(props.recent()?.sessions.length ?? 0) > 0}
-                        fallback={<text fg={themeV2.text.subdued}>No recent sessions</text>}
+                        fallback={<text fg={theme.text.subdued}>No recent sessions</text>}
                       >
                         <For each={props.recent()?.sessions.slice(0, 3)}>
                           {(session) => (
-                            <text truncate fg={themeV2.text.subdued}>
+                            <text truncate fg={theme.text.subdued}>
                               {session.title}
                             </text>
                           )}
@@ -557,7 +557,7 @@ function WorkspacesScreenContent(props: {
         </Show>
       </box>
       <box height={1} flexShrink={0} paddingLeft={3} paddingRight={3} flexDirection="row" justifyContent="center">
-        <text fg={themeV2.text.subdued}>
+        <text fg={theme.text.subdued}>
           {hint("previous", "↑")}
           {hint("next", "↓")} select · {hint("open", "enter")} open · {hint("delete", "ctrl+d")} delete copy ·{" "}
           {hint("forget", "ctrl+x")} forget · {hint("refresh", "ctrl+r")} refresh · {hint("back", "esc")} back
@@ -569,7 +569,7 @@ function WorkspacesScreenContent(props: {
 
 function WorkspaceForgetConfirmation(props: { entry: WorkspaceEntry; onConfirm: () => void }) {
   const dialog = useDialog()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   Keymap.createLayer(() => ({
     mode: "modal",
     commands: [
@@ -595,22 +595,22 @@ function WorkspaceForgetConfirmation(props: { entry: WorkspaceEntry; onConfirm: 
   return (
     <box paddingTop={1} paddingBottom={1} flexDirection="column" gap={1}>
       <box flexDirection="row" justifyContent="space-between" paddingLeft={3} paddingRight={3}>
-        <text attributes={TextAttributes.BOLD} fg={themeV2.text.default}>
+        <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
           Forget workspace directory?
         </text>
-        <text fg={themeV2.text.subdued} onMouseUp={() => dialog.clear()}>
+        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
           esc
         </text>
       </box>
       <box paddingLeft={3} paddingRight={3}>
-        <text fg={themeV2.text.subdued} wrapMode="word">
+        <text fg={theme.text.subdued} wrapMode="word">
           Permanently deletes {props.entry.sessions} sessions in {props.entry.directory} and forgets the directory.
           Files stay on disk.
         </text>
       </box>
       <box paddingLeft={3} flexDirection="row" gap={3}>
         <text
-          fg={themeV2.text.feedback.error.default}
+          fg={theme.text.feedback.error.default}
           onMouseUp={() => {
             props.onConfirm()
             dialog.clear()
@@ -618,7 +618,7 @@ function WorkspaceForgetConfirmation(props: { entry: WorkspaceEntry; onConfirm: 
         >
           enter confirm
         </text>
-        <text fg={themeV2.text.subdued} onMouseUp={() => dialog.clear()}>
+        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
           esc cancel
         </text>
       </box>

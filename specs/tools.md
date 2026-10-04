@@ -1,10 +1,10 @@
-# V2 Tools
+# Tools
 
 Status: **Current semantic overview.** The Plugin package owns the public tool type; Core owns registration, settlement, and generic output bounding.
 
 ## Tool Declarations
 
-V2 has one structural declaration for locally executable tools. Typed tools declare schemas, execution, and optional model-facing projection together:
+The runtime has one structural declaration for locally executable tools. Typed tools declare schemas, execution, and optional model-facing projection together:
 
 ```ts
 const read = Tool.make({
@@ -91,7 +91,7 @@ Built-ins use the same tool API while capturing trusted Location services:
 
 ```ts
 const filesystem = yield * FileSystem.Service
-const permission = yield * PermissionV2.Service
+const permission = yield * Permission.Service
 const tools = yield * Tools.Service
 
 yield *
@@ -124,7 +124,7 @@ yield *
   })
 ```
 
-Trusted tools formulate and sequence permission requests. `PermissionV2` evaluates policy and manages approval. The registry does not inject an `assertPermission` helper.
+Trusted tools formulate and sequence permission requests. `Permission` evaluates policy and manages approval. The registry does not inject an `assertPermission` helper.
 
 The built-in `glob` and `grep` tools canonicalize their search roots and reject escapes from the active Location. `grep` also accepts a direct absolute managed tool-output file; a direct file search checks `read` before scanning, while a directory search checks `read` on each matched file before returning results. A denied file fails the whole result. `webfetch` checks the destination URL's permission before following each HTTP redirect, with at most ten redirects.
 

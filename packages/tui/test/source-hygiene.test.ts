@@ -3,9 +3,9 @@ import { existsSync } from "node:fs"
 import path from "node:path"
 import { Schema } from "effect"
 import { DEFAULT_THEMES } from "../src/theme"
-import { ThemeFile } from "../src/theme/v2"
-import { resolveThemeFile } from "../src/theme/v2/resolve"
-import { themeModes } from "../src/theme/v2/select"
+import { ThemeFile } from "../src/theme"
+import { resolveThemeFile } from "../src/theme/resolve"
+import { themeModes } from "../src/theme/select"
 
 const root = path.resolve(import.meta.dir, "..")
 

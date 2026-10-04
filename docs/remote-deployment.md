@@ -58,11 +58,11 @@ HTTP `200` returns `{ "outcome": "accepted" | "rejected" | "expired" | "unreacha
 
 Commands below run from the repository root and target the committed configuration with `--config infra/cloudflare/wrangler.jsonc`. Wrangler is pinned to 4.133.0; `bunx wrangler` resolves that local version.
 
-### WebSocket v3 cutover
+### WebSocket v4 cutover
 
-The current relay accepts WebSockets only at `/ws/v3/client` and `/ws/v3/agent`. Missing-version, v1, v2, and unknown-version relay paths return `404` before a WebSocket upgrade; there are no aliases or protocol fallbacks. The v3 operation set uses native Forms for remote human input and contains no legacy Question operations. Enrollment records, device identities, and browser sign-in data remain valid, so this cutover requires no credential or data migration.
+The relay accepts WebSockets only at `/ws/v4/client` and `/ws/v4/agent`. Missing-version, v1, v2, v3, and unknown-version relay paths return `404` before a WebSocket upgrade; there are no aliases or protocol fallbacks. The v4 operation set uses native Forms for remote human input. Enrollment records, device identities, and browser sign-in data remain valid, so this cutover requires no credential or data migration.
 
-Perform a coordinated release in this order: stop existing `ycoding remote connect` processes; upgrade every installed connector to a build that uses `/ws/v3/agent`; deploy the Worker and web assets from the same release; refresh open browser tabs so they use `/ws/v3/client`; then restart each connector and reconnect the existing enrolled identity. A v2 connector cannot connect after the Worker cutover, and a v2 browser tab must be refreshed. Do not re-enroll a device unless its existing credential is independently invalid.
+Perform a coordinated release in this order: stop existing `ycoding remote connect` processes; upgrade every installed connector to a build that uses `/ws/v4/agent`; deploy the Worker and web assets from the same release; refresh open browser tabs so they use `/ws/v4/client`; then restart each connector and reconnect the existing enrolled identity. A v3 connector cannot connect after the Worker cutover, and a v3 browser tab must be refreshed. Do not re-enroll a device unless its existing credential is independently invalid.
 
 ### Notification protocol cutover
 

@@ -8,7 +8,7 @@ export const KeepAwakeGroup = HttpApiGroup.make("server.keepAwake")
     HttpApiEndpoint.get("keepAwake.get", "/api/keep-awake", {
       success: Schema.Struct({ data: KeepAwake.Status }),
     }).annotateMerge(OpenApi.annotations({
-      identifier: "v2.keepAwake.get",
+      identifier: "keepAwake.get",
       summary: "Get keep machine awake",
       description: "Read whether this server is preventing idle system sleep on its machine.",
     })),
@@ -18,7 +18,7 @@ export const KeepAwakeGroup = HttpApiGroup.make("server.keepAwake")
       payload: Schema.Struct({ enabled: Schema.Boolean }),
       success: Schema.Struct({ data: KeepAwake.Status }),
     }).annotateMerge(OpenApi.annotations({
-      identifier: "v2.keepAwake.set",
+      identifier: "keepAwake.set",
       summary: "Set keep machine awake",
       description:
         "Start or stop preventing idle system sleep for the lifetime of this server process. The choice is not persisted.",

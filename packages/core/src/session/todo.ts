@@ -5,7 +5,7 @@ import { asc, eq, sql } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { Hash } from "../util/hash"
 import { SessionSchema } from "./schema"
 import { SessionTodoStateTable, SessionTodoTable } from "./sql"
@@ -20,13 +20,13 @@ export interface Interface {
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Info>>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionTodo") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionTodo") {}
 
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     return Service.of({
       update: Effect.fn("SessionTodo.update")(function* (input) {
         const rows = input.todos.map((todo, position) => ({
@@ -83,4 +83,4 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeLocationNode({ service: Service, layer, deps: [EventV2.node, Database.node] })
+export const node = makeLocationNode({ service: Service, layer, deps: [EventRuntime.node, Database.node] })

@@ -10,14 +10,14 @@ export function BtwContext(props: { parentID: string }) {
   const data = useData()
   const client = useClient()
   const toast = useToast()
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   createEffect(() => {
     if (client.connection.status() !== "connected") return
     void data.session.sync(props.parentID).catch(toast.error)
   })
   return (
     <box paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1} flexShrink={0}>
-      <text fg={themeV2.text.subdued} wrapMode="none" truncate>
+      <text fg={theme.text.subdued} wrapMode="none" truncate>
         Parent context snapshot · read-only · {data.session.get(props.parentID)?.title ?? "main chat"}
       </text>
     </box>
@@ -26,7 +26,7 @@ export function BtwContext(props: { parentID: string }) {
 
 export function BtwFooter(props: { sessionID: string; parentID: string }) {
   const route = useRoute()
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const shortcuts = Keymap.useShortcuts()
   const paletteShortcut = Keymap.useShortcut("command.palette.show")
   const back = () => route.navigate({ type: "session", sessionID: props.parentID })
@@ -52,13 +52,13 @@ export function BtwFooter(props: { sessionID: string; parentID: string }) {
       justifyContent="space-between"
       alignItems="center"
       flexShrink={0}
-      backgroundColor={themeV2.background.chrome}
+      backgroundColor={theme.background.chrome}
     >
-      <text fg={themeV2.text.action.primary.default} onMouseUp={back}>
-        <span style={{ fg: themeV2.text.subdued }}>{shortcuts.get("session.btw.back")?.replaceAll("ctrl+", "⌃")}</span> Back to main
+      <text fg={theme.text.action.primary.default} onMouseUp={back}>
+        <span style={{ fg: theme.text.subdued }}>{shortcuts.get("session.btw.back")?.replaceAll("ctrl+", "⌃")}</span> Back to main
       </text>
-      <text fg={themeV2.text.default} wrapMode="none" flexShrink={0}>
-        {paletteShortcut()?.replaceAll("ctrl+", "⌃")} <span style={{ fg: themeV2.text.subdued }}>commands</span>
+      <text fg={theme.text.default} wrapMode="none" flexShrink={0}>
+        {paletteShortcut()?.replaceAll("ctrl+", "⌃")} <span style={{ fg: theme.text.subdued }}>commands</span>
       </text>
     </box>
   )

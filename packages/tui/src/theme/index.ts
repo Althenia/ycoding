@@ -1,13 +1,30 @@
 import { Schema } from "effect"
 import { DEFAULT_THEMES } from "./builtins"
-import { ThemeFile, type ThemeFile as ThemeFileType } from "./v2"
+import { ThemeFile } from "./schema"
 
 export { DEFAULT_THEMES } from "./builtins"
+export {
+  type ActionStateKey,
+  HueStep,
+  ModeDefinition,
+  ThemeDefinition,
+  ThemeFile,
+  type BackgroundDefinition,
+  type FileThemeDefinition,
+  type HueDefinition,
+  type MergeModeDefinition,
+  type Mode,
+  type StatefulColorDefinition,
+  type ContextKey,
+  type TextDefinition,
+  type ThemeTokensDefinition,
+} from "./schema"
+export type { HueScale, ResolvedActionState, ResolvedTheme, ResolvedThemeView } from "./types"
 
-const pluginThemes: Record<string, ThemeFileType> = {}
-let customThemes: Record<string, ThemeFileType> = {}
-let systemTheme: ThemeFileType | undefined
-const listeners = new Set<(themes: Record<string, ThemeFileType>) => void>()
+const pluginThemes: Record<string, ThemeFile> = {}
+let customThemes: Record<string, ThemeFile> = {}
+let systemTheme: ThemeFile | undefined
+const listeners = new Set<(themes: Record<string, ThemeFile>) => void>()
 const isThemeFile = Schema.is(ThemeFile)
 
 function listThemes() {
@@ -33,21 +50,21 @@ export function allThemes() {
   return listThemes()
 }
 
-export function isTheme(theme: unknown): theme is ThemeFileType {
+export function isTheme(theme: unknown): theme is ThemeFile {
   return isThemeFile(theme)
 }
 
-export function subscribeThemes(listener: (themes: Record<string, ThemeFileType>) => void) {
+export function subscribeThemes(listener: (themes: Record<string, ThemeFile>) => void) {
   listeners.add(listener)
   return () => listeners.delete(listener)
 }
 
-export function setCustomThemes(themes: Record<string, ThemeFileType>) {
+export function setCustomThemes(themes: Record<string, ThemeFile>) {
   customThemes = themes
   syncThemes()
 }
 
-export function setSystemTheme(theme: ThemeFileType | undefined) {
+export function setSystemTheme(theme: ThemeFile | undefined) {
   systemTheme = theme
   syncThemes()
 }

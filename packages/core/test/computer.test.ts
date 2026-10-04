@@ -4,18 +4,18 @@ import { MacOSComputer } from "@ycoding-ai/core/computer/macos"
 import { ElectronComputer } from "@ycoding-ai/core/computer/electron"
 import { Node } from "@ycoding-ai/core/effect/app-node"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { AppProcess } from "@ycoding-ai/core/process"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { Cause, Context, DateTime, Effect, Exit, Fiber, Layer, PubSub, Schema, Scope, Stream } from "effect"
 import path from "node:path"
 import { readFile, rm, stat, writeFile } from "node:fs/promises"
 import { statSync } from "node:fs"
 
-const owner = SessionV2.ID.make("ses_computer_owner")
-const other = SessionV2.ID.make("ses_computer_other")
+const owner = Session.ID.make("ses_computer_owner")
+const other = Session.ID.make("ses_computer_other")
 const target = {
   platform: "macos" as const,
   application: "iterm" as const,
@@ -724,16 +724,16 @@ describe("native computer target ownership", () => {
           expect(Exit.isFailure(stillOwned)).toBe(true)
 
           yield* PubSub.publish(lifecycleEvents, {
-            id: EventV2.ID.create(),
+            id: EventRuntime.ID.create(),
             type: SessionEvent.Moved.type,
             created: DateTime.makeUnsafe(0),
             durable: {
               aggregateID: other,
-              seq: EventV2.Seq.make(0),
-              version: EventV2.Version.make(SessionEvent.Moved.durable.version),
+              seq: EventRuntime.Seq.make(0),
+              version: EventRuntime.Version.make(SessionEvent.Moved.durable.version),
             },
             data: { sessionID: other, location: { directory: AbsolutePath.make("/tmp/computer-moved") } },
-          } satisfies EventV2.Payload<typeof SessionEvent.Moved>)
+          } satisfies EventRuntime.Payload<typeof SessionEvent.Moved>)
           yield* Effect.yieldNow
           const afterMove = yield* locations
             .acquire()
@@ -984,7 +984,7 @@ describe("native computer target ownership", () => {
 })
 
 function yieldPubSub() {
-  return Effect.runSync(PubSub.unbounded<EventV2.Payload>())
+  return Effect.runSync(PubSub.unbounded<EventRuntime.Payload>())
 }
 
 const fixtureRequest = Schema.Struct({
@@ -1033,7 +1033,7 @@ function makeLocationComputers(
     request: typeof fixtureRequest.Type,
     signal: AbortSignal,
   ) => Effect.Effect<Computer.NativeSuccess, Computer.NativeError>,
-  events: Stream.Stream<EventV2.Payload> = Stream.never,
+  events: Stream.Stream<EventRuntime.Payload> = Stream.never,
   onLaunch?: (args: ReadonlyArray<string>, signal?: AbortSignal) => void,
   invalidResponse?: (action: typeof fixtureRequest.Type.action) => boolean | {
     readonly status: "error"
@@ -1082,7 +1082,7 @@ function makeLocationComputers(
   })
   const split = LayerNode.hoist(Computer.node, Node.tags.values.global, [
     [AppProcess.node, processLayer],
-    [EventV2.node, Layer.mock(EventV2.Service, { subscribe: () => events })],
+    [EventRuntime.node, Layer.mock(EventRuntime.Service, { subscribe: () => events })],
   ])
 
   return Effect.gen(function* () {

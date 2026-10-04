@@ -33,7 +33,7 @@ const sample: SessionSummaryToon.Memory = {
 }
 
 describe("SessionSummaryToon", () => {
-  test("round trips the structured V2 continuation handoff fields", () => {
+  test("round trips the structured TOON version 2 continuation handoff fields", () => {
     const memory = {
       version: 2,
       through_sequence: 42,

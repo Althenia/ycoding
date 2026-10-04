@@ -4,7 +4,7 @@ import { and, asc, desc, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm"
 import { Effect, Schema } from "effect"
 import type { Database } from "../database/database"
 import { KeyedMutex } from "../effect/keyed-mutex"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { EventTable } from "../event/sql"
 import type { Job } from "../job"
 import { Hash } from "../util/hash"
@@ -28,14 +28,14 @@ const historyDefinitions = [
   SessionEvent.Tool.Failed,
 ] as const
 const decodeHistory = Schema.decodeUnknownSync(Schema.Union(historyDefinitions, { mode: "oneOf" }))
-const versioned = (definition: Extract<EventV2.Definition, { durability: "durable" }>) =>
-  EventV2.versionedType(definition.type, definition.durable.version)
+const versioned = (definition: Extract<EventRuntime.Definition, { durability: "durable" }>) =>
+  EventRuntime.versionedType(definition.type, definition.durable.version)
 
 class StaleCompletion extends Error {}
 
 export const make = (options: {
   readonly db: DatabaseService
-  readonly events: EventV2.Interface
+  readonly events: EventRuntime.Interface
   readonly jobs: Pick<Job.Interface, "list" | "outstandingSessions">
 }) => {
   const gate = KeyedMutex.makeUnsafe<SessionSchema.ID>()
@@ -104,7 +104,7 @@ export const latest = Effect.fn("SessionCompletion.latest")(function* (
     .pipe(Effect.orDie)
   const data = rows.slice(0, input.limit).map((row) => ({
     id: row.id,
-    seq: EventV2.Seq.make(row.seq),
+    seq: EventRuntime.Seq.make(row.seq),
     created: row.created,
     ...Schema.decodeUnknownSync(SessionEvent.Work.Completed.data)(row.data),
   }))
@@ -244,7 +244,7 @@ const completionCandidate = Effect.fnUntraced(function* (db: DatabaseService, se
     .pipe(Effect.orDie)
   if (revert && revert.seq > invokingStep.durable.seq) return undefined
   return {
-    id: EventV2.ID.make(`evt_work_${Hash.sha256(`${sessionID}\0${admitted.seq}\0${revert?.seq ?? -1}`).slice(0, 24)}`),
+    id: EventRuntime.ID.make(`evt_work_${Hash.sha256(`${sessionID}\0${admitted.seq}\0${revert?.seq ?? -1}`).slice(0, 24)}`),
     data: { sessionID, inputID: input.inputID, assistantMessageID: ended.data.assistantMessageID },
   }
 })

@@ -1,7 +1,7 @@
 export * as OpenAIUsage from "./openai"
 
 import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
-import { ProviderV2 } from "../provider"
+import { Provider } from "../provider"
 
 interface Bucket {
   readonly start_time?: unknown
@@ -10,7 +10,7 @@ interface Bucket {
 }
 
 export interface NormalizeInput {
-  readonly providerID: ProviderV2.ID
+  readonly providerID: Provider.ID
   readonly label: string
   readonly updatedAt: number
   readonly weekStart: number

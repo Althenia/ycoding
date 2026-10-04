@@ -26,9 +26,9 @@ import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNodePlatform } from "@ycoding-ai/core/effect/app-node-platform"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { EventTable } from "@ycoding-ai/core/event/sql"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectArtifactInstructions } from "@ycoding-ai/core/project-artifact/instructions"
@@ -37,7 +37,7 @@ import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { Form } from "@ycoding-ai/core/form"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { Snapshot } from "@ycoding-ai/core/snapshot"
 import { SessionCompactionExecution } from "@ycoding-ai/core/session/compaction-execution"
 import { SessionCompactionJob } from "@ycoding-ai/core/session/compaction-job"
@@ -74,7 +74,7 @@ import { PluginHooks } from "@ycoding-ai/core/plugin/hooks"
 import { SystemPromptPlugin } from "@ycoding-ai/core/plugin/system-prompt"
 import { QuestionTool } from "@ycoding-ai/core/tool/question"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
@@ -99,12 +99,12 @@ import { Instructions } from "@ycoding-ai/core/instructions"
 import { InstructionBuiltIns } from "@ycoding-ai/core/instructions/builtins"
 import { InstructionDiscovery } from "@ycoding-ai/core/instruction-discovery"
 import { SkillInstructions } from "@ycoding-ai/core/skill/instructions"
-import { SkillV2 } from "@ycoding-ai/core/skill"
+import { Skill } from "@ycoding-ai/core/skill"
 import { ReferenceInstructions } from "@ycoding-ai/core/reference/instructions"
 import { McpInstructions } from "@ycoding-ai/core/mcp/instructions"
-import { ModelV2 } from "@ycoding-ai/core/model"
+import { CatalogModel } from "@ycoding-ai/core/model"
 import { Location } from "@ycoding-ai/core/location"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { Cause, Clock, Context, DateTime, Deferred, Duration, Effect, Exit, Fiber, Layer, LayerMap, Schema, Scope, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { and, asc, eq, lte } from "drizzle-orm"
@@ -417,7 +417,7 @@ const permissionFail = Tool.make({
   execute: () =>
     new ToolFailure({
       message: "Permission denied: edit",
-      error: new PermissionV2.BlockedError({
+      error: new Permission.BlockedError({
         rules: [],
         permission: "edit",
         resources: ["src/index.ts"],
@@ -425,8 +425,8 @@ const permissionFail = Tool.make({
     }),
 })
 const permission = Layer.succeed(
-  PermissionV2.Service,
-  PermissionV2.Service.of({
+  Permission.Service,
+  Permission.Service.of({
     evaluateEffective: () => Effect.sync(() => skillAccess),
     assert: () => Effect.die("unused"),
     ask: () => Effect.die("unused"),
@@ -493,7 +493,7 @@ const echo = Layer.effectDiscard(
 const echoNode = makeLocationNode({ name: "test/session-runner-tools", layer: echo, deps: [ToolRegistry.node] })
 let modelResolveHook = Effect.void
 let currentModel = model
-let currentCost: ModelV2.Info["cost"] = []
+let currentCost: CatalogModel.Info["cost"] = []
 const models = SessionRunnerModel.layerWith((session) =>
   modelResolveHook.pipe(
     Effect.as(
@@ -510,13 +510,13 @@ let systemBaseline = "Initial context"
 let systemRemoved = false
 let systemUnavailable = false
 let systemLoadHook = Effect.void
-const skillBaselines = new Map<AgentV2.ID, string>()
+const skillBaselines = new Map<Agent.ID, string>()
 let skillAccess: "allow" | "deny" = "allow"
 const registerExplicitSkill = (id: string, content: string, location = `${runnerDirectory}/${id}.md`) =>
   Effect.gen(function* () {
-    const skills = yield* SkillV2.Service
+    const skills = yield* Skill.Service
     const locations = yield* LocationServiceMap.Service
-    const local = yield* SkillV2.Service.pipe(
+    const local = yield* Skill.Service.pipe(
       Effect.provide(locations.get(Location.Ref.make({ directory: runnerDirectory }))),
     )
     yield* Effect.forEach(
@@ -525,9 +525,9 @@ const registerExplicitSkill = (id: string, content: string, location = `${runner
         service.transform((draft) =>
           draft.source({
             type: "embedded",
-            skill: SkillV2.Info.make({
-              id: SkillV2.ID.make(id),
-              name: SkillV2.Name.make(id),
+            skill: Skill.Info.make({
+              id: Skill.ID.make(id),
+              name: Skill.Name.make(id),
               autoinvoke: false,
               location: AbsolutePath.make(location),
               content,
@@ -585,7 +585,7 @@ const projects = Layer.mock(Project.Service, {
 })
 let efficiencyConfig: ConfigEfficiency.Info | undefined
 let imageAnalyzerConfig: ConfigImageAnalyzer.Info | undefined
-let catalogModel: ModelV2.Info | undefined
+let catalogModel: CatalogModel.Info | undefined
 let compactionWakeHook = Effect.void
 let compactionSummary = false
 const config = Layer.succeed(
@@ -702,7 +702,7 @@ const compactionExecution = Layer.effect(
               baseContextRevision: job.baseContextRevision,
               coveredThrough: Object.freeze({
                 messageID: job.requestedThrough.messageID,
-                seq: EventV2.Seq.make(job.requestedThrough.seq),
+                seq: EventRuntime.Seq.make(job.requestedThrough.seq),
               }),
               protectedState: Object.freeze(
                 SessionLiveState.toProtectedState({ ...capture.sources, guardrails: guardrail }).map((entry) =>
@@ -717,7 +717,7 @@ const compactionExecution = Layer.effect(
                       text: summary,
                       coveredThrough: Object.freeze({
                         messageID: job.requestedThrough.messageID,
-                        seq: EventV2.Seq.make(job.requestedThrough.seq),
+                        seq: EventRuntime.Seq.make(job.requestedThrough.seq),
                       }),
                       digest: ContextManifest.payloadDigest(boundaryData),
                     }),
@@ -778,7 +778,7 @@ const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [Location.node, Location.boundNode({ directory: runnerDirectory })],
   [SkillInstructions.node, skillInstructions],
   [ReferenceInstructions.node, referenceInstructions],
-  [PermissionV2.node, permission],
+  [Permission.node, permission],
   [Config.node, config],
   [McpInstructions.node, mcpInstructions],
   [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
@@ -793,7 +793,7 @@ const execution = Layer.effect(
   Effect.gen(function* () {
     const sessionRunner = yield* SessionRunner.Service
     const compactionExecution = yield* SessionCompactionExecution.Service
-    const coordinator = yield* SessionRunCoordinator.make<SessionV2.ID, SessionRunner.RunError>({
+    const coordinator = yield* SessionRunCoordinator.make<Session.ID, SessionRunner.RunError>({
       drain: (sessionID, force) =>
         sessionRunner.drain({ sessionID, force }).pipe(SessionCompactionExecution.bind(compactionExecution)),
     })
@@ -812,12 +812,12 @@ const it = testEffect(
     LayerNode.group([
       Database.node,
       Job.node,
-      EventV2.node,
+      EventRuntime.node,
       Form.node,
       SessionProjector.node,
       SessionStore.node,
       SessionProviderRequest.node,
-      AgentV2.node,
+      Agent.node,
       Catalog.node,
       ToolRegistry.node,
       ToolRegistry.toolsNode,
@@ -830,7 +830,7 @@ const it = testEffect(
       InstructionDiscovery.node,
       InstructionEntry.node,
       SkillInstructions.node,
-      SkillV2.node,
+      Skill.node,
       LocationServiceMap.node,
       ReferenceInstructions.node,
       Config.node,
@@ -841,13 +841,13 @@ const it = testEffect(
       SessionGuardrail.node,
       SessionCompactionExecution.node,
       SessionExecution.node,
-      SessionV2.node,
+      Session.node,
       AttachmentStore.node,
     ]),
     [
       [LayerNodePlatform.llmClient, client],
       [Project.node, projects],
-      [PermissionV2.node, permission],
+      [Permission.node, permission],
       [Catalog.node, promptCatalog],
       [SessionRunnerModel.node, models],
       [InstructionBuiltIns.node, systemContext],
@@ -864,11 +864,11 @@ const it = testEffect(
     ],
   ),
 )
-const sessionID = SessionV2.ID.make("ses_runner_test")
-const otherSessionID = SessionV2.ID.make("ses_runner_other")
-const admit = (session: SessionV2.Interface, text: string) => session.prompt({ sessionID, text, resume: false })
+const sessionID = Session.ID.make("ses_runner_test")
+const otherSessionID = Session.ID.make("ses_runner_other")
+const admit = (session: Session.Interface, text: string) => session.prompt({ sessionID, text, resume: false })
 
-const insertSession = (id: SessionV2.ID) =>
+const insertSession = (id: Session.ID) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     yield* db
@@ -887,7 +887,7 @@ const insertSession = (id: SessionV2.ID) =>
 
 const setup = Effect.gen(function* () {
   const { db } = yield* Database.Service
-  const agents = yield* AgentV2.Service
+  const agents = yield* Agent.Service
   const catalog = yield* Catalog.Service
   const hooks = yield* PluginHooks.Service
   const pluginHost = host({
@@ -930,7 +930,7 @@ const setup = Effect.gen(function* () {
   activeToolExecutions = 0
   maxActiveToolExecutions = 0
   yield* agents.transform((draft) =>
-    draft.update(AgentV2.ID.make("build"), (agent) => {
+    draft.update(Agent.ID.make("build"), (agent) => {
       agent.mode = "primary"
     }),
   )
@@ -941,7 +941,7 @@ const setup = Effect.gen(function* () {
     .run()
     .pipe(Effect.orDie)
   yield* insertSession(sessionID)
-  return yield* SessionV2.Service
+  return yield* Session.Service
 })
 
 const providerUnavailable = () =>
@@ -1017,7 +1017,7 @@ const userTexts = (request: LLMRequest) => messageTexts(request, "user")
 const systemTexts = (request: LLMRequest) => messageTexts(request, "system")
 const nonVolatileMessages = (request: LLMRequest) => request.messages.filter((message) => message.volatile !== true)
 
-const recordedEventTypes = (id: SessionV2.ID) =>
+const recordedEventTypes = (id: Session.ID) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     return yield* db
@@ -1032,7 +1032,7 @@ const recordedEventTypes = (id: SessionV2.ID) =>
       )
   })
 
-const recordedStepSettlementEvents = (id: SessionV2.ID, assistantMessageID: SessionMessage.ID) =>
+const recordedStepSettlementEvents = (id: Session.ID, assistantMessageID: SessionMessage.ID) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     const settlementTypes = new Set([
@@ -1069,10 +1069,10 @@ const sessionStateNotice = {
   text: expect.stringContaining("Authoritative current Session state (JSON):"),
 }
 
-const replaySessionProjection = (id: SessionV2.ID) =>
+const replaySessionProjection = (id: Session.ID) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const recorded = yield* db
       .select()
       .from(EventTable)
@@ -1108,7 +1108,7 @@ type FragmentExpectedContent =
     }
 
 type FragmentFixture = {
-  readonly delta: EventV2.Definition
+  readonly delta: EventRuntime.Definition
   readonly completeEvents: LLMEvent[]
   readonly partialEvents: LLMEvent[]
   readonly expectedContent: FragmentExpectedContent
@@ -1183,7 +1183,7 @@ const verifyEphemeralDeltas = (kind: FragmentKind) =>
     const chunks = Array.from({ length: 32 }, (_, index) => `${index},`)
     const fixture = fragmentFixture(kind, fragmentID(kind, "many"), chunks)
     yield* admit(session, prompt)
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const live = yield* events.subscribe(fixture.delta).pipe(Stream.take(32), Stream.runCollect, Effect.forkScoped)
     yield* Effect.yieldNow
     response =
@@ -1204,7 +1204,7 @@ const verifyEphemeralDeltas = (kind: FragmentKind) =>
     const deltas = yield* db
       .select({ type: EventTable.type })
       .from(EventTable)
-      .where(eq(EventTable.type, EventV2.versionedType(fixture.delta.type, 1)))
+      .where(eq(EventTable.type, EventRuntime.versionedType(fixture.delta.type, 1)))
       .all()
       .pipe(Effect.orDie)
     expect(Array.from(yield* Fiber.join(live))).toHaveLength(32)
@@ -1313,7 +1313,7 @@ describe("SessionRunnerLLM", () => {
       expect(prompt).toContain("Inspect the third boundary.")
       expect(
         (yield* session.context(sessionID)).flatMap((message) => (message.type === "skill" ? [message.skill] : [])),
-      ).toEqual(["first-audit", "second-audit", "third-audit"].map((id) => SkillV2.ID.make(id)))
+      ).toEqual(["first-audit", "second-audit", "third-audit"].map((id) => Skill.ID.make(id)))
     }),
   )
 
@@ -1376,11 +1376,11 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       const session = yield* setup
       yield* registerExplicitSkill("client-audit", "Client audit full instructions")
-      yield* session.skill({ sessionID, skill: SkillV2.ID.make("client-audit"), resume: false })
+      yield* session.skill({ sessionID, skill: Skill.ID.make("client-audit"), resume: false })
       yield* session.prompt({ sessionID, text: "$client-audit", resume: false })
       yield* session.resume(sessionID)
       expect((yield* session.context(sessionID)).filter((message) => message.type === "skill")).toHaveLength(1)
-      yield* session.switchAgent({ sessionID, agent: AgentV2.ID.make("build") })
+      yield* session.switchAgent({ sessionID, agent: Agent.ID.make("build") })
       yield* session.prompt({ sessionID, text: "$client-audit", resume: false })
       yield* session.resume(sessionID)
       const messages = yield* session.context(sessionID)
@@ -1434,7 +1434,7 @@ describe("SessionRunnerLLM", () => {
           .slice(compaction + 1)
           .filter((message) => message.type === "skill")
           .map((message) => message.skill),
-      ).toEqual([SkillV2.ID.make("compacted-audit")])
+      ).toEqual([Skill.ID.make("compacted-audit")])
       expect(JSON.stringify(requests.at(-1)!.messages)).toContain("Compacted audit full instructions")
       expect(JSON.stringify(requests.at(-1)!.messages)).not.toContain("Other audit instructions")
     }),
@@ -1532,7 +1532,7 @@ describe("SessionRunnerLLM", () => {
       const session = yield* setup
       yield* registerToolPlugin(TaskCompleteTool.Plugin)
       const database = yield* Database.Service
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const store = yield* SessionStore.Service
       const autonomy = yield* SessionAutonomy.Service
       const jobs = yield* Job.Service
@@ -1544,7 +1544,7 @@ describe("SessionRunnerLLM", () => {
       )
       const context = yield* Layer.buildWithScope(SessionExecution.layer.pipe(
         Layer.provide(Layer.succeed(Database.Service, database)),
-        Layer.provide(Layer.succeed(EventV2.Service, events)),
+        Layer.provide(Layer.succeed(EventRuntime.Service, events)),
         Layer.provide(Layer.succeed(SessionStore.Service, store)),
         Layer.provide(Layer.succeed(SessionAutonomy.Service, autonomy)),
         Layer.provide(Layer.succeed(Job.Service, jobs)),
@@ -1683,7 +1683,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("retains TeamView lifecycle updates and clears deleted children once", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const db = (yield* Database.Service).db
       const teamMessages = (request: LLMRequest) => request.messages.filter((message) =>
         message.content.some((part) => part.type === "text" && part.text.startsWith("Internal orchestration context (JSON).")),
@@ -1702,8 +1702,8 @@ describe("SessionRunnerLLM", () => {
           toolCallID: "call-team-fixture",
           inputID: SessionMessage.ID.make("msg_team_input"),
           description: "Review fixture",
-          agent: AgentV2.ID.make("build"),
-          model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
+          agent: Agent.ID.make("build"),
+          model: { id: CatalogModel.ID.make("fake-model"), providerID: Provider.ID.make("fake") },
           promptDigest: "fixture-digest",
           background: true,
           delivery: "steer",
@@ -1766,7 +1766,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("does not append TeamView observations for repeated progress metadata", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const db = (yield* Database.Service).db
       yield* admit(session, "Start review")
       yield* session.resume(sessionID)
@@ -1780,8 +1780,8 @@ describe("SessionRunnerLLM", () => {
           toolCallID: "call-team-churn",
           inputID: SessionMessage.ID.make("msg_team_churn"),
           description: "Review fixture",
-          agent: AgentV2.ID.make("build"),
-          model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
+          agent: Agent.ID.make("build"),
+          model: { id: CatalogModel.ID.make("fake-model"), providerID: Provider.ID.make("fake") },
           promptDigest: "fixture-digest",
           background: true,
           delivery: "steer",
@@ -1922,7 +1922,7 @@ describe("SessionRunnerLLM", () => {
       expect(requests).toHaveLength(1)
       const assistant = requireAssistant(yield* session.context(sessionID))
       expect(assistant.model).toEqual(
-        ModelV2.Ref.make({ providerID: ProviderV2.ID.make("fake"), id: ModelV2.ID.make("fake-model") }),
+        CatalogModel.Ref.make({ providerID: Provider.ID.make("fake"), id: CatalogModel.ID.make("fake-model") }),
       )
       expect(assistant.content).toEqual([{ type: "text", text: "Provider answer" }])
     }),
@@ -2055,7 +2055,7 @@ describe("SessionRunnerLLM", () => {
         reply.tool("call-location", "location_context", { query: "hello" }),
         reply.text("Location response", "text-location-response"),
       ]
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const progressFiber = yield* events.subscribe(SessionEvent.Tool.Progress).pipe(
         Stream.filter((event) => event.data.sessionID === sessionID && event.data.callID === "call-location"),
         Stream.take(1),
@@ -2069,7 +2069,7 @@ describe("SessionRunnerLLM", () => {
       expect(contexts).toEqual([
         {
           sessionID,
-          agent: AgentV2.ID.make("build"),
+          agent: Agent.ID.make("build"),
           messageID: expect.stringMatching(/^msg_/),
           callID: "call-location",
           progress: expect.any(Function),
@@ -2209,7 +2209,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("keeps the five-minute Anthropic TTL for every request of an adaptive child Session", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const parentID = SessionV2.ID.make("ses_runner_cache_parent")
+      const parentID = Session.ID.make("ses_runner_cache_parent")
       const { db } = yield* Database.Service
       yield* insertSession(parentID)
       yield* db.update(SessionTable).set({ parent_id: parentID }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
@@ -2797,7 +2797,7 @@ describe("SessionRunnerLLM", () => {
       expect(separate?.generationSpeed?.latest).toMatchObject({ tokens: 8, durationNs: 2_000_000_000,
         tokensPerSecond: 4 })
       expect(separate?.generationSpeed?.recent).toHaveLength(2)
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       yield* events.publish(SessionEvent.Compaction.StartedV1, { sessionID, reason: "manual", recent: "" })
       yield* events.publish(SessionEvent.Compaction.EndedV1, {
         sessionID, reason: "manual", text: "summary", recent: "",
@@ -2848,7 +2848,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("publishes live cache diagnostics before settled local tools finish", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       currentModel = Model.make({
         id: "diagnostic-model",
         provider: "openai",
@@ -2961,7 +2961,7 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("streams one request with registry definitions from chronological V2 user history", () =>
+  it.effect("streams one request with registry definitions from chronological user history", () =>
     Effect.gen(function* () {
       const session = yield* setup
       yield* admit(session, "First")
@@ -2989,7 +2989,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("keeps durable moved-project history but excludes only ended project artifact injections", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const artifact = (scope: "project" | "global", id: string) => ({
         scopeID: ProjectArtifact.ScopeID.make(`pas_${scope}`),
         versionID: ProjectArtifact.VersionID.make(`pav_${id}`),
@@ -2999,15 +2999,15 @@ describe("SessionRunnerLLM", () => {
       })
       yield* events.publish(SessionEvent.Skill.Activated, {
         sessionID,
-        id: SkillV2.ID.make("project-skill"),
-        name: SkillV2.Name.make("PROJECT_SKILL"),
+        id: Skill.ID.make("project-skill"),
+        name: Skill.Name.make("PROJECT_SKILL"),
         text: "PROJECT_SKILL",
         artifact: artifact("project", "project-skill"),
       })
       yield* events.publish(SessionEvent.Skill.Activated, {
         sessionID,
-        id: SkillV2.ID.make("global-skill"),
-        name: SkillV2.Name.make("GLOBAL_SKILL"),
+        id: Skill.ID.make("global-skill"),
+        name: Skill.Name.make("GLOBAL_SKILL"),
         text: "GLOBAL_SKILL",
         artifact: artifact("global", "global-skill"),
       })
@@ -3028,15 +3028,15 @@ describe("SessionRunnerLLM", () => {
       requests.length = 0
       yield* events.publish(SessionEvent.AgentSelected, {
         sessionID,
-        agent: AgentV2.ID.make("project-agent"),
+        agent: Agent.ID.make("project-agent"),
         artifact: { ...artifact("project", "project-agent"), kind: "agent" },
       })
       yield* events.publish(SessionEvent.AgentSelected, {
         sessionID,
-        agent: AgentV2.ID.make("global-agent"),
+        agent: Agent.ID.make("global-agent"),
         artifact: { ...artifact("global", "global-agent"), kind: "agent" },
       })
-      yield* events.publish(SessionEvent.AgentSelected, { sessionID, agent: AgentV2.ID.make("build") })
+      yield* events.publish(SessionEvent.AgentSelected, { sessionID, agent: Agent.ID.make("build") })
       yield* session.synthetic({ sessionID, text: "ORDINARY_HISTORY" })
       yield* events.publish(SessionEvent.ProjectArtifactsEnded, {
         sessionID,
@@ -3067,8 +3067,8 @@ describe("SessionRunnerLLM", () => {
   it.effect("marks the initial instruction sync as baseline metadata", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const events = yield* EventV2.Service
-      const instructionEvents: EventV2.Payload[] = []
+      const events = yield* EventRuntime.Service
+      const instructionEvents: EventRuntime.Payload[] = []
       const unsubscribe = yield* events.listen((event) =>
         Effect.sync(() => {
           if (event.type === "session.instructions.updated") instructionEvents.push(event)
@@ -3185,7 +3185,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("interrupts a source Location runner after a Session moves", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const { db } = yield* Database.Service
       yield* admit(session, "First")
       yield* session.resume(sessionID)
@@ -3241,7 +3241,7 @@ describe("SessionRunnerLLM", () => {
       expect(systemTexts(requests.at(-1)!)).toContain("Latest context")
 
       const { db } = yield* Database.Service
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const recorded = yield* db
         .select()
         .from(EventTable)
@@ -3404,9 +3404,9 @@ describe("SessionRunnerLLM", () => {
         provider: "openai",
         route: OpenAIChat.route.with({ limits: testLimits }),
       })
-      const agent = yield* AgentV2.Service
+      const agent = yield* Agent.Service
       yield* agent.transform((editor) =>
-        editor.update(AgentV2.ID.make("build"), (agent) => {
+        editor.update(Agent.ID.make("build"), (agent) => {
           agent.system = ""
           agent.mode = "primary"
         }),
@@ -3426,9 +3426,9 @@ describe("SessionRunnerLLM", () => {
   it.effect("includes the effective default agent system before durable context", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const agent = yield* AgentV2.Service
+      const agent = yield* Agent.Service
       yield* agent.transform((editor) =>
-        editor.update(AgentV2.ID.make("build"), (agent) => {
+        editor.update(Agent.ID.make("build"), (agent) => {
           agent.system = "Build agent instructions"
           agent.mode = "primary"
         }),
@@ -3448,17 +3448,17 @@ describe("SessionRunnerLLM", () => {
   it.effect("uses the configured default agent system for omitted-agent sessions", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const agent = yield* AgentV2.Service
+      const agent = yield* Agent.Service
       yield* agent.transform((editor) => {
-        editor.update(AgentV2.ID.make("build"), (agent) => {
+        editor.update(Agent.ID.make("build"), (agent) => {
           agent.system = "Build agent instructions"
           agent.mode = "primary"
         })
-        editor.update(AgentV2.ID.make("reviewer"), (agent) => {
+        editor.update(Agent.ID.make("reviewer"), (agent) => {
           agent.system = "Reviewer instructions"
           agent.mode = "primary"
         })
-        editor.default(AgentV2.ID.make("reviewer"))
+        editor.default(Agent.ID.make("reviewer"))
       })
       yield* admit(session, "First")
 
@@ -3476,23 +3476,23 @@ describe("SessionRunnerLLM", () => {
   it.effect("replaces the agent system prompt after switching agents", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const agents = yield* AgentV2.Service
+      const agents = yield* Agent.Service
       yield* agents.transform((editor) => {
-        editor.update(AgentV2.ID.make("brainstorm"), (agent) => {
+        editor.update(Agent.ID.make("brainstorm"), (agent) => {
           agent.system = "Brainstorm agent instructions"
           agent.mode = "primary"
         })
-        editor.update(AgentV2.ID.make("build"), (agent) => {
+        editor.update(Agent.ID.make("build"), (agent) => {
           agent.system = "Build agent instructions"
           agent.mode = "primary"
         })
       })
-      yield* session.switchAgent({ sessionID, agent: AgentV2.ID.make("brainstorm") })
+      yield* session.switchAgent({ sessionID, agent: Agent.ID.make("brainstorm") })
       yield* admit(session, "Design")
       response = reply.text("Designed", "text-brainstorm")
       yield* session.resume(sessionID)
 
-      yield* session.switchAgent({ sessionID, agent: AgentV2.ID.make("build") })
+      yield* session.switchAgent({ sessionID, agent: Agent.ID.make("build") })
       yield* admit(session, "Implement")
       response = reply.text("Built", "text-build-after-switch")
       yield* session.resume(sessionID)
@@ -3517,9 +3517,9 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       const session = yield* setup
       const { db } = yield* Database.Service
-      const agent = yield* AgentV2.Service
+      const agent = yield* Agent.Service
       yield* agent.transform((editor) =>
-        editor.update(AgentV2.ID.make("reviewer"), (agent) => {
+        editor.update(Agent.ID.make("reviewer"), (agent) => {
           agent.system = "Reviewer instructions"
           agent.mode = "primary"
         }),
@@ -3553,7 +3553,7 @@ describe("SessionRunnerLLM", () => {
         .where(eq(SessionTable.id, sessionID))
         .run()
         .pipe(Effect.orDie)
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       yield* session.prompt({ sessionID, text: "Inspect files", resume: false })
 
       requests.length = 0
@@ -3574,7 +3574,7 @@ describe("SessionRunnerLLM", () => {
       yield* setup
       const release = yield* Deferred.make<void>()
       pluginFlushHook = Deferred.await(release)
-      const session = yield* SessionV2.Service
+      const session = yield* Session.Service
       yield* session.prompt({ sessionID, text: "Wait for plugins", resume: false })
 
       requests.length = 0
@@ -3594,21 +3594,21 @@ describe("SessionRunnerLLM", () => {
   it.effect("updates selected-agent skill instructions after an agent switch", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const events = yield* EventV2.Service
-      const agents = yield* AgentV2.Service
+      const events = yield* EventRuntime.Service
+      const agents = yield* Agent.Service
       yield* agents.transform((draft) =>
-        draft.update(AgentV2.ID.make("reviewer"), (agent) => {
+        draft.update(Agent.ID.make("reviewer"), (agent) => {
           agent.mode = "primary"
         }),
       )
-      skillBaselines.set(AgentV2.ID.make("build"), "Build skills")
+      skillBaselines.set(Agent.ID.make("build"), "Build skills")
       yield* admit(session, "First")
 
       yield* session.resume(sessionID)
-      skillBaselines.set(AgentV2.ID.make("reviewer"), "Reviewer skills")
+      skillBaselines.set(Agent.ID.make("reviewer"), "Reviewer skills")
       yield* events.publish(SessionEvent.AgentSelected, {
         sessionID,
-        agent: AgentV2.ID.make("reviewer"),
+        agent: Agent.ID.make("reviewer"),
       })
       yield* admit(session, "Second")
       yield* session.resume(sessionID)
@@ -3624,9 +3624,9 @@ describe("SessionRunnerLLM", () => {
   it.effect("keeps the sampled agent when selection changes during observation", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const events = yield* EventV2.Service
-      skillBaselines.set(AgentV2.ID.make("build"), "Build skills")
-      skillBaselines.set(AgentV2.ID.make("reviewer"), "Reviewer skills")
+      const events = yield* EventRuntime.Service
+      skillBaselines.set(Agent.ID.make("build"), "Build skills")
+      skillBaselines.set(Agent.ID.make("reviewer"), "Reviewer skills")
       let switched = false
       systemLoadHook = Effect.suspend(() => {
         if (switched) return Effect.void
@@ -3634,7 +3634,7 @@ describe("SessionRunnerLLM", () => {
         return events
           .publish(SessionEvent.AgentSelected, {
             sessionID,
-            agent: AgentV2.ID.make("reviewer"),
+            agent: Agent.ID.make("reviewer"),
           })
           .pipe(Effect.asVoid)
       })
@@ -3651,7 +3651,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("keeps the sampled model when selection changes during model resolution", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       let switched = false
       modelResolveHook = Effect.suspend(() => {
         if (switched) return Effect.void
@@ -3659,7 +3659,7 @@ describe("SessionRunnerLLM", () => {
         return events
           .publish(SessionEvent.ModelSelected, {
             sessionID,
-            model: { id: ModelV2.ID.make("replacement"), providerID: ProviderV2.ID.make("fake") },
+            model: { id: CatalogModel.ID.make("replacement"), providerID: Provider.ID.make("fake") },
           })
           .pipe(Effect.asVoid)
       })
@@ -3812,7 +3812,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("keeps initial instructions and chronological updates after a model switch", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       yield* admit(session, "First")
 
       yield* session.resume(sessionID)
@@ -3821,7 +3821,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
       yield* events.publish(SessionEvent.ModelSelected, {
         sessionID,
-        model: { id: ModelV2.ID.make("replacement"), providerID: ProviderV2.ID.make("fake") },
+        model: { id: CatalogModel.ID.make("replacement"), providerID: Provider.ID.make("fake") },
       })
       systemBaseline = "Replacement context"
       yield* admit(session, "Third")
@@ -3860,13 +3860,13 @@ describe("SessionRunnerLLM", () => {
   it.effect("preserves instruction values while a source is temporarily unavailable", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       yield* admit(session, "First")
 
       yield* session.resume(sessionID)
       yield* events.publish(SessionEvent.ModelSelected, {
         sessionID,
-        model: { id: ModelV2.ID.make("replacement"), providerID: ProviderV2.ID.make("fake") },
+        model: { id: CatalogModel.ID.make("replacement"), providerID: Provider.ID.make("fake") },
       })
       systemUnavailable = true
       yield* admit(session, "Second")
@@ -3887,7 +3887,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("moves the epoch at compaction and narrates later changes", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       yield* admit(session, "First")
 
       yield* session.resume(sessionID)
@@ -3921,7 +3921,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("uses epoch values after compaction while a source is unavailable", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       yield* admit(session, "First")
 
       yield* session.resume(sessionID)
@@ -4053,10 +4053,10 @@ describe("SessionRunnerLLM", () => {
   )
 
   const fakeCatalogModel = (input: readonly string[]) =>
-    ModelV2.Info.make({
-      id: ModelV2.ID.make("fake-model"),
-      modelID: ModelV2.ID.make("fake-model"),
-      providerID: ProviderV2.ID.make("fake"),
+    CatalogModel.Info.make({
+      id: CatalogModel.ID.make("fake-model"),
+      modelID: CatalogModel.ID.make("fake-model"),
+      providerID: Provider.ID.make("fake"),
       name: "Fake model",
       package: "@ycoding-ai/ai/providers/openai-compatible",
       settings: {},
@@ -4072,7 +4072,7 @@ describe("SessionRunnerLLM", () => {
     })
 
   const snapshotToolContent = Effect.gen(function* () {
-    const session = yield* SessionV2.Service
+    const session = yield* Session.Service
     const tool = requireAssistant(yield* session.context(sessionID)).content.find(
       (item) => item.type === "tool" && item.id === "call-snapshot",
     )
@@ -4215,7 +4215,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("reloads a model switch before a tool-driven continuation step", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       yield* admit(session, "Echo this")
 
       responses = [reply.tool("call-echo", "echo", { text: "hello" }), reply.text("Fixture response", "text-fixture")]
@@ -4226,7 +4226,7 @@ describe("SessionRunnerLLM", () => {
       yield* Deferred.await(toolExecutionsStarted)
       yield* events.publish(SessionEvent.ModelSelected, {
         sessionID,
-        model: { id: ModelV2.ID.make("replacement"), providerID: ProviderV2.ID.make("fake") },
+        model: { id: CatalogModel.ID.make("replacement"), providerID: Provider.ID.make("fake") },
       })
       systemBaseline = "Replacement context"
       yield* Deferred.succeed(toolExecutionGate, undefined)
@@ -5184,15 +5184,15 @@ describe("SessionRunnerLLM", () => {
   it.effect("durably fails local tools left running by a prior process before continuing", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       yield* admit(session, "Recover interrupted tool")
       yield* SessionPending.promoteSteers((yield* Database.Service).db, events, sessionID)
       const assistantMessageID = SessionMessage.ID.create()
       yield* events.publish(SessionEvent.Step.Started, {
         sessionID,
         assistantMessageID,
-        agent: AgentV2.ID.make("build"),
-        model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
+        agent: Agent.ID.make("build"),
+        model: { id: CatalogModel.ID.make("fake-model"), providerID: Provider.ID.make("fake") },
       })
       yield* events.publish(SessionEvent.Tool.Input.Started, {
         sessionID,
@@ -5241,15 +5241,15 @@ describe("SessionRunnerLLM", () => {
   it.effect("durably fails hosted tools left running by a prior process before continuing inline", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       yield* admit(session, "Recover interrupted hosted tool")
       yield* SessionPending.promoteSteers((yield* Database.Service).db, events, sessionID)
       const assistantMessageID = SessionMessage.ID.create()
       yield* events.publish(SessionEvent.Step.Started, {
         sessionID,
         assistantMessageID,
-        agent: AgentV2.ID.make("build"),
-        model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
+        agent: Agent.ID.make("build"),
+        model: { id: CatalogModel.ID.make("fake-model"), providerID: Provider.ID.make("fake") },
       })
       yield* events.publish(SessionEvent.Tool.Input.Started, {
         sessionID,
@@ -5292,15 +5292,15 @@ describe("SessionRunnerLLM", () => {
   it.effect("durably fails pending tool input left by a prior process before continuing", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       yield* admit(session, "Recover interrupted tool input")
       yield* SessionPending.promoteSteers((yield* Database.Service).db, events, sessionID)
       const assistantMessageID = SessionMessage.ID.create()
       yield* events.publish(SessionEvent.Step.Started, {
         sessionID,
         assistantMessageID,
-        agent: AgentV2.ID.make("build"),
-        model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
+        agent: Agent.ID.make("build"),
+        model: { id: CatalogModel.ID.make("fake-model"), providerID: Provider.ID.make("fake") },
       })
       yield* events.publish(SessionEvent.Tool.Input.Started, {
         sessionID,
@@ -5342,7 +5342,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("retries inbox input after prompt projection rolls back", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const defect = new Error("fail after prompt promotion")
       let fail = true
       yield* events.project(SessionEvent.InputPromoted, () => (fail ? Effect.die(defect) : Effect.void))
@@ -5363,7 +5363,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("does not strand a committed promotion when a post-commit listener defects", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       yield* events.listen((event) =>
         event.type === SessionEvent.InputPromoted.type
           ? Effect.die("fail after prompt promotion commits")
@@ -5401,7 +5401,7 @@ describe("SessionRunnerLLM", () => {
       const session = yield* setup
       currentModel = Model.make({
         id: "big-pickle",
-        provider: ProviderV2.ID.opencode,
+        provider: Provider.ID.opencode,
         route: OpenAIChat.route.with({ limits: testLimits }),
       })
       yield* admit(session, "Run provider-scoped request")
@@ -5420,7 +5420,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("adds the parent session header to child model requests", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const parentID = SessionV2.ID.make("ses_runner_parent")
+      const parentID = Session.ID.make("ses_runner_parent")
       const { db } = yield* Database.Service
       yield* insertSession(parentID)
       yield* db
@@ -5512,8 +5512,8 @@ describe("SessionRunnerLLM", () => {
   it.effect("shares a stable cache namespace across long session IDs with Session-scoped wire keys", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const longSessionID = SessionV2.ID.make(`ses_${"a".repeat(64)}`)
-      const otherLongSessionID = SessionV2.ID.make(`ses_${"b".repeat(64)}`)
+      const longSessionID = Session.ID.make(`ses_${"a".repeat(64)}`)
+      const otherLongSessionID = Session.ID.make(`ses_${"b".repeat(64)}`)
       yield* insertSession(longSessionID)
       yield* insertSession(otherLongSessionID)
       yield* session.prompt({
@@ -5656,7 +5656,7 @@ describe("SessionRunnerLLM", () => {
             input: Schema.Struct({}),
             output: Schema.Struct({}),
             execute: () =>
-              Effect.fail(new PermissionV2.BlockedError({ rules: [], permission: "blocked", resources: ["*"] })).pipe(
+              Effect.fail(new Permission.BlockedError({ rules: [], permission: "blocked", resources: ["*"] })).pipe(
                 Effect.mapError(() => new Tool.Failure({ message: "Permission blocked" })),
               ),
           }),
@@ -5694,7 +5694,7 @@ describe("SessionRunnerLLM", () => {
             description: "Fail because the user declined approval",
             input: Schema.Struct({}),
             output: Schema.Struct({}),
-            execute: () => Effect.die(new PermissionV2.DeclinedError()),
+            execute: () => Effect.die(new Permission.DeclinedError()),
           }),
         },
         { codemode: false },
@@ -5736,7 +5736,7 @@ describe("SessionRunnerLLM", () => {
             input: Schema.Struct({}),
             output: Schema.Struct({}),
             execute: () =>
-              Effect.fail(new PermissionV2.CorrectedError({ feedback: "Use another tool" })).pipe(
+              Effect.fail(new Permission.CorrectedError({ feedback: "Use another tool" })).pipe(
                 Effect.mapError(() => new Tool.Failure({ message: "Use another tool" })),
               ),
           }),
@@ -6048,9 +6048,9 @@ describe("SessionRunnerLLM", () => {
   it.effect("forces a text response on an agent's configured final step", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const agents = yield* AgentV2.Service
+      const agents = yield* Agent.Service
       yield* agents.transform((editor) =>
-        editor.update(AgentV2.ID.make("build"), (agent) => {
+        editor.update(Agent.ID.make("build"), (agent) => {
           agent.steps = 2
         }),
       )
@@ -6093,9 +6093,9 @@ describe("SessionRunnerLLM", () => {
     it.effect(`appends a step-limit reset after new input (${boundary})`, () =>
       Effect.gen(function* () {
         const session = yield* setup
-        const agents = yield* AgentV2.Service
-        const events = yield* EventV2.Service
-        yield* agents.transform((editor) => editor.update(AgentV2.ID.make("build"), (agent) => {
+        const agents = yield* Agent.Service
+        const events = yield* EventRuntime.Service
+        yield* agents.transform((editor) => editor.update(Agent.ID.make("build"), (agent) => {
           agent.steps = 2
         }))
         responses = [reply.tool("call-limit", "echo", { text: "done" }), reply.text("At limit", "text-at-limit")]
@@ -6132,9 +6132,9 @@ describe("SessionRunnerLLM", () => {
   it.effect("resets the configured step allowance when steering input promotes", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const agents = yield* AgentV2.Service
+      const agents = yield* Agent.Service
       yield* agents.transform((editor) =>
-        editor.update(AgentV2.ID.make("build"), (agent) => {
+        editor.update(Agent.ID.make("build"), (agent) => {
           agent.steps = 2
         }),
       )
@@ -6369,7 +6369,7 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       const session = yield* setup
       const hooks = yield* PluginHooks.Service
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const providerRequests = yield* SessionProviderRequest.Service
       currentModel = storedOpenAIResponsesModel
       efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
@@ -6405,7 +6405,7 @@ describe("SessionRunnerLLM", () => {
       const providerLedgerGate = yield* Deferred.make<void>()
       const stopBlockingProviderLedger = yield* events.listen((event) => {
         if (event.type !== "session.provider.request.recorded") return Effect.void
-        const recorded = event as EventV2.Payload<typeof SessionEvent.ProviderRequestRecorded>
+        const recorded = event as EventRuntime.Payload<typeof SessionEvent.ProviderRequestRecorded>
         if (recorded.data.sessionID !== otherSessionID) return Effect.void
         return Deferred.succeed(providerLedgerBlocked, undefined).pipe(
           Effect.andThen(Deferred.await(providerLedgerGate)),
@@ -6414,8 +6414,8 @@ describe("SessionRunnerLLM", () => {
       const blocker = yield* providerRequests.next({
         sessionID: otherSessionID,
         source: "title",
-        agent: AgentV2.ID.make("build"),
-        model: ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") }),
+        agent: Agent.ID.make("build"),
+        model: CatalogModel.Ref.make({ id: CatalogModel.ID.make("gpt-5.6"), providerID: Provider.ID.make("openai") }),
         routeID: "openai-responses",
         promptCacheKey: "block-provider-ownership",
         systemDigest: "system",
@@ -7237,9 +7237,9 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       const session = yield* setup
       const prompt = "Recover the interrupted Codex tool response"
-      const agents = yield* AgentV2.Service
+      const agents = yield* Agent.Service
       yield* agents.transform((editor) =>
-        editor.update(AgentV2.ID.make("build"), (agent) => {
+        editor.update(Agent.ID.make("build"), (agent) => {
           agent.steps = 3
         }),
       )
@@ -7348,9 +7348,9 @@ describe("SessionRunnerLLM", () => {
   it.effect("applies the configured step limit to Codex transport recovery", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const agents = yield* AgentV2.Service
+      const agents = yield* Agent.Service
       yield* agents.transform((editor) =>
-        editor.update(AgentV2.ID.make("build"), (agent) => {
+        editor.update(Agent.ID.make("build"), (agent) => {
           agent.steps = 2
         }),
       )
@@ -7674,9 +7674,9 @@ describe("SessionRunnerLLM", () => {
   it.effect("retries a physical attempt without consuming the logical agent step", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const agents = yield* AgentV2.Service
+      const agents = yield* Agent.Service
       yield* agents.transform((editor) =>
-        editor.update(AgentV2.ID.make("build"), (agent) => {
+        editor.update(Agent.ID.make("build"), (agent) => {
           agent.steps = 2
         }),
       )
@@ -7809,10 +7809,10 @@ describe("SessionRunnerLLM", () => {
       Effect.gen(function* () {
         const session = yield* setup
         currentModel = recovery
-          ? yield* SessionRunnerModel.fromCatalogModel(ModelV2.Info.make({
-              id: ModelV2.ID.make("deepseek/deepseek-v4.1-flash"),
-              modelID: ModelV2.ID.make("deepseek/deepseek-v4.1-flash"),
-              providerID: ProviderV2.ID.make("openrouter"),
+          ? yield* SessionRunnerModel.fromCatalogModel(CatalogModel.Info.make({
+              id: CatalogModel.ID.make("deepseek/deepseek-v4.1-flash"),
+              modelID: CatalogModel.ID.make("deepseek/deepseek-v4.1-flash"),
+              providerID: Provider.ID.make("openrouter"),
               name: "Reasoning model",
               package: "@ycoding-ai/ai/providers/openrouter",
               settings: { apiKey: "fixture-key", reasoning: { effort: "high" } },
@@ -8554,9 +8554,9 @@ describe("SessionRunnerLLM", () => {
   it.effect("does not continue malformed tool input past the agent step limit", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const agents = yield* AgentV2.Service
+      const agents = yield* Agent.Service
       yield* agents.transform((editor) =>
-        editor.update(AgentV2.ID.make("build"), (agent) => {
+        editor.update(Agent.ID.make("build"), (agent) => {
           agent.steps = 2
         }),
       )

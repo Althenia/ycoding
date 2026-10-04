@@ -9,7 +9,7 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Git } from "@ycoding-ai/core/git"
 import { Database } from "@ycoding-ai/core/database/database"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectDirectoryTable, ProjectTable } from "@ycoding-ai/core/project/sql"
 import { ProjectCopy } from "@ycoding-ai/core/project/copy"
@@ -18,7 +18,7 @@ import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([ProjectCopy.node, Database.node, EventV2.node, ProjectDirectories.node])),
+  AppNodeBuilder.build(LayerNode.group([ProjectCopy.node, Database.node, EventRuntime.node, ProjectDirectories.node])),
 )
 
 function abs(input: string) {
@@ -116,7 +116,7 @@ describe("ProjectCopy", () => {
     Effect.gen(function* () {
       const input = yield* setup()
       const copy = yield* ProjectCopy.Service
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const temp = yield* Effect.promise(() => fs.realpath(path.dirname(input.root.path)))
       const parent = abs(path.join(temp, path.basename(input.root.path) + "-copy-created"))
       const target = abs(path.join(parent, "copy"))
@@ -278,7 +278,7 @@ describe("ProjectCopy", () => {
     Effect.gen(function* () {
       const input = yield* setup()
       const copy = yield* ProjectCopy.Service
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const event = yield* events.subscribe(ProjectCopy.Event.Updated).pipe(
         Stream.take(1),
         Stream.runCollect,
@@ -300,7 +300,7 @@ describe("ProjectCopy", () => {
     Effect.gen(function* () {
       const input = yield* setup()
       const copy = yield* ProjectCopy.Service
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const target = abs(`${input.root.path}-copy-external`)
       yield* Effect.addFinalizer(() =>
         Effect.promise(() => fs.rm(target, { recursive: true, force: true })).pipe(Effect.ignore),

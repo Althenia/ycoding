@@ -77,7 +77,7 @@ function isCancelledToolError(error: ToolLifecycleInput["error"]) {
 }
 
 export function ToolLifecycleStatus(props: { lifecycle: ToolLifecycleInput }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const [now, setNow] = createSignal(Date.now())
   createEffect(() => {
     if (props.lifecycle.status !== "streaming" && props.lifecycle.status !== "running") return
@@ -90,9 +90,9 @@ export function ToolLifecycleStatus(props: { lifecycle: ToolLifecycleInput }) {
   })
   const presentation = createMemo(() => toolLifecyclePresentation({ ...props.lifecycle, now: now() }))
   const color = createMemo(() => {
-    if (presentation().variant === "error") return themeV2.text.feedback.error.default
-    if (presentation().variant === "warning") return themeV2.text.feedback.warning.default
-    return themeV2.text.subdued
+    if (presentation().variant === "error") return theme.text.feedback.error.default
+    if (presentation().variant === "warning") return theme.text.feedback.warning.default
+    return theme.text.subdued
   })
   return <text flexShrink={0} fg={color()}>{presentation().status}</text>
 }
@@ -105,7 +105,7 @@ export function SessionActivityRow(props: {
   onGuardrail?: (requestID: string) => void
   onSubagent?: (sessionID: string) => void
 }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   let data: ReturnType<typeof useData> | undefined
   try {
@@ -154,16 +154,16 @@ export function SessionActivityRow(props: {
     (props.row.type === "subagent" ? subagentActive() : false) ||
     (props.row.type === "task" && props.row.status === "in_progress" && props.running === true)
   const markerColor = () => {
-    if (props.row.type === "guardrail") return themeV2.text.feedback.warning.default
-    if (props.row.type === "subagent") return themeV2.text.feedback.info.default
-    if (props.row.status === "completed") return themeV2.text.feedback.success.default
-    return themeV2.text.feedback.info.default
+    if (props.row.type === "guardrail") return theme.text.feedback.warning.default
+    if (props.row.type === "subagent") return theme.text.feedback.info.default
+    if (props.row.status === "completed") return theme.text.feedback.success.default
+    return theme.text.feedback.info.default
   }
   const statusColor = () => {
-    if (props.row.type === "guardrail") return themeV2.text.feedback.warning.default
-    if (props.row.type === "subagent") return themeV2.text.feedback.info.default
-    if (props.row.status === "completed") return themeV2.text.subdued
-    return themeV2.text.feedback.success.default
+    if (props.row.type === "guardrail") return theme.text.feedback.warning.default
+    if (props.row.type === "subagent") return theme.text.feedback.info.default
+    if (props.row.status === "completed") return theme.text.subdued
+    return theme.text.feedback.success.default
   }
   const open = () => {
     const row = props.row
@@ -203,7 +203,7 @@ export function SessionActivityRow(props: {
       paddingLeft={1}
       onMouseUp={open}
     >
-      <box width="100%" border={[`top`]} borderColor={themeV2.border.default} flexDirection="row">
+      <box width="100%" border={[`top`]} borderColor={theme.border.default} flexDirection="row">
         <text width={2} flexShrink={0} fg={markerColor()}>
           {props.row.type === "guardrail"
             ? "!!"
@@ -219,7 +219,7 @@ export function SessionActivityRow(props: {
           flexShrink={1}
           wrapMode="none"
           truncate={true}
-          fg={themeV2.text.default}
+          fg={theme.text.default}
         >
           {label()}
         </text>
@@ -239,7 +239,7 @@ export function SessionToolActivityRow(props: {
   lifecycle?: ToolLifecycleInput
   details?: { request: string[]; response: string[] }
 }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
   const [expanded, setExpanded] = createSignal(false)
@@ -269,10 +269,10 @@ export function SessionToolActivityRow(props: {
     return "ok"
   })
   const color = createMemo(() => {
-    if (variant() === "error") return themeV2.text.feedback.error.default
-    if (variant() === "warning") return themeV2.text.feedback.warning.default
-    if (active() || variant() === "subagent") return themeV2.text.feedback.info.default
-    return themeV2.text.feedback.success.default
+    if (variant() === "error") return theme.text.feedback.error.default
+    if (variant() === "warning") return theme.text.feedback.warning.default
+    if (active() || variant() === "subagent") return theme.text.feedback.info.default
+    return theme.text.feedback.success.default
   })
   const label = createMemo(() => `${props.tool}${props.detail ? ` ${props.detail}` : ""}`)
   const status = createMemo(() => lifecycle()?.status ?? props.status ?? "")
@@ -307,7 +307,7 @@ export function SessionToolActivityRow(props: {
       onMouseUp={toggle}
       onKeyDown={onKeyDown}
     >
-      <box width="100%" border={[`top`]} borderColor={themeV2.border.default} flexDirection="row">
+      <box width="100%" border={[`top`]} borderColor={theme.border.default} flexDirection="row">
         <text width={2} flexShrink={0} fg={color()}>{marker()}</text>
         <SessionActivitySpacer running={active()} color={color()} />
         <text
@@ -315,12 +315,12 @@ export function SessionToolActivityRow(props: {
           flexShrink={1}
           wrapMode="none"
           truncate={true}
-          fg={themeV2.text.default}
+          fg={theme.text.default}
         >
           {label()}
         </text>
         <box flexGrow={1} />
-        <text flexShrink={0} fg={variant() === "error" || variant() === "warning" ? color() : themeV2.text.subdued}>
+        <text flexShrink={0} fg={variant() === "error" || variant() === "warning" ? color() : theme.text.subdued}>
           {status()}
         </text>
       </box>
@@ -334,12 +334,12 @@ export function SessionToolActivityRow(props: {
             scrollbarOptions={{ visible: false }}
           >
             <Show when={details().request.length > 0}>
-              <text fg={themeV2.text.label}>− Request</text>
-              <For each={details().request}>{(line) => <text fg={themeV2.text.subdued} wrapMode="word">  {line}</text>}</For>
+              <text fg={theme.text.label}>− Request</text>
+              <For each={details().request}>{(line) => <text fg={theme.text.subdued} wrapMode="word">  {line}</text>}</For>
             </Show>
             <Show when={details().response.length > 0}>
-              <text fg={themeV2.text.label}>− Response</text>
-              <For each={details().response}>{(line) => <text fg={themeV2.text.subdued} wrapMode="word">  {line}</text>}</For>
+              <text fg={theme.text.label}>− Response</text>
+              <For each={details().response}>{(line) => <text fg={theme.text.subdued} wrapMode="word">  {line}</text>}</For>
             </Show>
           </scrollbox>
         )}

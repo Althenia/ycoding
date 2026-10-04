@@ -368,10 +368,10 @@ test("applies one outer surface row around populated expandable rail sections", 
 
 test("renders RailRow values right-aligned on a single line with custom value color", async () => {
   const { RailRow } = await import("../src/routes/session/rail-section")
-  const [themeV2, setThemeV2] = createSignal<ReturnType<typeof useTheme>["themeV2"]>()
+  const [theme, setTheme] = createSignal<ReturnType<typeof useTheme>["theme"]>()
   const app = await mount(() => {
-    setThemeV2(useTheme().themeV2)
-    return <RailRow label="Hit ratio" value="71%" valueColor={themeV2()!.text.feedback.success.default} />
+    setTheme(useTheme().theme)
+    return <RailRow label="Hit ratio" value="71%" valueColor={theme()!.text.feedback.success.default} />
   })
   await app.waitForFrame((frame) => frame.includes("Hit ratio"))
 
@@ -383,7 +383,7 @@ test("renders RailRow values right-aligned on a single line with custom value co
     const line = app.captureCharFrame().split("\n").find((item) => item.includes("Hit ratio"))
 
     expect(line?.endsWith("71%")).toBe(true)
-    expect(value?.fg.toInts()).toEqual(themeV2()!.text.feedback.success.default.toInts())
+    expect(value?.fg.toInts()).toEqual(theme()!.text.feedback.success.default.toInts())
   } finally {
     app.renderer.destroy()
   }
@@ -394,7 +394,7 @@ test("renders the CONTEXT design rows and omits unreported cache telemetry", asy
     import("../src/routes/session/rail-section"),
     import("../src/feature-plugins/sidebar/context"),
   ])
-  const [themeV2, setThemeV2] = createSignal<ReturnType<typeof useTheme>["themeV2"]>()
+  const [theme, setTheme] = createSignal<ReturnType<typeof useTheme>["theme"]>()
   const diagnostics: SessionCacheDiagnostics = {
     model: { providerID: "openai", id: "gpt-5.6" },
     context: { total: 1_464, limit: 200_000, percent: 56 },
@@ -418,7 +418,7 @@ test("renders the CONTEXT design rows and omits unreported cache telemetry", asy
   }
   const app = await mount(
     () => {
-      setThemeV2(useTheme().themeV2)
+      setTheme(useTheme().theme)
       return (
         <RailProvider>
           <SidebarCacheContent diagnostics={() => diagnostics} cost={() => 9.08} />
@@ -448,10 +448,10 @@ test("renders the CONTEXT design rows and omits unreported cache telemetry", asy
     expect(indexes.every((index) => index >= 0)).toBe(true)
     expect(indexes).toEqual([...indexes].toSorted((left, right) => left - right))
     expect(rendered.find((item) => item.plainText === "71%")?.fg.toInts()).toEqual(
-      themeV2()!.text.feedback.success.default.toInts(),
+      theme()!.text.feedback.success.default.toInts(),
     )
-    expect(rendered.find((item) => item.plainText === "220,672")?.fg.toInts()).toEqual(themeV2()!.text.default.toInts())
-    expect(rendered.find((item) => item.plainText === "4,096")?.fg.toInts()).toEqual(themeV2()!.text.default.toInts())
+    expect(rendered.find((item) => item.plainText === "220,672")?.fg.toInts()).toEqual(theme()!.text.default.toInts())
+    expect(rendered.find((item) => item.plainText === "4,096")?.fg.toInts()).toEqual(theme()!.text.default.toInts())
     expect(frame).not.toContain("Prefix")
     expect(frame).not.toContain("prefix stable")
     expect(frame).not.toContain("Last step context")
@@ -524,9 +524,9 @@ test("keeps credential identity out of the Context section", async () => {
 
 test("renders a non-toggleable CACHE sub-heading inside the toggleable CONTEXT section", async () => {
   const { RailProvider, RailSection, RailSubheading } = await import("../src/routes/session/rail-section")
-  const [themeV2, setThemeV2] = createSignal<ReturnType<typeof useTheme>["themeV2"]>()
+  const [theme, setTheme] = createSignal<ReturnType<typeof useTheme>["theme"]>()
   const app = await mount(() => {
-    setThemeV2(useTheme().themeV2)
+    setTheme(useTheme().theme)
     return (
       <RailProvider>
         <RailSection section="context" title="CONTEXT">
@@ -548,8 +548,8 @@ test("renders a non-toggleable CACHE sub-heading inside the toggleable CONTEXT s
     const headingRow = lines.findIndex((line) => line.includes("CONTEXT"))
     const subheadingRow = lines.findIndex((line) => line.includes("CACHE"))
 
-    expect(heading?.fg.toInts()).toEqual(themeV2()!.text.feedback.success.default.toInts())
-    expect(subheading?.fg.toInts()).toEqual(themeV2()!.text.label.toInts())
+    expect(heading?.fg.toInts()).toEqual(theme()!.text.feedback.success.default.toInts())
+    expect(subheading?.fg.toInts()).toEqual(theme()!.text.label.toInts())
     expect(lines[subheadingRow]?.trim()).toBe("CACHE")
 
     await app.mockMouse.click(1, subheadingRow)
@@ -557,7 +557,7 @@ test("renders a non-toggleable CACHE sub-heading inside the toggleable CONTEXT s
 
     await app.mockMouse.click(2, headingRow)
     await app.waitForFrame((frame) => !frame.includes("cache body"))
-    expect(heading?.fg.toInts()).toEqual(themeV2()!.text.feedback.info.default.toInts())
+    expect(heading?.fg.toInts()).toEqual(theme()!.text.feedback.info.default.toInts())
 
     await app.mockMouse.click(2, headingRow)
     await app.waitForFrame((frame) => frame.includes("cache body"))
@@ -568,9 +568,9 @@ test("renders a non-toggleable CACHE sub-heading inside the toggleable CONTEXT s
 
 test("renders rail header glyphs and colors for expanded, collapsed, and attention states", async () => {
   const { RailProvider, RailSection } = await import("../src/routes/session/rail-section")
-  const [themeV2, setThemeV2] = createSignal<ReturnType<typeof useTheme>["themeV2"]>()
+  const [theme, setTheme] = createSignal<ReturnType<typeof useTheme>["theme"]>()
   const app = await mount(() => {
-    setThemeV2(useTheme().themeV2)
+    setTheme(useTheme().theme)
     return (
       <RailProvider>
         <RailSection section="todo" title="EXPANDED" />
@@ -596,17 +596,17 @@ test("renders rail header glyphs and colors for expanded, collapsed, and attenti
     const attentionCollapsed = header("ATTENTION COLLAPSED")
 
     expect(expanded[0]?.plainText).toBe("\u2212")
-    expect(expanded[0]?.fg.toInts()).toEqual(themeV2()!.text.feedback.success.default.toInts())
-    expect(expanded[1]?.fg.toInts()).toEqual(themeV2()!.text.feedback.success.default.toInts())
+    expect(expanded[0]?.fg.toInts()).toEqual(theme()!.text.feedback.success.default.toInts())
+    expect(expanded[1]?.fg.toInts()).toEqual(theme()!.text.feedback.success.default.toInts())
     expect(collapsed[0]?.plainText).toBe("+")
-    expect(collapsed[0]?.fg.toInts()).toEqual(themeV2()!.text.feedback.info.default.toInts())
-    expect(collapsed[1]?.fg.toInts()).toEqual(themeV2()!.text.feedback.info.default.toInts())
+    expect(collapsed[0]?.fg.toInts()).toEqual(theme()!.text.feedback.info.default.toInts())
+    expect(collapsed[1]?.fg.toInts()).toEqual(theme()!.text.feedback.info.default.toInts())
     expect(attentionExpanded[0]?.plainText).toBe("\u2212")
-    expect(attentionExpanded[0]?.fg.toInts()).toEqual(themeV2()!.text.feedback.warning.default.toInts())
-    expect(attentionExpanded[1]?.fg.toInts()).toEqual(themeV2()!.text.feedback.warning.default.toInts())
+    expect(attentionExpanded[0]?.fg.toInts()).toEqual(theme()!.text.feedback.warning.default.toInts())
+    expect(attentionExpanded[1]?.fg.toInts()).toEqual(theme()!.text.feedback.warning.default.toInts())
     expect(attentionCollapsed[0]?.plainText).toBe("\u2212")
-    expect(attentionCollapsed[0]?.fg.toInts()).toEqual(themeV2()!.text.feedback.warning.default.toInts())
-    expect(attentionCollapsed[1]?.fg.toInts()).toEqual(themeV2()!.text.feedback.warning.default.toInts())
+    expect(attentionCollapsed[0]?.fg.toInts()).toEqual(theme()!.text.feedback.warning.default.toInts())
+    expect(attentionCollapsed[1]?.fg.toInts()).toEqual(theme()!.text.feedback.warning.default.toInts())
   } finally {
     app.renderer.destroy()
   }
@@ -667,7 +667,7 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS rail rows, and a TO
       import("../src/feature-plugins/sidebar/todo"),
       import("../src/feature-plugins/sidebar/subagents"),
     ])
-  const [themeV2, setThemeV2] = createSignal<ReturnType<typeof useTheme>["themeV2"]>()
+  const [theme, setTheme] = createSignal<ReturnType<typeof useTheme>["theme"]>()
   const autonomy: SessionAutonomyState = { mode: "normal", yolo: true, goal: {
       text: "Fix provider cache accounting",
       status: "active",
@@ -678,7 +678,7 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS rail rows, and a TO
   }
   const todos: SessionTodoInfo[] = [{ content: "Verify baseline", status: "completed", priority: "medium" }]
   const app = await mount(() => {
-    setThemeV2(useTheme().themeV2)
+    setTheme(useTheme().theme)
     return (
       <>
         <SessionRailContent sessionID="ses_0085fc701234567" title="Provider cache audit" />
@@ -722,10 +722,10 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS rail rows, and a TO
     expect(subagentHeader).toContain("1/1 running")
     expect(subagentHeader).not.toContain("subagents")
     expect(rendered.find((item) => item.plainText.includes("2m14s"))?.fg.toInts()).toEqual(
-      themeV2()!.text.feedback.info.default.toInts(),
+      theme()!.text.feedback.info.default.toInts(),
     )
     expect(rendered.find((item) => item.plainText.includes("docs-sync"))?.fg.toInts()).toEqual(
-      themeV2()!.text.subdued.toInts(),
+      theme()!.text.subdued.toInts(),
     )
   } finally {
     app.renderer.destroy()

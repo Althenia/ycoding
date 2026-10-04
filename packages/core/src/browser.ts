@@ -8,7 +8,7 @@ import { BrowserProtocol } from "./browser/protocol"
 import { BrowserAdmission } from "./browser/admission"
 import { Credential } from "./credential"
 import { makeGlobalNode, makeLocationNode } from "./effect/app-node"
-import { EventV2 } from "./event"
+import { EventRuntime } from "./event"
 import { SessionErrors } from "./session/error"
 import { SessionEvent } from "./session/event"
 import { SessionStore } from "./session/store"
@@ -113,7 +113,7 @@ export interface Interface {
   }) => Effect.Effect<Attachment, SessionErrors.NotFoundError | AuthenticationError | BusyError>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/Browser") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/Browser") {}
 
 export interface Options {
   readonly pairingTTL?: Duration.Input
@@ -194,7 +194,7 @@ export const layer = (options: Options = {}) =>
       const sessions = yield* SessionStore.Service
       const credentials = yield* Credential.Service
       const admission = yield* BrowserAdmission.Service
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const pairingTTL = Duration.toMillis(Duration.fromInputUnsafe(options.pairingTTL ?? DEFAULT_PAIRING_TTL))
       const commandTimeout = options.commandTimeout ?? DEFAULT_COMMAND_TIMEOUT
       let pairing: PairingState | undefined
@@ -1134,7 +1134,7 @@ export const layer = (options: Options = {}) =>
     }),
   )
 
-class CoordinatorService extends Context.Service<CoordinatorService, Interface>()("@ycoding/v2/BrowserCoordinator") {}
+class CoordinatorService extends Context.Service<CoordinatorService, Interface>()("@ycoding/BrowserCoordinator") {}
 
 const coordinatorLayer = Layer.effect(
   CoordinatorService,
@@ -1155,7 +1155,7 @@ const coordinatorLayer = Layer.effect(
 const coordinatorNode = makeGlobalNode({
   service: CoordinatorService,
   layer: coordinatorLayer,
-  deps: [BrowserAdmission.coordinatorNode, Credential.node, EventV2.node, SessionStore.node],
+  deps: [BrowserAdmission.coordinatorNode, Credential.node, EventRuntime.node, SessionStore.node],
 })
 
 export const node = makeLocationNode({

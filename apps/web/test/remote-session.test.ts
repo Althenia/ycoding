@@ -2226,7 +2226,7 @@ describe("remote store integration", () => {
       await test.store.load()
       await waitFor(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
-      test.relay.pushEvent("ses_a", { id: "evt_p", type: "permission.v2.asked", data: { id: "per_1", action: "edit", resources: ["src/**"] } })
+      test.relay.pushEvent("ses_a", { id: "evt_p", type: "permission.asked", data: { id: "per_1", action: "edit", resources: ["src/**"] } })
       test.relay.pushEvent("ses_a", {
         id: "evt_g",
         type: "guardrail.asked",
@@ -2336,11 +2336,11 @@ describe("remote store integration", () => {
         const selected = test.store.selectSession("ses_a")
         await waitFor(() => test.relay.requests.some((request) => request.operation === "session.form.list"))
         if (settling) {
-          test.relay.pushEvent("ses_a", { type: "permission.v2.replied", data: { requestID: permission.id, reply: "reject" } })
+          test.relay.pushEvent("ses_a", { type: "permission.replied", data: { requestID: permission.id, reply: "reject" } })
           test.relay.pushEvent("ses_a", { type: "guardrail.replied", data: { requestID: guardrail.id, sessionID: "ses_a", rootSessionID: "ses_a", reply: "reject" } })
           test.relay.pushEvent("ses_a", { type: "form.cancelled", data: { id: form.id, sessionID: "ses_a" } })
         } else {
-          test.relay.pushEvent("ses_a", { type: "permission.v2.asked", data: permission })
+          test.relay.pushEvent("ses_a", { type: "permission.asked", data: permission })
           test.relay.pushEvent("ses_a", { type: "guardrail.asked", data: guardrail })
           test.relay.pushEvent("ses_a", { type: "form.created", data: { form } })
         }

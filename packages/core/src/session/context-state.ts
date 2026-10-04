@@ -5,7 +5,7 @@ import { and, eq, lte } from "drizzle-orm"
 import { Cause, Context, Data, Effect, Layer, Option, Schema } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { Location } from "../location"
 import { LocationServiceMap } from "../location-service-map"
 import { AbsolutePath } from "../schema"
@@ -18,7 +18,7 @@ import { SessionMessage } from "./message"
 import { SessionProviderState } from "./provider-state"
 import { SessionContinuation } from "./runner/continuation"
 import { SessionSchema } from "./schema"
-import type { ModelV2 } from "../model"
+import type { CatalogModel } from "../model"
 import { SessionSummaryToon } from "./summary-toon"
 import {
   CompactionManifestBlobTable,
@@ -38,7 +38,7 @@ export interface Current {
   readonly revision: number
   readonly manifestDigest?: string
   readonly coveredThrough?: ContextManifest.CoveredThrough
-  readonly activatedEventID?: EventV2.ID
+  readonly activatedEventID?: EventRuntime.ID
   readonly timeActivated?: number
   readonly errorCode?: string
 }
@@ -55,7 +55,7 @@ export type ActivationInput =
 export interface ActivationResult {
   readonly revision: number
   readonly manifestDigest: string
-  readonly eventID: EventV2.ID
+  readonly eventID: EventRuntime.ID
   readonly sequence: number
 }
 
@@ -88,7 +88,7 @@ export interface Interface {
   readonly activate: (input: ActivationInput) => Effect.Effect<ActivationResult, ActivationError>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionContextState") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionContextState") {}
 
 const encodeMessage = Schema.encodeSync(SessionMessage.Info)
 const encodeAssistant = Schema.encodeSync(SessionMessage.Assistant)
@@ -117,7 +117,7 @@ export function selectEntries<Entry extends { readonly seq?: number; readonly me
   db: DatabaseService,
   sessionID: SessionSchema.ID,
   entries: ReadonlyArray<Entry>,
-  model?: ModelV2.Ref,
+  model?: CatalogModel.Ref,
 ) {
   return Effect.gen(function* () {
     const state = yield* findCurrent(db, sessionID)
@@ -236,7 +236,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const locations = yield* LocationServiceMap.Service
     return Service.of({
       current: (sessionID) => readCurrent(db, sessionID),
@@ -291,12 +291,12 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   name: "session-context-state",
   layer,
-  deps: [Database.node, EventV2.node, LocationServiceMap.node],
+  deps: [Database.node, EventRuntime.node, LocationServiceMap.node],
 })
 
 const activate = Effect.fn("SessionContextState.activate")(function* (
   db: DatabaseService,
-  events: EventV2.Interface,
+  events: EventRuntime.Interface,
   guardrails: SessionGuardrail.Interface,
   liveState: LiveStateModule,
   input: ActivationInput,
@@ -318,7 +318,7 @@ const activate = Effect.fn("SessionContextState.activate")(function* (
       `Expected context revision ${state.revision}, received ${input.manifest.baseContextRevision}`,
     )
 
-  const eventID = EventV2.ID.create()
+  const eventID = EventRuntime.ID.create()
   const revision = state.revision + 1
   const timeActivated = Date.now()
   const jobID = input.jobID ?? SessionCompaction.ID.make(`cmp_${manifestDigest}`)
@@ -397,7 +397,7 @@ const commitActivation = Effect.fnUntraced(function* (
     readonly input: ActivationInput
     readonly manifestDigest: string
     readonly revision: number
-    readonly eventID: EventV2.ID
+    readonly eventID: EventRuntime.ID
     readonly sequence: number
     readonly timeActivated: number
     readonly guardrail: SessionGuardrail.Snapshot
@@ -592,9 +592,9 @@ function currentFromRow(row: typeof SessionContextStateTable.$inferSelect): Curr
     ...(row.covered_through_message_id === null || row.covered_through_seq === null
       ? {}
       : {
-          coveredThrough: { messageID: row.covered_through_message_id, seq: EventV2.Seq.make(row.covered_through_seq) },
+          coveredThrough: { messageID: row.covered_through_message_id, seq: EventRuntime.Seq.make(row.covered_through_seq) },
         }),
-    ...(row.activated_event_id === null ? {} : { activatedEventID: EventV2.ID.make(row.activated_event_id) }),
+    ...(row.activated_event_id === null ? {} : { activatedEventID: EventRuntime.ID.make(row.activated_event_id) }),
     ...(row.time_activated === null ? {} : { timeActivated: row.time_activated }),
     ...(row.error_code === null ? {} : { errorCode: row.error_code }),
   }
@@ -619,7 +619,7 @@ const existingActivation = Effect.fnUntraced(function* (
   return {
     revision,
     manifestDigest,
-    eventID: EventV2.ID.make(row.activation_event_id),
+    eventID: EventRuntime.ID.make(row.activation_event_id),
     sequence: row.activation_sequence,
   }
 })

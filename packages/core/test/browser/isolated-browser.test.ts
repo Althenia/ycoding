@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import { BrowserAdmission } from "@ycoding-ai/core/browser/admission"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { IsolatedBrowserExecutor } from "@ycoding-ai/core/browser/isolated-executor"
 import { IsolatedBrowser } from "@ycoding-ai/core/isolated-browser"
 import { Location } from "@ycoding-ai/core/location"
 import { Money } from "@ycoding-ai/schema/money"
-import { ProjectV2 } from "@ycoding-ai/core/project"
+import { Project } from "@ycoding-ai/core/project"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
@@ -16,12 +16,12 @@ import { location } from "../fixture/location"
 const directory = AbsolutePath.make("/isolated-browser-fixture")
 const sessionID = SessionSchema.ID.make("ses_isolated_owner")
 const otherSessionID = SessionSchema.ID.make("ses_isolated_other")
-const lifecycleEvents = Effect.runSync(PubSub.unbounded<EventV2.Payload>())
-const eventLayer = Layer.mock(EventV2.Service, { subscribe: () => Stream.fromPubSub(lifecycleEvents) })
+const lifecycleEvents = Effect.runSync(PubSub.unbounded<EventRuntime.Payload>())
+const eventLayer = Layer.mock(EventRuntime.Service, { subscribe: () => Stream.fromPubSub(lifecycleEvents) })
 
 const lifecycleEvent = (definition: typeof SessionEvent.Moved | typeof SessionEvent.Deleted | typeof SessionEvent.Archived) =>
   Schema.decodeUnknownSync(definition)({
-    id: EventV2.ID.create(),
+    id: EventRuntime.ID.create(),
     created: 1,
     type: definition.type,
     durable: {
@@ -35,7 +35,7 @@ const lifecycleEvent = (definition: typeof SessionEvent.Moved | typeof SessionEv
 const session = (id: SessionSchema.ID, archived = false) =>
   SessionSchema.Info.make({
     id,
-    projectID: ProjectV2.ID.global,
+    projectID: Project.ID.global,
     cost: Money.USD.zero,
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     time: {

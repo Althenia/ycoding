@@ -3,7 +3,7 @@ export * as InstructionState from "./instruction-state"
 import { and, asc, desc, eq, gt, inArray, lte, sql } from "drizzle-orm"
 import { DateTime, Effect, Option, Schema } from "effect"
 import type { Database } from "../database/database"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { EventTable } from "../event/sql"
 import { Instructions } from "../instructions/index"
 import { SessionEvent } from "./event"
@@ -54,7 +54,7 @@ export const activeKeys = Effect.fn("InstructionState.activeKeys")(function* (
 
 export const commit = Effect.fn("InstructionState.commit")(function* (
   db: DatabaseService,
-  events: EventV2.Interface,
+  events: EventRuntime.Interface,
   observation: Observation,
 ) {
   if (!observation.initial && Object.keys(observation.delta).length === 0) return
@@ -71,7 +71,7 @@ export const commit = Effect.fn("InstructionState.commit")(function* (
 
 export const prepare = Effect.fn("InstructionState.prepare")(function* (
   db: DatabaseService,
-  events: EventV2.Interface,
+  events: EventRuntime.Interface,
   instructions: Instructions.Instructions,
   sessionID: SessionSchema.ID,
 ) {
@@ -186,7 +186,7 @@ const assembleState = Effect.fnUntraced(function* (
       result.push({
         seq: update.row.seq,
         message: SessionMessage.System.make({
-          id: SessionMessage.ID.fromEvent(EventV2.ID.make(update.row.id)),
+          id: SessionMessage.ID.fromEvent(EventRuntime.ID.make(update.row.id)),
           type: "system",
           text,
           time: { created: DateTime.makeUnsafe(update.row.created) },
@@ -325,20 +325,20 @@ function requireBlob(blobs: ReadonlyMap<Instructions.Hash, Schema.Json>, hash: I
   return value
 }
 
-const instructionEventType = EventV2.versionedType(
+const instructionEventType = EventRuntime.versionedType(
   SessionEvent.InstructionsUpdated.type,
   SessionEvent.InstructionsUpdated.durable.version,
 )
-const legacyCompactionEventType = EventV2.versionedType(
+const legacyCompactionEventType = EventRuntime.versionedType(
   SessionEvent.Compaction.EndedV1.type,
   SessionEvent.Compaction.EndedV1.durable.version,
 )
-const currentCompactionEventType = EventV2.versionedType(
+const currentCompactionEventType = EventRuntime.versionedType(
   SessionEvent.Compaction.Ended.type,
   SessionEvent.Compaction.Ended.durable.version,
 )
-const movedEventType = EventV2.versionedType(SessionEvent.Moved.type, SessionEvent.Moved.durable.version)
-const revertedEventType = EventV2.versionedType(
+const movedEventType = EventRuntime.versionedType(SessionEvent.Moved.type, SessionEvent.Moved.durable.version)
+const revertedEventType = EventRuntime.versionedType(
   SessionEvent.RevertEvent.Committed.type,
   SessionEvent.RevertEvent.Committed.durable.version,
 )

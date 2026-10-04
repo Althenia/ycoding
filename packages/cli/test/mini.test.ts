@@ -194,7 +194,7 @@ describe("mini command", () => {
     }
   })
 
-  test("uses the shared V2 server option instead of an attach command", async () => {
+  test("uses the shared server option instead of an attach command", async () => {
     const result = await cli(["mini", "--help"])
 
     expect(result.exitCode).toBe(0)

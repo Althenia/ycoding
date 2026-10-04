@@ -1,12 +1,12 @@
 import { AISDK } from "@ycoding-ai/core/aisdk"
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { PluginV2 } from "@ycoding-ai/core/plugin"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
 import { Npm } from "@ycoding-ai/core/npm"
 import { SapAICorePlugin } from "@ycoding-ai/core/plugin/provider/sap-ai-core"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
 
@@ -19,7 +19,7 @@ const npm = Npm.Service.of({
 })
 
 const addPlugin = Effect.fn(function* () {
-  const plugin = yield* PluginV2.Service
+  const plugin = yield* PluginRegistry.Service
   const aisdk = yield* AISDK.Service
   const host = yield* PluginHost.make(plugin)
   yield* SapAICorePlugin.effect(host).pipe(Effect.provideService(Npm.Service, npm))
@@ -47,10 +47,10 @@ function withEnv<A, E, R>(vars: Record<string, string | undefined>, effect: () =
 }
 
 function model(providerID: string) {
-  return ModelV2.Info.make({
-    ...ModelV2.Info.empty(ProviderV2.ID.make(providerID), ModelV2.ID.make("sap-model")),
-    modelID: ModelV2.ID.make("sap-model"),
-    package: ProviderV2.aisdk(fixtureProvider),
+  return CatalogModel.Info.make({
+    ...CatalogModel.Info.empty(Provider.ID.make(providerID), CatalogModel.ID.make("sap-model")),
+    modelID: CatalogModel.ID.make("sap-model"),
+    package: Provider.aisdk(fixtureProvider),
   })
 }
 
@@ -60,7 +60,7 @@ describe("SapAICorePlugin", () => {
       { AICORE_SERVICE_KEY: undefined, AICORE_DEPLOYMENT_ID: "deployment", AICORE_RESOURCE_GROUP: "resource-group" },
       () =>
         Effect.gen(function* () {
-          const plugin = yield* PluginV2.Service
+          const plugin = yield* PluginRegistry.Service
           const aisdk = yield* AISDK.Service
           yield* addPlugin()
           const sdk = yield* aisdk.runSDK({
@@ -83,7 +83,7 @@ describe("SapAICorePlugin", () => {
       },
       () =>
         Effect.gen(function* () {
-          const plugin = yield* PluginV2.Service
+          const plugin = yield* PluginRegistry.Service
           const aisdk = yield* AISDK.Service
           yield* addPlugin()
           const sdk = yield* aisdk.runSDK({
@@ -102,7 +102,7 @@ describe("SapAICorePlugin", () => {
       { AICORE_SERVICE_KEY: undefined, AICORE_DEPLOYMENT_ID: "deployment", AICORE_RESOURCE_GROUP: "resource-group" },
       () =>
         Effect.gen(function* () {
-          const plugin = yield* PluginV2.Service
+          const plugin = yield* PluginRegistry.Service
           const aisdk = yield* AISDK.Service
           yield* addPlugin()
           const sdk = yield* aisdk.runSDK({
@@ -118,7 +118,7 @@ describe("SapAICorePlugin", () => {
 
   it.effect("uses the callable SDK for language selection", () =>
     Effect.gen(function* () {
-      const plugin = yield* PluginV2.Service
+      const plugin = yield* PluginRegistry.Service
       const aisdk = yield* AISDK.Service
       yield* addPlugin()
       const sdk = Object.assign((modelID: string) => ({ modelID, provider: "callable" }), {
@@ -136,7 +136,7 @@ describe("SapAICorePlugin", () => {
       { AICORE_SERVICE_KEY: undefined, AICORE_DEPLOYMENT_ID: "deployment", AICORE_RESOURCE_GROUP: "resource-group" },
       () =>
         Effect.gen(function* () {
-          const plugin = yield* PluginV2.Service
+          const plugin = yield* PluginRegistry.Service
           const aisdk = yield* AISDK.Service
           yield* addPlugin()
           const sdk = yield* aisdk.runSDK({

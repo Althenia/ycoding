@@ -3,7 +3,7 @@ export * as ConversationCompactTool from "./conversation-compact"
 import type { Context as PluginContext } from "@ycoding-ai/plugin/effect/plugin"
 import { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
 import { Effect } from "effect"
-import { AgentV2 } from "../agent"
+import { Agent } from "../agent"
 import { Catalog } from "../catalog"
 import { Config } from "../config"
 import { PluginRuntime } from "../plugin/runtime"
@@ -20,7 +20,7 @@ export const Plugin = {
     const pressure = new Map<SessionSchema.ID, SessionContextPressure.Level>()
     yield* ctx.session.hook("context", (event) =>
       Effect.gen(function* () {
-        if (event.agent === AgentV2.ID.make("compaction")) return
+        if (event.agent === Agent.ID.make("compaction")) return
         const models = yield* catalog.model.available()
         const tools = Object.entries(event.tools).map(([name, tool]) => ({
           name,

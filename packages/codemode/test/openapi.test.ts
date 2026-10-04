@@ -15,7 +15,7 @@ type Recorded = {
 }
 
 const ycodingSpec = async (): Promise<Document> => {
-  return Bun.file(new URL("./fixtures/ycoding-v2-openapi.json", import.meta.url)).json() as Promise<Document>
+  return Bun.file(new URL("./fixtures/ycoding-openapi.json", import.meta.url)).json() as Promise<Document>
 }
 
 const happyPathSpec = async (): Promise<Document> => {

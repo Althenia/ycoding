@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test"
-import { DEFAULT_THEMES } from "../../../src/theme/builtins"
-import { resolveThemeFile } from "../../../src/theme/v2/resolve"
-import { generateSyntax } from "../../../src/theme/v2/syntax"
+import { DEFAULT_THEMES } from "../../src/theme/builtins"
+import { resolveThemeFile } from "../../src/theme/resolve"
+import { generateSyntax } from "../../src/theme/syntax"
 
-test("syntax keeps prompt, markup, diff and extmark styles on resolved V2 colors", () => {
+test("syntax keeps prompt, markup, diff and extmark styles on resolved theme colors", () => {
   for (const mode of ["dark", "light"] as const) {
     const view = resolveThemeFile(DEFAULT_THEMES.ycoding, mode, "ycoding")
     const style = generateSyntax(view, mode)

@@ -168,7 +168,7 @@ function subagentMetadata(input: {
 }
 
 export function SubagentMetadata(props: { model?: string; cacheHit?: string; elapsed?: string; status?: string }) {
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const metadata = createMemo(() =>
     subagentMetadata({
@@ -184,7 +184,7 @@ export function SubagentMetadata(props: { model?: string; cacheHit?: string; ela
     <Show when={metadata()}>
       {(value) => (
         <box flexShrink={0}>
-          <text fg={themeV2.text.subdued} wrapMode="none">
+          <text fg={theme.text.subdued} wrapMode="none">
             {value()}
           </text>
         </box>
@@ -197,7 +197,7 @@ export function SubagentsTab(props: { sessionID: string }) {
   const route = useRouteData("session")
   const data = useData()
   const client = useClient()
-  const { themeV2 } = useTheme()
+  const { theme } = useTheme()
   const navigation = useRoute()
   const navigate = (input: Parameters<typeof navigation.navigate>[0]) => navigation.navigate(input)
   const composer = useComposerTab()
@@ -416,7 +416,7 @@ export function SubagentsTab(props: { sessionID: string }) {
         <Show
           when={entries().length > 0}
           fallback={
-            <text fg={themeV2.text.subdued}>
+            <text fg={theme.text.subdued}>
               {pager().older || pager().newer ? "No subagents on this page" : "No subagents"}
             </text>
           }
@@ -424,7 +424,7 @@ export function SubagentsTab(props: { sessionID: string }) {
           <For each={sections()}>
             {(section) => (
               <box flexDirection="column">
-                <text fg={themeV2.text.subdued} attributes={TextAttributes.BOLD}>
+                <text fg={theme.text.subdued} attributes={TextAttributes.BOLD}>
                   {section.label}
                 </text>
                 <For each={section.entries}>
@@ -433,10 +433,10 @@ export function SubagentsTab(props: { sessionID: string }) {
                     const active = createMemo(() => entryIndex() === selected())
                     const awaitingInput = createMemo(() => entry.awaitingInput)
                     const statusColor = createMemo(() => {
-                      if (awaitingInput()) return themeV2.text.feedback.warning.default
-                      if (entry.status === "running") return themeV2.text.feedback.success.default
-                      if (entry.status === "cancelled") return themeV2.text.feedback.error.default
-                      return themeV2.text.subdued
+                      if (awaitingInput()) return theme.text.feedback.warning.default
+                      if (entry.status === "running") return theme.text.feedback.success.default
+                      if (entry.status === "cancelled") return theme.text.feedback.error.default
+                      return theme.text.subdued
                     })
                     return (
                       <>
@@ -445,7 +445,7 @@ export function SubagentsTab(props: { sessionID: string }) {
                           minWidth={0}
                           flexGrow={1}
                           paddingRight={1}
-                          backgroundColor={active() ? themeV2.background.surface.offset : undefined}
+                          backgroundColor={active() ? theme.background.surface.offset : undefined}
                           onMouseOver={() => moveTo(entryIndex())}
                           onMouseUp={() => {
                             moveTo(entryIndex())
@@ -464,8 +464,8 @@ export function SubagentsTab(props: { sessionID: string }) {
                             <text
                               fg={
                                 active() || entry.current
-                                  ? themeV2.text.feedback.info.default
-                                  : themeV2.text.default
+                                  ? theme.text.feedback.info.default
+                                  : theme.text.default
                               }
                               attributes={active() ? TextAttributes.BOLD : undefined}
                               wrapMode="none"
@@ -474,7 +474,7 @@ export function SubagentsTab(props: { sessionID: string }) {
                             </text>
                           </box>
                           <box flexDirection="row" minWidth={0} flexGrow={1} flexShrink={1} paddingLeft={2} paddingRight={2}>
-                            <text fg={themeV2.text.subdued} wrapMode="none" truncate>
+                            <text fg={theme.text.subdued} wrapMode="none" truncate>
                               {`· ${entry.title}`}
                             </text>
                           </box>
@@ -487,7 +487,7 @@ export function SubagentsTab(props: { sessionID: string }) {
                         </box>
                         <Show when={entry.awaitingInput && entry.detail}>
                           <box paddingLeft={16}>
-                            <text fg={themeV2.text.feedback.warning.default} wrapMode="none">
+                            <text fg={theme.text.feedback.warning.default} wrapMode="none">
                               ? {entry.detail}
                             </text>
                           </box>
@@ -503,12 +503,12 @@ export function SubagentsTab(props: { sessionID: string }) {
         <Show when={pager().older || pager().newer}>
           <box flexDirection="row" gap={3} paddingTop={1}>
             <Show when={pager().newer}>
-              <text fg={themeV2.text.action.primary.default} onMouseUp={() => void data.session.subagent.loadNewer(parentID())}>
+              <text fg={theme.text.action.primary.default} onMouseUp={() => void data.session.subagent.loadNewer(parentID())}>
                 newer
               </text>
             </Show>
             <Show when={pager().older}>
-              <text fg={themeV2.text.action.primary.default} onMouseUp={() => void data.session.subagent.loadOlder(parentID())}>
+              <text fg={theme.text.action.primary.default} onMouseUp={() => void data.session.subagent.loadOlder(parentID())}>
                 {page()?.position === "top"
                   ? `+${Math.max(0, (page()?.summary.total ?? 0) - (page()?.data.length ?? 0))} more`
                   : "older"}

@@ -3,7 +3,7 @@ export * as SessionContextPressure from "./context-pressure"
 import type { LLMRequest } from "@ycoding-ai/ai"
 import { Config } from "../config"
 import { ConfigCompaction } from "../config/compaction"
-import type { ModelV2 } from "../model"
+import type { CatalogModel } from "../model"
 import { Token } from "../util/token"
 import { SessionContextBudget } from "./context-budget"
 
@@ -86,8 +86,8 @@ export const level = (
 
 export const modelLevel = (
   input: Usage & {
-    readonly models: readonly ModelV2.Info[]
-    readonly model: ModelV2.Ref
+    readonly models: readonly CatalogModel.Info[]
+    readonly model: CatalogModel.Ref
     readonly policy: ConfigCompaction.Resolved
     readonly estimate?: number
   },

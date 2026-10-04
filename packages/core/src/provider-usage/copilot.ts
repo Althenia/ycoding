@@ -1,7 +1,7 @@
 export * as CopilotUsage from "./copilot"
 
 import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
-import { ProviderV2 } from "../provider"
+import { Provider } from "../provider"
 import { Option, Schema } from "effect"
 
 const userStatusPath = "/copilot_internal/user"
@@ -53,7 +53,7 @@ type BillingSummaryType = Schema.Schema.Type<typeof BillingSummary>
 type UsageItemType = Schema.Schema.Type<typeof UsageItem>
 
 export interface SnapshotInput {
-  readonly providerID: ProviderV2.ID
+  readonly providerID: Provider.ID
   readonly label: string
   readonly updatedAt: number
 }

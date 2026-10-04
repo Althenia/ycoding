@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { InputRenderable, ScrollBoxRenderable, TextBufferRenderable, type Renderable } from "@opentui/core"
 import type { SessionMessageInfo } from "@ycoding-ai/client"
 import { DEFAULT_THEMES } from "../src/theme/builtins"
-import { resolveThemeFile } from "../src/theme/v2/resolve"
+import { resolveThemeFile } from "../src/theme/resolve"
 import { json } from "./fixture/tui-client"
 import { renderScreen } from "./screen/harness"
 

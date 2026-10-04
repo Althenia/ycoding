@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { NodeHttpServer } from "@effect/platform-node"
 import { Location } from "@ycoding-ai/core/location"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { Context, Effect, Layer } from "effect"
 import { HttpRouter } from "effect/unstable/http"
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises"
@@ -27,7 +27,7 @@ test("pages the directory inventory and forgets a directory through the real Ser
       Layer.provide(NodeHttpServer.layerHttpServices),
       Layer.tap((context) =>
         Effect.gen(function* () {
-          const session = Context.get(context, SessionV2.Service)
+          const session = Context.get(context, Session.Service)
           yield* session.create({ location: Location.Ref.make({ directory: AbsolutePath.make(first) }) })
           yield* session.create({ location: Location.Ref.make({ directory: AbsolutePath.make(first) }) })
           yield* session.create({ location: Location.Ref.make({ directory: AbsolutePath.make(second) }) })

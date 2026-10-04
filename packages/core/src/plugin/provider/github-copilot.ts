@@ -3,13 +3,13 @@ import type { IntegrationOAuthMethodRegistration } from "@ycoding-ai/plugin/effe
 import { Effect, Option, Schema, Semaphore, Stream } from "effect"
 import { Catalog } from "../../catalog"
 import { Credential } from "../../credential"
-import { EventV2 } from "../../event"
+import { EventRuntime } from "../../event"
 import { CopilotModels } from "../../github-copilot/models"
 import { InstallationVersion } from "../../installation/version"
 import { Integration } from "../../integration"
-import { ModelV2 } from "../../model"
+import { CatalogModel } from "../../model"
 import { define } from "@ycoding-ai/plugin/effect/plugin"
-import { ProviderV2 } from "../../provider"
+import { Provider } from "../../provider"
 import type { PluginInternal } from "../internal"
 
 const clientID = "Iv23liQxejUrCuRKOtA0"
@@ -124,11 +124,11 @@ export const GithubCopilotPlugin = define({
   id: "ycoding.provider.github-copilot",
   effect: Effect.fn(function* (ctx) {
     const catalog = yield* Catalog.Service
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const loading = Semaphore.makeUnsafe(1)
     const loaded: {
       baseURL?: string
-      models?: Map<ModelV2.ID, ModelV2.Info>
+      models?: Map<CatalogModel.ID, CatalogModel.Info>
     } = {}
 
     const load = Effect.fn("GithubCopilotPlugin.load")(function* () {
@@ -144,8 +144,8 @@ export const GithubCopilotPlugin = define({
 
       const enterprise = credential.metadata?.enterpriseUrl
       loaded.baseURL = baseURL(typeof enterprise === "string" ? enterprise : undefined)
-      const provider = yield* catalog.provider.get(ProviderV2.ID.githubCopilot)
-      const existing = (yield* catalog.model.all()).filter((model) => model.providerID === ProviderV2.ID.githubCopilot)
+      const provider = yield* catalog.provider.get(Provider.ID.githubCopilot)
+      const existing = (yield* catalog.model.all()).filter((model) => model.providerID === Provider.ID.githubCopilot)
       loaded.models = yield* Effect.tryPromise({
         try: () =>
           CopilotModels.get(
@@ -180,7 +180,7 @@ export const GithubCopilotPlugin = define({
     yield* ctx.aisdk.hook(
       "sdk",
       Effect.fn(function* (evt) {
-        if (evt.model.providerID !== ProviderV2.ID.githubCopilot) return
+        if (evt.model.providerID !== Provider.ID.githubCopilot) return
         if (evt.package !== "@ai-sdk/github-copilot" && evt.package !== "@ai-sdk/anthropic") return
         evt.options.fetch = copilotFetch(
           typeof evt.options.apiKey === "string" ? evt.options.apiKey : undefined,
@@ -203,7 +203,7 @@ export const GithubCopilotPlugin = define({
     yield* ctx.aisdk.hook(
       "language",
       Effect.fn(function* (evt) {
-        if (evt.model.providerID !== ProviderV2.ID.githubCopilot) return
+        if (evt.model.providerID !== Provider.ID.githubCopilot) return
         const id = evt.model.modelID ?? evt.model.id
         if (evt.sdk.responses === undefined && evt.sdk.chat === undefined) {
           evt.language = evt.sdk.languageModel(evt.model.modelID ?? evt.model.id)
@@ -238,14 +238,14 @@ function withoutMaxOutputTokens(language: LanguageModelV3): LanguageModelV3 {
 
 export function syncModels(
   catalog: CopilotCatalog,
-  models: Map<ModelV2.ID, ModelV2.Info> | undefined,
+  models: Map<CatalogModel.ID, CatalogModel.Info> | undefined,
   baseURL: string | undefined,
 ) {
-  const item = catalog.provider.get(ProviderV2.ID.githubCopilot)
+  const item = catalog.provider.get(Provider.ID.githubCopilot)
   if (!item) return
   if (models) {
     for (const id of item.models.keys()) {
-      if (!models.has(ModelV2.ID.make(id))) catalog.model.remove(item.provider.id, id)
+      if (!models.has(CatalogModel.ID.make(id))) catalog.model.remove(item.provider.id, id)
     }
     for (const [id, model] of models) {
       catalog.model.update(item.provider.id, id, (draft) => Object.assign(draft, structuredClone(model)))
@@ -253,8 +253,8 @@ export function syncModels(
   } else if (baseURL) {
     for (const id of item.models.keys()) catalog.model.remove(item.provider.id, id)
   }
-  if (!item.models.has(ModelV2.ID.make("gpt-5-chat-latest"))) return
-  catalog.model.update(item.provider.id, ModelV2.ID.make("gpt-5-chat-latest"), (model) => {
+  if (!item.models.has(CatalogModel.ID.make("gpt-5-chat-latest"))) return
+  catalog.model.update(item.provider.id, CatalogModel.ID.make("gpt-5-chat-latest"), (model) => {
     model.enabled = false
   })
 }

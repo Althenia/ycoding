@@ -1,18 +1,18 @@
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
 import { Catalog } from "@ycoding-ai/core/catalog"
-import { PluginV2 } from "@ycoding-ai/core/plugin"
+import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
 import { ProviderPlugins } from "@ycoding-ai/core/plugin/provider"
 import { KiloPlugin } from "@ycoding-ai/core/plugin/provider/kilo"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
 
 const it = testEffect(PluginTestLayer)
 
 const addPlugin = Effect.fn(function* () {
-  const plugin = yield* PluginV2.Service
+  const plugin = yield* PluginRegistry.Service
   const host = yield* PluginHost.make(plugin)
   yield* KiloPlugin.effect(host)
 })
@@ -26,19 +26,19 @@ describe("KiloPlugin", () => {
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service
       yield* catalog.transform((catalog) => {
-        catalog.provider.update(ProviderV2.ID.make("kilo"), (provider) => {
-          provider.package = ProviderV2.aisdk("@ai-sdk/openai-compatible")
+        catalog.provider.update(Provider.ID.make("kilo"), (provider) => {
+          provider.package = Provider.aisdk("@ai-sdk/openai-compatible")
           provider.settings = { baseURL: "https://api.kilo.ai/api/gateway" }
           provider.headers = { Existing: "value" }
         })
-        catalog.provider.update(ProviderV2.ID.openrouter, () => {})
+        catalog.provider.update(Provider.ID.openrouter, () => {})
       })
       yield* addPlugin()
-      expect((yield* catalog.provider.get(ProviderV2.ID.make("kilo")))?.headers).toEqual({
+      expect((yield* catalog.provider.get(Provider.ID.make("kilo")))?.headers).toEqual({
         Existing: "value",
         "X-Title": "YCoding",
       })
-      expect((yield* catalog.provider.get(ProviderV2.ID.openrouter))?.headers).toBeUndefined()
+      expect((yield* catalog.provider.get(Provider.ID.openrouter))?.headers).toBeUndefined()
     }),
   )
 
@@ -46,19 +46,19 @@ describe("KiloPlugin", () => {
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service
       yield* catalog.transform((catalog) => {
-        catalog.provider.update(ProviderV2.ID.make("kilo"), (provider) => {
-          provider.package = ProviderV2.aisdk("@ai-sdk/openai-compatible")
+        catalog.provider.update(Provider.ID.make("kilo"), (provider) => {
+          provider.package = Provider.aisdk("@ai-sdk/openai-compatible")
           provider.settings = { baseURL: "https://api.kilo.ai/api/gateway" }
         })
       })
       yield* addPlugin()
 
-      expect((yield* catalog.provider.get(ProviderV2.ID.make("kilo")))?.headers).toEqual({
+      expect((yield* catalog.provider.get(Provider.ID.make("kilo")))?.headers).toEqual({
         "X-Title": "YCoding",
       })
-      expect((yield* catalog.provider.get(ProviderV2.ID.make("kilo")))?.headers).not.toHaveProperty("http-referer")
-      expect((yield* catalog.provider.get(ProviderV2.ID.make("kilo")))?.headers).not.toHaveProperty("x-title")
-      expect((yield* catalog.provider.get(ProviderV2.ID.make("kilo")))?.headers).not.toHaveProperty("X-Source")
+      expect((yield* catalog.provider.get(Provider.ID.make("kilo")))?.headers).not.toHaveProperty("http-referer")
+      expect((yield* catalog.provider.get(Provider.ID.make("kilo")))?.headers).not.toHaveProperty("x-title")
+      expect((yield* catalog.provider.get(Provider.ID.make("kilo")))?.headers).not.toHaveProperty("X-Source")
     }),
   )
 
@@ -66,18 +66,18 @@ describe("KiloPlugin", () => {
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service
       yield* catalog.transform((catalog) => {
-        catalog.provider.update(ProviderV2.ID.make("kilo"), (provider) => {
-          provider.package = ProviderV2.aisdk("kilo")
+        catalog.provider.update(Provider.ID.make("kilo"), (provider) => {
+          provider.package = Provider.aisdk("kilo")
         })
-        catalog.provider.update(ProviderV2.ID.make("custom-kilo"), (provider) => {
-          provider.package = ProviderV2.aisdk("@ai-sdk/openai-compatible")
+        catalog.provider.update(Provider.ID.make("custom-kilo"), (provider) => {
+          provider.package = Provider.aisdk("@ai-sdk/openai-compatible")
           provider.settings = { baseURL: "https://api.kilo.ai/api/gateway" }
         })
       })
       yield* addPlugin()
 
-      expect((yield* catalog.provider.get(ProviderV2.ID.make("kilo")))?.headers).toBeUndefined()
-      expect((yield* catalog.provider.get(ProviderV2.ID.make("custom-kilo")))?.headers).toEqual({
+      expect((yield* catalog.provider.get(Provider.ID.make("kilo")))?.headers).toBeUndefined()
+      expect((yield* catalog.provider.get(Provider.ID.make("custom-kilo")))?.headers).toEqual({
         "X-Title": "YCoding",
       })
     }),

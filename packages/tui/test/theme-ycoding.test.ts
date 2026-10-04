@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { DEFAULT_THEMES } from "../src/theme/builtins"
-import { resolveThemeFile } from "../src/theme/v2/resolve"
+import { resolveThemeFile } from "../src/theme/resolve"
 
 const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
 const lightTheme = resolveThemeFile(DEFAULT_THEMES.ycoding, "light", "ycoding")

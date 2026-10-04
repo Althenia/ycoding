@@ -11,8 +11,8 @@ import { FileSystem } from "@ycoding-ai/core/filesystem"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { Location } from "@ycoding-ai/core/location"
 import { Image } from "@ycoding-ai/core/image"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Permission } from "@ycoding-ai/core/permission"
+import { Session } from "@ycoding-ai/core/session"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Global } from "@ycoding-ai/core/global"
 import { LocationMutation } from "@ycoding-ai/core/location-mutation"
@@ -34,14 +34,14 @@ const readToolNode = makeLocationNode({
     ReadToolFileSystem.node,
     LocationMutation.node,
     Image.node,
-    PermissionV2.node,
+    Permission.node,
     SessionInstructions.node,
     FSUtil.node,
     Location.node,
   ],
 })
 
-const assertions: PermissionV2.AssertInput[] = []
+const assertions: Permission.AssertInput[] = []
 const data = mkdtempSync(path.join(os.tmpdir(), "ycoding-tool-read-"))
 const missingPath = "__missing_read_target__.txt"
 const missingAbsolutePath = path.join(process.cwd(), missingPath)
@@ -79,9 +79,9 @@ const reader = Layer.succeed(
 )
 let allow = true
 const permission = Layer.succeed(
-  PermissionV2.Service,
-  PermissionV2.Service.of({
-    evaluateEffective: () => Effect.die(new Error("unused PermissionV2.evaluateEffective")),
+  Permission.Service,
+  Permission.Service.of({
+    evaluateEffective: () => Effect.die(new Error("unused Permission.evaluateEffective")),
     assert: (input) =>
       Effect.sync(() => {
         assertions.push(input)
@@ -90,7 +90,7 @@ const permission = Layer.succeed(
           allow
             ? Effect.void
             : Effect.fail(
-                new PermissionV2.BlockedError({
+                new Permission.BlockedError({
                   rules: [],
                   permission: input.action,
                   resources: input.resources,
@@ -168,7 +168,7 @@ const unavailableImage = Layer.succeed(
 const readLayer = (imageLayer: Layer.Layer<Image.Service>) =>
   AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, readToolNode]), [
     [ReadToolFileSystem.node, reader],
-    [PermissionV2.node, permission],
+    [Permission.node, permission],
     [Config.node, config],
     [Image.node, imageLayer],
     [LocationMutation.node, mutation],
@@ -179,7 +179,7 @@ const readLayer = (imageLayer: Layer.Layer<Image.Service>) =>
   ])
 const it = testEffect(readLayer(imageLayer))
 const itWithoutResizer = testEffect(readLayer(unavailableImage))
-const sessionID = SessionV2.ID.make("ses_read_tool_test")
+const sessionID = Session.ID.make("ses_read_tool_test")
 
 describe("ReadTool", () => {
   afterAll(() => rmSync(data, { recursive: true, force: true }))

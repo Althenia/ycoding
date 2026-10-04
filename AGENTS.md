@@ -23,7 +23,7 @@ Use this authority order when sources disagree:
 2. Public shapes and durable events in `packages/schema`.
 3. HTTP operations and middleware placement in `packages/protocol`.
 4. Runtime behavior and persistence in `packages/core`.
-5. Current YCoding documentation in `docs` and current contracts in `specs/v2`.
+5. Current YCoding documentation in `docs` and current contracts in `specs`.
 6. Package-local `AGENTS.md` guidance.
 7. Generated clients and OpenAPI output, which must match Protocol.
 8. Upstream documentation, upstream source, old plans, and historical notes.
@@ -47,7 +47,7 @@ Update documentation in the same change when behavior changes.
 - Session, autonomy, subagent, skill, project-artifact, cache, or transcript behavior: update `docs/runtime.md`.
 - Runtime, CLI/TUI, service, provider, MCP, permission, or environment configuration: update `docs/configuration.md`.
 - Agent, command, skill, plugin, hook, tool, theme, instruction, or repository-resource discovery: update `docs/repository-resources.md`.
-- Public API or schema: update the relevant `specs/v2` contract and regenerate clients/OpenAPI through the owning command.
+- Public API or schema: update the relevant `specs` contract and regenerate clients/OpenAPI through the owning command.
 - Contributor invariants or required verification: update this file or the relevant package `AGENTS.md`.
 - Visual design, brand, marks, tokens, components, motion, or UI rules on any surface: update the owning `DESIGN.md` in the chain in the same change.
 
@@ -229,7 +229,7 @@ const table = sqliteTable("session", {
 ## Session core
 
 - Keep durable events minimal: record irreducible new facts and do not repeat state derivable by folding ordered aggregate history. Enrich projections and read models when consumers need self-contained views.
-- Keep durable prompt admission separate from model execution. `SessionV2.prompt(...)` admits one durable `session_pending` row before scheduling advisory `SessionExecution.wake(sessionID)` unless `resume: false` requests admit-only behavior.
+- Keep durable prompt admission separate from model execution. `Session.prompt(...)` admits one durable `session_pending` row before scheduling advisory `SessionExecution.wake(sessionID)` unless `resume: false` requests admit-only behavior.
 - The serialized runner promotes admitted inputs into visible user messages at safe boundaries, consuming the pending row in the same event transaction. `session_pending` stores only unconsumed work.
 - Reusing a Session ID adopts the existing Session. Reusing a prompt message ID returns the admitted durable record and wakes execution; the first admission wins and sending a prompt never fails on ID reuse. A prompt message ID belongs to one Session and one input kind, so reuse across Sessions or across input kinds is rejected.
 - Retry of an already-promoted input reconciles against the projected message and durable admitted event rather than a retained pending row.
@@ -246,7 +246,7 @@ const table = sqliteTable("session", {
 - One step is one logical LLM call; its durable record covers only the model-visible span. Do not use “provider turn”, and do not use bare “turn” for a single call. “Turn” is reserved for the future assistant-turn unit containing all steps from prompt promotion until the session would go idle.
 - Every logical Step that publishes `Step.Started` publishes exactly one terminal `Step.Ended` or `Step.Failed`, including malformed provider settlement, non-LLM stream failures, and interruption during provider retry backoff.
 - A settled terminal Step with no non-whitespace assistant text and no local-tool continuation gets exactly one additional text-only recovery Step; recovery has no tools, no synthetic prompt, and cannot start a third Step.
-- Keep EventV2 replay owner claims separate from clustered Session execution ownership.
+- Keep EventRuntime replay owner claims separate from clustered Session execution ownership.
 - Keep the Instructions algebra and built-ins in `src/instructions`; keep instruction producers with their observed domains, and keep Session History selection plus `InstructionState` and `InstructionEntry` persistence Session-owned.
 - `InstructionDiscovery` observes ambient global and upward-project instructions. The runner composes built-ins, discovery, guidance, and entries explicitly in `loadInstructions`; there is no instruction registry.
 - `session.instructions.updated` stores only changed source keys and content hashes. Blob values live once in `instruction_blob`; `instruction_state` is a rebuildable fold cache, never primary state.

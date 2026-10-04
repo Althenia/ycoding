@@ -11,7 +11,7 @@ export function DialogSessionRename(props: { sessionID: string; currentTitle?: s
   const dialog = useDialog()
   const client = useClient()
   const toast = useToast()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const { theme } = useTheme().contextual("elevated")
   let input: InputRenderable
 
   const confirm = () => {
@@ -50,15 +50,15 @@ export function DialogSessionRename(props: { sessionID: string; currentTitle?: s
             input.value = props.currentTitle ?? ""
           }}
           placeholder="Session title"
-          placeholderColor={themeV2.text.subdued}
-          textColor={themeV2.text.formfield.default}
-          focusedTextColor={themeV2.text.formfield.default}
-          cursorColor={themeV2.text.formfield.default}
+          placeholderColor={theme.text.subdued}
+          textColor={theme.text.formfield.default}
+          focusedTextColor={theme.text.formfield.default}
+          cursorColor={theme.text.formfield.default}
           onSubmit={confirm}
         />
       </box>
       <box paddingTop={2} paddingLeft={6} paddingRight={4}>
-        <text fg={themeV2.text.default}>Enter <span style={{ fg: themeV2.text.subdued }}>save · Esc cancel</span></text>
+        <text fg={theme.text.default}>Enter <span style={{ fg: theme.text.subdued }}>save · Esc cancel</span></text>
       </box>
     </box>
   )

@@ -9,17 +9,17 @@ import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { makeGlobalNode } from "@ycoding-ai/core/effect/app-node"
 import { Database } from "@ycoding-ai/core/database/database"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Form } from "@ycoding-ai/core/form"
 import { Location } from "@ycoding-ai/core/location"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { Job } from "@ycoding-ai/core/job"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionPending } from "@ycoding-ai/core/session/pending"
@@ -30,12 +30,12 @@ import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { SessionPendingTable, SessionTable, SessionTaskNotificationTable } from "@ycoding-ai/core/session/sql"
-import { PluginV2 } from "@ycoding-ai/core/plugin"
+import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHooks } from "@ycoding-ai/core/plugin/hooks"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
-import { QuestionV2 } from "@ycoding-ai/core/question"
+import { Permission } from "@ycoding-ai/core/permission"
+import { Question } from "@ycoding-ai/core/question"
 import { PluginSupervisor } from "@ycoding-ai/core/plugin/supervisor"
 import { SubagentTool } from "@ycoding-ai/core/tool/subagent"
 import { SubagentControlTool } from "@ycoding-ai/core/tool/subagent-control"
@@ -51,11 +51,11 @@ import { fixtureModels } from "./lib/models"
 import { eq } from "drizzle-orm"
 
 const childText = "child final response"
-const childModel = ModelV2.Ref.make({ id: ModelV2.ID.make("child"), providerID: ProviderV2.ID.make("test") })
-const parentModel = ModelV2.Ref.make({ id: ModelV2.ID.make("parent"), providerID: ProviderV2.ID.make("test") })
+const childModel = CatalogModel.Ref.make({ id: CatalogModel.ID.make("child"), providerID: Provider.ID.make("test") })
+const parentModel = CatalogModel.Ref.make({ id: CatalogModel.ID.make("parent"), providerID: Provider.ID.make("test") })
 const tokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
-const executionWakes: SessionV2.ID[] = []
-const executionInterrupts: SessionV2.ID[] = []
+const executionWakes: Session.ID[] = []
+const executionInterrupts: Session.ID[] = []
 const notificationDeliveredOnWake: boolean[] = []
 
 const outputSessionID = (value: unknown) => Schema.decodeUnknownSync(SubagentTool.Output)(value).sessionID
@@ -65,11 +65,11 @@ const executionNode = makeGlobalNode({
   layer: Layer.effect(
     SessionExecution.Service,
     Effect.gen(function* () {
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const store = yield* SessionStore.Service
       const db = (yield* Database.Service).db
-      const completed = new Set<SessionV2.ID>()
-      const complete = Effect.fn("SubagentTest.complete")(function* (sessionID: SessionV2.ID) {
+      const completed = new Set<Session.ID>()
+      const complete = Effect.fn("SubagentTest.complete")(function* (sessionID: Session.ID) {
         if (completed.has(sessionID)) return
         const session = yield* store.get(sessionID)
         if (session?.title.includes("fail")) {
@@ -82,7 +82,7 @@ const executionNode = makeGlobalNode({
         yield* events.publish(SessionEvent.Step.Started, {
           sessionID,
           assistantMessageID,
-          agent: AgentV2.ID.make("reviewer"),
+          agent: Agent.ID.make("reviewer"),
           model: childModel,
         })
         yield* events.publish(SessionEvent.Text.Started, {
@@ -124,16 +124,16 @@ const executionNode = makeGlobalNode({
       })
     }),
   ),
-  deps: [Database.node, EventV2.node, SessionStore.node],
+  deps: [Database.node, EventRuntime.node, SessionStore.node],
 })
 
 const layer = AppNodeBuilder.build(
   LayerNode.group([
     Database.node,
-    EventV2.node,
+    EventRuntime.node,
     Job.node,
     ToolOutputStore.cleanupNode,
-    SessionV2.node,
+    Session.node,
     SessionExecution.node,
     SessionOrchestrationNotifier.node,
     PluginHooks.node,
@@ -159,10 +159,10 @@ const startupFailureIt = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       Database.node,
-      EventV2.node,
+      EventRuntime.node,
       Job.node,
       ToolOutputStore.cleanupNode,
-      SessionV2.node,
+      Session.node,
       SessionExecution.node,
       SessionOrchestrationNotifier.node,
       PluginHooks.node,
@@ -183,34 +183,34 @@ const withSubagent = (location: Location.Ref) =>
   Effect.gen(function* () {
     const locations = yield* LocationServiceMap.Service
     yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(Effect.provide(locations.get(location)))
-    yield* AgentV2.Service.use((agents) =>
+    yield* Agent.Service.use((agents) =>
       agents.transform((draft) => {
         // The caller identity used by executeTool; subagent permission asserts against it.
         draft.update(toolIdentity.agent, (agent) => {
           agent.mode = "primary"
           agent.permissions.push({ action: "*", resource: "*", effect: "allow" })
         })
-        draft.update(AgentV2.ID.make("reviewer"), (agent) => {
+        draft.update(Agent.ID.make("reviewer"), (agent) => {
           agent.mode = "subagent"
           agent.model = childModel
         })
-        draft.update(AgentV2.ID.make("fallback"), (agent) => {
+        draft.update(Agent.ID.make("fallback"), (agent) => {
           agent.mode = "subagent"
         })
-        draft.update(AgentV2.ID.make("primary"), (agent) => {
+        draft.update(Agent.ID.make("primary"), (agent) => {
           agent.mode = "primary"
         })
       }),
     ).pipe(Effect.provide(locations.get(location)))
     yield* Catalog.Service.use((catalog) =>
       catalog.transform((draft) => {
-        draft.provider.update(ProviderV2.ID.make("test"), (provider) => {
-          provider.package = ProviderV2.aisdk("@ai-sdk/openai")
+        draft.provider.update(Provider.ID.make("test"), (provider) => {
+          provider.package = Provider.aisdk("@ai-sdk/openai")
         })
-        draft.model.update(ProviderV2.ID.make("test"), childModel.id, (model) => {
-          model.variants.push({ id: ModelV2.VariantID.make("high") })
+        draft.model.update(Provider.ID.make("test"), childModel.id, (model) => {
+          model.variants.push({ id: CatalogModel.VariantID.make("high") })
         })
-        draft.model.update(ProviderV2.ID.make("test"), parentModel.id, () => {})
+        draft.model.update(Provider.ID.make("test"), parentModel.id, () => {})
       }),
     ).pipe(Effect.provide(locations.get(location)))
   })
@@ -222,7 +222,7 @@ describe("SubagentTool", () => {
       expect(
         Schema.decodeUnknownSync(SubagentControlTool.Input)({
           action: "send",
-          sessionID: SessionV2.ID.make("ses_child"),
+          sessionID: Session.ID.make("ses_child"),
           text: "context",
           delivery: "steer",
         }),
@@ -288,7 +288,7 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const session = yield* SessionV2.Service
+          const session = yield* Session.Service
           const parent = yield* session.create({ location })
           yield* withSubagent(parent.location)
 
@@ -325,7 +325,7 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const parent = yield* sessions.create({
             location,
             model: parentModel,
@@ -334,8 +334,8 @@ describe("SubagentTool", () => {
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
           const available = yield* Effect.gen(function* () {
-            const agents = yield* AgentV2.Service
-            const permission = yield* PermissionV2.Service
+            const agents = yield* Agent.Service
+            const permission = yield* Permission.Service
             return yield* SubagentTool.availableAgents({
               permission,
               sessionID: parent.id,
@@ -344,8 +344,8 @@ describe("SubagentTool", () => {
             })
           }).pipe(Effect.provide(locations.get(parent.location)))
 
-          expect(available.map((agent) => agent.id)).toContain(AgentV2.ID.make("fallback"))
-          expect(available.map((agent) => agent.id)).not.toContain(AgentV2.ID.make("reviewer"))
+          expect(available.map((agent) => agent.id)).toContain(Agent.ID.make("fallback"))
+          expect(available.map((agent) => agent.id)).not.toContain(Agent.ID.make("reviewer"))
         }),
       ),
     ),
@@ -354,7 +354,7 @@ describe("SubagentTool", () => {
   it.live("reports child-only identity for missing managed task operations", () =>
     Effect.gen(function* () {
       const orchestration = (yield* PluginRuntime.Service).orchestration
-      const childID = SessionV2.ID.make("ses_missing_managed_task")
+      const childID = Session.ID.make("ses_missing_managed_task")
       const errors = [
         yield* orchestration.progress(childID, "halfway").pipe(Effect.flip),
         yield* orchestration.question(childID, "Proceed?").pipe(Effect.flip),
@@ -380,7 +380,7 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const root = yield* sessions.create({ location })
           const parent = yield* sessions.create({ parentID: root.id, title: "parent" })
           yield* withSubagent(parent.location)
@@ -417,7 +417,7 @@ describe("SubagentTool", () => {
             Bun.write(path.join(dir.path, "ycoding.json"), JSON.stringify({ experimental: { subagent_depth: 2 } })),
           )
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const root = yield* sessions.create({ location })
           const parent = yield* sessions.create({ parentID: root.id, title: "parent", model: parentModel })
           yield* withSubagent(parent.location)
@@ -451,7 +451,7 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
@@ -512,7 +512,7 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
@@ -562,13 +562,13 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
           const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
           yield* waitForTool(registry, SubagentTool.name)
-          const events = yield* EventV2.Service
+          const events = yield* EventRuntime.Service
           const admitted = yield* events.subscribe(SessionEvent.InputAdmitted).pipe(
             Stream.filter((event) => event.data.sessionID === parent.id && event.data.input.type === "synthetic"),
             Stream.take(1),
@@ -612,7 +612,7 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
@@ -657,7 +657,7 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const source = {
@@ -666,16 +666,16 @@ describe("SubagentTool", () => {
             callID: "call_variant",
           }
           const valid = yield* SessionOrchestration.preflight(parent, {
-            agent: AgentV2.ID.make("reviewer"),
-            model: { ...childModel, variant: ModelV2.VariantID.make("high") },
+            agent: Agent.ID.make("reviewer"),
+            model: { ...childModel, variant: CatalogModel.VariantID.make("high") },
             caller: source.agent,
           }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location)))
-          expect(valid.resolved.ref.variant).toBe(ModelV2.VariantID.make("high"))
+          expect(valid.resolved.ref.variant).toBe(CatalogModel.VariantID.make("high"))
 
           const invalid = yield* Effect.exit(
             SessionOrchestration.preflight(parent, {
-              agent: AgentV2.ID.make("reviewer"),
-              model: { ...childModel, variant: ModelV2.VariantID.make("unknown") },
+              agent: Agent.ID.make("reviewer"),
+              model: { ...childModel, variant: CatalogModel.VariantID.make("unknown") },
               caller: source.agent,
             }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location))),
           )
@@ -695,7 +695,7 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const source = {
@@ -704,7 +704,7 @@ describe("SubagentTool", () => {
             callID: "call_retry",
           }
           const prepared = yield* SessionOrchestration.preflight(parent, {
-            agent: AgentV2.ID.make("reviewer"),
+            agent: Agent.ID.make("reviewer"),
             caller: source.agent,
           }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location)))
           const orchestration = (yield* PluginRuntime.Service).orchestration
@@ -712,7 +712,7 @@ describe("SubagentTool", () => {
             parentID: parent.id,
             parentAssistantMessageID: source.messageID,
             toolCallID: source.callID,
-            agent: AgentV2.ID.make("reviewer"),
+            agent: Agent.ID.make("reviewer"),
             description: "retry",
             prompt: "same prompt",
             background: true,
@@ -744,7 +744,7 @@ describe("SubagentTool", () => {
             agent: prepared.target.id,
             model: prepared.resolved.ref,
           })
-          yield* EventV2.Service.use((events) =>
+          yield* EventRuntime.Service.use((events) =>
             events.publish(
               SessionEvent.Task.Updated,
               {
@@ -763,7 +763,7 @@ describe("SubagentTool", () => {
                   delivery: "steer",
                 },
               },
-              { id: EventV2.ID.make(interruptedIDs.launchEventID) },
+              { id: EventRuntime.ID.make(interruptedIDs.launchEventID) },
             ),
           )
           expect((yield* orchestration.get(parent.id, interruptedIDs.childID)).state).toBe("starting")
@@ -791,7 +791,7 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const source = {
@@ -799,7 +799,7 @@ describe("SubagentTool", () => {
             callID: "call_starting_cancel",
           }
           const prepared = yield* SessionOrchestration.preflight(parent, {
-            agent: AgentV2.ID.make("reviewer"),
+            agent: Agent.ID.make("reviewer"),
             caller: toolIdentity.agent,
           }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location)))
           const ids = SessionOrchestrationIdentity.launch(parent.id, source.messageID, source.callID)
@@ -811,7 +811,7 @@ describe("SubagentTool", () => {
             model: prepared.resolved.ref,
           })
           const orchestration = (yield* PluginRuntime.Service).orchestration
-          const events = yield* EventV2.Service
+          const events = yield* EventRuntime.Service
           yield* events.publish(SessionEvent.Task.Updated, {
             sessionID: ids.childID,
             change: {
@@ -856,7 +856,7 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const parent = yield* sessions.create({ location, model: parentModel })
           const unrelatedParent = yield* sessions.create({ location, model: parentModel })
           const unmanaged = yield* sessions.create({ parentID: parent.id })
@@ -868,7 +868,7 @@ describe("SubagentTool", () => {
             callID: "call_control",
           }
           const prepared = yield* SessionOrchestration.preflight(parent, {
-            agent: AgentV2.ID.make("reviewer"),
+            agent: Agent.ID.make("reviewer"),
             caller: source.agent,
           }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location)))
           const orchestration = (yield* PluginRuntime.Service).orchestration
@@ -876,7 +876,7 @@ describe("SubagentTool", () => {
             parentID: parent.id,
             parentAssistantMessageID: source.messageID,
             toolCallID: source.callID,
-            agent: AgentV2.ID.make("reviewer"),
+            agent: Agent.ID.make("reviewer"),
             description: "controls",
             prompt: "initial",
             background: true,
@@ -1024,7 +1024,7 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const source = {
@@ -1033,7 +1033,7 @@ describe("SubagentTool", () => {
             callID: "call_outbox",
           }
           const prepared = yield* SessionOrchestration.preflight(parent, {
-            agent: AgentV2.ID.make("reviewer"),
+            agent: Agent.ID.make("reviewer"),
             caller: source.agent,
           }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location)))
           const orchestration = (yield* PluginRuntime.Service).orchestration
@@ -1041,13 +1041,13 @@ describe("SubagentTool", () => {
             parentID: parent.id,
             parentAssistantMessageID: source.messageID,
             toolCallID: source.callID,
-            agent: AgentV2.ID.make("reviewer"),
+            agent: Agent.ID.make("reviewer"),
             description: "outbox",
             prompt: "initial",
             background: true,
             prepared,
           })
-          const events = yield* EventV2.Service
+          const events = yield* EventRuntime.Service
           const admitted = yield* events.subscribe(SessionEvent.InputAdmitted).pipe(
             Stream.filter((event) => event.data.sessionID === parent.id && event.data.input.type === "synthetic"),
             Stream.take(1),
@@ -1084,27 +1084,27 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
           const orchestration = (yield* PluginRuntime.Service).orchestration
           const prepared = yield* SessionOrchestration.preflight(parent, {
-            agent: AgentV2.ID.make("reviewer"),
+            agent: Agent.ID.make("reviewer"),
             caller: toolIdentity.agent,
           }).pipe(Effect.provide(locations.get(parent.location)))
           const child = yield* orchestration.launch({
             parentID: parent.id,
             parentAssistantMessageID: SessionMessage.ID.make("msg_retry_parent"),
             toolCallID: "call_retry",
-            agent: AgentV2.ID.make("reviewer"),
+            agent: Agent.ID.make("reviewer"),
             description: "retry",
             prompt: "initial",
             background: true,
             prepared,
           })
           const db = (yield* Database.Service).db
-          const events = yield* EventV2.Service
+          const events = yield* EventRuntime.Service
           yield* db.delete(SessionPendingTable).where(eq(SessionPendingTable.session_id, child.sessionID)).run()
           yield* orchestration.settle(child.sessionID, { type: "completed", excerpt: "done" })
 
@@ -1142,14 +1142,14 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
           const orchestration = (yield* PluginRuntime.Service).orchestration
           const prepare = (callID: string) =>
             SessionOrchestration.preflight(parent, {
-              agent: AgentV2.ID.make("reviewer"),
+              agent: Agent.ID.make("reviewer"),
               caller: toolIdentity.agent,
             }).pipe(Effect.provide(locations.get(parent.location)))
           const launch = Effect.fnUntraced(function* (callID: string) {
@@ -1157,7 +1157,7 @@ describe("SubagentTool", () => {
               parentID: parent.id,
               parentAssistantMessageID: SessionMessage.ID.make(`msg_${callID}`),
               toolCallID: callID,
-              agent: AgentV2.ID.make("reviewer"),
+              agent: Agent.ID.make("reviewer"),
               description: callID,
               prompt: "pending",
               background: true,
@@ -1212,11 +1212,11 @@ describe("SubagentTool", () => {
 
           const inFlight = yield* launch("recover_inflight")
           const assistantMessageID = SessionMessage.ID.make("msg_inflight_assistant")
-          yield* EventV2.Service.use((events) =>
+          yield* EventRuntime.Service.use((events) =>
             events.publish(SessionEvent.Step.Started, {
               sessionID: inFlight.sessionID,
               assistantMessageID,
-              agent: AgentV2.ID.make("reviewer"),
+              agent: Agent.ID.make("reviewer"),
               model: childModel,
             }),
           )
@@ -1236,7 +1236,7 @@ describe("SubagentTool", () => {
           expect((yield* orchestration.get(parent.id, noPending.sessionID)).state).toBe("lost")
 
           const cancelling = yield* launch("recover_cancelling")
-          yield* EventV2.Service.use((events) =>
+          yield* EventRuntime.Service.use((events) =>
             events.publish(SessionEvent.Task.Updated, {
               sessionID: cancelling.sessionID,
               change: { type: "cancel_requested" },
@@ -1258,14 +1258,14 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const parent = yield* sessions.create({
             location,
             permissionCeiling: [{ action: "read", resource: "/secret/*", effect: "deny" }],
           })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
-          yield* AgentV2.Service.use((agents) =>
+          yield* Agent.Service.use((agents) =>
             agents.transform((draft) => {
               draft.update(toolIdentity.agent, (agent) => {
                 agent.permissions = [
@@ -1273,7 +1273,7 @@ describe("SubagentTool", () => {
                   { action: "shell", resource: "*", effect: "deny" },
                 ]
               })
-              draft.update(AgentV2.ID.make("reviewer"), (agent) => {
+              draft.update(Agent.ID.make("reviewer"), (agent) => {
                 agent.permissions = [{ action: "*", resource: "*", effect: "allow" }]
               })
             }),
@@ -1297,11 +1297,11 @@ describe("SubagentTool", () => {
             { action: "shell", resource: "*", effect: "deny" },
           ])
 
-          const permission = yield* PermissionV2.Service.pipe(Effect.provide(locations.get(child.location)))
+          const permission = yield* Permission.Service.pipe(Effect.provide(locations.get(child.location)))
           expect(
             yield* permission.ask({
               sessionID: child.id,
-              agent: AgentV2.ID.make("reviewer"),
+              agent: Agent.ID.make("reviewer"),
               action: "shell",
               resources: ["pwd"],
             }),
@@ -1309,7 +1309,7 @@ describe("SubagentTool", () => {
           expect(
             yield* permission.ask({
               sessionID: child.id,
-              agent: AgentV2.ID.make("reviewer"),
+              agent: Agent.ID.make("reviewer"),
               action: "read",
               resources: ["/secret/token"],
             }),
@@ -1317,7 +1317,7 @@ describe("SubagentTool", () => {
           expect(
             yield* permission.ask({
               sessionID: child.id,
-              agent: AgentV2.ID.make("reviewer"),
+              agent: Agent.ID.make("reviewer"),
               action: "edit",
               resources: ["src/index.ts"],
             }),
@@ -1335,7 +1335,7 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const parent = yield* sessions.create({
             location,
             model: parentModel,
@@ -1343,30 +1343,30 @@ describe("SubagentTool", () => {
           })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
-          yield* AgentV2.Service.use((agents) =>
+          yield* Agent.Service.use((agents) =>
             agents.transform((draft) =>
-              draft.update(AgentV2.ID.make("reviewer"), (agent) => {
+              draft.update(Agent.ID.make("reviewer"), (agent) => {
                 agent.permissions = [{ action: "*", resource: "*", effect: "ask" }]
               }),
             ),
           ).pipe(Effect.provide(locations.get(parent.location)))
           const orchestration = (yield* PluginRuntime.Service).orchestration
           const prepared = yield* SessionOrchestration.preflight(parent, {
-            agent: AgentV2.ID.make("reviewer"),
+            agent: Agent.ID.make("reviewer"),
             caller: toolIdentity.agent,
           }).pipe(Effect.provide(locations.get(parent.location)))
           const child = yield* orchestration.launch({
             parentID: parent.id,
             parentAssistantMessageID: SessionMessage.ID.make("msg_autonomous_parent"),
             toolCallID: "call_autonomous_child",
-            agent: AgentV2.ID.make("reviewer"),
+            agent: Agent.ID.make("reviewer"),
             description: "hold autonomous child",
             prompt: "continue safely",
             background: true,
             prepared,
           })
-          const permission = yield* PermissionV2.Service.pipe(Effect.provide(locations.get(parent.location)))
-          const questions = yield* QuestionV2.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const permission = yield* Permission.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const questions = yield* Question.Service.pipe(Effect.provide(locations.get(parent.location)))
           const forms = yield* Form.Service.pipe(Effect.provide(locations.get(parent.location)))
           const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
           const db = (yield* Database.Service).db
@@ -1396,18 +1396,18 @@ describe("SubagentTool", () => {
 
             expect(
               yield* permission.ask({
-                id: PermissionV2.ID.create(`per_child_${mode}`),
+                id: Permission.ID.create(`per_child_${mode}`),
                 sessionID: child.sessionID,
-                agent: AgentV2.ID.make("reviewer"),
+                agent: Agent.ID.make("reviewer"),
                 action: "edit",
                 resources: ["src/index.ts"],
               }),
             ).toMatchObject({ effect: "allow" })
             expect(
               yield* permission.ask({
-                id: PermissionV2.ID.create(`per_child_deny_${mode}`),
+                id: Permission.ID.create(`per_child_deny_${mode}`),
                 sessionID: child.sessionID,
-                agent: AgentV2.ID.make("reviewer"),
+                agent: Agent.ID.make("reviewer"),
                 action: "delete",
                 resources: ["src/index.ts"],
               }),
@@ -1442,7 +1442,7 @@ describe("SubagentTool", () => {
             expect(
               yield* executeTool(registry, {
                 sessionID: child.sessionID,
-                agent: AgentV2.ID.make("reviewer"),
+                agent: Agent.ID.make("reviewer"),
                 messageID: SessionMessage.ID.make(`msg_child_question_${mode}`),
                 call: {
                   type: "tool-call",
@@ -1483,7 +1483,7 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
@@ -1514,7 +1514,7 @@ describe("SubagentTool", () => {
             },
           })
           const childID = outputSessionID(launched.output?.structured)
-          yield* AgentV2.Service.use((agents) =>
+          yield* Agent.Service.use((agents) =>
             agents.transform((draft) =>
               draft.update(toolIdentity.agent, (agent) => {
                 agent.permissions = [{ action: "subagent", resource: "reviewer", effect: "deny" }]
@@ -1547,7 +1547,7 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
@@ -1579,7 +1579,7 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
@@ -1630,7 +1630,7 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const parent = yield* sessions.create({ location })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
@@ -1662,25 +1662,25 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
           // PluginHooks is not part of LocationServices, so the plugin is hosted against the
           // ambient hooks instance the test can trigger directly.
-          const plugins = yield* PluginV2.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const plugins = yield* PluginRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
           const host = yield* PluginHost.make(plugins).pipe(Effect.provide(locations.get(parent.location)))
           yield* SubagentTool.Plugin.effect(host).pipe(Effect.provide(locations.get(parent.location)))
           const orchestration = (yield* PluginRuntime.Service).orchestration
           const prepared = yield* SessionOrchestration.preflight(parent, {
-            agent: AgentV2.ID.make("reviewer"),
+            agent: Agent.ID.make("reviewer"),
             caller: toolIdentity.agent,
           }).pipe(Effect.provide(locations.get(parent.location)))
           const child = yield* orchestration.launch({
             parentID: parent.id,
             parentAssistantMessageID: SessionMessage.ID.make("msg_team_view"),
             toolCallID: "call_team_view",
-            agent: AgentV2.ID.make("reviewer"),
+            agent: Agent.ID.make("reviewer"),
             description: "team view",
             prompt: "hold",
             background: true,
@@ -1742,13 +1742,13 @@ describe("SubagentTool", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const sessions = yield* SessionV2.Service
+          const sessions = yield* Session.Service
           const parent = yield* sessions.create({ location })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
           const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
           yield* waitForTool(registry, SubagentTool.name)
-          const events = yield* EventV2.Service
+          const events = yield* EventRuntime.Service
           const admitted = yield* events.subscribe(SessionEvent.InputAdmitted).pipe(
             Stream.filter((event) => event.data.sessionID === parent.id && event.data.input.type === "synthetic"),
             Stream.take(1),

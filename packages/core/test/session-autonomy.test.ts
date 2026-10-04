@@ -4,7 +4,7 @@ import { Database } from "@ycoding-ai/core/database/database"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { goalReminder } from "@ycoding-ai/core/session/live-state"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
@@ -12,7 +12,7 @@ import { GoalTool } from "@ycoding-ai/core/tool/goal"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(Database.layer({ path: ":memory:" }))
-const sessionID = SessionV2.ID.make("ses_autonomy")
+const sessionID = Session.ID.make("ses_autonomy")
 
 const setup = Effect.gen(function* () {
   const { db } = yield* Database.Service

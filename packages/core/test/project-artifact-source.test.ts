@@ -4,11 +4,11 @@ import os from "os"
 import path from "path"
 import { DateTime, Effect, Layer, Schema } from "effect"
 import { TestClock } from "effect/testing"
-import { AgentV2 } from "@ycoding-ai/core/agent"
-import { CommandV2 } from "@ycoding-ai/core/command"
+import { Agent } from "@ycoding-ai/core/agent"
+import { Command } from "@ycoding-ai/core/command"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { Database } from "@ycoding-ai/core/database/database"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Global } from "@ycoding-ai/core/global"
 import { Location } from "@ycoding-ai/core/location"
@@ -26,22 +26,22 @@ import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionTable, SessionMessageTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { WorkspaceTable } from "@ycoding-ai/core/control-plane/workspace.sql"
-import { SkillV2 } from "@ycoding-ai/core/skill"
+import { Skill } from "@ycoding-ai/core/skill"
 import { Hash } from "@ycoding-ai/core/util/hash"
 import { testEffect } from "./lib/effect"
 import { Money } from "@ycoding-ai/schema/money"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
-import { WorkspaceV2 } from "@ycoding-ai/core/workspace"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
+import { Workspace } from "@ycoding-ai/core/workspace"
 
 const projectID = Project.ID.make("source-project")
 const dataRoot = path.join(os.tmpdir(), `ycoding-project-artifact-source-${process.pid}`)
 const storageID = ProjectArtifact.StorageID.make("11111111-1111-4111-8111-111111111111")
 const scopeID = ProjectArtifact.ScopeID.make("pas_source")
-const modelRef = { providerID: ProviderV2.ID.make("test"), id: ModelV2.ID.make("model") }
+const modelRef = { providerID: Provider.ID.make("test"), id: CatalogModel.ID.make("model") }
 const details = new Map<string, ProjectArtifact.ArtifactDetails>()
 let listFailure = false
 const observed: ProjectArtifactAccounting.ObserveInput[] = []
@@ -109,7 +109,7 @@ const locationLayer = Layer.succeed(
 )
 const sourceIt = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([ProjectArtifactSource.node, SkillV2.node, CommandV2.node, AgentV2.node]),
+    LayerNode.group([ProjectArtifactSource.node, Skill.node, Command.node, Agent.node]),
     [
     [ProjectArtifactStore.node, store],
     [ProjectArtifactAccounting.node, accounting],
@@ -131,7 +131,7 @@ const terminalIt = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       ProjectArtifactSource.node,
-      EventV2.node,
+      EventRuntime.node,
       Database.node,
       SessionStore.node,
       SessionAutonomy.node,
@@ -200,7 +200,7 @@ describe("ProjectArtifactSource", () => {
     expect(registry.size()).toBe(1)
   })
 
-  sourceIt.effect("keeps one replaceable managed SkillV2 source across caller scopes and refreshes", () =>
+  sourceIt.effect("keeps one replaceable managed Skill source across caller scopes and refreshes", () =>
     Effect.acquireUseRelease(
       Effect.promise(async () => {
         await fs.rm(dataRoot, { recursive: true, force: true })
@@ -249,9 +249,9 @@ describe("ProjectArtifactSource", () => {
             "active",
           )
           const source = yield* ProjectArtifactSource.Service
-          const skills = yield* SkillV2.Service
-          const commands = yield* CommandV2.Service
-          const agents = yield* AgentV2.Service
+          const skills = yield* Skill.Service
+          const commands = yield* Command.Service
+          const agents = yield* Agent.Service
 
           yield* commands.transform((draft) => {
             draft.update("jcodemunch:assess", (command) => {
@@ -263,7 +263,7 @@ describe("ProjectArtifactSource", () => {
             { id: "review", content: "First guidance" },
           ])
           expect(yield* commands.get("review-command")).toMatchObject({ template: "Review the change." })
-          expect(yield* agents.get(AgentV2.ID.make("review-agent"))).toMatchObject({
+          expect(yield* agents.get(Agent.ID.make("review-agent"))).toMatchObject({
             system: "Review without editing.",
             permissions: managedDefaults,
           })
@@ -297,8 +297,8 @@ describe("ProjectArtifactSource", () => {
         yield* writeSkill("pav_invocations", "Invocation skill", 1)
         const source = yield* ProjectArtifactSource.Service
         yield* source.refresh()
-        const events = yield* EventV2.Service
-        const sessionID = SessionV2.ID.make("ses_managed_invocations")
+        const events = yield* EventRuntime.Service
+        const sessionID = Session.ID.make("ses_managed_invocations")
         yield* seedTerminalSession((yield* Database.Service).db, sessionID, 99)
         const first = yield* events.publish(SessionEvent.Tool.Called, {
           sessionID, assistantMessageID: SessionMessage.ID.make("msg_invocations"), callID: "call_first", input: {}, executed: false,
@@ -337,8 +337,8 @@ describe("ProjectArtifactSource", () => {
         }, 1)
         const source = yield* ProjectArtifactSource.Service
         yield* source.refresh()
-        const events = yield* EventV2.Service
-        const sessionID = SessionV2.ID.make("ses_command_invocations")
+        const events = yield* EventRuntime.Service
+        const sessionID = Session.ID.make("ses_command_invocations")
         yield* seedTerminalSession((yield* Database.Service).db, sessionID, 100)
         const first = yield* events.publish(SessionEvent.InputAdmitted, {
           sessionID, inputID: SessionMessage.ID.make("msg_command_first"),
@@ -385,7 +385,7 @@ describe("ProjectArtifactSource", () => {
           const source = yield* ProjectArtifactSource.Service
           yield* source.refresh()
           const db = (yield* Database.Service).db
-          const events = yield* EventV2.Service
+          const events = yield* EventRuntime.Service
           const autonomy = yield* SessionAutonomy.Service
           const outcomes = [
             { type: "succeeded" as const },
@@ -393,7 +393,7 @@ describe("ProjectArtifactSource", () => {
             { type: "interrupted" as const },
           ]
           for (const [index, outcome] of outcomes.entries()) {
-            const sessionID = SessionV2.ID.make(`ses_terminal_${outcome.type}`)
+            const sessionID = Session.ID.make(`ses_terminal_${outcome.type}`)
             yield* seedTerminalSession(db, sessionID, index)
             yield* autonomy.setGoal({ sessionID, text: "Finish terminal proof" })
             yield* TestClock.setTime(1_000 + index * 1_000)
@@ -451,7 +451,7 @@ describe("ProjectArtifactSource", () => {
             versionID: ProjectArtifact.VersionID.make("pav_terminal"),
           }
           observeResult = [observation(identity, "pao_terminal-one"), observation(identity, "pao_terminal-two")]
-          const governorSession = SessionV2.ID.make("ses_terminal_governor")
+          const governorSession = Session.ID.make("ses_terminal_governor")
           yield* seedTerminalSession(db, governorSession, 9)
           yield* events.publish(SessionEvent.Execution.Started, { sessionID: governorSession })
           yield* events.publish(SessionEvent.Execution.Succeeded, { sessionID: governorSession })
@@ -466,7 +466,7 @@ describe("ProjectArtifactSource", () => {
               expectedRevision: ProjectArtifact.Revision.make(7),
               expectedVersionID: ProjectArtifact.VersionID.make("pav_terminal"),
               expectedDigest,
-              agentID: AgentV2.ID.make("build"),
+              agentID: Agent.ID.make("build"),
               modelID: "test/model",
               goalMode: false,
             },
@@ -479,15 +479,15 @@ describe("ProjectArtifactSource", () => {
               "pao_terminal-missing",
             ),
           ]
-          const staleSession = SessionV2.ID.make("ses_terminal_stale")
+          const staleSession = Session.ID.make("ses_terminal_stale")
           yield* seedTerminalSession(db, staleSession, 10)
           yield* events.publish(SessionEvent.Execution.Started, { sessionID: staleSession })
           yield* events.publish(SessionEvent.Execution.Succeeded, { sessionID: staleSession })
           yield* waitFor(() => observed.length === 5)
           expect(governors).toHaveLength(1)
 
-          const otherWorkspace = SessionV2.ID.make("ses_terminal_other_workspace")
-          yield* seedTerminalSession(db, otherWorkspace, 11, WorkspaceV2.ID.make("wrk_other"))
+          const otherWorkspace = Session.ID.make("ses_terminal_other_workspace")
+          yield* seedTerminalSession(db, otherWorkspace, 11, Workspace.ID.make("wrk_other"))
           yield* events.publish(SessionEvent.Execution.Started, { sessionID: otherWorkspace })
           yield* events.publish(SessionEvent.Execution.Succeeded, { sessionID: otherWorkspace })
           yield* Effect.yieldNow
@@ -527,14 +527,14 @@ describe("ProjectArtifactSource", () => {
           const source = yield* ProjectArtifactSource.Service
           yield* source.refresh()
           const db = (yield* Database.Service).db
-          const events = yield* EventV2.Service
+          const events = yield* EventRuntime.Service
           const profiles = [
             { id: "managed_skill", tools: ["skill"], managed: "skill" as const },
             { id: "managed_subagent", tools: ["subagent"], managed: "agent" as const },
             { id: "standard_tools", tools: ["skill", "subagent"], managed: undefined },
           ]
           for (const [index, profile] of profiles.entries()) {
-            const sessionID = SessionV2.ID.make(`ses_${profile.id}`)
+            const sessionID = Session.ID.make(`ses_${profile.id}`)
             yield* seedTerminalSession(db, sessionID, 20 + index, undefined, profile.tools)
             for (const tool of profile.tools)
               yield* events.publish(SessionEvent.Tool.Called, {
@@ -549,7 +549,7 @@ describe("ProjectArtifactSource", () => {
                 kind: "skill",
                 id: "review",
                 sessionID,
-                agentID: AgentV2.ID.make("build"),
+                agentID: Agent.ID.make("build"),
                 source: "skill-tool",
                 messageID: `msg_terminal_latest_${20 + index}`,
                 callID: `call-skill-${20 + index}`,
@@ -559,7 +559,7 @@ describe("ProjectArtifactSource", () => {
                 kind: "agent",
                 id: "review-agent",
                 sessionID,
-                agentID: AgentV2.ID.make("review-agent"),
+                agentID: Agent.ID.make("review-agent"),
                 source: "subagent-launch",
                 messageID: `msg_terminal_latest_${20 + index}`,
                 callID: `call-subagent-${20 + index}`,
@@ -650,9 +650,9 @@ const encodeMessage = Schema.encodeSync(SessionMessage.Info)
 
 function seedTerminalSession(
   db: Database.Interface["db"],
-  sessionID: SessionV2.ID,
+  sessionID: Session.ID,
   index: number,
-  workspaceID?: WorkspaceV2.ID,
+  workspaceID?: Workspace.ID,
   toolNames?: ReadonlyArray<string>,
 ) {
   return Effect.gen(function* () {
@@ -684,7 +684,7 @@ function seedTerminalSession(
         project_id: projectID,
         directory: "/workspace/source-project",
         workspace_id: workspaceID,
-        agent: AgentV2.ID.make("build"),
+        agent: Agent.ID.make("build"),
         model: modelRef,
         title: "terminal",
       })
@@ -694,7 +694,7 @@ function seedTerminalSession(
       SessionMessage.Assistant.make({
         id: SessionMessage.ID.make(`msg_terminal_old_${index}`),
         type: "assistant",
-        agent: AgentV2.ID.make("build"),
+        agent: Agent.ID.make("build"),
         model: modelRef,
         content: [],
         tokens: { input: 91, output: 92, reasoning: 0, cache: { read: 93, write: 0 } },
@@ -703,8 +703,8 @@ function seedTerminalSession(
       ...(toolNames ? [] : [SessionMessage.Skill.make({
         id: SessionMessage.ID.make(`msg_terminal_standard_${index}`),
         type: "skill",
-        skill: SkillV2.ID.make("standard"),
-        name: SkillV2.Name.make("Standard"),
+        skill: Skill.ID.make("standard"),
+        name: Skill.Name.make("Standard"),
         text: "standard prompt text",
         conflicts: { skills: [], instructions: [] },
         time: { created: time },
@@ -712,8 +712,8 @@ function seedTerminalSession(
       ...(toolNames ? [] : [SessionMessage.Skill.make({
         id: SessionMessage.ID.make(`msg_terminal_managed_${index}`),
         type: "skill",
-        skill: SkillV2.ID.make("review"),
-        name: SkillV2.Name.make("Review"),
+        skill: Skill.ID.make("review"),
+        name: Skill.Name.make("Review"),
         text: "managed prompt text",
         conflicts: { skills: [], instructions: [] },
         artifact: {
@@ -743,7 +743,7 @@ function seedTerminalSession(
       SessionMessage.Assistant.make({
         id: SessionMessage.ID.make(`msg_terminal_latest_${index}`),
         type: "assistant",
-        agent: AgentV2.ID.make("build"),
+        agent: Agent.ID.make("build"),
         model: modelRef,
         content: toolNames
           ? toolNames.map((name) => terminalTool(`call-${name}-${index}`, name, "completed", time))

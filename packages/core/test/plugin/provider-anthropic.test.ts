@@ -3,11 +3,11 @@ import { LLM } from "@ycoding-ai/ai";
 import { LLMClient } from "@ycoding-ai/ai/route";
 import { AISDK } from "@ycoding-ai/core/aisdk";
 import { Catalog } from "@ycoding-ai/core/catalog";
-import { ModelV2 } from "@ycoding-ai/core/model";
-import { PluginV2 } from "@ycoding-ai/core/plugin";
+import { CatalogModel } from "@ycoding-ai/core/model";
+import { PluginRegistry } from "@ycoding-ai/core/plugin";
 import { PluginHost } from "@ycoding-ai/core/plugin/host";
 import { AnthropicPlugin } from "@ycoding-ai/core/plugin/provider/anthropic";
-import { ProviderV2 } from "@ycoding-ai/core/provider";
+import { Provider } from "@ycoding-ai/core/provider";
 import { describe, expect } from "bun:test";
 import { Effect } from "effect";
 import { testEffect } from "../lib/effect";
@@ -16,7 +16,7 @@ import { PluginTestLayer } from "./fixture";
 const it = testEffect(PluginTestLayer);
 
 const addPlugin = Effect.fn(function* () {
-  const host = yield* PluginHost.make(yield* PluginV2.Service);
+  const host = yield* PluginHost.make(yield* PluginRegistry.Service);
   yield* AnthropicPlugin.effect(host);
 });
 
@@ -32,8 +32,8 @@ describe("AnthropicPlugin", () => {
       Effect.gen(function* () {
         const catalog = yield* Catalog.Service;
         yield* catalog.transform((draft) => {
-          draft.provider.update(ProviderV2.ID.anthropic, (provider) => {
-            provider.package = ProviderV2.aisdk("@ai-sdk/anthropic");
+          draft.provider.update(Provider.ID.anthropic, (provider) => {
+            provider.package = Provider.aisdk("@ai-sdk/anthropic");
             provider.headers = {
               Existing: "1",
               "Anthropic-Beta":
@@ -44,7 +44,7 @@ describe("AnthropicPlugin", () => {
         yield* addPlugin();
 
         const headers = required(
-          yield* catalog.provider.get(ProviderV2.ID.anthropic),
+          yield* catalog.provider.get(Provider.ID.anthropic),
         ).headers;
         expect(headers?.["anthropic-beta"]).toBe(
           "custom-feature,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14",
@@ -62,11 +62,11 @@ describe("AnthropicPlugin", () => {
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service;
       yield* catalog.transform((draft) =>
-        draft.provider.update(ProviderV2.ID.openai, () => {}),
+        draft.provider.update(Provider.ID.openai, () => {}),
       );
       yield* addPlugin();
       expect(
-        required(yield* catalog.provider.get(ProviderV2.ID.openai)).headers?.[
+        required(yield* catalog.provider.get(Provider.ID.openai)).headers?.[
           "anthropic-beta"
         ],
       ).toBeUndefined();
@@ -78,13 +78,13 @@ describe("AnthropicPlugin", () => {
       const aisdk = yield* AISDK.Service;
       yield* addPlugin();
       const result = yield* aisdk.runSDK({
-        model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(
-            ProviderV2.ID.make("custom-anthropic"),
-            ModelV2.ID.make("claude-sonnet-4-5"),
+        model: CatalogModel.Info.make({
+          ...CatalogModel.Info.empty(
+            Provider.ID.make("custom-anthropic"),
+            CatalogModel.ID.make("claude-sonnet-4-5"),
           ),
-          modelID: ModelV2.ID.make("claude-sonnet-4-5"),
-          package: ProviderV2.aisdk("@ai-sdk/anthropic"),
+          modelID: CatalogModel.ID.make("claude-sonnet-4-5"),
+          package: Provider.aisdk("@ai-sdk/anthropic"),
         }),
         package: "@ai-sdk/anthropic",
         options: { name: "custom-anthropic", apiKey: "test" },
@@ -118,13 +118,13 @@ describe("AnthropicPlugin", () => {
       );
       yield* addPlugin();
       const result = yield* aisdk.runSDK({
-        model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(
-            ProviderV2.ID.anthropic,
-            ModelV2.ID.make("claude-sonnet-4-6"),
+        model: CatalogModel.Info.make({
+          ...CatalogModel.Info.empty(
+            Provider.ID.anthropic,
+            CatalogModel.ID.make("claude-sonnet-4-6"),
           ),
-          modelID: ModelV2.ID.make("claude-sonnet-4-6"),
-          package: ProviderV2.aisdk("@ai-sdk/anthropic"),
+          modelID: CatalogModel.ID.make("claude-sonnet-4-6"),
+          package: Provider.aisdk("@ai-sdk/anthropic"),
         }),
         package: "@ai-sdk/anthropic",
         options: { name: "anthropic", apiKey: "api-test", fetch: request },
@@ -170,13 +170,13 @@ describe("AnthropicPlugin", () => {
           event.options.fetch = request;
         });
         yield* addPlugin();
-        const runtime = ModelV2.Info.make({
-          ...ModelV2.Info.empty(
-            ProviderV2.ID.anthropic,
-            ModelV2.ID.make("claude-opus-5"),
+        const runtime = CatalogModel.Info.make({
+          ...CatalogModel.Info.empty(
+            Provider.ID.anthropic,
+            CatalogModel.ID.make("claude-opus-5"),
           ),
-          modelID: ModelV2.ID.make("claude-opus-5"),
-          package: ProviderV2.aisdk("@ai-sdk/anthropic"),
+          modelID: CatalogModel.ID.make("claude-opus-5"),
+          package: Provider.aisdk("@ai-sdk/anthropic"),
         });
         const model = yield* aisdk.model(runtime);
         const anyOf = [
@@ -272,13 +272,13 @@ describe("AnthropicPlugin", () => {
         );
         yield* addPlugin();
         const result = yield* aisdk.runSDK({
-          model: ModelV2.Info.make({
-            ...ModelV2.Info.empty(
-              ProviderV2.ID.anthropic,
-              ModelV2.ID.make("claude-sonnet-4-6"),
+          model: CatalogModel.Info.make({
+            ...CatalogModel.Info.empty(
+              Provider.ID.anthropic,
+              CatalogModel.ID.make("claude-sonnet-4-6"),
             ),
-            modelID: ModelV2.ID.make("claude-sonnet-4-6"),
-            package: ProviderV2.aisdk("@ai-sdk/anthropic"),
+            modelID: CatalogModel.ID.make("claude-sonnet-4-6"),
+            package: Provider.aisdk("@ai-sdk/anthropic"),
           }),
           package: "@ai-sdk/anthropic",
           options: { name: "anthropic", apiKey: "test", fetch: request },

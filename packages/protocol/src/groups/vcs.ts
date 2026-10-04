@@ -21,7 +21,7 @@ export const VcsGroup = HttpApiGroup.make("server.vcs")
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.vcs.status",
+          identifier: "vcs.status",
           summary: "VCS status",
           description: "List uncommitted working-copy changes relative to the requested location.",
         }),
@@ -35,7 +35,7 @@ export const VcsGroup = HttpApiGroup.make("server.vcs")
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.vcs.branch",
+          identifier: "vcs.branch",
           summary: "VCS branches",
           description: "Read the current and default branch names for the requested location.",
         }),
@@ -49,7 +49,7 @@ export const VcsGroup = HttpApiGroup.make("server.vcs")
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.vcs.diff",
+          identifier: "vcs.diff",
           summary: "VCS diff",
           description:
             "Diff the working copy against HEAD (mode git) or the default-branch merge base (mode branch) for the requested location.",

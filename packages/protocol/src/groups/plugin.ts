@@ -13,7 +13,7 @@ export const PluginGroup = HttpApiGroup.make("server.plugin")
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
         OpenApi.annotations({
-          identifier: "v2.plugin.list",
+          identifier: "plugin.list",
           summary: "List plugins",
           description: "Retrieve currently loaded plugins.",
         }),

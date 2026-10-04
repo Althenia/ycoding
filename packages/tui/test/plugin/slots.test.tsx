@@ -5,8 +5,8 @@ import { onCleanup, onMount } from "solid-js"
 import { createSlots } from "../../src/plugin/slots"
 import { DEFAULT_THEMES } from "../../src/theme"
 import type { TuiTheme } from "../../src/plugin/host-api"
-import { createComponentTheme } from "../../src/theme/v2/component"
-import { resolveThemeFile } from "../../src/theme/v2/resolve"
+import { createComponentTheme } from "../../src/theme/component"
+import { resolveThemeFile } from "../../src/theme/resolve"
 
 test("replace slot mounts plugin content once", async () => {
   let mounts = 0

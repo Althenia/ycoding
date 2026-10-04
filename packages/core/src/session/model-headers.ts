@@ -1,7 +1,7 @@
 export * as SessionModelHeaders from "./model-headers"
 
 import { InstallationVersion } from "../installation/version"
-import { ProviderV2 } from "../provider"
+import { Provider } from "../provider"
 import { SessionSchema } from "./schema"
 import { Schema } from "effect"
 
@@ -17,7 +17,7 @@ export type Options = typeof Options.Type
  * cache prompts. The value is the Session ID: it is already stable for the conversation and
  * survives compaction, and it is never a credential.
  */
-const SESSION_HEADER_PROVIDERS = new Set<string>([ProviderV2.ID.opencode, ProviderV2.ID.make("opencode-go")])
+const SESSION_HEADER_PROVIDERS = new Set<string>([Provider.ID.opencode, Provider.ID.make("opencode-go")])
 
 export const make = (
   session: Pick<SessionSchema.Info, "id" | "parentID" | "projectID">,

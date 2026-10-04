@@ -2,13 +2,13 @@ export * as WellKnownPlugin from "./plugin"
 
 import { define } from "@ycoding-ai/plugin/effect/plugin"
 import { Effect, Stream } from "effect"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { WellKnown } from "../wellknown"
 
 export const Plugin = define({
   id: "ycoding.wellknown",
   effect: Effect.fn(function* (ctx) {
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const wellknown = yield* WellKnown.Service
     yield* wellknown.entries().pipe(Effect.orDie)
     yield* ctx.integration.transform((draft) => {

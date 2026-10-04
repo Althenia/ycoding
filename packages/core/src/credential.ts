@@ -55,7 +55,7 @@ export interface Interface {
   readonly remove: (id: ID) => Effect.Effect<void>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/Credential") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/Credential") {}
 
 const layer = Layer.effect(
   Service,

@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import { CodexUsage } from "@ycoding-ai/core/provider-usage/codex"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { Credential } from "@ycoding-ai/schema/credential"
 import { Integration } from "@ycoding-ai/schema/integration"
 
-const providerID = ProviderV2.ID.make("openai")
+const providerID = Provider.ID.make("openai")
 
 describe("CodexUsage", () => {
   test("normalizes app-server limits, credits, reset credits, and Spark separately", () => {

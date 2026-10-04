@@ -3,38 +3,38 @@ export * as PluginHost from "./host"
 import type { Plugin } from "@ycoding-ai/plugin/effect"
 import { EventManifest } from "@ycoding-ai/schema/event-manifest"
 import { Effect, Schema, Stream } from "effect"
-import { AgentV2 } from "../agent"
+import { Agent } from "../agent"
 import { AISDK } from "../aisdk"
 import { Catalog } from "../catalog"
-import { CommandV2 } from "../command"
+import { Command } from "../command"
 import { Credential } from "../credential"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { Integration } from "../integration"
 import { Location } from "../location"
-import { ModelV2 } from "../model"
-import { PluginV2 } from "../plugin"
+import { CatalogModel } from "../model"
+import { PluginRegistry } from "../plugin"
 import { PluginRuntime } from "./runtime"
-import { ProviderV2 } from "../provider"
+import { Provider } from "../provider"
 import { Reference } from "../reference"
 import { AbsolutePath, type DeepMutable } from "../schema"
-import { SkillV2 } from "../skill"
+import { Skill } from "../skill"
 import { Tool } from "../tool/tool"
 import { Tools } from "../tool/tools"
 import { ToolHooks } from "../tool/hooks"
-import { WorkspaceV2 } from "../workspace"
+import { Workspace } from "../workspace"
 import { PluginHooks } from "./hooks"
 
 const mutable = <T>(value: T) => value as DeepMutable<T>
-export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Interface) {
-  const agents = yield* AgentV2.Service
+export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginRegistry.Interface) {
+  const agents = yield* Agent.Service
   const aisdk = yield* AISDK.Service
   const catalog = yield* Catalog.Service
-  const commands = yield* CommandV2.Service
-  const events = yield* EventV2.Service
+  const commands = yield* Command.Service
+  const events = yield* EventRuntime.Service
   const integration = yield* Integration.Service
   const location = yield* Location.Service
   const reference = yield* Reference.Service
-  const skill = yield* SkillV2.Service
+  const skill = yield* Skill.Service
   const tools = yield* Tools.Service
   const toolHooks = yield* ToolHooks.Service
   const hooks = yield* PluginHooks.Service
@@ -53,7 +53,7 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
           workspaceID:
             input.location.workspace === undefined
               ? location.workspaceID
-              : WorkspaceV2.ID.make(input.location.workspace),
+              : Workspace.ID.make(input.location.workspace),
         })
   const isCurrentLocation = (ref: Location.Ref) =>
     ref.directory === location.directory && ref.workspaceID === location.workspaceID
@@ -63,7 +63,7 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
   return {
     options: {},
     agent: {
-      get: (id) => agents.get(AgentV2.ID.make(id)),
+      get: (id) => agents.get(Agent.ID.make(id)),
       list: (input) => {
         const ref = locationRef(input)
         if (ref && !isCurrentLocation(ref)) return runtime.location.agent.list(ref)
@@ -74,10 +74,10 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
         agents.transform((draft) => {
           callback({
             list: () => mutable(draft.list()),
-            get: (id) => mutable(draft.get(AgentV2.ID.make(id))),
-            default: (id) => draft.default(id === undefined ? undefined : AgentV2.ID.make(id)),
-            update: (id, update) => draft.update(AgentV2.ID.make(id), update),
-            remove: (id) => draft.remove(AgentV2.ID.make(id)),
+            get: (id) => mutable(draft.get(Agent.ID.make(id))),
+            default: (id) => draft.default(id === undefined ? undefined : Agent.ID.make(id)),
+            update: (id, update) => draft.update(Agent.ID.make(id), update),
+            remove: (id) => draft.remove(Agent.ID.make(id)),
           })
         }),
     },
@@ -114,7 +114,7 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
         list: () => response(catalog.provider.available()),
         get: (input) =>
           catalog.provider
-            .get(ProviderV2.ID.make(input.providerID))
+            .get(Provider.ID.make(input.providerID))
             .pipe(
               Effect.flatMap((provider) =>
                 provider === undefined
@@ -125,7 +125,7 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
       },
       model: {
         get: (providerID, modelID) =>
-          catalog.model.get(ProviderV2.ID.make(providerID), ModelV2.ID.make(modelID)),
+          catalog.model.get(Provider.ID.make(providerID), CatalogModel.ID.make(modelID)),
         list: () => response(catalog.model.available()),
         default: () => response(catalog.model.default()),
       },
@@ -135,21 +135,21 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
           callback({
             provider: {
               list: () => mutable(draft.provider.list()),
-              get: (id) => mutable(draft.provider.get(ProviderV2.ID.make(id))),
-              update: (id, update) => draft.provider.update(ProviderV2.ID.make(id), update),
-              remove: (id) => draft.provider.remove(ProviderV2.ID.make(id)),
+              get: (id) => mutable(draft.provider.get(Provider.ID.make(id))),
+              update: (id, update) => draft.provider.update(Provider.ID.make(id), update),
+              remove: (id) => draft.provider.remove(Provider.ID.make(id)),
             },
             model: {
               get: (providerID, modelID) =>
-                mutable(draft.model.get(ProviderV2.ID.make(providerID), ModelV2.ID.make(modelID))),
+                mutable(draft.model.get(Provider.ID.make(providerID), CatalogModel.ID.make(modelID))),
               update: (providerID, modelID, update) =>
-                draft.model.update(ProviderV2.ID.make(providerID), ModelV2.ID.make(modelID), update),
+                draft.model.update(Provider.ID.make(providerID), CatalogModel.ID.make(modelID), update),
               remove: (providerID, modelID) =>
-                draft.model.remove(ProviderV2.ID.make(providerID), ModelV2.ID.make(modelID)),
+                draft.model.remove(Provider.ID.make(providerID), CatalogModel.ID.make(modelID)),
               default: {
                 get: draft.model.default.get,
                 set: (providerID, modelID) =>
-                  draft.model.default.set(ProviderV2.ID.make(providerID), ModelV2.ID.make(modelID)),
+                  draft.model.default.set(Provider.ID.make(providerID), CatalogModel.ID.make(modelID)),
               },
             },
           })
@@ -345,7 +345,7 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
       transform: (callback) =>
         skill.transform((draft) => {
           callback({
-            source: (source) => draft.source(Schema.decodeUnknownSync(SkillV2.Source)(source)),
+            source: (source) => draft.source(Schema.decodeUnknownSync(Skill.Source)(source)),
             list: draft.list,
           })
         }),

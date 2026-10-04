@@ -128,7 +128,7 @@ describe("notificationCategory", () => {
     expect(notificationCategory({ type: "session.execution.succeeded", data: {} })).toBeUndefined()
     expect(notificationCategory({ type: "session.execution.failed", data: { error: { code: "x", message: "y" } } })).toBeUndefined()
     expect(notificationCategory({ type: "session.step.failed", data: { assistantMessageID: "msg_1" } })).toBeUndefined()
-    expect(notificationCategory({ type: "permission.v2.asked", data: { id: "per_1" } })).toBeUndefined()
+    expect(notificationCategory({ type: "permission.asked", data: { id: "per_1" } })).toBeUndefined()
     expect(notificationCategory({ type: "form.created", data: { form: { id: "frm_1", sessionID: "ses_a" } } })).toBeUndefined()
     expect(notificationCategory({ type: "guardrail.asked", data: { id: "grq_1", hardReview: true } })).toBeUndefined()
   })

@@ -3,18 +3,18 @@ import { describe, expect } from "bun:test"
 import type { LanguageModelV3 } from "@ai-sdk/provider"
 import { Effect } from "effect"
 import { Catalog } from "@ycoding-ai/core/catalog"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { PluginV2 } from "@ycoding-ai/core/plugin"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
 import { AzureCognitiveServicesPlugin } from "@ycoding-ai/core/plugin/provider/azure"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Provider } from "@ycoding-ai/core/provider"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
 
 const it = testEffect(PluginTestLayer)
 
 const addPlugin = Effect.fn(function* () {
-  const plugin = yield* PluginV2.Service
+  const plugin = yield* PluginRegistry.Service
   const aisdk = yield* AISDK.Service
   const host = yield* PluginHost.make(plugin)
   yield* AzureCognitiveServicesPlugin.effect(host)
@@ -65,12 +65,12 @@ describe("AzureCognitiveServicesPlugin", () => {
       Effect.gen(function* () {
         const catalog = yield* Catalog.Service
         yield* catalog.transform((catalog) => {
-          catalog.provider.update(ProviderV2.ID.make("azure-cognitive-services"), (item) => {
-            item.package = ProviderV2.aisdk("@ai-sdk/openai-compatible")
+          catalog.provider.update(Provider.ID.make("azure-cognitive-services"), (item) => {
+            item.package = Provider.aisdk("@ai-sdk/openai-compatible")
           })
         })
         yield* addPlugin()
-        const result = required(yield* catalog.provider.get(ProviderV2.ID.make("azure-cognitive-services")))
+        const result = required(yield* catalog.provider.get(Provider.ID.make("azure-cognitive-services")))
         expect(result).toMatchObject({
           package: "aisdk:@ai-sdk/openai-compatible",
           settings: { baseURL: "https://cognitive.cognitiveservices.azure.com/openai" },
@@ -85,12 +85,12 @@ describe("AzureCognitiveServicesPlugin", () => {
       Effect.gen(function* () {
         const catalog = yield* Catalog.Service
         yield* catalog.transform((catalog) => {
-          const azure = ProviderV2.Info.make({
-            ...ProviderV2.Info.empty(ProviderV2.ID.make("azure-cognitive-services")),
+          const azure = Provider.Info.make({
+            ...Provider.Info.empty(Provider.ID.make("azure-cognitive-services")),
             package: "aisdk:@ai-sdk/openai-compatible",
           })
-          const openai = ProviderV2.Info.make({
-            ...ProviderV2.Info.empty(ProviderV2.ID.openai),
+          const openai = Provider.Info.make({
+            ...Provider.Info.empty(Provider.ID.openai),
             package: "aisdk:test-provider",
           })
           catalog.provider.update(azure.id, (item) => {
@@ -103,8 +103,8 @@ describe("AzureCognitiveServicesPlugin", () => {
           })
         })
         yield* addPlugin()
-        const azure = required(yield* catalog.provider.get(ProviderV2.ID.make("azure-cognitive-services")))
-        const openai = required(yield* catalog.provider.get(ProviderV2.ID.openai))
+        const azure = required(yield* catalog.provider.get(Provider.ID.make("azure-cognitive-services")))
+        const openai = required(yield* catalog.provider.get(Provider.ID.openai))
         expect(azure.settings?.baseURL).toBeUndefined()
         expect(azure).toMatchObject({ package: "aisdk:@ai-sdk/openai-compatible" })
         expect(openai.settings?.baseURL).toBeUndefined()
@@ -115,14 +115,14 @@ describe("AzureCognitiveServicesPlugin", () => {
 
   it.effect("selects chat only for completion URLs", () =>
     Effect.gen(function* () {
-      const plugin = yield* PluginV2.Service
+      const plugin = yield* PluginRegistry.Service
       const aisdk = yield* AISDK.Service
       const calls: string[] = []
       yield* addPlugin()
       yield* aisdk.runLanguage({
-        model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(ProviderV2.ID.make("azure-cognitive-services"), ModelV2.ID.make("deployment")),
-          modelID: ModelV2.ID.make("deployment"),
+        model: CatalogModel.Info.make({
+          ...CatalogModel.Info.empty(Provider.ID.make("azure-cognitive-services"), CatalogModel.ID.make("deployment")),
+          modelID: CatalogModel.ID.make("deployment"),
           package: "aisdk:test-provider",
         }),
         sdk: fakeSelectorSdk(calls),
@@ -134,23 +134,23 @@ describe("AzureCognitiveServicesPlugin", () => {
 
   it.effect("uses the legacy Azure selector order and provider guard", () =>
     Effect.gen(function* () {
-      const plugin = yield* PluginV2.Service
+      const plugin = yield* PluginRegistry.Service
       const aisdk = yield* AISDK.Service
       const calls: string[] = []
       yield* addPlugin()
       yield* aisdk.runLanguage({
-        model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(ProviderV2.ID.make("azure-cognitive-services"), ModelV2.ID.make("deployment")),
-          modelID: ModelV2.ID.make("deployment"),
+        model: CatalogModel.Info.make({
+          ...CatalogModel.Info.empty(Provider.ID.make("azure-cognitive-services"), CatalogModel.ID.make("deployment")),
+          modelID: CatalogModel.ID.make("deployment"),
           package: "aisdk:test-provider",
         }),
         sdk: fakeSelectorSdk(calls),
         options: {},
       })
       const ignored = yield* aisdk.runLanguage({
-        model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(ProviderV2.ID.openai, ModelV2.ID.make("deployment")),
-          modelID: ModelV2.ID.make("deployment"),
+        model: CatalogModel.Info.make({
+          ...CatalogModel.Info.empty(Provider.ID.openai, CatalogModel.ID.make("deployment")),
+          modelID: CatalogModel.ID.make("deployment"),
           package: "aisdk:test-provider",
         }),
         sdk: fakeSelectorSdk(calls),
@@ -163,33 +163,33 @@ describe("AzureCognitiveServicesPlugin", () => {
 
   it.effect("falls back from responses to messages, chat, then languageModel", () =>
     Effect.gen(function* () {
-      const plugin = yield* PluginV2.Service
+      const plugin = yield* PluginRegistry.Service
       const aisdk = yield* AISDK.Service
       const calls: string[] = []
       const sdk = fakeSelectorSdk(calls)
       yield* addPlugin()
       yield* aisdk.runLanguage({
-        model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(ProviderV2.ID.make("azure-cognitive-services"), ModelV2.ID.make("messages-deployment")),
-          modelID: ModelV2.ID.make("messages-deployment"),
+        model: CatalogModel.Info.make({
+          ...CatalogModel.Info.empty(Provider.ID.make("azure-cognitive-services"), CatalogModel.ID.make("messages-deployment")),
+          modelID: CatalogModel.ID.make("messages-deployment"),
           package: "aisdk:test-provider",
         }),
         sdk: { messages: sdk.messages, chat: sdk.chat, languageModel: sdk.languageModel },
         options: {},
       })
       yield* aisdk.runLanguage({
-        model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(ProviderV2.ID.make("azure-cognitive-services"), ModelV2.ID.make("chat-deployment")),
-          modelID: ModelV2.ID.make("chat-deployment"),
+        model: CatalogModel.Info.make({
+          ...CatalogModel.Info.empty(Provider.ID.make("azure-cognitive-services"), CatalogModel.ID.make("chat-deployment")),
+          modelID: CatalogModel.ID.make("chat-deployment"),
           package: "aisdk:test-provider",
         }),
         sdk: { chat: sdk.chat, languageModel: sdk.languageModel },
         options: {},
       })
       yield* aisdk.runLanguage({
-        model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(ProviderV2.ID.make("azure-cognitive-services"), ModelV2.ID.make("language-deployment")),
-          modelID: ModelV2.ID.make("language-deployment"),
+        model: CatalogModel.Info.make({
+          ...CatalogModel.Info.empty(Provider.ID.make("azure-cognitive-services"), CatalogModel.ID.make("language-deployment")),
+          modelID: CatalogModel.ID.make("language-deployment"),
           package: "aisdk:test-provider",
         }),
         sdk: { languageModel: sdk.languageModel },

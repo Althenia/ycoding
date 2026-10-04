@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test"
 import { NodeHttpServer } from "@effect/platform-node"
-import { AgentV2 } from "@ycoding-ai/core/agent"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { Agent } from "@ycoding-ai/core/agent"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Location } from "@ycoding-ai/core/location"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
 import { HttpRouter } from "effect/unstable/http"
@@ -57,8 +57,8 @@ test("serves retained global usage through the real Server and Core graph when h
       Layer.provide(NodeHttpServer.layerHttpServices),
       Layer.tap((context) =>
         Effect.gen(function* () {
-          const session = Context.get(context, SessionV2.Service)
-          const events = Context.get(context, EventV2.Service)
+          const session = Context.get(context, Session.Service)
+          const events = Context.get(context, EventRuntime.Service)
           const first = yield* session.create({
             location: Location.Ref.make({ directory: AbsolutePath.make(firstDirectory) }),
           })
@@ -67,7 +67,7 @@ test("serves retained global usage through the real Server and Core graph when h
           })
           const fields = SessionEvent.ProviderRequestRecorded.fields.data.fields
           const record = Effect.fnUntraced(function* (input: {
-            sessionID: SessionV2.ID
+            sessionID: Session.ID
             id: string
             model: string
             request: number
@@ -77,10 +77,10 @@ test("serves retained global usage through the real Server and Core graph when h
               id: fields.id.make(`prq_${input.id}`),
               sessionID: input.sessionID,
               source: "step",
-              agent: AgentV2.ID.make("build"),
-              model: ModelV2.Ref.make({
-                providerID: ProviderV2.ID.make("unavailable"),
-                id: ModelV2.ID.make(input.model),
+              agent: Agent.ID.make("build"),
+              model: CatalogModel.Ref.make({
+                providerID: Provider.ID.make("unavailable"),
+                id: CatalogModel.ID.make(input.model),
               }),
               routeID: `test-${input.id}`,
               promptCacheKey: "cache-key",

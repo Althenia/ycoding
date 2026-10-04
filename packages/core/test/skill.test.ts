@@ -2,14 +2,14 @@ import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
 import { Deferred, Effect, Fiber, Layer, Stream } from "effect"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { MCP } from "@ycoding-ai/core/mcp/index"
-import { SkillV2 } from "@ycoding-ai/core/skill"
+import { Skill } from "@ycoding-ai/core/skill"
 import { SkillDiscovery } from "@ycoding-ai/core/skill/discovery"
 import { FileSystem } from "@ycoding-ai/schema/filesystem"
 import { Instruction } from "@ycoding-ai/schema/instruction"
@@ -29,7 +29,7 @@ const discovery = Layer.succeed(
   }),
 )
 const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([SkillV2.node, AgentV2.node, EventV2.node]), [
+  AppNodeBuilder.build(LayerNode.group([Skill.node, Agent.node, EventRuntime.node]), [
     [SkillDiscovery.node, discovery],
     [MCP.node, emptyMcpLayer],
   ]),
@@ -48,9 +48,9 @@ description: ${description}
 
 function waitForSkillUpdate() {
   return Effect.gen(function* () {
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const deferred = yield* Deferred.make<void>()
-    const fiber = yield* events.subscribe(SkillV2.Event.Updated).pipe(
+    const fiber = yield* events.subscribe(Skill.Event.Updated).pipe(
       Stream.runForEach(() => Deferred.succeed(deferred, undefined).pipe(Effect.asVoid)),
       Effect.forkScoped,
     )
@@ -59,10 +59,10 @@ function waitForSkillUpdate() {
   })
 }
 
-describe("SkillV2", () => {
+describe("Skill", () => {
   it.live("publishes updates when skill sources change", () =>
     Effect.gen(function* () {
-      const skill = yield* SkillV2.Service
+      const skill = yield* Skill.Service
 
       yield* Effect.acquireUseRelease(
         waitForSkillUpdate(),
@@ -94,7 +94,7 @@ describe("SkillV2", () => {
             await fs.writeFile(path.join(first, "foo.md"), "---\nslash: true\n---\n# foo")
           })
 
-          const skill = yield* SkillV2.Service
+          const skill = yield* Skill.Service
           yield* skill.transform((editor) => {
             editor.source({ type: "directory", path: AbsolutePath.make(first) })
             editor.source({ type: "directory", path: AbsolutePath.make(first) })
@@ -110,16 +110,16 @@ describe("SkillV2", () => {
             { type: "directory", path: AbsolutePath.make(second) },
           ])
           expect(yield* skill.list()).toEqual([
-            SkillV2.Info.make({
-              id: SkillV2.ID.make("foo"),
-              name: SkillV2.Name.make("foo"),
+            Skill.Info.make({
+              id: Skill.ID.make("foo"),
+              name: Skill.Name.make("foo"),
               slash: true,
               location: AbsolutePath.make(path.join(first, "foo.md")),
               content: "# foo",
             }),
             {
-              id: SkillV2.ID.make("review"),
-              name: SkillV2.Name.make("review"),
+              id: Skill.ID.make("review"),
+              name: Skill.Name.make("review"),
               description: "Second",
               location: AbsolutePath.make(path.join(second, "review", "SKILL.md")),
               content: "# review",
@@ -144,20 +144,20 @@ describe("SkillV2", () => {
           pulls = 0
           urls.set("https://example.test/skills/", [AbsolutePath.make(tmp.path)])
 
-          const agents = yield* AgentV2.Service
+          const agents = yield* Agent.Service
           yield* agents.transform((editor) =>
-            editor.update(AgentV2.ID.make("reviewer"), (agent) => {
+            editor.update(Agent.ID.make("reviewer"), (agent) => {
               agent.permissions.push({ action: "skill", resource: "deploy", effect: "deny" })
             }),
           )
 
-          const skill = yield* SkillV2.Service
+          const skill = yield* Skill.Service
           yield* skill.transform((editor) => editor.source({ type: "url", url: "https://example.test/skills/" }))
 
-          expect((yield* skill.list()).map((item) => item.name)).toEqual([SkillV2.Name.make("deploy")])
-          expect((yield* skill.list()).map((item) => item.name)).toEqual([SkillV2.Name.make("deploy")])
+          expect((yield* skill.list()).map((item) => item.name)).toEqual([Skill.Name.make("deploy")])
+          expect((yield* skill.list()).map((item) => item.name)).toEqual([Skill.Name.make("deploy")])
           expect(pulls).toBe(1)
-          expect(SkillV2.available(yield* skill.list(), (yield* agents.get(AgentV2.ID.make("reviewer")))!)).toEqual([])
+          expect(Skill.available(yield* skill.list(), (yield* agents.get(Agent.ID.make("reviewer")))!)).toEqual([])
         }),
       ),
     ),
@@ -185,13 +185,13 @@ metadata:
             )
           })
 
-          const skill = yield* SkillV2.Service
+          const skill = yield* Skill.Service
           yield* skill.transform((editor) => editor.source({ type: "directory", path: AbsolutePath.make(tmp.path) }))
 
           expect(yield* skill.list()).toEqual([
             {
-              id: SkillV2.ID.make("manual"),
-              name: SkillV2.Name.make("manual"),
+              id: Skill.ID.make("manual"),
+              name: Skill.Name.make("manual"),
               description: "Manual only",
               slash: true,
               autoinvoke: false,
@@ -226,12 +226,12 @@ metadata:
             )
           })
 
-          const skill = yield* SkillV2.Service
+          const skill = yield* Skill.Service
           yield* skill.transform((editor) => editor.source({ type: "directory", path: AbsolutePath.make(tmp.path) }))
 
           const [loaded] = yield* skill.list()
           expect(loaded?.conflicts).toEqual({
-            skills: [SkillV2.ID.make("other")],
+            skills: [Skill.ID.make("other")],
             instructions: [Instruction.Key.make("core/instructions")],
           })
         }),
@@ -260,7 +260,7 @@ metadata:
             )
           })
 
-          const skill = yield* SkillV2.Service
+          const skill = yield* Skill.Service
           yield* skill.transform((editor) => editor.source({ type: "directory", path: AbsolutePath.make(tmp.path) }))
 
           expect(yield* skill.list()).toEqual([])
@@ -303,7 +303,7 @@ metadata:
             ),
           )
 
-          const skill = yield* SkillV2.Service
+          const skill = yield* Skill.Service
           yield* skill.transform((editor) => editor.source({ type: "directory", path: AbsolutePath.make(tmp.path) }))
 
           expect(yield* skill.list()).toEqual([])
@@ -324,9 +324,9 @@ metadata:
             await write(tmp.path, "deploy", "Deploy production")
           })
 
-          const skill = yield* SkillV2.Service
+          const skill = yield* Skill.Service
           yield* skill.transform((editor) => editor.source({ type: "directory", path: AbsolutePath.make(tmp.path) }))
-          expect((yield* skill.list()).map((item) => item.id)).toEqual([SkillV2.ID.make("deploy")])
+          expect((yield* skill.list()).map((item) => item.id)).toEqual([Skill.ID.make("deploy")])
 
           // Ecosystem roots such as ~/.claude/skills are deliberately unwatched, so deleting a
           // skill there never produces a filesystem event: list must still reflect disk.
@@ -350,8 +350,8 @@ metadata:
             await write(tmp.path, "deploy", "Initial deploy")
           })
 
-          const events = yield* EventV2.Service
-          const skill = yield* SkillV2.Service
+          const events = yield* EventRuntime.Service
+          const skill = yield* Skill.Service
           yield* skill.transform((editor) => editor.source({ type: "directory", path: AbsolutePath.make(tmp.path) }))
 
           expect((yield* skill.list()).find((item) => item.name === "deploy")?.description).toBe("Initial deploy")

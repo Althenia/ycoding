@@ -1,13 +1,13 @@
 import { expect, test } from "bun:test"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionGoal } from "@ycoding-ai/core/session/goal"
 import { Deferred, Effect } from "effect"
 import { sessionHttp } from "./session-http"
 
-const sessionID = SessionV2.ID.make("ses_goal_http")
+const sessionID = Session.ID.make("ses_goal_http")
 
-function fixture(set: SessionV2.Interface["autonomy"]["set"]) {
+function fixture(set: Session.Interface["autonomy"]["set"]) {
   const http = sessionHttp({ autonomy: { get: () => Effect.succeed(SessionAutonomy.defaultState), set } })
   return {
     request: (payload: Record<string, unknown>) => http.json(`/api/session/${sessionID}/autonomy`, "PUT", payload),
@@ -49,7 +49,7 @@ test("R7 goal route does not acknowledge before calculation settles", async () =
 })
 
 test("R7 goal route retains the typed missing-Session failure", async () => {
-  await using f = fixture(() => Effect.fail(new SessionV2.NotFoundError({ sessionID })))
+  await using f = fixture(() => Effect.fail(new Session.NotFoundError({ sessionID })))
   const response = await f.request({ goal: true })
   expect(response.status).toBe(404)
   expect(await response.json()).toMatchObject({ _tag: "SessionNotFoundError", sessionID })

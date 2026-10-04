@@ -13,14 +13,14 @@ import {
 import { toLLMMessages, isProviderImage } from "@ycoding-ai/core/session/runner/to-llm-message"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { FileAttachment } from "@ycoding-ai/schema/prompt"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { DateTime, Effect } from "effect"
 import { decode, encode } from "@toon-format/toon"
 
 const created = DateTime.makeUnsafe(0)
 const id = (v: string) => SessionMessage.ID.make(`msg_${v}`)
-const model = ModelV2.Ref.make({ id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") })
+const model = CatalogModel.Ref.make({ id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("provider") })
 
 const managed = (mime: string, name: string, digest = "a".repeat(64), bytes = 4, description?: string) =>
   FileAttachment.make({

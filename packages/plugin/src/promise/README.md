@@ -1,4 +1,4 @@
-# YCoding V2 Promise Plugin API
+# YCoding Promise Plugin API
 
 The Promise plugin API at `@ycoding-ai/plugin` is the async/await equivalent of `@ycoding-ai/plugin/effect`. It grants plugins the same two in-process capabilities:
 

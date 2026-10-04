@@ -1,23 +1,23 @@
 import path from "path"
 import { describe, expect } from "bun:test"
 import { DateTime, Effect, Layer, LayerMap, Schema } from "effect"
-import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Agent } from "@ycoding-ai/core/agent"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { EventV2 } from "@ycoding-ai/core/event"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Location } from "@ycoding-ai/core/location"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import type { LocationServices } from "@ycoding-ai/core/location-services"
-import { ProjectV2 } from "@ycoding-ai/core/project"
+import { Project } from "@ycoding-ai/core/project"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionStore } from "@ycoding-ai/core/session/store"
-import { SkillV2 } from "@ycoding-ai/core/skill"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Skill } from "@ycoding-ai/core/skill"
+import { Permission } from "@ycoding-ai/core/permission"
 import { Instruction } from "@ycoding-ai/schema/instruction"
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionEvent } from "@ycoding-ai/schema/session-event"
@@ -28,18 +28,18 @@ import { InstructionState } from "@ycoding-ai/core/session/instruction-state"
 import { testEffect } from "./lib/effect"
 
 const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
-const projects = Layer.mock(ProjectV2.Service, {
-  resolve: (directory) => Effect.succeed({ id: ProjectV2.ID.global, directory }),
+const projects = Layer.mock(Project.Service, {
+  resolve: (directory) => Effect.succeed({ id: Project.ID.global, directory }),
 })
-const skills = Layer.mock(SkillV2.Service, {
+const skills = Layer.mock(Skill.Service, {
   list: () =>
     Effect.succeed([
-      SkillV2.Info.make({
-        id: SkillV2.ID.make("effect"),
-        name: SkillV2.Name.make("Effect"),
+      Skill.Info.make({
+        id: Skill.ID.make("effect"),
+        name: Skill.Name.make("Effect"),
         description: "Effect guidance",
         conflicts: {
-          skills: [SkillV2.ID.make("other")],
+          skills: [Skill.ID.make("other")],
           instructions: [Instruction.Key.make("core/instructions")],
         },
         location: AbsolutePath.make(path.resolve("/skills/effect/SKILL.md")),
@@ -62,16 +62,16 @@ const instruction = (key: string) =>
 const sessionContext = Layer.mock(SessionContext.Service, {
   select: (sessionID) =>
     Effect.succeed({
-      session: SessionV2.Info.make({
+      session: Session.Info.make({
         id: sessionID,
-        projectID: ProjectV2.ID.global,
+        projectID: Project.ID.global,
         title: "test",
         cost: Money.USD.zero,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
         time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
         location,
       }),
-      agent: { id: AgentV2.defaultID, info: AgentV2.Info.empty(AgentV2.defaultID) },
+      agent: { id: Agent.defaultID, info: Agent.Info.empty(Agent.defaultID) },
       instructions: instruction("core/environment"),
     }),
 })
@@ -82,7 +82,7 @@ const locations = Layer.effect(
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
       Layer.mergeAll(
         skills,
-        Layer.mock(PermissionV2.Service, { evaluateEffective: () => Effect.succeed("allow") }),
+        Layer.mock(Permission.Service, { evaluateEffective: () => Effect.succeed("allow") }),
         instructionDiscovery,
         sessionContext,
       ) as unknown as Layer.Layer<LocationServices>,
@@ -90,24 +90,24 @@ const locations = Layer.effect(
 )
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionStore.node, SessionV2.node]),
+    LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node, SessionStore.node, Session.node]),
     [
       [LocationServiceMap.node, locations],
-      [ProjectV2.node, projects],
+      [Project.node, projects],
       [SessionExecution.node, SessionExecution.noopLayer],
     ],
   ),
 )
 
-describe("SessionV2.skill", () => {
+describe("Session.skill", () => {
   it.effect("does not publish another activation for an already active skill", () =>
     Effect.gen(function* () {
-      const sessions = yield* SessionV2.Service
+      const sessions = yield* Session.Service
       const session = yield* sessions.create({ location })
       yield* Effect.all(
         [
-          sessions.skill({ sessionID: session.id, skill: SkillV2.ID.make("effect"), resume: false }),
-          sessions.skill({ sessionID: session.id, skill: SkillV2.ID.make("effect"), resume: false }),
+          sessions.skill({ sessionID: session.id, skill: Skill.ID.make("effect"), resume: false }),
+          sessions.skill({ sessionID: session.id, skill: Skill.ID.make("effect"), resume: false }),
         ],
         { concurrency: "unbounded" },
       )
@@ -119,11 +119,11 @@ describe("SessionV2.skill", () => {
 
   it.effect("projects the caller-supplied message ID", () =>
     Effect.gen(function* () {
-      const sessions = yield* SessionV2.Service
+      const sessions = yield* Session.Service
       const session = yield* sessions.create({ location })
       const id = SessionMessage.ID.make("msg_caller_skill")
 
-      yield* sessions.skill({ id, sessionID: session.id, skill: SkillV2.ID.make("effect"), resume: false })
+      yield* sessions.skill({ id, sessionID: session.id, skill: Skill.ID.make("effect"), resume: false })
 
       expect(yield* sessions.messages({ sessionID: session.id })).toContainEqual(
         expect.objectContaining({
@@ -133,7 +133,7 @@ describe("SessionV2.skill", () => {
           name: "Effect",
           text: expect.stringContaining('<skill_content name="Effect">'),
           conflicts: {
-            skills: [SkillV2.ID.make("other")],
+            skills: [Skill.ID.make("other")],
             instructions: [Instruction.Key.make("core/instructions")],
           },
         }),
@@ -148,14 +148,14 @@ describe("SessionV2.skill", () => {
 
   it.effect("normalizes absent historical conflict snapshots", () =>
     Effect.gen(function* () {
-      const sessions = yield* SessionV2.Service
+      const sessions = yield* Session.Service
       const session = yield* sessions.create({ location })
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
 
       yield* events.publish(SessionEvent.Skill.Activated, {
         sessionID: session.id,
-        id: SkillV2.ID.make("effect"),
-        name: SkillV2.Name.make("Effect"),
+        id: Skill.ID.make("effect"),
+        name: Skill.Name.make("Effect"),
         text: "Use Effect",
       })
 
@@ -171,52 +171,52 @@ describe("SessionV2.skill", () => {
 
   it.effect("reads isolated skill snapshots after the current catalog no longer contains them", () =>
     Effect.gen(function* () {
-      const sessions = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const sessions = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const parent = yield* sessions.create({ location })
       const child = yield* sessions.create({ parentID: parent.id })
 
       yield* events.publish(SessionEvent.Skill.Activated, {
         sessionID: parent.id,
-        id: SkillV2.ID.make("deleted"),
-        name: SkillV2.Name.make("Deleted"),
+        id: Skill.ID.make("deleted"),
+        name: Skill.Name.make("Deleted"),
         text: "Snapshot content",
         conflicts: { skills: [], instructions: [] },
       })
       yield* events.publish(SessionEvent.Skill.Activated, {
         sessionID: child.id,
-        id: SkillV2.ID.make("child"),
-        name: SkillV2.Name.make("Child"),
+        id: Skill.ID.make("child"),
+        name: Skill.Name.make("Child"),
         text: "Child content",
         conflicts: { skills: [], instructions: [] },
       })
 
       expect(yield* sessions.skills(parent.id)).toEqual([
-        expect.objectContaining({ id: SkillV2.ID.make("deleted"), content: "Snapshot content" }),
+        expect.objectContaining({ id: Skill.ID.make("deleted"), content: "Snapshot content" }),
       ])
       expect(yield* sessions.skills(child.id)).toEqual([
-        expect.objectContaining({ id: SkillV2.ID.make("child"), content: "Child content" }),
+        expect.objectContaining({ id: Skill.ID.make("child"), content: "Child content" }),
       ])
     }),
   )
 
   it.effect("resolves conflicts against non-discovery current instruction keys", () =>
     Effect.gen(function* () {
-      const sessions = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const sessions = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const session = yield* sessions.create({ location })
 
       yield* events.publish(SessionEvent.Skill.Activated, {
         sessionID: session.id,
-        id: SkillV2.ID.make("environment"),
-        name: SkillV2.Name.make("Environment"),
+        id: Skill.ID.make("environment"),
+        name: Skill.Name.make("Environment"),
         text: "Environment skill",
         conflicts: { skills: [], instructions: [Instruction.Key.make("core/environment")] },
       })
 
       expect(yield* sessions.skills(session.id)).toEqual([
         expect.objectContaining({
-          id: SkillV2.ID.make("environment"),
+          id: Skill.ID.make("environment"),
           conflicts: [{ type: "instruction", id: "core/environment", name: "core/environment" }],
         }),
       ])
@@ -225,8 +225,8 @@ describe("SessionV2.skill", () => {
 
   it.effect("retains unavailable instruction conflicts and removes them after deletion", () =>
     Effect.gen(function* () {
-      const sessions = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const sessions = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const { db } = yield* Database.Service
       const session = yield* sessions.create({ location })
       const instructions = instruction("core/environment")
@@ -235,15 +235,15 @@ describe("SessionV2.skill", () => {
       instructionValue = Instructions.unavailable
       yield* events.publish(SessionEvent.Skill.Activated, {
         sessionID: session.id,
-        id: SkillV2.ID.make("environment-unavailable"),
-        name: SkillV2.Name.make("Environment unavailable"),
+        id: Skill.ID.make("environment-unavailable"),
+        name: Skill.Name.make("Environment unavailable"),
         text: "Environment unavailable skill",
         conflicts: { skills: [], instructions: [Instruction.Key.make("core/environment")] },
       })
 
       expect(yield* sessions.skills(session.id)).toContainEqual(
         expect.objectContaining({
-          id: SkillV2.ID.make("environment-unavailable"),
+          id: Skill.ID.make("environment-unavailable"),
           conflicts: [{ type: "instruction", id: "core/environment", name: "core/environment" }],
         }),
       )
@@ -252,32 +252,32 @@ describe("SessionV2.skill", () => {
       yield* InstructionState.prepare(db, events, instructions, session.id)
 
       expect(yield* sessions.skills(session.id)).toContainEqual(
-        expect.objectContaining({ id: SkillV2.ID.make("environment-unavailable"), conflicts: [] }),
+        expect.objectContaining({ id: Skill.ID.make("environment-unavailable"), conflicts: [] }),
       )
     }).pipe(Effect.ensuring(Effect.sync(() => (instructionValue = "active")))),
   )
 })
 
-describe("SessionV2.resolveSkillConflict", () => {
+describe("Session.resolveSkillConflict", () => {
   it.effect("durably deactivates the chosen loser through the real skill-status derivation", () =>
     Effect.gen(function* () {
-      const sessions = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const sessions = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const session = yield* sessions.create({ location })
-      const winner = SkillV2.ID.make("winner")
-      const loser = SkillV2.ID.make("loser")
+      const winner = Skill.ID.make("winner")
+      const loser = Skill.ID.make("loser")
 
       yield* events.publish(SessionEvent.Skill.Activated, {
         sessionID: session.id,
         id: winner,
-        name: SkillV2.Name.make("Winner"),
+        name: Skill.Name.make("Winner"),
         text: "Winner instructions",
         conflicts: { skills: [loser], instructions: [] },
       })
       yield* events.publish(SessionEvent.Skill.Activated, {
         sessionID: session.id,
         id: loser,
-        name: SkillV2.Name.make("Loser"),
+        name: Skill.Name.make("Loser"),
         text: "Loser instructions",
         conflicts: { skills: [], instructions: [] },
       })
@@ -310,23 +310,23 @@ describe("SessionV2.resolveSkillConflict", () => {
 
   it.effect("does not change a conflict-free session", () =>
     Effect.gen(function* () {
-      const sessions = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      const sessions = yield* Session.Service
+      const events = yield* EventRuntime.Service
       const session = yield* sessions.create({ location })
-      const winner = SkillV2.ID.make("independent-winner")
-      const loser = SkillV2.ID.make("independent-loser")
+      const winner = Skill.ID.make("independent-winner")
+      const loser = Skill.ID.make("independent-loser")
 
       yield* events.publish(SessionEvent.Skill.Activated, {
         sessionID: session.id,
         id: winner,
-        name: SkillV2.Name.make("Independent winner"),
+        name: Skill.Name.make("Independent winner"),
         text: "Winner instructions",
         conflicts: { skills: [], instructions: [] },
       })
       yield* events.publish(SessionEvent.Skill.Activated, {
         sessionID: session.id,
         id: loser,
-        name: SkillV2.Name.make("Independent loser"),
+        name: Skill.Name.make("Independent loser"),
         text: "Loser instructions",
         conflicts: { skills: [], instructions: [] },
       })

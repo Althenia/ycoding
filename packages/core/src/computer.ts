@@ -5,7 +5,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { makeGlobalNode, makeLocationNode } from "./effect/app-node"
-import { EventV2 } from "./event"
+import { EventRuntime } from "./event"
 import { AppProcess } from "./process"
 import { SessionEvent } from "./session/event"
 import { SessionSchema } from "./session/schema"
@@ -496,17 +496,17 @@ function makeCoordinator(invoke: InvokeNative, platform: NodeJS.Platform): Coord
   }
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/Computer") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/Computer") {}
 
 class CoordinatorService extends Context.Service<CoordinatorService, Coordinator>()(
-  "@ycoding/v2/ComputerCoordinator",
+  "@ycoding/ComputerCoordinator",
 ) {}
 
 const coordinatorLayer = Layer.effect(
   CoordinatorService,
   Effect.gen(function* () {
     const processes = yield* AppProcess.Service
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const coordinator = makeCoordinator(MacOSComputer.invokeWithBridge(processes), process.platform)
     yield* events.subscribe([SessionEvent.Moved, SessionEvent.Deleted, SessionEvent.Archived]).pipe(
       Stream.runForEach((event) => coordinator.releaseSession(event.data.sessionID)),
@@ -519,7 +519,7 @@ const coordinatorLayer = Layer.effect(
 const coordinatorNode = makeGlobalNode({
   service: CoordinatorService,
   layer: coordinatorLayer,
-  deps: [AppProcess.node, EventV2.node],
+  deps: [AppProcess.node, EventRuntime.node],
 })
 
 const layer = Layer.effect(

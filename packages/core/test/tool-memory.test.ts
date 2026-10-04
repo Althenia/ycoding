@@ -8,9 +8,9 @@ import { Auth, LLMClient } from "@ycoding-ai/ai/route"
 import { MemoryTool } from "@ycoding-ai/core/tool/memory"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { Memory } from "@ycoding-ai/core/memory"
-import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { Permission } from "@ycoding-ai/core/permission"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
-import { SessionV2 } from "@ycoding-ai/core/session"
+import { Session } from "@ycoding-ai/core/session"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { Image } from "@ycoding-ai/core/image"
@@ -24,11 +24,11 @@ import { memoryFixture, note } from "./lib/memory"
 test("R5-F exposes on-demand memory and enforces permissions/guardrail lifetime across a real store flow", async () => {
   await using f = await memoryFixture()
   const state = { denied: false, catalogDenied: false, guardDenied: false, redirect: false, reads: 0, reservations: 0, releases: 0, actions: [] as string[] }
-  const permissions = Layer.mock(PermissionV2.Service, {
+  const permissions = Layer.mock(Permission.Service, {
     evaluateEffective: () => Effect.succeed(state.catalogDenied ? "deny" as const : "ask" as const),
     assert: (input) => Effect.gen(function* () {
       state.actions.push(input.action)
-      if (state.denied) return yield* new PermissionV2.BlockedError({ rules: [], permission: input.action, resources: input.resources })
+      if (state.denied) return yield* new Permission.BlockedError({ rules: [], permission: input.action, resources: input.resources })
       if (state.redirect) f.settings.path = "redirected"
     }),
   })
@@ -41,14 +41,14 @@ test("R5-F exposes on-demand memory and enforces permissions/guardrail lifetime 
   })
   const plugin = makeLocationNode({
     name: "test/memory-tool-plugin", layer: Layer.effectDiscard(registerToolPlugin(MemoryTool.Plugin)),
-    deps: [Memory.node, ToolRegistry.toolsNode, PermissionV2.node, SessionGuardrail.node],
+    deps: [Memory.node, ToolRegistry.toolsNode, Permission.node, SessionGuardrail.node],
   })
   const layer = AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, plugin]), [
     [Memory.node, Layer.succeed(Memory.Service, {
       ...f.store,
       read: (input, expectedRoot) => Effect.suspend(() => { state.reads++; return f.store.read(input, expectedRoot) }),
     })],
-    [PermissionV2.node, permissions], [SessionGuardrail.node, guardrails],
+    [Permission.node, permissions], [SessionGuardrail.node, guardrails],
     [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig], [Image.node, imagePassthrough],
   ])
   await Effect.runPromise(Effect.gen(function* () {
@@ -93,7 +93,7 @@ test("R5-F exposes on-demand memory and enforces permissions/guardrail lifetime 
       expect(parameters).not.toHaveProperty("anyOf")
     }
     const call = (input: Record<string, unknown>) => executeTool(registry, {
-      sessionID: SessionV2.ID.make("ses_memory_test"), ...toolIdentity,
+      sessionID: Session.ID.make("ses_memory_test"), ...toolIdentity,
       call: { type: "tool-call", id: `call-${state.actions.length}`, name: "memory", input },
     })
     expect((yield* call({ query: "build" })).type).toBe("error")

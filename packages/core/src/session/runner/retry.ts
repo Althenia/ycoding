@@ -3,7 +3,7 @@ export * as SessionRunnerRetry from "./retry";
 import { LLMError } from "@ycoding-ai/ai";
 import { SessionError } from "@ycoding-ai/schema/session-error";
 import { Data, Duration, Effect, Schedule } from "effect";
-import { EventV2 } from "../../event";
+import { EventRuntime } from "../../event";
 import { SessionEvent } from "../event";
 import { SessionMessage } from "../message";
 import { SessionSchema } from "../schema";
@@ -61,7 +61,7 @@ const retryAfter = (failure: RetryableFailure) =>
   reasonRetryAfterMs(failure.cause.reason);
 
 export const schedule = (
-  events: EventV2.Interface,
+  events: EventRuntime.Interface,
   sessionID: SessionSchema.ID,
   attemptsBeforeRetry: number,
 ) =>

@@ -2,8 +2,8 @@ export * as CopilotModels from "./models"
 
 import { Money } from "@ycoding-ai/schema/money"
 import { Option, Schema } from "effect"
-import { ModelV2 } from "../model"
-import { ProviderV2 } from "../provider"
+import { CatalogModel } from "../model"
+import { Provider } from "../provider"
 
 const RemoteModel = Schema.Struct({
   model_picker_enabled: Schema.Boolean,
@@ -70,7 +70,7 @@ type UsableModel = RemoteModel & {
   }
 }
 
-export async function get(baseURL: string, headers: RequestInit["headers"], existing: readonly ModelV2.Info[]) {
+export async function get(baseURL: string, headers: RequestInit["headers"], existing: readonly CatalogModel.Info[]) {
   const response = await fetch(`${baseURL}/models`, {
     headers: { ...headers, "Copilot-Integration-Id": "vscode-chat" },
     signal: AbortSignal.timeout(5_000),
@@ -97,7 +97,7 @@ export async function get(baseURL: string, headers: RequestInit["headers"], exis
   }
 
   for (const [id, model] of remote) {
-    const key = ModelV2.ID.make(id)
+    const key = CatalogModel.ID.make(id)
     if (result.has(key)) continue
     result.set(key, build(key, model, baseURL))
   }
@@ -114,7 +114,7 @@ function usable(model: RemoteModel): model is UsableModel {
   )
 }
 
-function build(id: ModelV2.ID, remote: UsableModel, baseURL: string, previous?: ModelV2.Info) {
+function build(id: CatalogModel.ID, remote: UsableModel, baseURL: string, previous?: CatalogModel.Info) {
   const messages = remote.supported_endpoints?.includes("/v1/messages") ?? false
   const endpoint = messages
     ? "messages"
@@ -134,15 +134,15 @@ function build(id: ModelV2.ID, remote: UsableModel, baseURL: string, previous?: 
     : remote.version
   const released = previous?.time.released || Date.parse(version)
 
-  return ModelV2.Info.make({
-    ...ModelV2.Info.empty(ProviderV2.ID.githubCopilot, id),
+  return CatalogModel.Info.make({
+    ...CatalogModel.Info.empty(Provider.ID.githubCopilot, id),
     id,
-    modelID: ModelV2.ID.make(remote.id),
-    providerID: ProviderV2.ID.githubCopilot,
-    family: previous?.family ?? ModelV2.Family.make(remote.capabilities.family),
+    modelID: CatalogModel.ID.make(remote.id),
+    providerID: Provider.ID.githubCopilot,
+    family: previous?.family ?? CatalogModel.Family.make(remote.capabilities.family),
     name: previous?.name ?? remote.name,
-    package: ProviderV2.aisdk(messages ? "@ai-sdk/anthropic" : "@ai-sdk/github-copilot"),
-    settings: ProviderV2.mergeOverlay(previous?.settings, {
+    package: Provider.aisdk(messages ? "@ai-sdk/anthropic" : "@ai-sdk/github-copilot"),
+    settings: Provider.mergeOverlay(previous?.settings, {
       baseURL: messages ? `${baseURL}/v1` : baseURL,
       ...(endpoint ? { endpoint } : {}),
       ...(messages
@@ -199,11 +199,11 @@ function build(id: ModelV2.ID, remote: UsableModel, baseURL: string, previous?: 
   })
 }
 
-function variants(remote: UsableModel, messages: boolean): ModelV2.Info["variants"] {
+function variants(remote: UsableModel, messages: boolean): CatalogModel.Info["variants"] {
   const efforts = remote.capabilities.supports.reasoning_effort ?? []
   if (!messages && efforts.length) {
     return efforts.map((effort) => ({
-      id: ModelV2.VariantID.make(effort),
+      id: CatalogModel.VariantID.make(effort),
       settings: {
         reasoningEffort: effort,
         reasoningSummary: "auto",
@@ -213,7 +213,7 @@ function variants(remote: UsableModel, messages: boolean): ModelV2.Info["variant
   }
   if (efforts.length && remote.capabilities.supports.adaptive_thinking) {
     return efforts.map((effort) => ({
-      id: ModelV2.VariantID.make(effort),
+      id: CatalogModel.VariantID.make(effort),
       settings: {
         thinking: {
           type: "adaptive",
@@ -227,11 +227,11 @@ function variants(remote: UsableModel, messages: boolean): ModelV2.Info["variant
   if (max === undefined) return []
   return [
     {
-      id: ModelV2.VariantID.make("max"),
+      id: CatalogModel.VariantID.make("max"),
       settings: { thinking: { type: "enabled", budgetTokens: max - 1 } },
     },
     {
-      id: ModelV2.VariantID.make("high"),
+      id: CatalogModel.VariantID.make("high"),
       settings: { thinking: { type: "enabled", budgetTokens: Math.floor(max / 2) } },
     },
   ]

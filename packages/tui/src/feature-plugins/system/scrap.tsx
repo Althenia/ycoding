@@ -26,8 +26,8 @@ function Commands(props: { context: Plugin.Context }) {
 
 function Scrap(props: { context: Plugin.Context }) {
   const dimensions = useTerminalDimensions()
-  const { themeV2 } = useTheme()
-  const { themeV2: elevatedTheme } = useTheme().contextual("elevated")
+  const { theme } = useTheme()
+  const { theme: elevatedTheme } = useTheme().contextual("elevated")
 
   Keymap.createLayer(() => ({
     commands: [
@@ -43,7 +43,7 @@ function Scrap(props: { context: Plugin.Context }) {
   }))
 
   return (
-    <box width={dimensions().width} height={dimensions().height} backgroundColor={themeV2.background.default}>
+    <box width={dimensions().width} height={dimensions().height} backgroundColor={theme.background.default}>
       <box flexGrow={1} />
       <box
         height={1}

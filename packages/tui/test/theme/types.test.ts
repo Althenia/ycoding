@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import type { BackgroundDefinition, TextDefinition, ThemeDefinition, ThemeFile } from "../../../src/theme/v2"
+import type { BackgroundDefinition, TextDefinition, ThemeDefinition, ThemeFile } from "../../src/theme"
 
 const text = {
   default: "$hue.neutral.900",

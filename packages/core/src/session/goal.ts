@@ -3,12 +3,12 @@ export * as SessionGoal from "./goal"
 import { LLM, LLMClient, LLMError, LLMEvent, LLMRequest, Message } from "@ycoding-ai/ai"
 import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
 import { Context, Effect, Layer, Schema, Stream } from "effect"
-import { AgentV2 } from "../agent"
+import { Agent } from "../agent"
 import { Config } from "../config"
 import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
 import { llmClient } from "../effect/app-node-platform"
-import { EventV2 } from "../event"
+import { EventRuntime } from "../event"
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionEvent } from "./event"
 import { SessionAutonomy } from "./autonomy"
@@ -41,11 +41,11 @@ export class Error extends Schema.TaggedErrorClass<Error>()("SessionGoal.Error",
 
 type Dependencies = {
   readonly headers?: SessionModelHeaders.Options
-  readonly events: EventV2.Interface
+  readonly events: EventRuntime.Interface
   readonly llm: {
     readonly stream: (request: LLMRequest) => Stream.Stream<LLMEvent, LLMError>
   }
-  readonly agents: AgentV2.Interface
+  readonly agents: Agent.Interface
   readonly config: Config.Interface
   readonly helpers: SessionHelperPolicy.Interface
   readonly requests: SessionProviderRequest.Interface
@@ -61,7 +61,7 @@ export interface Interface {
   }) => Effect.Effect<string, Error>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionGoal") {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionGoal") {}
 
 const make = (dependencies: Dependencies) => {
   const generate = Effect.fn("SessionGoal.generate")(function* (
@@ -71,7 +71,7 @@ const make = (dependencies: Dependencies) => {
       readonly request: string | ((history: ReadonlyArray<SessionMessage.Info>) => string)
     },
   ) {
-    const agent = yield* dependencies.agents.get(AgentV2.ID.make("goal"))
+    const agent = yield* dependencies.agents.get(Agent.ID.make("goal"))
     if (!agent) return yield* Effect.fail(new Error({ code: "goal.model_unavailable" }))
     const resolved = yield* dependencies.helpers.resolveModel(input.session, "goal", agent)
     if (!resolved) return yield* Effect.fail(new Error({ code: "goal.model_unavailable" }))
@@ -239,9 +239,9 @@ export const layer = (options?: SessionModelHeaders.Options) =>
   Layer.effect(
     Service,
     Effect.gen(function* () {
-      const events = yield* EventV2.Service
+      const events = yield* EventRuntime.Service
       const llm = yield* LLMClient.Service
-      const agents = yield* AgentV2.Service
+      const agents = yield* Agent.Service
       const config = yield* Config.Service
       const helpers = yield* SessionHelperPolicy.Service
       const requests = yield* SessionProviderRequest.Service
@@ -273,9 +273,9 @@ export function configured(options?: SessionModelHeaders.Options) {
     service: Service,
     layer: layer(options),
     deps: [
-      EventV2.node,
+      EventRuntime.node,
       llmClient,
-      AgentV2.node,
+      Agent.node,
       Config.node,
       SessionHelperPolicy.node,
       SessionProviderRequest.node,

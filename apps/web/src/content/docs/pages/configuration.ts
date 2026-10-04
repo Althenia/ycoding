@@ -849,7 +849,7 @@ Report concrete defects with file and symbol evidence.`,
         blocks: [
           {
             kind: "paragraph",
-            text: "The default export must be `define({ id, effect })` from `@ycoding-ai/plugin/effect/plugin` or `define({ id, setup })` from `@ycoding-ai/plugin/promise/plugin`. Any other shape fails with `Plugin does not implement the V2 contract`.",
+            text: "The default export must be `define({ id, effect })` from `@ycoding-ai/plugin/effect/plugin` or `define({ id, setup })` from `@ycoding-ai/plugin/promise/plugin`. Any other shape fails with `Invalid plugin export`.",
           },
           {
             kind: "code",

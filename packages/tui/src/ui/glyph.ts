@@ -1,4 +1,4 @@
-import type { FeedbackKind } from "../theme/v2/schema"
+import type { FeedbackKind } from "../theme/schema"
 import { stringWidth } from "../util/string-width"
 
 export type GlyphName =

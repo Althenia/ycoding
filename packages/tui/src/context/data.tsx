@@ -14,9 +14,9 @@ import type {
   McpServer,
   ModelInfo,
   PermissionSavedInfo,
-  PermissionV2Request,
+  PermissionRequest,
   ProviderRequestSummary,
-  ProviderV2Info,
+  ProviderInfo,
   ReferenceInfo,
   SessionMessageInfo,
   SessionMessageAssistant,
@@ -151,7 +151,7 @@ type LocationData = {
     resource?: McpResource[]
   }
   model?: ModelInfo[]
-  provider?: ProviderV2Info[]
+  provider?: ProviderInfo[]
   reference?: ReferenceInfo[]
   // Currently running shell commands for this location, keyed by shell id. Entries are removed
   // once the command exits or is deleted, so this only ever holds in-flight shells.
@@ -175,7 +175,7 @@ type Store = {
     subagent: Record<string, SubagentPage>
     todo: Record<string, SessionTodoInfo[]>
     input: Record<string, string[]>
-    permission: Record<string, PermissionV2Request[]>
+    permission: Record<string, PermissionRequest[]>
     guardrail: Record<string, GuardrailRequestListOutput>
     // Pending forms keyed by owner: a session ID or the temporary "global" elicitation sentinel.
     form: Record<string, FormWithLocation[]>
@@ -1540,14 +1540,14 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             time: { created: event.created },
           })
           break
-        case "permission.v2.asked":
+        case "permission.asked":
           if (store.session.permission[event.data.sessionID]?.some((request) => request.id === event.data.id)) break
           setStore("session", "permission", event.data.sessionID, [
             ...(store.session.permission[event.data.sessionID] ?? []),
             event.data,
           ])
           break
-        case "permission.v2.replied":
+        case "permission.replied":
           setStore(
             "session",
             "permission",

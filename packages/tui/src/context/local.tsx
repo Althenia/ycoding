@@ -55,7 +55,7 @@ export const {
     const data = useData()
     const client = useClient()
     const toast = useToast()
-    const { themeV2, mode } = useTheme()
+    const { theme, mode } = useTheme()
     const route = useRoute()
     const paths = useTuiPaths()
     const args = useArgs()
@@ -92,7 +92,7 @@ export const {
       const colors = createMemo(() => {
         const step = mode() === "light" ? 800 : 200
         return dedupeWith(
-          themeV2.categorical.map((scale) => scale[step]),
+          theme.categorical.map((scale) => scale[step]),
           (first, second) => first.equals(second),
         )
       })
@@ -131,13 +131,13 @@ export const {
           if (agent?.color) {
             const color = agent.color
             if (color.startsWith("#")) return RGBA.fromHex(color)
-            if (color === "primary") return themeV2.text.action.primary.selected
-            if (color === "secondary") return themeV2.categorical[0][mode() === "light" ? 800 : 200]
-            if (color === "accent") return themeV2.hue.accent[mode() === "light" ? 800 : 200]
-            if (color === "success") return themeV2.text.feedback.success.default
-            if (color === "warning") return themeV2.text.feedback.warning.default
-            if (color === "error") return themeV2.text.feedback.error.default
-            if (color === "info") return themeV2.text.feedback.info.default
+            if (color === "primary") return theme.text.action.primary.selected
+            if (color === "secondary") return theme.categorical[0][mode() === "light" ? 800 : 200]
+            if (color === "accent") return theme.hue.accent[mode() === "light" ? 800 : 200]
+            if (color === "success") return theme.text.feedback.success.default
+            if (color === "warning") return theme.text.feedback.warning.default
+            if (color === "error") return theme.text.feedback.error.default
+            if (color === "info") return theme.text.feedback.info.default
           }
           return colors()[index % colors().length]
         },

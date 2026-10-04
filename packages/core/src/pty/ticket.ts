@@ -1,9 +1,9 @@
 export * as PtyTicket from "./ticket"
 
-import { WorkspaceV2 } from "../workspace"
+import { Workspace } from "../workspace"
 import { PtyTicket } from "@ycoding-ai/schema/pty-ticket"
 import { PtyID } from "./schema"
-import { SessionV2 } from "../session"
+import { Session } from "../session"
 import { Cache, Context, Duration, Effect, Layer } from "effect"
 import { makeGlobalNode } from "../effect/app-node"
 
@@ -14,12 +14,12 @@ export const ConnectToken = PtyTicket.ConnectToken
 
 export type Scope = {
   readonly ptyID: PtyID
-  readonly sessionID: SessionV2.ID
+  readonly sessionID: Session.ID
   readonly access: "inspect" | "control"
   readonly generation: number
   readonly fence?: number
   readonly directory?: string
-  readonly workspaceID?: WorkspaceV2.ID
+  readonly workspaceID?: Workspace.ID
 }
 
 export interface Interface {

@@ -3,11 +3,11 @@ import type { Scope } from "effect"
 import type { IntegrationOAuthMethodRegistration } from "@ycoding-ai/plugin/effect/integration"
 import { define } from "@ycoding-ai/plugin/effect/plugin"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
-import { EventV2 } from "../../event"
+import { EventRuntime } from "../../event"
 import { Credential } from "../../credential"
 import { Integration } from "../../integration"
-import { ModelV2 } from "../../model"
-import { ProviderV2 } from "../../provider"
+import { CatalogModel } from "../../model"
+import { Provider } from "../../provider"
 import { Config } from "../../config"
 import { Money } from "@ycoding-ai/schema/money"
 
@@ -79,10 +79,10 @@ function oauth(http: HttpClient.HttpClient) {
   } satisfies IntegrationOAuthMethodRegistration
 }
 
-export const OpencodePlugin = define<HttpClient.HttpClient | EventV2.Service | Scope.Scope>({
+export const OpencodePlugin = define<HttpClient.HttpClient | EventRuntime.Service | Scope.Scope>({
   id: "opencode.provider.opencode",
   effect: Effect.fn(function* (ctx) {
-    const events = yield* EventV2.Service
+    const events = yield* EventRuntime.Service
     const http = yield* HttpClient.HttpClient
     const loading = Semaphore.makeUnsafe(1)
     let connected = false
@@ -119,9 +119,9 @@ export const OpencodePlugin = define<HttpClient.HttpClient | EventV2.Service | S
           if (item.name !== undefined) provider.name = item.name
           if (item.package !== undefined) provider.package = item.package
           if (item.settings !== undefined)
-            provider.settings = ProviderV2.mergeOverlay(provider.settings, withoutCredentials(item.settings))
-          if (item.headers !== undefined) provider.headers = ProviderV2.mergeHeaders(provider.headers, item.headers)
-          if (item.body !== undefined) provider.body = ProviderV2.mergeOverlay(provider.body, item.body)
+            provider.settings = Provider.mergeOverlay(provider.settings, withoutCredentials(item.settings))
+          if (item.headers !== undefined) provider.headers = Provider.mergeHeaders(provider.headers, item.headers)
+          if (item.body !== undefined) provider.body = Provider.mergeOverlay(provider.body, item.body)
         })
 
         for (const [modelID, config] of Object.entries(item.models ?? {})) {
@@ -131,9 +131,9 @@ export const OpencodePlugin = define<HttpClient.HttpClient | EventV2.Service | S
             if (config.modelID !== undefined) model.modelID = config.modelID
             if (config.package !== undefined) model.package = config.package
             if (config.settings !== undefined)
-              model.settings = ProviderV2.mergeOverlay(model.settings, withoutCredentials(config.settings))
-            if (config.headers !== undefined) model.headers = ProviderV2.mergeHeaders(model.headers, config.headers)
-            if (config.body !== undefined) model.body = ProviderV2.mergeOverlay(model.body, config.body)
+              model.settings = Provider.mergeOverlay(model.settings, withoutCredentials(config.settings))
+            if (config.headers !== undefined) model.headers = Provider.mergeHeaders(model.headers, config.headers)
+            if (config.body !== undefined) model.body = Provider.mergeOverlay(model.body, config.body)
             if (config.capabilities?.tools !== undefined) model.capabilities.tools = config.capabilities.tools
             if (config.capabilities?.input !== undefined) model.capabilities.input = [...config.capabilities.input]
             if (config.capabilities?.output !== undefined) model.capabilities.output = [...config.capabilities.output]
@@ -146,10 +146,10 @@ export const OpencodePlugin = define<HttpClient.HttpClient | EventV2.Service | S
                   model.variants.push(existing)
                 }
                 if (variant.settings !== undefined)
-                  existing.settings = ProviderV2.mergeOverlay(existing.settings, withoutCredentials(variant.settings))
+                  existing.settings = Provider.mergeOverlay(existing.settings, withoutCredentials(variant.settings))
                 if (variant.headers !== undefined)
-                  existing.headers = ProviderV2.mergeHeaders(existing.headers, variant.headers)
-                if (variant.body !== undefined) existing.body = ProviderV2.mergeOverlay(existing.body, variant.body)
+                  existing.headers = Provider.mergeHeaders(existing.headers, variant.headers)
+                if (variant.body !== undefined) existing.body = Provider.mergeOverlay(existing.body, variant.body)
               }
             }
             if (config.cost !== undefined) {
@@ -169,7 +169,7 @@ export const OpencodePlugin = define<HttpClient.HttpClient | EventV2.Service | S
         }
       }
 
-      const item = catalog.provider.get(ProviderV2.ID.opencode)
+      const item = catalog.provider.get(Provider.ID.opencode)
       if (!item) return
       const hasKey = Boolean(process.env.OPENCODE_API_KEY || connected || item.provider.settings?.apiKey)
       if (hasKey) return

@@ -1,7 +1,7 @@
 export * as SessionModelSwitch from "./model-switch"
 
 import { Session } from "@ycoding-ai/schema/session"
-import { ModelV2 } from "../model"
+import { CatalogModel } from "../model"
 import { SessionContextBudget } from "./context-budget"
 import { SessionMessage } from "./message"
 import { toLLMMessages } from "./runner/to-llm-message"
@@ -16,7 +16,7 @@ export type Outcome = { readonly status: "switched" } | Blocked
  * token metric as the compaction planner. The estimate covers the summary and
  * recent messages only; system, tool, and attachment prefixes are not included.
  */
-export const estimateContextTokens = (messages: readonly SessionMessage.Info[], model: ModelV2.Ref) =>
+export const estimateContextTokens = (messages: readonly SessionMessage.Info[], model: CatalogModel.Ref) =>
   SessionContextBudget.countTokens(
     JSON.stringify(
       toLLMMessages(
@@ -36,7 +36,7 @@ export const estimateContextTokens = (messages: readonly SessionMessage.Info[], 
  */
 const summarizeBoundary = (input: {
   readonly messages: readonly SessionMessage.Info[]
-  readonly model: ModelV2.Ref
+  readonly model: CatalogModel.Ref
   readonly targetSafeInputTokens: number
   readonly keepRecentMessages?: number
 }): SessionMessage.ID | undefined => {
@@ -62,10 +62,10 @@ const summarizeBoundary = (input: {
  * boundary is advisory only.
  */
 export const decide = (input: {
-  readonly currentModel?: ModelV2.Ref
-  readonly targetModel: ModelV2.Ref
+  readonly currentModel?: CatalogModel.Ref
+  readonly targetModel: CatalogModel.Ref
   readonly messages: readonly SessionMessage.Info[]
-  readonly model: ModelV2.Ref
+  readonly model: CatalogModel.Ref
   readonly target?: SessionContextBudget.Capabilities
   readonly keepRecentMessages?: number
 }): Outcome => {
