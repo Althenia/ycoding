@@ -210,6 +210,22 @@ const waitForCapturedBytes = (file: string, size: number) =>
   })
 
 describe("Shell output", () => {
+  posixIt("exposes all captured bytes when an immediately exiting shell reports terminal", () =>
+    Effect.gen(function* () {
+      const bytes = Buffer.from("fast shell output\n")
+      const { shell, info } = yield* createShell("printf 'fast shell output\\n'")
+      const deadline = Date.now() + 15_000
+      while ((yield* shell.get(info.id)).status === "running") {
+        if (Date.now() >= deadline) yield* Effect.die(new Error("the shell command did not exit"))
+        yield* Effect.sleep(Duration.millis(10))
+      }
+      const page = yield* shell.output(info.id)
+      expect(page.size).toBe(bytes.length)
+      expect(page.cursor).toBe(bytes.length)
+      expect(page.output).toBe(bytes.toString("utf8"))
+    }),
+  )
+
   posixIt("joins every page to the standard decoding of the captured bytes", () =>
     Effect.gen(function* () {
       const bytes = boundaryFixture()

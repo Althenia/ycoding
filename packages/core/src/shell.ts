@@ -230,7 +230,9 @@ export const layer = (options?: ShellSelect.Options) =>
       })
 
       const get = Effect.fn("Shell.get")(function* (id: Shell.ID) {
-        return (yield* require(id)).info
+        const session = yield* require(id)
+        if (session.info.status !== "running") yield* Deferred.await(session.done)
+        return session.info
       })
 
       const wait = Effect.fn("Shell.wait")(function* (id: Shell.ID) {
@@ -413,13 +415,6 @@ export const layer = (options?: ShellSelect.Options) =>
               const handle = yield* appProcess
                 .spawn(state.process)
                 .pipe(Effect.mapError((cause) => new SpawnError({ command: state.command, cause })))
-              if (owner)
-                yield* ShellLedger.record(database, {
-                  id,
-                  pid: Number(handle.pid),
-                  started: (yield* ShellLedger.identify(appProcess, Number(handle.pid)))?.started,
-                  owner,
-                })
               const session: Active = {
                 info: produce(info, (draft) => {
                   draft.pid = handle.pid
@@ -431,6 +426,10 @@ export const layer = (options?: ShellSelect.Options) =>
               sessions.set(id, session)
 
               const stream = createWriteStream(file)
+              const opened = new Promise<void>((resolve) => {
+                stream.once("open", () => resolve())
+                stream.once("error", () => resolve())
+              })
               const outputDone = Deferred.makeUnsafe<void>()
               const pump = handle.all.pipe(
                 Stream.runForEach((chunk: Uint8Array) =>
@@ -452,13 +451,23 @@ export const layer = (options?: ShellSelect.Options) =>
                   yield* Deferred.succeed(outputDone, undefined)
                 }).pipe(Effect.catch(() => Deferred.succeed(outputDone, undefined))),
               )
-              yield* Effect.promise(
-                () =>
-                  new Promise<void>((resolve) => {
-                    stream.once("open", () => resolve())
-                    stream.once("error", () => resolve())
-                  }),
-              )
+              yield* Effect.promise(() => opened)
+              if (owner)
+                yield* ShellLedger.record(database, {
+                  id,
+                  pid: Number(handle.pid),
+                  started: (yield* ShellLedger.identify(appProcess, Number(handle.pid)))?.started,
+                  owner,
+                }).pipe(
+                  Effect.onError(() =>
+                    Effect.gen(function* () {
+                      yield* handle.kill({ forceKillAfter: Duration.seconds(3) }).pipe(Effect.catch(() => Effect.void))
+                      stream.destroy()
+                      sessions.delete(id)
+                      yield* Effect.promise(() => unlink(file).catch(() => {}))
+                    }),
+                  ),
+                )
 
               const finish = (status: Info["status"], exit?: number, beforeWait = Effect.void) =>
                 Effect.gen(function* () {
