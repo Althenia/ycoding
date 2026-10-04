@@ -13,7 +13,7 @@ When the managed YCoding server shuts down gracefully, it records each Session i
 
 Suspension is an explicit action the managed server invokes during teardown. Automatic continuation would retry provider and tool work whose outcome is ambiguous, so no server schedules it; that requires an explicit durable crash-recovery design with admission rules.
 
-The field is not Session status. Live activity remains process-local. Hard-crash recovery and exactly-once provider or tool execution remain out of scope.
+The field is not Session status. Live activity remains process-local. Managed startup settles interrupted execution history and reconciles durable background-shell notices, but does not replay provider or tool execution. Exactly-once provider or tool execution remains out of scope.
 
 ## Decision
 
@@ -50,7 +50,7 @@ A persisted status such as `idle / running / resumable` answers three different 
 
 ## The Managed Server Owns Suspension
 
-Suspension is not layer configuration. `SessionRestart` is an inert core service exposing the actions `suspendActiveSessions` and `reconcileInterruptedExecutions`. Only the managed server (`ycoding serve --service`) invokes `suspendActiveSessions`:
+Suspension is not layer configuration. `SessionRestart` is an inert core service exposing `suspendActiveSessions`, `reconcileInterruptedExecutions`, and `reconcileShells`. Only the managed server (`ycoding serve --service`) invokes `suspendActiveSessions`:
 
 ```typescript
 // ServerProcess, service mode only
@@ -59,7 +59,7 @@ yield * Effect.addFinalizer(() => restart.suspendActiveSessions)
 
 Startup never resumes a suspended Session; the user resumes it manually. Default, embedded, and stdio servers build the same execution layer but never invoke `suspendActiveSessions`, so they never suspend.
 
-`ycoding update` restarts the managed server only after `GET /api/session/outstanding` reports no outstanding Session work, so an update restart suspends nothing.
+`ycoding update` restarts the managed server when `GET /api/session/outstanding` reports no running execution or background shell. `ycoding update --force` also restarts with running work or an unavailable outstanding-work read; an executing Session then records suspension and interruption.
 
 ### Graceful shutdown suspends
 
@@ -73,7 +73,7 @@ A SIGKILL runs none of this: nothing is suspended, and the user resumes manually
 
 ### Ordinary lifecycle clears stale suspension
 
-The Session execution layer clears the field through EventV2 live `commit` hooks, with no knowledge of server mode:
+The Session execution layer clears the field through durable execution-event `commit` hooks, with no knowledge of server mode:
 
 | Lifecycle event             | `time_suspended`                      |
 | --------------------------- | ------------------------------------- |
@@ -106,7 +106,7 @@ The design schedules no automatic continuation; the user decides whether to resu
 | Event                                               | Result                                                                        |
 | --------------------------------------------------- | ----------------------------------------------------------------------------- |
 | Graceful managed shutdown during execution          | Session is suspended and interrupted; the next server does not resume it      |
-| Managed server is killed before graceful closeout   | Nothing is suspended; user resumes manually                                   |
+| Managed server is killed before graceful closeout   | Nothing suspended; startup settles failed run and lost shell notices          |
 | Managed server dies between suspension and teardown | Session stays suspended; the next server does not resume it                   |
 | Interrupted tool has uncertain side effects         | Orphan reconciliation records interruption rather than replaying the old call |
 
@@ -141,7 +141,7 @@ Regression coverage verifies:
 ## Non-Goals
 
 - Resuming suspended Sessions automatically at server startup.
-- Recovering unmatched execution after a hard process or machine crash.
+- Automatically resuming provider or tool execution after a hard process or machine crash.
 - Persisting authoritative live Session status.
 - Coordinating Session execution across independent processes or a cluster.
 - Guaranteeing exactly-once provider requests or tool side effects.

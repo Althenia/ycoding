@@ -11,7 +11,6 @@ const upstreamPaths = [
   /^patches\//,
   /^NOTICE$/,
   /^packages\/core\/src\/cursor\/provider\//,
-  /^plans\/codebase-cleanup\//,
 ]
 
 const compatibilityPaths = [
