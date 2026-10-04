@@ -3,14 +3,17 @@ import { expect, test } from "bun:test"
 import { testRender, useRenderer } from "@opentui/solid"
 import { onCleanup, onMount } from "solid-js"
 import { createSlots } from "../../src/plugin/slots"
-import { DEFAULT_THEMES, resolveTheme } from "../../src/theme"
+import { DEFAULT_THEMES } from "../../src/theme"
 import type { TuiTheme } from "../../src/plugin/host-api"
+import { createComponentTheme } from "../../src/theme/v2/component"
+import { resolveThemeFile } from "../../src/theme/v2/resolve"
 
 test("replace slot mounts plugin content once", async () => {
   let mounts = 0
   const slots = createSlots()
+  const resolved = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
   const theme: TuiTheme = {
-    current: resolveTheme(DEFAULT_THEMES.ycoding, "dark"),
+    current: createComponentTheme(() => resolved, () => "dark"),
     selected: "ycoding",
     has: () => true,
     set: () => true,
@@ -18,6 +21,7 @@ test("replace slot mounts plugin content once", async () => {
     mode: () => "dark",
     ready: true,
   }
+  expect(theme.current.text.default).toBe(resolved.text.default)
 
   const Probe = () => {
     onMount(() => {

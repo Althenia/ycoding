@@ -18,6 +18,7 @@ import { removeProjectCopy } from "./project-copy-remove"
 import type { ProjectDirectoriesOutput } from "@ycoding-ai/client"
 import { useRoute } from "../context/route"
 import { DialogProjectCopyName } from "./dialog-project-copy-name"
+import { readableForeground } from "../theme/v2/component"
 
 export type MoveSessionSelection =
   | { type: "directory"; directory: string; subdirectory: boolean }
@@ -173,7 +174,14 @@ export function DialogMoveSession(props: DialogMoveSessionProps) {
         titleView: isRemoving ? (
           <span style={{ fg: themeV2.text.feedback.error.default }}>Deleting {item.location}</span>
         ) : deleting ? (
-          <span style={{ fg: themeV2.text.action.destructive.default }}>
+          <span
+            style={{
+              fg: readableForeground(
+                themeV2.text.action.destructive.default,
+                themeV2.background.action.destructive.default,
+              ),
+            }}
+          >
             Press {shortcuts.get("dialog.move_session.delete")} again to confirm
           </span>
         ) : suffix ? (
@@ -183,6 +191,9 @@ export function DialogMoveSession(props: DialogMoveSessionProps) {
           </>
         ) : undefined,
         bg: deleting ? themeV2.background.action.destructive.default : undefined,
+        fg: deleting
+          ? readableForeground(themeV2.text.action.destructive.default, themeV2.background.action.destructive.default)
+          : undefined,
         value: {
           type: "directory",
           directory: item.location,

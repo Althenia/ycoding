@@ -1,6 +1,7 @@
 import type { SessionAutonomyState } from "@ycoding-ai/client"
 import { For } from "solid-js"
 import { useTheme } from "../../context/theme"
+import { readableForeground } from "../../theme/v2/component"
 import { yoloLevel } from "../../util/session-autonomy"
 
 export type ModeChip = { key: "goal" | "yolo"; label: string; tone: "off" | "on" | "warning" | "danger" }
@@ -32,13 +33,15 @@ export function ModeChips(props: { autonomy?: SessionAutonomyState; guardrailPen
   const style = (tone: ModeChip["tone"]) => {
     if (tone === "danger")
       return {
-        fg: themeV2.text.action.destructive.default,
+        fg: readableForeground(themeV2.text.action.destructive.default, themeV2.background.action.destructive.default),
         bg: themeV2.background.action.destructive.default,
       }
-    if (tone === "on")
-      return { fg: themeV2.text.action.primary.focused, bg: themeV2.background.action.primary.focused }
+    if (tone === "on") return { fg: themeV2.text.action.primary.focused, bg: themeV2.background.action.primary.focused }
     if (tone === "warning")
-    return { fg: themeV2.text.action.primary.focused, bg: themeV2.text.feedback.warning.default }
+      return {
+        fg: readableForeground(themeV2.text.action.primary.focused, themeV2.text.feedback.warning.default),
+        bg: themeV2.text.feedback.warning.default,
+      }
     return { fg: themeV2.text.subdued }
   }
 
@@ -59,7 +62,7 @@ export function ModeChips(props: { autonomy?: SessionAutonomyState; guardrailPen
 function FilledWarningChip(props: { label: string }) {
   const { themeV2 } = useTheme()
   const style = {
-    fg: themeV2.text.action.primary.focused,
+    fg: readableForeground(themeV2.text.action.primary.focused, themeV2.text.feedback.warning.default),
     bg: themeV2.text.feedback.warning.default,
   }
   return (

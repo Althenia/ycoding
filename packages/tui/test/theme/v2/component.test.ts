@@ -2,8 +2,9 @@ import { expect, test } from "bun:test"
 import { createSignal } from "solid-js"
 import { RGBA } from "@opentui/core"
 import { createComponentTheme } from "../../../src/theme/v2/component"
+import { DEFAULT_THEMES } from "../../../src/theme/builtins"
 import { DEFAULT_THEME } from "../../../src/theme/v2/defaults"
-import { resolveTheme } from "../../../src/theme/v2/resolve"
+import { resolveTheme, resolveThemeFile } from "../../../src/theme/v2/resolve"
 import { selectTheme } from "../../../src/theme/v2/select"
 import type { ContextKey } from "../../../src/theme/v2"
 
@@ -69,4 +70,30 @@ test("provides reactive properties, states, contexts, and color operations", () 
   expect(theme.text.default).toBe(resolved().contexts["@context:elevated"]!.text.default)
   expect(theme.decrease(theme.background.surface.offset, 1)).toBe(resolved().hue.neutral[600])
   expect(theme.raise(theme.background.surface.offset)).toBe(resolved().hue.neutral[600])
+})
+
+test("selects readable focused ink for an opaque band without guessing transparent backdrops", () => {
+  const light = resolveThemeFile(DEFAULT_THEMES.ycoding, "light", "ycoding")
+  const dark = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
+  const [view, setView] = createSignal(light)
+  const theme = createComponentTheme(view, () => "light")
+
+  expect(light.text.action.primary.focused.toInts()).toEqual([255, 255, 255, 255])
+  expect(theme.text.action.primary.focused.toInts()).toEqual([0, 0, 0, 255])
+
+  setView(dark)
+  expect(theme.text.action.primary.focused).toBe(dark.text.action.primary.focused)
+
+  const transparent = RGBA.fromInts(59, 125, 216, 0)
+  setView({
+    ...light,
+    background: {
+      ...light.background,
+      action: {
+        ...light.background.action,
+        primary: { ...light.background.action.primary, focused: transparent },
+      },
+    },
+  })
+  expect(theme.text.action.primary.focused).toBe(light.text.action.primary.focused)
 })

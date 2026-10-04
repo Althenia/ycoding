@@ -147,6 +147,23 @@ test("unarchives the selected archived session directly", async () => {
   }
 })
 
+test("arms deletion with a readable destructive row instead of primary selection ink", async () => {
+  const { app, keymap } = await renderArchiveList(undefined, "ses_active", true, false)
+  try {
+    await app.waitForFrame((frame) => frame.includes("Active session"))
+    keymap.dispatch("session.delete")
+    await app.waitForFrame((frame) => frame.includes("again to confirm"))
+    const armed = app
+      .captureSpans()
+      .lines.flatMap((line) => line.spans)
+      .find((span) => span.text.includes("again to confirm"))
+    expect(armed?.bg.toInts()).toEqual([239, 125, 132, 255])
+    expect(armed?.fg.toInts()).toEqual([10, 10, 10, 255])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 async function renderArchiveList(override?: FetchHandler, sessionID?: string, activeFirst = false, archived = true) {
   const sessionState = `${state}/${renderCount++}`
   await mkdir(sessionState, { recursive: true })
@@ -215,16 +232,16 @@ function ArchiveProviders(props: {
                 initialRoute={props.sessionID ? { type: "session", sessionID: props.sessionID } : { type: "home" }}
               >
                 <ClientProvider api={props.api}>
-                    <DataProvider>
-                      <LocationProvider>
-                        <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-                          <LocalProvider>
-                            <DialogProvider>{props.children}</DialogProvider>
-                            <Toast />
-                          </LocalProvider>
-                        </ThemeProvider>
-                      </LocationProvider>
-                    </DataProvider>
+                  <DataProvider>
+                    <LocationProvider>
+                      <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+                        <LocalProvider>
+                          <DialogProvider>{props.children}</DialogProvider>
+                          <Toast />
+                        </LocalProvider>
+                      </ThemeProvider>
+                    </LocationProvider>
+                  </DataProvider>
                 </ClientProvider>
               </RouteProvider>
             </ToastProvider>

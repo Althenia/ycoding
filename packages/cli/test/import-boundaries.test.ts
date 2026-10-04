@@ -9,11 +9,22 @@ describe("CLI frontend import boundaries", () => {
   test("exposes only the intentional package entrypoints", async () => {
     const run = await import("@ycoding-ai/cli/run")
     const mini = await import("@ycoding-ai/tui/mini")
-    const cli = await Bun.file(path.join(root, "packages/cli/package.json")).json()
+    const cli: unknown = await Bun.file(path.join(root, "packages/cli/package.json")).json()
+    if (!cli || typeof cli !== "object" || !("exports" in cli) || !cli.exports || typeof cli.exports !== "object")
+      throw new Error("CLI package exports are missing")
+    const advertised = Object.entries(cli.exports)
 
     expect(Object.keys(run).sort()).toEqual(["runNonInteractive"])
     expect(Object.keys(mini).sort()).toEqual(["runMiniFrontend"])
-    expect(Object.keys(cli.exports).filter((key) => key === "./mini" || key.startsWith("./mini/"))).toEqual([])
+    expect(advertised.map(([key]) => key).filter((key) => key === "./mini" || key.startsWith("./mini/"))).toEqual([])
+    const missing = await Promise.all(
+      advertised.map(async ([name, target]) =>
+        typeof target === "string" && (await Bun.file(path.join(root, "packages/cli", target)).exists())
+          ? []
+          : [name],
+      ),
+    )
+    expect(missing.flat()).toEqual([])
   }, coldBundleTimeout)
 
   test("keeps source current-only", async () => {

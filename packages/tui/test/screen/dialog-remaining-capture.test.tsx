@@ -18,9 +18,8 @@ import { DialogSessionRename } from "../../src/component/dialog-session-rename"
 import { DialogSkill } from "../../src/component/dialog-skill"
 import { DialogStash } from "../../src/component/dialog-stash"
 import { DialogStatus } from "../../src/component/dialog-status"
-import { DialogTag } from "../../src/component/dialog-tag"
 import { DialogVariant } from "../../src/component/dialog-variant"
-import { PromptStashProvider } from "../../src/component/prompt/stash"
+import { PromptStashProvider } from "../../src/prompt/stash"
 import { ArgsProvider } from "../../src/context/args"
 import { ClientProvider } from "../../src/context/client"
 import { ClipboardProvider } from "../../src/context/clipboard"
@@ -106,7 +105,6 @@ const states = [
   { name: "retry-action", settle: "429 rate limited", evidence: "Cancel the turn", view: () => <DialogRetryAction title="Provider connection" message="Could not connect to the provider. Check your network and credentials." label="Open provider settings" link="https://opencode.ai/go" request={{ provider: "Anthropic", error: "429 rate limited", retryAfter: "retry after 30s" }} /> },
   { name: "help", settle: "Keyboard shortcuts", evidence: "Cycle variant", view: () => <DialogHelp shortcuts={helpShortcuts} /> },
   { name: "stash", settle: "cache-accounting-wip", evidence: "⌃x k drop", view: () => <DialogStash onSelect={() => {}} /> },
-  { name: "tag", settle: "dialog-remaining-capture.test.tsx", view: () => <DialogTag /> },
   { name: "run-skill", settle: "Scoped Go implementation", evidence: "Penpot UX/UI work", view: () => <DialogSkill onSelect={() => {}} /> },
   { name: "debug", settle: "Renderer stats", evidence: "Console", view: () => <DialogDebug /> },
 ] as const

@@ -6,12 +6,9 @@
 // the run footer + scrollback color model. Falls back to a hardcoded dark-mode
 // palette if detection fails.
 import { RGBA, SyntaxStyle, type CliRenderer, type ColorInput, type TerminalColors } from "@opentui/core"
-import type { TuiThemeCurrent } from "../plugin/host-api"
 import { ansiToRgba } from "../theme/color"
-import { toCurrentTheme } from "../theme/resolve"
 import { terminalMode } from "../theme/system"
-import type { ThemeFile } from "../theme/v2"
-import { resolveThemeFile } from "../theme/v2/resolve"
+import { generateSyntax } from "../theme/v2/syntax"
 import type { EntryKind, RunTuiConfig } from "./types"
 
 type Tone = {
@@ -65,12 +62,6 @@ export type RunTheme = {
   entry: RunEntryTheme
   splash: RunSplashTheme
   block: RunBlockTheme
-}
-
-type ThemeColor = Exclude<keyof TuiThemeCurrent, "thinkingOpacity">
-
-type SharedSyntaxTheme = TuiThemeCurrent & {
-  _hasSelectedListItemText: boolean
 }
 
 export const transparent = RGBA.fromValues(0, 0, 0, 0)
@@ -185,10 +176,6 @@ function splashShadow(indexed: RGBA[], base: RGBA, overlay: RGBA, value: number)
   return nearestIndexed(indexed, mixed)
 }
 
-export function resolveTheme(theme: ThemeFile, pick: "dark" | "light"): TuiThemeCurrent {
-  return toCurrentTheme(resolveThemeFile(theme, pick), pick)
-}
-
 function generateGrayScale(bg: RGBA, isDark: boolean, map: (rgba: RGBA) => RGBA): Record<number, RGBA> {
   const r = bg.r * 255
   const g = bg.g * 255
@@ -243,7 +230,7 @@ function generateMutedTextColor(bg: RGBA, isDark: boolean, map: (rgba: RGBA) => 
   return map(RGBA.fromInts(gray, gray, gray))
 }
 
-export function generateSystem(colors: TerminalColors, pick: "dark" | "light"): TuiThemeCurrent {
+export function generateSystem(colors: TerminalColors, pick: "dark" | "light") {
   const bg_snapshot = RGBA.fromHex(colors.defaultBackground ?? colors.palette[0]!)
   const fg_snapshot = RGBA.fromHex(colors.defaultForeground ?? colors.palette[7]!)
   const bg = RGBA.defaultBackground(bg_snapshot)
@@ -268,63 +255,72 @@ export function generateSystem(colors: TerminalColors, pick: "dark" | "light"): 
 
   const diff_alpha = isDark ? 0.22 : 0.14
   const diff_context_bg = grays[2]
-  const primary = ansi.cyan
-  const secondary = ansi.magenta
-
   return {
-      primary,
-      secondary,
-      accent: primary,
-      error: ansi.red,
-      warning: ansi.yellow,
-      success: ansi.green,
-      info: ansi.cyan,
+    hue: { accent: { 200: ansi.cyan, 800: ansi.cyan } },
+    categorical: [{ 200: ansi.magenta, 800: ansi.magenta }],
+    text: {
+      default: fg,
+      subdued: textMuted,
+      action: {
+        primary: { selected: ansi.cyan, focused: bg },
+        destructive: { default: bg },
+      },
+      feedback: {
+        error: { default: ansi.red },
+        warning: { default: ansi.yellow },
+        success: { default: ansi.green },
+        info: { default: ansi.cyan },
+      },
+    },
+    background: {
+      default: alpha(bg, 0),
+      surface: { offset: grays[2], overlay: grays[3] },
+      action: { primary: { focused: ansi.cyan } },
+    },
+    border: { default: grays[7], active: grays[8], subtle: grays[6] },
+    diff: {
+      text: { added: ansi.green, removed: ansi.red, context: grays[7], hunkHeader: grays[7] },
+      background: {
+        added: tint(bg_snapshot, ansi.green, diff_alpha),
+        removed: tint(bg_snapshot, ansi.red, diff_alpha),
+        context: diff_context_bg,
+      },
+      highlight: { added: ansi.green_bright, removed: ansi.red_bright },
+      lineNumber: {
+        text: textMuted,
+        background: {
+          added: tint(diff_context_bg, ansi.green, diff_alpha),
+          removed: tint(diff_context_bg, ansi.red, diff_alpha),
+        },
+      },
+    },
+    markdown: {
       text: fg,
-      textMuted,
-      selectedListItemText: bg,
-      background: alpha(bg, 0),
-      backgroundPanel: grays[2],
-      backgroundElement: grays[3],
-      backgroundMenu: grays[3],
-      borderSubtle: grays[6],
-      border: grays[7],
-      borderActive: grays[8],
-      diffAdded: ansi.green,
-      diffRemoved: ansi.red,
-      diffContext: grays[7],
-      diffHunkHeader: grays[7],
-      diffHighlightAdded: ansi.green_bright,
-      diffHighlightRemoved: ansi.red_bright,
-      diffAddedBg: tint(bg_snapshot, ansi.green, diff_alpha),
-      diffRemovedBg: tint(bg_snapshot, ansi.red, diff_alpha),
-      diffContextBg: diff_context_bg,
-      diffLineNumber: textMuted,
-      diffAddedLineNumberBg: tint(diff_context_bg, ansi.green, diff_alpha),
-      diffRemovedLineNumberBg: tint(diff_context_bg, ansi.red, diff_alpha),
-      markdownText: fg,
-      markdownHeading: fg,
-      markdownLink: ansi.blue,
-      markdownLinkText: ansi.cyan,
-      markdownCode: ansi.green,
-      markdownBlockQuote: ansi.yellow,
-      markdownEmph: ansi.yellow,
-      markdownStrong: fg,
-      markdownHorizontalRule: grays[7],
-      markdownListItem: ansi.blue,
-      markdownListEnumeration: ansi.cyan,
-      markdownImage: ansi.blue,
-      markdownImageText: ansi.cyan,
-      markdownCodeBlock: fg,
-      syntaxComment: textMuted,
-      syntaxKeyword: ansi.magenta,
-      syntaxFunction: ansi.blue,
-      syntaxVariable: fg,
-      syntaxString: ansi.green,
-      syntaxNumber: ansi.yellow,
-      syntaxType: ansi.cyan,
-      syntaxOperator: ansi.cyan,
-      syntaxPunctuation: fg,
-      thinkingOpacity: 0.6,
+      heading: fg,
+      link: ansi.blue,
+      linkText: ansi.cyan,
+      code: ansi.green,
+      blockQuote: ansi.yellow,
+      emphasis: ansi.yellow,
+      strong: fg,
+      horizontalRule: grays[7],
+      listItem: ansi.blue,
+      listEnumeration: ansi.cyan,
+      image: ansi.blue,
+      imageText: ansi.cyan,
+      codeBlock: fg,
+    },
+    syntax: {
+      comment: textMuted,
+      keyword: ansi.magenta,
+      function: ansi.blue,
+      variable: fg,
+      string: ansi.green,
+      number: ansi.yellow,
+      type: ansi.cyan,
+      operator: ansi.cyan,
+      punctuation: fg,
+    },
   }
 }
 
@@ -336,40 +332,109 @@ function quantizeColor(indexed: RGBA[], rgba: RGBA): RGBA {
   return nearestIndexed(indexed, rgba)
 }
 
-function quantizeTheme(theme: TuiThemeCurrent, indexed: RGBA[]): TuiThemeCurrent {
-  const resolved = Object.fromEntries(
-    Object.entries(theme)
-      .filter(([key]) => key !== "thinkingOpacity")
-      .map(([key, value]) => [key, quantizeColor(indexed, value as RGBA)]),
-  ) as Partial<Record<ThemeColor, RGBA>>
+type MiniPalette = ReturnType<typeof generateSystem>
 
+function quantizeTheme(theme: MiniPalette, indexed: RGBA[]): MiniPalette {
+  const q = (color: RGBA) => quantizeColor(indexed, color)
   return {
-    ...(resolved as Record<ThemeColor, RGBA>),
-    thinkingOpacity: theme.thinkingOpacity,
+    hue: { accent: { 200: q(theme.hue.accent[200]), 800: q(theme.hue.accent[800]) } },
+    categorical: theme.categorical.map((scale) => ({ 200: q(scale[200]), 800: q(scale[800]) })),
+    text: {
+      default: q(theme.text.default),
+      subdued: q(theme.text.subdued),
+      action: {
+        primary: { selected: q(theme.text.action.primary.selected), focused: q(theme.text.action.primary.focused) },
+        destructive: { default: q(theme.text.action.destructive.default) },
+      },
+      feedback: {
+        error: { default: q(theme.text.feedback.error.default) },
+        warning: { default: q(theme.text.feedback.warning.default) },
+        success: { default: q(theme.text.feedback.success.default) },
+        info: { default: q(theme.text.feedback.info.default) },
+      },
+    },
+    background: {
+      default: q(theme.background.default),
+      surface: { offset: q(theme.background.surface.offset), overlay: q(theme.background.surface.overlay) },
+      action: { primary: { focused: q(theme.background.action.primary.focused) } },
+    },
+    border: {
+      default: q(theme.border.default),
+      active: q(theme.border.active),
+      subtle: q(theme.border.subtle),
+    },
+    diff: {
+      text: {
+        added: q(theme.diff.text.added),
+        removed: q(theme.diff.text.removed),
+        context: q(theme.diff.text.context),
+        hunkHeader: q(theme.diff.text.hunkHeader),
+      },
+      background: {
+        added: q(theme.diff.background.added),
+        removed: q(theme.diff.background.removed),
+        context: q(theme.diff.background.context),
+      },
+      highlight: { added: q(theme.diff.highlight.added), removed: q(theme.diff.highlight.removed) },
+      lineNumber: {
+        text: q(theme.diff.lineNumber.text),
+        background: {
+          added: q(theme.diff.lineNumber.background.added),
+          removed: q(theme.diff.lineNumber.background.removed),
+        },
+      },
+    },
+    markdown: {
+      text: q(theme.markdown.text),
+      heading: q(theme.markdown.heading),
+      link: q(theme.markdown.link),
+      linkText: q(theme.markdown.linkText),
+      code: q(theme.markdown.code),
+      blockQuote: q(theme.markdown.blockQuote),
+      emphasis: q(theme.markdown.emphasis),
+      strong: q(theme.markdown.strong),
+      horizontalRule: q(theme.markdown.horizontalRule),
+      listItem: q(theme.markdown.listItem),
+      listEnumeration: q(theme.markdown.listEnumeration),
+      image: q(theme.markdown.image),
+      imageText: q(theme.markdown.imageText),
+      codeBlock: q(theme.markdown.codeBlock),
+    },
+    syntax: {
+      comment: q(theme.syntax.comment),
+      keyword: q(theme.syntax.keyword),
+      function: q(theme.syntax.function),
+      variable: q(theme.syntax.variable),
+      string: q(theme.syntax.string),
+      number: q(theme.syntax.number),
+      type: q(theme.syntax.type),
+      operator: q(theme.syntax.operator),
+      punctuation: q(theme.syntax.punctuation),
+    },
   }
 }
 
-function splashTheme(theme: TuiThemeCurrent, indexed: RGBA[]): RunSplashTheme {
-  const left = nearestIndexed(indexed, theme.textMuted)
-  const right = nearestIndexed(indexed, theme.text)
+function splashTheme(theme: MiniPalette, indexed: RGBA[]): RunSplashTheme {
+  const left = nearestIndexed(indexed, theme.text.subdued)
+  const right = nearestIndexed(indexed, theme.text.default)
   return {
     left,
     right,
-    leftShadow: splashShadow(indexed, theme.background, left, 0.14),
+    leftShadow: splashShadow(indexed, theme.background.default, left, 0.14),
   }
 }
 
 function map(
-  footerTheme: TuiThemeCurrent,
-  scrollbackTheme: TuiThemeCurrent,
+  footerTheme: MiniPalette,
+  scrollbackTheme: MiniPalette,
   splash: RunSplashTheme,
   syntax?: SyntaxStyle,
 ): RunTheme {
-  const footerBackground = alpha(footerTheme.background, 1)
+  const footerBackground = alpha(footerTheme.background.default, 1)
   const footerMode = colorMode(footerBackground)
-  const shade = fade(footerTheme.backgroundMenu, footerTheme.background, 0.12, 0.56, 0.72)
-  const surface = fade(footerTheme.backgroundMenu, footerTheme.background, 0.18, 0.76, 0.9)
-  const line = fade(footerTheme.backgroundMenu, footerTheme.background, 0.24, 0.9, 0.98)
+  const shade = fade(footerTheme.background.surface.overlay, footerTheme.background.default, 0.12, 0.56, 0.72)
+  const surface = fade(footerTheme.background.surface.overlay, footerTheme.background.default, 0.18, 0.76, 0.9)
+  const line = fade(footerTheme.background.surface.overlay, footerTheme.background.default, 0.24, 0.9, 0.98)
   const statusBase = tint(footerBackground, rgba("#000000"), footerMode === "dark" ? 0.12 : 0.06)
   const statusAccentBase =
     footerMode === "dark" ? tint(footerBackground, rgba("#ffffff"), 0.06) : tint(statusBase, rgba("#000000"), 0.04)
@@ -379,58 +444,58 @@ function map(
   const statusAccent = collapsedStatus ? tint(status, rgba("#ffffff"), 0.06) : statusAccentBase
 
   return {
-    background: footerTheme.background,
+    background: footerTheme.background.default,
     footer: {
-      highlight: footerTheme.primary,
-      selected: footerTheme.backgroundElement,
-      selectedText: footerTheme.selectedListItemText,
-      warning: footerTheme.warning,
-      error: footerTheme.error,
-      muted: footerTheme.textMuted,
-      text: footerTheme.text,
+      highlight: footerTheme.text.action.primary.selected,
+      selected: footerTheme.background.surface.overlay,
+      selectedText: footerTheme.text.action.primary.focused,
+      warning: footerTheme.text.feedback.warning.default,
+      error: footerTheme.text.feedback.error.default,
+      muted: footerTheme.text.subdued,
+      text: footerTheme.text.default,
       status,
       statusAccent,
       shade,
       surface,
-      pane: footerTheme.backgroundMenu,
-      border: footerTheme.border,
+      pane: footerTheme.background.surface.overlay,
+      border: footerTheme.border.default,
       line,
     },
     entry: {
       system: {
-        body: scrollbackTheme.textMuted,
+        body: scrollbackTheme.text.subdued,
       },
       user: {
-        body: scrollbackTheme.primary,
+        body: scrollbackTheme.text.action.primary.selected,
       },
       assistant: {
-        body: scrollbackTheme.text,
+        body: scrollbackTheme.text.default,
       },
       reasoning: {
-        body: scrollbackTheme.textMuted,
+        body: scrollbackTheme.text.subdued,
       },
       tool: {
-        body: scrollbackTheme.text,
-        start: scrollbackTheme.textMuted,
+        body: scrollbackTheme.text.default,
+        start: scrollbackTheme.text.subdued,
       },
       error: {
-        body: scrollbackTheme.error,
+        body: scrollbackTheme.text.feedback.error.default,
       },
     },
     splash,
     block: {
-      text: scrollbackTheme.text,
-      muted: scrollbackTheme.textMuted,
+      text: scrollbackTheme.text.default,
+      muted: scrollbackTheme.text.subdued,
       syntax,
-      diffRemoved: scrollbackTheme.diffRemoved,
+      diffRemoved: scrollbackTheme.diff.text.removed,
       diffAddedBg: transparent,
       diffRemovedBg: transparent,
       diffContextBg: transparent,
-      diffHighlightAdded: scrollbackTheme.diffHighlightAdded,
-      diffHighlightRemoved: scrollbackTheme.diffHighlightRemoved,
-      diffLineNumber: scrollbackTheme.diffLineNumber,
-      diffAddedLineNumberBg: scrollbackTheme.diffAddedLineNumberBg,
-      diffRemovedLineNumberBg: scrollbackTheme.diffRemovedLineNumberBg,
+      diffHighlightAdded: scrollbackTheme.diff.highlight.added,
+      diffHighlightRemoved: scrollbackTheme.diff.highlight.removed,
+      diffLineNumber: scrollbackTheme.diff.lineNumber.text,
+      diffAddedLineNumberBg: scrollbackTheme.diff.lineNumber.background.added,
+      diffRemovedLineNumberBg: scrollbackTheme.diff.lineNumber.background.removed,
     },
   }
 }
@@ -518,15 +583,15 @@ export async function resolveRunTheme(renderer: CliRenderer, config?: RunTuiConf
       config?.mode === "dark" || config?.mode === "light"
         ? config.mode
         : (terminalMode(colors) ?? renderer.themeMode ?? colorMode(RGBA.fromHex(bg)))
-    const { generateSyntax } = await import("../theme")
     const indexed = indexedPalette(colors, 256)
     const footerTheme = generateSystem(colors, pick)
     const scrollbackTheme = quantizeTheme(footerTheme, indexed)
-    const syntaxTheme: SharedSyntaxTheme = {
-      ...scrollbackTheme,
-      _hasSelectedListItemText: true,
-    }
-    return map(footerTheme, scrollbackTheme, splashTheme(scrollbackTheme, indexed), generateSyntax(syntaxTheme))
+    return map(
+      footerTheme,
+      scrollbackTheme,
+      splashTheme(scrollbackTheme, indexed),
+      generateSyntax(scrollbackTheme, pick),
+    )
   } catch {
     return RUN_THEME_FALLBACK
   }

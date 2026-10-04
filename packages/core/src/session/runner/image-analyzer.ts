@@ -178,35 +178,6 @@ export const createAnalysisMemo = () => {
   }
 }
 
-const resolveVisionModel = Effect.fn("ImageAnalyzer.resolveVisionModel")(function* () {
-  const config = yield* Config.Service
-  const catalog = yield* Catalog.Service
-  const integrations = yield* Integration.Service
-  const entries = yield* config.entries()
-  const info = Config.latest(entries, "image_analyzer")
-  if (!info || info.enabled === false) return undefined
-  const selection = ConfigImageAnalyzer.resolveSelection(info)
-  if (!selection) return undefined
-  const modelInfo = yield* catalog.model.get(selection.providerID, selection.model).pipe(
-    Effect.orElseSucceed(() => undefined as unknown as ModelV2.Info | undefined),
-  )
-  if (!modelInfo) return undefined
-  const provider = yield* catalog.provider.get(modelInfo.providerID).pipe(
-    Effect.orElseSucceed(() => undefined as unknown as import("../../provider").ProviderV2.Info | undefined),
-  )
-  const connection = yield* integrations.connection
-    .active(provider?.integrationID ?? Integration.ID.make(modelInfo.providerID))
-    .pipe(Effect.orElseSucceed(() => undefined as unknown as IntegrationConnection.Info | undefined))
-  const credential = connection
-    ? yield* integrations.connection.resolve(connection).pipe(Effect.orElseSucceed(() => undefined))
-    : undefined
-  const nested = yield* SessionRunnerModel.fromCatalogModel(modelInfo, credential).pipe(
-    Effect.orElseSucceed(() => undefined as unknown as import("@ycoding-ai/ai").Model),
-  )
-  if (!nested) return undefined
-  return { model: nested, ref: selection, info, modelInfo }
-})
-
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {

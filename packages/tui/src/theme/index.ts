@@ -1,12 +1,8 @@
 import { Schema } from "effect"
 import { DEFAULT_THEMES } from "./builtins"
-import { generateSyntax, selectedForeground, type Theme } from "./current"
-import { toCurrentTheme } from "./resolve"
 import { ThemeFile, type ThemeFile as ThemeFileType } from "./v2"
-import { resolveThemeFile } from "./v2/resolve"
 
 export { DEFAULT_THEMES } from "./builtins"
-export { generateSyntax, selectedForeground, type Theme } from "./current"
 
 const pluginThemes: Record<string, ThemeFileType> = {}
 let customThemes: Record<string, ThemeFileType> = {}
@@ -80,8 +76,4 @@ export function upsertTheme(name: string, theme: unknown) {
   }
   syncThemes()
   return true
-}
-
-export function resolveTheme(theme: ThemeFileType, mode: "dark" | "light", name = "theme"): Theme {
-  return toCurrentTheme(resolveThemeFile(theme, mode, name), mode)
 }

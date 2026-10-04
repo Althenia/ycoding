@@ -86,6 +86,7 @@ export interface DialogSelectOption<T = any> {
   state?: GlyphName
   disabled?: boolean
   bg?: RGBA
+  fg?: RGBA
   gutter?: () => JSX.Element
   margin?: JSX.Element
   onSelect?: (ctx: DialogContext) => void
@@ -549,18 +550,14 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
         onMouseUp={() => trigger(item)}
       >
         <text
-          fg={
-            disabled()
-              ? themeV2.text.subdued
-              : active()
-                ? themeV2.text.action.primary.focused
-                : themeV2.text.default
-          }
+          fg={disabled() ? themeV2.text.subdued : active() ? themeV2.text.action.primary.focused : themeV2.text.default}
           attributes={active() ? TextAttributes.BOLD : undefined}
         >
           {item.label}
         </text>
-        <text fg={disabled() ? themeV2.text.subdued : active() ? themeV2.text.action.primary.focused : themeV2.text.subdued}>
+        <text
+          fg={disabled() ? themeV2.text.subdued : active() ? themeV2.text.action.primary.focused : themeV2.text.subdued}
+        >
           {" "}
           {item.title}
         </text>
@@ -719,6 +716,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                                   truncateTitle={option.truncateTitle}
                                   description={option.description !== category ? option.description : undefined}
                                   active={active()}
+                                  fg={option.fg}
                                   current={current()}
                                   muted={actionFocused()}
                                   gutter={option.gutter}
@@ -779,6 +777,7 @@ function Option(props: {
   titleView?: JSX.Element
   description?: string
   active?: boolean
+  fg?: RGBA
   current?: boolean
   muted?: boolean
   footer?: JSX.Element | string
@@ -791,13 +790,13 @@ function Option(props: {
   const { themeV2 } = useTheme().contextual("elevated")
   const stateGlyph = createMemo(() => (props.state ? getGlyph(props.state) : undefined))
   const text = createMemo(() => {
-    if (props.active && !props.muted) return themeV2.text.action.primary.focused
+    if (props.active && !props.muted) return props.fg ?? themeV2.text.action.primary.focused
     if (props.muted && (props.active || props.current)) return themeV2.text.subdued
     if (props.current) return themeV2.text.feedback.info.default
     return themeV2.text.default
   })
   const stateColor = createMemo(() => {
-    if (props.active && !props.muted) return themeV2.text.action.primary.focused
+    if (props.active && !props.muted) return props.fg ?? themeV2.text.action.primary.focused
     return glyphColor(themeV2, stateGlyph())
   })
 
@@ -836,7 +835,12 @@ function Option(props: {
               ? Locale.truncateLeft(props.title, props.titleWidth ?? 61)
               : Locale.truncate(props.title, props.titleWidth ?? 61))}
         <Show when={props.description}>
-          <span style={{ fg: props.active && !props.muted ? themeV2.text.action.primary.focused : themeV2.text.subdued }}>
+          <span
+            style={{
+              fg:
+                props.active && !props.muted ? (props.fg ?? themeV2.text.action.primary.focused) : themeV2.text.subdued,
+            }}
+          >
             {" "}
             {props.description}
           </span>
@@ -845,7 +849,7 @@ function Option(props: {
       <Show when={props.footer}>
         <box flexShrink={0}>
           <text
-            fg={props.active && !props.muted ? themeV2.text.action.primary.focused : themeV2.text.subdued}
+            fg={props.active && !props.muted ? (props.fg ?? themeV2.text.action.primary.focused) : themeV2.text.subdued}
           >
             {props.footer}
           </text>

@@ -85,7 +85,7 @@ export function Autocomplete(props: {
   const data = useData()
   const keymap = Keymap.use()
   const keymapCommands = Keymap.useCommands()
-  const { theme, themeV2 } = useTheme()
+  const { themeV2 } = useTheme()
   const selection = autocompleteSelectionColors(themeV2)
   const dimensions = useTerminalDimensions()
   const frecency = useFrecency()
@@ -190,7 +190,8 @@ export function Autocomplete(props: {
     const extmarkStart = store.index
     const extmarkEnd = extmarkStart + stringWidth(virtualText)
 
-    const styleId = part.type === "file" ? props.fileStyleId : part.type === "agent" ? props.agentStyleId : props.skillStyleId
+    const styleId =
+      part.type === "file" ? props.fileStyleId : part.type === "agent" ? props.agentStyleId : props.skillStyleId
 
     const extmarkId = input.extmarks.create({
       start: extmarkStart,
@@ -438,7 +439,10 @@ export function Autocomplete(props: {
         display: "$" + skill.id,
         value: `${skill.id} ${skill.name} ${skill.description ?? ""}`,
         description: skill.description ?? skill.name,
-        marker: skill.conflicts && (skill.conflicts.skills.length > 0 || skill.conflicts.instructions.length > 0) ? "conflict" : undefined,
+        marker:
+          skill.conflicts && (skill.conflicts.skills.length > 0 || skill.conflicts.instructions.length > 0)
+            ? "conflict"
+            : undefined,
         resourceDisplay: skill.name,
         resourceValue: skill.name,
         onSelect: () => {
@@ -817,137 +821,166 @@ export function Autocomplete(props: {
 
   return (
     <Show when={hasOpened()}>
-    <box
-      visible={store.visible !== false}
-      position="absolute"
-      top={position().y - height() - chromeHeight() - composerGap()}
-      left={position().x}
-      width={popupWidth()}
-      zIndex={100}
-      {...SplitBorder}
-      backgroundColor={store.visible === "/" ? themeV2.background.surface.offset : undefined}
-      borderColor={store.visible === "/" ? themeV2.border.default : theme.border}
-      flexDirection="column"
-    >
-      <Show when={store.visible === "/"}>
-        <>
-          <box
-            flexDirection="row"
-            justifyContent="space-between"
-            paddingLeft={textLeftInset()}
-            paddingRight={textRightInset()}
-            height={1}
-          >
-            <text fg={themeV2.text.label}>/ COMMANDS</text>
-            <text fg={themeV2.text.label} flexShrink={0}>{`${options().length} of ${commands().length}`}</text>
-          </box>
-          <text fg={themeV2.border.default}>{"─".repeat(Math.max(1, popupWidth() - 2))}</text>
-        </>
-      </Show>
       <box
-        backgroundColor={store.visible === "/" ? themeV2.background.surface.offset : theme.backgroundMenu}
-        height={height()}
-        onMouseScroll={(event) => {
-          pointer = { x: event.x, y: event.y }
-          if (event.scroll?.direction === "up") move(-1)
-          if (event.scroll?.direction === "down") move(1)
-        }}
+        visible={store.visible !== false}
+        position="absolute"
+        top={position().y - height() - chromeHeight() - composerGap()}
+        left={position().x}
+        width={popupWidth()}
+        zIndex={100}
+        {...SplitBorder}
+        backgroundColor={store.visible === "/" ? themeV2.background.surface.offset : undefined}
+        borderColor={themeV2.border.default}
+        flexDirection="column"
       >
-        <For
-          each={renderWindow().options}
-          fallback={
-            <box paddingLeft={1} paddingRight={1}>
-              <text fg={emptyError() ? theme.error : theme.textMuted}>{emptyMessage()}</text>
-            </box>
-          }
-        >
-          {(option, index) => (
+        <Show when={store.visible === "/"}>
+          <>
             <box
-              backgroundColor={
-                store.visible === "/" ? themeV2.background.surface.offset : theme.backgroundMenu
-              }
+              flexDirection="row"
+              justifyContent="space-between"
+              paddingLeft={textLeftInset()}
+              paddingRight={textRightInset()}
               height={1}
-              flexDirection="column"
-              onMouseMove={(event) => hover(renderWindow().start + index(), event)}
-              onMouseDown={() => {
-                moveTo(renderWindow().start + index())
-              }}
-              onMouseUp={() => select()}
             >
+              <text fg={themeV2.text.label}>/ COMMANDS</text>
+              <text fg={themeV2.text.label} flexShrink={0}>{`${options().length} of ${commands().length}`}</text>
+            </box>
+            <text fg={themeV2.border.default}>{"─".repeat(Math.max(1, popupWidth() - 2))}</text>
+          </>
+        </Show>
+        <box
+          backgroundColor={
+            store.visible === "/" ? themeV2.background.surface.offset : themeV2.background.surface.overlay
+          }
+          height={height()}
+          onMouseScroll={(event) => {
+            pointer = { x: event.x, y: event.y }
+            if (event.scroll?.direction === "up") move(-1)
+            if (event.scroll?.direction === "down") move(1)
+          }}
+        >
+          <For
+            each={renderWindow().options}
+            fallback={
+              <box paddingLeft={1} paddingRight={1}>
+                <text fg={emptyError() ? themeV2.text.feedback.error.default : themeV2.text.subdued}>
+                  {emptyMessage()}
+                </text>
+              </box>
+            }
+          >
+            {(option, index) => (
               <box
-                height={1}
-                paddingLeft={textLeftInset()}
-                paddingRight={textRightInset()}
                 backgroundColor={
-                  renderWindow().start + index() === store.selected
-                    ? selection.fill
-                    : store.visible === "/"
-                      ? themeV2.background.surface.offset
-                      : theme.backgroundMenu
+                  store.visible === "/" ? themeV2.background.surface.offset : themeV2.background.surface.overlay
                 }
-                flexDirection="row"
+                height={1}
+                flexDirection="column"
+                onMouseMove={(event) => hover(renderWindow().start + index(), event)}
+                onMouseDown={() => {
+                  moveTo(renderWindow().start + index())
+                }}
+                onMouseUp={() => select()}
               >
-                <box width={store.visible === "/" ? commandDescriptionWidth() : undefined} flexShrink={0} overflow="hidden">
-                  <text fg={renderWindow().start + index() === store.selected ? selection.foreground : themeV2.text.default} flexShrink={0}>
-                    <AutocompleteOptionText
-                      text={option.display}
-                      matches={
-                        store.visible === "/" && option.display.toLowerCase().startsWith(`/${search().toLowerCase()}`)
-                          ? Array.from({ length: search().length + 1 }, (_, match) => match)
-                          : option.matches
-                      }
-                      selected={renderWindow().start + index() === store.selected}
-                      foreground={renderWindow().start + index() === store.selected ? selection.foreground : themeV2.text.default}
-                      background={
-                        renderWindow().start + index() === store.selected
-                          ? selection.fill
-                          : store.visible === "/"
-                            ? themeV2.background.surface.offset
-                            : theme.backgroundMenu
-                      }
-                      accent={themeV2.text.feedback.success.default}
-                    />
-                  </text>
-                </box>
-                <Show when={option.marker}>
-                  <text fg={renderWindow().start + index() === store.selected ? selection.foreground : themeV2.text.feedback.warning.default} flexShrink={0}>
-                    {" · " + option.marker}
-                  </text>
-                </Show>
-                <Show when={option.description}>
-                  <text
-                    fg={renderWindow().start + index() === store.selected ? selection.foreground : themeV2.text.subdued}
-                    wrapMode="none"
+                <box
+                  height={1}
+                  paddingLeft={textLeftInset()}
+                  paddingRight={textRightInset()}
+                  backgroundColor={
+                    renderWindow().start + index() === store.selected
+                      ? selection.fill
+                      : store.visible === "/"
+                        ? themeV2.background.surface.offset
+                        : themeV2.background.surface.overlay
+                  }
+                  flexDirection="row"
+                >
+                  <box
+                    width={store.visible === "/" ? commandDescriptionWidth() : undefined}
+                    flexShrink={0}
+                    overflow="hidden"
                   >
-                    <span
-                      style={{
-                        fg: renderWindow().start + index() === store.selected ? selection.foreground : themeV2.text.subdued,
-                        bg:
+                    <text
+                      fg={
+                        renderWindow().start + index() === store.selected ? selection.foreground : themeV2.text.default
+                      }
+                      flexShrink={0}
+                    >
+                      <AutocompleteOptionText
+                        text={option.display}
+                        matches={
+                          store.visible === "/" && option.display.toLowerCase().startsWith(`/${search().toLowerCase()}`)
+                            ? Array.from({ length: search().length + 1 }, (_, match) => match)
+                            : option.matches
+                        }
+                        selected={renderWindow().start + index() === store.selected}
+                        foreground={
+                          renderWindow().start + index() === store.selected
+                            ? selection.foreground
+                            : themeV2.text.default
+                        }
+                        background={
                           renderWindow().start + index() === store.selected
                             ? selection.fill
                             : store.visible === "/"
                               ? themeV2.background.surface.offset
-                              : theme.backgroundMenu,
-                      }}
+                              : themeV2.background.surface.overlay
+                        }
+                        accent={themeV2.text.feedback.success.default}
+                      />
+                    </text>
+                  </box>
+                  <Show when={option.marker}>
+                    <text
+                      fg={
+                        renderWindow().start + index() === store.selected
+                          ? selection.foreground
+                          : themeV2.text.feedback.warning.default
+                      }
+                      flexShrink={0}
                     >
-                      {" " + option.description?.trimStart()}
-                    </span>
-                  </text>
-                </Show>
+                      {" · " + option.marker}
+                    </text>
+                  </Show>
+                  <Show when={option.description}>
+                    <text
+                      fg={
+                        renderWindow().start + index() === store.selected ? selection.foreground : themeV2.text.subdued
+                      }
+                      wrapMode="none"
+                    >
+                      <span
+                        style={{
+                          fg:
+                            renderWindow().start + index() === store.selected
+                              ? selection.foreground
+                              : themeV2.text.subdued,
+                          bg:
+                            renderWindow().start + index() === store.selected
+                              ? selection.fill
+                              : store.visible === "/"
+                                ? themeV2.background.surface.offset
+                                : themeV2.background.surface.overlay,
+                        }}
+                      >
+                        {" " + option.description?.trimStart()}
+                      </span>
+                    </text>
+                  </Show>
+                </box>
               </box>
+            )}
+          </For>
+        </box>
+        <Show when={store.visible === "/"}>
+          <>
+            <text fg={themeV2.border.default}>{"─".repeat(Math.max(1, popupWidth() - 2))}</text>
+            <box paddingLeft={textLeftInset()} paddingRight={textRightInset()} height={1}>
+              <text fg={themeV2.text.subdued}>↑↓ move Enter accept Tab complete Esc close</text>
             </box>
-          )}
-        </For>
+          </>
+        </Show>
       </box>
-      <Show when={store.visible === "/"}>
-        <>
-          <text fg={themeV2.border.default}>{"─".repeat(Math.max(1, popupWidth() - 2))}</text>
-          <box paddingLeft={textLeftInset()} paddingRight={textRightInset()} height={1}>
-            <text fg={themeV2.text.subdued}>↑↓ move    Enter accept    Tab complete    Esc close</text>
-          </box>
-        </>
-      </Show>
-    </box>
     </Show>
   )
 }
@@ -974,7 +1007,13 @@ function AutocompleteOptionText(props: {
   return (
     <>
       {runs.map((run) => (
-        <span style={{ fg: props.selected || !run.matched ? props.foreground : props.accent, bg: props.background, bold: run.matched }}>
+        <span
+          style={{
+            fg: props.selected || !run.matched ? props.foreground : props.accent,
+            bg: props.background,
+            bold: run.matched,
+          }}
+        >
           {run.text}
         </span>
       ))}

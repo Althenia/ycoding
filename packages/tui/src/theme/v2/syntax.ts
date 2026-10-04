@@ -1,111 +1,115 @@
-import { RGBA, SyntaxStyle } from "@opentui/core"
-import type { TuiThemeCurrent } from "../plugin/host-api"
+import { SyntaxStyle } from "@opentui/core"
+import { readableForeground } from "./component"
+import type { ResolvedThemeView } from "./types"
 
-export type Theme = TuiThemeCurrent & { readonly _hasSelectedListItemText: boolean }
-
-export function selectedForeground(theme: Theme, bg?: RGBA): RGBA {
-  if (theme._hasSelectedListItemText) return theme.selectedListItemText
-
-  if (theme.background.a === 0) {
-    const targetColor = bg ?? theme.primary
-    const { r, g, b } = targetColor
-    const luminance = 0.299 * r + 0.587 * g + 0.114 * b
-    return luminance > 0.5 ? RGBA.fromInts(0, 0, 0) : RGBA.fromInts(255, 255, 255)
+export type SyntaxTheme = Pick<ResolvedThemeView, "syntax" | "markdown"> & {
+  hue: { accent: Pick<ResolvedThemeView["hue"]["accent"], 200 | 800> }
+  categorical: readonly Pick<ResolvedThemeView["hue"]["accent"], 200 | 800>[]
+  text: {
+    default: ResolvedThemeView["text"]["default"]
+    subdued: ResolvedThemeView["text"]["subdued"]
+    action: { primary: { focused: ResolvedThemeView["text"]["default"] } }
+    feedback: Record<"error" | "warning" | "success" | "info", { default: ResolvedThemeView["text"]["default"] }>
   }
-
-  return theme.background
+  background: { default: ResolvedThemeView["background"]["default"] }
+  diff: {
+    text: Pick<ResolvedThemeView["diff"]["text"], "added" | "removed" | "context">
+    background: ResolvedThemeView["diff"]["background"]
+  }
 }
 
-export function generateSyntax(theme: Theme) {
-  return SyntaxStyle.fromTheme(getSyntaxRules(theme))
+export function generateSyntax(theme: SyntaxTheme, mode: "dark" | "light") {
+  return SyntaxStyle.fromTheme(getSyntaxRules(theme, mode))
 }
 
-function getSyntaxRules(theme: Theme) {
+function getSyntaxRules(theme: SyntaxTheme, mode: "dark" | "light") {
+  const accent = theme.hue.accent[mode === "light" ? 800 : 200]
+  const warning = theme.text.feedback.warning.default
   return [
     {
       scope: ["default"],
       style: {
-        foreground: theme.text,
+        foreground: theme.text.default,
       },
     },
     {
       scope: ["prompt"],
       style: {
-        foreground: theme.accent,
+        foreground: accent,
       },
     },
     {
       scope: ["extmark.file"],
       style: {
-        foreground: theme.warning,
+        foreground: warning,
         bold: true,
       },
     },
     {
       scope: ["extmark.agent"],
       style: {
-        foreground: theme.secondary,
+        foreground: theme.categorical[0][mode === "light" ? 800 : 200],
         bold: true,
       },
     },
     {
       scope: ["extmark.skill"],
       style: {
-        foreground: theme.accent,
+        foreground: accent,
         bold: true,
       },
     },
     {
       scope: ["extmark.paste"],
       style: {
-        foreground: selectedForeground(theme, theme.warning),
-        background: theme.warning,
+        foreground: readableForeground(theme.text.action.primary.focused, warning),
+        background: warning,
         bold: true,
       },
     },
     {
       scope: ["comment"],
       style: {
-        foreground: theme.syntaxComment,
+        foreground: theme.syntax.comment,
         italic: true,
       },
     },
     {
       scope: ["comment.documentation"],
       style: {
-        foreground: theme.syntaxComment,
+        foreground: theme.syntax.comment,
         italic: true,
       },
     },
     {
       scope: ["string", "symbol"],
       style: {
-        foreground: theme.syntaxString,
+        foreground: theme.syntax.string,
       },
     },
     {
       scope: ["number", "boolean"],
       style: {
-        foreground: theme.syntaxNumber,
+        foreground: theme.syntax.number,
       },
     },
     {
       scope: ["character.special"],
       style: {
-        foreground: theme.syntaxString,
+        foreground: theme.syntax.string,
       },
     },
     {
       scope: ["keyword.return", "keyword.conditional", "keyword.repeat", "keyword.coroutine"],
       style: {
-        foreground: theme.syntaxKeyword,
+        foreground: theme.syntax.keyword,
         italic: true,
       },
     },
     {
       scope: ["keyword.type"],
       style: {
-        foreground: theme.syntaxType,
+        foreground: theme.syntax.type,
         bold: true,
         italic: true,
       },
@@ -113,124 +117,124 @@ function getSyntaxRules(theme: Theme) {
     {
       scope: ["keyword.function", "function.method"],
       style: {
-        foreground: theme.syntaxFunction,
+        foreground: theme.syntax.function,
       },
     },
     {
       scope: ["keyword"],
       style: {
-        foreground: theme.syntaxKeyword,
+        foreground: theme.syntax.keyword,
         italic: true,
       },
     },
     {
       scope: ["keyword.import"],
       style: {
-        foreground: theme.syntaxKeyword,
+        foreground: theme.syntax.keyword,
       },
     },
     {
       scope: ["operator", "keyword.operator", "punctuation.delimiter"],
       style: {
-        foreground: theme.syntaxOperator,
+        foreground: theme.syntax.operator,
       },
     },
     {
       scope: ["keyword.conditional.ternary"],
       style: {
-        foreground: theme.syntaxOperator,
+        foreground: theme.syntax.operator,
       },
     },
     {
       scope: ["variable", "variable.parameter", "function.method.call", "function.call"],
       style: {
-        foreground: theme.syntaxVariable,
+        foreground: theme.syntax.variable,
       },
     },
     {
       scope: ["variable.member", "function", "constructor"],
       style: {
-        foreground: theme.syntaxFunction,
+        foreground: theme.syntax.function,
       },
     },
     {
       scope: ["type", "module"],
       style: {
-        foreground: theme.syntaxType,
+        foreground: theme.syntax.type,
       },
     },
     {
       scope: ["constant"],
       style: {
-        foreground: theme.syntaxNumber,
+        foreground: theme.syntax.number,
       },
     },
     {
       scope: ["property"],
       style: {
-        foreground: theme.syntaxVariable,
+        foreground: theme.syntax.variable,
       },
     },
     {
       scope: ["class"],
       style: {
-        foreground: theme.syntaxType,
+        foreground: theme.syntax.type,
       },
     },
     {
       scope: ["parameter"],
       style: {
-        foreground: theme.syntaxVariable,
+        foreground: theme.syntax.variable,
       },
     },
     {
       scope: ["punctuation", "punctuation.bracket"],
       style: {
-        foreground: theme.syntaxPunctuation,
+        foreground: theme.syntax.punctuation,
       },
     },
     {
       scope: ["variable.builtin", "type.builtin", "function.builtin", "module.builtin", "constant.builtin"],
       style: {
-        foreground: theme.error,
+        foreground: theme.text.feedback.error.default,
       },
     },
     {
       scope: ["variable.super"],
       style: {
-        foreground: theme.error,
+        foreground: theme.text.feedback.error.default,
       },
     },
     {
       scope: ["string.escape", "string.regexp"],
       style: {
-        foreground: theme.syntaxKeyword,
+        foreground: theme.syntax.keyword,
       },
     },
     {
       scope: ["keyword.directive"],
       style: {
-        foreground: theme.syntaxKeyword,
+        foreground: theme.syntax.keyword,
         italic: true,
       },
     },
     {
       scope: ["punctuation.special"],
       style: {
-        foreground: theme.syntaxOperator,
+        foreground: theme.syntax.operator,
       },
     },
     {
       scope: ["keyword.modifier"],
       style: {
-        foreground: theme.syntaxKeyword,
+        foreground: theme.syntax.keyword,
         italic: true,
       },
     },
     {
       scope: ["keyword.exception"],
       style: {
-        foreground: theme.syntaxKeyword,
+        foreground: theme.syntax.keyword,
         italic: true,
       },
     },
@@ -238,14 +242,14 @@ function getSyntaxRules(theme: Theme) {
     {
       scope: ["markup.heading"],
       style: {
-        foreground: theme.markdownHeading,
+        foreground: theme.markdown.heading,
         bold: true,
       },
     },
     {
       scope: ["markup.heading.1"],
       style: {
-        foreground: theme.markdownHeading,
+        foreground: theme.markdown.heading,
         bold: true,
         underline: true,
       },
@@ -253,135 +257,135 @@ function getSyntaxRules(theme: Theme) {
     {
       scope: ["markup.heading.2"],
       style: {
-        foreground: theme.markdownHeading,
+        foreground: theme.markdown.heading,
         bold: true,
       },
     },
     {
       scope: ["markup.heading.3"],
       style: {
-        foreground: theme.markdownHeading,
+        foreground: theme.markdown.heading,
         bold: true,
       },
     },
     {
       scope: ["markup.heading.4"],
       style: {
-        foreground: theme.markdownHeading,
+        foreground: theme.markdown.heading,
         bold: true,
       },
     },
     {
       scope: ["markup.heading.5"],
       style: {
-        foreground: theme.markdownHeading,
+        foreground: theme.markdown.heading,
         bold: true,
       },
     },
     {
       scope: ["markup.heading.6"],
       style: {
-        foreground: theme.markdownHeading,
+        foreground: theme.markdown.heading,
         bold: true,
       },
     },
     {
       scope: ["markup.bold", "markup.strong"],
       style: {
-        foreground: theme.markdownStrong,
+        foreground: theme.markdown.strong,
         bold: true,
       },
     },
     {
       scope: ["markup.italic"],
       style: {
-        foreground: theme.markdownEmph,
+        foreground: theme.markdown.emphasis,
         italic: true,
       },
     },
     {
       scope: ["markup.list"],
       style: {
-        foreground: theme.markdownListItem,
+        foreground: theme.markdown.listItem,
       },
     },
     {
       scope: ["markup.quote"],
       style: {
-        foreground: theme.markdownBlockQuote,
+        foreground: theme.markdown.blockQuote,
         italic: true,
       },
     },
     {
       scope: ["markup.raw", "markup.raw.block"],
       style: {
-        foreground: theme.markdownCode,
+        foreground: theme.markdown.code,
       },
     },
     {
       scope: ["markup.raw.inline"],
       style: {
-        foreground: theme.markdownCode,
-        background: theme.background,
+        foreground: theme.markdown.code,
+        background: theme.background.default,
       },
     },
     {
       scope: ["markup.link"],
       style: {
-        foreground: theme.markdownLink,
+        foreground: theme.markdown.link,
         underline: true,
       },
     },
     {
       scope: ["markup.link.label"],
       style: {
-        foreground: theme.markdownLinkText,
+        foreground: theme.markdown.linkText,
         underline: true,
       },
     },
     {
       scope: ["markup.link.url"],
       style: {
-        foreground: theme.markdownLink,
+        foreground: theme.markdown.link,
         underline: true,
       },
     },
     {
       scope: ["label"],
       style: {
-        foreground: theme.markdownLinkText,
+        foreground: theme.markdown.linkText,
       },
     },
     {
       scope: ["spell", "nospell"],
       style: {
-        foreground: theme.text,
+        foreground: theme.text.default,
       },
     },
     // Additional common highlight groups
     {
       scope: ["string.special", "string.special.url"],
       style: {
-        foreground: theme.markdownLink,
+        foreground: theme.markdown.link,
         underline: true,
       },
     },
     {
       scope: ["character"],
       style: {
-        foreground: theme.syntaxString,
+        foreground: theme.syntax.string,
       },
     },
     {
       scope: ["float"],
       style: {
-        foreground: theme.syntaxNumber,
+        foreground: theme.syntax.number,
       },
     },
     {
       scope: ["comment.error"],
       style: {
-        foreground: theme.error,
+        foreground: theme.text.feedback.error.default,
         italic: true,
         bold: true,
       },
@@ -389,7 +393,7 @@ function getSyntaxRules(theme: Theme) {
     {
       scope: ["comment.warning"],
       style: {
-        foreground: theme.warning,
+        foreground: warning,
         italic: true,
         bold: true,
       },
@@ -397,7 +401,7 @@ function getSyntaxRules(theme: Theme) {
     {
       scope: ["comment.todo", "comment.note"],
       style: {
-        foreground: theme.info,
+        foreground: theme.text.feedback.info.default,
         italic: true,
         bold: true,
       },
@@ -405,122 +409,122 @@ function getSyntaxRules(theme: Theme) {
     {
       scope: ["namespace"],
       style: {
-        foreground: theme.syntaxType,
+        foreground: theme.syntax.type,
       },
     },
     {
       scope: ["field"],
       style: {
-        foreground: theme.syntaxVariable,
+        foreground: theme.syntax.variable,
       },
     },
     {
       scope: ["type.definition"],
       style: {
-        foreground: theme.syntaxType,
+        foreground: theme.syntax.type,
         bold: true,
       },
     },
     {
       scope: ["keyword.export"],
       style: {
-        foreground: theme.syntaxKeyword,
+        foreground: theme.syntax.keyword,
       },
     },
     {
       scope: ["attribute", "annotation"],
       style: {
-        foreground: theme.warning,
+        foreground: warning,
       },
     },
     {
       scope: ["tag"],
       style: {
-        foreground: theme.error,
+        foreground: theme.text.feedback.error.default,
       },
     },
     {
       scope: ["tag.attribute"],
       style: {
-        foreground: theme.syntaxKeyword,
+        foreground: theme.syntax.keyword,
       },
     },
     {
       scope: ["tag.delimiter"],
       style: {
-        foreground: theme.syntaxOperator,
+        foreground: theme.syntax.operator,
       },
     },
     {
       scope: ["markup.strikethrough"],
       style: {
-        foreground: theme.textMuted,
+        foreground: theme.text.subdued,
       },
     },
     {
       scope: ["markup.underline"],
       style: {
-        foreground: theme.text,
+        foreground: theme.text.default,
         underline: true,
       },
     },
     {
       scope: ["markup.list.checked"],
       style: {
-        foreground: theme.success,
+        foreground: theme.text.feedback.success.default,
       },
     },
     {
       scope: ["markup.list.unchecked"],
       style: {
-        foreground: theme.textMuted,
+        foreground: theme.text.subdued,
       },
     },
     {
       scope: ["diff.plus"],
       style: {
-        foreground: theme.diffAdded,
-        background: theme.diffAddedBg,
+        foreground: theme.diff.text.added,
+        background: theme.diff.background.added,
       },
     },
     {
       scope: ["diff.minus"],
       style: {
-        foreground: theme.diffRemoved,
-        background: theme.diffRemovedBg,
+        foreground: theme.diff.text.removed,
+        background: theme.diff.background.removed,
       },
     },
     {
       scope: ["diff.delta"],
       style: {
-        foreground: theme.diffContext,
-        background: theme.diffContextBg,
+        foreground: theme.diff.text.context,
+        background: theme.diff.background.context,
       },
     },
     {
       scope: ["error"],
       style: {
-        foreground: theme.error,
+        foreground: theme.text.feedback.error.default,
         bold: true,
       },
     },
     {
       scope: ["warning"],
       style: {
-        foreground: theme.warning,
+        foreground: warning,
         bold: true,
       },
     },
     {
       scope: ["info"],
       style: {
-        foreground: theme.info,
+        foreground: theme.text.feedback.info.default,
       },
     },
     {
       scope: ["debug"],
       style: {
-        foreground: theme.textMuted,
+        foreground: theme.text.subdued,
       },
     },
   ]

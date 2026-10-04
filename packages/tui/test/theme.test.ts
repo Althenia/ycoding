@@ -2,7 +2,8 @@ import { expect, test } from "bun:test"
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type { TerminalColors } from "@opentui/core"
-import { DEFAULT_THEMES, addTheme, allThemes, hasTheme, resolveTheme } from "../src/theme"
+import { DEFAULT_THEMES, addTheme, allThemes, hasTheme } from "../src/theme"
+import { resolveThemeFile } from "../src/theme/v2/resolve"
 import { discoverThemes, themeDirectories } from "../src/theme/discovery"
 import { terminalMode } from "../src/theme/system"
 import type { ThemeFile } from "../src/theme/v2"
@@ -42,7 +43,7 @@ test("hasTheme checks theme presence", () => {
   expect(hasTheme(name)).toBe(true)
 })
 
-test("resolveTheme rejects circular current color references", () => {
+test("resolving a theme file rejects circular color references", () => {
   const item = DEFAULT_THEMES.ycoding!
   const dark = item.dark!
   const circular: ThemeFile = {
@@ -57,15 +58,14 @@ test("resolveTheme rejects circular current color references", () => {
     },
   }
 
-  expect(() => resolveTheme(circular, "dark")).toThrow("Circular theme reference")
+  expect(() => resolveThemeFile(circular, "dark")).toThrow("Circular theme reference")
 })
 
-test("resolveTheme exposes the current flat component view", () => {
-  const theme = resolveTheme(DEFAULT_THEMES.ycoding!, "dark")
-  expect(theme.primary).toBeDefined()
-  expect(theme.selectedListItemText).toBeDefined()
-  expect(theme._hasSelectedListItemText).toBe(true)
-  expect(theme.thinkingOpacity).toBe(0.6)
+test("theme files resolve semantic selection roles without presentation opacity", () => {
+  const theme = resolveThemeFile(DEFAULT_THEMES.ycoding!, "dark")
+  expect(theme.text.action.primary.selected).toBeDefined()
+  expect(theme.text.action.primary.focused).toBeDefined()
+  expect("thinkingOpacity" in theme).toBe(false)
 })
 
 function withDarkText(file: ThemeFile, color: `#${string}`): ThemeFile {

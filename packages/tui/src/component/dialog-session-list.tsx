@@ -15,6 +15,7 @@ import { useToast } from "../ui/toast"
 import { DialogSessionRename } from "./dialog-session-rename"
 import { Spinner } from "./spinner"
 import { errorMessage } from "../util/error"
+import { readableForeground } from "../theme/v2/component"
 
 export function DialogSessionList(
   props: {
@@ -26,7 +27,7 @@ export function DialogSessionList(
   const dialog = useDialog()
   const route = useRoute()
   const data = useData()
-  const { theme } = useTheme()
+  const { themeV2, mode } = useTheme()
   const client = useClient()
   const local = useLocal()
   const toast = useToast()
@@ -122,12 +123,15 @@ export function DialogSessionList(
         value: session.id,
         category,
         footer,
-        bg: deleting ? theme.error : undefined,
+        bg: deleting ? themeV2.background.action.destructive.default : undefined,
+        fg: deleting
+          ? readableForeground(themeV2.text.action.destructive.default, themeV2.background.action.destructive.default)
+          : undefined,
         gutter: data.session.family(session.id).some((id) => data.session.status(id) === "running")
           ? () => <Spinner />
           : slot === undefined
             ? undefined
-            : () => <text fg={theme.accent}>{slot}</text>,
+            : () => <text fg={themeV2.hue.accent[mode() === "light" ? 800 : 200]}>{slot}</text>,
       }
     }
 
@@ -204,12 +208,14 @@ export function DialogSessionList(
       }}
       emptyView={
         <box paddingLeft={4} paddingRight={4} paddingTop={1}>
-          <text fg={theme.textMuted}>No sessions available</text>
+          <text fg={themeV2.text.subdued}>No sessions available</text>
         </box>
       }
       noMatchView={
         <box paddingLeft={4} paddingRight={4} paddingTop={1}>
-          <text fg={searchState().error ? theme.error : theme.textMuted}>{searchState().message}</text>
+          <text fg={searchState().error ? themeV2.text.feedback.error.default : themeV2.text.subdued}>
+            {searchState().message}
+          </text>
         </box>
       }
       onMove={() => setToDelete(undefined)}
@@ -265,7 +271,7 @@ function ArchiveConfirmation(props: {
   onCancel: () => void
   onConfirm: () => void
 }) {
-  const { theme } = useTheme()
+  const { themeV2 } = useTheme()
   const [confirm, setConfirm] = createSignal(true)
 
   Keymap.createLayer(() => ({
@@ -301,20 +307,28 @@ function ArchiveConfirmation(props: {
   return (
     <box paddingTop={1}>
       <box paddingLeft={3}>
-        <text fg={theme.text}>Archive session</text>
+        <text fg={themeV2.text.default}>Archive session</text>
       </box>
       <box paddingLeft={3} paddingRight={4} paddingTop={3}>
-        <text fg={theme.textMuted} wrapMode="word">
+        <text fg={themeV2.text.subdued} wrapMode="word">
           Archive “{props.title ?? props.sessionID}”? This is reversible: you can unarchive the session later. Archiving
           does not automatically delete its history.
         </text>
       </box>
       <box paddingTop={2}>
-        <box paddingLeft={6} backgroundColor={!confirm() ? theme.primary : undefined} onMouseUp={props.onCancel}>
-          <text fg={!confirm() ? theme.background : theme.textMuted}>Cancel</text>
+        <box
+          paddingLeft={6}
+          backgroundColor={!confirm() ? themeV2.background.action.primary.focused : undefined}
+          onMouseUp={props.onCancel}
+        >
+          <text fg={!confirm() ? themeV2.text.action.primary.focused : themeV2.text.subdued}>Cancel</text>
         </box>
-        <box paddingLeft={6} backgroundColor={confirm() ? theme.primary : undefined} onMouseUp={props.onConfirm}>
-          <text fg={confirm() ? theme.background : theme.textMuted}>Archive</text>
+        <box
+          paddingLeft={6}
+          backgroundColor={confirm() ? themeV2.background.action.primary.focused : undefined}
+          onMouseUp={props.onConfirm}
+        >
+          <text fg={confirm() ? themeV2.text.action.primary.focused : themeV2.text.subdued}>Archive</text>
         </box>
       </box>
     </box>

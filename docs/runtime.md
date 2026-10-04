@@ -960,6 +960,10 @@ The TUI is the only release surface and currently includes:
 
 TUI-visible state must rehydrate from durable or canonical API state after process restart. A feature that appears only after visiting a child session or reopening a dialog is a defect unless the interaction itself is the explicit trigger.
 
+Terminal themes use version 2 JSON files with at least one light or dark mode. The TUI resolves semantic text, background, action, feedback, diff, markdown, and syntax roles, falling back to the mode a one-mode theme provides. Selected rows use the focused primary fill and ink; armed destructive rows use the destructive action pair; filled warning chips and paste markers use the warning fill with readable ink. For an opaque fill whose preferred ink has less than 4.5:1 contrast, the TUI chooses the higher-contrast black or white ink. A transparent fill retains semantic ink because its terminal backdrop is unknown. Agent labels use categorical ink on their actual formfield surface, without a filled badge. Thinking opacity is fixed at `0.6`, not configurable through theme JSON.
+
+The direct interactive Mini view derives its colors from the terminal palette, retaining native default-color intent and a palette-matched 256-color scrollback while keeping its footer colors exact. Syntax highlighting derives from resolved semantic colors and preserves prompt extmarks, code, Markdown, and diff scopes and text attributes.
+
 ## Known boundaries
 
 - Session execution placement is process-local; clustering is not implemented.

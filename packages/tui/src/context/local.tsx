@@ -45,13 +45,17 @@ export function recentModels(model: ModelPreferenceModel, recent: ModelPreferenc
     .map((item) => ({ providerID: item.providerID, modelID: item.modelID }))
 }
 
-export const { use: useLocal, provider: LocalProvider, context: LocalContext } = createSimpleContext({
+export const {
+  use: useLocal,
+  provider: LocalProvider,
+  context: LocalContext,
+} = createSimpleContext({
   name: "Local",
   init: () => {
     const data = useData()
     const client = useClient()
     const toast = useToast()
-    const { theme, themeV2, mode } = useTheme()
+    const { themeV2, mode } = useTheme()
     const route = useRoute()
     const paths = useTuiPaths()
     const args = useArgs()
@@ -127,8 +131,13 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
           if (agent?.color) {
             const color = agent.color
             if (color.startsWith("#")) return RGBA.fromHex(color)
-            // already validated by config, just satisfying TS here
-            return theme[color as keyof typeof theme] as RGBA
+            if (color === "primary") return themeV2.text.action.primary.selected
+            if (color === "secondary") return themeV2.categorical[0][mode() === "light" ? 800 : 200]
+            if (color === "accent") return themeV2.hue.accent[mode() === "light" ? 800 : 200]
+            if (color === "success") return themeV2.text.feedback.success.default
+            if (color === "warning") return themeV2.text.feedback.warning.default
+            if (color === "error") return themeV2.text.feedback.error.default
+            if (color === "info") return themeV2.text.feedback.info.default
           }
           return colors()[index % colors().length]
         },
@@ -237,8 +246,7 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
         const pending = sessionID ? pendingTargets()[sessionID] : undefined
         if (pending) return pending
         const saved = sessionID ? data.session.get(sessionID)?.model : undefined
-        if (saved)
-          return { providerID: saved.providerID, modelID: saved.id, variant: saved.variant }
+        if (saved) return { providerID: saved.providerID, modelID: saved.id, variant: saved.variant }
         const configured = agent.current()?.model
         const value = sessionID
           ? getFirstValidModel(
@@ -316,10 +324,7 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
           setPendingTargets((current) => ({ ...current, [sessionID]: desired }))
           save()
         },
-        commitPending(
-          sessionID: string,
-          model: { providerID: string; id: string; variant?: string },
-        ) {
+        commitPending(sessionID: string, model: { providerID: string; id: string; variant?: string }) {
           const pending = pendingTargets()[sessionID]
           if (!pending) return
           if (pending.providerID !== model.providerID || pending.modelID !== model.id) return
@@ -496,9 +501,10 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
         pinned,
         slots,
         togglePin(sessionID: string) {
-          const request = data.session.get(sessionID)?.time.pinned === undefined
-            ? client.api.session.pin({ sessionID })
-            : client.api.session.unpin({ sessionID })
+          const request =
+            data.session.get(sessionID)?.time.pinned === undefined
+              ? client.api.session.pin({ sessionID })
+              : client.api.session.unpin({ sessionID })
           void request.catch((error) => {
             toast.show({
               message: `Failed to update pin: ${errorMessage(error)}`,

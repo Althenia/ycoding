@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test"
 import { RGBA, type CliRenderer, type TerminalColors } from "@opentui/core"
-import { RUN_THEME_FALLBACK, generateSystem, resolveRunTheme, resolveTheme } from "../../src/mini/theme"
-import { DEFAULT_THEMES } from "../../src/theme"
+import { RUN_THEME_FALLBACK, generateSystem, resolveRunTheme } from "../../src/mini/theme"
 
 const palette = ["#15161e", "#f7768e", "#9ece6a", "#e0af68", "#7aa2f7", "#bb9af7", "#7dcfff", "#c0caf5"] as const
 
@@ -63,13 +62,12 @@ test("falls back when palette lookup fails", async () => {
   expect(await resolveRunTheme(renderer({ fail: true }))).toBe(RUN_THEME_FALLBACK)
 })
 
-test("resolveTheme maps a current theme file to the Mini flat theme", () => {
-  const theme = resolveTheme(DEFAULT_THEMES.ycoding, "dark")
-
-  expect(theme.primary).toBeInstanceOf(RGBA)
-  expect(theme.background).toBeInstanceOf(RGBA)
-  expect(theme.selectedListItemText).toBeInstanceOf(RGBA)
-  expect("_hasSelectedListItemText" in theme).toBe(true)
+test("terminal palette retains semantic roles and native default-color intent", () => {
+  const theme = generateSystem(terminalColors(), "dark")
+  expect(theme.text.action.primary.selected).toBeInstanceOf(RGBA)
+  expect(theme.text.default.intent).toBe("default")
+  expect(theme.background.default.a).toBe(0)
+  expect(theme.categorical[0][200].toInts()).toEqual(theme.syntax.keyword.toInts())
 })
 
 test("returns syntax styles and indexed splash colors", async () => {
@@ -81,7 +79,12 @@ test("returns syntax styles and indexed splash colors", async () => {
     expectIndexed(theme.splash.left)
     expectIndexed(theme.splash.right)
     expectIndexed(theme.splash.leftShadow)
+    expectIndexed(theme.entry.user.body)
+    expectIndexed(theme.block.syntax?.getStyle("prompt")?.fg)
+    expect(theme.block.syntax?.getStyle("extmark.agent")?.bold).toBe(true)
     expectRgba(theme.footer.highlight)
+    expect(expectRgba(theme.footer.highlight).toInts()).toEqual([125, 207, 255, 255])
+    expect(expectRgba(theme.footer.selectedText).intent).toBe("default")
     expectRgba(theme.footer.statusAccent)
     expectRgba(theme.footer.surface)
     expect(expectRgba(theme.footer.statusAccent).toInts()).not.toEqual(expectRgba(theme.footer.status).toInts())
@@ -99,9 +102,9 @@ test("keeps footer surfaces exact while scrollback stays palette matched", async
   const exact = generateSystem(colors, "dark")
 
   try {
-    expect(expectRgba(theme.footer.selected).toInts()).toEqual(expectRgba(exact.backgroundElement).toInts())
-    expect(expectRgba(theme.footer.border).toInts()).toEqual(expectRgba(exact.border).toInts())
-    expect(expectRgba(theme.footer.pane).toInts()).toEqual(expectRgba(exact.backgroundMenu).toInts())
+    expect(expectRgba(theme.footer.selected).toInts()).toEqual(exact.background.surface.overlay.toInts())
+    expect(expectRgba(theme.footer.border).toInts()).toEqual(exact.border.default.toInts())
+    expect(expectRgba(theme.footer.pane).toInts()).toEqual(exact.background.surface.overlay.toInts())
     expect(expectRgba(theme.footer.selected).intent).toBe("rgb")
   } finally {
     theme.block.syntax?.destroy()
@@ -150,8 +153,8 @@ test("keeps dark surfaces neutral on saturated backgrounds", () => {
     "dark",
   )
 
-  expect(spread(theme.backgroundPanel)).toBeLessThan(10)
-  expect(spread(theme.backgroundElement)).toBeLessThan(10)
+  expect(spread(theme.background.surface.offset)).toBeLessThan(10)
+  expect(spread(theme.background.surface.overlay)).toBeLessThan(10)
 })
 
 test("keeps light surfaces close to neutral on warm backgrounds", () => {
@@ -163,6 +166,6 @@ test("keeps light surfaces close to neutral on warm backgrounds", () => {
     "light",
   )
 
-  expect(spread(theme.backgroundPanel)).toBeLessThan(60)
-  expect(spread(theme.backgroundElement)).toBeLessThan(60)
+  expect(spread(theme.background.surface.offset)).toBeLessThan(60)
+  expect(spread(theme.background.surface.overlay)).toBeLessThan(60)
 })

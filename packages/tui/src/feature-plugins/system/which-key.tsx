@@ -1,10 +1,11 @@
 /** @jsxImportSource @opentui/solid */
-import { RGBA, TextAttributes, type KeyEvent, type Renderable } from "@opentui/core"
+import { TextAttributes, type KeyEvent, type Renderable, type RGBA } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
 import { Keymap } from "../../context/keymap"
 import type { ActiveKey } from "@opentui/keymap"
-import type { TuiPlugin, TuiPluginApi, TuiThemeCurrent } from "../../plugin/host-api"
+import type { TuiPlugin, TuiPluginApi } from "../../plugin/host-api"
+import type { ResolvedThemeView } from "../../theme/v2"
 import type { BuiltinTuiPlugin } from "../builtins"
 
 const command = {
@@ -61,10 +62,18 @@ type Skin = {
   tabText: Color
 }
 
-export function whichKeySelectionColors(theme: Pick<TuiThemeCurrent, "info" | "selectedListItemText">) {
+export function whichKeyThemeColors(theme: ResolvedThemeView) {
   return {
-    fill: theme.info,
-    foreground: theme.selectedListItemText,
+    panel: theme.background.surface.overlay,
+    text: theme.text.default,
+    muted: theme.text.subdued,
+    subtle: theme.hue.neutral[500],
+    key: theme.text.feedback.warning.default,
+    accent: theme.text.feedback.info.default,
+    selection: {
+      fill: theme.background.action.primary.focused,
+      foreground: theme.text.action.primary.focused,
+    },
   }
 }
 
@@ -96,24 +105,17 @@ function text(value: unknown) {
   return trimmed || undefined
 }
 
-function ink(api: TuiPluginApi, name: string, fallback: string): Color {
-  const value = Reflect.get(api.theme.current, name)
-  if (typeof value === "string") return value
-  if (value instanceof RGBA) return value
-  return fallback
-}
-
 function skin(api: TuiPluginApi): Skin {
-  const selection = whichKeySelectionColors(api.theme.current)
+  const colors = whichKeyThemeColors(api.theme.current)
   return {
-    panel: ink(api, "backgroundMenu", "#1c1c1c"),
-    text: ink(api, "text", "#f0f0f0"),
-    muted: ink(api, "textMuted", "#a5a5a5"),
-    subtle: ink(api, "borderSubtle", "#6f6f6f"),
-    key: ink(api, "warning", "#ffd75f"),
-    accent: ink(api, "primary", "#5f87ff"),
-    tab: selection.fill,
-    tabText: selection.foreground,
+    panel: colors.panel,
+    text: colors.text,
+    muted: colors.muted,
+    subtle: colors.subtle,
+    key: colors.key,
+    accent: colors.accent,
+    tab: colors.selection.fill,
+    tabText: colors.selection.foreground,
   }
 }
 

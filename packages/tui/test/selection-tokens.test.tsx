@@ -2,9 +2,8 @@
 import { expect, test } from "bun:test"
 import { errorSelectionColors } from "../src/component/error-component"
 import { autocompleteSelectionColors } from "../src/component/prompt/autocomplete"
-import { whichKeySelectionColors } from "../src/feature-plugins/system/which-key"
+import { whichKeyThemeColors } from "../src/feature-plugins/system/which-key"
 import { DEFAULT_THEMES } from "../src/theme/builtins"
-import { toCurrentTheme } from "../src/theme/resolve"
 import { resolveThemeFile } from "../src/theme/v2/resolve"
 
 const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
@@ -18,17 +17,23 @@ test("resolves selected UI colours to the INFO focused-action pair", () => {
   expectColor(theme.background.action.primary.focused, "#79B8FF")
   expectColor(theme.text.action.primary.focused, "#0F1115")
 
-  const currentTheme = toCurrentTheme(theme, "dark")
   const selections = [
     errorSelectionColors(),
     autocompleteSelectionColors(theme),
-    whichKeySelectionColors(currentTheme),
+    whichKeyThemeColors(theme).selection,
   ]
 
   for (const selection of selections) {
     expectColor(selection.fill, "#79B8FF")
     expectColor(selection.foreground, "#0F1115")
   }
+
+  const colors = whichKeyThemeColors(theme)
+  expect(colors.panel.toInts()).toEqual(theme.background.surface.overlay.toInts())
+  expect(colors.muted.toInts()).toEqual(theme.text.subdued.toInts())
+  expect(colors.key.toInts()).toEqual(theme.text.feedback.warning.default.toInts())
+  expect(colors.selection.fill.toInts()).toEqual(theme.background.action.primary.focused.toInts())
+  expect(colors.selection.foreground.toInts()).toEqual(theme.text.action.primary.focused.toInts())
 })
 
 test("keeps crash fallback selection colours aligned with the ycoding theme", () => {

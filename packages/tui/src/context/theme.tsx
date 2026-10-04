@@ -4,22 +4,19 @@ import {
   DEFAULT_THEMES,
   addTheme,
   allThemes,
-  generateSyntax,
   hasTheme,
   isTheme,
-  resolveTheme,
-  selectedForeground,
   setCustomThemes,
   setSystemTheme,
   subscribeThemes,
   upsertTheme,
-  type Theme,
 } from "../theme"
 import { generateSystem, terminalMode } from "../theme/system"
 import { discoverThemes, themeDirectories } from "../theme/discovery"
 import { createComponentTheme, type ComponentTheme } from "../theme/v2/component"
 import type { ThemeFile } from "../theme/v2"
 import { resolveThemeFile } from "../theme/v2/resolve"
+import { generateSyntax } from "../theme/v2/syntax"
 import { themeModes } from "../theme/v2/select"
 import { createEffect, createMemo, onCleanup, onMount, type Accessor } from "solid-js"
 import { createStore, produce } from "solid-js/store"
@@ -47,16 +44,7 @@ const themeSource: ThemeSource = {
 
 export { discoverThemes } from "../theme/discovery"
 
-export {
-  DEFAULT_THEMES,
-  addTheme,
-  allThemes,
-  generateSyntax,
-  hasTheme,
-  selectedForeground,
-  upsertTheme,
-  type Theme,
-} from "../theme"
+export { DEFAULT_THEMES, addTheme, allThemes, hasTheme, upsertTheme } from "../theme"
 
 const THEME_REFRESH_DELAYS = [250, 1000] as const
 
@@ -70,7 +58,6 @@ type State = {
 
 type ContextName = "elevated" | "overlay"
 type ThemeService = {
-  theme: Theme
   themeV2: ComponentTheme
   contextual(context: ContextName): ThemeService
   readonly selected: string
@@ -98,7 +85,11 @@ const [store, setStore] = createStore<State>({
 
 subscribeThemes((themes) => setStore("themes", themes))
 
-export const { use: useTheme, provider: ThemeProvider, context: ThemeContext } = createSimpleContext({
+export const {
+  use: useTheme,
+  provider: ThemeProvider,
+  context: ThemeContext,
+} = createSimpleContext({
   name: "Theme",
   init: (props: { mode: "dark" | "light"; source?: ThemeSource }) => {
     const renderer = useRenderer()
@@ -280,7 +271,6 @@ export const { use: useTheme, provider: ThemeProvider, context: ThemeContext } =
       if (supported.includes(store.mode)) return store.mode
       return supported[0] ?? store.mode
     }
-    const values = createMemo(() => resolveTheme(source(), mode(), sourceName()))
     const valuesV2 = createMemo(() => {
       const resolveStarted = performance.now()
       const result = resolveThemeFile(file(), mode(), sourceName())
@@ -301,21 +291,13 @@ export const { use: useTheme, provider: ThemeProvider, context: ThemeContext } =
       }, mode),
     }
 
-    createEffect(() => renderer.setBackgroundColor(values().background))
+    createEffect(() => renderer.setBackgroundColor(valuesV2().background.default))
 
-    const syntax = createSyntaxStyleMemo(() => generateSyntax(values()))
-
-    const theme = new Proxy(values(), {
-      get(_target, prop) {
-        // @ts-expect-error Properties are forwarded to the current reactive value.
-        return values()[prop]
-      },
-    })
+    const syntax = createSyntaxStyleMemo(() => generateSyntax(valuesV2(), mode()))
     function contextual(context: ContextName) {
       return contextualServices[context]
     }
     const service: ThemeService = {
-      theme,
       themeV2,
       contextual,
       get selected() {
