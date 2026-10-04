@@ -31,6 +31,7 @@ import { SessionStore } from "@ycoding-ai/core/session/store"
 import { Permission } from "@ycoding-ai/core/permission"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
 import { Shell } from "@ycoding-ai/core/shell"
+import { ShellTable } from "@ycoding-ai/core/shell/sql"
 import { ShellSandbox } from "@ycoding-ai/core/shell-sandbox"
 import { Shell as ShellSchema } from "@ycoding-ai/schema/shell"
 import { ShellTool } from "@ycoding-ai/core/tool/shell"
@@ -205,6 +206,8 @@ const fakeShellNode = makeLocationNode({
       return Shell.Service.of({
         prepare,
         create,
+        noticeOwed: () => Effect.void,
+        noticeAdmitted: () => Effect.void,
         list: () => Effect.succeed(fakeShellState.info?.status === "running" ? [fakeShellState.info] : []),
         get: requireInfo,
         wait: (id) =>
@@ -1068,6 +1071,39 @@ describe("ShellTool", () => {
             expect((yield* sessions.outstanding()).sessions.has(sessionID)).toBe(true)
           }),
         )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
+  it.live("owes a durable completion notice from backgrounding until the input is admitted", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withSession(tmp.path, (registry) => Effect.gen(function* () {
+          const jobs = yield* Job.Service
+          const db = (yield* Database.Service).db
+          const release = path.join(tmp.path, "release")
+          const command = isWindows
+            ? `while (!(Test-Path -LiteralPath '${release}')) { Start-Sleep -Milliseconds 50 }`
+            : `while [ ! -e '${release}' ]; do sleep 0.05; done`
+          const settled = yield* settleTool(registry, call({ command, timeout: 10_000, background: true }))
+          const structured = settled.output?.structured
+          const shellID = typeof structured === "object" && structured !== null ? Reflect.get(structured, "shellID") : undefined
+          expect(shellID).toBeString()
+          if (typeof shellID !== "string") return
+          const owed = () => db.select().from(ShellTable).all().pipe(
+            Effect.map((rows) => rows.find((row) => row.id === shellID)),
+          )
+          expect(yield* owed()).toMatchObject({ session_id: sessionID, notice_pending: true })
+          yield* Effect.promise(() => fs.writeFile(release, ""))
+          yield* jobs.wait({ id: "call-shell" })
+          yield* Effect.gen(function* () {
+            while ((yield* owed()) !== undefined) yield* Effect.sleep(10)
+          }).pipe(Effect.timeout(5_000))
+          expect(yield* db.select().from(SessionPendingTable).all()).toHaveLength(1)
+        }))
       },
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
     ),

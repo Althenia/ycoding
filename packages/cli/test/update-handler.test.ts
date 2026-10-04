@@ -106,12 +106,21 @@ else {
     expect(withoutHealth(outcome.oldRequests)).toEqual([...outstandingOnly, "POST /api/service/stop"])
   }, 30_000)
 
-  test("a forced update does not restart a background server whose running work cannot be read", async () => {
+  test("a forced update restarts a background server whose running work cannot be read and says so", async () => {
     const outcome = await run({ server: { outstanding: "error" }, force: true })
 
+    expect(outcome.exitCode).toBe(0)
     expect(outcome.stderr).toContain("Could not check the background server for running work")
+    expect(outcome.stderr).toContain("restarting it anyway")
+    expect(outcome.stdout).toContain("Restarted the background server")
+    expect(withoutHealth(outcome.oldRequests)).toEqual([...outstandingOnly, "POST /api/service/stop"])
+    expect(outcome.registration).toEqual({ id: "new-service", version: "2.0.0" })
+  }, 30_000)
+
+  test("an older server's response without lost still protects its running Sessions during update", async () => {
+    const outcome = await run({ server: { outstanding: ["ses_busy"], running: ["ses_busy"] } })
+    expect(outcome.stdout).toContain("1 Session has running work")
     expect(withoutHealth(outcome.oldRequests)).toEqual(outstandingOnly)
-    expect(outcome.registration).toEqual({ id: "old-service", version: "1.0.0" })
   }, 30_000)
 
   test("a background server whose running work cannot be read is treated as busy", async () => {

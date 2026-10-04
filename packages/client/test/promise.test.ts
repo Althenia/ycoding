@@ -22,6 +22,19 @@ test("R7 sends explicit goal resume and preserves the returned objective", async
   expect(await requests[0]!.json()).toEqual({ goal: true, yolo: 1 })
 })
 
+test("outstanding reports lost shell notices through the generated Session client", async () => {
+  const requests: Request[] = []
+  const result = { data: [], running: [], failed: [], lost: ["ses_lost_shell"] }
+  const client = YCoding.make({ baseUrl: "http://localhost:3000", fetch: async (input, init) => {
+    requests.push(input instanceof Request ? input : new Request(input, init))
+    return Response.json(result)
+  } })
+  expect(await client.session.outstanding()).toEqual(result)
+  expect(requests.map((request) => [request.method, new URL(request.url).pathname])).toEqual([
+    ["GET", "/api/session/outstanding"],
+  ])
+})
+
 test("keep-awake methods use the local-runtime HTTP contract without a Session or Location", async () => {
   const requests: Request[] = []
   const client = YCoding.make({

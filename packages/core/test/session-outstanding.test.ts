@@ -5,6 +5,9 @@ import { EventTable } from "@ycoding-ai/core/event/sql"
 import { adjust } from "effect/testing/TestClock"
 import { eq } from "drizzle-orm"
 import { Database } from "@ycoding-ai/core/database/database"
+import { AppProcess } from "@ycoding-ai/core/process"
+import { ShellLedger } from "@ycoding-ai/core/shell/ledger"
+import { Shell as ShellSchema } from "@ycoding-ai/schema/shell"
 import { Agent } from "@ycoding-ai/core/agent"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
@@ -42,7 +45,7 @@ const execution = Layer.succeed(SessionExecution.Service, SessionExecution.Servi
   withTransition: (_sessionID, effect) => effect,
 }))
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([
-  Database.node, EventRuntime.node, SessionProjector.node, SessionStore.node, Session.node, LocationServiceMap.node, Job.node,
+  AppProcess.node, Database.node, EventRuntime.node, SessionProjector.node, SessionStore.node, Session.node, LocationServiceMap.node, Job.node,
 ]), [[Project.node, projects], [SessionExecution.node, execution]]))
 
 it.effect("derives outstanding Sessions from pending input, active goal, tasks, notices, and shell jobs", () =>
@@ -85,6 +88,35 @@ it.effect("derives outstanding Sessions from pending input, active goal, tasks, 
     yield* db.update(SessionTaskNotificationTable).set({ delivered: true }).run()
     yield* jobs.noticeAdmitted(job.id)
     expect([...(yield* sessions.outstanding()).sessions].toSorted()).toEqual([executing, goal, parent, pending].toSorted())
+  }),
+)
+
+it.effect("reports no lost shell notices for a fresh Session", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    yield* sessions.create({ id: Session.ID.make("ses_fresh_shell"), location: { directory: AbsolutePath.make("/project") } })
+    expect([...(yield* sessions.outstanding()).lost]).toEqual([])
+  }),
+)
+
+it.effect("a lost notice is cleared by the next execution even in the same millisecond", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const events = yield* EventRuntime.Service
+    const appProcess = yield* AppProcess.Service
+    const db = (yield* Database.Service).db
+    const sessionID = Session.ID.make("ses_same_millisecond")
+    yield* sessions.create({ id: sessionID, location: { directory: AbsolutePath.make("/project") } })
+    yield* events.publish(SessionEvent.Execution.Started, { sessionID })
+    const id = ShellSchema.ID.create()
+    yield* ShellLedger.record(db, { id, pid: 2_000_000_000,
+      owner: { pid: 2_000_000_000, pgid: 2_000_000_000, started: "Thu Jan  1 00:00:00 1970" } })
+    yield* ShellLedger.noticeOwed(db, id, sessionID)
+    yield* ShellLedger.reconcile(db, appProcess)
+    expect([...(yield* sessions.outstanding()).lost]).toEqual([sessionID])
+    yield* events.publish(SessionEvent.Execution.Started, { sessionID })
+    expect([...(yield* sessions.outstanding()).lost]).toEqual([])
+    expect([...(yield* sessions.outstanding(true)).failed]).toEqual([])
   }),
 )
 

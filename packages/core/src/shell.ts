@@ -10,11 +10,14 @@ import { makeLocationNode } from "./effect/app-node"
 import { AppProcess } from "./process"
 import { Config } from "./config"
 import { ConfigShell } from "./config/shell"
+import { Database } from "./database/database"
 import { EventRuntime } from "./event"
 import { Location } from "./location"
 import { Global } from "./global"
 import { ShellSandbox } from "./shell-sandbox"
+import { ShellLedger } from "./shell/ledger"
 import { ShellSelect } from "./shell/select"
+import type { SessionSchema } from "./session/schema"
 
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Shell.NotFoundError", {
   id: Shell.ID,
@@ -152,6 +155,8 @@ export interface Interface {
   readonly timeout: (id: Shell.ID, duration: number) => Effect.Effect<Shell.Info, NotFoundError>
   readonly output: (id: Shell.ID, input?: Shell.OutputInput) => Effect.Effect<Shell.Output, NotFoundError>
   readonly remove: (id: Shell.ID) => Effect.Effect<void, NotFoundError>
+  readonly noticeOwed: (id: Shell.ID, sessionID: SessionSchema.ID) => Effect.Effect<void>
+  readonly noticeAdmitted: (id: Shell.ID) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/Shell") {}
@@ -166,11 +171,13 @@ export const layer = (options?: ShellSelect.Options) =>
       const global = yield* Global.Service
       const appProcess = yield* AppProcess.Service
       const sandbox = yield* ShellSandbox.Service
+      const database = (yield* Database.Service).db
       const context = yield* Effect.context()
       const runFork = Effect.runForkWith(context)
       const sessions = new Map<string, Active>()
       const preparations = new WeakMap<Prepared, PreparedState>()
       const exitOrder: string[] = []
+      const owner = yield* ShellLedger.identify(appProcess, process.pid)
 
       const outputDir = path.join(global.data, "shell", location.project.id)
       const { mkdir, unlink } = yield* Effect.promise(() => import("fs/promises"))
@@ -202,6 +209,7 @@ export const layer = (options?: ShellSelect.Options) =>
         sessions.delete(id)
         const index = exitOrder.indexOf(id)
         if (index !== -1) exitOrder.splice(index, 1)
+        yield* ShellLedger.release(database, id)
         if (session.timeoutFiber) yield* Fiber.interrupt(session.timeoutFiber)
         if (session.memoryFiber) yield* Fiber.interrupt(session.memoryFiber)
         // Unblock any wait still pending when the command is removed before it terminated.
@@ -405,6 +413,13 @@ export const layer = (options?: ShellSelect.Options) =>
               const handle = yield* appProcess
                 .spawn(state.process)
                 .pipe(Effect.mapError((cause) => new SpawnError({ command: state.command, cause })))
+              if (owner)
+                yield* ShellLedger.record(database, {
+                  id,
+                  pid: Number(handle.pid),
+                  started: (yield* ShellLedger.identify(appProcess, Number(handle.pid)))?.started,
+                  owner,
+                })
               const session: Active = {
                 info: produce(info, (draft) => {
                   draft.pid = handle.pid
@@ -543,7 +558,11 @@ export const layer = (options?: ShellSelect.Options) =>
         return session.info
       })
 
-      return Service.of({ prepare, create, list, get, wait, timeout, output, remove })
+      return Service.of({
+        prepare, create, list, get, wait, timeout, output, remove,
+        noticeOwed: (id, sessionID) => ShellLedger.noticeOwed(database, id, sessionID),
+        noticeAdmitted: (id) => ShellLedger.noticeAdmitted(database, id),
+      })
     }),
   )
 
@@ -551,7 +570,7 @@ export function configured(options?: ShellSelect.Options) {
   return makeLocationNode({
     service: Service,
     layer: layer(options),
-    deps: [EventRuntime.node, Location.node, Config.node, Global.node, AppProcess.node, ShellSandbox.node],
+    deps: [EventRuntime.node, Location.node, Config.node, Global.node, AppProcess.node, ShellSandbox.node, Database.node],
   })
 }
 

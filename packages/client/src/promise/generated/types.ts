@@ -4047,7 +4047,12 @@ export type SessionActiveOutput = { data: { [x: string]: SessionActive } }["data
 
 export type SessionOutstandingInput = { readonly failures?: { readonly failures?: boolean | undefined }["failures"] }
 
-export type SessionOutstandingOutput = { data: Array<string>; running: Array<string>; failed: Array<string> }
+export type SessionOutstandingOutput = {
+  data: Array<string>
+  running: Array<string>
+  failed: Array<string>
+  lost: Array<string>
+}
 
 export type SessionCompletionsInput = {
   readonly after?: { readonly after?: string | undefined; readonly limit?: number | undefined }["after"]

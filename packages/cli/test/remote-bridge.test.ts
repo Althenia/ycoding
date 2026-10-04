@@ -86,7 +86,7 @@ function harness(options: {
       ),
     }),
     getSession: async (sessionID: string) => sessionInfo(sessionID),
-    activeSessions: {}, outstandingSessions: { data: [], running: [], failed: [] }, completions: { data: [] }, permissionRequests: [], formRequests: [], guardrailRequestList: [],
+    activeSessions: {}, outstandingSessions: { data: [], running: [], failed: [], lost: [] }, completions: { data: [] }, permissionRequests: [], formRequests: [], guardrailRequestList: [],
     ...options.results,
   })
   const records: ConnectionRecord[] = []
@@ -273,7 +273,7 @@ describe("remote bridge", () => {
     let registered = false
     const test = harness({ results: {
       listPage: async () => ({ data: registered ? [sessionInfo("ses_new")] : [] }),
-      outstandingSessions: () => ({ data: [], running: [], failed: ["ses_new"] }),
+      outstandingSessions: () => ({ data: [], running: [], failed: ["ses_new"], lost: [] }),
     } })
     await test.bridge.connect()
     try {
@@ -287,7 +287,7 @@ describe("remote bridge", () => {
   test("stopping an idle goal through the relay refreshes outstanding work without waiting for a periodic poll", async () => {
     let outstanding = ["ses_1"]
     const test = harness({ results: {
-      outstandingSessions: () => ({ data: outstanding, running: [], failed: [] }),
+      outstandingSessions: () => ({ data: outstanding, running: [], failed: [], lost: [] }),
       autonomySet: () => ({ mode: "normal", yolo: 0, goal: { text: "Finish", status: "stopped" } }),
       getSession: async (sessionID: string) => sessionInfo(sessionID, { title: "One" }),
     } })
@@ -304,7 +304,7 @@ describe("remote bridge", () => {
   })
   test("a failed family remains in attention until its next execution starts, including after reconnect", async () => {
     let persistedFailure = true
-    const test = harness({ results: { outstandingSessions: () => ({ data: [], running: [], failed: persistedFailure ? ["ses_1"] : [] }) } })
+    const test = harness({ results: { outstandingSessions: () => ({ data: [], running: [], failed: persistedFailure ? ["ses_1"] : [], lost: [] }) } })
     await test.bridge.connect()
     try {
       await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status" && frame.attention.includes("ses_1")))
@@ -317,6 +317,34 @@ describe("remote bridge", () => {
       persistedFailure = true
       test.streams[0].stream.onEvent({ type: "session.execution.failed.1", data: { sessionID: "ses_1" } })
       await waitFor(() => sentFrames(test.records[0]).filter((frame) => frame.type === "status" && frame.attention.includes("ses_1")).length > 2 ? true : undefined)
+    } finally { await test.bridge.close() }
+  })
+
+  test("an owed shell notice lost in a crashed service appears as attention, never as failed", async () => {
+    let lost = ["ses_1"]
+    const test = harness({ results: { outstandingSessions: () => ({ data: [], running: [], failed: [], lost }) } })
+    await test.bridge.connect()
+    try {
+      await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status" && frame.attention.includes("ses_1")))
+      expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status").at(-1)).toEqual({
+        type: "status", running: [], attention: ["ses_1"], details: [{ sessionID: "ses_1", title: "One" }],
+      })
+      lost = []
+      test.streams[0].stream.onEvent({ type: "session.execution.started.1", data: { sessionID: "ses_1" } })
+      await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status" && frame.attention.length === 0))
+    } finally { await test.bridge.close() }
+  })
+
+  test("a lost shell notice remains actionable when that family also has a failed execution", async () => {
+    const test = harness({
+      results: { outstandingSessions: () => ({ data: [], running: [], failed: ["ses_1"], lost: ["ses_1"] }) },
+    })
+    await test.bridge.connect()
+    try {
+      await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status" && frame.attention.includes("ses_1")))
+      expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status").at(-1)).toEqual({
+        type: "status", running: [], attention: ["ses_1"], details: [{ sessionID: "ses_1", title: "One" }],
+      })
     } finally { await test.bridge.close() }
   })
 
@@ -350,7 +378,7 @@ describe("remote bridge", () => {
   test("a request event during the reconnect failure read never drops a failed family from attention", async () => {
     let held: { resolve: (value: unknown) => void } | undefined
     const test = harness({ results: { outstandingSessions: () => held === undefined
-      ? { data: [], running: [], failed: ["ses_1"] }
+      ? { data: [], running: [], failed: ["ses_1"], lost: [] }
       : new Promise((resolve) => { held!.resolve = resolve }) } })
     await test.bridge.connect()
     try {
@@ -361,20 +389,20 @@ describe("remote bridge", () => {
       test.records[0].input.onOpen()
       await waitFor(() => test.calls.filter((call) => call.method === "outstandingSessions").length > 1 ? true : undefined)
       test.streams[0].stream.onEvent({ type: "guardrail.decided", data: { sessionID: "ses_1", decision: "allow" } })
-      held.resolve({ data: [], running: [], failed: ["ses_1"] })
+      held.resolve({ data: [], running: [], failed: ["ses_1"], lost: [] })
       held = undefined
       await waitFor(() => sentFrames(test.records[0]).slice(before).find((frame) => frame.type === "status"))
       await Bun.sleep(400)
       const statuses = sentFrames(test.records[0]).slice(before).filter((frame) => frame.type === "status")
       expect(statuses.length).toBeGreaterThan(0)
       expect(statuses.every((frame) => frame.attention.includes("ses_1"))).toBe(true)
-    } finally { held?.resolve({ data: [], running: [], failed: ["ses_1"] }); await test.bridge.close() }
+    } finally { held?.resolve({ data: [], running: [], failed: ["ses_1"], lost: [] }); await test.bridge.close() }
   })
 
   test("a failure-only family is in attention and failed, a family with a pending request too is in attention only, and the next execution clears both", async () => {
     let requests: unknown[] = []
     const test = harness({ sessions: [entry, second], results: {
-      outstandingSessions: () => ({ data: ["ses_2"], running: ["ses_2"], failed: ["ses_1", "ses_2"] }),
+      outstandingSessions: () => ({ data: ["ses_2"], running: ["ses_2"], failed: ["ses_1", "ses_2"], lost: [] }),
       permissionRequests: () => requests,
     } })
     await test.bridge.connect()
@@ -395,7 +423,7 @@ describe("remote bridge", () => {
 
   test("a shell or subagent change republishes the one outstanding family set", async () => {
     let outstanding: string[] = []
-    const test = harness({ results: { outstandingSessions: () => ({ data: outstanding, running: [], failed: [] }) } })
+    const test = harness({ results: { outstandingSessions: () => ({ data: outstanding, running: [], failed: [], lost: [] }) } })
     await test.bridge.connect()
     try {
       await waitFor(() => sentFrames(test.records[0]).some((frame) => frame.type === "status") ? true : undefined)
@@ -426,7 +454,7 @@ describe("remote bridge", () => {
     const test = harness({ results: {
       outstandingSessions: () => {
         if (failNextRead) { failNextRead = false; throw new Error("transient status read") }
-        return { data: running ? ["ses_1"] : [], running: running ? ["ses_1"] : [], failed: [] }
+        return { data: running ? ["ses_1"] : [], running: running ? ["ses_1"] : [], failed: [], lost: [] }
       },
     } })
     await test.bridge.connect()
@@ -446,7 +474,7 @@ describe("remote bridge", () => {
     let running = false
     const test = harness({ results: { outstandingSessions: () => {
       if ([1, 2, 3, 5].includes(++reads)) throw new Error("transient status read")
-      return { data: running ? ["ses_1"] : [], running: running ? ["ses_1"] : [], failed: [] }
+      return { data: running ? ["ses_1"] : [], running: running ? ["ses_1"] : [], failed: [], lost: [] }
     } } })
     await test.bridge.connect()
     try {
@@ -464,7 +492,7 @@ describe("remote bridge", () => {
     let reads = 0
     const test = harness({ results: { outstandingSessions: () => {
       if (++reads === 1) throw new Error("transient status read")
-      return { data: [], running: [], failed: [] }
+      return { data: [], running: [], failed: [], lost: [] }
     } } })
     await test.bridge.connect()
     try {
@@ -482,7 +510,7 @@ describe("remote bridge", () => {
     let reads = 0
     const test = harness({ results: { outstandingSessions: () => {
       if (++reads === 1) throw new Error("transient status read")
-      return { data: [], running: [], failed: [] }
+      return { data: [], running: [], failed: [], lost: [] }
     } } })
     await test.bridge.connect()
     try {
@@ -500,7 +528,7 @@ describe("remote bridge", () => {
     const test = harness({ results: { outstandingSessions: () => {
       if (++reads === 1) return first.promise
       if (reads === 2) return second.promise
-      return { data: [], running: [], failed: [] }
+      return { data: [], running: [], failed: [], lost: [] }
     } } })
     await test.bridge.connect()
     try {
@@ -513,10 +541,10 @@ describe("remote bridge", () => {
       test.streams[0].stream.onEvent({ type: "session.execution.started.1", data: { sessionID: "ses_1" } })
       await Bun.sleep(300)
       expect(reads).toBe(2)
-      second.resolve({ data: [], running: [], failed: [] })
+      second.resolve({ data: [], running: [], failed: [], lost: [] })
       await waitFor(() => reads === 3 ? true : undefined)
       expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status")).toHaveLength(1)
-    } finally { second.resolve({ data: [], running: [], failed: [] }); await test.bridge.close() }
+    } finally { second.resolve({ data: [], running: [], failed: [], lost: [] }); await test.bridge.close() }
   })
   test("reports the relay's policy close reason without hiding its cause", async () => {
     const test = harness({})
@@ -599,7 +627,7 @@ describe("remote bridge", () => {
   test("execution-only status changes read active state without rescanning pending requests", async () => {
     let active: readonly string[] = []
     const sessions = Array.from({ length: 100 }, (_, index) => ({ sessionID: `ses_${index}`, directory: "/work", title: "Session" }))
-    const test = harness({ sessions, results: { outstandingSessions: () => ({ data: active, running: active, failed: [] }) } })
+    const test = harness({ sessions, results: { outstandingSessions: () => ({ data: active, running: active, failed: [], lost: [] }) } })
     await test.bridge.connect()
     try {
       await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status"), 1_000)
@@ -615,7 +643,7 @@ describe("remote bridge", () => {
   test("a replaced connection sends its initial status while its predecessor read is held", async () => {
     const held = Promise.withResolvers<unknown>()
     let first = true
-    const test = harness({ results: { outstandingSessions: () => first ? held.promise : { data: [], running: [], failed: [] } } })
+    const test = harness({ results: { outstandingSessions: () => first ? held.promise : { data: [], running: [], failed: [], lost: [] } } })
     await test.bridge.connect()
     try {
       first = false
@@ -623,14 +651,14 @@ describe("remote bridge", () => {
       await waitFor(() => test.records[1], 1_000)
       await waitFor(() => sentFrames(test.records[1]).find((frame) => frame.type === "status"), 200)
       expect(sentFrames(test.records[1]).filter((frame) => frame.type === "status")).toEqual([{ type: "status", running: [], attention: [] }])
-    } finally { held.resolve({ data: [], running: [], failed: [] }); await test.bridge.close() }
+    } finally { held.resolve({ data: [], running: [], failed: [], lost: [] }); await test.bridge.close() }
   })
 
   test("sends an initial family status and coalesces transition bursts to the latest frame", async () => {
     let active: readonly string[] = []
     let permissions: unknown[] = []
     const test = harness({ results: {
-      outstandingSessions: () => ({ data: active, running: active, failed: [] }),
+      outstandingSessions: () => ({ data: active, running: active, failed: [], lost: [] }),
       permissionRequests: () => permissions,
     } })
     await test.bridge.connect()

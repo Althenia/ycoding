@@ -60,13 +60,17 @@ function restartServer(installed: string, force: boolean) {
         }),
       catch: (cause) => cause,
     }).pipe(Effect.result)
-    if (Result.isFailure(outstanding)) {
+    if (Result.isFailure(outstanding) && !force) {
       process.stderr.write(
         `Could not check the background server for running work (${message(outstanding.failure)}), so it was not restarted. Run ${restartCommand} to apply the update.\n`,
       )
       return
     }
-    const running = outstanding.success.running.length
+    if (Result.isFailure(outstanding))
+      process.stderr.write(
+        `Could not check the background server for running work (${message(outstanding.failure)}); restarting it anyway because --force was given.\n`,
+      )
+    const running = Result.isSuccess(outstanding) ? outstanding.success.running.length : 0
     if (running > 0 && !force) {
       process.stdout.write(
         `${running} ${running === 1 ? "Session has" : "Sessions have"} running work, so the background server was not restarted. Run ${restartCommand} to apply the update once they finish.\n`,

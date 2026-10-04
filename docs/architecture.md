@@ -76,7 +76,7 @@ A Schema change is a public-contract change unless proven otherwise.
 Owns:
 
 - session creation, prompt admission, execution, history, compaction, and restart continuation;
-- instructions, permissions, forms, questions, shell, PTY, and filesystem behavior;
+- instructions, permissions, forms, questions, shell execution and durable shell process ownership, PTY, and filesystem behavior;
 - models, providers, credentials, and configuration;
 - durable subagent orchestration and autonomy;
 - skill discovery, activation, and session status;
@@ -170,8 +170,6 @@ terminal input
   -> terminal render
 ```
 
-The optional development relay adds an outbound edge after local process startup. It does not replace any step in this runtime flow and carries no Session, prompt, tool, shell, or model payload in the smoke milestone.
-
 Prompt admission and provider execution are separate. A prompt is admitted durably before the process-local coordinator wakes execution. One Session is serialized locally; different Sessions may run concurrently.
 
 ## Location scope
@@ -179,6 +177,8 @@ Prompt admission and provider execution are separate. A prompt is admitted durab
 Models, providers, provider usage, tools, permissions, Session guardrails, instructions, filesystem access, plugins, and related services are resolved through a Location. Session execution resolves the Session's Location when a drain starts.
 
 `SessionGuardrail` is Location-scoped but evaluates by Session ID. It resolves the root Session through `SessionStore`, shares counters across that family, and mediates mutation immediately before side effects. `ProviderUsage` is Location-scoped and resolves credentials through the existing credential service; it returns normalized, cached snapshots without becoming part of model execution.
+
+The Location-scoped Shell records process identity and owed completion notices in the global database. At managed startup, `SessionRestart` reconciles dead shell owners before Server readiness. Protocol reports lost Session notices separately from running and failed work; the CLI maps them to root-family attention without resuming a provider request.
 
 ## Event flow
 
@@ -191,6 +191,7 @@ The TUI applies events to a Solid store and reconciles canonical Client reads. A
 | Scope | Examples | Owner |
 | --- | --- | --- |
 | Process-global | execution coordinator, application service nodes | Core process runtime |
+| Process-global durable | background shell process ownership and lost completion notices | Core shell ledger in the local database |
 | Location | models, providers, provider usage, tools, plugins, permissions, guardrail policy, filesystem, instructions | Core Location services |
 | Session durable | messages, pending prompts, autonomy, orchestration, compaction | Core database and event history |
 | Project durable | project artifacts and project configuration | Core project-artifact store |

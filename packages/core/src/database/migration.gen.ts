@@ -24,5 +24,6 @@ export const migrations = (
     import("./migration/20260926113528_session-pin"),
     import("./migration/20260929044715_session-active"),
     import("./migration/20261002020321_drop-legacy-account-share"),
+    import("./migration/20261004094144_shell-ledger"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

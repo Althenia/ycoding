@@ -121,7 +121,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.outstanding",
         Effect.fn(function* (ctx) {
           const outstanding = yield* session.outstanding(ctx.query.failures)
-          return { data: [...outstanding.sessions], running: [...outstanding.running], failed: [...outstanding.failed] }
+          return { data: [...outstanding.sessions], running: [...outstanding.running], failed: [...outstanding.failed], lost: [...outstanding.lost] }
         }),
       )
       .handle(

@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "f8aed05f-e4bf-4045-9382-eb255be8a820",
+  "id": "16e8ba31-f648-4084-959c-b3d561432a6f",
   "prevIds": [
-    "9e835d6f-a15e-4b26-873d-4c47fe35e368"
+    "f8aed05f-e4bf-4045-9382-eb255be8a820"
   ],
   "ddl": [
     {
@@ -180,6 +180,10 @@
     },
     {
       "name": "session_usage",
+      "entityType": "tables"
+    },
+    {
+      "name": "shell",
       "entityType": "tables"
     },
     {
@@ -4509,6 +4513,106 @@
       "table": "session_usage"
     },
     {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "shell"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "shell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "pid",
+      "entityType": "columns",
+      "table": "shell"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "process_started",
+      "entityType": "columns",
+      "table": "shell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "owner_pid",
+      "entityType": "columns",
+      "table": "shell"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "owner_started",
+      "entityType": "columns",
+      "table": "shell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "notice_pending",
+      "entityType": "columns",
+      "table": "shell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "shell"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_lost",
+      "entityType": "columns",
+      "table": "shell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "-1",
+      "generated": null,
+      "name": "start_seq",
+      "entityType": "columns",
+      "table": "shell"
+    },
+    {
       "columns": [
         "project_id"
       ],
@@ -5904,6 +6008,15 @@
       "nameExplicit": false,
       "name": "session_todo_state_pk",
       "table": "session_todo_state",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "shell_pk",
+      "table": "shell",
       "entityType": "pks"
     },
     {

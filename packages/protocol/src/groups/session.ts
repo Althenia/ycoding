@@ -341,12 +341,12 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
     .add(
       HttpApiEndpoint.get("session.outstanding", "/api/session/outstanding", {
         query: SessionOutstandingQuery,
-        success: Schema.Struct({ data: Schema.Array(Session.ID), running: Schema.Array(Session.ID), failed: Schema.Array(Session.ID) }),
+        success: Schema.Struct({ data: Schema.Array(Session.ID), running: Schema.Array(Session.ID), failed: Schema.Array(Session.ID), lost: Schema.Array(Session.ID) }),
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "session.outstanding",
           summary: "List outstanding Session work",
-          description: "List Sessions with executing drains, admitted inputs, background shell notices, active subagent tasks or notices, or active goals in this process. Separately report Sessions with executing drains or live shell jobs as running; a settled shell awaiting notification is outstanding but not running. Optionally include roots whose latest execution failed until their family next starts.",
+          description: "List Sessions with executing drains, admitted inputs, background shell notices, active subagent tasks or notices, or active goals in this process. Separately report Sessions with executing drains or live shell jobs as running; a settled shell awaiting notification is outstanding but not running. Optionally include roots whose latest execution failed until their family next starts. `lost` lists Sessions whose background shell completion notice a server restart lost, until that Session next starts an execution; loss is attention, not failed or outstanding work.",
         }),
       ),
     )

@@ -261,5 +261,6 @@ function unavailable(status: Status.State) {
  */
 const installRestartContinuity = Effect.fnUntraced(function* (restart: SessionRestart.Interface) {
   yield* restart.reconcileInterruptedExecutions
+  yield* restart.reconcileShells
   yield* Effect.addFinalizer(() => restart.suspendActiveSessions)
 })

@@ -817,6 +817,20 @@ export default {
           CONSTRAINT \`fk_session_usage_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
         );
       `)
+      yield* tx.run(`
+        CREATE TABLE \`shell\` (
+          \`id\` text PRIMARY KEY,
+          \`session_id\` text,
+          \`pid\` integer NOT NULL,
+          \`process_started\` text,
+          \`owner_pid\` integer NOT NULL,
+          \`owner_started\` text NOT NULL,
+          \`notice_pending\` integer DEFAULT false NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_lost\` integer,
+          \`start_seq\` integer DEFAULT -1 NOT NULL
+        );
+      `)
       yield* tx.run(`CREATE UNIQUE INDEX \`event_aggregate_seq_idx\` ON \`event\` (\`aggregate_id\`,\`seq\`);`)
       yield* tx.run(`CREATE INDEX \`event_aggregate_type_seq_idx\` ON \`event\` (\`aggregate_id\`,\`type\`,\`seq\`);`)
       yield* tx.run(

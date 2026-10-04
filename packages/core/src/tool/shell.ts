@@ -2,6 +2,7 @@ export * as ShellTool from "./shell"
 
 import path from "path"
 import { ToolFailure } from "@ycoding-ai/ai"
+import type { Shell as ShellSchema } from "@ycoding-ai/schema/shell"
 import type { Context as PluginContext } from "@ycoding-ai/plugin/effect/plugin"
 import { Effect, Fiber, Schedule, Schema, Scope } from "effect"
 import { ConfigShell } from "../config/shell"
@@ -121,9 +122,11 @@ export const Plugin = {
 
     const notifyWhenDone = Effect.fn("ShellTool.notifyWhenDone")(function* (
       sessionID: SessionSchema.ID,
+      shellID: ShellSchema.ID,
       callID: string,
       command: string,
     ) {
+      yield* shell.noticeOwed(shellID, sessionID)
       yield* runtime.job.wait({ id: callID }).pipe(
         Effect.flatMap((result) => {
           const state =
@@ -146,7 +149,7 @@ export const Plugin = {
             text: `<shell id="${callID}" state="${state}" command="${command}">\n${text}\n</shell>`,
             description: command,
             metadata: { source: "shell", state },
-          }).pipe(Effect.andThen(runtime.job.noticeAdmitted(callID)))
+          }).pipe(Effect.andThen(runtime.job.noticeAdmitted(callID)), Effect.andThen(shell.noticeAdmitted(shellID)))
         }),
         Effect.forkIn(scope, { startImmediately: true }),
       )
@@ -308,7 +311,7 @@ export const Plugin = {
 
                 if (input.background === true) {
                   yield* runtime.job.background(job.id)
-                  yield* notifyWhenDone(context.sessionID, context.callID, input.command)
+                  yield* notifyWhenDone(context.sessionID, info.id, context.callID, input.command)
                   return {
                     output: BACKGROUND_STARTED,
                     shellID: info.id,
@@ -349,7 +352,7 @@ export const Plugin = {
                       text: AUTO_BACKGROUND_STEER,
                       delivery: "steer",
                     })
-                  yield* notifyWhenDone(context.sessionID, context.callID, input.command)
+                  yield* notifyWhenDone(context.sessionID, info.id, context.callID, input.command)
                   return {
                     output: BACKGROUND_STARTED,
                     shellID: info.id,

@@ -83,7 +83,7 @@ export type LocalServer = {
   readonly getSession: (sessionID: string, location: LocalLocation) => Promise<SessionInfo>
   /** Process-wide running status; the caller filters it to the current inventory. */
   readonly activeSessions: () => Promise<unknown>
-  readonly outstandingSessions: (failures?: boolean) => Promise<{ readonly data: readonly string[]; readonly running: readonly string[]; readonly failed: readonly string[] }>
+  readonly outstandingSessions: (failures?: boolean) => Promise<{ readonly data: readonly string[]; readonly running: readonly string[]; readonly failed: readonly string[]; readonly lost: readonly string[] }>
   readonly completions: (input: { readonly after?: string; readonly limit: number }) => Promise<SessionCompletionsOutput>
   readonly providerUsageList: (refresh?: boolean) => Promise<ProviderUsageListOutput>
   readonly usageSummary: () => Promise<UsageGetOutput>

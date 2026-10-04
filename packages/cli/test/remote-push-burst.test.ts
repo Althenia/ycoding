@@ -85,7 +85,7 @@ test("a fast 2355-delta provider stream preserves explicit completion push witho
   const local = Object.assign(createLocalServer({ url: "http://127.0.0.1:1" }), {
     listPage: async () => ({ data: [{ id: sessionID, title: "Burst", projectID: "prj_burst", time: { created: 1, updated: 1 }, location: { directory: "/work" } }] }),
     activeSessions: async () => running ? { [sessionID]: { type: "running" } } : {},
-    outstandingSessions: async () => ({ data: outstanding || running ? [sessionID] : [], running: running ? [sessionID] : [], failed: [] }),
+    outstandingSessions: async () => ({ data: outstanding || running ? [sessionID] : [], running: running ? [sessionID] : [], failed: [], lost: [] }),
     completions: async () => ({ data: completed ? [{ id: "evt_burst_complete", seq: 25, created: Date.now(), sessionID, inputID: "msg_burst_input", assistantMessageID: "msg_burst_final" }] : [] }),
     permissionRequests: async () => attention ? [{ sessionID }] : [], formRequests: async () => [], guardrailRequestList: async () => [],
     events: async (value: LocalEventStream) => { stream = value; return async () => {} },

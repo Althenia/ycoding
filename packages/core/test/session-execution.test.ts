@@ -21,6 +21,7 @@ import { Money } from "@ycoding-ai/schema/money"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionGoal } from "@ycoding-ai/core/session/goal"
 import { SessionRestart } from "@ycoding-ai/core/session/execution/restart"
+import { AppProcess } from "@ycoding-ai/core/process"
 import { UserInterruptedError } from "@ycoding-ai/core/session/error"
 import { SessionRunner } from "@ycoding-ai/core/session/runner"
 import { SessionMessageTable, SessionTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
@@ -39,9 +40,9 @@ import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Logg
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
-const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionStore.node, Job.node])))
+const it = testEffect(AppNodeBuilder.build(LayerNode.group([AppProcess.node, Database.node, EventRuntime.node, SessionStore.node, Job.node])))
 const completionIt = testEffect(AppNodeBuilder.build(LayerNode.group([
-  Database.node, EventRuntime.node, SessionStore.node, SessionProjector.node, Job.node,
+  AppProcess.node, Database.node, EventRuntime.node, SessionStore.node, SessionProjector.node, Job.node,
 ])))
 
 completionIt.effect("records verified work once after an explicit declaration and the final response settle", () =>
@@ -1181,6 +1182,7 @@ function buildExecution(
         Layer.provideMerge(SessionExecution.layer),
         Layer.provide(Layer.succeed(Database.Service, database)),
         Layer.provide(Layer.succeed(EventRuntime.Service, events)),
+        Layer.provide(AppNodeBuilder.build(LayerNode.group([AppProcess.node]))),
         Layer.provide(Layer.succeed(SessionStore.Service, store)),
         Layer.provide(Layer.succeed(SessionAutonomy.Service, autonomy)),
         Layer.provide(Layer.succeed(Job.Service, jobs)),

@@ -387,7 +387,7 @@ function formInfo(id: string, sessionID: string) {
 type Call = { readonly method: string; readonly args: readonly unknown[] }
 
 function fakeLocal(results: Partial<Record<keyof LocalServer, unknown>> = {}) {
-  results.outstandingSessions ??= { data: [], running: [], failed: [] }
+  results.outstandingSessions ??= { data: [], running: [], failed: [], lost: [] }
   const calls: Call[] = []
   const local = new Proxy({} as LocalServer, {
     get(_target, property: PropertyKey) {
@@ -807,7 +807,7 @@ describe("operation mapping", () => {
 
   test("a cached-attention status still refuses more than 500 running roots", async () => {
     const sessions = Array.from({ length: RemoteLimits.maxStatusSessions + 1 }, (_, index) => sessionInfo(`ses_${index}`, { updated: index }))
-    const { local } = fakeLocal({ outstandingSessions: { data: sessions.map((session) => session.id), running: sessions.map((session) => session.id), failed: [] } })
+    const { local } = fakeLocal({ outstandingSessions: { data: sessions.map((session) => session.id), running: sessions.map((session) => session.id), failed: [], lost: [] } })
     const failure = await sessionStatus(local, sessions, {}).then(() => undefined, (cause: unknown) => cause)
     expect(failure instanceof Error ? failure.message : undefined).toBe("Session status exceeds the bounded root count")
   })
@@ -824,7 +824,7 @@ describe("operation mapping", () => {
     ]
     const idleRead = new Error("an idle Location was read for status")
     const { local, calls } = fakeLocal({
-      outstandingSessions: { data: ["ses_child"], running: ["ses_child"], failed: [] },
+      outstandingSessions: { data: ["ses_child"], running: ["ses_child"], failed: [], lost: [] },
       permissionRequests: async (location: LocalLocation) => location.directory === directory ? [{ id: "per_1", sessionID: "ses_child" }] : Promise.reject(idleRead),
       formRequests: async (location: LocalLocation) => location.directory === directory ? [formInfo("frm_1", "ses_idle")] : Promise.reject(idleRead),
       guardrailRequestList: async () => [],
@@ -837,12 +837,26 @@ describe("operation mapping", () => {
     expect(calls.some((call) => call.method === "permissionList" || call.method === "formList")).toBe(false)
   })
 
+  test("a lost shell notice in a child belongs to its root's attention, not failed or outstanding work", async () => {
+    const sessions = [sessionInfo("ses_root", { updated: 1 }), sessionInfo("ses_child", { updated: 2, parentID: "ses_root" })]
+    const { local } = fakeLocal({ outstandingSessions: { data: [], running: [], failed: [], lost: ["ses_child"] } })
+    expect(await sessionStatus(local, sessions)).toEqual({ running: [], attention: ["ses_root"],
+      requestAttention: [], requestNeeds: {}, failed: [], lost: ["ses_root"] })
+  })
+
+  test("status does not silently accept an older backend missing the required lost field", async () => {
+    const { local } = fakeLocal({ outstandingSessions: { data: [], running: [], failed: [] } })
+    await expect(sessionStatus(local, [sessionInfo("ses_root", { updated: 1 })])).rejects.toThrow(
+      "Local server requires an update before remote Session status can be read",
+    )
+  })
+
   test("status names what each attention root waits for, preferring a permission over a question over a review", async () => {
     const directory = process.cwd()
     const sessions = [sessionInfo("ses_a", { updated: 1, directory }), sessionInfo("ses_b", { updated: 2, directory }),
       sessionInfo("ses_c", { updated: 3, directory }), sessionInfo("ses_c_child", { updated: 4, directory, parentID: "ses_c" })]
     const { local } = fakeLocal({
-      outstandingSessions: { data: [], running: ["ses_a", "ses_b", "ses_c"], failed: [] },
+      outstandingSessions: { data: [], running: ["ses_a", "ses_b", "ses_c"], failed: [], lost: [] },
       permissionRequests: [{ id: "per_1", sessionID: "ses_c_child" }],
       formRequests: [formInfo("frm_1", "ses_b"), formInfo("frm_2", "ses_c")],
       guardrailRequestList: async (rootID: string) => [{ id: "grq_1", sessionID: rootID }],
@@ -860,7 +874,7 @@ describe("operation mapping", () => {
   test("maps the one process-wide outstanding read to non-executing family roots without per-root work reads", async () => {
     const sessions = [sessionInfo("ses_parent", { updated: 1 }),
       sessionInfo("ses_child", { updated: 2, parentID: "ses_parent" }), sessionInfo("ses_other", { updated: 3 })]
-    const { local, calls } = fakeLocal({ outstandingSessions: { data: ["ses_child", "ses_other"], running: ["ses_other"], failed: [] } })
+    const { local, calls } = fakeLocal({ outstandingSessions: { data: ["ses_child", "ses_other"], running: ["ses_other"], failed: [], lost: [] } })
     expect(await sessionStatus(local, sessions, {})).toMatchObject({ running: ["ses_other"], outstanding: ["ses_parent"] })
     expect(calls.map((call) => call.method)).toEqual(["outstandingSessions"])
   })
@@ -869,7 +883,7 @@ describe("operation mapping", () => {
     const directory = process.cwd()
     const sessions = [sessionInfo("ses_root", { updated: 1, directory }), sessionInfo("ses_child", { updated: 2, parentID: "ses_root", directory }), sessionInfo("ses_other", { updated: 3, directory })]
     const { local, registry, subscriptions } = await harness({ sessions, results: {
-      outstandingSessions: { data: ["ses_child"], running: ["ses_child"], failed: [] },
+      outstandingSessions: { data: ["ses_child"], running: ["ses_child"], failed: [], lost: [] },
       permissionRequests: async () => [{ id: "per_1", sessionID: "ses_child" }],
       formRequests: async () => [formInfo("frm_1", "ses_other")],
       guardrailRequestList: async (id: string) => id === "ses_root" ? [{ id: "grq_1", sessionID: "ses_child", rootSessionID: id }] : [],
@@ -885,11 +899,28 @@ describe("operation mapping", () => {
     const { local, registry, subscriptions } = await harness({ sessions, results: {
       permissionRequests: async () => [{ id: "per_1", sessionID: "ses_both" }],
       formRequests: async () => [],
-      outstandingSessions: { data: ["ses_both"], running: ["ses_both"], failed: ["ses_child", "ses_both"] },
+      outstandingSessions: { data: ["ses_both"], running: ["ses_both"], failed: ["ses_child", "ses_both"], lost: [] },
       guardrailRequestList: async () => [],
     } })
     const outcome = await executeRemoteOperation({ request: request("session.status"), local, sessions: registry, subscriptions })
     expect(valueOf(outcome)).toEqual({ running: ["ses_both"], attention: ["ses_both", "ses_failed"], failed: ["ses_failed"] })
+  })
+
+  test("a lost shell notice takes attention precedence over a failed run in the same family", async () => {
+    const sessions = [sessionInfo("ses_lost", { updated: 1 }), sessionInfo("ses_failed", { updated: 2 })]
+    const { local, registry, subscriptions } = await harness({
+      sessions,
+      results: {
+        outstandingSessions: { data: [], running: [], failed: ["ses_lost", "ses_failed"], lost: ["ses_lost"] },
+      },
+    })
+    const outcome = await executeRemoteOperation({
+      request: request("session.status"),
+      local,
+      sessions: registry,
+      subscriptions,
+    })
+    expect(valueOf(outcome)).toEqual({ running: [], attention: ["ses_failed", "ses_lost"], failed: ["ses_failed"] })
   })
 
   test("catalog and file finder read only the verified Location and project workspace", async () => {
@@ -1846,7 +1877,7 @@ describe("session list paging", () => {
   test("live background shell owners make their family running; settled notices remain outstanding only", async () => {
     const root = sessionInfo("ses_root", { updated: 1 })
     const child = sessionInfo("ses_child", { updated: 2, parentID: "ses_root" })
-    let work = { data: ["ses_child"], running: ["ses_child"], failed: [] as string[] }
+    let work = { data: ["ses_child"], running: ["ses_child"], failed: [] as string[], lost: [] }
     const h = await harness({ sessions: [root, child], results: { activeSessions: {}, outstandingSessions: () => work } })
     const list = async (status: "running" | "idle") => valueOf(await executeRemoteOperation({ request: request("session.list", { status, parentID: null, order: "active" }),
       local: h.local, sessions: h.registry, subscriptions: h.subscriptions }))

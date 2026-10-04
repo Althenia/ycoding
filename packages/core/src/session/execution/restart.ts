@@ -4,6 +4,8 @@ import { Context, Effect, Layer } from "effect"
 import { makeGlobalNode } from "../../effect/app-node"
 import { Database } from "../../database/database"
 import { EventRuntime } from "../../event"
+import { AppProcess } from "../../process"
+import { ShellLedger } from "../../shell/ledger"
 import { SessionExecution } from "../execution"
 import { SessionInterruptedExecution } from "./interrupted"
 import { SessionStore } from "../store"
@@ -19,6 +21,7 @@ export interface Interface {
    * Call once at managed startup before any execution begins; it never resumes work.
    */
   readonly reconcileInterruptedExecutions: Effect.Effect<void>
+  readonly reconcileShells: Effect.Effect<void>
 }
 
 /**
@@ -32,6 +35,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
     const events = yield* EventRuntime.Service
+    const appProcess = yield* AppProcess.Service
     const store = yield* SessionStore.Service
     const execution = yield* SessionExecution.Service
     return Service.of({
@@ -39,6 +43,7 @@ export const layer = Layer.effect(
         yield* store.suspend(yield* execution.active)
       }),
       reconcileInterruptedExecutions: SessionInterruptedExecution.reconcile(db, events),
+      reconcileShells: ShellLedger.reconcile(db, appProcess),
     })
   }),
 )
@@ -46,5 +51,5 @@ export const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [Database.node, EventRuntime.node, SessionStore.node, SessionExecution.node],
+  deps: [Database.node, EventRuntime.node, AppProcess.node, SessionStore.node, SessionExecution.node],
 })

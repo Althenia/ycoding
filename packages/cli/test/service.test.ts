@@ -12,6 +12,9 @@ import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
+import { ShellLedger } from "@ycoding-ai/core/shell/ledger"
+import { ShellTable } from "@ycoding-ai/core/shell/sql"
+import { Shell as ShellSchema } from "@ycoding-ai/schema/shell"
 import { expect, test } from "bun:test"
 import { Effect, Schema } from "effect"
 import fs from "node:fs/promises"
@@ -378,10 +381,65 @@ test("managed service startup settles an unterminated execution as a failed run 
     const outstanding = await fetch(new URL("/api/session/outstanding?failures=true", service.info.url), {
       headers: { authorization: "Basic " + btoa(`ycoding:${service.info.password}`) },
     }).then((response) => response.json())
-    expect(outstanding).toEqual({ data: [], running: [], failed: [sessionID] })
+    expect(outstanding).toEqual({ data: [], running: [], failed: [sessionID], lost: [] })
     expect(await executionStarts(path.join(service.root, "ycoding.db"), sessionID)).toBe(1)
   } finally {
     await stopManagedService(service)
+  }
+}, 60_000)
+
+test("a crashed managed service loses its own background shell, then replacement reports the owed notice", async () => {
+  const service = await startManagedService("ycoding-service-shell-crash-")
+  const sessionID = Session.ID.make("ses_service_shell_crash")
+  const database = path.join(service.root, "ycoding.db")
+  let shellPID: number | undefined
+  let replacement: Bun.Subprocess | undefined
+  try {
+    await waitForReady(service.info)
+    await withDatabase(database, Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make(service.root), sandboxes: [] }).run()
+      yield* db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global,
+        directory: service.root, title: "crashed shell" }).run()
+    }))
+    const created = await fetch(new URL("/api/shell", service.info.url), {
+      method: "POST",
+      headers: { authorization: "Basic " + btoa(`ycoding:${service.info.password}`),
+        "content-type": "application/json", "x-ycoding-directory": service.root },
+      body: JSON.stringify({ command: "sleep 300", timeout: 0, metadata: { sessionID } }),
+    })
+    expect(created.status).toBe(200)
+    const body: unknown = await created.json()
+    if (typeof body !== "object" || body === null || !("data" in body)) throw new Error("Shell create response was unreadable")
+    const shell = Schema.decodeUnknownSync(ShellSchema.Info)(body.data)
+    if (shell.pid === undefined) throw new Error("Shell create response omitted its process ID")
+    shellPID = shell.pid
+    await withDatabase(database, Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      expect((yield* db.select().from(ShellTable).all()).find((row) => row.id === shell.id)?.session_id).toBeNull()
+      yield* ShellLedger.noticeOwed(db, shell.id, sessionID)
+    }))
+
+    service.owner.kill("SIGKILL")
+    await service.owner.exited
+    replacement = Bun.spawn([process.execPath, path.join(import.meta.dir, "../src/index.ts"), "serve", "--service"], {
+      env: serviceEnv(service.root), stderr: "pipe", stdout: "ignore",
+    })
+    const info = await waitForInfo(service.registration, (candidate) => candidate.pid === replacement?.pid)
+    await waitForReady(info)
+    const response = await fetch(new URL("/api/session/outstanding?failures=true", info.url), {
+      headers: { authorization: "Basic " + btoa(`ycoding:${info.password}`) },
+    })
+    expect(await response.json()).toEqual({ data: [], running: [], failed: [], lost: [sessionID] })
+    expect(await executionStarts(database, sessionID)).toBe(0)
+    expect(Bun.spawnSync(["ps", "-o", "stat=", "-p", String(shellPID)]).stdout.toString().trim()).toMatch(/^(|Z.*)$/)
+  } finally {
+    replacement?.kill("SIGTERM")
+    if (replacement) await replacement.exited
+    service.owner.kill("SIGKILL")
+    await service.owner.exited
+    if (shellPID !== undefined) try { process.kill(-shellPID, "SIGKILL") } catch {}
+    await fs.rm(service.root, { recursive: true, force: true })
   }
 }, 60_000)
 

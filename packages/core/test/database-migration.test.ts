@@ -54,6 +54,7 @@ const currentMigrations = [
   { id: "20260926113528_session-pin" },
   { id: "20260929044715_session-active" },
   { id: "20261002020321_drop-legacy-account-share" },
+  { id: "20261004094144_shell-ledger" },
 ]
 const selectiveCompactionTables = [
   "compaction_manifest_blob",

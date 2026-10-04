@@ -603,7 +603,7 @@ async function run(input: OperationInput) {
   }
   if (validated.kind === "status") {
     const status = await sessionStatus(input.local, input.sessions.snapshot())
-    const failed = status.failed.filter((id) => !status.requestAttention.includes(id)).sort()
+    const failed = status.failed.filter((id) => !status.requestAttention.includes(id) && !status.lost?.includes(id)).sort()
     return { running: status.running, attention: status.attention,
       ...(status.outstanding === undefined ? {} : { outstanding: status.outstanding }),
       ...(failed.length === 0 ? {} : { failed }) }
@@ -1290,10 +1290,13 @@ export async function sessionStatus(local: LocalServer, sessions: readonly Sessi
     return session === undefined ? undefined : rootSessionID(session, byID)
   }
   const work = await local.outstandingSessions(knownFailures === undefined)
+  if (!Array.isArray(work.lost))
+    throw new OperationError("internal_error", "Local server requires an update before remote Session status can be read")
   const executing = work.running.flatMap((id) => byID.get(id) ?? [])
   const running = new Set(executing.flatMap((session) => rootSessionID(session, byID) ?? []))
   const outstanding = new Set(work.data.flatMap((id) => rootOf(id) ?? []).filter((id) => !running.has(id)))
   const failed = knownFailures ?? new Set(work.failed.flatMap((id) => rootOf(id) ?? []))
+  const lost = new Set(work.lost.flatMap((id) => rootOf(id) ?? []))
   if (running.size > RemoteLimits.maxStatusSessions || (knownAttention !== undefined && Object.keys(knownAttention).length > RemoteLimits.maxStatusSessions))
     throw new OperationError("message_too_large", "Session status exceeds the bounded root count")
   if (outstanding.size > RemoteLimits.maxStatusSessions) throw new OperationError("message_too_large", "Session status exceeds the bounded root count")
@@ -1326,10 +1329,11 @@ export async function sessionStatus(local: LocalServer, sessions: readonly Sessi
   if (attention.size > RemoteLimits.maxStatusSessions)
     throw new OperationError("message_too_large", "Session status exceeds the bounded root count")
   const requestAttention = [...attention.keys()].sort()
-  const combined = [...new Set([...requestAttention, ...failed])].sort()
+  const combined = [...new Set([...requestAttention, ...failed, ...lost])].sort()
   if (combined.length > RemoteLimits.maxStatusSessions) throw new OperationError("message_too_large", "Session status exceeds the bounded root count")
   return { running: [...running].sort(), attention: combined, requestAttention, requestNeeds: Object.fromEntries(attention), failed: [...failed],
-    ...(outstanding.size === 0 ? {} : { outstanding: [...outstanding].sort() }) }
+    ...(outstanding.size === 0 ? {} : { outstanding: [...outstanding].sort() }),
+    ...(lost.size === 0 ? {} : { lost: [...lost].sort() }) }
 }
 
 const attentionNeeds: readonly RemoteAttentionNeed[] = ["permission", "question", "review"]
