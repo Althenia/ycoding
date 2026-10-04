@@ -28,7 +28,7 @@ import { SessionRunnerCache } from "./runner/cache"
 import { SessionCacheRuntime } from "./runner/cache-runtime"
 import { SessionRunnerModel } from "./runner/model"
 import PROMPT_DEFAULT from "./runner/prompt/base.txt"
-import { isProviderImage, readAttachments, toLLMMessages } from "./runner/to-llm-message"
+import { isProviderImage, readAttachments, readToolImages, toLLMMessages } from "./runner/to-llm-message"
 import { ImageAnalyzer } from "./runner/image-analyzer"
 import { ConfigImageAnalyzer } from "../config/image-analyzer"
 import { Catalog } from "../catalog"
@@ -167,9 +167,13 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         })
         const attachmentRead = yield* readAttachments(attachments, session.id, input.context.messages)
         const verifiedAttachments = attachmentRead.verified
-        const images = attachmentRead.materialization.images
+        const toolImages = readToolImages(input.context.messages)
+        const imageInputs = [
+          ...verifiedAttachments.filter(({ file }) => isProviderImage(file)).map(({ file, bytes }) => ({ file, bytes })),
+          ...toolImages.map(({ file, bytes }) => ({ file, bytes })),
+        ]
         let fallbackDescriptions: ReadonlyMap<string, string> | undefined
-        if (images.size > 0) {
+        if (imageInputs.length > 0) {
           const runningInfo = yield* catalog.model.get(resolved.ref.providerID, resolved.ref.id).pipe(
             Effect.orElseSucceed(() => undefined as unknown as import("../model").ModelV2.Info | undefined),
           )
@@ -179,9 +183,6 @@ export const layer = (options?: SessionModelHeaders.Options) =>
             const analyzerInfo = Config.latest(entriesImg, "image_analyzer")
             const analyzerEnabled = analyzerInfo ? ConfigImageAnalyzer.isEnabled(analyzerInfo) : false
             if (analyzerEnabled && imageAnalyzer) {
-              const imageInputs = verifiedAttachments
-                .filter(({ file }) => isProviderImage(file))
-                .map(({ file, bytes }) => ({ file, bytes }))
               const analyzed = yield* imageAnalyzer.analyze(imageInputs).pipe(
                 Effect.orElseSucceed(() =>
                   new Map(
@@ -196,17 +197,25 @@ export const layer = (options?: SessionModelHeaders.Options) =>
             } else {
               const reason = analyzerInfo === undefined ? "image analyzer not configured" : "vision analyzer unavailable"
               fallbackDescriptions = new Map(
-                [...images.keys()].map((digest) => {
-                  const file = verifiedAttachments.find((v) => v.file.content.digest === digest)?.file
-                  return [digest, ImageAnalyzer.failureBlock(file!, reason)] as const
-                }),
+                imageInputs.map(({ file }) => [file.content.digest, ImageAnalyzer.failureBlock(file, reason)] as const),
               )
             }
           }
         }
+        const descriptions = fallbackDescriptions
         const attachmentMaterialization = {
           ...attachmentRead.materialization,
-          ...(fallbackDescriptions ? { fallbackDescriptions } : {}),
+          ...(descriptions
+            ? {
+                fallbackDescriptions: descriptions,
+                toolImageDescriptions: new Map(
+                  toolImages.flatMap(({ uri, file }) => {
+                    const description = descriptions.get(file.content.digest)
+                    return description === undefined ? [] : [[uri, description] as const]
+                  }),
+                ),
+              }
+            : {}),
         }
         const loweredHistory = input.context.messages.map((message) =>
           toLLMMessages([message], resolved.ref, providerMetadataKey, materialized, attachmentMaterialization),

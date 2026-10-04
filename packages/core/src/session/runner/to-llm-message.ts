@@ -12,6 +12,7 @@ import type { ModelV2 } from "../../model"
 import { SessionMessage } from "../message"
 import type { FileAttachment } from "@ycoding-ai/schema/prompt"
 import { SessionProviderState } from "../provider-state"
+import { Hash } from "../../util/hash"
 
 const imageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
 
@@ -21,6 +22,7 @@ export interface AttachmentMaterialization {
   readonly absolutePath: (file: FileAttachment) => string
   readonly images: ReadonlyMap<string, Uint8Array>
   readonly fallbackDescriptions?: ReadonlyMap<string, string>
+  readonly toolImageDescriptions?: ReadonlyMap<string, string>
   readonly unavailable?: ReadonlyMap<string, UnavailableReason>
 }
 
@@ -62,6 +64,32 @@ export const readAttachments = Effect.fnUntraced(function* (
     },
   }
 })
+
+export const readToolImages = (messages: ReadonlyArray<SessionMessage.Info>) => [
+  ...new Map(
+    messages
+      .flatMap((message) => (message.type === "assistant" ? message.content : []))
+      .flatMap((item) =>
+        item.type === "tool" && item.executed !== true && item.state.status === "completed" ? item.state.content : [],
+      )
+      .flatMap((item) => {
+        if (item.type !== "file" || !imageMimes.has(item.mime) || !item.uri.startsWith("data:")) return []
+        const marker = item.uri.indexOf(";base64,")
+        if (marker === -1) return []
+        const bytes = Buffer.from(item.uri.slice(marker + ";base64,".length), "base64")
+        return [
+          [
+            item.uri,
+            {
+              uri: item.uri,
+              bytes: new Uint8Array(bytes),
+              file: { mime: item.mime, name: item.name, content: { digest: Hash.sha256(bytes), bytes: bytes.byteLength } },
+            },
+          ] as const,
+        ]
+      }),
+  ).values(),
+]
 
 const media = (file: FileAttachment, data: Uint8Array): ContentPart => ({
   type: "media",
@@ -151,14 +179,28 @@ const toolCall = (tool: SessionMessage.AssistantTool, providerMetadata: Provider
     providerMetadata,
   })
 
-const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: ProviderMetadata | undefined) => {
+const toolResult = (
+  tool: SessionMessage.AssistantTool,
+  providerMetadata: ProviderMetadata | undefined,
+  attachments?: AttachmentMaterialization,
+) => {
   if (tool.state.status === "completed") {
     // TODO: Materialize remote and managed URIs before provider-history lowering.
     // ToolOutput.toResultValue rejects unresolved URIs rather than treating them as media bytes.
     const result =
       tool.executed === true && tool.state.result !== undefined
         ? tool.state.result
-        : ToolOutput.toResultValue({ structured: tool.state.structured, content: tool.state.content })
+        : ToolOutput.toResultValue({
+            structured: tool.state.structured,
+            content:
+              tool.executed === true
+                ? tool.state.content
+                : tool.state.content.map((item) => {
+                    const description =
+                      item.type === "file" ? attachments?.toolImageDescriptions?.get(item.uri) : undefined
+                    return description === undefined ? item : { type: "text" as const, text: description }
+                  }),
+          })
     return ToolResultPart.make({
       id: tool.id,
       name: tool.name,
@@ -187,6 +229,7 @@ const assistant = (
   model: ModelV2.Ref,
   providerMetadataKey: string,
   materialized: ReadonlyMap<string, Record<string, unknown>>,
+  attachments?: AttachmentMaterialization,
 ) => {
   const sameModel =
     String(message.model.providerID) === String(model.providerID) && String(message.model.id) === String(model.id)
@@ -270,6 +313,7 @@ const assistant = (
               ),
             )
           : undefined,
+        attachments,
       ),
     )
     .filter((message) => message !== undefined)
@@ -348,7 +392,7 @@ function toLLMMessage(
         }),
       ]
     case "assistant":
-      return assistant(message, model, providerMetadataKey, materialized)
+      return assistant(message, model, providerMetadataKey, materialized, attachments)
     case "compaction":
       if (message.status !== "completed" || !("reason" in message)) return []
       return [

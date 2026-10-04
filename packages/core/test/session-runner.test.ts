@@ -78,6 +78,7 @@ import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
+import { ConfigImageAnalyzer } from "@ycoding-ai/core/config/image-analyzer"
 import { Tool } from "@ycoding-ai/core/tool/tool"
 import {
   InstructionStateTable,
@@ -406,6 +407,7 @@ test("does not apply an ineligible tier without base pricing", () => {
   ).toBe(Money.USD.zero)
 })
 
+const onePixelPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 const authorizations: Tool.Context[] = []
 const executions: string[] = []
 const permissionFail = Tool.make({
@@ -472,6 +474,16 @@ const echo = Layer.effectDiscard(
           input: Schema.Struct({}),
           output: Schema.Any,
           execute: () => Effect.succeed({ big: 1n }),
+        }),
+        snapshot: Tool.make({
+          description: "Capture a window image",
+          input: Schema.Struct({}),
+          output: Schema.Struct({}),
+          toModelOutput: () => [
+            { type: "text", text: "Captured window" },
+            { type: "file", data: onePixelPng, mime: "image/png", name: "window.png" },
+          ],
+          execute: () => Effect.succeed({}),
         }),
       },
       { codemode: false },
@@ -572,6 +584,8 @@ const projects = Layer.mock(Project.Service, {
   resolve: (directory) => Effect.succeed({ id: Project.ID.global, directory }),
 })
 let efficiencyConfig: ConfigEfficiency.Info | undefined
+let imageAnalyzerConfig: ConfigImageAnalyzer.Info | undefined
+let catalogModel: ModelV2.Info | undefined
 let compactionWakeHook = Effect.void
 let compactionSummary = false
 const config = Layer.succeed(
@@ -589,6 +603,7 @@ const config = Layer.succeed(
               reserved_output_tokens: 1_000,
             }),
             ...(efficiencyConfig === undefined ? {} : { efficiency: efficiencyConfig }),
+            ...(imageAnalyzerConfig === undefined ? {} : { image_analyzer: imageAnalyzerConfig }),
           }),
         }),
       ]),
@@ -743,7 +758,10 @@ const promptCatalog = Layer.mock(Catalog.Service, {
     available: () => Effect.succeed([]),
   },
   model: {
-    get: () => Effect.succeed(undefined),
+    get: (providerID, modelID) =>
+      Effect.succeed(
+        catalogModel?.providerID === providerID && catalogModel.id === modelID ? catalogModel : undefined,
+      ),
     all: () => Effect.succeed([]),
     available: () => Effect.succeed([]),
     default: () => Effect.succeed(undefined),
@@ -753,6 +771,7 @@ const promptCatalog = Layer.mock(Catalog.Service, {
 const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [Snapshot.node, Snapshot.noopLayer],
   [LayerNodePlatform.llmClient, client],
+  [Catalog.node, promptCatalog],
   [SessionRunnerModel.node, models],
   [InstructionBuiltIns.node, systemContext],
   [InstructionDiscovery.node, instructionContext],
@@ -892,6 +911,8 @@ const setup = Effect.gen(function* () {
   currentModel = model
   currentCost = []
   efficiencyConfig = undefined
+  imageAnalyzerConfig = undefined
+  catalogModel = undefined
   compactionWakeHook = Effect.void
   compactionSummary = false
   skillBaselines.clear()
@@ -1980,7 +2001,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(2)
-      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo", "storefail"])
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo", "snapshot", "storefail"])
       expect(requests[1]?.tools.map((tool) => tool.name)).toEqual(requests[0]?.tools.map((tool) => tool.name))
     }),
   )
@@ -2004,7 +2025,7 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(1)
       expect(requests[0]?.tools.map((tool) => tool.name)).not.toContain("echo")
-      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "storefail"])
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "snapshot", "storefail"])
     }),
   )
 
@@ -2950,7 +2971,7 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(1)
       expect(requests[0]?.model).toBe(model)
-      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo", "storefail"])
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo", "snapshot", "storefail"])
       expect(
         nonVolatileMessages(requests[0]).map((message) => ({ role: message.role, content: message.content })),
       ).toEqual([
@@ -3987,7 +4008,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(2)
-      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo", "storefail"])
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo", "snapshot", "storefail"])
       expect((yield* session.context(sessionID)).slice(0, 3)).toMatchObject([
         { type: "user", text: "Use tools" },
         sessionStateNotice,
@@ -4028,6 +4049,81 @@ describe("SessionRunnerLLM", () => {
           ],
         },
       ])
+    }),
+  )
+
+  const fakeCatalogModel = (input: readonly string[]) =>
+    ModelV2.Info.make({
+      id: ModelV2.ID.make("fake-model"),
+      modelID: ModelV2.ID.make("fake-model"),
+      providerID: ProviderV2.ID.make("fake"),
+      name: "Fake model",
+      package: "@ycoding-ai/ai/providers/openai-compatible",
+      settings: {},
+      headers: {},
+      body: {},
+      capabilities: { tools: true, input: [...input], output: ["text"] },
+      variants: [],
+      status: "active",
+      enabled: true,
+      limit: testLimits,
+      cost: [],
+      time: { released: 0 },
+    })
+
+  const snapshotToolContent = Effect.gen(function* () {
+    const session = yield* SessionV2.Service
+    const tool = requireAssistant(yield* session.context(sessionID)).content.find(
+      (item) => item.type === "tool" && item.id === "call-snapshot",
+    )
+    if (tool?.type !== "tool" || tool.state.status !== "completed") throw new Error("Snapshot tool result missing")
+    return tool.state.content
+  })
+
+  it.effect("analyzes local tool-result images through the analyzer for a text-only model on the wire", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      catalogModel = fakeCatalogModel(["text"])
+      imageAnalyzerConfig = new ConfigImageAnalyzer.Info({ model: "openai/gpt-6-luna#high" })
+      yield* admit(session, "Capture the window")
+      responses = [reply.tool("call-snapshot", "snapshot", {}), reply.text("Seen", "text-snapshot")]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      const body = (yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(requests[1])).body
+      expect(JSON.stringify(body.messages)).not.toContain("image_url")
+      const toolMessage = body.messages.find((message) => message.role === "tool")
+      expect(toolMessage).toMatchObject({ role: "tool", tool_call_id: "call-snapshot" })
+      expect(toolMessage?.content).toContain("Captured window")
+      expect(toolMessage?.content).toContain("[Image Analysis: window.png (image/png) — FAILED]")
+      expect(toolMessage?.content).toContain("Automated vision analysis failed: vision model not configured or unavailable")
+      expect(yield* snapshotToolContent).toEqual([
+        { type: "text", text: "Captured window" },
+        { type: "file", uri: expect.stringMatching(/^data:image\/png;base64,/), mime: "image/png", name: "window.png" },
+      ])
+    }),
+  )
+
+  it.effect("passes local tool-result images natively to a multimodal model on the wire", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      catalogModel = fakeCatalogModel(["text", "image"])
+      imageAnalyzerConfig = new ConfigImageAnalyzer.Info({ model: "openai/gpt-6-luna#high" })
+      yield* admit(session, "Capture the window")
+      responses = [reply.tool("call-snapshot", "snapshot", {}), reply.text("Seen", "text-snapshot")]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      const body = (yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(requests[1])).body
+      expect(body.messages.find((message) => message.role === "tool")).toEqual({
+        role: "tool",
+        tool_call_id: "call-snapshot",
+        content: "Captured window",
+      })
+      expect(JSON.stringify(body.messages)).toContain("image_url")
+      expect(JSON.stringify(body.messages)).not.toContain("[Image Analysis:")
     }),
   )
 

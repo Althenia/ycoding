@@ -14,7 +14,6 @@ import { Integration } from "../../integration"
 import { IntegrationConnection } from "../../integration/connection"
 import { ModelV2 } from "../../model"
 import { SessionRunnerModel } from "./model"
-import type { FileAttachment } from "@ycoding-ai/schema/prompt"
 
 export const IMAGE_ANALYSIS_SCHEMA_VERSION = "1"
 
@@ -95,8 +94,15 @@ export const normalizeToonAnalysis = (raw: string): string => {
   return stripped
 }
 
+export interface Image {
+  readonly mime: string
+  readonly name?: string
+  readonly description?: string
+  readonly content: { readonly digest: string; readonly bytes: number }
+}
+
 export const formatFallbackBlock = (input: {
-  readonly file: FileAttachment
+  readonly file: Image
   readonly analysis: string
   readonly modelLabel?: string
 }): string => {
@@ -118,7 +124,7 @@ export const formatFallbackBlock = (input: {
     .join("\n")
 }
 
-export const failureBlock = (file: FileAttachment, error: string): string =>
+export const failureBlock = (file: Image, error: string): string =>
   [
     `[Image Analysis: ${file.name ?? file.content.digest.slice(0, 12)} (${file.mime}) — FAILED]`,
     `Automated vision analysis failed: ${error}`,
@@ -131,7 +137,7 @@ export const failureBlock = (file: FileAttachment, error: string): string =>
     .join("\n")
 
 export interface AnalyzeInput {
-  readonly file: FileAttachment
+  readonly file: Image
   readonly bytes: Uint8Array
 }
 

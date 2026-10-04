@@ -437,7 +437,7 @@ The optional `efficiency` block controls provider-request amplification and prom
 
 ## Image analysis fallback
 
-Text-only models cannot natively receive `image/*` media. When `image_analyzer` is configured, YCoding replaces provider images with a deterministic text description so any agent gets consistent understanding.
+Text-only models cannot natively receive `image/*` media. When `image_analyzer` is configured, YCoding replaces provider images with a deterministic text description so any agent gets consistent understanding. Provider images are managed user attachments and inline `data:` PNG, JPEG, GIF, or WebP images in completed local tool results. A tool-result image's description replaces that image in place inside the same tool result, so the tool call ID and the tool's text are unchanged. Durable Session history keeps the original image. Provider-executed tool results are sent unchanged, and YCoding never fetches a tool-result URI to analyze it.
 
 Multimodal models (those whose `capabilities.input` contains `image/*` or `vision`) bypass the fallback and receive media natively.
 
