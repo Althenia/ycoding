@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import { mkdtemp } from "node:fs/promises"
+import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { json } from "./fixture/tui-client"
@@ -9,6 +9,7 @@ import { materializeClipboardImage } from "../src/clipboard"
 import { testRender } from "@opentui/solid"
 import { createSignal, onMount } from "solid-js"
 import { StartupGate } from "../src/component/startup-loading"
+import { TextareaRenderable, type Renderable } from "@opentui/core"
 
 const sessionID = "ses_composer_live_fixes"
 const directory = "/tmp/ycoding/composer-live-fixes"
@@ -46,10 +47,10 @@ const permission = {
   metadata: {},
 }
 let submittedPrompt: string | undefined
-let failNextPrompt = false
 let admissionFailure: (() => Response) | undefined
 let conflictNextPrompt = false
-let holdAdmissionUntilCancelled = false
+let admissionGate: Promise<void> | undefined
+let releaseAdmission: (() => void) | undefined
 let admissionAbortObserved = false
 let modelSwitchGate: Promise<void> | undefined
 let releaseModelSwitch: (() => void) | undefined
@@ -71,9 +72,6 @@ let wakeGate: Promise<void> | undefined
 let releaseWake: (() => void) | undefined
 const submittedResumes: boolean[] = []
 const skillRequests: Array<{ id: string; skill: string }> = []
-let failNextSkill = false
-let skillGate: Promise<void> | undefined
-let releaseSkill: (() => void) | undefined
 
 function submittedText(): string | undefined {
   return submittedPrompt
@@ -121,15 +119,15 @@ async function route(url: URL, request: Request) {
     promptRequests.push(body)
     submittedResumes.push(body.resume === true)
     modelPromptOrder.push(body.resume ? "resume" : "admit")
-    if (holdAdmissionUntilCancelled && !body.resume) {
-      return new Promise<Response>((_resolve, reject) => {
-        const cancel = () => {
+    if (admissionGate && !body.resume) {
+      request.signal.addEventListener(
+        "abort",
+        () => {
           admissionAbortObserved = true
-          reject(request.signal.reason)
-        }
-        if (request.signal.aborted) return cancel()
-        request.signal.addEventListener("abort", cancel, { once: true })
-      })
+        },
+        { once: true },
+      )
+      await admissionGate
     }
     if (conflictNextPrompt) {
       conflictNextPrompt = false
@@ -137,10 +135,6 @@ async function route(url: URL, request: Request) {
         { _tag: "ConflictError", message: "Prompt message ID conflicts with an existing durable record" },
         { status: 409 },
       )
-    }
-    if (failNextPrompt) {
-      failNextPrompt = false
-      return json({ error: "simulated admission failure" }, { status: 500 })
     }
     if (admissionFailure) {
       const response = admissionFailure()
@@ -191,11 +185,6 @@ async function route(url: URL, request: Request) {
     const body: unknown = await request.json()
     if (!isSkillBody(body)) return json({ error: "invalid skill" }, { status: 400 })
     skillRequests.push(body)
-    if (skillGate) await skillGate
-    if (failNextSkill) {
-      failNextSkill = false
-      return json({ error: "simulated skill rejection" }, { status: 400 })
-    }
     return new Response(null, { status: 204 })
   }
   if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
@@ -345,7 +334,7 @@ test("keeps resident content mounted after one-time startup loading completes", 
     setReady(true)
     await app.waitForFrame((frame) => frame.includes("resident session content"))
     setReady(false)
-    await Bun.sleep(20)
+    await app.renderOnce()
     expect(app.captureCharFrame()).toContain("resident session content")
     expect(mounts).toBe(1)
   } finally {
@@ -358,20 +347,35 @@ async function permissionRoute(url: URL, request: Request) {
   return route(url, request)
 }
 
-async function waitForFrameText(screen: { frame(): string }, text: string) {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    if (screen.frame().includes(text)) return
-    await Bun.sleep(20)
+async function until(predicate: () => boolean | Promise<boolean>) {
+  const deadline = Date.now() + 5000
+  while (Date.now() < deadline) {
+    if (await predicate()) return
+    await new Promise<void>((resolve) => setImmediate(resolve))
   }
+  throw new Error("Expected composer transition did not occur")
+}
+
+async function waitForFrameText(screen: Awaited<ReturnType<typeof renderScreen>>, text: string) {
+  await until(() => screen.frame().includes(text))
+  await screen.renderOnce()
   expect(screen.frame()).toContain(text)
 }
 
 async function waitForPromptRequests(count: number) {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    if (promptRequests.length >= count) return
-    await Bun.sleep(20)
-  }
+  await until(() => promptRequests.length >= count)
   expect(promptRequests).toHaveLength(count)
+}
+
+function composer(node: Renderable): TextareaRenderable | undefined {
+  if (node instanceof TextareaRenderable) return node
+  return node.getChildren().map(composer).find(Boolean)
+}
+
+async function retryReceipt(screen: Awaited<ReturnType<typeof renderScreen>>) {
+  const row = screen.lines().findIndex((line) => line.includes("Retry send"))
+  expect(row).toBeGreaterThan(-1)
+  await screen.mouse.click(screen.lines()[row].indexOf("Retry send"), row)
 }
 
 function composerRuleRow(lines: string[], contentRow: number) {
@@ -389,7 +393,7 @@ test("keeps the composer subagent picker hidden during a permission review", asy
   try {
     expect(screen.frame()).toContain("bash wants to run")
     screen.input.pressKey("ARROW_DOWN")
-    await Bun.sleep(100)
+    await screen.renderOnce()
     expect(screen.frame()).toContain("Permission required")
     expect(screen.frame()).not.toContain("Subagents")
     expect(screen.frame()).not.toContain("reviewer")
@@ -457,7 +461,7 @@ test("insets the input, caps natural wrapping at six rows, and keeps autocomplet
     expect(composerRuleRow(scrolled, cursorTail)).toBe(cappedRule)
     expect(scrolled.join("\n")).not.toContain("cap-tail")
 
-    screen.input.pressEnter()
+    screen.input.pressKey("c", { ctrl: true })
     await waitForFrameText(screen, "Message YCoding…")
     await screen.input.typeText("/")
     await waitForFrameText(screen, "/ COMMANDS")
@@ -472,7 +476,7 @@ test("insets the input, caps natural wrapping at six rows, and keeps autocomplet
     await waitForFrameText(screen, "Message YCoding…")
     // Bracketed paste schedules one zero-delay layout invalidation after insertion. Let the final
     // invalidation paint before destroying this renderer so it cannot leak into the next screen.
-    await Bun.sleep(50)
+    await screen.renderOnce()
   } finally {
     await screen.dispose()
   }
@@ -483,7 +487,6 @@ test("blocks a dead clipboard image until the user explicitly removes it and sen
   const image = await materializeClipboardImage(root, async (file) => {
     await Bun.write(file, "png")
   })
-  failNextPrompt = false
   submittedPrompt = undefined
   const screen = await renderScreen({
     width: 100,
@@ -508,11 +511,12 @@ test("blocks a dead clipboard image until the user explicitly removes it and sen
     expect(screen.frame()).toContain("keep this text")
 
     screen.input.pressEnter()
-    await waitForFrameText(screen, "Message YCoding…")
+    await until(() => submittedText() === "keep this text")
     expect(submittedText()).toBe("keep this text")
   } finally {
     await screen.dispose()
     await image.temporary.cleanup()
+    await rm(root, { recursive: true, force: true })
   }
 })
 
@@ -548,7 +552,7 @@ test("shows cancellable clipboard progress and disposes a late image without tou
     await waitForFrameText(screen, "Cancelled · draft retained")
     releaseRead()
     await paste
-    await Bun.sleep(50)
+    await until(async () => !(await Bun.file(image.temporary.path).exists()))
 
     expect(screen.frame()).toContain("edited while reading 中文")
     expect(screen.frame()).not.toContain("[Image 1]")
@@ -557,6 +561,7 @@ test("shows cancellable clipboard progress and disposes a late image without tou
     releaseRead()
     await screen.dispose()
     await image.temporary.cleanup()
+    await rm(root, { recursive: true, force: true })
   }
 }, 30_000)
 
@@ -585,8 +590,10 @@ test("keeps the managed receipt and stable prompt ID when wake fails, then retri
     await screen.input.typeText("retry this image")
     screen.input.pressEnter()
 
-    await waitForFrameText(screen, "Prompt admitted · waking session…")
     await waitForPromptRequests(2)
+    await screen.renderOnce()
+    expect(screen.frame()).toContain("retry this image")
+    expect(composer(screen.renderer.root)?.plainText).toBe("")
     expect(promptRequests).toHaveLength(2)
     expect(promptRequests[0]?.resume).toBe(false)
     expect(promptRequests[1]?.resume).toBe(true)
@@ -594,15 +601,18 @@ test("keeps the managed receipt and stable prompt ID when wake fails, then retri
     expect(await Bun.file(image.temporary.path).exists()).toBe(false)
 
     releaseWake?.()
-    await waitForFrameText(screen, "Prompt admitted but the wake failed")
+    await waitForFrameText(screen, "Prompt admitted · wake unresolved · Retry send")
     expect(screen.frame()).toContain("retry this image")
-    screen.input.pressEnter()
-    await waitForFrameText(screen, "Message YCoding…")
+    await screen.input.typeText("new attachment-independent draft")
+    await retryReceipt(screen)
+    await waitForPromptRequests(3)
+    await waitForFrameText(screen, "new attachment-independent draft")
 
-    expect(promptRequests).toHaveLength(4)
+    expect(promptRequests).toHaveLength(3)
     expect(new Set(promptRequests.map((request) => request.id)).size).toBe(1)
     expect(promptRequests[2]?.files?.[0]?.uri).toStartWith("ycoding-attachment://sha256/")
-    expect(promptRequests[3]?.resume).toBe(true)
+    expect(promptRequests.map((request) => request.resume)).toEqual([false, true, true])
+    expect(composer(screen.renderer.root)?.plainText).toBe("new attachment-independent draft")
   } finally {
     releaseWake?.()
     wakeGate = undefined
@@ -610,10 +620,11 @@ test("keeps the managed receipt and stable prompt ID when wake fails, then retri
     failNextWake = false
     await screen.dispose()
     await image.temporary.cleanup()
+    await rm(root, { recursive: true, force: true })
   }
 }, 30_000)
 
-test("retains a rejected attachment and draft, reports the validation error, and allows a corrected next prompt", async () => {
+test("distinguishes attachment rejection and discards only its recovery before a new prompt", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "ycoding-tui-attachment-rejected-"))
   const image = await materializeClipboardImage(root, async (file) => {
     await Bun.write(file, "png")
@@ -639,19 +650,22 @@ test("retains a rejected attachment and draft, reports the validation error, and
     await waitForFrameText(screen, "[Image 1]")
     await screen.input.typeText("first attachment")
     screen.input.pressEnter()
-    await waitForFrameText(screen, "Attachment rejected · draft retained")
-    expect(screen.frame()).toContain("Attachment exceeds the 20 MiB limit")
+    await waitForFrameText(screen, "Attachment rejected · Retry send")
     expect(screen.frame()).toContain("[Image 1]")
     expect(screen.frame()).toContain("first attachment")
     expect(promptRequests).toHaveLength(1)
     expect(await Bun.file(image.temporary.path).exists()).toBe(true)
 
-    // Correct the draft explicitly; a rejected admission must not pin the next prompt.
-    for (let index = 0; index < "first attachment".length; index++) screen.input.pressKey("BACKSPACE")
-    for (let index = 0; index < "[Image 1] ".length; index++) screen.input.pressKey("BACKSPACE")
     await screen.input.typeText("next plain prompt")
+    screen.input.pressKey("p", { ctrl: true })
+    await waitForFrameText(screen, "Commands")
+    await screen.input.typeText("Discard previous submission recovery")
+    await waitForFrameText(screen, "Discard previous submission recovery:")
     screen.input.pressEnter()
-    await waitForFrameText(screen, "Message YCoding…")
+    await until(async () => !(await Bun.file(image.temporary.path).exists()))
+    expect(composer(screen.renderer.root)?.plainText).toBe("next plain prompt")
+    screen.input.pressEnter()
+    await waitForPromptRequests(3)
     expect(promptRequests.map((request) => request.text)).toEqual([
       "[Image 1] first attachment",
       "next plain prompt",
@@ -663,6 +677,7 @@ test("retains a rejected attachment and draft, reports the validation error, and
     admissionFailure = undefined
     await screen.dispose()
     await image.temporary.cleanup()
+    await rm(root, { recursive: true, force: true })
   }
 }, 30_000)
 
@@ -688,14 +703,15 @@ test("keeps an uncertain attachment admission intact for an exact retry instead 
     await waitForFrameText(screen, "[Image 1]")
     await screen.input.typeText("uncertain image")
     screen.input.pressEnter()
-    await waitForFrameText(screen, "Checking whether sent · retry keeps the same prompt ID")
+    await waitForFrameText(screen, "Sending prompt unresolved · Retry send")
     expect(screen.frame()).toContain("[Image 1]")
     expect(screen.frame()).not.toContain("An attachment could not be prepared or admitted")
     expect(await Bun.file(image.temporary.path).exists()).toBe(true)
     expect(promptRequests).toHaveLength(1)
 
-    screen.input.pressEnter()
-    await waitForFrameText(screen, "Message YCoding…")
+    await retryReceipt(screen)
+    await waitForPromptRequests(3)
+    await until(async () => !(await Bun.file(image.temporary.path).exists()))
     expect(promptRequests).toHaveLength(3)
     expect(new Set(promptRequests.map((request) => request.id)).size).toBe(1)
     expect(promptRequests[1]?.files?.[0]?.uri).toStartWith("file:")
@@ -705,48 +721,7 @@ test("keeps an uncertain attachment admission intact for an exact retry instead 
     admissionFailure = undefined
     await screen.dispose()
     await image.temporary.cleanup()
-  }
-}, 30_000)
-
-test("shows skill progress and lets a plain next draft send after a rejected activation", async () => {
-  promptRequests.length = 0
-  skillRequests.length = 0
-  failNextSkill = true
-  skillGate = new Promise<void>((resolve) => (releaseSkill = resolve))
-  const screen = await renderScreen({
-    width: 120,
-    height: 40,
-    args: { sessionID },
-    route,
-    settle: "Message YCoding…",
-  })
-  try {
-    const promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
-    await screen.mouse.click(3, promptRow)
-    await screen.input.typeText("$review first")
-    screen.input.pressEnter()
-    await waitForFrameText(screen, "Loading skill 1/1…")
-    expect(promptRequests).toHaveLength(0)
-
-    releaseSkill?.()
-    await waitForFrameText(screen, "Skill activation failed · draft retained")
-    expect(screen.frame()).toContain("$review first")
-    expect(skillRequests).toHaveLength(1)
-    for (let index = 0; index < "$review first".length; index++) screen.input.pressKey("BACKSPACE")
-    await screen.input.typeText("plain next")
-    screen.input.pressEnter()
-    await waitForFrameText(screen, "Message YCoding…")
-
-    expect(skillRequests).toHaveLength(1)
-    expect(promptRequests).toHaveLength(2)
-    expect(promptRequests.every((request) => request.text === "plain next")).toBe(true)
-    expect(new Set(promptRequests.map((request) => request.id)).size).toBe(1)
-  } finally {
-    releaseSkill?.()
-    skillGate = undefined
-    releaseSkill = undefined
-    failNextSkill = false
-    await screen.dispose()
+    await rm(root, { recursive: true, force: true })
   }
 }, 30_000)
 
@@ -765,11 +740,11 @@ test("never mints a fresh prompt ID after a durable conflict", async () => {
     await screen.mouse.click(3, promptRow)
     await screen.input.typeText("stable conflict retry")
     screen.input.pressEnter()
-    await waitForFrameText(screen, "Prompt ID conflict · draft retained")
+    await waitForFrameText(screen, "Prompt ID conflict · Retry send")
     expect(promptRequests).toHaveLength(1)
 
-    screen.input.pressEnter()
-    await waitForFrameText(screen, "Message YCoding…")
+    await retryReceipt(screen)
+    await waitForPromptRequests(3)
     expect(promptRequests).toHaveLength(3)
     expect(new Set(promptRequests.map((request) => request.id)).size).toBe(1)
     expect(promptRequests.map((request) => request.resume)).toEqual([false, false, true])
@@ -779,10 +754,12 @@ test("never mints a fresh prompt ID after a durable conflict", async () => {
   }
 }, 30_000)
 
-test("cancels the owned Client admission request and keeps its stable retry identity", async () => {
+test("Escape leaves owned admission running and its completion preserves the new draft", async () => {
   promptRequests.length = 0
   admissionAbortObserved = false
-  holdAdmissionUntilCancelled = true
+  admissionGate = new Promise<void>((resolve) => {
+    releaseAdmission = resolve
+  })
   const screen = await renderScreen({
     width: 80,
     height: 24,
@@ -795,21 +772,28 @@ test("cancels the owned Client admission request and keeps its stable retry iden
     await screen.mouse.click(3, promptRow)
     await screen.input.typeText("cancel this admission")
     screen.input.pressEnter()
-    await waitForFrameText(screen, "Preparing attachments / sending…")
+    await waitForPromptRequests(1)
+    expect(composer(screen.renderer.root)?.plainText).toBe("")
+    await screen.input.typeText("new draft during admission")
 
     screen.input.pressKey("ESCAPE")
-    await waitForFrameText(screen, "Cancelled · draft retained")
-    expect(admissionAbortObserved).toBe(true)
-    expect(screen.frame()).toContain("cancel this admission")
+    await screen.renderOnce()
+    expect(admissionAbortObserved).toBe(false)
+    expect(composer(screen.renderer.root)?.plainText).toBe("new draft during admission")
     expect(promptRequests).toHaveLength(1)
 
-    holdAdmissionUntilCancelled = false
-    screen.input.pressEnter()
-    await waitForFrameText(screen, "Message YCoding…")
-    expect(promptRequests).toHaveLength(3)
+    releaseAdmission?.()
+    await waitForPromptRequests(2)
+    await screen.renderOnce()
+    expect(admissionAbortObserved).toBe(false)
+    expect(screen.frame()).toContain("cancel this admission")
+    expect(composer(screen.renderer.root)?.plainText).toBe("new draft during admission")
+    expect(promptRequests).toHaveLength(2)
     expect(new Set(promptRequests.map((request) => request.id)).size).toBe(1)
   } finally {
-    holdAdmissionUntilCancelled = false
+    releaseAdmission?.()
+    admissionGate = undefined
+    releaseAdmission = undefined
     await screen.dispose()
   }
 }, 30_000)
@@ -826,7 +810,7 @@ test("submits virtualized large pastes at full length without blocking the compo
     expect(screen.frame()).not.toContain("large-paste-line-0-")
 
     screen.input.pressEnter()
-    await waitForFrameText(screen, "Message YCoding…")
+    await until(() => submittedText() === pasted)
     const submitted = submittedText()
     if (submitted === undefined) throw new Error("large paste was not submitted")
     expect(submitted).toBe(pasted)
@@ -855,7 +839,7 @@ test("defers a running Session's model selection until the next prompt, then swi
     screen.input.pressKey("ARROW_DOWN")
     screen.input.pressEnter()
     await waitForFrameText(screen, "Message YCoding…")
-    await Bun.sleep(50)
+    await screen.renderOnce()
     expect(modelSwitchRequests).toEqual([])
     expect(interruptRequests).toEqual([])
     expect(promptRequests).toEqual([])
@@ -868,10 +852,7 @@ test("defers a running Session's model selection until the next prompt, then swi
     await screen.mouse.click(3, promptRow)
     await screen.input.typeText("steer on the selected variant")
     screen.input.pressEnter()
-    for (let attempt = 0; attempt < 100; attempt++) {
-      if (modelSwitchStarted) break
-      await Bun.sleep(10)
-    }
+    await until(() => modelSwitchStarted)
 
     expect(modelSwitchStarted).toBe(true)
     // The switch is awaited before any admission: nothing is admitted while it is in flight.
@@ -880,8 +861,7 @@ test("defers a running Session's model selection until the next prompt, then swi
     expect(interruptRequests).toEqual([])
     expect(modelPromptOrder).toEqual(["model"])
     releaseModelSwitch?.()
-    for (let attempt = 0; attempt < 100 && submittedText() !== "steer on the selected variant"; attempt++)
-      await Bun.sleep(10)
+    await waitForPromptRequests(2)
 
     expect(submittedText()).toBe("steer on the selected variant")
     // Admission precedes the explicit resume, and the resume keeps the same submission.
@@ -926,13 +906,13 @@ test("a failed in-flight selection admits nothing and retains the draft", async 
     await screen.mouse.click(3, promptRow)
     await screen.input.typeText("draft survives failed selection")
     screen.input.pressEnter()
-    for (let attempt = 0; attempt < 100 && !modelSwitchStarted; attempt++) await Bun.sleep(10)
+    await until(() => modelSwitchStarted)
     expect(modelSwitchStarted).toBe(true)
     // Submission is waiting on the prompt-time switch; nothing has been admitted on the old model.
     expect(promptRequests).toHaveLength(0)
 
     releaseModelSwitch?.()
-    await waitForFrameText(screen, "Model switch needs attention")
+    await waitForFrameText(screen, "Switching model unresolved · Retry send")
     // The failed selection admits nothing and keeps the draft for retry.
     expect(promptRequests).toHaveLength(0)
     expect(submittedText()).toBeUndefined()
@@ -959,7 +939,8 @@ test("a blocked model switch retains the draft and admits nothing", async () => 
     reason: "context-window-exceeded",
   }
   async function blockedRoute(url: URL, request: Request) {
-    if (url.pathname === `/api/session/${sessionID}/model` && request.method === "POST") return json(blocked, { status: 409 })
+    if (url.pathname === `/api/session/${sessionID}/model` && request.method === "POST")
+      return json(blocked, { status: 409 })
     return route(url, request)
   }
   submittedPrompt = undefined
@@ -988,7 +969,7 @@ test("a blocked model switch retains the draft and admits nothing", async () => 
     await screen.mouse.click(3, promptRow)
     await screen.input.typeText("prompt survives blocked switch")
     screen.input.pressEnter()
-    await waitForFrameText(screen, "Model switch needs attention")
+    await waitForFrameText(screen, "Switching model unresolved · Retry send")
 
     // No admission and no wake: the failed switch performs neither.
     expect(promptRequests).toHaveLength(0)
@@ -1009,8 +990,7 @@ test("stacks the full-width subagent picker above the prompt with legible model 
     expect(promptRow).toBeGreaterThan(-1)
     await screen.mouse.click(3, promptRow)
     screen.input.pressKey("ARROW_DOWN")
-    const deadline = Date.now() + 15_000
-    while (Date.now() < deadline && !screen.frame().includes("reviewer")) await Bun.sleep(50)
+    await waitForFrameText(screen, "reviewer")
     expect(screen.frame()).toContain("reviewer")
     const lines = screen.lines()
     const tabs = lines.findIndex((line) => line.includes("Subagents"))

@@ -23,6 +23,7 @@ const models = [
   { providerID: "openai", id: "model-a-fast", name: "Model A Fast", variants: ["medium", "high"] },
   { providerID: "openai", id: "model-b", name: "Model B", variants: ["low", "high"] },
   { providerID: "openai", id: "model-c", name: "Model C", variants: ["medium", "high"] },
+  { providerID: "openai", id: "model-d", name: "Model D", variants: ["default", "none"] },
   { providerID: "openai", id: "model-plain", name: "Model Plain", variants: [] },
 ]
 type Page = Awaited<ReturnType<NonNullable<typeof browser>["openPage"]>>
@@ -72,19 +73,55 @@ async function send(page: Page, text: string) {
 }
 async function effort(page: Page, value: string) {
   await page.evaluate(`document.querySelector('.model-control__trigger').click()`)
-  await page.evaluate(`document.querySelector('[aria-label="Reset reasoning effort"]').click()`)
-  if (value !== "Base") {
+  await page.evaluate(`document.querySelector('[aria-label="Clear reasoning effort override"]').click()`)
+  if (value !== "Model settings") {
     await page.evaluate(`document.querySelector('[role="slider"]').focus()`)
     await page.pressKey("End", "End", 35)
   }
   await page.evaluate(`document.querySelector('[aria-label="Close model picker"]').click()`)
 }
 
+test("omitted effort is not an offered slider stop and clearing stays separate from variant selection", async () => {
+  const h = await harness({ providerID: "openai", id: "model-a" })
+  try {
+    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("Model settings")
+    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["low", "high", "max"])
+    expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("No effort override")
+    await h.page.evaluate(`document.querySelector('[role="slider"]').focus()`)
+    await h.page.pressKey("Home", "Home", 36)
+    expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("low")
+    await h.page.evaluate(`document.querySelector('[aria-label="Clear reasoning effort override"]').click()`)
+    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__switch strong').textContent`)).toBe("Model settings")
+    expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("No effort override")
+    expect(await h.page.evaluate<unknown>(`window.modelReplayStore.state().selectedSessionInfo.model`)).toEqual({ providerID: "openai", id: "model-a" })
+    expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(0)
+  } finally { await h.close() }
+})
+
+test("provider-offered none and default remain selectable explicit variants", async () => {
+  const h = await harness()
+  try {
+    await choose(h.page, "Model D")
+    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["none", "default"])
+    await h.page.evaluate(`document.querySelector('[role="slider"]').focus()`)
+    await h.page.pressKey("Home", "Home", 36)
+    expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("none")
+    await h.page.pressKey("End", "End", 35)
+    expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("default")
+    await h.page.evaluate(`document.querySelector('[aria-label="Close model picker"]').click()`)
+    await send(h.page, "Use offered default")
+    await wait(h.page, `document.querySelector('textarea').value === ''`)
+    expect(h.relay.requests.find((request) => request.operation === "session.switchModel")?.input?.model).toEqual({ providerID: "openai", id: "model-d", variant: "default" })
+  } finally { await h.close() }
+})
+
 test("each model restores its own valid effort instead of another model's effort or its default", async () => {
   const h = await harness()
   try {
     await choose(h.page, "Model B")
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("Base")
+    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("Model settings")
     await choose(h.page, "Model A")
     expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("max")
     await choose(h.page, "Model B")
@@ -92,15 +129,15 @@ test("each model restores its own valid effort instead of another model's effort
     expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("high")
     await choose(h.page, "Model A")
     expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("max")
-    await effort(h.page, "Base")
+    await effort(h.page, "Model settings")
     await choose(h.page, "Model B")
     await choose(h.page, "Model A")
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("Base")
+    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("Model settings")
     expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(0)
   } finally { await h.close() }
 })
 
-test("invalid incoming effort blocks ordinary sends until an explicit valid Base intent without rewriting the Session on read", async () => {
+test("invalid incoming effort blocks ordinary sends until an explicit clear intent without rewriting the Session on read", async () => {
   const h = await harness({ providerID: "openai", id: "model-b", variant: "max" })
   try {
     expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toContain("Unavailable")
@@ -114,14 +151,14 @@ test("invalid incoming effort blocks ordinary sends until an explicit valid Base
     await send(h.page, "Retain invalid draft")
     expect(await h.page.evaluate<string>(`document.querySelector('textarea').value`)).toBe("Retain invalid draft")
     expect(h.relay.requests.filter((request) => request.operation === "session.prompt" || request.operation === "session.switchModel")).toHaveLength(0)
-    await effort(h.page, "Base")
-    await send(h.page, "Use explicit Base")
+    await effort(h.page, "Model settings")
+    await send(h.page, "Use model settings")
     await wait(h.page, `window.modelReplayStore.state().mutations.every(mutation=>mutation.state!=='sending') && document.querySelector('textarea').value === ''`)
     expect(h.relay.requests.find((request) => request.operation === "session.switchModel")?.input?.model).toEqual({ providerID: "openai", id: "model-b" })
   } finally { await h.close() }
 })
 
-test("a confirmed local choice releases its override, an external model then owns ordinary sends, and a failed switch admits no prompt", async () => {
+test("a confirmed local choice releases its override, an external model owns later sends, and a failed switch retains the receipt", async () => {
   const h = await harness()
   try {
     await choose(h.page, "Model B")
@@ -143,18 +180,18 @@ test("a confirmed local choice releases its override, an external model then own
     h.refuse()
     await choose(h.page, "Model A")
     await send(h.page, "Retain on refusal")
-    await wait(h.page, `window.modelReplayStore.state().mutations.some(mutation=>mutation.kind==='model' && mutation.state==='failed')`)
+    await wait(h.page, `window.modelReplayStore.state().mutations.some(mutation=>mutation.kind==='prompt' && mutation.state==='failed' && mutation.detail==='Switch refused')`)
     expect(h.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(2)
-    expect(await h.page.evaluate<string>(`document.querySelector('textarea').value`)).toBe("Retain on refusal")
+    expect(await h.page.evaluate<string>(`window.modelReplayStore.state().mutations.find(mutation=>mutation.state==='failed')?.input.text`)).toBe("Retain on refusal")
   } finally { await h.close() }
 })
 
-test("a no-effort model needs explicit Base intent for obsolete effort and a fast counterpart uses omission when it cannot retain effort", async () => {
+test("a no-effort model needs explicit clear intent for obsolete effort and a fast counterpart uses omission when it cannot retain effort", async () => {
   const plain = await harness({ providerID: "openai", id: "model-plain", variant: "max" })
   try {
     expect(await plain.page.evaluate<boolean>(`document.querySelector('.model-control__effort') === null`)).toBe(true)
     expect(await plain.page.evaluate<string>(`document.querySelector('.composer__model-warning').textContent`)).toContain("max")
-    await effort(plain.page, "Base")
+    await effort(plain.page, "Model settings")
     await send(plain.page, "Use plain model")
     await wait(plain.page, `document.querySelector('textarea').value === ''`)
     expect(plain.relay.requests.find((request) => request.operation === "session.switchModel")?.input?.model).toEqual({ providerID: "openai", id: "model-plain" })
@@ -168,13 +205,13 @@ test("a no-effort model needs explicit Base intent for obsolete effort and a fas
   } finally { await fast.close() }
 })
 
-test("an omitted effort stays Base with authoritative diagnostics and no inferred effort or extra model switch", async () => {
+test("an omitted effort stays unselected with authoritative diagnostics and no inferred effort or extra model switch", async () => {
   const h = await harness({ providerID: "openai", id: "model-a" })
   try {
     const sample = { model: h.current(), tokens: 12, durationNs: 2_000_000_000, tokensPerSecond: 6 }
     h.relay.pushEvent("ses_a", { type: "session.diagnostics.updated", data: { sessionID: "ses_a", diagnostics: { model: h.current(), context: { total: 800, limit: 2_000 }, generationSpeed: { latest: sample, recent: [sample] } } } })
     await wait(h.page, `window.modelReplayStore.state().view.contextWindow?.used === 800`)
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("Base")
+    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("Model settings")
     expect(await h.page.evaluate<string>(`document.querySelector('.composer__speed')?.textContent ?? ''`)).toContain("6 tok/s")
     expect(await h.page.evaluate<boolean>(`document.querySelector('.composer__context-trigger') !== null`)).toBe(true)
     await send(h.page, "Keep the actual model")
@@ -184,12 +221,12 @@ test("an omitted effort stays Base with authoritative diagnostics and no inferre
   } finally { await h.close() }
 })
 
-test("an existing Session without a model uses the catalog base, not the stored new-session preference", async () => {
+test("an existing Session without a model uses the catalog default identity, not the stored new-session preference", async () => {
   const preferred = { providerID: "openai", id: "model-b", variant: "high" }
   const h = await harness(null, preferred)
   try {
     expect(await h.page.evaluate<string>(`document.querySelector('.model-control__name').textContent`)).toBe("Model A")
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("Base")
+    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("Model settings")
     expect(await h.page.evaluate<unknown>(`window.modelReplayStore.state().selectedSessionInfo.model`)).toBeUndefined()
     await send(h.page, "Use the runtime default")
     await wait(h.page, `document.querySelector('textarea').value === ''`)

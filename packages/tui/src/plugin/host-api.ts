@@ -27,36 +27,12 @@ import type { PromptInput } from "@ycoding-ai/schema"
 import type { Types } from "effect"
 import type { CliRenderer, KeyEvent, RGBA, Renderable, SlotMode } from "@opentui/core"
 import type { Binding, Keymap } from "@opentui/keymap"
-import {
-  createBindingLookup as createKeymapBindingLookup,
-  type BindingConfig,
-  type CreateBindingLookupOptions,
-  type KeySequenceFormatPart,
-  type SequenceBindingLike,
-} from "@opentui/keymap/extras"
+import type { KeySequenceFormatPart, SequenceBindingLike } from "@opentui/keymap/extras"
 import type { JSX, SolidPlugin } from "@opentui/solid"
 
 export type { CliRenderer, KeyEvent, Renderable, SlotMode } from "@opentui/core"
-export { stringifyKeySequence, stringifyKeyStroke } from "@opentui/keymap"
-export type { Binding, KeyLike, KeySequencePart, KeyStringifyInput, StringifyOptions } from "@opentui/keymap"
-export { formatCommandBindings, formatKeySequence } from "@opentui/keymap/extras"
-export type {
-  BindingConfig,
-  BindingLookup,
-  BindingValue,
-  CreateBindingLookupOptions,
-  FormatCommandBindingsOptions,
-  FormatKeySequenceOptions,
-  KeySequenceFormatPart,
-  SequenceBindingLike,
-} from "@opentui/keymap/extras"
-
-export function createBindingLookup(
-  config: BindingConfig<Renderable, KeyEvent> | undefined,
-  options?: CreateBindingLookupOptions<Renderable, KeyEvent>,
-) {
-  return createKeymapBindingLookup<Renderable, KeyEvent>(config ?? {}, options)
-}
+export type { Binding } from "@opentui/keymap"
+export type { KeySequenceFormatPart, SequenceBindingLike } from "@opentui/keymap/extras"
 
 export type TuiRouteCurrent =
   | {
@@ -198,7 +174,7 @@ export type TuiToast = {
 
 export type TuiAttentionWhen = "always" | "focused" | "blurred"
 
-export const TuiAttentionSoundNames = ["default", "question", "permission", "error", "done", "subagent_done"] as const
+const TuiAttentionSoundNames = ["default", "question", "permission", "error", "done", "subagent_done"] as const
 export type TuiAttentionSoundName = (typeof TuiAttentionSoundNames)[number]
 
 export type TuiAttentionSound =
@@ -568,11 +544,6 @@ export type TuiPluginInstallResult =
       message: string
       missing?: boolean
     }
-
-export type TuiWorkspace = {
-  current: () => string | undefined
-  set: (workspaceID?: string) => void
-}
 
 export type TuiPluginApi = {
   app: TuiApp

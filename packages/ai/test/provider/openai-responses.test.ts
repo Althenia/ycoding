@@ -2951,194 +2951,97 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("fails with a typed rate limit for provider error frames", () =>
-    Effect.gen(function* () {
-      const error = yield* LLMClient.generate(request).pipe(
-        Effect.provide(fixedResponse(sseEvents({ type: "error", code: "rate_limit_exceeded", message: "Slow down" }))),
-        Effect.flip,
-      )
-
-      expect(error).toBeInstanceOf(LLMError)
-      expect(error.reason).toMatchObject({ _tag: "RateLimit", message: "rate_limit_exceeded: Slow down" })
-    }),
-  )
-
-  it.effect("falls back to error code when no message is present", () =>
-    Effect.gen(function* () {
-      const error = yield* LLMClient.generate(request).pipe(
-        Effect.provide(fixedResponse(sseEvents({ type: "error", code: "internal_error" }))),
-        Effect.flip,
-      )
-
-      expect(error.reason).toMatchObject({ _tag: "ProviderInternal", message: "internal_error" })
-    }),
-  )
-
-  it.effect("falls back to error code when message is empty", () =>
-    Effect.gen(function* () {
-      const error = yield* LLMClient.generate(request).pipe(
-        Effect.provide(fixedResponse(sseEvents({ type: "error", code: "internal_error", message: "" }))),
-        Effect.flip,
-      )
-
-      expect(error.reason).toMatchObject({ _tag: "ProviderInternal", message: "internal_error" })
-    }),
-  )
-
-  // Regression: `response.failed` carries the failure details under
-  // `response.error`, not at the top level. The previous handler only
-  // checked top-level `message`/`code` and so always emitted the bare
-  // "OpenAI Responses response failed" string, hiding the real cause.
-  it.effect("surfaces response.failed details from response.error", () =>
-    Effect.gen(function* () {
-      const error = yield* LLMClient.generate(request).pipe(
-        Effect.provide(
-          fixedResponse(
-            sseEvents({
-              type: "response.failed",
-              response: {
-                id: "resp_failed_1",
-                error: { code: "server_error", message: "Upstream model unavailable" },
-              },
-            }),
-          ),
-        ),
-        Effect.flip,
-      )
-
-      expect(error.reason).toMatchObject({
-        _tag: "ProviderInternal",
-        message: "server_error: Upstream model unavailable",
-      })
-    }),
-  )
-
-  it.effect("surfaces response.failed code when no nested message is present", () =>
-    Effect.gen(function* () {
-      const error = yield* LLMClient.generate(request).pipe(
-        Effect.provide(
-          fixedResponse(
-            sseEvents({
-              type: "response.failed",
-              response: { id: "resp_failed_2", error: { code: "invalid_prompt" } },
-            }),
-          ),
-        ),
-        Effect.flip,
-      )
-
-      expect(error.reason).toMatchObject({ _tag: "InvalidRequest", message: "invalid_prompt" })
-    }),
-  )
-
-  it.effect("surfaces error event details nested under response.error", () =>
-    Effect.gen(function* () {
-      // Some OpenAI-compatible proxies and older SDK versions wrap the
-      // top-level error fields into a nested `response.error` payload
-      // when they bubble up an HTTP error as an SSE `error` event. Honour
-      // both shapes so the user still sees the underlying cause instead
-      // of the catch-all string.
-      const error = yield* LLMClient.generate(request).pipe(
-        Effect.provide(
-          fixedResponse(
-            sseEvents({
-              type: "error",
-              response: { error: { code: "context_length_exceeded", message: "prompt too long" } },
-            }),
-          ),
-        ),
-        Effect.flip,
-      )
-
-      expect(error.reason).toMatchObject({
+  const streamErrors = [
+    [
+      "typed rate limit for provider error frames",
+      { type: "error", code: "rate_limit_exceeded", message: "Slow down" },
+      { _tag: "RateLimit", message: "rate_limit_exceeded: Slow down" },
+    ],
+    [
+      "error code when no message is present",
+      { type: "error", code: "internal_error" },
+      { _tag: "ProviderInternal", message: "internal_error" },
+    ],
+    [
+      "error code when message is empty",
+      { type: "error", code: "internal_error", message: "" },
+      { _tag: "ProviderInternal", message: "internal_error" },
+    ],
+    [
+      "response.failed details from response.error",
+      {
+        type: "response.failed",
+        response: { id: "resp_failed_1", error: { code: "server_error", message: "Upstream model unavailable" } },
+      },
+      { _tag: "ProviderInternal", message: "server_error: Upstream model unavailable" },
+    ],
+    [
+      "response.failed code when no nested message is present",
+      { type: "response.failed", response: { id: "resp_failed_2", error: { code: "invalid_prompt" } } },
+      { _tag: "InvalidRequest", message: "invalid_prompt" },
+    ],
+    [
+      "error event nested under response.error",
+      { type: "error", response: { error: { code: "context_length_exceeded", message: "prompt too long" } } },
+      {
         _tag: "InvalidRequest",
         message: "context_length_exceeded: prompt too long",
         classification: "context-overflow",
-      })
-    }),
-  )
-
-  it.effect("surfaces error event details nested under error", () =>
-    Effect.gen(function* () {
-      const error = yield* LLMClient.generate(request).pipe(
-        Effect.provide(
-          fixedResponse(
-            sseEvents({
-              type: "error",
-              sequence_number: 2,
-              error: {
-                type: "invalid_request_error",
-                code: "context_length_exceeded",
-                message: "prompt too long",
-                param: "input",
-              },
-            }),
-          ),
-        ),
-        Effect.flip,
-      )
-
-      expect(error.reason).toMatchObject({
+      },
+    ],
+    [
+      "error event nested under error",
+      {
+        type: "error",
+        sequence_number: 2,
+        error: {
+          type: "invalid_request_error",
+          code: "context_length_exceeded",
+          message: "prompt too long",
+          param: "input",
+        },
+      },
+      {
         _tag: "InvalidRequest",
         message: "context_length_exceeded: prompt too long",
         classification: "context-overflow",
-      })
-    }),
-  )
+      },
+    ],
+    [
+      "nullable fields in spec-compliant error events",
+      { type: "error", code: null, message: "Something went wrong", param: null, sequence_number: 1 },
+      { _tag: "UnknownProvider", message: "Something went wrong" },
+    ],
+    [
+      "stable default when error is null",
+      { type: "error", error: null },
+      { _tag: "UnknownProvider", message: "OpenAI Responses stream error" },
+    ],
+    [
+      "stable default when error and response are absent",
+      { type: "error" },
+      { _tag: "UnknownProvider", message: "OpenAI Responses stream error" },
+    ],
+    [
+      "stable default when response.failed has no error payload",
+      { type: "response.failed", response: { id: "resp_failed_3" } },
+      { _tag: "UnknownProvider", message: "OpenAI Responses response failed" },
+    ],
+  ] as const
 
-  it.effect("accepts nullable fields in spec-compliant error events", () =>
-    Effect.gen(function* () {
-      const error = yield* LLMClient.generate(request).pipe(
-        Effect.provide(
-          fixedResponse(
-            sseEvents({
-              type: "error",
-              code: null,
-              message: "Something went wrong",
-              param: null,
-              sequence_number: 1,
-            }),
-          ),
-        ),
-        Effect.flip,
-      )
+  for (const [name, event, reason] of streamErrors) {
+    it.effect(`classifies ${name}`, () =>
+      Effect.gen(function* () {
+        const error = yield* LLMClient.generate(request).pipe(
+          Effect.provide(fixedResponse(sseEvents(event))),
+          Effect.flip,
+        )
 
-      expect(error.reason).toMatchObject({ _tag: "UnknownProvider", message: "Something went wrong" })
-    }),
-  )
-
-  it.effect("falls back to a stable default when error is null", () =>
-    Effect.gen(function* () {
-      const error = yield* LLMClient.generate(request).pipe(
-        Effect.provide(fixedResponse(sseEvents({ type: "error", error: null }))),
-        Effect.flip,
-      )
-
-      expect(error.reason).toMatchObject({ _tag: "UnknownProvider", message: "OpenAI Responses stream error" })
-    }),
-  )
-
-  it.effect("falls back to a stable default when both error and response are absent", () =>
-    Effect.gen(function* () {
-      const error = yield* LLMClient.generate(request).pipe(
-        Effect.provide(fixedResponse(sseEvents({ type: "error" }))),
-        Effect.flip,
-      )
-
-      expect(error.reason).toMatchObject({ _tag: "UnknownProvider", message: "OpenAI Responses stream error" })
-    }),
-  )
-
-  it.effect("falls back to a stable default when response.failed has no error payload", () =>
-    Effect.gen(function* () {
-      const error = yield* LLMClient.generate(request).pipe(
-        Effect.provide(fixedResponse(sseEvents({ type: "response.failed", response: { id: "resp_failed_3" } }))),
-        Effect.flip,
-      )
-
-      expect(error.reason).toMatchObject({ _tag: "UnknownProvider", message: "OpenAI Responses response failed" })
-    }),
-  )
+        expect(error).toBeInstanceOf(LLMError)
+        expect(error.reason).toMatchObject(reason)
+      }),
+    )
+  }
 
   it.effect("fails HTTP provider errors before stream parsing", () =>
     Effect.gen(function* () {

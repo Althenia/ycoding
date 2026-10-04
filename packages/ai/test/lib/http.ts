@@ -5,7 +5,7 @@ import type { Service as LLMClientService } from "../../src/route/client"
 import type { Service as RequestExecutorService } from "../../src/route/executor"
 import type { Service as WebSocketExecutorService } from "../../src/route/transport/websocket"
 
-export type HandlerInput = {
+type HandlerInput = {
   readonly request: HttpClientRequest.HttpClientRequest
   readonly text: string
   readonly respond: (
@@ -34,7 +34,7 @@ const handlerLayer = (handler: Handler): Layer.Layer<HttpClient.HttpClient> =>
 
 export type RuntimeEnv = RequestExecutorService | WebSocketExecutorService | LLMClientService
 
-export const runtimeLayer = (layer: Layer.Layer<HttpClient.HttpClient>): Layer.Layer<RuntimeEnv> => {
+const runtimeLayer = (layer: Layer.Layer<HttpClient.HttpClient>): Layer.Layer<RuntimeEnv> => {
   const requestExecutorLayer = RequestExecutor.layer.pipe(Layer.provide(layer))
   const deps = Layer.mergeAll(requestExecutorLayer, WebSocketExecutor.layer)
   const llmClientLayer = LLMClient.layer.pipe(Layer.provide(deps))

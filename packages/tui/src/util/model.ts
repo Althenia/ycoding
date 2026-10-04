@@ -13,7 +13,7 @@ export function switchLabel(
   previous?: { providerID: string; id: string; variant?: string },
 ) {
   if (previous?.providerID === model.providerID && previous.id === model.id)
-    return `Switched variant to ${model.variant ?? "Base"}`
+    return model.variant === undefined ? "Cleared variant selection" : `Switched variant to ${model.variant}`
   const display = models?.find((item) => item.providerID === model.providerID && item.id === model.id)?.name
   if (display === undefined) return `Switched model to ${formatRef(model)}`
   const variant = model.variant ? ` (${model.variant})` : ""

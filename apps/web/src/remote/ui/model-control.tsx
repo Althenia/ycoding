@@ -26,12 +26,15 @@ export function ModelControl(props: { readonly models: readonly ModelOption[]; r
   const option = () => props.models.find((item) => item.providerID === selected()?.providerID && item.id === selected()?.id)
   const pair = () => pairedFastModel(props.models, selected())
   const displayOption = () => pair()?.base ?? option()
-  const stops = () => option()?.variants.length ? [undefined, ...orderedVariants(option()!.variants)] : []
-  const selectedIndex = () => Math.max(0, stops().indexOf(selected()?.variant))
+  const stops = () => orderedVariants(option()?.variants ?? [])
+  const selectedIndex = () => {
+    const variant = selected()?.variant
+    return variant === undefined ? 0 : Math.max(0, stops().indexOf(variant))
+  }
   const fraction = () => drag()?.fraction ?? (stops().length < 2 ? 0 : selectedIndex() / (stops().length - 1))
-  const level = () => selection().blocked || selected()?.variant === undefined ? "base" : effortLevel(selected()?.variant)
-  const glow = () => stops().length < 2 ? 0 : (drag()?.fraction ?? selectedIndex() / (stops().length - 1))
-  const effortLabel = () => selection().blocked ? `Unavailable: ${selected()?.variant ?? selected()?.id}` : selected()?.variant ?? "Base"
+  const level = () => selection().blocked || selected()?.variant === undefined ? "unselected" : effortLevel(selected()?.variant)
+  const glow = () => selected()?.variant === undefined ? 0 : (drag()?.fraction ?? (selectedIndex() + 1) / stops().length)
+  const effortLabel = () => selection().blocked ? `Unavailable: ${selected()?.variant ?? selected()?.id}` : selected()?.variant ?? "Model settings"
   const models = () => visibleModels(props.models).filter((item) => `${item.name} ${item.id} ${item.providerName ?? item.providerID}`.toLowerCase().includes(query().toLowerCase())).sort((left, right) => left.providerID.localeCompare(right.providerID))
   let trigger: HTMLButtonElement | undefined
   let surface: HTMLDivElement | undefined
@@ -47,8 +50,12 @@ export function ModelControl(props: { readonly models: readonly ModelOption[]; r
   const chooseVariant = (index: number) => {
     const item = option()
     const variant = stops()[index]
-    if (!item || index < 0 || index >= stops().length && index !== 0) return
-    props.onChange({ providerID: item.providerID, id: item.id, ...(variant === undefined ? {} : { variant }) })
+    if (!item || variant === undefined) return
+    props.onChange({ providerID: item.providerID, id: item.id, variant })
+  }
+  const clearOverride = () => {
+    const item = option()
+    if (item) props.onChange({ providerID: item.providerID, id: item.id })
   }
   const toggleFast = () => {
     const next = switchFastModel(props.models, selected())
@@ -111,15 +118,15 @@ export function ModelControl(props: { readonly models: readonly ModelOption[]; r
       }}>
         <Show when={listing()}><div class="mini-picker__heading"><strong><Icon name="chevron-right" /> Choose model</strong><button type="button" aria-label="Close model picker" onClick={() => close(true)}><Icon name="close" /></button></div></Show>
         <Show when={!listing()}>
-          <div class="model-control__hero"><button type="button" class="model-control__fast" aria-label="Fast model" aria-pressed={pair()?.active ?? false} aria-disabled={!pair()} aria-description={!pair() ? `No paired fast model for ${displayOption()?.name ?? "this model"}` : undefined} title={pair() ? "Switch paired fast model" : "No paired fast model"} onClick={toggleFast}><Icon name="zap" /></button><button type="button" class="model-control__switch" onClick={() => { setListing(true); setActive(0) }}><strong>{effortLabel()}</strong><span>{displayOption()?.name ?? "Choose model"}<Icon name="chevron-down" /></span></button><div class="model-control__heading-actions"><Show when={option()}><button type="button" aria-label="Reset reasoning effort" title="Use Base effort" onClick={() => chooseVariant(0)}><Icon name="reset" /></button></Show><button type="button" aria-label="Close model picker" onClick={() => close(true)}><Icon name="close" /></button></div></div>
-          <Show when={stops().length && !selection().blocked}><div class="model-control__slider" role="slider" tabindex="0" aria-label="Reasoning effort" aria-valuemin="0" aria-valuemax={stops().length - 1} aria-valuenow={selectedIndex()} aria-valuetext={stops()[selectedIndex()] ?? "Base"} onKeyDown={(event) => {
+          <div class="model-control__hero"><button type="button" class="model-control__fast" aria-label="Fast model" aria-pressed={pair()?.active ?? false} aria-disabled={!pair()} aria-description={!pair() ? `No paired fast model for ${displayOption()?.name ?? "this model"}` : undefined} title={pair() ? "Switch paired fast model" : "No paired fast model"} onClick={toggleFast}><Icon name="zap" /></button><button type="button" class="model-control__switch" onClick={() => { setListing(true); setActive(0) }}><strong>{effortLabel()}</strong><span>{displayOption()?.name ?? "Choose model"}<Icon name="chevron-down" /></span></button><div class="model-control__heading-actions"><Show when={option()}><button type="button" aria-label="Clear reasoning effort override" title="Clear reasoning effort override" onClick={clearOverride}><Icon name="reset" /></button></Show><button type="button" aria-label="Close model picker" onClick={() => close(true)}><Icon name="close" /></button></div></div>
+          <Show when={stops().length && !selection().blocked}><div class="model-control__slider" role="slider" tabindex="0" aria-label="Reasoning effort" aria-valuemin="0" aria-valuemax={stops().length - 1} aria-valuenow={selectedIndex()} aria-valuetext={selected()?.variant ?? "No effort override"} onKeyDown={(event) => {
             const next = event.key === "Home" ? 0 : event.key === "End" ? stops().length - 1 : event.key === "ArrowRight" || event.key === "ArrowUp" || event.key === "PageUp" ? Math.min(stops().length - 1, selectedIndex() + 1) : event.key === "ArrowLeft" || event.key === "ArrowDown" || event.key === "PageDown" ? Math.max(0, selectedIndex() - 1) : undefined
             if (next === undefined) return
             event.preventDefault()
             chooseVariant(next)
           }} onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); setDrag({ pointerID:event.pointerId, fraction:pointerFraction(event) }) }} onPointerMove={(event) => { if (drag()?.pointerID === event.pointerId) setDrag({ pointerID:event.pointerId, fraction:pointerFraction(event) }) }} onPointerUp={(event) => { if (drag()?.pointerID !== event.pointerId) return; const next = Math.round(pointerFraction(event) * (stops().length - 1)); setDrag(undefined); chooseVariant(next) }} onPointerCancel={(event) => { if (drag()?.pointerID === event.pointerId) setDrag(undefined) }} onLostPointerCapture={(event) => { if (drag()?.pointerID === event.pointerId) setDrag(undefined) }}>
             <div class="model-control__track" style={{ "--composer-effort-fraction": String(fraction()), "--composer-effort-glow": String(glow()) }}><div class="model-control__fill"><div class="model-control__sparkles" aria-hidden="true"><For each={sparkles}>{(sparkle) => <i style={{ left: `${sparkle.x}%`, top: `${sparkle.y}%`, "--composer-sparkle-delay": `${sparkle.delay}s`, "--composer-sparkle-size": `${sparkle.size}px` }} />}</For></div></div><span class="model-control__thumb" /></div>
-            <div class="model-control__labels"><For each={stops()}>{(variant) => <span>{variant ?? "Base"}</span>}</For></div>
+            <div class="model-control__labels"><For each={stops()}>{(variant) => <span>{variant}</span>}</For></div>
           </div></Show>
         </Show>
         <Show when={listing()}><input ref={search} class="mini-picker__search" type="search" aria-label="Search models" placeholder="Search models…" value={query()} onInput={(event) => { setQuery(event.currentTarget.value); setActive(0) }} /><div class="mini-picker__list" role="listbox" aria-label="Models"><For each={models()}>{(item, index) => <><Show when={index() === 0 || models()[index() - 1]?.providerID !== item.providerID}><div class="mini-picker__group model-control__provider" role="presentation">{item.providerName ?? item.providerID}</div></Show><button type="button" role="option" aria-selected={displayOption()?.providerID === item.providerID && displayOption()?.id === item.id} class="mini-picker__option model-control__model" classList={{ "mini-picker__option--active": active() === index() }} onPointerEnter={() => setActive(index())} onClick={() => chooseModel(item)}>{item.name}<small>{item.id}</small></button></>}</For><Show when={!models().length}><p class="mini-picker__empty">No matches</p></Show></div></Show>

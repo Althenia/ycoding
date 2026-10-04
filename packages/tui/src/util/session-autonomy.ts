@@ -13,25 +13,6 @@ export function yoloLevel(state: { yolo?: unknown }): YoloLevel {
   return 0
 }
 
-export function yoloLevelLabel(level: number): string {
-  if (level === 0) return "Normal"
-  return `YOLO ${level}`
-}
-
-export function yoloLevelTooltip(level: number): string {
-  if (level === 1) return "auto questions"
-  if (level === 2) return "auto questions + permissions"
-  if (level === 3) return "auto questions + permissions + guardrails"
-  return "manual approvals"
-}
-
-export const YOLO_LEVEL_DETAILS: Record<number, string> = {
-  0: "manual approvals",
-  1: "questions",
-  2: "+permissions",
-  3: "+guardrails",
-}
-
 export function autonomyModeLabel(state: SessionAutonomyState) {
   const level = yoloLevel(state)
   const active = state.goal?.status === "active"
@@ -70,7 +51,7 @@ export function createSessionMessageID() {
   return `msg_${crypto.randomUUID()}`
 }
 
-export function createSessionID() {
+function createSessionID() {
   return `ses_${crypto.randomUUID()}`
 }
 

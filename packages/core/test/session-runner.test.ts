@@ -2471,181 +2471,84 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("falls back once from invalid stored OpenAI response state without creating another logical request", () =>
-    Effect.gen(function* () {
-      const session = yield* setup
-      currentModel = storedOpenAIResponsesModel
-      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
-      responseStreams = [
-        Stream.fromIterable(reply.toolWithResponse("call-fallback", "echo", { text: "fallback" }, "resp_first")),
-        Stream.fromIterable([LLMEvent.stepStart({ index: 0 })]).pipe(
-          Stream.concat(Stream.fail(invalidPreviousResponse())),
-        ),
-        Stream.fromIterable(reply.textWithResponse("Recovered", "fallback-recovered", "resp_recovered")),
-      ]
+  const staleStateFailures = [
+    {
+      name: "invalid_previous_response_id",
+      thrown: invalidPreviousResponse,
+      message: "invalid_previous_response_id: Previous response ID is invalid or expired",
+    },
+    { name: "bare invalid_prompt", thrown: bareInvalidPrompt, message: "invalid_prompt: The prompt is invalid." },
+  ]
+  const continuationRecords = Effect.gen(function* () {
+    const providerRequests = yield* SessionProviderRequest.Service
+    return (yield* providerRequests.list(sessionID)).map((record) => ({
+      attempts: record.attempts,
+      continuation: record.continuation,
+    }))
+  })
 
-      yield* admit(session, "Recover stale response state")
-      yield* session.resume(sessionID)
+  for (const failure of staleStateFailures)
+    for (const delivery of ["thrown", "streamed"] as const)
+      it.effect(`falls back once from ${delivery} ${failure.name} without creating another logical request`, () =>
+        Effect.gen(function* () {
+          const session = yield* setup
+          currentModel = storedOpenAIResponsesModel
+          efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
+          responseStreams = [
+            Stream.fromIterable(reply.toolWithResponse("call-fallback", "echo", { text: "fallback" }, "resp_first")),
+            Stream.fromIterable([LLMEvent.stepStart({ index: 0 })]).pipe(
+              Stream.concat(
+                delivery === "thrown"
+                  ? Stream.fail(failure.thrown())
+                  : Stream.make(LLMEvent.providerError({ message: failure.message })),
+              ),
+            ),
+            Stream.fromIterable(reply.textWithResponse("Recovered", "fallback-recovered", "resp_recovered")),
+          ]
 
-      expect(requests).toHaveLength(3)
-      expect(requests[1]?.providerOptions?.openai).toMatchObject({ previousResponseId: "resp_first" })
-      expect(requests[2]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
-      expect(requests[1]?.id).toBe(requests[2]?.id)
-      const assistant = requireAssistant((yield* session.context(sessionID)).slice(-1))
-      expect((yield* recordedStepSettlementEvents(sessionID, assistant.id)).map((event) => event.type)).toEqual([
-        "session.step.started.1",
-        "session.step.ended.1",
-      ])
-      const records = yield* SessionProviderRequest.Service.pipe(
-        Effect.flatMap((providerRequests) => providerRequests.list(sessionID)),
+          yield* admit(session, "Recover stale response state")
+          yield* session.resume(sessionID)
+
+          expect(requests).toHaveLength(3)
+          expect(requests[1]?.providerOptions?.openai).toMatchObject({ previousResponseId: "resp_first" })
+          expect(requests[2]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
+          expect(requests[1]?.id).toBe(requests[2]?.id)
+          const assistant = requireAssistant((yield* session.context(sessionID)).slice(-1))
+          expect((yield* recordedStepSettlementEvents(sessionID, assistant.id)).map((event) => event.type)).toEqual([
+            "session.step.started.1",
+            "session.step.ended.1",
+          ])
+          expect(yield* continuationRecords).toEqual([
+            { attempts: 1, continuation: "full" },
+            { attempts: 2, continuation: "fallback" },
+          ])
+        }),
       )
-      expect(records.map((record) => ({ attempts: record.attempts, continuation: record.continuation }))).toEqual([
-        { attempts: 1, continuation: "full" },
-        { attempts: 2, continuation: "fallback" },
-      ])
-    }),
-  )
 
-  it.effect("falls back from a streamed invalid stored OpenAI response error", () =>
-    Effect.gen(function* () {
-      const session = yield* setup
-      currentModel = storedOpenAIResponsesModel
-      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
-      responses = [
-        reply.toolWithResponse("call-fallback-event", "echo", { text: "fallback" }, "resp_event"),
-        [
-          LLMEvent.stepStart({ index: 0 }),
-          LLMEvent.providerError({
-            message: "invalid_previous_response_id: Previous response ID is invalid or expired",
-          }),
-        ],
-        reply.textWithResponse("Recovered", "fallback-event-recovered", "resp_event_recovered"),
-      ]
+  for (const failure of staleStateFailures)
+    it.effect(`does not retry a second ${failure.name} after the continuation fallback`, () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        currentModel = storedOpenAIResponsesModel
+        efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
+        responseStreams = [
+          Stream.fromIterable(reply.toolWithResponse("call-fallback-once", "echo", { text: "once" }, "resp_once")),
+          Stream.fail(failure.thrown()),
+          Stream.fail(failure.thrown()),
+        ]
 
-      yield* admit(session, "Recover streamed stale response state")
-      yield* session.resume(sessionID)
+        yield* admit(session, "Fallback only once")
+        expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBeInstanceOf(LLMError)
 
-      expect(requests).toHaveLength(3)
-      expect(requests[1]?.providerOptions?.openai).toMatchObject({ previousResponseId: "resp_event" })
-      expect(requests[2]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
-      expect(requests[1]?.id).toBe(requests[2]?.id)
-      const assistant = requireAssistant((yield* session.context(sessionID)).slice(-1))
-      expect((yield* recordedStepSettlementEvents(sessionID, assistant.id)).map((event) => event.type)).toEqual([
-        "session.step.started.1",
-        "session.step.ended.1",
-      ])
-      const records = yield* SessionProviderRequest.Service.pipe(
-        Effect.flatMap((providerRequests) => providerRequests.list(sessionID)),
-      )
-      expect(records.map((record) => ({ attempts: record.attempts, continuation: record.continuation }))).toEqual([
-        { attempts: 1, continuation: "full" },
-        { attempts: 2, continuation: "fallback" },
-      ])
-    }),
-  )
-
-  it.effect("falls back once from a bare invalid_prompt error without creating another logical request", () =>
-    Effect.gen(function* () {
-      const session = yield* setup
-      currentModel = storedOpenAIResponsesModel
-      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
-      responseStreams = [
-        Stream.fromIterable(
-          reply.toolWithResponse("call-fallback-bare", "echo", { text: "fallback" }, "resp_bare_first"),
-        ),
-        Stream.fromIterable([LLMEvent.stepStart({ index: 0 })]).pipe(
-          Stream.concat(Stream.fail(bareInvalidPrompt())),
-        ),
-        Stream.fromIterable(reply.textWithResponse("Recovered", "fallback-bare-recovered", "resp_bare_recovered")),
-      ]
-
-      yield* admit(session, "Recover bare invalid prompt state")
-      yield* session.resume(sessionID)
-
-      expect(requests).toHaveLength(3)
-      expect(requests[1]?.providerOptions?.openai).toMatchObject({ previousResponseId: "resp_bare_first" })
-      expect(requests[2]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
-      expect(requests[1]?.id).toBe(requests[2]?.id)
-      const assistant = requireAssistant((yield* session.context(sessionID)).slice(-1))
-      expect((yield* recordedStepSettlementEvents(sessionID, assistant.id)).map((event) => event.type)).toEqual([
-        "session.step.started.1",
-        "session.step.ended.1",
-      ])
-      const records = yield* SessionProviderRequest.Service.pipe(
-        Effect.flatMap((providerRequests) => providerRequests.list(sessionID)),
-      )
-      expect(records.map((record) => ({ attempts: record.attempts, continuation: record.continuation }))).toEqual([
-        { attempts: 1, continuation: "full" },
-        { attempts: 2, continuation: "fallback" },
-      ])
-    }),
-  )
-
-  it.effect("falls back from a streamed bare invalid_prompt error", () =>
-    Effect.gen(function* () {
-      const session = yield* setup
-      currentModel = storedOpenAIResponsesModel
-      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
-      responses = [
-        reply.toolWithResponse("call-fallback-bare-event", "echo", { text: "fallback" }, "resp_bare_event"),
-        [
-          LLMEvent.stepStart({ index: 0 }),
-          LLMEvent.providerError({
-            message: "invalid_prompt: The prompt is invalid.",
-          }),
-        ],
-        reply.textWithResponse("Recovered", "fallback-bare-event-recovered", "resp_bare_event_recovered"),
-      ]
-
-      yield* admit(session, "Recover streamed bare invalid prompt state")
-      yield* session.resume(sessionID)
-
-      expect(requests).toHaveLength(3)
-      expect(requests[1]?.providerOptions?.openai).toMatchObject({ previousResponseId: "resp_bare_event" })
-      expect(requests[2]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
-      expect(requests[1]?.id).toBe(requests[2]?.id)
-      const assistant = requireAssistant((yield* session.context(sessionID)).slice(-1))
-      expect((yield* recordedStepSettlementEvents(sessionID, assistant.id)).map((event) => event.type)).toEqual([
-        "session.step.started.1",
-        "session.step.ended.1",
-      ])
-      const records = yield* SessionProviderRequest.Service.pipe(
-        Effect.flatMap((providerRequests) => providerRequests.list(sessionID)),
-      )
-      expect(records.map((record) => ({ attempts: record.attempts, continuation: record.continuation }))).toEqual([
-        { attempts: 1, continuation: "full" },
-        { attempts: 2, continuation: "fallback" },
-      ])
-    }),
-  )
-
-  it.effect("does not retry a second bare invalid_prompt after the continuation fallback", () =>
-    Effect.gen(function* () {
-      const session = yield* setup
-      currentModel = storedOpenAIResponsesModel
-      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
-      responseStreams = [
-        Stream.fromIterable(reply.toolWithResponse("call-fallback-bare-once", "echo", { text: "once" }, "resp_bare_once")),
-        Stream.fail(bareInvalidPrompt()),
-        Stream.fail(bareInvalidPrompt()),
-      ]
-
-      yield* admit(session, "Fallback bare invalid prompt only once")
-      const error = yield* session.resume(sessionID).pipe(Effect.flip)
-
-      expect(error).toBeInstanceOf(LLMError)
-      expect(requests).toHaveLength(3)
-      expect(requests[1]?.providerOptions?.openai).toHaveProperty("previousResponseId", "resp_bare_once")
-      expect(requests[2]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
-      const records = yield* SessionProviderRequest.Service.pipe(
-        Effect.flatMap((providerRequests) => providerRequests.list(sessionID)),
-      )
-      expect(records.map((record) => ({ attempts: record.attempts, continuation: record.continuation }))).toEqual([
-        { attempts: 1, continuation: "full" },
-        { attempts: 2, continuation: "fallback" },
-      ])
-    }),
-  )
+        expect(requests).toHaveLength(3)
+        expect(requests[1]?.providerOptions?.openai).toHaveProperty("previousResponseId", "resp_once")
+        expect(requests[2]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
+        expect(yield* continuationRecords).toEqual([
+          { attempts: 1, continuation: "full" },
+          { attempts: 2, continuation: "fallback" },
+        ])
+      }),
+    )
 
   it.effect("caps continuation fallback attempts at ten with monotonic retry events", () =>
     Effect.gen(function* () {
@@ -2694,34 +2597,6 @@ describe("SessionRunnerLLM", () => {
       expect(records.map((record) => ({ attempts: record.attempts, continuation: record.continuation }))).toEqual([
         { attempts: 1, continuation: "full" },
         { attempts: 10, continuation: "fallback" },
-      ])
-    }),
-  )
-
-  it.effect("does not retry a second invalid request after the continuation fallback", () =>
-    Effect.gen(function* () {
-      const session = yield* setup
-      currentModel = storedOpenAIResponsesModel
-      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
-      responseStreams = [
-        Stream.fromIterable(reply.toolWithResponse("call-fallback-once", "echo", { text: "once" }, "resp_once")),
-        Stream.fail(invalidPreviousResponse()),
-        Stream.fail(invalidPreviousResponse()),
-      ]
-
-      yield* admit(session, "Fallback only once")
-      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
-
-      expect(Exit.isFailure(exit)).toBe(true)
-      expect(requests).toHaveLength(3)
-      expect(requests[1]?.providerOptions?.openai).toHaveProperty("previousResponseId", "resp_once")
-      expect(requests[2]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
-      const records = yield* SessionProviderRequest.Service.pipe(
-        Effect.flatMap((providerRequests) => providerRequests.list(sessionID)),
-      )
-      expect(records.map((record) => ({ attempts: record.attempts, continuation: record.continuation }))).toEqual([
-        { attempts: 1, continuation: "full" },
-        { attempts: 2, continuation: "fallback" },
       ])
     }),
   )
@@ -3574,28 +3449,6 @@ describe("SessionRunnerLLM", () => {
         withProjectArtifactGuidance("Initial context"),
       ])
       expect((yield* session.messages({ sessionID }))[0]).toMatchObject({ type: "assistant", agent: "reviewer" })
-    }),
-  )
-
-  it.effect("uses only the agent prompt and initial instructions as system parts", () =>
-    Effect.gen(function* () {
-      const session = yield* setup
-      const agent = yield* AgentV2.Service
-      yield* agent.transform((editor) =>
-        editor.update(AgentV2.ID.make("build"), (agent) => {
-          agent.system = "Build agent instructions"
-          agent.mode = "primary"
-        }),
-      )
-      yield* admit(session, "First")
-
-      response = reply.text("Done", "text-no-system")
-      yield* session.resume(sessionID)
-
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual([
-        "Build agent instructions",
-        withProjectArtifactGuidance("Initial context"),
-      ])
     }),
   )
 

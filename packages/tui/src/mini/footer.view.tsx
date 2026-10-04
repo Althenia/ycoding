@@ -24,6 +24,7 @@ import {
 import { FOOTER_MENU_ROWS, RunFooterMenu } from "./footer.menu"
 import { RunFooterSubagentBody } from "./footer.subagent"
 import { RunPromptBody, createPromptState } from "./footer.prompt"
+import { isExitCommand } from "./prompt.shared"
 import { RunPermissionBody } from "./footer.permission"
 import { RunFormBody } from "./footer.form"
 import { RunChromePairingBody } from "./footer.chrome"
@@ -328,7 +329,22 @@ export function RunFooterView(props: RunFooterViewProps) {
     width,
     theme,
     history: props.history,
-    onSubmit: props.onSubmit,
+    onSubmit: (input) => {
+      const variant = props.currentVariant()
+      if (
+        input.mode !== "shell" &&
+        input.command?.source !== "skill" &&
+        !isExitCommand(input.text) &&
+        variant !== undefined &&
+        !props.variants().includes(variant)
+      ) {
+        props.onStatus(
+          `Variant ${variant} unavailable · choose an offered variant or clear the selection; draft retained`,
+        )
+        return false
+      }
+      return props.onSubmit(input)
+    },
     onCycle: props.onCycle,
     onInterrupt: props.onInterrupt,
     onEditorOpen: props.onEditorOpen,

@@ -43,7 +43,7 @@ export type InlineDiffFile = {
   status?: string
 }
 
-export type InlineDiffFileStatus = "created" | "deleted" | "modified"
+type InlineDiffFileStatus = "created" | "deleted" | "modified"
 
 export type InlineDiffGroup = {
   path: string
@@ -53,7 +53,7 @@ export type InlineDiffGroup = {
   status?: InlineDiffFileStatus
 }
 
-export function inlineDiffFileStatus(file: InlineDiffFile): InlineDiffFileStatus {
+function inlineDiffFileStatus(file: InlineDiffFile): InlineDiffFileStatus {
   const raw = typeof file.status === "string" ? file.status.toLowerCase() : undefined
   if (raw === "created" || raw === "added" || raw === "create") return "created"
   if (raw === "deleted" || raw === "removed" || raw === "delete") return "deleted"
@@ -72,7 +72,7 @@ export function inlineDiffFileStatus(file: InlineDiffFile): InlineDiffFileStatus
  * falling back to the patch itself. Shared so the collapsed summary and the expanded diff can never
  * disagree about what a file changed.
  */
-export function inlineDiffSummary(file: InlineDiffFile) {
+function inlineDiffSummary(file: InlineDiffFile) {
   const parsed = parseInlineDiff(file.diff)
   const lines = parsed?.lines ?? []
   return {

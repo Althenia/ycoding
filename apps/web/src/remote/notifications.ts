@@ -17,7 +17,7 @@ export type RemoteNotificationView = {
 export const NOTICE_WINDOW = 200
 const LOCAL_LIMIT = 50
 
-export type SyncedNotice = {
+type SyncedNotice = {
   readonly id: string
   readonly category: NotificationCategory
   readonly at: number

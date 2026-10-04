@@ -16,6 +16,7 @@ import { projectedPromptInput } from "./codec"
 import type { SessionSubmissionRetry, YoloLevel } from "../util/session-autonomy"
 import { submitPrompt } from "../component/prompt/prompt-admission"
 import { errorMessage } from "../util/error"
+import { isConflictError, isInvalidRequestError } from "@ycoding-ai/client"
 
 export type PromptSubmissionPayload = {
   inputText: string
@@ -293,7 +294,15 @@ export function createPromptSubmissions(input: {
           update(entry, {
             state: "attention",
             error: errorMessage(error),
-            phase: `${entry.admitted ? "Prompt admitted · wake unresolved" : entry.phase + " unresolved"} · Retry send`,
+            phase: `${
+              entry.admitted
+                ? "Prompt admitted · wake unresolved"
+                : entry.phase === "Sending prompt" && isConflictError(error)
+                  ? "Prompt ID conflict"
+                  : entry.phase === "Sending prompt" && isInvalidRequestError(error) && error.field === "files"
+                    ? "Attachment rejected"
+                    : entry.phase + " unresolved"
+            } · Retry send`,
           })
       })
       .finally(() => {

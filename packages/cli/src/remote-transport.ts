@@ -1,6 +1,6 @@
 import { RemoteLimits } from "@ycoding-ai/remote"
 
-export interface RemoteTransport {
+interface RemoteTransport {
   readonly connect: () => Promise<void>
   /** Sends one already-serialized envelope frame; the transport never re-encodes it. */
   readonly send: (frame: string) => Promise<void>
@@ -26,7 +26,7 @@ export interface RemoteSocket {
   readonly close: (code?: number, reason?: string) => void
 }
 
-export type RemoteSocketOptions = { readonly headers?: Record<string, string> }
+type RemoteSocketOptions = { readonly headers?: Record<string, string> }
 
 export type RemoteSocketFactory = (url: string, options: RemoteSocketOptions) => RemoteSocket
 

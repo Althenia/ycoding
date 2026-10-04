@@ -1,0 +1,14 @@
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration"
+
+export default {
+  id: "20261002020321_drop-legacy-account-share",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`DROP TABLE \`account_state\`;`)
+      yield* tx.run(`DROP TABLE \`account\`;`)
+      yield* tx.run(`DROP TABLE \`control_account\`;`)
+      yield* tx.run(`DROP TABLE \`session_share\`;`)
+    })
+  },
+} satisfies DatabaseMigration.Migration

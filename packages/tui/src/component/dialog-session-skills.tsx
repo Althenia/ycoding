@@ -1,5 +1,5 @@
 import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core"
-import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
+import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { Global } from "@ycoding-ai/core/global"
 import { createMemo, createResource, createSignal, For, Match, onMount, Show, Switch } from "solid-js"
 import { useClient } from "../context/client"
@@ -172,15 +172,6 @@ function SessionSkillDetails(props: { skill: SessionSkill; onBack: () => void })
     setExpanded((value) => !value)
   }
 
-  useKeyboard((key) => {
-    if (key.name === "up") return scroll?.scrollBy(-1)
-    if (key.name === "down") return scroll?.scrollBy(1)
-    if (key.name === "pageup") return scroll?.scrollBy(-height())
-    if (key.name === "pagedown") return scroll?.scrollBy(height())
-    if (key.name === "home") return scroll?.scrollTo(0)
-    if (key.name === "end" && scroll) return scroll.scrollTo(scroll.scrollHeight)
-  })
-
   return (
     <DialogSelect
       title={`Session skill: ${props.skill.name}`}
@@ -206,6 +197,12 @@ function SessionSkillDetails(props: { skill: SessionSkill; onBack: () => void })
           group: "Dialog",
           run: toggle,
         },
+        { bind: "up", title: "Scroll up", group: "Dialog", run: () => scroll?.scrollBy(-1) },
+        { bind: "down", title: "Scroll down", group: "Dialog", run: () => scroll?.scrollBy(1) },
+        { bind: "pageup", title: "Page up", group: "Dialog", run: () => scroll?.scrollBy(-height()) },
+        { bind: "pagedown", title: "Page down", group: "Dialog", run: () => scroll?.scrollBy(height()) },
+        { bind: "home", title: "First line", group: "Dialog", run: () => scroll?.scrollTo(0) },
+        { bind: "end", title: "Last line", group: "Dialog", run: () => scroll?.scrollTo(scroll?.scrollHeight ?? 0) },
       ]}
       emptyView={
         <scrollbox

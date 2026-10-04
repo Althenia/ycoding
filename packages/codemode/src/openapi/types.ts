@@ -68,7 +68,7 @@ export type Result = {
 
 export type Parsed<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly reason: string }
 
-export type InputLocation = "path" | "query" | "header" | "body"
+type InputLocation = "path" | "query" | "header" | "body"
 
 export type InputField = {
   readonly inputName: string

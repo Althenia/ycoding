@@ -4,7 +4,7 @@ export type DiffLine =
 
 export type DiffCell = { readonly kind: "context" | "added" | "removed"; readonly number: number; readonly text: string }
 
-export type SplitDiffRow =
+type SplitDiffRow =
   | { readonly kind: "hunk"; readonly text: string }
   | { readonly kind: "line"; readonly old?: DiffCell; readonly new?: DiffCell }
 

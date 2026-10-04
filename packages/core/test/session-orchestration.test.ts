@@ -15,7 +15,6 @@ import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
-import { SessionOrchestrationNotifier } from "@ycoding-ai/core/session/orchestration-notifier"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { SessionTable, SessionTaskNotificationTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
@@ -413,18 +412,6 @@ describe("Session orchestration helpers", () => {
       expect(
         yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.parent_id, pageParentID)).all(),
       ).toHaveLength(12)
-    }),
-  )
-
-  it.effect("exposes the Session-owned orchestration service contract", () =>
-    Effect.sync(() => {
-      expect(SessionOrchestration.Service).toBeDefined()
-    }),
-  )
-
-  it.effect("exposes the durable parent-notification dispatcher", () =>
-    Effect.sync(() => {
-      expect(SessionOrchestrationNotifier.Service).toBeDefined()
     }),
   )
 

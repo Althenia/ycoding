@@ -82,7 +82,6 @@
     "@ycoding-ai/plugin": "workspace:*",
     "@ycoding-ai/schema": "workspace:*",
     "@ycoding-ai/simulation": "workspace:*",
-    "@ycoding-ai/ui": "workspace:*",
     "@opentui/core": "catalog:",
     "@opentui/keymap": "catalog:",
     "@opentui/solid": "catalog:",

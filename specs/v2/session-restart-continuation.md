@@ -50,14 +50,14 @@ A persisted status such as `idle / running / resumable` answers three different 
 
 ## The Managed Server Owns Suspension
 
-Suspension is not layer configuration. `SessionRestart` is an inert core service exposing two actions. Only the managed server (`ycoding serve --service`) invokes one of them, `suspendActiveSessions`:
+Suspension is not layer configuration. `SessionRestart` is an inert core service exposing the actions `suspendActiveSessions` and `reconcileInterruptedExecutions`. Only the managed server (`ycoding serve --service`) invokes `suspendActiveSessions`:
 
 ```typescript
 // ServerProcess, service mode only
 yield * Effect.addFinalizer(() => restart.suspendActiveSessions)
 ```
 
-No product path invokes `resumeSuspendedSessions`, so startup never resumes a suspended Session. Default, embedded, and stdio servers build the same execution layer but never invoke either action, so they never suspend.
+Startup never resumes a suspended Session; the user resumes it manually. Default, embedded, and stdio servers build the same execution layer but never invoke `suspendActiveSessions`, so they never suspend.
 
 `ycoding update` restarts the managed server only after `GET /api/session/outstanding` reports no outstanding Session work, so an update restart suspends nothing.
 
@@ -86,9 +86,9 @@ Interruption must preserve suspension because managed teardown interrupts drains
 
 Because the clears are `commit` hooks rather than projections, event replay preserves lifecycle history without recreating or destroying suspension.
 
-## Explicit Resume Consumes Each Suspension Atomically
+## Suspension Is Consumed Atomically
 
-When invoked, `resumeSuspendedSessions` reads pending Session IDs through the partial index. Immediately before resuming each Session, it performs a conditional clear:
+When a drain starts or finishes on its own, its `commit` hook performs a conditional clear:
 
 ```sql
 UPDATE session
@@ -97,9 +97,7 @@ WHERE id = ? AND time_suspended IS NOT NULL
 RETURNING id;
 ```
 
-Only the process receiving the returned row resumes that Session. A second consumer receives no row. Each suspension is consumed right before its own drain starts, and at most four resumed drains run at once.
-
-The resume goes through the existing process-local coordinator, which joins duplicate same-process resumes and starts a forced drain while idle.
+Only the caller receiving the returned row consumes the suspension. A second caller receives no row.
 
 ## Failure Semantics
 
@@ -136,7 +134,6 @@ An old shutdown event records what happened; it does not prove that a future pro
 Regression coverage verifies:
 
 - A suspension can be consumed only once per Session.
-- The explicit resume action resumes each suspended Session at most once.
 - Generic lifecycle publication and replay do not infer suspension.
 - Concurrent managed-service processes elect one server, and startup resumes no suspended Session.
 - Teardown interruption preserves suspension; a drain finishing on its own clears it.

@@ -1,6 +1,7 @@
 import { For, Show, createEffect, createSignal, onCleanup, type JSX } from "solid-js"
 import { createThrottler } from "@tanstack/solid-pacer"
 import type { SessionInfoView } from "../store"
+import { LoadingPlaceholder } from "./loading"
 import "./running-sessions.css"
 
 export function RunningSessions(props: {
@@ -46,6 +47,7 @@ export function RunningSessions(props: {
     <section class={`running-sessions${props.loading ? " running-sessions--loading" : " running-sessions--ready"}`} aria-labelledby="running-sessions-title" aria-busy={props.loading === true}>
       <h2 id="running-sessions-title">Running and recent</h2>
       <ul class="running-sessions__list" ref={track} onScroll={pacedMeasure.maybeExecute} onWheel={() => { target = undefined }} onTouchStart={() => { target = undefined }}>
+        <Show when={props.loading && props.sessions.length === 0}><For each={[0, 1, 2]}>{(index) => <li><LoadingPlaceholder kind="session" label="Loading running and recent sessions…" announce={index === 0} /></li>}</For></Show>
         <For each={props.sessions}>
           {(session, index) => {
             const lastActive = session.activeAt !== undefined ? new Date(session.activeAt) : undefined

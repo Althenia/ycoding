@@ -52,8 +52,8 @@ import {
   setCookie,
 } from "./http"
 
-export const sessionCookieName = "yc_session"
-export const oauthCookieName = "yc_oauth"
+const sessionCookieName = "yc_session"
+const oauthCookieName = "yc_oauth"
 
 export type RelayNamespace = {
   readonly getByName: (name: string) => { readonly fetch: (request: Request) => Promise<Response> }

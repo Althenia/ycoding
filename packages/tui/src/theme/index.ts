@@ -7,7 +7,6 @@ import { resolveThemeFile } from "./v2/resolve"
 
 export { DEFAULT_THEMES } from "./builtins"
 export { generateSyntax, selectedForeground, type Theme } from "./current"
-export { ThemeFile, type ThemeFile as ThemeSource } from "./v2"
 
 const pluginThemes: Record<string, ThemeFileType> = {}
 let customThemes: Record<string, ThemeFileType> = {}

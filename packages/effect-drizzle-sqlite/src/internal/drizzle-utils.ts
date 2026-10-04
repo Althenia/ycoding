@@ -1,7 +1,6 @@
 /* oxlint-disable */
 import { Column, getColumnTable } from "drizzle-orm/column"
 import { is } from "drizzle-orm/entity"
-import type { JoinNullability } from "drizzle-orm/query-builders/select.types"
 import { Param, SQL } from "drizzle-orm/sql/sql"
 import type { SelectedFieldsOrdered } from "drizzle-orm/sqlite-core/query-builders/select.types"
 import type { SQLiteUpdateSetSource } from "drizzle-orm/sqlite-core/query-builders/update"
@@ -123,5 +122,3 @@ export function getTableLikeName(table: SQLiteTable | Subquery | SQLiteViewBase 
       : TableSymbol.BaseName
   ] as string
 }
-
-export type { JoinNullability }

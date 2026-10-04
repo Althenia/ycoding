@@ -22,20 +22,16 @@ const base = createRemoteStore({ http: createRemoteHttp(), createTransport: () =
 const syncState = (notifications: readonly RemoteNotificationView[]): RemoteStoreState["noticeSync"] =>
   ({ status: parameters.get("sync") === "error" ? "error" : "ready", total: notifications.length, loaded: notifications.length, hidden: 0, loadingMore: false,
     message: parameters.get("sync") === "error" ? "Some notifications could not be saved. Stored unread notifications remain available." : undefined })
-let state: RemoteStoreState = { ...base.state(), notifications: initial, noticeSync: syncState(initial) }
+base.container.setState((state) => ({ ...state, notifications: initial, noticeSync: syncState(initial) }))
 let serial = 0
 const opened: string[] = []
-const subscribers = new Set<() => void>()
 const publish = (notifications: readonly RemoteNotificationView[]) => {
-  state = { ...state, notifications, noticeSync: syncState(notifications) }
-  for (const subscriber of subscribers) subscriber()
+  base.container.setState((state) => ({ ...state, notifications, noticeSync: syncState(notifications) }))
 }
 const store: RemoteStore = {
   ...base,
-  state: () => state,
-  subscribe: (listener) => { subscribers.add(listener); return () => subscribers.delete(listener) },
   load: async () => {},
-  readNotification: async (id) => { publish(state.notifications.filter((entry) => entry.id !== id)) },
+  readNotification: async (id) => { publish(base.state().notifications.filter((entry) => entry.id !== id)) },
   readAllNotifications: async () => { publish([]) },
   loadMoreNotifications: async () => {},
   reloadNotifications: async () => {},
@@ -43,9 +39,9 @@ const store: RemoteStore = {
 Object.assign(window, {
   remoteNotify: (category: RemoteNotificationView["category"] = "approval-requested", sessionID = "ses_alpha", titled = true, synced = category !== "approval-requested") => {
     const entry = baseline(`notice_live_${++serial}`, category, Date.now(), sessionID, titled, true, synced)
-    publish([entry, ...state.notifications].slice(0, 50))
+    publish([entry, ...base.state().notifications].slice(0, 50))
   },
-  remoteResolveTitle: (sessionID: string, title: string) => publish(state.notifications.map((entry) => entry.sessionID === sessionID ? { ...entry, sessionTitle: title } : entry)),
+  remoteResolveTitle: (sessionID: string, title: string) => publish(base.state().notifications.map((entry) => entry.sessionID === sessionID ? { ...entry, sessionTitle: title } : entry)),
   remoteOpened: () => opened.slice(),
 })
 const root = document.getElementById("app")

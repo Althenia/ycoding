@@ -42,7 +42,7 @@ export const weatherTool = ToolDefinition.make({
   },
 })
 
-export const weatherRuntimeTool = Tool.make({
+const weatherRuntimeTool = Tool.make({
   description: weatherTool.description,
   parameters: Schema.Struct({ city: Schema.String }),
   success: Schema.Struct({ temperature: Schema.Number, condition: Schema.String }),
@@ -123,15 +123,10 @@ export const runWeatherToolLoop = (request: LLMRequest) =>
 const assistantContent = (events: ReadonlyArray<LLMEvent>) =>
   events.reduce(LLMResponse.reduce, LLMResponse.empty()).message.content
 
-export const expectFinish = (
+const expectFinish = (
   events: ReadonlyArray<LLMEvent>,
   reason: Extract<LLMEvent, { readonly type: "finish" }>["reason"],
 ) => expect(events.at(-1)).toMatchObject({ type: "finish", reason })
-
-export const expectWeatherToolCall = (response: LLMResponse) =>
-  expect(response.toolCalls).toMatchObject([
-    { type: "tool-call", id: expect.any(String), name: weatherToolName, input: { city: "Paris" } },
-  ])
 
 export const expectWeatherToolLoop = (events: ReadonlyArray<LLMEvent>) => {
   const finishes = events.filter(LLMEvent.is.finish)
@@ -158,7 +153,7 @@ export const expectWeatherToolLoop = (events: ReadonlyArray<LLMEvent>) => {
   expect(output.trim().length).toBeGreaterThan(0)
 }
 
-export const expectGoldenWeatherToolLoop = (events: ReadonlyArray<LLMEvent>) => {
+const expectGoldenWeatherToolLoop = (events: ReadonlyArray<LLMEvent>) => {
   expectWeatherToolLoop(events)
   expect(LLMResponse.text({ events }).trim()).toMatch(/^Paris is sunny\.?$/)
 }

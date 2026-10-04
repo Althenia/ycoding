@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
 import { Schema } from "effect"
+import { ClientApi, groupNames } from "../src/client.js"
 import {
   ArtifactMutation,
   ArtifactListItem,
@@ -106,11 +107,12 @@ test("requires a confirmation token for global mutation and has no workflow kind
   expect(() => Schema.decodeUnknownSync(ArtifactMutation)({ definition: { kind: "workflow" } })).toThrow()
 })
 
-test("removes the legacy self-improvement Protocol group", async () => {
-  const api = await Bun.file(new URL("../src/api.ts", import.meta.url)).text()
-  const client = await Bun.file(new URL("../src/client.ts", import.meta.url)).text()
-
-  expect(api).not.toContain("SelfImprovement")
-  expect(api).not.toContain("self-improvement")
-  expect(client).not.toContain("selfImprovement")
+test("exposes managed artifacts without a self-improvement API or client group", () => {
+  expect(Object.keys(ClientApi.groups)).toContain("server.projectArtifact")
+  expect(groupNames["server.projectArtifact"]).toBe("projectArtifact")
+  expect(Object.keys(ClientApi.groups).some((name) => /self.?improvement/i.test(name))).toBe(false)
+  expect(Object.values(ClientApi.groups).flatMap((group) => Object.values(group.endpoints)).some(
+    (endpoint) => /self.?improvement/i.test(`${endpoint.name} ${endpoint.path}`),
+  )).toBe(false)
+  expect(Object.values(groupNames).some((name) => /self.?improvement/i.test(name))).toBe(false)
 })

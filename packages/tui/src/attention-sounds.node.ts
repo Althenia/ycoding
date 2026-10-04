@@ -1,13 +1,10 @@
-import { createRequire } from "node:module"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 
-const require = createRequire(import.meta.url)
-const resolve = (name: string) => {
-  const key = `@ycoding-ai/ui/audio/${name}`
-  return process.env.YCODING_NODE_ASSETS_DIR
-    ? path.join(process.env.YCODING_NODE_ASSETS_DIR, key)
-    : require.resolve(key)
-}
+const resolve = (name: string) =>
+  process.env.YCODING_NODE_ASSETS_DIR
+    ? path.join(process.env.YCODING_NODE_ASSETS_DIR, `@ycoding-ai/tui/audio/${name}`)
+    : fileURLToPath(new URL(`./assets/audio/${name}`, import.meta.url))
 
 export const defaultSoundPath = resolve("bip-bop-01.mp3")
 export const questionSoundPath = resolve("bip-bop-03.mp3")

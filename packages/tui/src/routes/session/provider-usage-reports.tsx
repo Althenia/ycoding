@@ -64,7 +64,7 @@ export function providerUsageViewLabel(view: ProviderUsageView) {
   return view[0].toUpperCase() + view.slice(1)
 }
 
-export function providerUsageReportGroup(view: ProviderUsageReportView): ProviderRequestReport["group"] {
+function providerUsageReportGroup(view: ProviderUsageReportView): ProviderRequestReport["group"] {
   if (view === "models") return "model"
   if (view === "daily" || view === "stats") return "day"
   if (view === "hourly") return "hour"

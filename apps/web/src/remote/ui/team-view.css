@@ -31,6 +31,7 @@
 .team-view__note { margin: 0 0 var(--yc-space-2); color: var(--yc-text-muted); font-size: var(--yc-size-xs); }
 
 .team-view__task, .team-view__shell, .team-view__side-chat { display: grid; gap: var(--yc-space-1); min-inline-size: 0; padding: var(--yc-space-2) var(--yc-space-3); border: var(--yc-border-width) solid var(--yc-border); border-radius: var(--yc-radius-md); background: var(--yc-surface-raised); }
+.team-view__task { min-block-size: 138px; }
 .team-view__task[data-attached="true"] { border-color: var(--yc-green-strong); }
 .team-view__row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: var(--yc-space-2); row-gap: var(--yc-space-1); min-inline-size: 0; }
 .team-view__state { display: inline-flex; align-items: center; gap: 6px; min-inline-size: 0; color: var(--yc-text-muted); font-size: var(--yc-size-2xs); text-transform: lowercase; white-space: nowrap; }

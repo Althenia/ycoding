@@ -29,9 +29,10 @@ describe("compaction checkpoint in the conversation", () => {
         await page.setReducedMotion(true)
         await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?theme=${theme}`)
         await page.evaluate(`(async () => {
-          const [{ createComponent, render }, { createSessionView, readSnapshot }, { RemoteProvider }, { TranscriptNavigation }] = await Promise.all([
+          const [{ createComponent, render }, { createSessionView, readSnapshot }, { RemoteProvider }, { TranscriptNavigation }, { createRemoteStore }, { createRemoteHttp }] = await Promise.all([
             import('/node_modules/solid-js/web/dist/web.js'), import('/src/remote/projection.ts'),
             import('/src/remote/context.tsx'), import('/src/remote/ui/transcript-nav.tsx'),
+            import('/src/remote/store.ts'), import('/src/remote/http.ts'),
           ])
           document.querySelector('#app').remove()
           const root = document.createElement('div')
@@ -60,9 +61,10 @@ describe("compaction checkpoint in the conversation", () => {
               { jobID: 'cmp_latest', trigger: 'manual', status: 'completed', created: 4, metrics },
             ], truncated: false, completedBefore: 0, completedCount: 2, totalSavedTokens: 1200 } }
           window.olderRequests = 0
-          const store = { state: () => ({ activeSessionID: 'ses_a', view, history: { status: 'idle', before: 'covered' }, mutations: [] }),
-            subscribe: () => () => {}, load: async () => {}, dispose: () => {},
-            loadOlderMessages: async () => { window.olderRequests++ } }
+          const store = createRemoteStore({ http: createRemoteHttp(), createTransport: () => { throw new Error('Checkpoint fixture must not connect') } })
+          store.container.setState((state) => ({ ...state, activeSessionID: 'ses_a', view, history: { status: 'idle', before: 'covered' } }))
+          Object.defineProperty(store, 'load', { value: async () => {} })
+          Object.defineProperty(store, 'loadOlderMessages', { value: async () => { window.olderRequests++ } })
           render(() => createComponent(RemoteProvider, { createStore: () => store,
             get children() { return createComponent(TranscriptNavigation, { messages: () => view.messages }) } }), scroll)
           await new Promise((resolve) => setTimeout(resolve, 50))

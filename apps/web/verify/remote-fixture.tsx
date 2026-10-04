@@ -49,6 +49,9 @@ const accountParams = new URLSearchParams(window.location.search)
 const requestLatencyMs = Number(accountParams.get("latency") ?? 0)
 const requestLog: { readonly at: number; readonly operation: string; readonly input?: unknown }[] = []
 Object.assign(window, { requestLog })
+let inventoryHeld = accountParams.get("inventoryGate") === "1"
+const inventoryWaiters: (() => void)[] = []
+Object.assign(window, { remoteReleaseInventory: () => { inventoryHeld = false; inventoryWaiters.splice(0).forEach((release) => release()) } })
 if (accountParams.get("presentation") !== "keep") {
   window.localStorage.setItem(WORKSPACE_PRESENTATION_KEY, accountParams.get("presentation") === "office" ? "office" : "conversation")
   window.localStorage.removeItem(OFFICE_PREFERENCES_KEY)
@@ -351,6 +354,11 @@ const defaultMessages = [
 ]
 const transcriptProbe = accountParams.get("transcriptProbe") === "1"
 const responseProbe = accountParams.get("responseProbe") === "1"
+const childQuestion = accountParams.get("childQuestion") === "1"
+const questionFlow = accountParams.get("questionFlow") === "1"
+let childQuestionAnswered = false
+let releaseChildAnswer: (() => void) | undefined
+Object.assign(window, { remoteReleaseChildAnswer: () => releaseChildAnswer?.() })
 let probeText = "## Stable heading\n\nParagraph before streaming.\n\n```ts\nconst pending = 1"
 let messages: readonly unknown[] = transcriptProbe ? [...Array.from({ length: 12 }, (_, index) => [
     { id: `probe_prompt_${index}`, type: "user", text: `Investigate part ${index}`, time: { created: index * 2 + 1, consumed: index * 2 + 2 } },
@@ -379,7 +387,7 @@ const form = {
   id: "frm_fixture",
   sessionID,
   title: "Questions",
-  metadata: { kind: "question" },
+  metadata: { kind: "question", ...(questionFlow ? { tool: { messageID: "msg_question_flow", callID: "call_question_flow" } } : {}) },
   fields: [
     {
       key: "q0",
@@ -394,6 +402,7 @@ const form = {
     },
   ],
 }
+if (questionFlow) messages = [{ id: "msg_question_flow", type: "assistant", content: [{ type: "tool", id: "call_question_flow", name: "question", state: { status: "running", input: { questions: [{ header: "Scope", question: "Which sessions should the workspace reload after reconnect?", options: [{ label: "Active only", description: "Reload just the session you are watching" }, { label: "All advertised", description: "Reload every session in the advertisement" }] }] }, content: [] } }], time: { created: ago(1) } }]
 const allForm = {
   id: "frm_all_fixture",
   sessionID,
@@ -533,6 +542,7 @@ type Fixture = {
   readonly operationReport: () => { readonly transports: number; readonly operations: Readonly<Record<string, number>> }
   readonly transcriptDelta: (delta: string) => void
   readonly transcriptRefresh: () => Promise<void>
+  readonly readingTail: (kind: "progress" | "decisions" | "settle" | "epoch") => Promise<void>
   readonly responseSnapshot: (messages: readonly unknown[], captured: RemoteCapturedChangesPage["data"], running: boolean) => Promise<void>
 }
 
@@ -542,9 +552,12 @@ function createFixtureStore(): Fixture {
   let streamed = false
   let nextSeq = 43
   let snapshotWatermark = 42
+  let sourceEpoch = "epoch_fixture"
   let probeStarted = false
   let probeClock = 0
   let probeCaptured = "after"
+  let readingDecision = false
+  const readingForm = { ...form, id: "frm_reading", fields: [{ key: "q0", type: "string", title: "Decision", description: "Keep the reader's position?", options: [] }] }
   let responseCaptured: RemoteCapturedChangesPage["data"] = []
   let teamReported = false
   let teamCancelState: "running" | "cancelling" | "cancelled" = "running"
@@ -630,6 +643,8 @@ function createFixtureStore(): Fixture {
     input?: Readonly<Record<string, unknown>>,
     targetSessionID = sessionID,
   ): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
+    if (inventoryHeld && (operation === "session.list" || operation === "workspace.list" && input?.sessionsOnly === true))
+      return new Promise<void>((resolve) => inventoryWaiters.push(resolve)).then(() => outcome(operation, input, targetSessionID))
     if (operation === "notice.subscribe" || operation === "notice.list") {
       const before = operation === "notice.list" && typeof input?.before === "string" ? noticeSequence(input.before) ?? Infinity : Infinity
       const older = [...fixtureNotices].reverse().filter((notice) => (noticeSequence(notice.id) ?? 0) < before)
@@ -752,13 +767,23 @@ function createFixtureStore(): Fixture {
       if (accountParams.get("team") === "unsupported") return { status: "failed", error: { code: "unknown_operation", message: "Unknown operation" } }
       const tasks = targetSessionID === sessionID && accountParams.get("team") !== "none" ? [{
         sessionID: "ses_child", parentID: sessionID, description: "Fix flaky suite", agent: "general", model, background: true,
-        state: teamReported ? "completed" : teamCancelState, revision: teamReported ? 2 : teamCancelState === "running" ? 1 : 2,
+        state: childQuestion && !childQuestionAnswered ? "waiting" : teamReported ? "completed" : teamCancelState, revision: teamReported ? 2 : teamCancelState === "running" ? 1 : 2,
+        ...(childQuestion && !childQuestionAnswered ? { question: { id: "qst_fixture", text: "May I update the scoped tests?", time: ago(1) } } : {}),
         time: { created: ago(30), updated: ago(teamReported ? 0 : 4) },
       }, ...(accountParams.get("team") === "two" ? [{ sessionID: "ses_second", parentID: sessionID, description: "Inspect source", agent: "researcher", model, background: true,
         state: "running", revision: 1, time: { created: ago(20), updated: ago(2) } }] : [])] : []
       return { status: "ok", value: { data: tasks, summary: { total: tasks.length }, cursor: {} } }
     }
     if (operation === "session.team.economics") return { status: "ok", value: { data: Array.isArray(input?.sessionIDs) ? input.sessionIDs.map((id) => ({ sessionID: id, cost: 0.25, tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 3, write: 0 } }, cacheHitRatio: 0.75, contextTotal: 800, contextLimit: 2_000, cacheRead: 3, cacheWrite: 0 })) : [] } }
+    if (operation === "session.subagent.answer" && childQuestion) {
+      if (targetSessionID !== sessionID || input?.childID !== "ses_child" || input.questionID !== "qst_fixture" || childQuestionAnswered)
+        return { status: "failed", error: { code: "forbidden", message: "Question is not pending in this family" } }
+      const answered = (): RemoteRequestOutcome => {
+        childQuestionAnswered = true
+        return { status: "ok", value: { data: { sessionID: "ses_child", parentID: sessionID, description: "Fix flaky suite", agent: "general", model, background: true, state: "running", revision: 3, time: { created: ago(30), updated: ago(0) } } } }
+      }
+      return accountParams.get("childAnswerGate") === "1" ? new Promise<void>((resolve) => { releaseChildAnswer = resolve }).then(answered) : answered()
+    }
     if (operation === "session.subagent.cancel") {
       if (targetSessionID !== sessionID || input?.childID !== "ses_child") return { status: "failed", error: { code: "forbidden", message: "Not a managed child" } }
       teamCancelState = "cancelling"
@@ -791,7 +816,7 @@ function createFixtureStore(): Fixture {
       return {
         status: "ok",
         value: {
-          sourceEpoch: "epoch_fixture",
+          sourceEpoch,
           session: createdSessions.get(targetSessionID) ?? sessions.find((item) => item.id === targetSessionID),
           messages: targetSessionID === sessionID ? structuredClone(messages) : targetSessionID === "ses_child" && accountParams.has("childTranscript") ? structuredClone(defaultMessages) : [],
           watermark: { type: "log.synced", aggregateID: targetSessionID, seq: targetSessionID === sessionID ? snapshotWatermark : 0 },
@@ -813,6 +838,7 @@ function createFixtureStore(): Fixture {
     }
     if (operation === "session.permission.list") return { status: "ok", value: { data: targetSessionID === sessionID && accountParams.get("team") !== "two" ? unreplied(permissions) : [] } }
     if (operation === "session.guardrail.request.list") return { status: "ok", value: { data: targetSessionID === sessionID && accountParams.get("team") !== "two" ? unreplied(guardrails) : [] } }
+    if (operation === "session.form.list" && readingDecision && targetSessionID === sessionID) return { status: "ok", value: [readingForm] }
     if (operation === "session.form.list") return {
       status: "ok",
       value: targetSessionID !== sessionID || accountParams.get("team") === "two" ? [] : remoteScenarioData === undefined
@@ -833,6 +859,12 @@ function createFixtureStore(): Fixture {
       }
       if (formID !== undefined && formOutcome === "unknown") return { status: "unknown", error: { code: "outcome_unknown", message: "Synthetic unknown Form outcome" } }
       if (formID !== undefined) answered.add(formID)
+      if (questionFlow && operation === "session.form.reply" && formID === form.id && typeof input?.answer === "object" && input.answer !== null && "q0" in input.answer && typeof input.answer.q0 === "string") {
+        const structured = { answers: [[input.answer.q0]] }
+        emitEvent(sessionID, { type: "session.tool.success", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { sessionID, assistantMessageID: "msg_question_flow", callID: "call_question_flow", structured, content: [] } })
+        messages = messages.map((message) => typeof message === "object" && message !== null && Reflect.get(message, "id") === "msg_question_flow" ? { ...message, content: [{ type: "tool", id: "call_question_flow", name: "question", state: { status: "completed", input: { questions: [{ header: "Scope", question: form.fields[0]!.description, options: [] }] }, structured, content: [] } }] } : message)
+        snapshotWatermark = nextSeq - 1
+      }
       if (formID !== undefined && formDelayMs > 0) return new Promise((resolve) => setTimeout(() => resolve({ status: "ok", value: null }), formDelayMs))
       return { status: "ok", value: null }
     }
@@ -1020,6 +1052,28 @@ function createFixtureStore(): Fixture {
       handlers?.onSessions?.()
       await store.reloadMessages()
     },
+    readingTail: async (kind) => {
+      const data = { sessionID, assistantMessageID: "probe_tail", callID: "call_reading" }
+      if (kind === "progress") {
+        emitEvent(sessionID, { type: "session.tool.input.started", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { ...data, name: "shell" } })
+        emitEvent(sessionID, { type: "session.tool.called", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { ...data, input: { command: "bun test scoped" }, executed: false } })
+        emitEvent(sessionID, { type: "session.tool.progress", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { ...data, structured: {}, content: [{ type: "text", text: "Progress output ".repeat(100) }] } })
+        messages = messages.map((message) => typeof message === "object" && message !== null && Reflect.get(message, "id") === "probe_tail" ? { ...message, content: [{ type: "text", text: probeText }, { type: "tool", id: "call_reading", name: "shell", state: { status: "running", input: { command: "bun test scoped" }, structured: {}, content: [{ type: "text", text: "Progress output ".repeat(100) }] } }] } : message)
+      }
+      if (kind === "decisions") {
+        readingDecision = true
+        emitEvent(sessionID, { type: "todo.updated", data: { sessionID, todos: Array.from({ length: 4 }, (_, index) => ({ content: `Reading task ${index}`, status: "in_progress", priority: "high" })) } })
+        emitEvent(sessionID, { type: "form.created", data: { form: readingForm } })
+      }
+      if (kind === "settle") {
+        probeClock += 11_000
+        emitEvent(sessionID, { type: "session.tool.success", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { ...data, structured: {}, content: [{ type: "text", text: "Focused checks passed" }] } })
+        emitEvent(sessionID, { type: "session.step.ended", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { sessionID, assistantMessageID: "probe_tail", finish: "stop", cost: 0, tokens: { input: 100, output: 10, reasoning: 0, cache: { read: 0, write: 0 } } } })
+        messages = messages.map((message) => typeof message === "object" && message !== null && Reflect.get(message, "id") === "probe_tail" ? { ...message, content: [{ type: "text", text: probeText }, { type: "tool", id: "call_reading", name: "shell", state: { status: "completed", input: { command: "bun test scoped" }, structured: {}, content: [{ type: "text", text: "Focused checks passed" }] } }], time: { created: 30, completed: Date.now() + probeClock } } : message)
+      }
+      snapshotWatermark = nextSeq - 1
+      if (kind === "epoch") { sourceEpoch = "epoch_reading"; await store.reloadMessages() }
+    },
     responseSnapshot: async (projected, captured, running) => {
       messages = projected
       responseCaptured = captured
@@ -1036,6 +1090,7 @@ function createFixtureStore(): Fixture {
 
 const fixture = createFixtureStore()
 Object.assign(window, { transcriptDelta: fixture.transcriptDelta, transcriptRefresh: fixture.transcriptRefresh, responseSnapshot: fixture.responseSnapshot, responseStatus: () => fixture.store.state().view?.status })
+Object.assign(window, { remoteReadingTail: fixture.readingTail })
 Object.assign(window, { remoteInventoryReport: () => ({ requests: fixture.inventoryRequests(), rows: fixture.store.state().sessions.length,
   groups: fixture.store.state().sessionGroups.length, next: fixture.store.state().sessionHasNext,
   first: fixture.store.state().sessions[0]?.id, last: fixture.store.state().sessions.at(-1)?.id, inputs: fixture.inventoryInputs(),
@@ -1046,7 +1101,7 @@ Object.assign(window, { remoteInventoryReport: () => ({ requests: fixture.invent
 /** Picks the device and session a user would pick, so the fixture opens on a live workspace. */
 async function openFixtureWorkspace(store: RemoteStore) {
   await store.load()
-  store.connect("dev_studio")
+  if (store.state().activeDeviceID !== "dev_studio") store.connect("dev_studio")
   for (let attempt = 0; attempt < 40 && store.state().sessions.length === 0; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
@@ -1057,7 +1112,7 @@ async function openFixtureWorkspace(store: RemoteStore) {
 /** Selects the fixture device and lets the real store settle its rejected list read. */
 async function openFixtureUnavailableWorkspace(store: RemoteStore) {
   await store.load()
-  store.connect("dev_studio")
+  if (store.state().activeDeviceID !== "dev_studio") store.connect("dev_studio")
 }
 
 /**

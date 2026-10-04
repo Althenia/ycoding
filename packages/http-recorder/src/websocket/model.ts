@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 
-export const WebSocketEventSchema = Schema.Union([
+const WebSocketEventSchema = Schema.Union([
   Schema.Struct({
     direction: Schema.Literals(["client", "server"]),
     kind: Schema.tag("text"),

@@ -38,7 +38,7 @@ export function isBlockedPath(pathname: string): boolean {
   )
 }
 
-export function isPrecachedShellUrl(pathname: string): boolean {
+function isPrecachedShellUrl(pathname: string): boolean {
   return (PRECACHE_URLS as readonly string[]).includes(pathname)
 }
 

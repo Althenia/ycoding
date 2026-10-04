@@ -1,6 +1,6 @@
 import { type CreateEnrollmentResponse, type MeResponse, type RemoteDeviceInfo, type PushKeyResponse, type PushRegistration } from "@ycoding-ai/remote"
 
-export type RemoteHttpFailureReason = "http" | "unexpected-body" | "network"
+type RemoteHttpFailureReason = "http" | "unexpected-body" | "network"
 
 export type RemoteHttpResult<T> =
   | { readonly ok: true; readonly value: T }
@@ -167,7 +167,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-export function readDeviceInfo(value: unknown): RemoteDeviceInfo | undefined {
+function readDeviceInfo(value: unknown): RemoteDeviceInfo | undefined {
   if (!isRecord(value)) return undefined
   if (typeof value.id !== "string" || value.id.length === 0) return undefined
   if (typeof value.name !== "string") return undefined

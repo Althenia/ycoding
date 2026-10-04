@@ -44,7 +44,7 @@ export const NOTIFICATION_CATEGORIES = [
 
 export type NotificationCategory = (typeof NOTIFICATION_CATEGORIES)[number]["id"]
 export type NotificationChannel = "in-app" | "desktop"
-export type NotificationPreference = Record<NotificationChannel, boolean>
+type NotificationPreference = Record<NotificationChannel, boolean>
 export type NotificationPreferences = Record<NotificationCategory, NotificationPreference>
 
 export const NOTIFICATION_CHANNELS: readonly { id: NotificationChannel; label: string }[] = [

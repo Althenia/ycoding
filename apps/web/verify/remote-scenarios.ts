@@ -1,8 +1,8 @@
 import type { RemoteDeviceInfo } from "@ycoding-ai/remote"
 
-export type RemoteScenarioName = "conversation-workspace" | "session-list" | "conversation-tool-terminal-output" | "permission-guardrail-hard-review-form-requests" | "empty-backend" | "selected-machine-offline" | "signed-out" | "devices-enrollment" | "autonomy-goal-notification-settings" | "usage-quotas"
-export type RemoteScenarioViewport = 1440 | 768 | 390
-export type RemoteScenarioView = "chat" | "sessions" | "usage" | "settings"
+type RemoteScenarioName = "conversation-workspace" | "session-list" | "conversation-tool-terminal-output" | "permission-guardrail-hard-review-form-requests" | "empty-backend" | "selected-machine-offline" | "signed-out" | "devices-enrollment" | "autonomy-goal-notification-settings" | "usage-quotas"
+type RemoteScenarioViewport = 1440 | 768 | 390
+type RemoteScenarioView = "chat" | "sessions" | "usage" | "settings"
 
 type WireSession = {
   readonly id: string
@@ -144,12 +144,12 @@ const permission = (id: string, action: string, resources: readonly string[] = [
   metadata: {},
 })
 
-const guardrail = (id: string, action: string, reason: string, hardReview: boolean): WireGuardrail => ({
+const guardrail = (id: string, action: string, reason: string, hardReview: boolean, resources: readonly string[]): WireGuardrail => ({
   id,
   sessionID,
   rootSessionID: sessionID,
   action,
-  resources: [],
+  resources,
   ruleIDs: [hardReview ? "hard-destructive-action" : "ordinary-review"],
   reason,
   standard: true,
@@ -326,10 +326,11 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
     permissions: viewport === 768 ? [] : [permission("per_socket", viewport === 390 ? "Network Socket Access" : "Write File Request", viewport === 390 ? ["bind 0.0.0.0:8080 (TCP / LISTEN)"] : ["/etc/systemd/system/ycoding-worker.service"])],
     guardrails: viewport === 1440
       ? [
-          guardrail("grq_context", "High Context Consumption", "Refactoring involves 48 modules in src/compiler/*.", false),
-          guardrail("grq_hard", "Destructive Database Alteration & Git Force Push", "A human decision is required, even at YOLO 3.", true),
+          guardrail("grq_context", "High Context Consumption", "Refactoring involves 48 modules in src/compiler/*.", false, ["src/compiler/*"]),
+          guardrail("grq_hard", "Destructive Database Alteration & Git Force Push", "A human decision is required, even at YOLO 3.", true, ["ALTER TABLE sessions DROP COLUMN status", "git push -f"]),
         ]
-      : [guardrail("grq_hard", viewport === 768 ? "git reset --hard HEAD~12 && git push -f" : "rm -rf /var/log/audit/*", "A human decision is required, even at YOLO 3.", true)],
+      : [guardrail("grq_hard", viewport === 768 ? "git reset --hard HEAD~12 && git push -f" : "rm -rf /var/log/audit/*", "A human decision is required, even at YOLO 3.", true,
+          [viewport === 768 ? "git reset --hard HEAD~12 && git push -f" : "rm -rf /var/log/audit/*"])],
     forms: permissionGuardrailHardReviewFormRequestsForms(viewport),
     expectedText: viewport === 390
       ? ["Network Socket Access", "Guardrail review (human decision required)", "Select Target Cluster"]

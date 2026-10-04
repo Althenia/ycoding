@@ -22,6 +22,7 @@ import {
   type ToolContentBlock,
 } from "../projection"
 import { capturedChangesVisible, promptReceipt, shellOutputPaging } from "../view-model"
+import { parentAnswer, questionAnswerState, questionHistory } from "../question-history"
 import { FormRequest } from "./form-request"
 import { Markdown } from "./markdown"
 import { DotTrail } from "./dot-trail"
@@ -270,6 +271,10 @@ function PartView(props: { readonly parts: () => readonly AssistantPart[] }): JS
   const part = () => props.parts()[0]!
   const reasoning = () => props.parts().map((item) => partText(item)).join("\n\n")
   const kind = () => part().kind
+  const questions = createMemo(() => {
+    const tool = toolOf(part())
+    return tool ? questionHistory(tool) : []
+  })
   return (
     <>
       <Show when={kind() === "text"}>
@@ -279,6 +284,15 @@ function PartView(props: { readonly parts: () => readonly AssistantPart[] }): JS
         <ReasoningPart text={reasoning} parts={props.parts} />
       </Show>
       <Show when={kind() === "tool"}>
+        <For each={questions().map((_, index) => index)}>{(index) => {
+          const question = () => questions()[index]!
+          return <section class="request request--form" aria-label="Recorded question">
+            <header class="request__header"><Icon name="chat" size={16} /><span>{question().title}</span></header>
+            <div class="request__body"><Markdown text={question().text} /></div>
+            <p class="request__body"><strong>{question().answer === undefined ? questionAnswerState(toolOf(part())!) : "Answer"}</strong></p>
+            <Show when={question().answer}>{(answer) => <div class="request__body"><Markdown text={answer()} /></div>}</Show>
+          </section>
+        }}</For>
         <ToolPart part={() => toolOf(part())!} />
       </Show>
     </>
@@ -392,9 +406,9 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
         </Show>
 
         <Show when={kind() === "system" || kind() === "synthetic"}>
-          <Show when={syntheticNotice()} fallback={<Show when={observation()} fallback={<p class="transcript-message__system">{fallbackText()}</p>}>{(summary) => <details class="transcript-message__observation"><summary>{summary()}</summary><pre tabindex="0">{systemText(props.message())}</pre></details>}</Show>}>
+          <Show when={parentAnswer(props.message())} fallback={<Show when={syntheticNotice()} fallback={<Show when={observation()} fallback={<p class="transcript-message__system">{fallbackText()}</p>}>{(summary) => <details class="transcript-message__observation"><summary>{summary()}</summary><pre tabindex="0">{systemText(props.message())}</pre></details>}</Show>}>
             {(notice) => <SyntheticNotice notice={notice()} />}
-          </Show>
+          </Show>}>{(answer) => <section class="request request--form" aria-label="Recorded parent answer"><header class="request__header"><Icon name="chat" size={16} /><span>Parent answer</span></header><div class="request__body"><Markdown text={answer()} /></div></section>}</Show>
         </Show>
 
         <Show when={kind() === "shell"}>

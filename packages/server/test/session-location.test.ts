@@ -77,34 +77,3 @@ test("declares the bounded paged subagent endpoint without changing control rout
     "/api/session/:parentID/subagent/:childID/resume",
   )
 })
-
-test("rejects malformed and cross-parent subagent cursors before the paged read", async () => {
-  const source = await Bun.file(new URL("../src/handlers/session.ts", import.meta.url)).text()
-  const handler = source.slice(source.indexOf('"session.subagent.list"'), source.indexOf('"session.subagent.launch"'))
-
-  expect(handler).toContain("SubagentCursor.parse")
-  expect(handler).toContain("parsed.parentID !== ctx.params.parentID")
-  expect(handler).toContain('new InvalidCursorError({ message: "Invalid cursor" })')
-})
-
-test("keeps a missing session failure typed in the session skills handler", async () => {
-  const source = await Bun.file(new URL("../src/handlers/session.ts", import.meta.url)).text()
-  const handler = source.slice(source.indexOf('"session.skills"'), source.indexOf('"session.synthetic"'))
-
-  expect(handler).toContain('Effect.catchTag("Session.NotFoundError"')
-  expect(handler).not.toContain("Effect.orDie")
-})
-
-test("passes compact job IDs through and maps compaction conflicts by durable job ID", async () => {
-  const source = await Bun.file(new URL("../src/handlers/session.ts", import.meta.url)).text()
-  const handler = source.slice(source.indexOf('"session.compact"'), source.indexOf('"session.wait"'))
-
-  expect(handler).toContain("session.compact({ sessionID: ctx.params.sessionID, id: ctx.payload.id })")
-  expect(handler).toContain("data: yield* session.compact")
-  expect(handler).toContain('Effect.catchTag("Session.CompactionConflictError"')
-  expect(handler).toContain("resource: error.jobID")
-  expect(handler).toContain("${error.jobID}")
-  expect(handler).toContain("error.message")
-  expect(handler).not.toContain("SessionPending")
-  expect(handler).not.toContain("summary")
-})

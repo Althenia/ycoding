@@ -25,18 +25,10 @@ describe("webSearchProviderLabel", () => {
     expect(webSearchProviderLabel("exa")).toBe("Exa Web Search")
   })
 
-  for (const [name, provider] of [
-    ["undefined", undefined],
-    ["null", null],
-    ["an object", {}],
-    ["an array", []],
-    ["a number", 1],
-    ["an unexpected string", "other"],
-  ] as const) {
-    test(`uses the generic label for ${name}`, () => {
+  test("uses the generic label for unsupported provider values", () => {
+    for (const provider of [undefined, null, {}, [], 1, "other"])
       expect(webSearchProviderLabel(provider)).toBe("Web Search")
-    })
-  }
+  })
 })
 
 describe("toolDisplayMetadata", () => {

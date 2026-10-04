@@ -238,7 +238,7 @@ export function FatalCrashGuard(props: ParentProps<{ error: unknown }>) {
   )
 }
 
-export function buildCrashReport(message: string, stack: string) {
+function buildCrashReport(message: string, stack: string) {
   return [
     "YCoding TUI crash report",
     "",

@@ -644,7 +644,7 @@ it.effect("summarizes absent, mixed, and explicit-zero cache-read reporting by m
   }),
 )
 
-it.effect("prioritizes compaction and model cache reset diagnostics while normalizing legacy default variants", () =>
+it.effect("prioritizes compaction, model, and provider cache reset diagnostics and treats a variant named default as an ordinary variant", () =>
   Effect.gen(function* () {
     const sessionID = SessionV2.ID.make("ses_provider_request_resets")
     yield* insertSession(sessionID)
@@ -682,14 +682,24 @@ it.effect("prioritizes compaction and model cache reset diagnostics while normal
     yield* record("step", model("gpt-5.7"), "after-compaction")
     yield* record("step", model("gpt-5.8"), "model-switch")
     yield* record("step", model("gpt-5.8", "high"), "variant-switch")
+    yield* record(
+      "step",
+      ModelV2.Ref.make({
+        id: ModelV2.ID.make("gpt-5.8"),
+        providerID: ProviderV2.ID.make("anthropic"),
+        variant: ModelV2.VariantID.make("high"),
+      }),
+      "provider-switch",
+    )
 
     expect((yield* service.list(sessionID)).map((item) => item.invalidation)).toEqual([
       "first-request",
-      "provider-not-reported",
+      "model-variant-switched",
       "model-switched",
       "compaction-reset",
       "model-switched",
       "model-variant-switched",
+      "model-switched",
     ])
   }),
 )

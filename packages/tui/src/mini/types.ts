@@ -53,7 +53,7 @@ export type RunCommand = {
   source?: string
 }
 
-export type RunProviderModel = {
+type RunProviderModel = {
   name?: string
   cost?: {
     input: number
@@ -154,7 +154,7 @@ export type MiniHost = {
 export type EntryKind = "system" | "user" | "assistant" | "reasoning" | "tool" | "error"
 
 // Whether the assistant is actively processing a turn.
-export type FooterPhase = "idle" | "running"
+type FooterPhase = "idle" | "running"
 
 // Full snapshot of footer status bar state. Every update replaces the whole
 // object in the SolidJS signal so the view re-renders atomically.
@@ -172,7 +172,7 @@ export type FooterState = {
 // A partial update to FooterState. The footer merges this onto the current state.
 export type FooterPatch = Partial<FooterState>
 
-export type TurnSummary = {
+type TurnSummary = {
   agent: string
   model: string
   duration: string
@@ -182,14 +182,14 @@ export type ScrollbackOptions = {
   suppressBackgrounds?: boolean
 }
 
-export type ToolCodeSnapshot = {
+type ToolCodeSnapshot = {
   kind: "code"
   title: string
   content: string
   file?: string
 }
 
-export type ToolDiffSnapshot = {
+type ToolDiffSnapshot = {
   kind: "diff"
   items: Array<{
     title: string
@@ -199,14 +199,14 @@ export type ToolDiffSnapshot = {
   }>
 }
 
-export type ToolTaskSnapshot = {
+type ToolTaskSnapshot = {
   kind: "task"
   title: string
   rows: string[]
   tail: string
 }
 
-export type ToolQuestionSnapshot = {
+type ToolQuestionSnapshot = {
   kind: "question"
   items: Array<{
     question: string
@@ -217,7 +217,7 @@ export type ToolQuestionSnapshot = {
 
 export type ToolSnapshot = ToolCodeSnapshot | ToolDiffSnapshot | ToolTaskSnapshot | ToolQuestionSnapshot
 
-export type MiniToolState =
+type MiniToolState =
   | { status: "pending"; input: Record<string, unknown>; raw?: string }
   | {
       status: "running"
@@ -400,11 +400,11 @@ export type RunTuiConfig = Pick<Config.Resolved, "keybinds" | "leader" | "theme"
 
 // Lifecycle phase of a scrollback entry. "start" opens the entry, "progress"
 // appends content (coalesced in the footer queue), "final" closes it.
-export type StreamPhase = "start" | "progress" | "final"
+type StreamPhase = "start" | "progress" | "final"
 
-export type StreamSource = "assistant" | "reasoning" | "tool" | "system"
+type StreamSource = "assistant" | "reasoning" | "tool" | "system"
 
-export type StreamToolState = "running" | "completed" | "error"
+type StreamToolState = "running" | "completed" | "error"
 
 // A single append-only commit to scrollback. The transport produces these from
 // V2 events, and RunFooter.append() queues them for the next

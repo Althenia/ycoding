@@ -39,7 +39,6 @@
     "@ycoding-ai/tui": "workspace:*",
     "@opentui/core": "catalog:",
     "@opentui/solid": "catalog:",
-    "@parcel/watcher": "2.5.1",
     "effect": "catalog:",
     "immer": "11.1.4",
     "jsonc-parser": "3.3.1",

@@ -15,9 +15,9 @@ export type GlyphName =
   | "connecting"
   | "error"
 
-export type GlyphColorKind = "accent" | "muted" | "danger" | "warning" | "info"
+type GlyphColorKind = "accent" | "muted" | "danger" | "warning" | "info"
 
-export type GlyphColorToken = "feedback.success" | "text.subdued" | "feedback.error" | "feedback.warning" | "feedback.info"
+type GlyphColorToken = "feedback.success" | "text.subdued" | "feedback.error" | "feedback.warning" | "feedback.info"
 
 export type GlyphSlot = Readonly<{
   readonly glyph: string
@@ -34,7 +34,7 @@ const feedbackTokens: Readonly<Record<FeedbackKind, GlyphColorToken>> = {
   info: "feedback.info",
 }
 
-export const GLYPHS: Readonly<Record<GlyphName, GlyphSlot>> = {
+const GLYPHS: Readonly<Record<GlyphName, GlyphSlot>> = {
   ok: createGlyph("ok", "tool succeeded", "accent", "success"),
   inFlight: createGlyph("..", "in flight", "muted"),
   queued: createGlyph("--", "queued", "muted"),

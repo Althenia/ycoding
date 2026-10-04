@@ -10,12 +10,6 @@ import type { RemotePublicKey } from "../../../../packages/remote/src/index"
  * plaintext credentials.
  */
 
-export type IdentityRow = {
-  readonly provider: string
-  readonly subject: string
-  readonly userID: string
-}
-
 export type BrowserSessionRow = {
   readonly id: string
   readonly userID: string

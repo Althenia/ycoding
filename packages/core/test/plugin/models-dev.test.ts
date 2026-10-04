@@ -2,9 +2,13 @@ import path from "path"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { describe, expect } from "bun:test"
+import { LLM, Model } from "@ycoding-ai/ai"
+import { LLMClient, RequestExecutor } from "@ycoding-ai/ai/route"
 import { Money } from "@ycoding-ai/schema/money"
 import { Effect, Layer } from "effect"
+import { HttpClientResponse } from "effect/unstable/http"
 import { Catalog } from "@ycoding-ai/core/catalog"
+import { Credential } from "@ycoding-ai/core/credential"
 import { Integration } from "@ycoding-ai/core/integration"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
@@ -13,8 +17,10 @@ import { Location } from "@ycoding-ai/core/location"
 import { ModelV2 } from "@ycoding-ai/core/model"
 import { ModelsDev } from "@ycoding-ai/core/models-dev"
 import { ModelsDevPlugin } from "@ycoding-ai/core/plugin/models-dev"
+import { OpenRouterPlugin } from "@ycoding-ai/core/plugin/provider/openrouter"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
+import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { location } from "../fixture/location"
 import { testEffect } from "../lib/effect"
 import { catalogHost, host, integrationHost } from "./host"
@@ -30,7 +36,98 @@ const it = testEffect(layer)
 const models = (file: string) =>
   AppNodeBuilder.build(ModelsDev.node, [[ModelsDev.node, ModelsDev.configured({ file, fetch: false })]])
 
+const captureRequestBody = (model: Model) => Effect.gen(function* () {
+  const requests: unknown[] = []
+  yield* LLMClient.generate(LLM.request({ model, prompt: "Hello" })).pipe(
+    Effect.provide(LLMClient.configured()),
+    Effect.provideService(RequestExecutor.Service, {
+      execute: (request) => Effect.sync(() => {
+        if (request.body._tag !== "Uint8Array") throw new Error("Expected a JSON byte body")
+        requests.push(JSON.parse(new TextDecoder().decode(request.body.body)))
+        return HttpClientResponse.fromWeb(request, new Response("Fixture rejected request", { status: 400 }))
+      }),
+    }),
+    Effect.flip,
+  )
+  expect(requests).toHaveLength(1)
+  return requests[0]
+})
+
 describe("ModelsDevPlugin", () => {
+  for (const effort of ["low", "medium", "xhigh"])
+    it.effect(`preserves the source OpenRouter DeepSeek ${effort} effort through selection and encoded requests`, () =>
+      Effect.promise(() => mkdtemp(path.join(tmpdir(), "ycoding-models-dev-"))).pipe(
+        Effect.flatMap((directory) => Effect.gen(function* () {
+          yield* Effect.promise(() => Bun.write(path.join(directory, "models.json"), JSON.stringify({
+            openrouter: {
+              id: "openrouter", name: "OpenRouter", env: [], npm: "@openrouter/ai-sdk-provider",
+              models: {
+                "deepseek/effort-fixture": {
+                  id: "deepseek/effort-fixture", name: "DeepSeek Effort Fixture", release_date: "2026-01-01",
+                  attachment: false, reasoning: true, tool_call: true,
+                  reasoning_options: [{ type: "effort", values: ["low", "medium", "xhigh"] }],
+                  limit: { context: 1000, output: 100 },
+                },
+              },
+            },
+          })))
+          const catalog = yield* Catalog.Service
+          const integrations = yield* Integration.Service
+          yield* ModelsDevPlugin.effect(host({ catalog: catalogHost(catalog), integration: integrationHost(integrations) }))
+          yield* OpenRouterPlugin.effect(host({ catalog: catalogHost(catalog), aisdk: { hook: () => Effect.succeed({ dispose: Effect.void }) } }))
+          const model = yield* catalog.model.get(ProviderV2.ID.openrouter, ModelV2.ID.make("deepseek/effort-fixture"))
+          if (!model) throw new Error("Fixture catalog model missing")
+          expect(model.variants.map((variant) => variant.id)).toEqual(["low", "medium", "xhigh"].map((id) => ModelV2.VariantID.make(id)))
+          const selected = yield* SessionRunnerModel.withVariant(model, ModelV2.VariantID.make(effort))
+          expect(selected.settings?.reasoning).toEqual({ effort })
+          const resolved = yield* SessionRunnerModel.fromCatalogModel(selected, Credential.Key.make({ type: "key", key: "fixture-key" }))
+          expect(yield* captureRequestBody(resolved)).toMatchObject({ model: "deepseek/effort-fixture", reasoning: { effort } })
+        }).pipe(
+          Effect.provide(models(path.join(directory, "models.json"))),
+          Effect.ensuring(Effect.promise(() => rm(directory, { recursive: true, force: true }))),
+        )),
+      ),
+    )
+
+  for (const scenario of [
+    { provider: "alibaba", npm: "@ai-sdk/alibaba" },
+    { provider: "cohere", npm: "@ai-sdk/cohere" },
+  ])
+    it.effect(`uses the pinned ${scenario.provider} toggle identities without accepting removed aliases`, () =>
+      Effect.promise(() => mkdtemp(path.join(tmpdir(), "ycoding-models-dev-"))).pipe(
+        Effect.flatMap((directory) => Effect.gen(function* () {
+          yield* Effect.promise(() => Bun.write(path.join(directory, "models.json"), JSON.stringify({
+            [scenario.provider]: {
+              id: scenario.provider, name: scenario.provider, env: [], npm: scenario.npm,
+              models: {
+                "toggle-fixture": {
+                  id: "toggle-fixture", name: "Toggle Fixture", release_date: "2026-01-01",
+                  attachment: false, reasoning: true, tool_call: true,
+                  reasoning_options: [{ type: "toggle" }], limit: { context: 1000, output: 100 },
+                },
+              },
+            },
+          })))
+          const catalog = yield* Catalog.Service
+          const integrations = yield* Integration.Service
+          yield* ModelsDevPlugin.effect(host({ catalog: catalogHost(catalog), integration: integrationHost(integrations) }))
+          const model = yield* catalog.model.get(ProviderV2.ID.make(scenario.provider), ModelV2.ID.make("toggle-fixture"))
+          if (!model) throw new Error("Fixture catalog model missing")
+          expect(model.variants.map((variant) => variant.id)).toEqual(["none", "high"].map((id) => ModelV2.VariantID.make(id)))
+          const selected = yield* SessionRunnerModel.withVariant(model, ModelV2.VariantID.make("high"))
+          if (scenario.provider === "alibaba") expect(selected.settings).toEqual({ enableThinking: true })
+          if (scenario.provider === "cohere") expect(selected.settings).toEqual({ thinking: { type: "enabled" } })
+          for (const removed of ["thinking", "default", "base"])
+            expect(yield* SessionRunnerModel.withVariant(model, ModelV2.VariantID.make(removed)).pipe(Effect.flip)).toMatchObject({
+              _tag: "SessionRunnerModel.VariantUnavailableError", variant: removed,
+            })
+        }).pipe(
+          Effect.provide(models(path.join(directory, "models.json"))),
+          Effect.ensuring(Effect.promise(() => rm(directory, { recursive: true, force: true }))),
+        )),
+      ),
+    )
+
   it.effect("requests encrypted reasoning only for reasoning OpenAI base models", () =>
     Effect.promise(() => mkdtemp(path.join(tmpdir(), "ycoding-models-dev-"))).pipe(
       Effect.flatMap((directory) => Effect.gen(function* () {
@@ -369,6 +466,7 @@ describe("ModelsDevPlugin", () => {
         include: ["reasoning.encrypted_content"],
       })
       expect(model?.variants?.map((variant) => variant.id)).toEqual([
+        ModelV2.VariantID.make("none"),
         ModelV2.VariantID.make("low"),
         ModelV2.VariantID.make("high"),
       ])
@@ -389,6 +487,12 @@ describe("ModelsDevPlugin", () => {
         },
       })
 
+      if (!model) throw new Error("Fixture catalog model missing")
+      const selected = yield* SessionRunnerModel.withVariant(model, ModelV2.VariantID.make("none"))
+      expect(selected.settings).toMatchObject({ reasoningEffort: "none", reasoningSummary: "auto" })
+      const resolved = yield* SessionRunnerModel.fromCatalogModel(selected, Credential.Key.make({ type: "key", key: "fixture-key" }))
+      expect(yield* captureRequestBody(resolved)).toMatchObject({ model: "gpt-reasoning", reasoning: { effort: "none" } })
+
       const mode = yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-reasoning-high"))
       expect(mode).toMatchObject({
         id: "gpt-reasoning-high",
@@ -397,6 +501,7 @@ describe("ModelsDevPlugin", () => {
         body: { service_tier: "priority" },
       })
       expect(mode?.variants?.map((variant) => variant.id)).toEqual([
+        ModelV2.VariantID.make("none"),
         ModelV2.VariantID.make("low"),
         ModelV2.VariantID.make("high"),
       ])
@@ -463,7 +568,7 @@ describe("ModelsDevPlugin", () => {
       const toggle = yield* catalog.model.get(ProviderV2.ID.make("alibaba"), ModelV2.ID.make("toggle-only"))
       expect(toggle?.variants).toEqual([
         { id: ModelV2.VariantID.make("none"), settings: { enableThinking: false } },
-        { id: ModelV2.VariantID.make("thinking"), settings: { enableThinking: true } },
+        { id: ModelV2.VariantID.make("high"), settings: { enableThinking: true } },
       ])
 
       const combined = yield* catalog.model.get(ProviderV2.ID.make("alibaba"), ModelV2.ID.make("toggle-budget"))

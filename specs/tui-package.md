@@ -27,6 +27,12 @@ The CLI creates or discovers the local service, constructs the Client, supplies 
 
 The TUI must remain testable with a fake Client and renderer. It must not start its own hidden server, read process-global configuration directly, or own persistence.
 
+## Dialog ownership
+
+`@ycoding-ai/tui/ui/dialog` exports `DialogContext`. Each `stack` entry's `element` is `JSX.Element | (() => JSX.Element)`: rendered JSX or a zero-argument render factory. `replace` retains those accepted inputs.
+
+The provider constructs a factory once for its current stack entry, without subscribing factory construction to dialog-local reactive reads. Live JSX remains reactive inside that entry. Replacing or closing the entry disposes its mounted content; Escape closes the dialog and restores the invoking focus. Selection and paging inside a dialog retain that dialog's controller rather than reconstructing the list.
+
 ## Product identity
 
 User-facing product copy is `YCoding`. Commands and paths use `ycoding`. Terminal titles use `YCoding` or the `YC` prefix. OpenCode Zen and OpenCode Go may appear only as external provider identity.

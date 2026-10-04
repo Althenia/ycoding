@@ -32,17 +32,12 @@ describe("resolveTheme", () => {
 })
 
 describe("normalizeThemePreference", () => {
-  test("accepts the three supported preferences", () => {
-    expect(normalizeThemePreference("light")).toBe("light")
-    expect(normalizeThemePreference("dark")).toBe("dark")
-    expect(normalizeThemePreference("system")).toBe("system")
+  test.each(["light", "dark", "system"])("accepts %p", (value) => {
+    expect(normalizeThemePreference(value)).toBe(value)
   })
 
-  test("falls back to system for unknown, empty, and non-string values", () => {
-    expect(normalizeThemePreference("sepia")).toBe("system")
-    expect(normalizeThemePreference("")).toBe("system")
-    expect(normalizeThemePreference(undefined)).toBe("system")
-    expect(normalizeThemePreference(2)).toBe("system")
+  test.each(["sepia", "", undefined, 2])("falls back to system for %p", (value) => {
+    expect(normalizeThemePreference(value)).toBe("system")
   })
 })
 

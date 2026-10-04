@@ -4,7 +4,7 @@ import { createSignal } from "solid-js"
 
 export type Value = string | number | boolean | null
 
-export type Group = Readonly<{
+type Group = Readonly<{
   id: string
   title: string
   entries: readonly Readonly<{ key: string; value: Value }>[]

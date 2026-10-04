@@ -491,5 +491,3 @@ function isLoopbackHost(hostname: string) {
   if (octets.length !== 4 || octets.some((octet) => !/^\d{1,3}$/.test(octet))) return false
   return Number(octets[0]) === 127
 }
-
-export const limits = RemoteLimits

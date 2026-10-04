@@ -56,7 +56,7 @@ export function ModeChips(props: { autonomy?: SessionAutonomyState; guardrailPen
   )
 }
 
-export function FilledWarningChip(props: { label: string }) {
+function FilledWarningChip(props: { label: string }) {
   const { themeV2 } = useTheme()
   const style = {
     fg: themeV2.text.action.primary.focused,

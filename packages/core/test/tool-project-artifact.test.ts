@@ -4,6 +4,9 @@ import { mkdtempSync } from "fs"
 import os from "os"
 import path from "path"
 import { Effect, Layer, Schema } from "effect"
+import { LLM } from "@ycoding-ai/ai"
+import { AnthropicMessages, OpenAIChat, OpenAIResponses } from "@ycoding-ai/ai/protocols"
+import { Auth, LLMClient } from "@ycoding-ai/ai/route"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
@@ -31,6 +34,8 @@ import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
 import { imagePassthrough } from "./lib/image"
 import { registerToolPlugin, settleTool, toolDefinitions } from "./lib/tool"
 import { testEffect } from "./lib/effect"
+import { fixedResponse } from "../../ai/test/lib/http"
+import { sseEvents } from "../../ai/test/lib/sse"
 
 const decode = Schema.decodeUnknownOption(ProjectArtifactTool.Input)
 const sessionID = SessionV2.ID.make("ses_project_artifact_tool")
@@ -247,6 +252,115 @@ describe("ProjectArtifactTool input", () => {
 })
 
 describe("ProjectArtifactTool runtime", () => {
+  it.effect("preserves required insight keys on provider wires and rejects omitted keys before an artifact write", () =>
+    Effect.gen(function* () {
+      reset()
+      const registry = yield* ToolRegistry.Service
+      const definitions = yield* toolDefinitions(registry)
+      const chat = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
+        LLM.request({
+          model: OpenAIChat.route.with({ auth: Auth.bearer("fixture") }).model({ id: "gpt-4.1-mini" }),
+          prompt: "Save synthetic review guidance.",
+          tools: definitions,
+        }),
+      )
+      const responsesModel = OpenAIResponses.route.with({ auth: Auth.bearer("fixture") }).model({ id: "gpt-4.1-mini" })
+      const responses = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: responsesModel,
+          prompt: "Save synthetic review guidance.",
+          tools: definitions,
+        }),
+      )
+      const anthropic = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(
+        LLM.request({
+          model: AnthropicMessages.route
+            .with({ auth: Auth.header("x-api-key", "fixture") })
+            .model({ id: "claude-opus-5-5" }),
+          prompt: "Save synthetic review guidance.",
+          tools: definitions,
+        }),
+      )
+      const responseTool = responses.body.tools?.find(
+        (tool) => tool.type === "function" && tool.name === ProjectArtifactTool.name,
+      )
+      const inputSchemas = [
+        chat.body.tools?.find((tool) => tool.function.name === ProjectArtifactTool.name)?.function.parameters,
+        responseTool?.type === "function" ? responseTool.parameters : undefined,
+        anthropic.body.tools?.find((tool) => tool.name === ProjectArtifactTool.name)?.input_schema,
+      ]
+      for (const inputSchema of inputSchemas) {
+        const serialized = Schema.decodeUnknownSync(Schema.UnknownFromJsonString)(JSON.stringify(inputSchema))
+        if (typeof serialized !== "object" || serialized === null) throw new Error("Missing provider tool schema")
+        const reference = Reflect.get(serialized, "$ref")
+        const root =
+          typeof reference === "string"
+            ? Reflect.get(Reflect.get(serialized, "$defs"), reference.replace("#/$defs/", ""))
+            : serialized
+        const required = Reflect.get(root, "required")
+        if (!Array.isArray(required)) throw new Error("Missing required provider fields")
+        expect(new Set(required)).toEqual(new Set(["id", "insight_key", "kind", "name", "description"]))
+        const insight = Reflect.get(Reflect.get(root, "properties"), "insight_key")
+        expect(insight.type).toBe("string")
+        const constraints = [insight, ...(Array.isArray(insight.allOf) ? insight.allOf : [])]
+        expect(constraints.some((constraint) => constraint.minLength === 1)).toBe(true)
+      }
+      const input = {
+        kind: "skill",
+        id: "review",
+        name: "Review",
+        description: "Reusable review guidance",
+        content: "Run focused checks.",
+      }
+      const generated = yield* LLMClient.generate(
+        LLM.request({
+          model: responsesModel,
+          prompt: "Save synthetic review guidance.",
+          tools: definitions,
+        }),
+      ).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              {
+                type: "response.output_item.added",
+                item: {
+                  id: "item_artifact",
+                  type: "function_call",
+                  call_id: "call_missing_insight",
+                  name: ProjectArtifactTool.name,
+                  arguments: "",
+                },
+              },
+              {
+                type: "response.output_item.done",
+                item: {
+                  id: "item_artifact",
+                  type: "function_call",
+                  call_id: "call_missing_insight",
+                  name: ProjectArtifactTool.name,
+                  arguments: JSON.stringify(input),
+                },
+              },
+              { type: "response.completed", response: { id: "resp_artifact" } },
+            ),
+          ),
+        ),
+      )
+      const toolCall = generated.toolCalls[0]
+      expect(toolCall?.name).toBe(ProjectArtifactTool.name)
+      expect(toolCall?.input).toEqual(input)
+      if (toolCall === undefined) throw new Error("Missing provider tool call")
+      const failed = yield* settleTool(registry, { sessionID, agent: agentID, messageID, call: toolCall })
+      expect(failed.result.type).toBe("error")
+      expect(failed.result.value).toContain("Invalid tool input")
+      expect(failed.result.value).toContain("insight_key")
+      expect(failed.error).toMatchObject({ type: "tool.execution", message: failed.result.value })
+      expect(writes).toEqual([])
+      expect(refreshes).toBe(0)
+    }),
+  )
+
   it.effect("registers one native project_artifact tool and settles one exact automatic write", () =>
     Effect.gen(function* () {
       reset()

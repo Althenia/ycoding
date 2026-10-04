@@ -193,7 +193,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     model: ctx.model ?? session.model,
     providers: [],
     variants: [],
-    activeVariant: resolveVariant(ctx.variant, session.variant, savedVariant, []),
+    activeVariant: resolveVariant(ctx.variant, session.variant, savedVariant),
     sessionID: "",
     history: [...session.history],
     localRows: [],
@@ -298,7 +298,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       state.activeVariant = cycleVariant(state.activeVariant, state.variants)
       void input.host.preferences.saveVariant(state.model, state.activeVariant)
       return {
-        status: state.activeVariant ? `variant ${state.activeVariant}` : "variant default",
+        status: state.activeVariant === undefined ? "Variant selection cleared" : `variant ${state.activeVariant}`,
         modelLabel: formatModelLabel(state.model, state.activeVariant, state.providers),
         variant: state.activeVariant,
       }
@@ -317,7 +317,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
           return
         }
 
-        state.activeVariant = resolveVariant(undefined, undefined, saved, state.variants)
+        state.activeVariant = resolveVariant(undefined, undefined, saved)
       })
       state.switching = switching
       await switching
@@ -338,7 +338,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       }
     },
     onVariantSelect: async (variant) => {
-      if (!state.model || state.variants.length === 0) {
+      if (!state.model) {
         return {
           status: "no variants available",
         }
@@ -353,7 +353,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       state.activeVariant = variant
       void input.host.preferences.saveVariant(state.model, state.activeVariant)
       return {
-        status: state.activeVariant ? `variant ${state.activeVariant}` : "variant default",
+        status: state.activeVariant === undefined ? "Variant selection cleared" : `variant ${state.activeVariant}`,
         modelLabel: formatModelLabel(state.model, state.activeVariant, state.providers),
         variant: state.activeVariant,
         variants: state.variants,
@@ -471,7 +471,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         state.history = [...resumed.history]
         state.model = next.model ?? resumed.model
         const resumedSavedVariant = state.model ? await input.host.preferences.resolveVariant(state.model) : undefined
-        state.activeVariant = resolveVariant(next.variant, resumed.variant, resumedSavedVariant, undefined)
+        state.activeVariant = resolveVariant(next.variant, resumed.variant, resumedSavedVariant)
         session.variant = state.activeVariant
         footer.event({ type: "history", history: resumed.history })
         footer.event({ type: "first", first: resumed.first })
@@ -633,11 +633,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     if (!currentClient(attempt)) return
     state.providers = info.providers
     state.variants = variantsFor(state.providers, state.model)
-    state.activeVariant = boot
-      ? resolveVariant(ctx.variant, current, saved, state.variants)
-      : current && !state.variants.includes(current)
-        ? undefined
-        : current
+    state.activeVariant = boot ? resolveVariant(ctx.variant, current, saved) : current
     if (footer.isClosed) return
     footer.event({ type: "models", providers: info.providers })
     footer.event({ type: "variants", variants: state.variants, current: state.activeVariant })
@@ -944,6 +940,16 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         await state.switching?.catch(() => {})
 
         try {
+          if (
+            prompt.mode !== "shell" &&
+            prompt.command?.source !== "skill" &&
+            state.activeVariant !== undefined &&
+            !state.variants.includes(state.activeVariant)
+          ) {
+            throw new Error(
+              `Variant ${state.activeVariant} unavailable; choose an offered variant or clear the selection`,
+            )
+          }
           const next = await ensureStream()
           await next.handle.runPromptTurn({
             agent: state.agent,

@@ -22,31 +22,32 @@ const providers: RunProvider[] = [
 ]
 
 describe("run variant shared", () => {
-  test("prefers cli then session then saved variants", () => {
-    expect(resolveVariant("max", "high", "low", ["low", "high"])).toBe("max")
-    expect(resolveVariant(undefined, "high", "low", ["low", "high"])).toBe("high")
-    expect(resolveVariant(undefined, "missing", "low", ["low", "high"])).toBe("low")
+  test("prefers explicit cli then session then saved variants without replacing unavailable ids", () => {
+    expect(resolveVariant("max", "high", "low")).toBe("max")
+    expect(resolveVariant(undefined, "high", "low")).toBe("high")
+    expect(resolveVariant(undefined, "missing", "low")).toBe("missing")
+    expect(resolveVariant(undefined, undefined, "missing")).toBe("missing")
   })
 
-  test("drops a stored variant when the model offers no variants at all", () => {
-    expect(resolveVariant(undefined, "high", "low", [])).toBeUndefined()
-    expect(resolveVariant(undefined, "high", undefined, [] as string[])).toBeUndefined()
+  test("retains a stored explicit variant when the model offers no variants", () => {
+    expect(resolveVariant(undefined, "high", "low")).toBe("high")
+    expect(resolveVariant(undefined, undefined, "high")).toBe("high")
   })
 
   test("keeps stored variants while the catalog has not resolved the model yet", () => {
-    expect(resolveVariant(undefined, "high", "low", undefined)).toBe("high")
-    expect(resolveVariant(undefined, undefined, "low", undefined)).toBe("low")
+    expect(resolveVariant(undefined, "high", "low")).toBe("high")
+    expect(resolveVariant(undefined, undefined, "low")).toBe("low")
   })
 
   test("keeps an explicit cli variant even when the catalog has not resolved variants", () => {
-    expect(resolveVariant("max", undefined, undefined, undefined)).toBe("max")
-    expect(resolveVariant("max", undefined, undefined, [])).toBe("max")
+    expect(resolveVariant("max", undefined, undefined)).toBe("max")
   })
 
-  test("cycles through variants and back to no variant", () => {
+  test("cycles through offered variants without clearing the optional selection", () => {
     expect(cycleVariant(undefined, ["low", "high"])).toBe("low")
     expect(cycleVariant("low", ["low", "high"])).toBe("high")
-    expect(cycleVariant("high", ["low", "high"])).toBeUndefined()
+    expect(cycleVariant("high", ["low", "high"])).toBe("low")
+    expect(cycleVariant("missing", ["low", "high"])).toBe("low")
     expect(cycleVariant(undefined, [])).toBeUndefined()
   })
 
@@ -54,11 +55,11 @@ describe("run variant shared", () => {
     expect(cycleVariant(undefined, ["none", "low", "high"])).toBe("none")
     expect(cycleVariant("none", ["none", "low", "high"])).toBe("low")
     expect(cycleVariant("low", ["none", "low", "high"])).toBe("high")
-    expect(cycleVariant("high", ["none", "low", "high"])).toBeUndefined()
+    expect(cycleVariant("high", ["none", "low", "high"])).toBe("none")
     expect(cycleVariant(undefined, ["default", "low", "high"])).toBe("default")
     expect(cycleVariant("default", ["default", "low", "high"])).toBe("low")
-    expect(resolveVariant("none", undefined, undefined, ["none", "low", "high"])).toBe("none")
-    expect(resolveVariant(undefined, "default", "low", ["default", "low"])).toBe("default")
+    expect(resolveVariant("none", undefined, undefined)).toBe("none")
+    expect(resolveVariant(undefined, "default", "low")).toBe("default")
     expect(decodeModelPreference({ variant: { "openai/gpt-6-luna": "none" } }).variant).toEqual({
       "openai/gpt-6-luna": "none",
     })

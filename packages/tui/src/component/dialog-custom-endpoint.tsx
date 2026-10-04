@@ -18,7 +18,7 @@ export type CustomEndpointResult = {
   models: CustomEndpointModel[]
 }
 
-export type CustomEndpointModel = {
+type CustomEndpointModel = {
   id: string
   modelID?: string
   name?: string

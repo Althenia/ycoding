@@ -30,7 +30,7 @@ export type ProviderFixture = {
   readonly reply?: (request: unknown) => readonly ReturnType<typeof deltaChunk>[]
 }
 
-export type ProviderStandIn = {
+type ProviderStandIn = {
   readonly providerID: string
   readonly modelID: string
   readonly url: string

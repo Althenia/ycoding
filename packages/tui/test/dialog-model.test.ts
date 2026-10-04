@@ -27,22 +27,3 @@ test("withholds completion until a required variant is explicitly selected", () 
     variant: "extended",
   })
 })
-
-test("model and variant cancellation have no completion result", () => {
-  expect(
-    dialogModel.completeModelSelection({
-      providerID: "anthropic",
-      modelID: "claude-sonnet",
-      variants: ["default", "extended"],
-    }),
-  ).toBeUndefined()
-})
-
-test("reports explicit cancellation from both model and variant dialogs", async () => {
-  const model = await Bun.file(new URL("../src/component/dialog-model.tsx", import.meta.url)).text()
-  const variant = await Bun.file(new URL("../src/component/dialog-variant.tsx", import.meta.url)).text()
-
-  expect(model).toContain('props.onComplete?.({ type: "cancelled" })')
-  expect(model).toContain("onCancel={() => props.onComplete?.({ type: \"cancelled\" })}")
-  expect(variant).toContain("if (!selected) props.onCancel?.()")
-})

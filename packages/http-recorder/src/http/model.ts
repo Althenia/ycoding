@@ -1,7 +1,7 @@
 import { Schema } from "effect"
 import type { RequestSnapshot } from "../api.js"
 
-export const RequestSnapshotSchema = Schema.Struct({
+const RequestSnapshotSchema = Schema.Struct({
   method: Schema.String,
   url: Schema.String,
   headers: Schema.Record(Schema.String, Schema.String),
@@ -10,7 +10,7 @@ export const RequestSnapshotSchema = Schema.Struct({
 
 export type { RequestSnapshot } from "../api.js"
 
-export const ResponseSnapshotSchema = Schema.Struct({
+const ResponseSnapshotSchema = Schema.Struct({
   status: Schema.Number,
   headers: Schema.Record(Schema.String, Schema.String),
   body: Schema.String,

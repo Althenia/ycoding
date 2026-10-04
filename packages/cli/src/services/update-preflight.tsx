@@ -35,7 +35,7 @@ export type Handle = {
   readonly close: () => Promise<void>
 }
 
-export type Handoff = {
+type Handoff = {
   readonly renderer: CliRenderer
   readonly mode: ThemeMode | null
   readonly complete: () => void

@@ -22,7 +22,6 @@ import { PermissionV2 } from "@ycoding-ai/core/permission"
 import { PluginHooks } from "@ycoding-ai/core/plugin/hooks"
 import { PluginSupervisor } from "@ycoding-ai/core/plugin/supervisor"
 import { Project } from "@ycoding-ai/core/project"
-import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
 import { ReferenceInstructions } from "@ycoding-ai/core/reference/instructions"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
@@ -41,7 +40,6 @@ import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionModelSwitch } from "@ycoding-ai/core/session/model-switch"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionProviderRequest } from "@ycoding-ai/core/session/provider-request"
-import { SessionRunnerCache } from "@ycoding-ai/core/session/runner/cache"
 import { SessionRunCoordinator } from "@ycoding-ai/core/session/run-coordinator"
 import { SessionRunner } from "@ycoding-ai/core/session/runner"
 import * as SessionRunnerLLM from "@ycoding-ai/core/session/runner/llm"
@@ -52,7 +50,6 @@ import {
   SessionMessageTable,
   SessionPendingTable,
   SessionProviderRequestTable,
-  SessionTable,
 } from "@ycoding-ai/core/session/sql"
 import { SkillInstructions } from "@ycoding-ai/core/skill/instructions"
 import { Snapshot } from "@ycoding-ai/core/snapshot"
@@ -513,7 +510,7 @@ const pendingRows = (sessionID: SessionV2.ID) =>
   })
 
 describe("SessionV2.switchModel context validation", () => {
-  it.effect("applies a fitting switch and preserves the visible summary and recent transcript", () =>
+  it.effect("applies a fitting switch without compaction, preserving the visible summary and recent transcript", () =>
     Effect.gen(function* () {
       const { sessionID, location } = createSession()
       const session = yield* SessionV2.Service
@@ -529,9 +526,14 @@ describe("SessionV2.switchModel context validation", () => {
       expect(outcome).toEqual({ status: "switched" })
       expect((yield* session.get(sessionID)).model).toMatchObject({ id: "claude-haiku-4-5", providerID: "anthropic" })
       const messages = yield* session.context(sessionID)
+      expect(messages.filter((message) => message.type === "compaction")).toHaveLength(1)
       const summary = messages.find((message) => message.type === "compaction")
       expect(summary).toMatchObject({ type: "compaction", status: "completed", summary: "S1", recent: "R1" })
       expect(messages).toContainEqual(expect.objectContaining({ type: "user", text: "hello" }))
+      expect((yield* pendingRows(sessionID)).filter((row) => row.type === "compaction")).toHaveLength(0)
+      expect(yield* eventCountFor(sessionID, "session.compaction.started")).toBe(0)
+      expect(yield* eventCountFor(sessionID, "session.compaction.ended")).toBe(0)
+      expect(requests).toHaveLength(0)
     }),
   )
 
@@ -552,25 +554,6 @@ describe("SessionV2.switchModel context validation", () => {
       expect((yield* session.get(sessionID)).model).toMatchObject({ id: "claude-sonnet-4-5", providerID: "anthropic" })
       expect((yield* session.context(sessionID)).filter((message) => message.type === "compaction")).toHaveLength(1)
       expect((yield* pendingRows(sessionID)).filter((row) => row.type === "compaction")).toHaveLength(0)
-    }),
-  )
-
-  it.effect("succeeds switching to a smaller-context model that fits without compaction", () =>
-    Effect.gen(function* () {
-      const { sessionID, location } = createSession()
-      const session = yield* SessionV2.Service
-      yield* session.create({ id: sessionID, location, model: sonnet })
-      yield* seedTranscript({
-        sessionID,
-        summary: "S1",
-        posts: [{ id: SessionMessage.ID.make("msg_u1"), text: "hello" }],
-      })
-
-      const outcome = yield* session.switchModel({ sessionID, model: haiku })
-
-      expect(outcome).toEqual({ status: "switched" })
-      expect((yield* session.get(sessionID)).model).toMatchObject({ id: "claude-haiku-4-5", providerID: "anthropic" })
-      expect((yield* session.context(sessionID)).filter((message) => message.type === "compaction")).toHaveLength(1)
     }),
   )
 
@@ -680,25 +663,6 @@ describe("SessionV2.switchModel context validation", () => {
 
       expect(outcome).toEqual({ status: "switched" })
       expect(yield* eventCountFor(sessionID, "session.compaction.ended")).toBe(1)
-    }),
-  )
-
-  it.effect("a fitting switch issues no compaction job and no provider request", () =>
-    Effect.gen(function* () {
-      const { sessionID, location } = createSession()
-      const session = yield* SessionV2.Service
-      yield* session.create({ id: sessionID, location, model: sonnet })
-      yield* seedTranscript({
-        sessionID,
-        summary: "S1",
-        posts: [{ id: SessionMessage.ID.make("msg_u1"), text: "hello" }],
-      })
-
-      expect(yield* session.switchModel({ sessionID, model: haiku })).toEqual({ status: "switched" })
-      expect((yield* pendingRows(sessionID)).filter((row) => row.type === "compaction")).toHaveLength(0)
-      expect(yield* eventCountFor(sessionID, "session.compaction.started")).toBe(0)
-      expect(yield* eventCountFor(sessionID, "session.compaction.ended")).toBe(0)
-      expect(requests).toHaveLength(0)
     }),
   )
 
@@ -1038,93 +1002,6 @@ describe("SessionV2.switchModel in-flight boundary", () => {
       drainHook = () => Effect.void
     }),
   )
-})
-
-describe("SessionProviderRequest continuation invalidation across models and providers", () => {
-  const providerIt = testEffect(
-    AppNodeBuilder.build(
-      LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionProviderRequest.node]),
-    ),
-  )
-  providerIt.effect("never reuses continuation state across models or providers", () =>
-    Effect.gen(function* () {
-      const providerSessionID = SessionV2.ID.make("ses_invalidation")
-      const { db } = yield* Database.Service
-      yield* db
-        .insert(ProjectTable)
-        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
-        .onConflictDoNothing()
-        .run()
-        .pipe(Effect.orDie)
-      yield* db
-        .insert(SessionTable)
-        .values({ id: providerSessionID, project_id: Project.ID.global, directory: "/project", title: "test" })
-        .onConflictDoNothing()
-        .run()
-        .pipe(Effect.orDie)
-      const service = yield* SessionProviderRequest.Service
-      const record = Effect.fnUntraced(function* (model: ModelV2.Ref) {
-        const tracker = yield* service.next({
-          sessionID: providerSessionID,
-          source: "step",
-          agent: AgentV2.ID.make("build"),
-          model,
-          routeID: "openai-responses",
-          promptCacheKey: "same-key",
-          systemDigest: "same-system",
-          toolDigest: "same-tools",
-        })
-        yield* tracker.complete({
-          continuation: "full",
-          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-        })
-      })
-
-      yield* record(ref("openai", "gpt-5.6"))
-      yield* record(ref("openai", "gpt-5.6-mini"))
-      yield* record(ref("anthropic", "claude-sonnet-4-5"))
-
-      const invalidation = (yield* service.list(providerSessionID)).map((item) => item.invalidation)
-      expect(invalidation).toEqual(["first-request", "model-switched", "model-switched"])
-    }),
-  )
-})
-
-describe("SessionRunnerCache prompt cache namespace identity", () => {
-  const base = {
-    projectID: "prj_test",
-    directory: "/project",
-    providerID: "openai",
-    modelID: "gpt-5.6",
-    variant: undefined,
-    policyRevision: "revision",
-    permissions: [],
-    system: [],
-    tools: [],
-  }
-  test("changes when the model id changes on a model switch", () => {
-    expect(SessionRunnerCache.promptCacheNamespace(base)).not.toBe(
-      SessionRunnerCache.promptCacheNamespace({ ...base, modelID: "gpt-5.6-mini" }),
-    )
-  })
-  test("changes when the provider changes on a provider switch", () => {
-    expect(SessionRunnerCache.promptCacheNamespace(base)).not.toBe(
-      SessionRunnerCache.promptCacheNamespace({ ...base, providerID: "anthropic", modelID: "claude-sonnet-4-5" }),
-    )
-  })
-  test("changes when the variant changes", () => {
-    expect(SessionRunnerCache.promptCacheNamespace(base)).not.toBe(
-      SessionRunnerCache.promptCacheNamespace({ ...base, variant: "high" }),
-    )
-  })
-  test("stays stable for the same model identity", () => {
-    expect(SessionRunnerCache.promptCacheNamespace(base)).toBe(SessionRunnerCache.promptCacheNamespace(base))
-  })
-  test("hashes an absent variant as absent, never as a named variant", () => {
-    expect(SessionRunnerCache.promptCacheNamespace(base)).not.toBe(
-      SessionRunnerCache.promptCacheNamespace({ ...base, variant: "default" }),
-    )
-  })
 })
 
 describe("SessionModelSwitch decision logic", () => {

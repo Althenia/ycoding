@@ -333,7 +333,7 @@ body:has(.app) {
 :root[data-motion="on"] .route-panel--exiting { opacity: 0; transform: translateY(-8px); }
 :root:not([data-motion="on"]) .route-panel--exiting { content-visibility: hidden; }
 .route-panel--idle { display: none; }
-.route-panel:has(> .new-session-composer) { display: flex; flex-direction: column; }
+.route-panel:has(> .new-session-composer):not(.route-panel--idle) { display: flex; flex-direction: column; }
 .route-panel > .new-session-composer { flex: 1; }
 .remote-conversation-view.route-panel--idle { position: absolute; inset: 0; display: block; block-size: 100%; overflow: hidden; content-visibility: hidden; pointer-events: none; }
 .remote-conversation-view.route-panel--exiting { block-size: 100%; overflow: hidden; }
@@ -953,6 +953,9 @@ body:has(.app) {
   border-radius: var(--yc-radius-sm);
 }
 
+.request > .team-answer { padding: var(--yc-space-3); }
+.request > .team-answer button { justify-self: end; }
+
 .request__note {
   padding: 0 var(--yc-space-3) var(--yc-space-3);
   color: var(--yc-text-muted);
@@ -1124,7 +1127,7 @@ body:has(.app) {
 }
 
 .app--empty .empty-conversation > *,
-.app--empty .workspace__scroll > .remote-conversation-view > .new-session-composer {
+.app--empty .workspace__scroll > .route-panel > .new-session-composer {
   inline-size: min(100%, 640px);
   margin-inline: auto;
 }
@@ -1167,6 +1170,7 @@ body:has(.app) {
 
 .conversation-breadcrumb {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--yc-space-2);
   min-block-size: 42px;
@@ -1175,6 +1179,8 @@ body:has(.app) {
   color: var(--yc-text-muted);
   font-size: var(--yc-size-xs);
 }
+
+.conversation-breadcrumb__new { flex: none; margin-inline-start: auto; }
 
 .conversation-breadcrumb strong {
   min-inline-size: 0;

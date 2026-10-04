@@ -102,5 +102,4 @@ These are implementation/API slices, not separate npm packages.
 4. Add runner/catalog mappings and recorded scenarios for the native Vertex Gemini, Chat, Responses, and Messages entrypoints.
 5. Decide Chat/Responses selection for `@ai-sdk/google-vertex/xai` catalog models.
 6. Add Bedrock Mantle as a separate OpenAI-compatible Bedrock namespace after deciding whether it uses Chat, Responses, or both by model.
-7. Expand typed provider options from the existing V1 lowerer knowledge in `packages/core/src/v1/config/provider-options.ts` before adding more raw overlay examples.
-8. Add recorded provider tests for Azure, Vertex Gemini, Vertex Chat, Vertex Responses, Vertex Messages, Bedrock credential-chain behavior, and Mantle before making native runtime the default for those packages.
+7. Add recorded provider tests for Azure, Vertex Gemini, Vertex Chat, Vertex Responses, Vertex Messages, Bedrock credential-chain behavior, and Mantle before making native runtime the default for those packages.

@@ -203,7 +203,7 @@ export function wallAt(x: number, y: number): boolean {
   return x === 0 || x === columns - 1 || y === 0 || y === rows - 1
 }
 
-export function walkable(x: number, y: number): boolean {
+function walkable(x: number, y: number): boolean {
   return !wallAt(x, y) && !occupied.has(`${x},${y}`)
 }
 
@@ -233,8 +233,4 @@ export const officeLayout: OfficeLayout = {
     rest(27, 22, "right"), rest(27, 23, "right"), rest(36, 22, "left"), rest(36, 23, "left"),
     rest(29, 31), rest(31, 31), rest(34, 31), rest(36, 31),
   ],
-}
-
-export function center(cell: Point): Point {
-  return { x: cell.x * tileSize + tileSize / 2, y: cell.y * tileSize + tileSize / 2 }
 }

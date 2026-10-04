@@ -39,10 +39,10 @@ export function modelPreferenceKey(model: ModelPreferenceModel) {
 }
 
 export function cycleModelVariant(current: string | undefined, variants: string[]) {
-  if (variants.length === 0) return undefined
+  if (variants.length === 0) return current
   if (current === undefined) return variants[0]
   const index = variants.indexOf(current)
-  if (index === -1 || index === variants.length - 1) return undefined
+  if (index === -1 || index === variants.length - 1) return variants[0]
   return variants[index + 1]
 }
 

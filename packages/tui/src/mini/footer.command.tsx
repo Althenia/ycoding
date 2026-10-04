@@ -2,7 +2,7 @@
 import { TextAttributes, type InputRenderable, type KeyEvent } from "@opentui/core"
 import { useKeyboard, type JSX } from "@opentui/solid"
 import fuzzysort from "fuzzysort"
-import { createEffect, createMemo, createSignal, type Accessor } from "solid-js"
+import { createEffect, createMemo, createSignal, Show, type Accessor } from "solid-js"
 import { RunFooterMenu, createFooterMenuState, type RunFooterMenuItem } from "./footer.menu"
 import type { RunFooterTheme } from "./theme"
 import type { FooterQueuedPrompt, FooterSubagentTab, RunCommand, RunInput, RunProvider } from "./types"
@@ -32,7 +32,7 @@ type ModelEntry = PanelEntry & {
 }
 
 type VariantEntry = PanelEntry & {
-  variant: string | undefined
+  variant: string
   current: boolean
 }
 
@@ -820,16 +820,8 @@ export function RunVariantSelectBody(props: {
   onClose: () => void
   onSelect: (variant: string | undefined) => void
 }) {
-  const entries = createMemo<VariantEntry[]>(() => [
-    {
-      category: "",
-      display: "Default",
-      description: props.current() === undefined ? "current" : undefined,
-      keywords: "default",
-      variant: undefined,
-      current: props.current() === undefined,
-    },
-    ...props.variants().map((variant) => ({
+  const entries = createMemo<VariantEntry[]>(() =>
+    props.variants().map((variant) => ({
       category: "",
       display: variant,
       description: props.current() === variant ? "current" : undefined,
@@ -837,18 +829,28 @@ export function RunVariantSelectBody(props: {
       variant,
       current: props.current() === variant,
     })),
-  ])
+  )
   const controller = createSearchablePanelController({
     entries,
     limit: PANEL_LIST_ROWS,
     onClose: props.onClose,
     onSelect: (item) => props.onSelect(item.variant),
     isCurrent: (item) => item.current,
+    onKey: (event) => {
+      if (!event.ctrl || event.name.toLowerCase() !== "u" || props.current() === undefined) return false
+      event.preventDefault()
+      props.onSelect(undefined)
+      return true
+    },
   })
 
   return (
     <PanelShell
-      title="Select variant"
+      title={
+        props.current() !== undefined && !props.variants().includes(props.current()!)
+          ? `Select variant · ${props.current()} unavailable`
+          : "Select variant"
+      }
       query={controller.query()}
       count={controller.items().length}
       total={entries().length}
@@ -873,6 +875,11 @@ export function RunVariantSelectBody(props: {
         grouped={false}
         background
       />
+      <Show when={props.current() !== undefined}>
+        <text fg={props.theme().highlight} onMouseUp={() => props.onSelect(undefined)}>
+          Clear selection ⌃u
+        </text>
+      </Show>
     </PanelShell>
   )
 }

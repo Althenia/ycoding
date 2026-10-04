@@ -1,10 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
-import type {
-  ProviderRequestSummary,
-  ProviderUsageListOutput,
-} from "@ycoding-ai/client"
+import type { ProviderRequestSummary, ProviderUsageListOutput } from "@ycoding-ai/client"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import {
@@ -60,19 +57,6 @@ test("invalidates stale asynchronous generations", () => {
   expect(guard.current(second)).toBeFalse()
 })
 
-test("registers screen-only entry and back commands without a command palette item", async () => {
-  const [footer, route] = await Promise.all([
-    Bun.file(new URL("../../../src/routes/session/footer.tsx", import.meta.url)).text(),
-    Bun.file(new URL("../../../src/context/route.tsx", import.meta.url)).text(),
-  ])
-
-  expect(footer).toContain("session.provider-usage.open")
-  expect(footer).toContain("Open provider usage")
-  expect(footer).toContain('bind: "<leader>shift+u"')
-  expect(route).toContain('type: "provider-usage"')
-  expect(footer.match(/id: "session\.provider-usage\.open"[\s\S]*?run: openUsage/)?.[0]).not.toContain("palette: true")
-})
-
 test("renders provider progress and unavailable states in a dedicated dialog", async () => {
   const [{ ConfigProvider }, { ThemeProvider }, { Keymap }, { DialogProvider }, { ToastProvider }] = await Promise.all([
     import("../../../src/config"),
@@ -120,11 +104,7 @@ test("renders provider progress and unavailable states in a dedicated dialog", a
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
               <ToastProvider>
                 <DialogProvider>
-                  <ProviderUsageScreenContent
-                    snapshots={() => snapshots}
-                    initialTab="usage"
-                    now={() => 1_000}
-                  />
+                  <ProviderUsageScreenContent snapshots={() => snapshots} initialTab="usage" now={() => 1_000} />
                 </DialogProvider>
               </ToastProvider>
             </ThemeProvider>
@@ -166,11 +146,13 @@ test("renders missing local pricing as an estimated zero cost", async () => {
     continued: 0,
     fallback: 0,
     tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 0, write: 0 } },
-    models: [{
-      model: { id: "custom", providerID: "custom" },
-      requests: 1,
-      tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 0, write: 0 } },
-    }],
+    models: [
+      {
+        model: { id: "custom", providerID: "custom" },
+        requests: 1,
+        tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 0, write: 0 } },
+      },
+    ],
   }
   const app = await testRender(
     () => (
@@ -227,10 +209,7 @@ test("renders durable backend request usage after detailed records are compacted
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
               <ToastProvider>
                 <DialogProvider>
-                  <ProviderUsageScreenContent
-                    snapshots={() => []}
-                    backendUsage={() => usage}
-                  />
+                  <ProviderUsageScreenContent snapshots={() => []} backendUsage={() => usage} />
                 </DialogProvider>
               </ToastProvider>
             </ThemeProvider>

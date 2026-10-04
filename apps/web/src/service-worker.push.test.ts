@@ -32,6 +32,18 @@ test("service worker shows one notification per push including malformed and foc
   })
   try {
     await import("./service-worker")
+    expect([...listeners.keys()].sort()).toEqual(["activate", "fetch", "install", "notificationclick", "push", "pushsubscriptionchange"])
+    const intercepted = (url: string, method: string, mode: string, destination: string) => {
+      const responses: unknown[] = []
+      listeners.get("fetch")?.({ request: { url, method, mode, destination }, respondWith: (response: Promise<unknown>) => responses.push(response.catch(() => undefined)) })
+      return responses.length
+    }
+    expect(intercepted("https://relay.test/api/me", "GET", "navigate", "document")).toBe(0)
+    expect(intercepted("https://relay.test/ws/v3/client", "GET", "cors", "websocket")).toBe(0)
+    expect(intercepted("https://relay.test/auth/google", "GET", "navigate", "document")).toBe(0)
+    expect(intercepted("https://relay.test/assets/index.js", "POST", "cors", "script")).toBe(0)
+    expect(intercepted("https://relay.test/docs/usage", "GET", "navigate", "document")).toBe(1)
+    calls.length = 0
     const emit = async (name: string, event: Record<string, unknown>) => {
       let pending: Promise<unknown> | undefined
       listeners.get(name)?.({ ...event, waitUntil: (promise: Promise<unknown>) => { pending = promise } })

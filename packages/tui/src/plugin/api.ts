@@ -6,7 +6,7 @@ type RouteEntry = {
   render: TuiRouteDefinition["render"]
 }
 
-export type RouteMap = Map<string, RouteEntry[]>
+type RouteMap = Map<string, RouteEntry[]>
 
 export function createPluginRoutes() {
   const routes: RouteMap = new Map()
@@ -36,5 +36,3 @@ export function createPluginRoutes() {
     },
   }
 }
-
-export type PluginRoutes = ReturnType<typeof createPluginRoutes>

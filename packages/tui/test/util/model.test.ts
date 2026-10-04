@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { formatRef, parse, switchLabel } from "../../src/util/model"
+import { parse, switchLabel } from "../../src/util/model"
 
 describe("util.model", () => {
   test("splits provider from a nested model identifier", () => {
@@ -7,15 +7,11 @@ describe("util.model", () => {
     expect(parse("invalid")).toEqual({ providerID: "invalid", modelID: "" })
   })
 
-  test("includes the selected variant in model refs", () => {
-    expect(formatRef({ providerID: "anthropic", id: "sonnet", variant: "thinking" })).toBe("anthropic/sonnet/thinking")
-    expect(formatRef({ providerID: "anthropic", id: "sonnet" })).toBe("anthropic/sonnet")
-  })
-
   test("includes the selected variant in model switch notices", () => {
     expect(switchLabel({ providerID: "anthropic", id: "sonnet", variant: "thinking" })).toBe(
       "Switched model to anthropic/sonnet/thinking",
     )
+    expect(switchLabel({ providerID: "anthropic", id: "sonnet" })).toBe("Switched model to anthropic/sonnet")
   })
 
   test("uses the catalog display name in model switch notices", () => {
@@ -36,9 +32,7 @@ describe("util.model", () => {
     const previous = { providerID: "openai", id: "gpt-5.5", variant: "medium" }
 
     expect(switchLabel({ ...previous, variant: "high" }, undefined, previous)).toBe("Switched variant to high")
-    expect(switchLabel({ providerID: "openai", id: "gpt-5.5" }, undefined, previous)).toBe(
-      "Switched variant to Base",
-    )
+    expect(switchLabel({ providerID: "openai", id: "gpt-5.5" }, undefined, previous)).toBe("Cleared variant selection")
     expect(switchLabel({ providerID: "openai", id: "gpt-5.5", variant: "default" }, undefined, previous)).toBe(
       "Switched variant to default",
     )

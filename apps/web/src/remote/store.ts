@@ -137,7 +137,7 @@ export type TeamTaskView = {
   readonly tokens?: number
 }
 
-export type TeamView = {
+type TeamView = {
   readonly rootID: string
   readonly status: "loading" | "ready" | "unsupported" | "error"
   readonly tasks: readonly TeamTaskView[]
@@ -176,7 +176,7 @@ export type PendingMutation = {
 
 export type MutationToast = { readonly id: string; readonly label: string; readonly state: "failed" | "unknown"; readonly detail?: string; readonly sessionID: string }
 
-export type SessionCreation = {
+type SessionCreation = {
   readonly id: string
   readonly deviceID: string
   readonly workspace: RemoteWorkspaceInfo
@@ -247,6 +247,7 @@ export type RemoteStoreOptions = {
   readonly createTransport: (deviceID: string, handlers: RemoteTransportHandlers) => RemoteTransport
   readonly schedule?: (callback: () => void, ms: number) => () => void
   readonly now?: () => number
+  readonly monotonicNow?: () => number
   /** Holds the remembered machine; defaults to browser storage. */
   readonly storage?: StorageLike
   /** Coalesces stream deltas into one state notification. */
@@ -368,6 +369,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     return () => clearTimeout(handle)
   })
   const now = options.now ?? (() => Date.now())
+  const monotonicNow = options.monotonicNow ?? (() => performance.now())
   const storage = options.storage ?? browserStorage()
   const batchMs = options.batchMs ?? defaultBatchMs
   const createMessageID = options.createMessageID ?? defaultMessageID
@@ -420,6 +422,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   let selectionReadyToken: number | undefined
   let selectionFailedToken: number | undefined
   let teamWatching = false
+  const childAnswers = new Set<string>()
   let teamWatchToken = 0
   let teamShellRead = 0
   let activityWatching = false
@@ -1784,7 +1787,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (!isCurrentConnection(owner) || (!statusReloadLocal && !carouselRefreshPending)) return
     if (container.state.selectedWorkspaceID === undefined && !carouselRefreshPending) return
     if (statusReloading) return
-    const now = performance.now()
+    const now = monotonicNow()
     const loadLocal = statusReloadLocal && container.state.selectedWorkspaceID !== undefined && loadingPageToken !== sessionsToken && now - lastStatusReload >= 5_000
     const loadCarousel = carouselRefreshPending && now - lastCarouselReload >= 5_000
     if (!loadLocal && !loadCarousel) {
@@ -2646,7 +2649,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
       const task = readTeamTask(data)
       if (task?.parentID !== rootID || task.sessionID !== childID) return { status: "unknown", message: "The device returned an unreadable cancellation; check the subagent before retrying." }
-      setState({ team: { ...container.state.team, tasks: container.state.team.tasks.map((item) => item.sessionID === childID ? { ...item, ...task } : item) } })
+      setState({ team: { ...container.state.team, tasks: container.state.team.tasks.map((item) => item.sessionID === childID ? { ...item, ...task, question: task.question } : item) } })
       return { status: "ok", message: "" }
     },
     answerSubagent: async (childID, questionID, text) => {
@@ -2656,13 +2659,16 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         return { status: "failed", message: "This subagent question is no longer pending." }
       const rootID = team.rootID
       const token = selectionToken
-      const outcome = await owner.request("session.subagent.answer", { sessionID: rootID, input: { childID, questionID, text }, timeoutMs: 10_000 })
+      const answerKey = `${rootID}:${childID}:${questionID}`
+      if (childAnswers.has(answerKey)) return { status: "failed", message: "An answer to this subagent question is already being sent." }
+      childAnswers.add(answerKey)
+      const outcome = await owner.request("session.subagent.answer", { sessionID: rootID, input: { childID, questionID, text }, timeoutMs: 10_000 }).finally(() => childAnswers.delete(answerKey))
       if (token !== selectionToken || !isCurrentConnection(owner) || container.state.team?.rootID !== rootID) return { status: "unknown", message: "The family changed; check the question before retrying." }
       if (outcome.status !== "ok") return teamActionFailure(outcome, "Answer subagent")
       const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
       const task = readTeamTask(data)
       if (task?.parentID !== rootID || task.sessionID !== childID) return { status: "unknown", message: "The device returned an unreadable answer; check the subagent before retrying." }
-      setState({ team: { ...container.state.team, tasks: container.state.team.tasks.map((item) => item.sessionID === childID ? { ...item, ...task } : item) } })
+      setState({ team: { ...container.state.team, tasks: container.state.team.tasks.map((item) => item.sessionID === childID ? { ...item, ...task, question: task.question } : item) } })
       return { status: "ok", message: "" }
     },
     killTeamShell: async (shellID) => {
@@ -3392,7 +3398,7 @@ export function parseSessionStatus(payload: unknown): RemoteStoreState["sessionS
   return { running: new Set(running), attention: new Set(attention), outstanding: new Set(outstanding ?? []), failed: new Set(failed ?? []) }
 }
 
-export function readAutonomyFromResponse(value: unknown): SessionAutonomyView | undefined {
+function readAutonomyFromResponse(value: unknown): SessionAutonomyView | undefined {
   return readAutonomy(value)
 }
 

@@ -3,7 +3,7 @@ import type { RemoteRequestOutcome } from "./transport"
 
 export type KeepAwakeStatus = { readonly state: "off" | "on" | "unsupported" | "error"; readonly message?: string }
 
-export type KeepAwakeChange = {
+type KeepAwakeChange = {
   readonly state: "sending" | "failed" | "unknown"
   readonly enabled: boolean
   readonly message?: string

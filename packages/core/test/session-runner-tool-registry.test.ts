@@ -285,16 +285,6 @@ describe("ToolRegistry", () => {
     }),
   )
 
-  it.effect("exposes settlement only through materialization", () =>
-    Effect.gen(function* () {
-      const service = yield* ToolRegistry.Service
-      expect("definitions" in service).toBe(false)
-      expect("execute" in service).toBe(false)
-      expect("settle" in service).toBe(false)
-      expect(typeof service.materialize).toBe("function")
-    }),
-  )
-
   it.effect("passes complete invocation identity to the canonical handler", () =>
     Effect.gen(function* () {
       const service = yield* ToolRegistry.Service

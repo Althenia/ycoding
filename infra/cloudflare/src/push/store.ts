@@ -10,7 +10,7 @@ export type PushSubscription = {
   readonly failures: number
 }
 
-export type PushTestClaim = { readonly status: "missing" } | { readonly status: "limited" } | { readonly status: "claimed"; readonly subscription: PushSubscription }
+type PushTestClaim = { readonly status: "missing" } | { readonly status: "limited" } | { readonly status: "claimed"; readonly subscription: PushSubscription }
 
 export type PushStore = {
   readonly upsert: (accountID: string, browserSessionID: string, input: PushRegistration, now: number) => Promise<boolean>

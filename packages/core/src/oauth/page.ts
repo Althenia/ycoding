@@ -7,7 +7,7 @@
 // etc.).
 //
 // The visual language mirrors the YCoding app: the design tokens are a curated
-// subset of the YC-2 semantic tokens in `packages/ui/src/styles/theme.css`, and
+// subset of the YC-2 semantic tokens, and
 // the mark uses the canonical geometry in `assets/brand/ycoding-mark.svg`.
 // Keep this file in sync with those sources when the brand changes.
 
@@ -146,7 +146,7 @@ function escapeHtml(value: string) {
     .replaceAll("'", "&#39;")
 }
 
-// Curated subset of YC-2 tokens (packages/ui/src/styles/theme.css). Default is
+// Curated subset of YC-2 tokens. Default is
 // light; dark applies via prefers-color-scheme. The [data-theme] selectors let a
 // host force a scheme without changing the default.
 const LIGHT_VARS = `

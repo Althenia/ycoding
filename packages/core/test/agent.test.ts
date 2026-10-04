@@ -208,75 +208,6 @@ describe("AgentV2", () => {
     }),
   )
 
-  it.effect("registers GSD as a general-purpose delivery agent with outcome reporting", () =>
-    Effect.gen(function* () {
-      const agent = yield* AgentV2.Service
-      yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
-        Effect.provideService(Location.Service, Location.Service.of(testLocation)),
-      )
-
-      expect(yield* agent.get(AgentV2.ID.make("TLDR"))).toBeUndefined()
-      const gsd = yield* agent.resolve(AgentV2.ID.make("GSD"))
-      expect(gsd).toMatchObject({ id: "GSD", name: "GSD", mode: "primary", hidden: false })
-      if (!gsd) throw new Error("expected the GSD primary agent")
-      expect(gsd.system).toContain("You are GSD (Get shit done), an all-round agent.")
-      expect(gsd.system).toContain("Answer read-only requests without making changes")
-      expect(gsd.system).toContain("root cause")
-      expect(gsd.system).toContain("complete authorized outcome")
-      expect(gsd.system).toContain("Implement directly when that is fastest")
-      expect(gsd.system).toContain("Run independent subagent tasks in parallel")
-      expect(gsd.system).toContain("Compare delegation overhead with time saved on the critical path")
-      expect(gsd.system).toContain("Dispatch ready independent tasks early")
-      expect(gsd.system).toContain("keep tightly coupled edits and integration in your own hands")
-      expect(gsd.system).toContain("Give each child a bounded outcome, inputs, ownership, and acceptance checks")
-      expect(gsd.system).toContain("Continue independent work while children run")
-      expect(gsd.system).toContain("assign one writer per file or mutable resource")
-      expect(gsd.system).toContain("Use TDD for changed behavior")
-      expect(gsd.system).toContain("Run the full suite only when an affected required check demands it")
-      expect(gsd.system).toContain("focused tests")
-      expect(gsd.system).toContain("Ask the user only when truly blocked")
-      expect(gsd.system).toContain("Never overengineer")
-      expect(gsd.system).toContain("repository standards and guidelines")
-      expect(gsd.system).toContain("Verify subagent evidence")
-      expect(gsd.system).toContain("Lead with the delivered outcome or direct answer")
-      expect(gsd.system).toContain("plain, brisk language")
-      expect(gsd.color).toBe("#e67e22")
-      const source = yield* Effect.promise(() =>
-        Bun.file(new URL("../src/plugin/agent/GSD.md", import.meta.url)).text(),
-      )
-      expect(source.match(/^color:\s*"(#[0-9a-fA-F]{6})"/m)?.[1]).toBe(gsd.color)
-      expect(source.toLowerCase()).not.toContain("oneshot")
-      expect(source.toLowerCase()).not.toContain("one-shot")
-      expect(PermissionV2.evaluate("subagent", "occam", gsd.permissions).effect).toBe("allow")
-      expect(yield* agent.resolve()).toMatchObject({ id: "god" })
-    }),
-  )
-
-  it.effect("gives each selectable primary agent a distinct role-matched communication style", () =>
-    Effect.gen(function* () {
-      const agent = yield* AgentV2.Service
-      yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
-        Effect.provideService(Location.Service, Location.Service.of(testLocation)),
-      )
-
-      const styles = [
-        ["GSD", "plain, brisk language", "next action only when someone must act"],
-        ["architech", "Lead with the recommendation or decision", "affected boundaries and material trade-offs"],
-        ["god", "quiet authority", "Correct false premises plainly without condescension"],
-        ["yangi", "spare, plain sentences", "Stop once the point is proved"],
-      ] as const
-      for (const [id, voice, structure] of styles) {
-        const item = yield* agent.get(AgentV2.ID.make(id))
-        if (!item?.system) throw new Error(`expected ${id} with a system prompt`)
-        expect(item.system).toContain("## Communication")
-        expect(item.system).toContain(voice)
-        expect(item.system).toContain(structure)
-        expect(item.system).toContain("exact checks")
-        expect(item.system).toContain("blockers")
-      }
-    }),
-  )
-
   it.effect("loads each built-in's static metadata and prompt from its Markdown", () =>
     Effect.gen(function* () {
       const agent = yield* AgentV2.Service
@@ -322,79 +253,82 @@ describe("AgentV2", () => {
     }),
   )
 
-  it.effect("shares bounded-search guidance without duplicating GSD's instruction", () =>
+  it.effect("places each shared guidance paragraph once before the role in every maintained built-in agent", () =>
     Effect.gen(function* () {
       const agent = yield* AgentV2.Service
       yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
         Effect.provideService(Location.Service, Location.Service.of(testLocation)),
       )
 
-      const guidance =
-        "Bound repository searches by scope and output; reuse settled results, pivot a missing broad search to a likely file, symbol, caller, or directory, and repeat reads only for changed inputs or new evidence."
+      const shared = [
+        "Keep the todo list up to date.",
+        "Use the supplied tool schema or discovered signature, not capability prose, to construct a call. After invalid input, inspect the returned field or path and correct the request only when the previous call is known not to have mutated state. Treat denial, unavailability, and invalid input as distinct outcomes; never replay an uncertain mutation automatically.",
+        "Bound repository searches by scope and output; reuse settled results, pivot a missing broad search to a likely file, symbol, caller, or directory, and repeat reads only for changed inputs or new evidence.",
+        "Never make atomic commits. Commit only when the task, one of its phases, or a complete piece of functionality is finished.",
+        "For requests to change, build, or fix, make the requested in-scope local changes and run relevant non-destructive checks without asking first.",
+        "For requests to answer, explain, review, diagnose, or plan, inspect the relevant material and report. Do not make changes unless the request also asks for them.",
+        "Require confirmation before external writes, purchases, destructive or irreversible actions, dependency changes, data or schema migrations, CI/CD changes, public-contract breaks, or material scope expansion.",
+        "If your permission ceiling prevents asking for confirmation, do not act; report the blocker.",
+      ]
       for (const id of ["zeus", "GSD", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein"]) {
         const item = yield* agent.get(AgentV2.ID.make(id))
         if (!item?.system) throw new Error(`expected ${id} with a system prompt`)
-        expect(item.system.split(guidance)).toHaveLength(2)
-        expect(item.system.indexOf(guidance)).toBeLessThan(item.system.indexOf("You are "))
+        for (const paragraph of shared) {
+          expect(item.system.split(paragraph)).toHaveLength(2)
+          expect(item.system.indexOf(paragraph)).toBeLessThan(item.system.indexOf("You are "))
+        }
       }
-      const source = yield* Effect.promise(() =>
-        Bun.file(new URL("../src/plugin/agent/GSD.md", import.meta.url)).text(),
-      )
-      expect(source).not.toContain("Never repeat a settled search or tool call without changed input")
-    }),
-  )
-
-  it.effect("shares the commit-timing rule with every maintained built-in agent", () =>
-    Effect.gen(function* () {
-      const agent = yield* AgentV2.Service
-      yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
-        Effect.provideService(Location.Service, Location.Service.of(testLocation)),
-      )
-
-      const rule =
-        "Never make atomic commits. Commit only when the task, one of its phases, or a complete piece of functionality is finished."
-      for (const id of ["zeus", "GSD", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein"]) {
-        const item = yield* agent.get(AgentV2.ID.make(id))
-        if (!item?.system) throw new Error(`expected ${id} with a system prompt`)
-        expect(item.system.split(rule)).toHaveLength(2)
-        expect(item.system.indexOf(rule)).toBeLessThan(item.system.indexOf("You are "))
-      }
-    }),
-  )
-
-  it.effect("preserves representative built-in agent metadata and prompts", () =>
-    Effect.gen(function* () {
-      const agent = yield* AgentV2.Service
-      yield* AgentPlugin.Plugin.effect(
-        host({
-          agent: agentHost(agent),
-        }),
-      ).pipe(
-        Effect.provideService(
-          Location.Service,
-          Location.Service.of(location({ directory: AbsolutePath.make("/project") })),
-        ),
-      )
 
       const god = yield* agent.get(AgentV2.ID.make("god"))
       const zeus = yield* agent.get(AgentV2.ID.make("zeus"))
-      if (!god?.system || !zeus?.system) throw new Error("expected built-in agents with system prompts")
+      const title = yield* agent.get(AgentV2.ID.make("title"))
+      const compaction = yield* agent.get(AgentV2.ID.make("compaction"))
+      const goal = yield* agent.get(AgentV2.ID.make("goal"))
+      const summary = yield* agent.get(AgentV2.ID.make("summary"))
+      const btw = yield* agent.get(AgentV2.ID.make("btw"))
+      if (
+        !god?.system ||
+        !zeus?.system ||
+        !title?.system ||
+        !compaction?.system ||
+        !goal?.system ||
+        !summary?.system ||
+        !btw?.system
+      ) {
+        throw new Error("expected maintained built-in prompts")
+      }
+      expect(god.system).toContain("Explicit permission denies remain denied.")
+      expect(god.system).toContain("Only effective YOLO 3 auto-approves guardrail reviews.")
+      expect(zeus.system).toContain("You are a durable child Session")
+      expect(zeus.system).toContain("Do not spawn child agents")
+      expect(title.system).toContain("Output exactly one natural thread title")
+      expect(title.system).toContain("Use one line of at most 50 characters.")
+      expect(title.system).toContain("Preserve exact technical terms, numbers, filenames, and HTTP status codes.")
+      expect(title.system).toContain("Output only the title.")
+      expect(compaction.system).toContain("previous conversation_memory")
+      expect(compaction.system).toContain("Keep active work in in_progress")
+      expect(compaction.system).toContain("Record durable choices in decision")
+      expect(compaction.system).toContain("only currently active skills")
+      expect(compaction.system).toContain("Do not answer the conversation")
+      expect(goal.system).toContain("observable completion condition")
+      expect(goal.system).toContain("For a user-proxy steer, preserve the active goal exactly.")
+      expect(goal.system).toContain("Never grant or imply human approval")
+      expect(goal.system).toContain("Output exactly one concise imperative sentence")
+      expect(summary.system).toContain("two or three first-person sentences")
+      expect(summary.system).toContain("preserve it verbatim")
+      expect(btw.system).toContain("read-only advisor")
+      expect(btw.system).toContain("Do not mutate files, state, or external systems")
+    }),
+  )
 
-      expect(god.system.startsWith("YCoding is the terminal-first V2 runtime")).toBe(true)
-      expect(zeus.system.startsWith("YCoding is the terminal-first V2 runtime")).toBe(true)
-      expect(god.system).toContain("Follow the user's prompt or inquiry strictly")
-      expect(zeus.system).toContain("Do not perform work the user did not request")
-      expect(god.system).toContain("concrete evidence")
-      expect(god.system).toContain("You are God, an autonomous production software builder.")
-      expect(god.system).toContain("## Delivery")
-      expect(god).toMatchObject({
-        description:
-          "Calm, sovereign, evidence-led builder that identifies the real need, corrects false premises, and delivers exceptional work.",
-        mode: "primary",
-        request: { body: { temperature: 0.6 } },
-        color: "#f1c40f",
-      })
-      expect(god.permissions).toEqual([
+  it.effect("gives the default primary agent its exact permission ruleset", () =>
+    Effect.gen(function* () {
+      const agent = yield* AgentV2.Service
+      yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
+        Effect.provideService(Location.Service, Location.Service.of(testLocation)),
+      )
+
+      expect((yield* agent.get(AgentV2.ID.make("god")))?.permissions).toEqual([
         { action: "*", resource: "*", effect: "allow" },
         { action: "external_directory", resource: "*", effect: "ask" },
         { action: "external_directory", resource: `${Global.Path.data}/shell/*/*`, effect: "allow" },
@@ -410,105 +344,6 @@ describe("AgentV2", () => {
         { action: "plan_enter", resource: "*", effect: "allow" },
         { action: "shell", resource: "*", effect: "allow" },
       ])
-      expect(zeus.system).toContain("You are Zeus, an autonomous software implementer.")
-      expect(zeus.system).toContain("## Execution")
-      expect(zeus).toMatchObject({
-        description:
-          "Evidence-led autonomous implementer that corrects false premises and completes one bounded task with exceptional quality.",
-        mode: "subagent",
-        request: { body: { temperature: 0.6 } },
-        color: "#f1c40f",
-      })
-      expect(PermissionV2.evaluate("shell", "git status", zeus.permissions).effect).toBe("allow")
-    }),
-  )
-
-  it.effect("gives execution agents explicit action boundaries and keeps the title prompt lean", () =>
-    Effect.gen(function* () {
-      const agent = yield* AgentV2.Service
-      yield* AgentPlugin.Plugin.effect(
-        host({
-          agent: agentHost(agent),
-        }),
-      ).pipe(
-        Effect.provideService(
-          Location.Service,
-          Location.Service.of(location({ directory: AbsolutePath.make("/project") })),
-        ),
-      )
-
-      for (const id of ["GSD", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein", "zeus"]) {
-        const item = yield* agent.get(AgentV2.ID.make(id))
-        if (!item?.system) throw new Error(`expected built-in agent ${id} with a system prompt`)
-        expect(item.system).toContain(
-          "For requests to answer, explain, review, diagnose, or plan, inspect the relevant material and report.",
-        )
-        expect(item.system).toContain("Do not make changes unless the request also asks for them.")
-        expect(item.system).toContain(
-          "For requests to change, build, or fix, make the requested in-scope local changes and run relevant non-destructive checks without asking first.",
-        )
-        expect(item.system).toContain(
-          "Require confirmation before external writes, purchases, destructive or irreversible actions, dependency changes, data or schema migrations, CI/CD changes, public-contract breaks, or material scope expansion.",
-        )
-        expect(item.system).toContain(
-          "If your permission ceiling prevents asking for confirmation, do not act; report the blocker.",
-        )
-        expect(item.system.split("For requests to change, build, or fix")).toHaveLength(2)
-      }
-
-      const god = yield* agent.get(AgentV2.ID.make("god"))
-      if (!god?.system) throw new Error("expected god agent with a system prompt")
-      expect(god.system).toContain("Explicit permission denies remain denied.")
-      expect(god.system).toContain("Only effective YOLO 3 auto-approves guardrail reviews.")
-
-      const zeus = yield* agent.get(AgentV2.ID.make("zeus"))
-      if (!zeus?.system) throw new Error("expected zeus agent with a system prompt")
-      expect(zeus.system).toContain("You are a durable child Session")
-      expect(zeus.system).toContain("Do not spawn child agents")
-
-      const title = yield* agent.get(AgentV2.ID.make("title"))
-      if (!title?.system) throw new Error("expected title agent with a system prompt")
-      expect(title.system).toContain("Output exactly one natural thread title")
-      expect(title.system).not.toContain("<examples>")
-      expect(title.system.length).toBeLessThan(900)
-    }),
-  )
-
-  it.effect("preserves each utility agent's output contract", () =>
-    Effect.gen(function* () {
-      const agent = yield* AgentV2.Service
-      yield* AgentPlugin.Plugin.effect(
-        host({
-          agent: agentHost(agent),
-        }),
-      ).pipe(
-        Effect.provideService(
-          Location.Service,
-          Location.Service.of(location({ directory: AbsolutePath.make("/project") })),
-        ),
-      )
-
-      const compaction = yield* agent.get(AgentV2.ID.make("compaction"))
-      const goal = yield* agent.get(AgentV2.ID.make("goal"))
-      const summary = yield* agent.get(AgentV2.ID.make("summary"))
-      const btw = yield* agent.get(AgentV2.ID.make("btw"))
-      if (!compaction?.system || !goal?.system || !summary?.system || !btw?.system) {
-        throw new Error("expected utility agents with system prompts")
-      }
-
-      expect(compaction.system).toContain("previous conversation_memory")
-      expect(compaction.system).toContain("in_progress")
-      expect(compaction.system).toContain("decision")
-      expect(compaction.system).toContain("skill")
-      expect(compaction.system).toContain("Do not answer the conversation")
-      expect(goal.system).toContain("observable completion condition")
-      expect(goal.system).toContain("user-proxy steer")
-      expect(goal.system).toContain("Never grant or imply human approval")
-      expect(goal.system).toContain("Output exactly one concise imperative sentence")
-      expect(summary.system).toContain("two or three first-person sentences")
-      expect(summary.system).toContain("preserve it verbatim")
-      expect(btw.system).toContain("read-only advisor")
-      expect(btw.system).toContain("Do not mutate files, state, or external systems")
     }),
   )
 

@@ -15,7 +15,7 @@ export type TeamShell = {
   readonly completedAt?: number
 }
 
-export type TeamSideChat = {
+type TeamSideChat = {
   readonly id: string
   readonly title: string
   readonly updatedAt: number

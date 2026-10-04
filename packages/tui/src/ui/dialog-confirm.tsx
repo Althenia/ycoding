@@ -14,7 +14,7 @@ export type DialogConfirmProps = {
   label?: string
 }
 
-export type DialogConfirmResult = boolean | undefined
+type DialogConfirmResult = boolean | undefined
 
 export function DialogConfirm(props: DialogConfirmProps) {
   const dialog = useDialog()

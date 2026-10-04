@@ -1409,20 +1409,3 @@ describe("ShellTool", () => {
     ),
   )
 })
-
-test("keeps locked deferred parity TODOs visible", async () => {
-  const source = await fs.readFile(new URL("../src/tool/shell.ts", import.meta.url), "utf8")
-  for (const todo of [
-    "Port tree-sitter bash / PowerShell parser-based approval reduction.",
-    "Port BashArity reusable command-prefix approvals.",
-    "Replace token-based command-argument external-directory advisories with parser-based detection.",
-    "Restore PowerShell and cmd-specific invocation/path handling on Windows.",
-    "Add plugin shell.env environment augmentation once V2 plugin hooks exist.",
-    "Persist job status and define restart recovery before exposing remote observation.",
-    "Revisit process-group cleanup and platform coverage with shell-specific tests if current AppProcess semantics do not fully cover it.",
-    "Revisit binary output handling if stdout/stderr decoding is text-only.",
-    "Stream full shell output into managed storage while retaining only a bounded in-memory preview.",
-  ]) {
-    expect(source).toContain(`TODO: ${todo}`)
-  }
-})

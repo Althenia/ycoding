@@ -762,10 +762,13 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
         name: "variant.list",
         title: "Switch model variant",
         category: "Agent",
-        palette: local.model.variant.list().length === 0 ? undefined : (true as const),
+        palette:
+          local.model.variant.list().length === 0 && local.model.variant.current() === undefined
+            ? undefined
+            : (true as const),
         slash: { name: "variants" },
         run: () => {
-          if (local.model.variant.list().length === 0) {
+          if (local.model.variant.list().length === 0 && local.model.variant.current() === undefined) {
             return toast.show({
               title: "No variants available",
               message: "The current model does not support any variants.",

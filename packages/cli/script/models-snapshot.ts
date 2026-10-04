@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import path from "node:path"
 
-export function validateModelsSnapshot(text: string, source: string) {
+function validateModelsSnapshot(text: string, source: string) {
   let value: unknown
   try {
     value = JSON.parse(text)

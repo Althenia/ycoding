@@ -3710,6 +3710,17 @@ function SkillContent(props: { content: unknown }) {
     if (key.name === "end" && scroll) return scroll.scrollTo(scroll.scrollHeight)
   }
 
+  Keymap.createLayer(() => ({
+    priority: 1,
+    target: () => content,
+    commands: ["return", "space", "up", "down", "pageup", "pagedown", "home", "end"].map((bind) => ({
+      bind,
+      title: bind === "return" || bind === "space" ? "Toggle skill content" : "Scroll skill content",
+      group: "Session",
+      run: () => onKeyDown({ name: bind }),
+    })),
+  }))
+
   return (
     <Show when={display().visible}>
       <box
@@ -3720,7 +3731,6 @@ function SkillContent(props: { content: unknown }) {
         ref={(element: BoxRenderable) => (content = element)}
         onMouseDown={() => content?.focus()}
         onMouseUp={toggle}
-        onKeyDown={onKeyDown}
       >
         <text fg={themeV2.text.subdued}>{expanded() ? "- Skill content" : "+ Skill content"}</text>
         <Show when={expanded()}>

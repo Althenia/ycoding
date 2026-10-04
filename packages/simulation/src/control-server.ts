@@ -1,7 +1,7 @@
 import { Effect, Fiber, Queue, Stream } from "effect"
 import { SimulationProtocol } from "./protocol"
 
-export interface Server {
+interface Server {
   readonly url: string
 }
 

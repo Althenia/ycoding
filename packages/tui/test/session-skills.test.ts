@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { filterSessionSkills, groupSessionSkills, sessionSkillContent, sessionSkillLabel } from "../src/util/session-skills"
-
-const dialogSessionSkills = await Bun.file(new URL("../src/component/dialog-session-skills.tsx", import.meta.url)).text()
-const sessionRoute = await Bun.file(new URL("../src/routes/session/index.tsx", import.meta.url)).text()
+import {
+  filterSessionSkills,
+  groupSessionSkills,
+  sessionSkillContent,
+  sessionSkillLabel,
+} from "../src/util/session-skills"
 
 const skills = [
   {
@@ -61,25 +63,5 @@ describe("session skill presentation", () => {
   test("keeps exact string content and discards non-string tool output", () => {
     expect(sessionSkillContent("\nExact skill content\n")).toBe("\nExact skill content\n")
     expect(sessionSkillContent(undefined)).toBe("")
-  })
-
-  test("renders skill details in a bounded scrollbox with keyboard expansion", () => {
-    expect(dialogSessionSkills).toContain("<scrollbox")
-    expect(dialogSessionSkills).toContain('height={height()}')
-    expect(dialogSessionSkills).toContain('bind: "return"')
-    expect(dialogSessionSkills).toContain('bind: "space"')
-  })
-
-  test("highlights loaded skill badges with the skill accent", () => {
-    expect(sessionRoute).toContain("status={<StatusBadge color={accent()}>Loaded</StatusBadge>}")
-    expect(sessionRoute.replace(/\s+/g, " ")).toContain(
-      'status={ props.part.state.status === "completed" ? <StatusBadge color={accent()}>Loaded</StatusBadge> : undefined }',
-    )
-    expect(sessionRoute).toContain("function StatusBadge(props: { children: string; color?: RGBA })")
-  })
-
-  test("hides only completed duplicate Skill tool parts", () => {
-    expect(sessionRoute).toContain("function transcriptToolPartVisible(part: SessionMessageAssistantTool)")
-    expect(sessionRoute).toContain('content.type !== "tool" || transcriptToolPartVisible(content)')
   })
 })

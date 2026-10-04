@@ -39,7 +39,7 @@ import {
 } from "./remote-local"
 
 /** Operations the relay proxies without addressing one session. */
-export const unscopedOperations: ReadonlySet<RemoteOperation> = new Set([
+const unscopedOperations: ReadonlySet<RemoteOperation> = new Set([
   "workspace.list",
   "workspace.catalog",
   "workspace.file.find",
@@ -173,7 +173,7 @@ export function successFrames(id: string, value: unknown): readonly RemoteRespon
   return frames
 }
 
-export function failureFrame(id: string, code: RemoteErrorCode, message: string): RemoteResponse {
+function failureFrame(id: string, code: RemoteErrorCode, message: string): RemoteResponse {
   return { type: "response", id, ok: false, error: remoteError(code, message) }
 }
 
@@ -1358,7 +1358,7 @@ function rootSessionID(session: SessionInfo, byID: ReadonlyMap<string, SessionIn
 }
 
 /** Running status is only ever reported for Sessions the user shared. */
-export function filterActiveSessions(value: unknown, allowed: ReadonlySet<string>) {
+function filterActiveSessions(value: unknown, allowed: ReadonlySet<string>) {
   if (typeof value !== "object" || value === null) return {}
   return Object.fromEntries(Object.entries(value).filter(([sessionID]) => allowed.has(sessionID)))
 }

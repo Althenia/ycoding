@@ -21,7 +21,7 @@ import { SkillV2 } from "@ycoding-ai/core/skill"
 import { Effect, Layer, Stream } from "effect"
 import { location } from "./location"
 
-export type SkillFile = {
+type SkillFile = {
   readonly name: string
   readonly text: string
   readonly mimeType?: string

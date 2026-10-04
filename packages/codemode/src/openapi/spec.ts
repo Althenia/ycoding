@@ -34,7 +34,7 @@ const resolvePointer = (root: unknown, ref: string): unknown =>
     .map((segment) => segment.replaceAll("~1", "/").replaceAll("~0", "~"))
     .reduce<unknown>((item, segment) => (isRecord(item) ? own(item, segment) : undefined), root)
 
-export const resolve = (document: Document, value: unknown): unknown => {
+const resolve = (document: Document, value: unknown): unknown => {
   const next = (current: unknown, seen: ReadonlySet<string>): unknown => {
     if (!isRecord(current)) return current
     const ref = nonEmptyString(own(current, "$ref"))

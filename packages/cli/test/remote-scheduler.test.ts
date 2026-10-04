@@ -1,9 +1,13 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test"
 import { RemoteLimits, parseAgentMessage } from "@ycoding-ai/remote"
 import { RemoteScheduler } from "../src/remote-scheduler"
 
+beforeEach(() => { jest.useFakeTimers() })
+afterEach(() => { jest.useRealTimers() })
+
 function scheduler(options: { buffered?: () => number | undefined } = {}) {
   const sent: string[] = []
+  const waiting = new Map<number, () => void>()
   let release = () => {}
   const gate = new Promise<void>((resolve) => {
     release = resolve
@@ -19,10 +23,17 @@ function scheduler(options: { buffered?: () => number | undefined } = {}) {
         await gate
       }
       sent.push(frame)
+      waiting.get(sent.length)?.()
+      waiting.delete(sent.length)
       return true
     },
   })
-  return { instance, sent, release }
+  return {
+    instance,
+    sent,
+    release,
+    waitFor: (count: number) => sent.length >= count ? Promise.resolve() : new Promise<void>((resolve) => waiting.set(count, resolve)),
+  }
 }
 
 const live = () => true
@@ -52,7 +63,7 @@ describe("remote scheduler", () => {
     const late = test.instance.control("late", live)
     test.release()
     await Promise.all([gate, late, ...bulk])
-    await Bun.sleep(5)
+    await test.waitFor(9)
 
     expect(test.sent.map(label)).toEqual(["gate", "late", "ses_a:e1", "ses_b:f1", "a0", "ses_a:e2", "ses_a:e3", "b0", "a1"])
   })
@@ -66,7 +77,8 @@ describe("remote scheduler", () => {
     for (let index = 0; index < total; index++) test.instance.event("ses_a", { index }, 12, 0, live, 20)
     const large = 100_000
     for (let index = 0; index < 3; index++) test.instance.event("ses_b", { index }, large, 0, live, 20)
-    await Bun.sleep(100)
+    jest.advanceTimersByTime(20)
+    await test.waitFor(5)
 
     const frames = test.sent.slice(1).map((frame) => {
       const parsed = parseAgentMessage(frame)
@@ -92,7 +104,8 @@ describe("remote scheduler", () => {
     await gate
     expect(await control).toBe(false)
     expect(await bulk).toBe(false)
-    await Bun.sleep(60)
+    expect(jest.getTimerCount()).toBe(0)
+    jest.advanceTimersByTime(60)
     expect(test.sent).toEqual(["gate"])
     expect(test.instance.queuedEvents).toBe(0)
   })

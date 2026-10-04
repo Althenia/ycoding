@@ -24,7 +24,7 @@ const AbsolutePath = Schema.String.check(
   Schema.makeFilter((value) => (isAbsolute(value) ? undefined : "an absolute path")),
 )
 
-export const Manifest = Schema.Struct({
+const Manifest = Schema.Struct({
   endpoints: Schema.Struct({
     ui: Endpoint,
     backend: Endpoint,
@@ -41,7 +41,7 @@ export const Manifest = Schema.Struct({
     }),
   ),
 })
-export interface Manifest extends Schema.Schema.Type<typeof Manifest> {}
+interface Manifest extends Schema.Schema.Type<typeof Manifest> {}
 
 export class ResolveError extends Schema.TaggedErrorClass<ResolveError>()("DriveManifest.ResolveError", {
   reason: Schema.Literals(["config", "not-found", "read", "decode"]),
@@ -50,7 +50,7 @@ export class ResolveError extends Schema.TaggedErrorClass<ResolveError>()("Drive
   cause: Schema.Defect(),
 }) {}
 
-export const defaults: Manifest = {
+const defaults: Manifest = {
   endpoints: {
     ui: "ws://127.0.0.1:40900",
     backend: "ws://127.0.0.1:40950",

@@ -18,9 +18,8 @@ describe("remote-prompt hidden input (integration)", () => {
       const session = startPty()
       try {
         expect(session.localFlags() & echoBit).toBe(echoBit)
-        await session.waitFor("Enrollment code: ")
+        await session.waitFor("READY")
         expect(session.localFlags() & echoBit).toBe(0)
-        await Bun.sleep(150)
         session.write(`${secret("7Q4")}\r`)
         const output = await session.waitFor("TERMIOS=")
         expect(before(output, "RESULT=")).not.toContain(secret("7Q4"))
@@ -40,8 +39,7 @@ describe("remote-prompt hidden input (integration)", () => {
     async () => {
       const session = startPty()
       try {
-        await session.waitFor("Enrollment code: ")
-        await Bun.sleep(150)
+        await session.waitFor("READY")
         session.write("SYNTHETIC-CX\u007fODE\r")
         const output = await session.waitFor("TERMIOS=")
         expect(output).toContain("RESULT=SYNTHETIC-CODE")
@@ -59,8 +57,7 @@ describe("remote-prompt hidden input (integration)", () => {
     async () => {
       const session = startPty()
       try {
-        await session.waitFor("Enrollment code: ")
-        await Bun.sleep(150)
+        await session.waitFor("READY")
         session.write("SYNTHETIC\u0003")
         const output = await session.waitFor("TERMIOS=")
         expect(output).toContain("CANCELED=Canceled")
@@ -106,11 +103,18 @@ function before(output: string, marker: string) {
 
 function startPty() {
   const output: string[] = []
+  const waiting = new Map<string, ReturnType<typeof Promise.withResolvers<string>>>()
   const terminal = new Bun.Terminal({
     cols: 100,
     rows: 30,
     data(_terminal, data) {
       output.push(Buffer.from(data).toString("utf8"))
+      const text = output.join("")
+      for (const [marker, reader] of waiting) {
+        if (!text.includes(marker)) continue
+        waiting.delete(marker)
+        reader.resolve(text)
+      }
     },
   })
   const child = Bun.spawn([process.execPath, fixture], {
@@ -118,22 +122,29 @@ function startPty() {
     terminal,
     env: { ...process.env, TERM: "xterm-256color" },
   })
+  void child.exited.then((code) => {
+    for (const [marker, reader] of waiting) {
+      reader.reject(new Error(`process exited ${code} waiting for ${marker}; saw ${JSON.stringify(output.join(""))}`))
+    }
+    waiting.clear()
+  })
   return {
     localFlags: () => terminal.localFlags,
     exited: child.exited,
     write: (data: string) => terminal.write(data),
     close: () => {
+      for (const reader of waiting.values()) reader.reject(new Error("terminal closed"))
+      waiting.clear()
       child.kill()
       terminal.close()
     },
     async waitFor(marker: string) {
-      const deadline = Date.now() + timeout
-      while (!output.join("").includes(marker)) {
-        if (Date.now() >= deadline)
-          throw new Error(`timed out waiting for ${marker}; saw ${JSON.stringify(output.join(""))}`)
-        await Bun.sleep(10)
-      }
-      return output.join("")
+      const text = output.join("")
+      if (text.includes(marker)) return text
+      if (child.exitCode !== null) throw new Error(`process exited ${child.exitCode} waiting for ${marker}; saw ${JSON.stringify(text)}`)
+      const reader = Promise.withResolvers<string>()
+      waiting.set(marker, reader)
+      return reader.promise
     },
   }
 }

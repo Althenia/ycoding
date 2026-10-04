@@ -26,8 +26,7 @@
     "@ycoding-ai/client": "workspace:*",
     "@ycoding-ai/schema": "workspace:*",
     "@standard-schema/spec": "^1.1.0",
-    "effect": "catalog:",
-    "zod": "catalog:"
+    "effect": "catalog:"
   },
   "peerDependencies": {
     "@opentui/core": ">=0.5.10",
@@ -50,7 +49,6 @@
     "@opentui/keymap": "catalog:",
     "@opentui/solid": "catalog:",
     "@tsconfig/bun": "catalog:",
-    "@tsconfig/node22": "catalog:",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "@typescript/native-preview": "catalog:"

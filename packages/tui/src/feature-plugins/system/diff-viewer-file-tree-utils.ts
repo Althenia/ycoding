@@ -8,7 +8,7 @@ export type FileTreeItem = {
   readonly status?: "added" | "deleted" | "modified"
 }
 
-export type FileTreeNode = {
+type FileTreeNode = {
   readonly id: number
   readonly name: string
   readonly parent: number | undefined
@@ -110,7 +110,7 @@ function collapsedFileTreeDirectoryChain(tree: FileTree, id: number): FileTreeNo
   return [node, ...collapsedFileTreeDirectoryChain(tree, child.id)]
 }
 
-export function compareFileTreeNodes(tree: FileTree, left: number, right: number) {
+function compareFileTreeNodes(tree: FileTree, left: number, right: number) {
   const leftNode = tree.nodes[left]!
   const rightNode = tree.nodes[right]!
   if (leftNode.kind !== rightNode.kind) return leftNode.kind === "directory" ? -1 : 1

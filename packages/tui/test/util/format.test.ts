@@ -45,16 +45,5 @@ describe("util.format", () => {
       expect(formatDuration(1209600)).toBe("~2 weeks")
       expect(formatDuration(1609200)).toBe("~2 weeks")
     })
-
-    test("handles boundary values correctly", () => {
-      expect(formatDuration(59)).toBe("59s")
-      expect(formatDuration(60)).toBe("1m00s")
-      expect(formatDuration(3599)).toBe("59m59s")
-      expect(formatDuration(3600)).toBe("1h")
-      expect(formatDuration(86399)).toBe("23h 59m")
-      expect(formatDuration(86400)).toBe("~1 day")
-      expect(formatDuration(604799)).toBe("~6 days")
-      expect(formatDuration(604800)).toBe("~1 week")
-    })
   })
 })

@@ -17,15 +17,15 @@ const JsonValueSchema = Schema.suspend(
     ]),
 )
 
-export const CassetteMetadataSchema = Schema.Record(Schema.String, JsonValueSchema)
+const CassetteMetadataSchema = Schema.Record(Schema.String, JsonValueSchema)
 
-export const InteractionSchema = Schema.Union([HttpInteractionSchema, WebSocketInteractionSchema]).pipe(
+const InteractionSchema = Schema.Union([HttpInteractionSchema, WebSocketInteractionSchema]).pipe(
   Schema.toTaggedUnion("transport"),
 )
 export type Interaction = Schema.Schema.Type<typeof InteractionSchema>
 
 export const isHttpInteraction = InteractionSchema.guards.http
-export const isWebSocketInteraction = InteractionSchema.guards.websocket
+const isWebSocketInteraction = InteractionSchema.guards.websocket
 export const httpInteractions = (interactions: ReadonlyArray<Interaction>) => interactions.filter(isHttpInteraction)
 export const webSocketInteractions = (interactions: ReadonlyArray<Interaction>) =>
   interactions.filter(isWebSocketInteraction)

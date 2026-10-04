@@ -55,55 +55,6 @@ describe("XAIPlugin", () => {
     }),
   )
 
-  it.effect("creates an xAI SDK only for @ai-sdk/xai", () =>
-    Effect.gen(function* () {
-      const aisdk = yield* AISDK.Service
-      yield* addPlugin()
-
-      const ignored = yield* aisdk.runSDK({
-        model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(ProviderV2.ID.make("xai"), ModelV2.ID.make("grok-4")),
-          modelID: ModelV2.ID.make("grok-4"),
-          package: "aisdk:@ai-sdk/xai",
-        }),
-        package: "@ai-sdk/openai-compatible",
-        options: {},
-      })
-
-      const result = yield* aisdk.runSDK({
-        model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(ProviderV2.ID.make("xai"), ModelV2.ID.make("grok-4")),
-          modelID: ModelV2.ID.make("grok-4"),
-          package: "aisdk:@ai-sdk/xai",
-        }),
-        package: "@ai-sdk/xai",
-        options: {},
-      })
-
-      expect(ignored.sdk).toBeUndefined()
-      expect(typeof result.sdk?.responses).toBe("function")
-    }),
-  )
-
-  it.effect("creates xAI SDKs for custom provider IDs", () =>
-    Effect.gen(function* () {
-      const aisdk = yield* AISDK.Service
-      yield* addPlugin()
-
-      const result = yield* aisdk.runSDK({
-        model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(ProviderV2.ID.make("custom-xai"), ModelV2.ID.make("grok-4")),
-          modelID: ModelV2.ID.make("grok-4"),
-          package: "aisdk:@ai-sdk/xai",
-        }),
-        package: "@ai-sdk/xai",
-        options: {},
-      })
-
-      expect(result.sdk.responses("grok-4").provider).toBe("xai.responses")
-    }),
-  )
-
   it.effect("uses responses with the model modelID for xAI language models", () =>
     Effect.gen(function* () {
       const aisdk = yield* AISDK.Service

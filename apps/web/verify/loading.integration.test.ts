@@ -41,7 +41,7 @@ test("Team pages and shell output keep visual loading affordances inside their p
     for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('.team-view') !== null`); attempt += 1) await Bun.sleep(50)
     await page.evaluate(`window.finishLoading()`)
     await page.evaluate(`document.querySelector('.team-view__more').click()`)
-    expect(await page.evaluate<boolean>(`document.querySelector('#team-panel-subagents .loading-placeholder--team') !== null`)).toBe(true)
+    expect(await page.evaluate<boolean>(`document.querySelector('#team-panel-subagents .team-view__more').textContent.trim() === 'Loading older…' && document.querySelector('#team-panel-subagents .team-view__more').disabled && document.querySelector('[data-session-id="ses_child"]') !== null && document.querySelector('#team-panel-subagents .loading-placeholder') === null`)).toBe(true)
     await page.evaluate(`window.finishPage()`)
     expect(await page.evaluate<boolean>(`document.querySelector('[data-session-id="ses_old"]') !== null`)).toBe(true)
     await page.evaluate(`document.querySelector('[data-tab="shell"]').click(); document.querySelector('[data-action="output"]').click()`)

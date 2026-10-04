@@ -82,7 +82,7 @@ export function headMetadata(metadata: RouteMetadata): readonly HeadTag[] {
  * The static tags in index.html are managed by the same selectors, so the first
  * client render reconciles them instead of duplicating them.
  */
-export function applyDocumentMetadata(metadata: RouteMetadata, target: Document = window.document): void {
+function applyDocumentMetadata(metadata: RouteMetadata, target: Document = window.document): void {
   target.title = metadata.title
   const head = target.head
   for (const name of MANAGED_META_NAMES) removeAll(head, `meta[name="${name}"]`)

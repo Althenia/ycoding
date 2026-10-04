@@ -20,6 +20,84 @@ function files(count: number): Entry[] {
 }
 
 describe("mention search results", () => {
+  test("promotes the best query match ahead of folders and keeps the remaining backend order", () => {
+    const merged = mergeFileSearchEntries(
+      [
+        { path: "packages/containers/", type: "directory" },
+        { path: "packages/client/", type: "directory" },
+      ],
+      [
+        { path: "docs/usage-notes.md", type: "file" },
+        { path: "AGENTS.md", type: "file" },
+        { path: "docs/AGENTS.md", type: "file" },
+      ],
+      "agents",
+    )
+    expect(merged.map((entry) => entry.path)).toEqual([
+      "AGENTS.md",
+      "packages/containers/",
+      "packages/client/",
+      "docs/usage-notes.md",
+      "docs/AGENTS.md",
+    ])
+  })
+
+  test("promotes equal best matches without an arbitrary score cutoff", () => {
+    const merged = mergeFileSearchEntries(
+      [{ path: "packages/containers/", type: "directory" }],
+      [
+        { path: "two/AGENTS.md", type: "file" },
+        { path: "one/AGENTS.md", type: "file" },
+      ],
+      "agents",
+    )
+    expect(merged.map((entry) => entry.path)).toEqual(["two/AGENTS.md", "one/AGENTS.md", "packages/containers/"])
+  })
+
+  test("promotes an exact folder match ahead of both weak folders and a file prefix match", () => {
+    expect(
+      mergeFileSearchEntries(
+        [
+          { path: "packages/containers/", type: "directory" },
+          { path: "agents/", type: "directory" },
+        ],
+        [{ path: "AGENTS.md", type: "file" }],
+        "agents",
+      ).map((entry) => entry.path),
+    ).toEqual(["agents/", "packages/containers/", "AGENTS.md"])
+  })
+
+  test("normalizes platform separators for scoring and duplicate identity without rewriting the returned paths", () => {
+    expect(
+      mergeFileSearchEntries(
+        [{ path: "packages\\client\\", type: "directory" }],
+        [
+          { path: "src\\AGENTS.md", type: "file" },
+          { path: "src/AGENTS.md", type: "file" },
+          { path: "docs/notes.md", type: "file" },
+        ],
+        "src\\agents",
+      ).map((entry) => entry.path),
+    ).toEqual(["src\\AGENTS.md", "packages\\client\\", "docs/notes.md"])
+  })
+
+  test("keeps the directory cap and all file candidates after query promotion", () => {
+    const merged = mergeFileSearchEntries(
+      directories(MENTION_DIRECTORY_LIMIT + 6),
+      files(MENTION_RESULT_LIMIT),
+      "file-0",
+    )
+    expect(merged[0]?.path).toBe("file-0.ts")
+    expect(merged.filter((entry) => entry.type === "directory")).toHaveLength(MENTION_DIRECTORY_LIMIT)
+    expect(merged.filter((entry) => entry.type === "file")).toHaveLength(MENTION_RESULT_LIMIT)
+    expect(mergeFileSearchEntries(directories(2), files(2), "unmatched-query").map((entry) => entry.path)).toEqual([
+      "dir-0/",
+      "dir-1/",
+      "file-0.ts",
+      "file-1.ts",
+    ])
+  })
+
   test("lists directories before files while preserving backend ranking", () => {
     const merged = mergeFileSearchEntries(
       [

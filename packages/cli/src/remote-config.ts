@@ -23,13 +23,13 @@ export const Config = Schema.Struct({
 })
 export type Config = typeof Config.Type
 
-export const filename = "remote.json"
+const filename = "remote.json"
 export const envVar = "YCODING_REMOTE_URL"
 
 const empty = (): Config => ({ sessions: [] })
 
 const decodeConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(Config))
-export const file = Effect.gen(function* () {
+const file = Effect.gen(function* () {
   const global = yield* Global.Service
   return path.join(global.config, filename)
 })

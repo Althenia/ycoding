@@ -57,7 +57,7 @@ const sessionID = SessionV2.ID.make("ses_runner_recorded")
 // wire key is scoped to the recorded Session.
 const expectedPromptCacheKey = SessionRunnerCache.promptCacheKeyForGeneration(
   sessionID,
-  "b262c30baea8fc90ee7f7d4d335518f539c2d84701e3ae4fe84c49d543d89696",
+  "2b63e4f5188e14c7cc338f931b964c57aff442c57b2b7bc67b67a84b21fa9ea3",
 )
 if (process.env.RECORD === "true") {
   if (process.env.CI !== undefined) throw new Error("Unset CI before recording HTTP cassettes")

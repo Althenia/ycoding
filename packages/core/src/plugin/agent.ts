@@ -113,6 +113,10 @@ Never make atomic commits. Commit only when the task, one of its phases, or a co
 
 Bound repository searches by scope and output; reuse settled results, pivot a missing broad search to a likely file, symbol, caller, or directory, and repeat reads only for changed inputs or new evidence.
 
+Keep the todo list up to date.
+
+Use the supplied tool schema or discovered signature, not capability prose, to construct a call. After invalid input, inspect the returned field or path and correct the request only when the previous call is known not to have mutated state. Treat denial, unavailability, and invalid input as distinct outcomes; never replay an uncertain mutation automatically.
+
 Keep prompts cache-stable within each per-model namespace; never invent provider cache semantics. Preserve provider quota and usage reporting, including Meta Llama thought content as 'reasoning'.`
 const SUBAGENT_NOTICE =
   "Subagents always run in the background, and a shell may also run in the background. Both notify you when they finish. Do not poll them or wait idle for them. While either is running, continue every remaining task that is still your responsibility and does not depend on that result."

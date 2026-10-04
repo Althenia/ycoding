@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { attentionSoundAssets } from "../src/node/target"
 
 const macTest = process.platform === "darwin" && process.arch === "arm64" ? test : test.skip
 
@@ -20,6 +21,11 @@ macTest("builds and smokes a macOS Node CLI with its complete signed computer ap
       ).exists(),
     ).toBe(true)
     expect(await Bun.file(path.join(directory, "cli-node-darwin-arm64/bin/ycoding-chrome-extension/manifest.json")).exists()).toBe(true)
+    expect(
+      await Promise.all(
+        attentionSoundAssets.map((key) => Bun.file(path.join(import.meta.dir, "../dist-node/assets", key)).exists()),
+      ),
+    ).toEqual(attentionSoundAssets.map(() => true))
   } finally {
     await rm(directory, { recursive: true, force: true })
   }

@@ -251,6 +251,44 @@ function composer(node: Renderable): TextareaRenderable | undefined {
   return node.getChildren().map(composer).find(Boolean)
 }
 
+test("unavailable explicit Session variant retains the draft and starts no model or prompt request", async () => {
+  resetFixture()
+  const switches: unknown[] = []
+  const screen = await renderScreen({
+    width: 100,
+    height: 40,
+    args: { sessionID },
+    route: (url, request) => {
+      const stale = { ...session, model: { ...session.model, variant: "removed" } }
+      if (url.pathname === "/api/session") return json({ data: [stale], cursor: {} })
+      if (url.pathname === `/api/session/${sessionID}`) return json({ data: stale })
+      if (url.pathname === `/api/session/${sessionID}/model`) {
+        switches.push(url.pathname)
+        return new Response(null, { status: 204 })
+      }
+      return route(url, request)
+    },
+    config: { animations: false },
+    settle: "Message YCoding…",
+  })
+  try {
+    const row = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, row)
+    await screen.input.typeText("retain unavailable effort draft")
+    screen.input.pressEnter()
+    await waitFor(
+      () => screen.frame().includes("Model selection needs attention"),
+      "unavailable variant admission guard",
+    )
+    expect(promptRequests).toEqual([])
+    expect(switches).toEqual([])
+    expect(composer(screen.renderer.root)?.plainText).toBe("retain unavailable effort draft")
+    expect(screen.frame()).toContain("removed")
+  } finally {
+    await screen.dispose()
+  }
+}, 30000)
+
 test("dispatch releases the composer for a second send while the first acknowledgement is unresolved", async () => {
   resetFixture()
   failFirstPrompt = false

@@ -10,7 +10,7 @@ import { SubagentsTab } from "./subagents-tab"
 import { ShellTab } from "./shell-tab"
 import { SideChatsTab } from "./side-chats-tab"
 
-export interface ComposerHint {
+interface ComposerHint {
   label: string
   shortcut: string
   gapAfter?: number

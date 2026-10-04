@@ -2,10 +2,6 @@ import { describe, expect, test } from "bun:test"
 import { inlineSegments } from "./inline"
 
 describe("inlineSegments", () => {
-  test("keeps plain prose as one run", () => {
-    expect(inlineSegments("Run the terminal interface.")).toEqual([{ code: false, text: "Run the terminal interface." }])
-  })
-
   test("marks every backtick pair as inline code", () => {
     expect(inlineSegments("Run `ycoding` or `ycoding run --yolo`.")).toEqual([
       { code: false, text: "Run " },
@@ -14,10 +10,6 @@ describe("inlineSegments", () => {
       { code: true, text: "ycoding run --yolo" },
       { code: false, text: "." },
     ])
-  })
-
-  test("leaves text with an unpaired backtick literal", () => {
-    expect(inlineSegments("Quote with ` alone")).toEqual([{ code: false, text: "Quote with ` alone" }])
   })
 
   test("marks **bold** pairs outside code as strong", () => {
@@ -34,7 +26,11 @@ describe("inlineSegments", () => {
     ])
   })
 
-  test("drops empty runs", () => {
-    expect(inlineSegments("`cli.json`")).toEqual([{ code: true, text: "cli.json" }])
+  test.each([
+    ["Run the terminal interface.", [{ code: false, text: "Run the terminal interface." }]],
+    ["Quote with ` alone", [{ code: false, text: "Quote with ` alone" }]],
+    ["`cli.json`", [{ code: true, text: "cli.json" }]],
+  ])("keeps prose, unpaired backticks and empty runs literal: %p", (text, segments) => {
+    expect(inlineSegments(text)).toEqual(segments)
   })
 })
