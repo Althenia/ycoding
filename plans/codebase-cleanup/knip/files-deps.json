@@ -1,0 +1,1719 @@
+[
+  {
+    "file": "script/changelog.ts",
+    "files": [
+      {
+        "name": "script/changelog.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "script/format.ts",
+    "files": [
+      {
+        "name": "script/format.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "script/raw-changelog.ts",
+    "files": [
+      {
+        "name": "script/raw-changelog.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "script/version.ts",
+    "files": [
+      {
+        "name": "script/version.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "extensions/chrome/popup.js",
+    "files": [
+      {
+        "name": "extensions/chrome/popup.js"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "extensions/chrome/service-worker.js",
+    "files": [
+      {
+        "name": "extensions/chrome/service-worker.js"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "nix/scripts/canonicalize-node-modules.ts",
+    "files": [
+      {
+        "name": "nix/scripts/canonicalize-node-modules.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "nix/scripts/normalize-bun-binaries.ts",
+    "files": [
+      {
+        "name": "nix/scripts/normalize-bun-binaries.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "infra/cloudflare/test/smoke.ts",
+    "files": [
+      {
+        "name": "infra/cloudflare/test/smoke.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "infra/cloudflare/test/integration/admin-push.ts",
+    "files": [
+      {
+        "name": "infra/cloudflare/test/integration/admin-push.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "infra/cloudflare/test/integration/completion-notices.ts",
+    "files": [
+      {
+        "name": "infra/cloudflare/test/integration/completion-notices.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "infra/cloudflare/test/integration/invite-flow.ts",
+    "files": [
+      {
+        "name": "infra/cloudflare/test/integration/invite-flow.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "infra/cloudflare/test/integration/push-binding-local.ts",
+    "files": [
+      {
+        "name": "infra/cloudflare/test/integration/push-binding-local.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "infra/cloudflare/test/integration/relay-local.ts",
+    "files": [
+      {
+        "name": "infra/cloudflare/test/integration/relay-local.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "infra/cloudflare/test/support/push-server.ts",
+    "files": [
+      {
+        "name": "infra/cloudflare/test/support/push-server.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "extensions/chrome/test/fixtures/service-worker.case.js",
+    "files": [
+      {
+        "name": "extensions/chrome/test/fixtures/service-worker.case.js"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/cli/script/isolated-browser-smoke.ts",
+    "files": [
+      {
+        "name": "packages/cli/script/isolated-browser-smoke.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/cli/script/postinstall.mjs",
+    "files": [
+      {
+        "name": "packages/cli/script/postinstall.mjs"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/cli/script/publish.ts",
+    "files": [
+      {
+        "name": "packages/cli/script/publish.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/cli/script/service-smoke.ts",
+    "files": [
+      {
+        "name": "packages/cli/script/service-smoke.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/cli/src/tui.ts",
+    "files": [
+      {
+        "name": "packages/cli/src/tui.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/cli/test/remote-node-transport.ts",
+    "files": [
+      {
+        "name": "packages/cli/test/remote-node-transport.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/cli/test/remote-prompt-pty.fixture.ts",
+    "files": [
+      {
+        "name": "packages/cli/test/remote-prompt-pty.fixture.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/cli/src/commands/tui.ts",
+    "files": [
+      {
+        "name": "packages/cli/src/commands/tui.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/cli/src/node/index.ts",
+    "files": [
+      {
+        "name": "packages/cli/src/node/index.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/cli/src/node/plugin-runtime.effect.ts",
+    "files": [
+      {
+        "name": "packages/cli/src/node/plugin-runtime.effect.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/cli/src/node/plugin-runtime.promise.ts",
+    "files": [
+      {
+        "name": "packages/cli/src/node/plugin-runtime.promise.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/cli/test/drive/mini-interactive.drive.mjs",
+    "files": [
+      {
+        "name": "packages/cli/test/drive/mini-interactive.drive.mjs"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/cli/test/drive/run-smoke.drive.mjs",
+    "files": [
+      {
+        "name": "packages/cli/test/drive/run-smoke.drive.mjs"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/cli/test/fixture/standalone-owner.ts",
+    "files": [
+      {
+        "name": "packages/cli/test/fixture/standalone-owner.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/cli/src/commands/handlers/tui-serve.ts",
+    "files": [
+      {
+        "name": "packages/cli/src/commands/handlers/tui-serve.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/cli/src/commands/handlers/tui.ts",
+    "files": [
+      {
+        "name": "packages/cli/src/commands/handlers/tui.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/server/test-integration/keep-awake-backend.ts",
+    "files": [
+      {
+        "name": "packages/server/test-integration/keep-awake-backend.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/tui/src/context/directory.ts",
+    "files": [
+      {
+        "name": "packages/tui/src/context/directory.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/tui/src/theme/v2/solid.ts",
+    "files": [
+      {
+        "name": "packages/tui/src/theme/v2/solid.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/core/script/wellknown-server.ts",
+    "files": [
+      {
+        "name": "packages/core/script/wellknown-server.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/core/test/fixture/effect-flock-worker.ts",
+    "files": [
+      {
+        "name": "packages/core/test/fixture/effect-flock-worker.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/core/test/fixture/flock-worker.ts",
+    "files": [
+      {
+        "name": "packages/core/test/fixture/flock-worker.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/core/test/fixture/mcp-output-schema.ts",
+    "files": [
+      {
+        "name": "packages/core/test/fixture/mcp-output-schema.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/core/test/fixture/mcp-timeout.ts",
+    "files": [
+      {
+        "name": "packages/core/test/fixture/mcp-timeout.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/core/test/fixture/process-lock-worker.ts",
+    "files": [
+      {
+        "name": "packages/core/test/fixture/process-lock-worker.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/core/test/plugin/fixtures/config-effect-plugin.ts",
+    "files": [
+      {
+        "name": "packages/core/test/plugin/fixtures/config-effect-plugin.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/core/test/plugin/fixtures/config-promise-plugin.ts",
+    "files": [
+      {
+        "name": "packages/core/test/plugin/fixtures/config-promise-plugin.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/core/test/plugin/fixtures/failing-plugin.ts",
+    "files": [
+      {
+        "name": "packages/core/test/plugin/fixtures/failing-plugin.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/core/test/plugin/fixtures/invalid-plugin.ts",
+    "files": [
+      {
+        "name": "packages/core/test/plugin/fixtures/invalid-plugin.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/core/test/plugin/fixtures/variant-source-plugin.ts",
+    "files": [
+      {
+        "name": "packages/core/test/plugin/fixtures/variant-source-plugin.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/core/test/config/fixtures/plugin/directory-plugin.ts",
+    "files": [
+      {
+        "name": "packages/core/test/config/fixtures/plugin/directory-plugin.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/plugin/script/publish.ts",
+    "files": [
+      {
+        "name": "packages/plugin/script/publish.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/client/script/publish.ts",
+    "files": [
+      {
+        "name": "packages/client/script/publish.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/client/test/api.types.ts",
+    "files": [
+      {
+        "name": "packages/client/test/api.types.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/client/test/fixture/service.ts",
+    "files": [
+      {
+        "name": "packages/client/test/fixture/service.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/protocol/script/publish.ts",
+    "files": [
+      {
+        "name": "packages/protocol/script/publish.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/ai/example/tutorial.ts",
+    "files": [
+      {
+        "name": "packages/ai/example/tutorial.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/ai/script/publish.ts",
+    "files": [
+      {
+        "name": "packages/ai/script/publish.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/ai/script/recording-cost-report.ts",
+    "files": [
+      {
+        "name": "packages/ai/script/recording-cost-report.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/ai/test/auth-options.types.ts",
+    "files": [
+      {
+        "name": "packages/ai/test/auth-options.types.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/ai/test/image.types.ts",
+    "files": [
+      {
+        "name": "packages/ai/test/image.types.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/ai/test/provider.types.ts",
+    "files": [
+      {
+        "name": "packages/ai/test/provider.types.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/ai/test/tool.types.ts",
+    "files": [
+      {
+        "name": "packages/ai/test/tool.types.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/script/generate-office-art.ts",
+    "files": [
+      {
+        "name": "apps/web/script/generate-office-art.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/script/office-art/png.ts",
+    "files": [
+      {
+        "name": "apps/web/script/office-art/png.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/_screenshot.ts",
+    "files": [
+      {
+        "name": "apps/web/verify/_screenshot.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/activity-order-fixture.tsx",
+    "files": [
+      {
+        "name": "apps/web/verify/activity-order-fixture.tsx"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/composer-fixture.tsx",
+    "files": [
+      {
+        "name": "apps/web/verify/composer-fixture.tsx"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/cursors-fixture.tsx",
+    "files": [
+      {
+        "name": "apps/web/verify/cursors-fixture.tsx"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/guardrail-family-fixture.tsx",
+    "files": [
+      {
+        "name": "apps/web/verify/guardrail-family-fixture.tsx"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/keep-awake-settings-fixture.tsx",
+    "files": [
+      {
+        "name": "apps/web/verify/keep-awake-settings-fixture.tsx"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/loading-fixture.tsx",
+    "files": [
+      {
+        "name": "apps/web/verify/loading-fixture.tsx"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/matched-content.vite.config.ts",
+    "files": [
+      {
+        "name": "apps/web/verify/matched-content.vite.config.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/modal-focus-fixture.tsx",
+    "files": [
+      {
+        "name": "apps/web/verify/modal-focus-fixture.tsx"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/model-replay-fixture.tsx",
+    "files": [
+      {
+        "name": "apps/web/verify/model-replay-fixture.tsx"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/notifications-fixture.tsx",
+    "files": [
+      {
+        "name": "apps/web/verify/notifications-fixture.tsx"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/office-engine-fixture.tsx",
+    "files": [
+      {
+        "name": "apps/web/verify/office-engine-fixture.tsx"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/push-settings-fixture.tsx",
+    "files": [
+      {
+        "name": "apps/web/verify/push-settings-fixture.tsx"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/remote-fixture.tsx",
+    "files": [
+      {
+        "name": "apps/web/verify/remote-fixture.tsx"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/router-fixture.tsx",
+    "files": [
+      {
+        "name": "apps/web/verify/router-fixture.tsx"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/running-sessions-fixture.tsx",
+    "files": [
+      {
+        "name": "apps/web/verify/running-sessions-fixture.tsx"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/team-fixture.tsx",
+    "files": [
+      {
+        "name": "apps/web/verify/team-fixture.tsx"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/todo-fixture.tsx",
+    "files": [
+      {
+        "name": "apps/web/verify/todo-fixture.tsx"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/transcript-fixture.tsx",
+    "files": [
+      {
+        "name": "apps/web/verify/transcript-fixture.tsx"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/typography-fixture.tsx",
+    "files": [
+      {
+        "name": "apps/web/verify/typography-fixture.tsx"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/usage-fixture.tsx",
+    "files": [
+      {
+        "name": "apps/web/verify/usage-fixture.tsx"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/matched-content/changelog.ts",
+    "files": [
+      {
+        "name": "apps/web/verify/matched-content/changelog.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/matched-content/docs-registry.ts",
+    "files": [
+      {
+        "name": "apps/web/verify/matched-content/docs-registry.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "apps/web/verify/matched-content/site.ts",
+    "files": [
+      {
+        "name": "apps/web/verify/matched-content/site.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/effect-drizzle-sqlite/examples/basic.ts",
+    "files": [
+      {
+        "name": "packages/effect-drizzle-sqlite/examples/basic.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/httpapi-codegen/test/generated-consumer.ts",
+    "files": [
+      {
+        "name": "packages/httpapi-codegen/test/generated-consumer.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/httpapi-codegen/test/generated/client-error.ts",
+    "files": [
+      {
+        "name": "packages/httpapi-codegen/test/generated/client-error.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/httpapi-codegen/test/generated/client.ts",
+    "files": [
+      {
+        "name": "packages/httpapi-codegen/test/generated/client.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/httpapi-codegen/test/generated/event.ts",
+    "files": [
+      {
+        "name": "packages/httpapi-codegen/test/generated/event.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/httpapi-codegen/test/generated/index.ts",
+    "files": [
+      {
+        "name": "packages/httpapi-codegen/test/generated/index.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/httpapi-codegen/test/generated/session.ts",
+    "files": [
+      {
+        "name": "packages/httpapi-codegen/test/generated/session.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/httpapi-codegen/test/generated/system.ts",
+    "files": [
+      {
+        "name": "packages/httpapi-codegen/test/generated/system.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/schema/script/publish.ts",
+    "files": [
+      {
+        "name": "packages/schema/script/publish.ts"
+      }
+    ],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "package.json",
+    "files": [],
+    "dependencies": [
+      {
+        "name": "@ycoding-ai/plugin",
+        "line": 132,
+        "col": 6,
+        "pos": 5785
+      },
+      {
+        "name": "@ycoding-ai/script",
+        "line": 133,
+        "col": 6,
+        "pos": 5826
+      }
+    ],
+    "devDependencies": [
+      {
+        "name": "@actions/artifact",
+        "line": 118,
+        "col": 6,
+        "pos": 5417
+      },
+      {
+        "name": "glob",
+        "line": 122,
+        "col": 6,
+        "pos": 5561
+      },
+      {
+        "name": "semver",
+        "line": 127,
+        "col": 6,
+        "pos": 5687
+      },
+      {
+        "name": "turbo",
+        "line": 128,
+        "col": 6,
+        "pos": 5711
+      }
+    ],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/cli/package.json",
+    "files": [],
+    "dependencies": [
+      {
+        "name": "@ycoding-ai/plugin",
+        "line": 35,
+        "col": 6,
+        "pos": 1121
+      },
+      {
+        "name": "@parcel/watcher",
+        "line": 42,
+        "col": 6,
+        "pos": 1390
+      }
+    ],
+    "devDependencies": [
+      {
+        "name": "@ycoding-ai/protocol",
+        "line": 54,
+        "col": 6,
+        "pos": 1684
+      },
+      {
+        "name": "@lydell/node-pty-darwin-arm64",
+        "line": 59,
+        "col": 6,
+        "pos": 1869
+      },
+      {
+        "name": "@lydell/node-pty-darwin-x64",
+        "line": 60,
+        "col": 6,
+        "pos": 1923
+      },
+      {
+        "name": "@lydell/node-pty-linux-arm64",
+        "line": 61,
+        "col": 6,
+        "pos": 1975
+      },
+      {
+        "name": "@lydell/node-pty-linux-x64",
+        "line": 62,
+        "col": 6,
+        "pos": 2028
+      },
+      {
+        "name": "@lydell/node-pty-win32-arm64",
+        "line": 63,
+        "col": 6,
+        "pos": 2079
+      },
+      {
+        "name": "@lydell/node-pty-win32-x64",
+        "line": 64,
+        "col": 6,
+        "pos": 2132
+      },
+      {
+        "name": "@parcel/watcher-darwin-arm64",
+        "line": 65,
+        "col": 6,
+        "pos": 2183
+      },
+      {
+        "name": "@parcel/watcher-linux-arm64-glibc",
+        "line": 66,
+        "col": 6,
+        "pos": 2228
+      },
+      {
+        "name": "@parcel/watcher-linux-x64-glibc",
+        "line": 67,
+        "col": 6,
+        "pos": 2278
+      },
+      {
+        "name": "@parcel/watcher-win32-arm64",
+        "line": 68,
+        "col": 6,
+        "pos": 2326
+      },
+      {
+        "name": "@parcel/watcher-win32-x64",
+        "line": 69,
+        "col": 6,
+        "pos": 2370
+      }
+    ],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/core/package.json",
+    "files": [],
+    "dependencies": [
+      {
+        "name": "@cursor/sdk",
+        "line": 102,
+        "col": 6,
+        "pos": 3832
+      },
+      {
+        "name": "@ycoding-ai/effect-sqlite-node",
+        "line": 123,
+        "col": 6,
+        "pos": 4687
+      },
+      {
+        "name": "ignore",
+        "line": 138,
+        "col": 6,
+        "pos": 5171
+      },
+      {
+        "name": "semver",
+        "line": 147,
+        "col": 6,
+        "pos": 5421
+      }
+    ],
+    "devDependencies": [
+      {
+        "name": "@types/semver",
+        "line": 66,
+        "col": 6,
+        "pos": 2526
+      },
+      {
+        "name": "@parcel/watcher-darwin-arm64",
+        "line": 69,
+        "col": 6,
+        "pos": 2620
+      },
+      {
+        "name": "@parcel/watcher-darwin-x64",
+        "line": 70,
+        "col": 6,
+        "pos": 2665
+      },
+      {
+        "name": "@parcel/watcher-linux-arm64-glibc",
+        "line": 71,
+        "col": 6,
+        "pos": 2708
+      },
+      {
+        "name": "@parcel/watcher-linux-arm64-musl",
+        "line": 72,
+        "col": 6,
+        "pos": 2758
+      },
+      {
+        "name": "@parcel/watcher-linux-x64-glibc",
+        "line": 73,
+        "col": 6,
+        "pos": 2807
+      },
+      {
+        "name": "@parcel/watcher-linux-x64-musl",
+        "line": 74,
+        "col": 6,
+        "pos": 2855
+      },
+      {
+        "name": "@parcel/watcher-win32-arm64",
+        "line": 75,
+        "col": 6,
+        "pos": 2902
+      },
+      {
+        "name": "@parcel/watcher-win32-x64",
+        "line": 76,
+        "col": 6,
+        "pos": 2946
+      }
+    ],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/plugin/package.json",
+    "files": [],
+    "dependencies": [
+      {
+        "name": "zod",
+        "line": 30,
+        "col": 6,
+        "pos": 838
+      }
+    ],
+    "devDependencies": [
+      {
+        "name": "@opentui/keymap",
+        "line": 50,
+        "col": 6,
+        "pos": 1245
+      },
+      {
+        "name": "@tsconfig/node22",
+        "line": 53,
+        "col": 6,
+        "pos": 1347
+      }
+    ],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/http-recorder/package.json",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [
+      {
+        "name": "@effect/platform-node",
+        "line": 43,
+        "col": 6,
+        "pos": 1028
+      }
+    ],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/remote/package.json",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [
+      {
+        "name": "@tsconfig/bun",
+        "line": 16,
+        "col": 6,
+        "pos": 366
+      }
+    ],
+    "unlisted": [],
+    "binaries": []
+  },
+  {
+    "file": "packages/effect-drizzle-sqlite/tsconfig.json",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [
+      {
+        "name": "@effect/language-service"
+      }
+    ],
+    "binaries": []
+  },
+  {
+    "file": "packages/effect-sqlite-node/tsconfig.json",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [
+      {
+        "name": "@effect/language-service"
+      }
+    ],
+    "binaries": []
+  },
+  {
+    "file": "packages/http-recorder/tsconfig.json",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [
+      {
+        "name": "@effect/language-service"
+      }
+    ],
+    "binaries": []
+  },
+  {
+    "file": "packages/ai/sst-env.d.ts",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [
+      {
+        "name": "sst",
+        "line": 9,
+        "col": 8,
+        "pos": 221
+      }
+    ],
+    "binaries": []
+  },
+  {
+    "file": "packages/cli/sst-env.d.ts",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [
+      {
+        "name": "sst",
+        "line": 9,
+        "col": 8,
+        "pos": 221
+      }
+    ],
+    "binaries": []
+  },
+  {
+    "file": "packages/client/sst-env.d.ts",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [
+      {
+        "name": "sst",
+        "line": 9,
+        "col": 8,
+        "pos": 221
+      }
+    ],
+    "binaries": []
+  },
+  {
+    "file": "packages/codemode/sst-env.d.ts",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [
+      {
+        "name": "sst",
+        "line": 9,
+        "col": 8,
+        "pos": 221
+      }
+    ],
+    "binaries": []
+  },
+  {
+    "file": "packages/core/sst-env.d.ts",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [
+      {
+        "name": "sst",
+        "line": 9,
+        "col": 8,
+        "pos": 221
+      }
+    ],
+    "binaries": []
+  },
+  {
+    "file": "packages/effect-drizzle-sqlite/sst-env.d.ts",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [
+      {
+        "name": "sst",
+        "line": 9,
+        "col": 8,
+        "pos": 221
+      }
+    ],
+    "binaries": []
+  },
+  {
+    "file": "packages/effect-sqlite-node/sst-env.d.ts",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [
+      {
+        "name": "sst",
+        "line": 9,
+        "col": 8,
+        "pos": 221
+      }
+    ],
+    "binaries": []
+  },
+  {
+    "file": "packages/http-recorder/sst-env.d.ts",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [
+      {
+        "name": "sst",
+        "line": 9,
+        "col": 8,
+        "pos": 221
+      }
+    ],
+    "binaries": []
+  },
+  {
+    "file": "packages/httpapi-codegen/sst-env.d.ts",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [
+      {
+        "name": "sst",
+        "line": 9,
+        "col": 8,
+        "pos": 221
+      }
+    ],
+    "binaries": []
+  },
+  {
+    "file": "packages/plugin/sst-env.d.ts",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [
+      {
+        "name": "sst",
+        "line": 9,
+        "col": 8,
+        "pos": 221
+      }
+    ],
+    "binaries": []
+  },
+  {
+    "file": "packages/protocol/sst-env.d.ts",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [
+      {
+        "name": "sst",
+        "line": 9,
+        "col": 8,
+        "pos": 221
+      }
+    ],
+    "binaries": []
+  },
+  {
+    "file": "packages/schema/sst-env.d.ts",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [
+      {
+        "name": "sst",
+        "line": 9,
+        "col": 8,
+        "pos": 221
+      }
+    ],
+    "binaries": []
+  },
+  {
+    "file": "packages/script/sst-env.d.ts",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [
+      {
+        "name": "sst",
+        "line": 9,
+        "col": 8,
+        "pos": 221
+      }
+    ],
+    "binaries": []
+  },
+  {
+    "file": "packages/server/sst-env.d.ts",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [
+      {
+        "name": "sst",
+        "line": 9,
+        "col": 8,
+        "pos": 221
+      }
+    ],
+    "binaries": []
+  },
+  {
+    "file": "packages/tui/sst-env.d.ts",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [
+      {
+        "name": "sst",
+        "line": 9,
+        "col": 8,
+        "pos": 221
+      }
+    ],
+    "binaries": []
+  },
+  {
+    "file": "infra/cloudflare/src/relay/durable-object.ts",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [
+      {
+        "name": "cloudflare",
+        "line": 9,
+        "col": 31,
+        "pos": 308
+      }
+    ],
+    "binaries": []
+  },
+  {
+    "file": "packages/core/src/mcp/client.ts",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": [
+      {
+        "name": "pgrep"
+      }
+    ]
+  },
+  {
+    "file": "packages/core/src/cursor/provider/protocol/device-id.js",
+    "files": [],
+    "dependencies": [],
+    "devDependencies": [],
+    "unlisted": [],
+    "binaries": [
+      {
+        "name": "ioreg"
+      },
+      {
+        "name": "reg"
+      }
+    ]
+  }
+]
