@@ -48,7 +48,6 @@ Rules:
 - Client consumes the assembled Protocol and provides generated and composed APIs.
 - CLI owns the executable, local-service discovery, build, packaging, and TUI startup.
 - TUI owns presentation and interaction, never canonical durable state.
-- UI provides reusable theme and presentation primitives used by the TUI.
 - Remote owns the closed relay envelopes and device-authentication request shapes shared by the CLI, browser, and edge relay. It does not redefine local Session semantics.
 - Web owns the responsive browser presentation and curated public content. It must not import Core or Server implementation code. The remote browser store is a TanStack Store that owns event-sourced Session state, selection, subscriptions, notices, Team state, and mutations; connection-scoped read resources (provider usage, keep-awake, workspace lists) are TanStack Query resources keyed by device and connection generation, and one Query client discards them when the connection ends. Views read those resources through a non-suspending observer (`apps/web/src/remote/query.ts`) because a Solid Query resource read reaches the router's Suspense boundary and would detach the shell; route loaders preload a view's reads on link intent, and the shell warms the Usage, keep-awake, and workspace reads once after the selected Session settles. Browser-persisted notification preferences are a TanStack Store persisted through browser storage.
 
@@ -88,7 +87,7 @@ Owns:
 
 Core remains independent of any specific UI.
 
-`Memory.Service` derives repository identity from the canonical Git common directory so linked worktrees share one collection, reads current configuration lazily, and owns concept validation, bounded retrieval, compare-and-swap writes, and derived files. Shared knowledge uses a separate collection under the same configured base. The built-in `memory` tool applies permissions and Session file-mutation guardrails before calling that service. It imports no UI package and exposes no separate HTTP group or hosted application. See [workspace memory](./memory.md).
+`Memory.Service` derives repository identity from the canonical Git common directory so linked worktrees share one collection, reads current configuration lazily, and owns concept validation, bounded retrieval, compare-and-swap writes, and derived files. Shared knowledge uses a separate collection under the same configured base. The built-in `memory` tool applies permissions and Session file-mutation guardrails before calling that service. It exposes no separate HTTP group or hosted application. See [workspace memory](./memory.md).
 
 ### `packages/protocol`
 
