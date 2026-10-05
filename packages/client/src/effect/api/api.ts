@@ -23,8 +23,25 @@ export interface HealthApi<E = never> {
 export type Endpoint1_0Output = EffectValue<ReturnType<RawClient["server.server"]["server.get"]>>
 export type ServerGetOperation<E = never> = () => Effect.Effect<Endpoint1_0Output, E>
 
+type Endpoint1_1Request = Parameters<RawClient["server.server"]["telemetry.append"]>[0]
+export type Endpoint1_1Input = { readonly samples: Endpoint1_1Request["payload"]["samples"] }
+export type Endpoint1_1Output = EffectValue<ReturnType<RawClient["server.server"]["telemetry.append"]>>
+export type ServerTelemetryAppendOperation<E = never> = (input: Endpoint1_1Input) => Effect.Effect<Endpoint1_1Output, E>
+
+type Endpoint1_2Request = Parameters<RawClient["server.server"]["telemetry.list"]>[0]
+export type Endpoint1_2Input = {
+  readonly limit?: Endpoint1_2Request["query"]["limit"]
+  readonly before?: Endpoint1_2Request["query"]["before"]
+}
+export type Endpoint1_2Output = EffectValue<ReturnType<RawClient["server.server"]["telemetry.list"]>>
+export type ServerTelemetryListOperation<E = never> = (input?: Endpoint1_2Input) => Effect.Effect<Endpoint1_2Output, E>
+
 export interface ServerApi<E = never> {
   readonly get: ServerGetOperation<E>
+  readonly telemetry: {
+    readonly append: ServerTelemetryAppendOperation<E>
+    readonly list: ServerTelemetryListOperation<E>
+  }
 }
 
 type Endpoint2_0Request = Parameters<RawClient["server.location"]["location.get"]>[0]

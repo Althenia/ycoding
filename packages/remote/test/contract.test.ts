@@ -124,6 +124,27 @@ test("machine keep-awake controls are global and accept only the explicit enable
   expect(parseClientMessage(JSON.stringify({ ...read, input: {} })).ok).toBe(false)
 })
 
+test("machine latency ingest and reads accept only bounded anonymous samples for the connected device", () => {
+  const sample = { kind: "request", at: "2026-10-04T12:00:00.000Z", operation: "session.list", outcome: "ok", queueMs: 5, settlementMs: 20, totalMs: 25 }
+  const task = { kind: "long-task", at: sample.at, durationMs: 70 }
+  const append = { type: "request", id: "req_latency", operation: "machine.latency.append", input: { samples: [sample, task] } }
+  const list = { type: "request", id: "req_latency_list", operation: "machine.latency.list", input: { limit: 200, before: "cursor_1" } }
+  for (const frame of [append, list, { ...list, input: undefined }]) {
+    expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true })
+    expect(parseRelayToAgentMessage(JSON.stringify(frame))).toMatchObject({ ok: true })
+    expect(parseClientMessage(JSON.stringify({ ...frame, sessionID: "ses_1" })).ok).toBe(false)
+  }
+  for (const input of [undefined, {}, { samples: [] }, { samples: Array.from({ length: 21 }, () => sample) },
+    { samples: [sample], directory: "/private" }, { samples: [{ ...sample, input: { text: "private" } }] },
+    { samples: [{ ...sample, operation: "machine.latency.append" }] }, { samples: [{ ...sample, operation: "account.read" }] },
+    { samples: [{ ...sample, operation: "session.list", totalMs: -1 }] },
+    { samples: [{ ...sample, settlementMs: 600_001 }] }, { samples: [{ ...sample, at: "yesterday" }] },
+    { samples: [{ ...task, attribution: "/private" }] }, { samples: [{ ...task, durationMs: 0 }] }])
+    expect(parseClientMessage(JSON.stringify({ ...append, input })).ok).toBe(false)
+  for (const input of [{ limit: 0 }, { limit: 201 }, { before: "" }, { before: "x".repeat(257) }, { limit: 1, workspace: "/private" }, {}])
+    expect(parseClientMessage(JSON.stringify({ ...list, input })).ok).toBe(input !== undefined && Object.keys(input).length === 0)
+})
+
 test("captured changes is a read-only Session-scoped paged operation without caller placement", () => {
   const frame = { type: "request", id: "req_changes", operation: "session.capturedChanges.list", sessionID: "ses_root" }
   expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
@@ -575,6 +596,8 @@ describe("remote operations", () => {
       "usage.report",
       "machine.keepAwake.get",
       "machine.keepAwake.set",
+      "machine.latency.append",
+      "machine.latency.list",
     ])
     expect(remoteOperations.filter(requireSession)).toEqual([...remoteSessionOperations])
     expect(requireSession("workspace.list")).toBe(false)
@@ -589,6 +612,8 @@ describe("remote operations", () => {
     expect(requireSession("session.compact")).toBe(true)
     expect(requireSession("machine.keepAwake.get")).toBe(false)
     expect(requireSession("machine.keepAwake.set")).toBe(false)
+    expect(requireSession("machine.latency.append")).toBe(false)
+    expect(requireSession("machine.latency.list")).toBe(false)
     expect(RemoteProtocolVersion).toBe(4)
     expect(RemoteWebSocketPath).toEqual({ client: "/ws/v4/client", agent: "/ws/v4/agent" })
     expect(parseClientMessage('{"type":"request","id":"r","operation":"session.question.list","sessionID":"ses_1"}').ok).toBe(false)

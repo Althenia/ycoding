@@ -55,6 +55,7 @@ const currentMigrations = [
   { id: "20260929044715_session-active" },
   { id: "20261002020321_drop-legacy-account-share" },
   { id: "20261004094144_shell-ledger" },
+  { id: "20261004154315_web-latency" },
 ]
 const selectiveCompactionTables = [
   "compaction_manifest_blob",
@@ -298,6 +299,9 @@ describe("DatabaseMigration", () => {
         expect(yield* db.get(sql`SELECT id FROM database_format`)).toEqual({ id: DatabaseFormat.CurrentID })
         expect(yield* db.all(sql`SELECT id FROM migration ORDER BY id`)).toEqual(currentMigrations)
         expect(
+          yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'web_latency'`),
+        ).toEqual({ name: "web_latency" })
+        expect(
           yield* db.all<{ name: string }>(sql`
             SELECT name
             FROM sqlite_master
@@ -402,6 +406,28 @@ describe("DatabaseMigration", () => {
         yield* DatabaseMigration.apply(db)
         yield* DatabaseMigration.apply(db)
         expect(yield* db.get(sql`SELECT id FROM database_format`)).toEqual({ id: DatabaseFormat.CurrentID })
+        expect(yield* db.all(sql`SELECT id FROM migration ORDER BY id`)).toEqual(currentMigrations)
+      }),
+    )
+  })
+
+  test("adds Web latency storage to an existing current-format database without changing its rows", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE database_format (id TEXT PRIMARY KEY, time_created INTEGER NOT NULL)`)
+        yield* db.run(sql`INSERT INTO database_format (id, time_created) VALUES (${DatabaseFormat.CurrentID}, 1)`)
+        yield* db.run(sql`CREATE TABLE migration (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL)`)
+        for (const migration of currentMigrations.slice(0, -1))
+          yield* db.run(sql`INSERT INTO migration (id, time_completed) VALUES (${migration.id}, 1)`)
+        yield* db.run(sql`CREATE TABLE retained_current (value TEXT NOT NULL)`)
+        yield* db.run(sql`INSERT INTO retained_current (value) VALUES ('keep')`)
+        yield* DatabaseMigration.apply(db)
+        yield* DatabaseMigration.apply(db)
+        expect(yield* db.get(sql`SELECT value FROM retained_current`)).toEqual({ value: "keep" })
+        expect(yield* db.get(sql`SELECT name FROM sqlite_master WHERE name = 'web_latency'`)).toEqual({
+          name: "web_latency",
+        })
         expect(yield* db.all(sql`SELECT id FROM migration ORDER BY id`)).toEqual(currentMigrations)
       }),
     )

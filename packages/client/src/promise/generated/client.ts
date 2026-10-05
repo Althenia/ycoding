@@ -3,6 +3,10 @@ import type {
   HealthStopInput,
   HealthStopOutput,
   ServerGetOutput,
+  ServerTelemetryAppendInput,
+  ServerTelemetryAppendOutput,
+  ServerTelemetryListInput,
+  ServerTelemetryListOutput,
   LocationGetInput,
   LocationGetOutput,
   AgentListInput,
@@ -526,6 +530,32 @@ export function make(options: ClientOptions) {
           { method: "GET", path: `/api/server`, successStatus: 200, declaredStatuses: [401, 400], empty: false },
           requestOptions,
         ),
+      telemetry: {
+        append: (input: ServerTelemetryAppendInput, requestOptions?: RequestOptions) =>
+          request<ServerTelemetryAppendOutput>(
+            {
+              method: "POST",
+              path: `/api/server/web-latency`,
+              body: { samples: input["samples"] },
+              successStatus: 200,
+              declaredStatuses: [400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ),
+        list: (input?: ServerTelemetryListInput, requestOptions?: RequestOptions) =>
+          request<ServerTelemetryListOutput>(
+            {
+              method: "GET",
+              path: `/api/server/web-latency`,
+              query: { limit: input?.["limit"], before: input?.["before"] },
+              successStatus: 200,
+              declaredStatuses: [400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ),
+      },
     },
     location: {
       get: (input?: LocationGetInput, requestOptions?: RequestOptions) =>

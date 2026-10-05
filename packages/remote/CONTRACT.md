@@ -592,6 +592,8 @@ grouping and Session-list filters are derived from backend metadata.
 | `usage.report` | no | `usage.report` | `GET /api/usage/report` | `group`, `timeZone?`, `from?`, `to?`, `offset?`, `limit?`, `sort?`, `order?` |
 | `machine.keepAwake.get` | no | `keepAwake.get` | `GET /api/keep-awake` | — |
 | `machine.keepAwake.set` | no | `keepAwake.set` | `PUT /api/keep-awake` | `enabled` boolean |
+| `machine.latency.append` | no | `telemetry.append` | `POST /api/server/web-latency` | `samples` (1–20 bounded anonymous rows) |
+| `machine.latency.list` | no | `telemetry.list` | `GET /api/server/web-latency` | `limit?` (1–200), `before?` (opaque, ≤256 chars) |
 | `session.status` | no | `session.active`, `session.outstanding`, pending Session permission/form/guardrail reads | Local active, outstanding-work, and pending-request GET routes | — |
 | `session.get` | yes | `session.get` | `GET /api/session/:sessionID` | — |
 | `session.messages` | yes | `message.list` | `GET /api/session/:sessionID/message` | — |
@@ -643,6 +645,8 @@ grouping and Session-list filters are derived from backend metadata.
 `session.compact` requests manual compaction using its stable job ID and waits up to five minutes for settlement. An ended job returns `{ data: SessionCompaction.Result }`; a failed job reports a request failure rather than success. It accepts no arguments, files, caller placement, or managed-subagent direct input. It never becomes an ordinary provider prompt. A transport failure leaves the outcome unknown; an explicit retry retains the same job ID.
 
 `machine.keepAwake.get` and `machine.keepAwake.set` address the connected backend, not a Session or Location, and reject `sessionID` and caller placement. The authenticated enrolled-device owner is their authorization boundary. Both return `{ data: { state, message? } }`, with `state` one of `off`, `on`, `unsupported`, and `error`, and a message of at most 200 characters. Unsupported and inhibitor errors are successful status responses, not transport failures. Enabling is runtime-only, initially off, and prevents idle system sleep on macOS until disabled or the backend exits. Manual sleep and lid closure remain effective. Other platforms report `unsupported`. Clients never persist or automatically re-enable this choice; an uncertain write may be followed by a fresh status read but is not automatically replayed.
+
+`machine.latency.append` and `machine.latency.list` also address only the connected backend; neither accepts a Session ID, Location, device ID, or caller-selected URL. The relay verifies browser ownership of its selected enrolled device before forwarding, while the connector validates every sample and uses its authenticated loopback local Server. Append accepts at most 20 rows containing a canonical UTC timestamp and either a fixed forwarded operation name, outcome and bounded integer queue/settlement/total durations, or a browser long-task duration of at least 50 ms. Account HTTP reads and relay-local notices are not attributed to a machine. Unknown fields, arbitrary strings, payloads, paths, headers, and metadata fail validation before the local write. An unconfirmed append is not replayed automatically. The local Server exposes at most 10,000 rows received within seven days from its own SQLite; it prunes expired rows when running and on next startup after downtime. The hosted relay does not store samples, and an older connector rejects the new operations with `unknown_operation`. List reads recent rows in bounded pages with an opaque cursor.
 
 `workspace.list` returns `{ data: RemoteWorkspaceInfo[] }`, where each item is
 `{ id, projectID, directory, workspaceID?, name? }`. Without `sessionsOnly: true`,
@@ -957,8 +961,8 @@ most one pending machine-offline check (section 3.2), deleted when an agent
 attaches or the check's alarm settles it.
 
 D1 never stores transcripts, message projections, streaming deltas, tool output,
-session contents, or file contents. Session data stays on the user's machine and
-crosses the relay only as live WebSocket frames.
+session contents, file contents, or Web latency samples. Session and latency
+data stay on the user's machine and cross the relay only as live WebSocket frames.
 
 Device private keys never leave the device. Stored as SHA-256 hashes: browser
 session IDs (`yc_session` cookie tokens), enrollment codes, and device credential

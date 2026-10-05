@@ -91,6 +91,8 @@ export const remoteOperations = [
   "usage.report",
   "machine.keepAwake.get",
   "machine.keepAwake.set",
+  "machine.latency.append",
+  "machine.latency.list",
 ] as const
 
 /** Operations that address one session and therefore require `sessionID`. */
@@ -142,6 +144,11 @@ export const remoteSessionOperations = [
 ] as const
 
 export type RemoteOperation = (typeof remoteOperations)[number]
+
+export type RemoteLatencySample =
+  | { readonly kind: "request"; readonly at: string; readonly operation: Exclude<RemoteOperation, "machine.latency.append" | "machine.latency.list">; readonly outcome: "ok" | "failed" | "unknown" | "unavailable";
+    readonly reason?: "not-connected" | "in-flight-limit" | "request-limit" | "cancelled"; readonly queueMs: number; readonly settlementMs?: number; readonly totalMs: number }
+  | { readonly kind: "long-task"; readonly at: string; readonly durationMs: number }
 
 export type RemoteCapturedChangesPage = {
   readonly data: readonly {
@@ -216,6 +223,9 @@ export const RemoteLimits = {
   maxErrorCodeChars: 64,
   maxErrorMessageChars: 512,
   maxClientRequestsPerWindow: 120,
+  maxLatencyBatch: 20,
+  maxLatencyDurationMs: 600_000,
+  maxLatencyPage: 200,
   clientRateWindowMs: 10_000,
   maxAgentMessagesPerWindow: 500,
   agentRateWindowMs: 10_000,
@@ -612,7 +622,8 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
     return failRequest("session_required", "Operation requires a session")
   if ((operation === "session.status" || operation === "workspace.catalog" || operation === "workspace.file.find" ||
     operation === "usage.providers" || operation === "usage.summary" || operation === "usage.report" ||
-    operation === "machine.keepAwake.get" || operation === "machine.keepAwake.set") && frame.sessionID !== undefined)
+    operation === "machine.keepAwake.get" || operation === "machine.keepAwake.set" ||
+    operation === "machine.latency.append" || operation === "machine.latency.list") && frame.sessionID !== undefined)
     return failRequest("invalid_message", "Global operation does not accept a session")
   if (frame.input !== undefined && !isRecord(frame.input)) return invalid()
   if (!validOperationInput(operation, frame.input)) return failRequest("invalid_message", "Input does not match the remote operation")
@@ -634,6 +645,13 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
 }
 
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
+  if (operation === "machine.latency.append") return isRecord(input) && Object.keys(input).length === 1 &&
+    Array.isArray(input.samples) && input.samples.length >= 1 && input.samples.length <= RemoteLimits.maxLatencyBatch &&
+    input.samples.every(isRemoteLatencySample)
+  if (operation === "machine.latency.list") return input === undefined || isRecord(input) &&
+    Object.keys(input).every((key) => key === "limit" || key === "before") &&
+    (input.limit === undefined || typeof input.limit === "number" && Number.isSafeInteger(input.limit) && input.limit >= 1 && input.limit <= RemoteLimits.maxLatencyPage) &&
+    (input.before === undefined || typeof input.before === "string" && input.before.length > 0 && input.before.length <= 256)
   if (operation === "machine.keepAwake.get") return input === undefined
   if (operation === "machine.keepAwake.set") return isRecord(input) && typeof input.enabled === "boolean" && Object.keys(input).length === 1
   if (operation === "session.capturedChanges.list") return input === undefined || isRecord(input) && typeof input.cursor === "string" && input.cursor.length > 0 && input.cursor.length <= 256 && Object.keys(input).length === 1
@@ -712,6 +730,26 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
   )
     return false
   return Object.keys(input).every((key) => key === "id" || key === "workspace" || key === "agent" || key === "model")
+}
+
+export function isRemoteLatencySample(value: unknown): value is RemoteLatencySample {
+  if (!isRecord(value) || typeof value.at !== "string" || value.at.length !== 24 ||
+    !Number.isFinite(Date.parse(value.at)) || new Date(value.at).toISOString() !== value.at) return false
+  const duration = (input: unknown) => typeof input === "number" && Number.isSafeInteger(input) && input >= 0 && input <= RemoteLimits.maxLatencyDurationMs
+  if (value.kind === "long-task") return Object.keys(value).every((key) => key === "kind" || key === "at" || key === "durationMs") &&
+    duration(value.durationMs) && typeof value.durationMs === "number" && value.durationMs >= 50
+  if (value.kind !== "request" || typeof value.operation !== "string" || !isOperation(value.operation) ||
+    value.operation === "machine.latency.append" || value.operation === "machine.latency.list" ||
+    (typeof value.outcome !== "string" || !["ok", "failed", "unknown", "unavailable"].includes(value.outcome)) ||
+    !duration(value.queueMs) || !duration(value.totalMs) ||
+    (value.settlementMs !== undefined && !duration(value.settlementMs)) ||
+    Object.keys(value).some((key) => !["kind", "at", "operation", "outcome", "reason", "queueMs", "settlementMs", "totalMs"].includes(key))) return false
+  if (value.outcome === "unavailable") {
+    if (value.reason !== undefined && (typeof value.reason !== "string" || !["not-connected", "in-flight-limit", "request-limit", "cancelled"].includes(value.reason))) return false
+  } else if (value.reason !== undefined) return false
+  return typeof value.queueMs === "number" && typeof value.totalMs === "number" &&
+    (value.settlementMs === undefined ? value.queueMs === value.totalMs :
+      typeof value.settlementMs === "number" && value.queueMs + value.settlementMs === value.totalMs)
 }
 
 function validWorkspace(value: unknown): boolean {

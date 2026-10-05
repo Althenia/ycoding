@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import type { RemoteNoticeFrame } from "@ycoding-ai/remote"
+import { isRemoteLatencySample, type RemoteNoticeFrame } from "@ycoding-ai/remote"
 import { canReplyToRequest, sessionStatusLabel, visibleTranscriptMessages } from "../src/remote/projection"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore, readSessionInfo, type RemoteStore } from "../src/remote/store"
-import { createRemoteTransport, type RemoteTransport, type RemoteTransportStatus } from "../src/remote/transport"
+import { createRemoteTransport, type RemoteRequestTiming, type RemoteTransport, type RemoteTransportStatus } from "../src/remote/transport"
 import { startRelayDouble, waitFor, type RelayDouble, type RelayHandlerOutcome, type RelayHandlerResult } from "./relay-double"
 
 type Harness = {
@@ -26,6 +26,7 @@ async function harness(options: {
   now?: () => number
   paceLongTimers?: boolean
   requestTimeoutMs?: number
+  latencyUploadIntervalMs?: number
 } = {}): Promise<Harness> {
   const relay = await startRelayDouble({
     handler: options.handler,
@@ -67,6 +68,7 @@ async function harness(options: {
     batchMs: 20,
     now: options.now ?? (() => 1_000),
     createMessageID: () => "msg_local_1",
+    ...(options.latencyUploadIntervalMs === undefined ? {} : { latencyUploadIntervalMs: options.latencyUploadIntervalMs }),
   })
   const runUntil = async (predicate: () => boolean, attempts = 100) => {
     for (let index = 0; index < attempts && !predicate(); index += 1) {
@@ -95,7 +97,9 @@ type FakeSocket = {
   readonly statusFrame: (running: readonly string[], attention: readonly string[]) => void
   readonly notices: (frame: RemoteNoticeFrame) => void
   readonly reconnect: () => void
+  readonly timing: (sample: RemoteRequestTiming) => void
   readonly unsubscribes: string[]
+  readonly requests: string[]
 }
 
 /**
@@ -103,7 +107,7 @@ type FakeSocket = {
  * delivered by hand, in any order. A real socket cannot be asked to publish a frame
  * after the connection that replaced it is already live.
  */
-async function fakeConnectionHarness() {
+async function fakeConnectionHarness(options: { readonly latencyUploadIntervalMs?: number } = {}) {
   const relay = await startRelayDouble({ advertisedSessions: ["ses_a", "ses_b"] })
   const sockets: FakeSocket[] = []
   const timers: (() => void)[] = []
@@ -130,7 +134,9 @@ async function fakeConnectionHarness() {
         statusFrame: (running, attention) => handlers.onSessionStatus?.({ running, attention }),
         notices: (frame) => handlers.onNotices?.(frame),
         reconnect: () => handlers.onReconnect?.(),
+        timing: (sample) => handlers.onRequestTiming?.(sample),
         unsubscribes: [],
+        requests: [],
       }
       sockets.push(socket)
       const transport: RemoteTransport = {
@@ -143,6 +149,7 @@ async function fakeConnectionHarness() {
         setPriority: () => {},
         status: () => ({ kind: "open" }),
         request: async (operation, input) => {
+          socket.requests.push(operation)
           if (operation === "session.unsubscribe") socket.unsubscribes.push(String(input?.sessionID))
           if (operation === "session.snapshot") {
             return {
@@ -164,6 +171,7 @@ async function fakeConnectionHarness() {
     },
     schedule,
     batchMs: 20,
+    ...(options.latencyUploadIntervalMs === undefined ? {} : { latencyUploadIntervalMs: options.latencyUploadIntervalMs }),
     now: () => 1_000,
   })
   return {
@@ -179,6 +187,115 @@ async function fakeConnectionHarness() {
 }
 
 describe("remote store integration", () => {
+  test("reports an old machine as unsupported without repeatedly uploading the same samples", async () => {
+    const test = await harness({ latencyUploadIntervalMs: 20, handler: (request) => request.operation === "machine.latency.append"
+      ? { ok: false, code: "unknown_operation", message: "Update YCoding" } : "default" })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().latencySync === "unsupported")
+      const attempts = test.relay.requests.filter((request) => request.operation === "machine.latency.append").length
+      expect(attempts).toBe(1)
+      await test.flush()
+      await test.flush()
+      expect(test.relay.requests.filter((request) => request.operation === "machine.latency.append")).toHaveLength(attempts)
+    } finally { await test.stop() }
+  })
+
+  test("clearing the tab drops queued unsent machine telemetry", async () => {
+    const test = await fakeConnectionHarness({ latencyUploadIntervalMs: 20 })
+    try {
+      await test.store.load()
+      await waitFor(() => test.sockets.length > 0)
+      const socket = test.sockets[0]!
+      socket.timing({ operation: "session.list", outcome: "ok", queueMs: 0, settlementMs: 8, totalMs: 8 })
+      test.store.latency.clear()
+      await test.flush()
+      expect(socket.requests.filter((operation) => operation === "machine.latency.append")).toEqual([])
+      expect(test.store.latency.snapshot().samples).toEqual([])
+    } finally { await test.stop() }
+  })
+
+  test("reads only bounded machine-stored samples and fences a replaced device", async () => {
+    const sample = { kind: "request", at: "2026-10-04T12:00:00.000Z", operation: "session.list", outcome: "ok", queueMs: 0, settlementMs: 8, totalMs: 8 } as const
+    const row = { receivedAt: Date.UTC(2026, 9, 4, 12), sample }
+    let release = (_value: unknown) => {}
+    const gate = new Promise<unknown>((resolve) => { release = resolve })
+    let lists = 0
+    const test = await harness({ handler: (request) => {
+      if (request.operation !== "machine.latency.list") return "default"
+      lists += 1
+      return lists === 1 ? { ok: true, value: { data: [row], cursor: { next: "opaque_1" } } } : gate.then((value) => ({ ok: true, value }))
+    } })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.some((session) => session.id === "ses_a"))
+      expect(await test.store.readStoredLatency()).toEqual({ status: "ok", data: [row], next: "opaque_1" })
+      const pending = test.store.readStoredLatency("opaque_1")
+      await test.runUntil(() => lists === 2)
+      test.store.connect("dev_2")
+      release({ data: [row], cursor: {} })
+      expect((await pending).status).toBe("unavailable")
+      expect(test.relay.requests.filter((request) => request.operation === "machine.latency.list").map((request) => request.input)).toEqual([undefined, { before: "opaque_1" }])
+    } finally { await test.stop() }
+  })
+
+  test("automatically batches only sanitized selected-machine timings and never records its own upload", async () => {
+    const test = await harness({ latencyUploadIntervalMs: 20, handler: (request) =>
+      request.operation === "machine.latency.append" ? { ok: true, value: { accepted: Array.isArray(request.input?.samples) ? request.input.samples.length : 0 } } : "default" })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.some((session) => session.id === "ses_a"))
+      await test.runUntil(() => test.relay.requests.some((request) => request.operation === "machine.latency.append"))
+      const uploads = test.relay.requests.filter((request) => request.operation === "machine.latency.append")
+      const samples = uploads.flatMap((request) => Array.isArray(request.input?.samples) ? request.input.samples : [])
+      expect(samples.length).toBeGreaterThan(0)
+      expect(samples.length).toBeLessThanOrEqual(20)
+      expect(samples.every(isRemoteLatencySample)).toBe(true)
+      expect(samples.some((sample) => typeof sample === "object" && sample !== null && "operation" in sample && sample.operation === "account.read")).toBe(false)
+      expect(samples.some((sample) => typeof sample === "object" && sample !== null && "operation" in sample && sample.operation === "machine.latency.append")).toBe(false)
+      expect(JSON.stringify(samples)).not.toMatch(/ses_a|dev_1|user_1|"(?:text|input|value|url)":/)
+      await test.flush()
+      expect(test.relay.requests.filter((request) => request.operation === "machine.latency.append")).toHaveLength(uploads.length)
+    } finally { await test.stop() }
+  })
+
+  test("records real relay list and account timings without recording request or response contents", async () => {
+    const test = await harness()
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.some((session) => session.id === "ses_a"))
+      const report = test.store.latency.snapshot()
+      expect(report.samples).toContainEqual(expect.objectContaining({ kind: "request", operation: "account.read", outcome: "ok" }))
+      expect(report.samples).toContainEqual(expect.objectContaining({ kind: "request", operation: "session.list", outcome: "ok" }))
+      const list = report.samples.find((sample) => sample.kind === "request" && sample.operation === "session.list")
+      expect(list).toMatchObject({ queueMs: expect.any(Number), settlementMs: expect.any(Number), totalMs: expect.any(Number) })
+      expect(JSON.stringify(report)).not.toMatch(/ses_a|dev_1|user_1|Studio Mac|"(?:message|input|value)":/)
+    } finally { await test.stop() }
+  })
+
+  test("keeps only recent anonymous latency samples from the active machine and clears them on replacement and disconnect", async () => {
+    const test = await fakeConnectionHarness()
+    try {
+      await test.store.load()
+      await waitFor(() => test.sockets.length > 0)
+      const first = test.sockets[0]!
+      for (let index = 0; index < 65; index += 1) first.timing({ operation: "session.list", outcome: "ok", queueMs: 0, settlementMs: index, totalMs: index })
+      const report = test.store.latency.snapshot()
+      expect(report.samples).toHaveLength(60)
+      expect(report.samples[0]).toMatchObject({ kind: "request", operation: "session.list", settlementMs: 5 })
+      expect(report.samples.at(-1)).toMatchObject({ operation: "session.list", settlementMs: 64 })
+      expect(JSON.stringify(report)).not.toMatch(/ses_a|dev_1|user_1|private/)
+      test.store.connect("dev_2")
+      expect(test.store.latency.snapshot().samples).toEqual([])
+      first.timing({ operation: "session.list", outcome: "failed", queueMs: 1, settlementMs: 10, totalMs: 11 })
+      expect(test.store.latency.snapshot().samples).toEqual([])
+      test.sockets.at(-1)!.timing({ operation: "session.list", outcome: "unknown", queueMs: 1, settlementMs: 10, totalMs: 11 })
+      expect(test.store.latency.snapshot().samples).toHaveLength(1)
+      test.store.disconnect()
+      expect(test.store.latency.snapshot().samples).toEqual([])
+    } finally { await test.stop() }
+  })
+
   test("compacts the selected Session without sending a prompt or clearing another Session's draft", async () => {
     let release = () => {}
     const gate = new Promise<void>((resolve) => { release = resolve })

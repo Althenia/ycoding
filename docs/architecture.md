@@ -57,6 +57,8 @@ Client, TUI, and Web code must not import Core or Server implementation modules 
 
 The local CLI connects outbound to the relay and maps a fixed operation set onto the existing authenticated local service. An enrolled machine's authenticated owner can access every Session in that backend. The bridge derives each Location from the paginated backend inventory; a browser cannot supply an arbitrary local URL, HTTP method, filesystem path, or Location header.
 
+The browser batches fixed, content-free latency samples through this same authenticated device connection. The relay forwards them without persistence; the connector writes through a machine-global authenticated Server operation into Core's bounded SQLite store. The browser reads only the selected machine's saved samples through a separate bounded operation, and account/relay-only events are never misattributed to that machine.
+
 The edge authenticates browser users and enrolled devices separately, checks device/account ownership, and routes bounded frames. Each device Durable Object reports current authenticated agent presence to the owner-only device-list API; enrollment and `lastSeenAt` do not imply online status. D1 owns authentication and device metadata, not presence, conversation history, or streamed tool/model output. Durable Session facts remain in the local runtime.
 
 The web Office presentation is a Phaser scene loaded only while Office is shown. It reads the same browser store through a read-only adapter and emits only local selection and camera intents; prompts, replies, interruption, and settings stay in Solid components. It adds no transport, relay operation, or execution authority.
@@ -82,6 +84,7 @@ Owns:
 - skill discovery, activation, and session status;
 - project-artifact storage, validation, packaging, lifecycle, and accounting;
 - Location-scoped on-demand Markdown knowledge storage and derived offline graph export;
+- machine-scoped, seven-day Web latency sample retention in local SQLite;
 - database schema, migrations, event history, and projections;
 - process-global and location-scoped runtime services.
 

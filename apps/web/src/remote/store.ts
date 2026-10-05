@@ -1,4 +1,4 @@
-import { RemoteLimits, isWellFormedBase64, noticeSequence, type CreateEnrollmentResponse, type RemoteDeviceInfo, type RemoteFamilyActivity, parseNoticePage, type RemoteNotice, type RemoteNoticeFrame, type RemoteNoticePage, type RemoteOperation, type RemoteWorkspaceInfo } from "@ycoding-ai/remote"
+import { RemoteLimits, isRemoteLatencySample, isWellFormedBase64, noticeSequence, type CreateEnrollmentResponse, type RemoteDeviceInfo, type RemoteFamilyActivity, parseNoticePage, type RemoteLatencySample, type RemoteNotice, type RemoteNoticeFrame, type RemoteNoticePage, type RemoteOperation, type RemoteWorkspaceInfo } from "@ycoding-ai/remote"
 import { catalogKey, readCatalog, readFileFind, type AgentAttachmentInput, type CatalogTarget, type CatalogView, type FileAttachmentInput, type FileFindResult } from "./catalog"
 import { signInURL, type RemoteHttp, type RemoteHttpResult, type SignInProvider } from "./http"
 import {
@@ -61,6 +61,7 @@ import type {
   RemoteTransportHandlers,
   RemoteTransportStatus,
 } from "./transport"
+import { createLatencyDiagnostics } from "./latency"
 import type { RemoteConnectionState } from "./view-model"
 import type { QueryClient } from "@tanstack/solid-query"
 import { Store, batch } from "@tanstack/solid-store"
@@ -221,6 +222,7 @@ export type RemoteStoreState = {
   readonly familyActivity?: { readonly rootID: string; readonly status: "loading" | "ready" | "unsupported" | "error"; readonly members: readonly RemoteFamilyActivity[] }
   readonly teamCues: readonly TeamCue[]
   readonly transport: RemoteTransportStatus
+  readonly latencySync: "idle" | "saving" | "saved" | "waiting" | "unsupported" | "unknown" | "failed"
   readonly lastRelayDrop?: { readonly code: number; readonly reason: string }
   readonly mutations: readonly PendingMutation[]
   readonly mutationToasts?: readonly MutationToast[]
@@ -252,6 +254,7 @@ export type RemoteStoreOptions = {
   readonly storage?: StorageLike
   /** Coalesces stream deltas into one state notification. */
   readonly batchMs?: number
+  readonly latencyUploadIntervalMs?: number
   readonly createMessageID?: () => string
   readonly createSessionID?: () => string
   readonly deviceName?: (deviceID: string) => string
@@ -263,10 +266,15 @@ export type RemoteStoreOptions = {
 
 export type RemoteStore = {
   readonly container: Store<RemoteStoreState>
+  readonly latency: ReturnType<typeof createLatencyDiagnostics>
   readonly queryClient: QueryClient
   readonly link: RemoteLink
   readonly state: () => RemoteStoreState
   readonly subscribe: (listener: () => void) => () => void
+  readonly readStoredLatency: (before?: string) => Promise<
+    | { readonly status: "ok"; readonly data: readonly { readonly receivedAt: number; readonly sample: RemoteLatencySample }[]; readonly next?: string }
+    | { readonly status: "unavailable" | "unsupported" | "unknown" | "failed" }
+  >
   readonly signInURL: (provider: SignInProvider, redirectAfter?: string) => string
   readonly load: () => Promise<void>
   readonly logout: () => Promise<void>
@@ -370,6 +378,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   })
   const now = options.now ?? (() => Date.now())
   const monotonicNow = options.monotonicNow ?? (() => performance.now())
+  const latency = createLatencyDiagnostics(now)
   const storage = options.storage ?? browserStorage()
   const batchMs = options.batchMs ?? defaultBatchMs
   const createMessageID = options.createMessageID ?? defaultMessageID
@@ -404,9 +413,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     notifications: [],
     noticeSync: { status: "idle", total: 0, loaded: 0, hidden: 0, loadingMore: false, message: undefined },
     transport: { kind: "idle" },
+    latencySync: "idle",
     unhandledEvents: 0,
   })
   let transport: RemoteTransport | undefined
+  const pendingLatency: RemoteLatencySample[] = []
+  let cancelLatencyUpload: (() => void) | undefined
+  let latencyUpload: { readonly owner: RemoteTransport; readonly deviceID: string } | undefined
+  let latencyUnsupported = false
   let olderMessageIDs = new Set<string>()
   const oversizedReads = new Map<string, AbortController>()
   const imageSources = new Map<string, { readonly mime: string; readonly controller: AbortController; readonly promise: Promise<string> }>()
@@ -503,6 +517,76 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (Object.hasOwn(patch, "view") && (patch.view === undefined || patch.view?.id !== container.state.view?.id)) sealed = undefined
     container.setState((previous) => ({ ...previous, ...patch }))
   }
+
+  const clearPendingLatency = () => {
+    cancelLatencyUpload?.()
+    cancelLatencyUpload = undefined
+    pendingLatency.length = 0
+    latencyUpload = undefined
+    latencyUnsupported = false
+    setState({ latencySync: "idle" })
+  }
+
+  const scheduleLatencyUpload = () => {
+    const owner = transport
+    if (owner === undefined || container.state.transport.kind !== "open" || pendingLatency.length === 0 ||
+      cancelLatencyUpload !== undefined || latencyUpload !== undefined || latencyUnsupported) return
+    cancelLatencyUpload = schedule(() => {
+      cancelLatencyUpload = undefined
+      void flushLatency(owner)
+    }, options.latencyUploadIntervalMs ?? 10_000)
+  }
+
+  const flushLatency = async (owner: RemoteTransport) => {
+    if (transport !== owner || container.state.transport.kind !== "open" || latencyUpload !== undefined || pendingLatency.length === 0) return
+    const deviceID = container.state.activeDeviceID
+    if (deviceID === undefined) return
+    const flight = { owner, deviceID }
+    latencyUpload = flight
+    const samples = pendingLatency.splice(0, RemoteLimits.maxLatencyBatch)
+    setState({ latencySync: "saving" })
+    const outcome = await owner.request("machine.latency.append", { input: { samples } })
+    if (latencyUpload !== flight) return
+    latencyUpload = undefined
+    if (transport !== owner || container.state.activeDeviceID !== deviceID) return
+    if (outcome.status === "unavailable") {
+      pendingLatency.unshift(...samples)
+      pendingLatency.splice(60)
+      setState({ latencySync: "waiting" })
+      scheduleLatencyUpload()
+      return
+    }
+    if (outcome.status === "failed") {
+      pendingLatency.unshift(...samples)
+      pendingLatency.splice(60)
+      latencyUnsupported = true
+      setState({ latencySync: outcome.error.code === "unknown_operation" ? "unsupported" : "failed" })
+      return
+    }
+    if (outcome.status === "unknown") {
+      setState({ latencySync: "unknown" })
+      scheduleLatencyUpload()
+      return
+    }
+    const accepted = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "accepted") : undefined
+    setState({ latencySync: accepted === samples.length ? "saved" : "failed" })
+    if (accepted !== samples.length) latencyUnsupported = true
+    scheduleLatencyUpload()
+  }
+
+  latency.subscribe((sample) => {
+    if (sample === undefined) {
+      cancelLatencyUpload?.()
+      cancelLatencyUpload = undefined
+      pendingLatency.length = 0
+      if (latencyUpload === undefined) setState({ latencySync: "idle" })
+      return
+    }
+    if (container.state.activeDeviceID === undefined || !isRemoteLatencySample(sample)) return
+    pendingLatency.push(sample)
+    if (pendingLatency.length > 60) pendingLatency.shift()
+    scheduleLatencyUpload()
+  })
 
   const clearCatalogs = () => {
     catalogGeneration += 1
@@ -1184,6 +1268,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           shellStatus: "loading", sideChatStatus: "loading", sideChatLoading: false, economicsUnsupported: false } }) })
     }
     if (rejected && status.kind === "closed") {
+      clearPendingLatency()
+      latency.clear()
       goalsInFlight.clear()
       clearImageSources()
       clearCatalogs()
@@ -1224,6 +1310,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
     setState({ transport: status, connection: connectionFor(status, container.state.activeDeviceID), notifications: delivery.entries(),
       ...(status.kind === "closed" ? { lastRelayDrop: { code: status.code, reason: status.reason } } : {}) })
+    if (reopened) latencyUnsupported = false
+    if (status.kind === "open") scheduleLatencyUpload()
     if (opened) void loadNotices(owner)
     if (status.kind === "open" && container.state.activeSessionID !== undefined) void readSessionStatus(owner)
     if (reopened) {
@@ -2302,6 +2390,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
 
   const disconnectDevice = (retainMachineOffline = false) => {
+    clearPendingLatency()
+    latency.clear()
     goalsInFlight.clear()
     if (!retainMachineOffline) offlineDeviceID = undefined
     clearImageSources()
@@ -2358,6 +2448,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
 
   const api: RemoteStore = {
     container,
+    latency,
     queryClient,
     link,
     state: () => container.state,
@@ -2369,13 +2460,43 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         subscription.unsubscribe()
       }
     },
+    readStoredLatency: async (before) => {
+      const owner = transport
+      const deviceID = container.state.activeDeviceID
+      const generation = container.state.generation
+      if (owner === undefined || deviceID === undefined || container.state.transport.kind !== "open") return { status: "unavailable" }
+      const outcome = await owner.request("machine.latency.list", before === undefined ? {} : { input: { before } })
+      if (transport !== owner || container.state.activeDeviceID !== deviceID || container.state.generation !== generation) return { status: "unavailable" }
+      if (outcome.status === "unavailable") return { status: "unavailable" }
+      if (outcome.status === "unknown") return { status: "unknown" }
+      if (outcome.status === "failed") return { status: outcome.error.code === "unknown_operation" ? "unsupported" : "failed" }
+      const value = outcome.value
+      if (typeof value !== "object" || value === null || Array.isArray(value)) return { status: "failed" }
+      const data = Reflect.get(value, "data")
+      const cursor = Reflect.get(value, "cursor")
+      if (!Array.isArray(data) || data.length > RemoteLimits.maxLatencyPage || typeof cursor !== "object" || cursor === null || Array.isArray(cursor)) return { status: "failed" }
+      const next = Reflect.get(cursor, "next")
+      if (next !== undefined && (typeof next !== "string" || next.length < 1 || next.length > 256)) return { status: "failed" }
+      const rows = data.flatMap((entry: unknown) => {
+        if (typeof entry !== "object" || entry === null || Array.isArray(entry) || Object.keys(entry).some((key) => key !== "receivedAt" && key !== "sample")) return []
+        const receivedAt = Reflect.get(entry, "receivedAt")
+        const sample = Reflect.get(entry, "sample")
+        return typeof receivedAt === "number" && Number.isSafeInteger(receivedAt) && receivedAt >= 0 && isRemoteLatencySample(sample)
+          ? [{ receivedAt, sample }] : []
+      })
+      if (rows.length !== data.length) return { status: "failed" }
+      return { status: "ok", data: rows, ...(next === undefined ? {} : { next }) }
+    },
     signInURL: (provider, redirectAfter = "/remote/") => signInURL(provider, redirectAfter),
     load: async () => {
       const token = ++accountToken
+      const startedAt = monotonicNow()
       const me = await options.http.me()
       // A read that settles after sign-out, a rejected credential, a deliberate
       // disconnect, or a newer read describes an account this store no longer shows.
       if (token !== accountToken) return
+      const elapsed = Math.max(0, Math.round(monotonicNow() - startedAt))
+      latency.recordRequest({ operation: "account.read", outcome: me.ok ? "ok" : "failed", queueMs: 0, settlementMs: elapsed, totalMs: elapsed })
       if (!me.ok) {
         if (me.status === 401 || me.status === 403) {
           // The account answer is authoritative: the browser session is gone, so the
@@ -2498,6 +2619,15 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       capturedRead = undefined
       lastCapturedRead = -Infinity
       const switching = container.state.activeDeviceID !== deviceID
+      if (switching && container.state.activeDeviceID !== undefined) {
+        clearPendingLatency()
+        latency.clear()
+      } else {
+        cancelLatencyUpload?.()
+        cancelLatencyUpload = undefined
+        latencyUpload = undefined
+        latencyUnsupported = false
+      }
       if (switching) offlineDeviceID = undefined
       clearImageSources()
       cancelFamilyRefresh?.()
@@ -2539,6 +2669,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       })
       endAlerts(false, switching)
       const created = options.createTransport(deviceID, {
+        onRequestTiming: (sample) => {
+          if (isCurrentConnection(created)) latency.recordRequest(sample)
+        },
         onStatus: (status) => handleStatus(created, status),
         onSessionStatus: (status) => applyStatusFrame(created, status),
         onNotices: (frame) => applyNotices(created, frame, deviceID),
@@ -3121,6 +3254,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       setState({ view: { ...view, autonomy } })
     },
     dispose: () => {
+      clearPendingLatency()
+      latency.dispose()
       goalsInFlight.clear()
       const abandoned = new Set(sends.keys())
       sends.clear()

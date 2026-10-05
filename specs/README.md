@@ -32,6 +32,7 @@ Generated clients follow the assembled public `HttpApi`. GitHub issues own activ
 | [Tools](./tools.md)                           | Explain tool construction, registration, execution, and settlement laws.                |
 | [Session-owned PTY](./pty.md)                 | Explain owned terminal lifecycle, control fencing, bounded replay, and TUI recovery.    |
 | [Selected-tab browser](./browser.md)          | Explain explicit Chrome sharing, pairing, semantic actions, fencing, and safety bounds. |
+| [Machine-local Web latency](./web-latency.md) | Explain sanitized remote ingestion, local SQLite retention, bounded readout, and timing limits. |
 
 ## Decisions and proposals
 

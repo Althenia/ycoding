@@ -4,7 +4,9 @@ import { pathToFileURL } from "node:url"
 import { describe, expect, test } from "bun:test"
 import type { SessionInfo } from "@ycoding-ai/client/promise"
 import { Project } from "@ycoding-ai/schema/project"
-import { RemoteLimits, parseChunkedValue, requireSession, type RemoteRequest } from "@ycoding-ai/remote"
+import { RemoteLimits, parseChunkedValue, remoteOperations, requireSession, type RemoteRequest } from "@ycoding-ai/remote"
+import { Telemetry } from "@ycoding-ai/schema/telemetry"
+import { Schema } from "effect"
 import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
 import { assertPrivateEndpoint, type LocalLocation, type LocalServer } from "../src/remote-local"
 import { LocalFailure as LocalFailureClass } from "../src/remote-local"
@@ -78,6 +80,36 @@ test("machine keep-awake forwards global backend controls without a caller Locat
   expect(errorOf(await run("machine.keepAwake.set", { enabled: "true" })).code).toBe("invalid_message")
   expect(errorOf(await run("machine.keepAwake.get", undefined, "ses_1")).code).toBe("invalid_message")
   expect(fixture.calls).toHaveLength(2)
+})
+
+test("machine latency writes and reads only validated anonymous samples at the authenticated local backend", async () => {
+  const sample = { kind: "request", at: "2026-10-04T12:00:00.000Z", operation: "session.list", outcome: "ok", queueMs: 4, settlementMs: 9, totalMs: 13 }
+  const task = { kind: "long-task", at: sample.at, durationMs: 70 }
+  const fixture = await harness({ sessions: [], results: { latencyAppend: { accepted: 2 }, latencyList: { data: [sample, task], cursor: {} } } })
+  const run = (operation: RemoteRequest["operation"], input?: Record<string, unknown>, sessionID?: string) => executeRemoteOperation({
+    request: { ...request(operation, input), ...(sessionID === undefined ? {} : { sessionID }) }, local: fixture.local,
+    sessions: fixture.registry, subscriptions: fixture.subscriptions,
+  })
+  expect(valueOf(await run("machine.latency.append", { samples: [sample, task] }))).toEqual({ accepted: 2 })
+  expect(valueOf(await run("machine.latency.list", { limit: 60 }))).toEqual({ data: [sample, task], cursor: {} })
+  expect(fixture.calls).toEqual([
+    { method: "latencyAppend", args: [[sample, task]] },
+    { method: "latencyList", args: [{ limit: 60 }] },
+  ])
+  for (const input of [{ samples: [{ ...sample, text: "private" }] }, { samples: [sample], directory: "/private" }, { samples: [] }])
+    expect(errorOf(await run("machine.latency.append", input)).code).toBe("invalid_message")
+  expect(errorOf(await run("machine.latency.list", { limit: 201 })).code).toBe("invalid_message")
+  expect(errorOf(await run("machine.latency.append", { samples: [sample] }, "ses_1")).code).toBe("invalid_message")
+  expect(fixture.calls).toHaveLength(2)
+})
+
+test("local telemetry operation names cover the relay's current forwarded operations without self-upload", () => {
+  const decode = Schema.decodeUnknownSync(Telemetry.Operation)
+  for (const operation of remoteOperations) {
+    if (operation === "machine.latency.append" || operation === "machine.latency.list") continue
+    expect(decode(operation)).toBe(operation)
+  }
+  expect(() => decode("machine.latency.append")).toThrow()
 })
 
 test("unconfirmed machine control and compaction writes are unknown, not failed or replayed", async () => {

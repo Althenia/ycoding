@@ -152,6 +152,8 @@ The background update check resolves the newest release from the same GitHub Rel
 
 `ycoding remote` gives the authenticated owner of an enrolled machine access to every Session in that machine's backend through a relay deployment. The local process keeps execution authority; see [Runtime behavior](./runtime.md#remote-relay-agent) for backend-derived Location, authorization, reconnection, and frame-bounding rules.
 
+The connected Web workspace automatically sends bounded, content-free timing batches to its selected machine through that authenticated relay. Only the local Server stores these samples in SQLite: reads include at most 10,000 rows from the last seven days, and expired rows are pruned while the Server runs or at its next start. The relay retains no samples. Settings → Web latency shows the last 60 tab-local measurements and can read saved rows from the selected machine; clearing the tab report does not delete SQLite rows. Account and relay-local timings remain tab-local. See [remote runtime behavior](./runtime.md#remote-relay-agent) for bounds and failure states.
+
 The standalone terminal artifact and the full CLI expose the same remote subcommands and handlers. Remote access does not require a separate full-CLI installation.
 
 In the browser, **New session** selects from existing repositories recorded by that backend. Open a missing repository locally, then use **Refresh repositories**. New Sessions use the selected directory's configured `default_agent` and `model` when no Session-specific selection exists; configure providers and credentials on the machine. The browser does not accept an arbitrary directory or create repositories.

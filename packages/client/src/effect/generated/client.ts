@@ -26,7 +26,25 @@ const adaptGroup0 = (raw: RawClient["server.health"]) => ({ get: Endpoint0_0(raw
 const Endpoint1_0 = (raw: RawClient["server.server"]) => () =>
   raw["server.get"]({}).pipe(Effect.mapError(mapClientError))
 
-const adaptGroup1 = (raw: RawClient["server.server"]) => ({ get: Endpoint1_0(raw) })
+type Endpoint1_1Request = Parameters<RawClient["server.server"]["telemetry.append"]>[0]
+type Endpoint1_1Input = { readonly samples: Endpoint1_1Request["payload"]["samples"] }
+const Endpoint1_1 = (raw: RawClient["server.server"]) => (input: Endpoint1_1Input) =>
+  raw["telemetry.append"]({ payload: { samples: input["samples"] } }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint1_2Request = Parameters<RawClient["server.server"]["telemetry.list"]>[0]
+type Endpoint1_2Input = {
+  readonly limit?: Endpoint1_2Request["query"]["limit"]
+  readonly before?: Endpoint1_2Request["query"]["before"]
+}
+const Endpoint1_2 = (raw: RawClient["server.server"]) => (input?: Endpoint1_2Input) =>
+  raw["telemetry.list"]({ query: { limit: input?.["limit"], before: input?.["before"] } }).pipe(
+    Effect.mapError(mapClientError),
+  )
+
+const adaptGroup1 = (raw: RawClient["server.server"]) => ({
+  get: Endpoint1_0(raw),
+  telemetry: { append: Endpoint1_1(raw), list: Endpoint1_2(raw) },
+})
 
 type Endpoint2_0Request = Parameters<RawClient["server.location"]["location.get"]>[0]
 type Endpoint2_0Input = { readonly location?: Endpoint2_0Request["query"]["location"] }

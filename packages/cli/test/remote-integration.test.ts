@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { parseAgentMessage, parseChunkedValue, type RemoteResponse } from "@ycoding-ai/remote"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
+import { Telemetry } from "@ycoding-ai/schema/telemetry"
 import { Schema } from "effect"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -18,6 +19,37 @@ import type { RemoteTransport, RemoteTransportHandlers } from "../../../apps/web
 // real local adapter. Nothing here touches the user's runtime or database.
 
 type SentValue = { readonly type: string; readonly [key: string]: unknown }
+
+test("forwards anonymous Web latency through the connector into the local Server's SQLite", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ycoding-remote-latency-"))
+  const server = await startServer(directory)
+  const relay = createRelay()
+  const bridge = new RemoteAgent({
+    relayURL: "https://relay.example",
+    local: createLocalServer({ url: server.base, auth: { type: "basic", username: "ycoding", password } }),
+    credentials: async () => ({ accessToken: "integration-token", accessExpiresAt: Date.now() + 600_000 }),
+    createConnection: relay.createConnection,
+    refreshIntervalMs: 3_600_000,
+  })
+  const sample = { kind: "request", at: "2026-10-04T12:00:00.000Z", operation: "session.list", outcome: "ok", queueMs: 2, settlementMs: 9, totalMs: 11 } as const
+  try {
+    await bridge.connect()
+    relay.deliver(request("latency_append", "machine.latency.append", undefined, { samples: [sample] }))
+    expect(valueOf(await answer(relay, "latency_append"))).toEqual({ accepted: 1 })
+    relay.deliver(request("latency_read", "machine.latency.list", undefined, { limit: 60 }))
+    const stored = Schema.decodeUnknownSync(Telemetry.Page)(valueOf(await answer(relay, "latency_read")))
+    expect(stored.data).toHaveLength(1)
+    expect(stored.data[0]?.sample).toEqual(sample)
+    expect(stored.data[0]?.receivedAt).toBeGreaterThan(0)
+    expect(stored.cursor.next).toBeUndefined()
+    relay.deliver(request("latency_invalid", "machine.latency.append", undefined, { samples: [{ ...sample, text: "private" }] }))
+    expect(errorOf(await answer(relay, "latency_invalid")).code).toBe("invalid_message")
+    relay.deliver(request("latency_scoped", "machine.latency.list", "ses_1"))
+    expect(errorOf(await answer(relay, "latency_scoped")).code).toBe("invalid_message")
+    relay.deliver(request("latency_read_again", "machine.latency.list"))
+    expect(Schema.decodeUnknownSync(Telemetry.Page)(valueOf(await answer(relay, "latency_read_again"))).data).toHaveLength(1)
+  } finally { await bridge.close(); await server.close(); await rm(directory, { recursive: true, force: true }) }
+}, 30_000)
 
 test("the real local adapter admits selected prompt skills as metadata without activating an admit-only queued input", async () => {
   const directory = await mkdtemp(join(tmpdir(), "ycoding-prompt-skills-"))

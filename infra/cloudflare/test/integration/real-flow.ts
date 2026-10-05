@@ -601,6 +601,20 @@ try {
   const familyStatus = await probeRequest("session.status")
   expect(familyStatus.status === "ok" && isRecord(familyStatus.value) && Array.isArray(familyStatus.value.running) && Array.isArray(familyStatus.value.attention),
     `family status failed: ${JSON.stringify(familyStatus)}`)
+  const latencySample = { kind: "request", at: new Date().toISOString(), operation: "session.list", outcome: "ok", queueMs: 431, settlementMs: 17, totalMs: 448 }
+  const latencySaved = await probeRequest("machine.latency.append", { input: { samples: [latencySample] } })
+  expect(latencySaved.status === "ok" && isRecord(latencySaved.value) && latencySaved.value.accepted === 1,
+    `machine latency was not saved through the relay: ${JSON.stringify(latencySaved)}`)
+  const latencyListed = await probeRequest("machine.latency.list", { input: { limit: 60 } })
+  expect(latencyListed.status === "ok" && isRecord(latencyListed.value) && Array.isArray(latencyListed.value.data) &&
+    latencyListed.value.data.some((row) => isRecord(row) && isRecord(row.sample) && row.sample.queueMs === 431 && row.sample.totalMs === 448 &&
+      typeof row.receivedAt === "number"), `saved machine latency was not readable through the relay: ${JSON.stringify(latencyListed)}`)
+  const localLatency = await server.request("/api/server/web-latency?limit=60")
+  const localLatencyBody: unknown = await localLatency.json()
+  expect(localLatency.status === 200 && isRecord(localLatencyBody) && Array.isArray(localLatencyBody.data) &&
+    localLatencyBody.data.some((row) => isRecord(row) && isRecord(row.sample) && row.sample.queueMs === 431 && row.sample.totalMs === 448),
+  "relay latency did not persist in the connected local Server's SQLite")
+  checks.push("anonymous Web latency traversed the authenticated hosted relay and connector into local SQLite and remained readable without relay storage")
   const memberActivity = await probeRequest("session.family.activity", { sessionID, input: { sessionIDs: [] } })
   expect(memberActivity.status === "ok" && isRecord(memberActivity.value) && Array.isArray(memberActivity.value.data) &&
     memberActivity.value.data.length === 1 && isRecord(memberActivity.value.data[0]) &&

@@ -4,6 +4,75 @@ export type ServiceHealth = { healthy: true; version: string; pid: number; sourc
 
 export type ServiceStopResponse = { accepted: boolean }
 
+export type TelemetryRequestSample = {
+  kind: "request"
+  at: string
+  operation:
+    | "workspace.list"
+    | "session.list"
+    | "session.active"
+    | "session.get"
+    | "session.messages"
+    | "session.capturedChanges.list"
+    | "session.compaction.list"
+    | "session.compact"
+    | "session.snapshot"
+    | "session.pending.list"
+    | "session.attachment.read"
+    | "session.message.stream"
+    | "session.todo.list"
+    | "session.subagent.list"
+    | "session.subagent.cancel"
+    | "session.subagent.answer"
+    | "session.team.economics"
+    | "session.team.shell.list"
+    | "session.team.shell.kill"
+    | "session.side-chat.list"
+    | "session.side-chat.create"
+    | "session.family.activity"
+    | "session.log"
+    | "session.subscribe"
+    | "session.unsubscribe"
+    | "session.prompt"
+    | "session.attachment.upload"
+    | "session.interrupt"
+    | "session.permission.list"
+    | "session.permission.reply"
+    | "session.guardrail.status"
+    | "session.guardrail.request.list"
+    | "session.guardrail.reply"
+    | "session.form.list"
+    | "session.form.reply"
+    | "session.form.cancel"
+    | "session.shell.output"
+    | "session.autonomy.get"
+    | "session.autonomy.set"
+    | "session.goal.set"
+    | "session.goal.stop"
+    | "session.create"
+    | "session.status"
+    | "session.catalog"
+    | "workspace.catalog"
+    | "session.file.find"
+    | "workspace.file.find"
+    | "session.switchModel"
+    | "session.switchAgent"
+    | "session.command"
+    | "session.skill"
+    | "usage.providers"
+    | "usage.summary"
+    | "usage.report"
+    | "machine.keepAwake.get"
+    | "machine.keepAwake.set"
+  outcome: "ok" | "failed" | "unknown" | "unavailable"
+  reason?: "not-connected" | "in-flight-limit" | "request-limit" | "cancelled"
+  queueMs: number
+  settlementMs?: number
+  totalMs: number
+}
+
+export type TelemetryLongTaskSample = { kind: "long-task"; at: string; durationMs: number }
+
 export type ModelRef = { id: string; providerID: string; variant?: string }
 
 export type ProviderSettings = { [x: string]: JsonValue }
@@ -513,6 +582,8 @@ export type BrowserPairing = { secret: string; expiresAt: number }
 export type BrowserCaptureOutput = { mediaType: "image/png"; data: string; bytes: number }
 
 export type KeepAwakeState = "off" | "on" | "unsupported" | "error"
+
+export type TelemetrySample = TelemetryRequestSample | TelemetryLongTaskSample
 
 export type SessionMessageModelSelected = {
   id: string
@@ -2202,6 +2273,8 @@ export type BrowserElement = {
 
 export type KeepAwakeStatus = { state: KeepAwakeState; message?: string }
 
+export type TelemetryPage = { data: Array<{ receivedAt: number; sample: TelemetrySample }>; cursor: { next?: string } }
+
 export type SessionGenerationSpeedHistory = { latest?: SessionGenerationSpeed; recent: Array<SessionGenerationSpeed> }
 
 export type PermissionRuleset = Array<PermissionRule>
@@ -3868,6 +3941,89 @@ export type HealthStopInput = { readonly instanceID: { readonly instanceID: stri
 export type HealthStopOutput = ServiceStopResponse
 
 export type ServerGetOutput = { urls: Array<string> }
+
+export type ServerTelemetryAppendInput = {
+  readonly samples: {
+    readonly samples: ReadonlyArray<
+      | {
+          readonly kind: "request"
+          readonly at: string
+          readonly operation:
+            | "workspace.list"
+            | "session.list"
+            | "session.active"
+            | "session.get"
+            | "session.messages"
+            | "session.capturedChanges.list"
+            | "session.compaction.list"
+            | "session.compact"
+            | "session.snapshot"
+            | "session.pending.list"
+            | "session.attachment.read"
+            | "session.message.stream"
+            | "session.todo.list"
+            | "session.subagent.list"
+            | "session.subagent.cancel"
+            | "session.subagent.answer"
+            | "session.team.economics"
+            | "session.team.shell.list"
+            | "session.team.shell.kill"
+            | "session.side-chat.list"
+            | "session.side-chat.create"
+            | "session.family.activity"
+            | "session.log"
+            | "session.subscribe"
+            | "session.unsubscribe"
+            | "session.prompt"
+            | "session.attachment.upload"
+            | "session.interrupt"
+            | "session.permission.list"
+            | "session.permission.reply"
+            | "session.guardrail.status"
+            | "session.guardrail.request.list"
+            | "session.guardrail.reply"
+            | "session.form.list"
+            | "session.form.reply"
+            | "session.form.cancel"
+            | "session.shell.output"
+            | "session.autonomy.get"
+            | "session.autonomy.set"
+            | "session.goal.set"
+            | "session.goal.stop"
+            | "session.create"
+            | "session.status"
+            | "session.catalog"
+            | "workspace.catalog"
+            | "session.file.find"
+            | "workspace.file.find"
+            | "session.switchModel"
+            | "session.switchAgent"
+            | "session.command"
+            | "session.skill"
+            | "usage.providers"
+            | "usage.summary"
+            | "usage.report"
+            | "machine.keepAwake.get"
+            | "machine.keepAwake.set"
+          readonly outcome: "ok" | "failed" | "unknown" | "unavailable"
+          readonly reason?: "not-connected" | "in-flight-limit" | "request-limit" | "cancelled"
+          readonly queueMs: number
+          readonly settlementMs?: number
+          readonly totalMs: number
+        }
+      | { readonly kind: "long-task"; readonly at: string; readonly durationMs: number }
+    >
+  }["samples"]
+}
+
+export type ServerTelemetryAppendOutput = { accepted: number }
+
+export type ServerTelemetryListInput = {
+  readonly limit?: { readonly limit?: number | undefined; readonly before?: string | undefined }["limit"]
+  readonly before?: { readonly limit?: number | undefined; readonly before?: string | undefined }["before"]
+}
+
+export type ServerTelemetryListOutput = TelemetryPage
 
 export type LocationGetInput = {
   readonly location?: {

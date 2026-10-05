@@ -28,6 +28,84 @@ afterAll(async () => {
 })
 
 describe("remote shell layout", () => {
+  test("keeps saved latency pages bounded while navigating older samples", async () => {
+    const page = await fixture("view=settings&noSelection=1&latencyPages=1", 390, "System alerts")
+    try {
+      await page.evaluate(`document.querySelector('button[aria-label="Read saved latency"]')?.click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('button[aria-label="Load older latency"]') !== null`); attempt += 1) await Bun.sleep(25)
+      expect(await page.evaluate<number>(`JSON.parse(document.querySelector('textarea[aria-label="Machine latency report"]').value).data.length`)).toBe(60)
+      await page.evaluate(`document.querySelector('button[aria-label="Load older latency"]')?.click()`)
+      for (let attempt = 0; attempt < 40 && await page.evaluate<number>(`JSON.parse(document.querySelector('textarea[aria-label="Machine latency report"]').value).data.length`) !== 1; attempt += 1) await Bun.sleep(25)
+      expect(await page.evaluate<number>(`JSON.parse(document.querySelector('textarea[aria-label="Machine latency report"]').value).data.length`)).toBe(1)
+      await page.evaluate(`document.querySelector('button[aria-label="Read saved latency"]')?.click()`)
+      for (let attempt = 0; attempt < 40 && await page.evaluate<number>(`JSON.parse(document.querySelector('textarea[aria-label="Machine latency report"]').value).data.length`) !== 60; attempt += 1) await Bun.sleep(25)
+      expect(await page.evaluate<number>(`JSON.parse(document.querySelector('textarea[aria-label="Machine latency report"]').value).data.length`)).toBe(60)
+    } finally { await page.close() }
+  }, 20_000)
+
+  test("uploads a browser long task only to the connected machine and reads it back", async () => {
+    const page = await fixture("view=settings&noSelection=1&latencyUploadMs=20", 390, "System alerts")
+    try {
+      const supported = await page.evaluate<boolean>(`JSON.parse(document.querySelector('textarea[aria-label="Web latency report"]').value).longTasksSupported`)
+      if (!supported) return
+      await page.evaluate(`new Promise(resolve => setTimeout(() => { const start = performance.now(); while (performance.now() - start < 70) {} resolve() }, 0))`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`window.requestLog.some(request => request.operation === 'machine.latency.append' && request.input?.samples?.some(sample => sample.kind === 'long-task'))`); attempt += 1) await Bun.sleep(25)
+      const uploads = await page.evaluate<readonly { operation: string; input: { samples: readonly { kind: string; durationMs?: number }[] } }[]>(`window.requestLog.filter(request => request.operation === 'machine.latency.append')`)
+      expect(uploads).toHaveLength(1)
+      expect(uploads[0]?.input.samples.some((sample) => sample.kind === "long-task" && Number(sample.durationMs) >= 50)).toBe(true)
+      expect(JSON.stringify(uploads)).not.toMatch(/ses_fixture|dev_studio|user_1|"(?:text|url|attribution)":/)
+      await page.evaluate(`document.querySelector('button[aria-label="Read saved latency"]')?.click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('textarea[aria-label="Machine latency report"]')?.value.includes('long-task') === true`); attempt += 1) await Bun.sleep(25)
+      expect(await page.evaluate<boolean>(`document.querySelector('textarea[aria-label="Machine latency report"]')?.value.includes('long-task') === true`)).toBe(true)
+    } finally { await page.close() }
+  }, 20_000)
+
+  test("reads machine-stored latency without confusing Clear this tab with deletion", async () => {
+    const page = await fixture("view=settings&noSelection=1", 390, "System alerts")
+    try {
+      await page.evaluate(`document.querySelector('button[aria-label="Read saved latency"]')?.click()`)
+      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('textarea[aria-label="Machine latency report"]')?.value.includes('session.list') === true`); attempt += 1) await Bun.sleep(25)
+      const saved = await page.evaluate<{ data: readonly { receivedAt: number; sample: { operation: string } }[] }>(`JSON.parse(document.querySelector('textarea[aria-label="Machine latency report"]').value)`)
+      expect(saved.data[0]?.sample.operation).toBe("session.list")
+      expect(saved.data[0]?.receivedAt).toBeGreaterThan(0)
+      await page.evaluate(`document.querySelector('button[aria-label="Clear latency report"]')?.click()`)
+      expect(await page.evaluate<string>(`document.querySelector('textarea[aria-label="Machine latency report"]')?.value ?? ''`)).toContain("session.list")
+      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+    } finally { await page.close() }
+  }, 20_000)
+
+  test("shows a private bounded latency report in Settings and clears it without affecting the connection", async () => {
+    const page = await fixture("view=settings&noSelection=1", 390, "System alerts")
+    try {
+      const report = await page.evaluate<{ version: number; longTasksSupported: boolean; samples: readonly Record<string, unknown>[] }>(`(() => {
+        const field = document.querySelector('textarea[aria-label="Web latency report"]')
+        return field ? JSON.parse(field.value) : null
+      })()`)
+      expect(report.version).toBe(1)
+      expect(report.samples.some((sample) => sample.kind === "request" && sample.operation === "account.read")).toBe(true)
+      expect(report.samples.find((sample) => sample.operation === "account.read")).toHaveProperty("settlementMs")
+      expect(report.samples.length).toBeLessThanOrEqual(60)
+      expect(JSON.stringify(report)).not.toMatch(/ses_fixture|dev_studio|user_1|http:\/\/|wss:\/\//)
+      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+      if (report.longTasksSupported) {
+        await page.evaluate(`new Promise(resolve => setTimeout(() => { const start = performance.now(); while (performance.now() - start < 70) {} resolve() }, 0))`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`JSON.parse(document.querySelector('textarea[aria-label="Web latency report"]').value).samples.some(sample => sample.kind === 'long-task' && sample.durationMs >= 50)`); attempt += 1) await Bun.sleep(25)
+        const tasks = await page.evaluate<readonly Record<string, unknown>[]>(`JSON.parse(document.querySelector('textarea[aria-label="Web latency report"]').value).samples.filter(sample => sample.kind === 'long-task')`)
+        expect(tasks.some((task) => Number(task.durationMs) >= 50)).toBe(true)
+        expect(tasks.every((task) => Object.keys(task).sort().join(",") === "at,durationMs,kind")).toBe(true)
+      }
+      const copied = await page.evaluate<string>(`new Promise(resolve => {
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: (text) => { resolve(text); return Promise.resolve() } } })
+        document.querySelector('button[aria-label="Copy latency report"]').click()
+      })`)
+      expect(JSON.parse(copied).samples.length).toBeGreaterThan(0)
+      expect(copied).not.toMatch(/ses_fixture|dev_studio|user_1/)
+      await page.evaluate(`document.querySelector('button[aria-label="Clear latency report"]')?.click()`)
+      expect(await page.evaluate<readonly unknown[]>(`JSON.parse(document.querySelector('textarea[aria-label="Web latency report"]').value).samples`)).toEqual([])
+      expect(await page.evaluate<string>(`document.querySelector('.remote-connection-label')?.textContent ?? ''`)).toContain("Connected")
+    } finally { await page.close() }
+  }, 20_000)
+
   test("scrolls Settings from the window edge while its content stays one centered column", async () => {
     for (const [width, height] of [[1440, 900], [1920, 1080]] as const) {
       const page = await fixture("view=settings&noSelection=1", width, "System alerts", undefined, height)

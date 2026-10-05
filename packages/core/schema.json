@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "16e8ba31-f648-4084-959c-b3d561432a6f",
+  "id": "66fad4f6-a3e3-4491-8aca-0140abba7612",
   "prevIds": [
-    "f8aed05f-e4bf-4045-9382-eb255be8a820"
+    "16e8ba31-f648-4084-959c-b3d561432a6f"
   ],
   "ddl": [
     {
@@ -184,6 +184,10 @@
     },
     {
       "name": "shell",
+      "entityType": "tables"
+    },
+    {
+      "name": "web_latency",
       "entityType": "tables"
     },
     {
@@ -4613,6 +4617,36 @@
       "table": "shell"
     },
     {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": true,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "web_latency"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "received_at",
+      "entityType": "columns",
+      "table": "web_latency"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "sample",
+      "entityType": "columns",
+      "table": "web_latency"
+    },
+    {
       "columns": [
         "project_id"
       ],
@@ -6021,6 +6055,15 @@
     },
     {
       "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "web_latency_pk",
+      "table": "web_latency",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
         {
           "value": "aggregate_id",
           "isExpression": false
@@ -7042,6 +7085,20 @@
       "name": "session_todo_session_idx",
       "entityType": "indexes",
       "table": "session_todo"
+    },
+    {
+      "columns": [
+        {
+          "value": "received_at",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "web_latency_received_at_idx",
+      "entityType": "indexes",
+      "table": "web_latency"
     },
     {
       "columns": [

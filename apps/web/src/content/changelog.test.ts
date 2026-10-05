@@ -4,8 +4,20 @@ import { RELEASES, changeTagCounts } from "./changelog"
 const TAGS = ["Added", "Changed", "Fixed"] as const
 
 describe("release entries", () => {
-  test("lists the v0.9.0 runtime and remote cutover at the top", () => {
+  test("lists v0.9.1 machine-local Web latency first", () => {
     expect(RELEASES[0]).toEqual({
+      version: "0.9.1",
+      date: "2026-10-05",
+      title: "Machine-local Web latency diagnostics",
+      tags: ["Added"],
+      changes: [
+        { tag: "Added", text: "Inspect and copy anonymous Web latency timings in Settings, including local queue time, remote settlement time, and supported browser long tasks. While connected, bounded batches are saved in the selected machine's local SQLite for seven-day readout; the hosted relay does not store them. Update YCoding on the connected machine to enable saved reports; an older machine keeps the tab-local report and shows an unsupported state." },
+      ],
+    })
+  })
+
+  test("retains the v0.9.0 runtime and remote cutover", () => {
+    expect(RELEASES[1]).toEqual({
       version: "0.9.0",
       date: "2026-10-04",
       title: "Reliable shell recovery and remote protocol v4",
@@ -26,7 +38,7 @@ describe("release entries", () => {
   })
 
   test("retains the previous TUI release after v0.9.0", () => {
-    expect(RELEASES[1]).toEqual({
+    expect(RELEASES[2]).toEqual({
       version: "0.8.12",
       date: "2026-10-03",
       title: "Large images and actionable input requests",
@@ -36,7 +48,7 @@ describe("release entries", () => {
         { tag: "Changed", text: "Improve agent guidance to request missing information, decisions, and required reviews through actionable questions, so pending requests use the existing attention alerts instead of ending with a text-only request. Permission and guardrail approvals keep their existing rules." },
       ],
     })
-    expect(RELEASES[2]).toEqual({
+    expect(RELEASES[3]).toEqual({
       version: "0.8.11",
       date: "2026-10-02",
       title: "Specific and reliable System alerts",
@@ -56,7 +68,7 @@ describe("release entries", () => {
         { tag: "Fixed", text: "Show \"YCoding — alerts paused\" when the browser drops push alerts for this device and they cannot be renewed." },
       ],
     })
-    expect(RELEASES[3]).toEqual({
+    expect(RELEASES[4]).toEqual({
       version: "0.8.10",
       date: "2026-10-02",
       title: "Keep working while background tasks run",
@@ -66,7 +78,7 @@ describe("release entries", () => {
         { tag: "Changed", text: "Always choose a model variant when starting a subagent if that model offers variants. Match the variant to the task, and use a stronger variant only when the task needs it." },
       ],
     })
-    expect(RELEASES[4]).toEqual({
+    expect(RELEASES[5]).toEqual({
       version: "0.8.9",
       date: "2026-10-02",
       title: "Skills follow the prompt that invokes them",
@@ -77,7 +89,7 @@ describe("release entries", () => {
         { tag: "Fixed", text: "Show an invoked skill's Loaded row in the terminal transcript as soon as the skill activates." },
       ],
     })
-    expect(RELEASES[5]).toEqual({
+    expect(RELEASES[6]).toEqual({
       version: "0.8.8",
       date: "2026-10-01",
       title: "Responsive prompts and reliable model selection",
@@ -92,7 +104,7 @@ describe("release entries", () => {
         { tag: "Changed", text: "Allow explicit shell timeouts up to one hour. The default remains ten minutes, and foreground commands still move to the background after five minutes." },
       ],
     })
-    expect(RELEASES[6]).toEqual({
+    expect(RELEASES[7]).toEqual({
       version: "0.8.7",
       date: "2026-10-01",
       title: "Cursor cache reporting",
@@ -104,7 +116,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[7]).toEqual({
+    expect(RELEASES[8]).toEqual({
       version: "0.8.6",
       date: "2026-10-01",
       title: "Quieter attention notifications",
@@ -116,7 +128,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[8]).toEqual({
+    expect(RELEASES[9]).toEqual({
       version: "0.8.5",
       date: "2026-10-01",
       title: "Machine memory and steadier Session status",
@@ -132,7 +144,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[9]).toEqual({
+    expect(RELEASES[10]).toEqual({
       version: "0.8.4",
       date: "2026-10-01",
       title: "Forced update restarts and steadier Session catalogs",
@@ -156,7 +168,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[10]).toEqual({
+    expect(RELEASES[11]).toEqual({
       version: "0.8.3",
       date: "2026-10-01",
       title: "Cursor models and quotas",
@@ -180,7 +192,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[11]).toEqual({
+    expect(RELEASES[12]).toEqual({
       version: "0.8.2",
       date: "2026-10-01",
       title: "Cursor provider",
@@ -200,7 +212,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[12]).toEqual({
+    expect(RELEASES[13]).toEqual({
       version: "0.8.1",
       date: "2026-10-01",
       title: "Instant remote view transitions",
@@ -228,7 +240,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[13]).toEqual({
+    expect(RELEASES[14]).toEqual({
       version: "0.8.0",
       date: "2026-10-01",
       title: "Multiplexed remote delivery and windowed transcripts",
@@ -1098,7 +1110,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 20)).toEqual([
+    expect(versions.slice(0, 21)).toEqual([
+      "0.9.1",
       "0.9.0",
       "0.8.12",
       "0.8.11",

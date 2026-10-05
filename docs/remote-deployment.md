@@ -102,6 +102,7 @@ No user-facing privacy policy is published from this repository. The durable dat
 Current application capability:
 
 - Push delivery emits sanitized `web-push` outcome records; other request paths have no custom diagnostic logging.
+- Web latency batches are forwarded through the authenticated device relay to local SQLite. The Worker does not store or log their sample bodies, and D1 has no latency table.
 - `GET /health` is the only observability endpoint. It runs `SELECT 1` against D1 and returns `{"status":"ok"}` with `200`, or `{"status":"error"}` with `503`. It deliberately omits provider and database detail.
 
 Platform log surfaces:

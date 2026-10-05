@@ -55,6 +55,26 @@ test("keep-awake methods use the local-runtime HTTP contract without a Session o
   expect(requests.every((request) => !request.headers.has("x-ycoding-directory"))).toBe(true)
 })
 
+test("generated telemetry methods address one local machine without Session or Location input", async () => {
+  const requests: Request[] = []
+  const sample = { kind: "request" as const, at: "2026-10-04T12:00:00.000Z", operation: "session.list" as const,
+    outcome: "ok" as const, queueMs: 1, settlementMs: 2, totalMs: 3 }
+  const client = YCoding.make({ baseUrl: "http://localhost:3000", fetch: async (input, init) => {
+    const request = input instanceof Request ? input : new Request(input, init)
+    requests.push(request)
+    return Response.json(request.method === "POST" ? { accepted: 1 } :
+      { data: [{ receivedAt: 100, sample }], cursor: {} })
+  } })
+  expect(await client.server.telemetry.append({ samples: [sample] })).toEqual({ accepted: 1 })
+  expect(await client.server.telemetry.list({ limit: 1 })).toEqual({ data: [{ receivedAt: 100, sample }], cursor: {} })
+  expect(requests.map((request) => [request.method, new URL(request.url).pathname])).toEqual([
+    ["POST", "/api/server/web-latency"], ["GET", "/api/server/web-latency"],
+  ])
+  expect(await requests[0].json()).toEqual({ samples: [sample] })
+  expect(new URL(requests[1].url).searchParams.get("limit")).toBe("1")
+  expect(requests.every((request) => !request.headers.has("x-ycoding-directory"))).toBe(true)
+})
+
 test("exposes every standard HTTP API group", () => {
   const client = YCoding.make({ baseUrl: "http://localhost:3000" })
 

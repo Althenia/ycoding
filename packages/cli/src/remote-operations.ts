@@ -12,12 +12,14 @@ import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestra
 import {
   RemoteLimits,
   alertTitle,
+  isRemoteLatencySample,
   isSessionID,
   remoteError,
   requireSession,
   serializeResponse,
   type RemoteErrorCode,
   type RemoteOperation,
+  type RemoteLatencySample,
   type RemotePriorityMode,
   type RemoteRequest,
   type RemoteResponse,
@@ -40,6 +42,8 @@ import {
 
 /** Operations the relay proxies without addressing one session. */
 const unscopedOperations: ReadonlySet<RemoteOperation> = new Set([
+  "machine.latency.append",
+  "machine.latency.list",
   "workspace.list",
   "workspace.catalog",
   "workspace.file.find",
@@ -611,6 +615,8 @@ async function run(input: OperationInput) {
   if (validated.kind === "usage.providers") return { data: (await input.local.providerUsageList(validated.refresh)).data }
   if (validated.kind === "usage.summary") return { data: await input.local.usageSummary() }
   if (validated.kind === "usage.report") return { data: await input.local.usageReport(validated.input) }
+  if (validated.kind === "latency.append") return input.local.latencyAppend(validated.samples)
+  if (validated.kind === "latency.list") return input.local.latencyList(validated.input)
   if (validated.kind === "keepAwake.get") return { data: await input.local.keepAwakeGet() }
   if (validated.kind === "keepAwake.set") return { data: await input.local.keepAwakeSet(validated.enabled) }
   if (!scopedOperation(request.operation)) return unknownOperation()
@@ -849,6 +855,8 @@ function unknownOperation(): never {
 type Reply = "once" | "always" | "reject"
 
 type Validated =
+  | { readonly kind: "latency.append"; readonly samples: readonly RemoteLatencySample[] }
+  | { readonly kind: "latency.list"; readonly input: { readonly limit?: number; readonly before?: string } }
   | { readonly kind: "keepAwake.get" }
   | { readonly kind: "keepAwake.set"; readonly enabled: boolean }
   | { readonly kind: "compact"; readonly id: string }
@@ -927,6 +935,19 @@ const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
 
 function validate(request: RemoteRequest): Validated {
   const fields = validateFields(request)
+  if (request.operation === "machine.latency.append" || request.operation === "machine.latency.list") {
+    if (request.sessionID !== undefined) throw new OperationError("invalid_message", "Machine latency does not accept a Session")
+    if (request.operation === "machine.latency.append") {
+      if (!Array.isArray(fields.samples) || fields.samples.length < 1 || fields.samples.length > RemoteLimits.maxLatencyBatch ||
+        !fields.samples.every(isRemoteLatencySample)) throw new OperationError("invalid_message", "Invalid latency samples")
+      return { kind: "latency.append", samples: fields.samples }
+    }
+    if (fields.limit !== undefined && (typeof fields.limit !== "number" || !Number.isSafeInteger(fields.limit) || fields.limit < 1 || fields.limit > RemoteLimits.maxLatencyPage))
+      throw new OperationError("invalid_message", "Invalid latency page limit")
+    if (fields.before !== undefined && (typeof fields.before !== "string" || fields.before.length < 1 || fields.before.length > 256))
+      throw new OperationError("invalid_message", "Invalid latency cursor")
+    return { kind: "latency.list", input: { ...(fields.limit === undefined ? {} : { limit: fields.limit }), ...(fields.before === undefined ? {} : { before: fields.before }) } }
+  }
   if (request.operation === "machine.keepAwake.get" || request.operation === "machine.keepAwake.set") {
     if (request.sessionID !== undefined) throw new OperationError("invalid_message", "Machine controls do not accept a Session")
     if (request.operation === "machine.keepAwake.set") return { kind: "keepAwake.set", enabled: requireBoolean(fields.enabled, "enabled") }
@@ -1498,6 +1519,8 @@ function afterAnchor(session: SessionInfo, anchor: Cursor, order: "asc" | "desc"
 }
 
 const allowedFields: Readonly<Record<string, readonly string[]>> = {
+  "machine.latency.append": ["samples"],
+  "machine.latency.list": ["limit", "before"],
   "machine.keepAwake.get": [],
   "machine.keepAwake.set": ["enabled"],
   "workspace.list": ["sessionsOnly"],
@@ -1565,6 +1588,7 @@ function validateFields(request: RemoteRequest): Readonly<Record<string, unknown
 }
 
 const mutations: ReadonlySet<string> = new Set([
+  "machine.latency.append",
   "machine.keepAwake.set",
   "session.compact",
   "session.create",

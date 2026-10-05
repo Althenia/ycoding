@@ -22,6 +22,15 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.9.1",
+    date: "2026-10-05",
+    title: "Machine-local Web latency diagnostics",
+    tags: ["Added"],
+    changes: [
+      { tag: "Added", text: "Inspect and copy anonymous Web latency timings in Settings, including local queue time, remote settlement time, and supported browser long tasks. While connected, bounded batches are saved in the selected machine's local SQLite for seven-day readout; the hosted relay does not store them. Update YCoding on the connected machine to enable saved reports; an older machine keeps the tab-local report and shows an unsupported state." },
+    ],
+  },
+  {
     version: "0.9.0",
     date: "2026-10-04",
     title: "Reliable shell recovery and remote protocol v4",

@@ -22,7 +22,7 @@ import type {
   RemoteTransportHandlers,
   RemoteTransportStatus,
 } from "../src/remote/transport"
-import { RemoteLimits, noticePageValue, noticeSequence, type RemoteCapturedChangesPage, type RemoteDeviceInfo, type RemoteNotice, type RemoteNoticeOperation, type RemoteOperation } from "@ycoding-ai/remote"
+import { RemoteLimits, isRemoteLatencySample, noticePageValue, noticeSequence, type RemoteCapturedChangesPage, type RemoteDeviceInfo, type RemoteLatencySample, type RemoteNotice, type RemoteNoticeOperation, type RemoteOperation } from "@ycoding-ai/remote"
 import { remoteScenario } from "./remote-scenarios"
 import "../src/styles/tokens.css"
 import "../src/styles/base.css"
@@ -638,6 +638,14 @@ function createFixtureStore(): Fixture {
   let previousStatus = { running: new Set(statusRunning), attention: new Set<string>() }
   let noticeSerial = 0
 
+  const storedLatency: { receivedAt: number; sample: RemoteLatencySample }[] = [{ receivedAt: Date.now(), sample: {
+    kind: "request", at: new Date().toISOString(), operation: "session.list", outcome: "ok", queueMs: 0, settlementMs: 8, totalMs: 8,
+  } }]
+  if (accountParams.get("latencyPages") === "1") for (let index = 1; index <= 60; index += 1)
+    storedLatency.push({ receivedAt: Date.now() - index, sample: {
+      kind: "request", at: new Date().toISOString(), operation: "session.list", outcome: "ok", queueMs: index, settlementMs: 8, totalMs: index + 8,
+    } })
+
   const outcome = (
     operation: RemoteOperation | RemoteNoticeOperation,
     input?: Readonly<Record<string, unknown>>,
@@ -661,6 +669,17 @@ function createFixtureStore(): Fixture {
       return { status: "ok", value: null }
     }
     operationCounts.set(operation, (operationCounts.get(operation) ?? 0) + 1)
+    if (operation === "machine.latency.list") {
+      const offset = typeof input?.before === "string" ? Number(atob(input.before)) : 0
+      const limit = typeof input?.limit === "number" ? input.limit : 60
+      const next = offset + limit < storedLatency.length ? btoa(String(offset + limit)) : undefined
+      return { status: "ok", value: { data: storedLatency.slice(offset, offset + limit), cursor: next === undefined ? {} : { next } } }
+    }
+    if (operation === "machine.latency.append") {
+      const samples = Array.isArray(input?.samples) ? input.samples.filter(isRemoteLatencySample) : []
+      storedLatency.unshift(...samples.map((sample) => ({ receivedAt: Date.now(), sample })))
+      return { status: "ok", value: { accepted: samples.length } }
+    }
     if (responseProbe && operation === "session.capturedChanges.list") return { status: "ok", value: { data: structuredClone(responseCaptured) } }
     if (transcriptProbe && operation === "session.todo.list") return { status: "ok", value: { data: [{ content: "Verify stable transcript", status: "in_progress", priority: "high" }] } }
     if (transcriptProbe && operation === "session.capturedChanges.list") return { status: "ok", value: { data: [{ placementMessageID: "probe_reply_4", path: "src/probe.ts", additions: 1, deletions: 1, status: "modified", files: [{ path: "src/probe.ts", diff: `@@ -1 +1 @@\n-before\n+${probeCaptured}`, additions: 1, deletions: 1, status: "modified" }] }] } }
@@ -919,6 +938,7 @@ function createFixtureStore(): Fixture {
 
   const store = createRemoteStore({
     http: syntheticHttp,
+    ...(accountParams.has("latencyUploadMs") ? { latencyUploadIntervalMs: Number(accountParams.get("latencyUploadMs")) } : {}),
     ...(transcriptProbe || responseProbe ? { now: () => Date.now() + probeClock, schedule: (callback: () => void, ms: number) => {
       const timer = setTimeout(callback, ms >= 1_000 ? 1 : ms)
       return () => clearTimeout(timer)

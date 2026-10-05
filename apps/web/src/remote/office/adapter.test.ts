@@ -32,6 +32,7 @@ function remoteState(patch: Partial<RemoteStoreState> = {}): RemoteStoreState {
     catalogs: {},
     generation: 0,
     transport: { kind: "open" },
+    latencySync: "idle",
     mutations: [],
     notifications: [],
     noticeSync: { status: "idle", total: 0, loaded: 0, hidden: 0, loadingMore: false, message: undefined },

@@ -24,12 +24,22 @@ export type RemoteTransportStatus =
   | { readonly kind: "reconnecting"; readonly attempt: number; readonly delayMs: number }
   | { readonly kind: "closed"; readonly code: number; readonly reason: string; readonly retryable: boolean }
 
+export type RemoteRequestTiming = {
+  readonly operation: RemoteOperation | RemoteNoticeOperation
+  readonly outcome: RemoteRequestOutcome["status"]
+  readonly reason?: Extract<RemoteRequestOutcome, { status: "unavailable" }>["reason"]
+  readonly queueMs: number
+  readonly settlementMs?: number
+  readonly totalMs: number
+}
+
 export type RemoteTransportHandlers = {
   readonly onStatus?: (status: RemoteTransportStatus) => void
   readonly onSessions?: () => void
   readonly onSessionStatus?: (status: { readonly running: readonly string[]; readonly attention: readonly string[]; readonly outstanding?: readonly string[]; readonly failed?: readonly string[] }) => void
   readonly onEvents?: (sessionID: string, events: readonly unknown[]) => void
   readonly onNotices?: (frame: RemoteNoticeFrame) => void
+  readonly onRequestTiming?: (timing: RemoteRequestTiming) => void
   /** Called after a successful reconnect so read-only state can be reloaded. */
   readonly onReconnect?: () => void
 }
@@ -378,21 +388,44 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
     entry.resolve(joined.ok ? { status: "ok", value: joined.value } : { status: "failed", error: joined.error })
   }
 
+  let timingWarningReported = false
+  const reportTiming = (timing: RemoteRequestTiming) => {
+    try {
+      handlers.onRequestTiming?.(timing)
+    } catch {
+      if (timingWarningReported) return
+      timingWarningReported = true
+      console.warn("Web latency diagnostics observer failed.")
+    }
+  }
+
   const request: RemoteTransport["request"] = (operation, input = {}) => {
-    if (input.signal?.aborted) return Promise.resolve({ status: "unavailable", reason: "cancelled" })
+    if (input.signal?.aborted) return unavailableRequest(operation, "cancelled")
     if (socket === undefined || socket.readyState !== 1) {
-      return Promise.resolve({ status: "unavailable", reason: "not-connected" })
+      return unavailableRequest(operation, "not-connected")
     }
     if (pending.size >= maxInFlight) {
-      return Promise.resolve({ status: "unavailable", reason: "in-flight-limit" })
+      return unavailableRequest(operation, "in-flight-limit")
     }
+    const startedAt = now()
     nextID += 1
     const id = `req_${nextID}_${Math.floor(random() * 1_000_000).toString(36)}`
     return new Promise<RemoteRequestOutcome>((settled) => {
       const timeout = input.timeoutMs ?? requestTimeoutMs
+      let transmittedAt: number | undefined
+      let recorded = false
       const resolve = (outcome: RemoteRequestOutcome) => {
+        if (recorded) return
+        recorded = true
         input.signal?.removeEventListener("abort", abort)
+        const finishedAt = now()
+        const totalMs = Math.max(0, Math.round(finishedAt - startedAt))
+        const queueMs = Math.min(totalMs, Math.max(0, Math.round((transmittedAt ?? finishedAt) - startedAt)))
         settled(outcome)
+        reportTiming({ operation, outcome: outcome.status,
+          ...(outcome.status === "unavailable" ? { reason: outcome.reason } : {}),
+          queueMs,
+          ...(transmittedAt === undefined ? {} : { settlementMs: Math.max(0, totalMs - queueMs) }), totalMs })
       }
       const entry = { resolve, cancel: () => {}, sent: false }
       const abort = () => {
@@ -415,6 +448,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
         },
         () => {
           entry.sent = true
+          transmittedAt = now()
           if (timeout > 0)
             entry.cancel = schedule(() => {
               if (!pending.delete(id)) return
@@ -431,6 +465,11 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
       entry.cancel()
       resolve({ status: "unavailable", reason: "not-connected" })
     })
+  }
+
+  const unavailableRequest = (operation: RemoteOperation | RemoteNoticeOperation, reason: Extract<RemoteRequestOutcome, { status: "unavailable" }>["reason"]) => {
+    reportTiming({ operation, outcome: "unavailable", reason, queueMs: 0, totalMs: 0 })
+    return Promise.resolve({ status: "unavailable" as const, reason })
   }
 
   return {

@@ -26,7 +26,8 @@ import {
 } from "@ycoding-ai/client/promise"
 import { createHash } from "node:crypto"
 import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
-import { RemoteLimits, type RemoteUsageReportInput } from "@ycoding-ai/remote"
+import { Telemetry } from "@ycoding-ai/schema/telemetry"
+import { RemoteLimits, type RemoteLatencySample, type RemoteUsageReportInput } from "@ycoding-ai/remote"
 
 // The bridge's only view of the local YCoding server: the same Protocol routes
 // the TUI uses, addressed with a Location derived from the backend inventory.
@@ -70,6 +71,8 @@ export type LocalEventStream = {
 }
 
 export type LocalServer = {
+  readonly latencyAppend: (samples: readonly RemoteLatencySample[]) => Promise<{ readonly accepted: number }>
+  readonly latencyList: (input: { readonly limit?: number; readonly before?: string }) => Promise<Telemetry.Page>
   readonly keepAwakeGet: () => Promise<KeepAwakeStatus>
   readonly keepAwakeSet: (enabled: boolean) => Promise<KeepAwakeStatus>
   readonly listPage: (input: { limit: number; cursor?: string }) => Promise<{
@@ -181,6 +184,8 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
   }
 
   return {
+    latencyAppend: (samples) => call(() => client.server.telemetry.append({ samples }, { signal: AbortSignal.timeout(timeoutMs) })),
+    latencyList: (input) => call(() => client.server.telemetry.list(input, { signal: AbortSignal.timeout(timeoutMs) })),
     listPage: (input) =>
       call(async () => {
         const page = await client.session.list(

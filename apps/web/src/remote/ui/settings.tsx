@@ -1,6 +1,7 @@
 import { createMutation } from "@tanstack/solid-query"
 import { useStore } from "@tanstack/solid-store"
-import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js"
+import { For, Show, createEffect, createSignal, onCleanup, onMount, type JSX } from "solid-js"
+import type { RemoteLatencySample } from "@ycoding-ai/remote"
 import { Icon } from "../../ui/icon"
 import { CustomSelect } from "../../ui/custom-select"
 import { Modal } from "../../ui/modal"
@@ -96,6 +97,102 @@ export function AppSettings(): JSX.Element {
         <span class="defs__value"><InstallPWAButton /></span>
       </div>
     </Show>
+  </Section>
+}
+
+export function LatencySettings(): JSX.Element {
+  const remote = useRemote()
+  const generation = remote.select((state) => state.generation)
+  const [report, setReport] = createSignal(remote.store.latency.snapshot())
+  const [copyStatus, setCopyStatus] = createSignal("")
+  const [saved, setSaved] = createSignal<{
+    readonly status: "idle" | "loading" | "ready" | "unavailable" | "unsupported" | "unknown" | "failed"
+    readonly data: readonly { readonly receivedAt: number; readonly sample: RemoteLatencySample }[]
+    readonly next?: string
+  }>({ status: "idle", data: [] })
+  let field: HTMLTextAreaElement | undefined
+  let mounted = true
+  createEffect(() => {
+    generation()
+    setSaved({ status: "idle", data: [] })
+  })
+  onMount(() => {
+    let frame: number | undefined
+    const unsubscribe = remote.store.latency.subscribe(() => {
+      if (frame !== undefined) return
+      frame = requestAnimationFrame(() => {
+        frame = undefined
+        setReport(remote.store.latency.snapshot())
+        setCopyStatus("")
+      })
+    })
+    onCleanup(() => {
+      mounted = false
+      unsubscribe()
+      if (frame !== undefined) cancelAnimationFrame(frame)
+    })
+  })
+  const text = () => JSON.stringify({ version: 1, ...report() }, null, 2)
+  const savedText = () => JSON.stringify({ data: saved().data, cursor: saved().next === undefined ? {} : { next: saved().next } }, null, 2)
+  const readSaved = async (before?: string) => {
+    if (saved().status === "loading") return
+    const generation = remote.state().generation
+    setSaved({ ...saved(), status: "loading" })
+    const outcome = await remote.store.readStoredLatency(before)
+    if (!mounted || remote.state().generation !== generation) return
+    if (outcome.status !== "ok") {
+      setSaved({ ...saved(), status: outcome.status })
+      return
+    }
+    setSaved({ status: "ready", data: outcome.data, next: outcome.next })
+  }
+  const copy = () => {
+    if (!navigator.clipboard) {
+      field?.select()
+      setCopyStatus("Select and copy the report text.")
+      return
+    }
+    void navigator.clipboard.writeText(text()).then(
+      () => setCopyStatus("Copied latency report."),
+      () => { field?.select(); setCopyStatus("Copy unavailable. Select and copy the report text.") },
+    )
+  }
+  return <Section id="latency-settings" category="Diagnostics" title="Web latency" hint="Fixed, anonymous timings are sent through the relay to the selected machine's SQLite, never stored by the relay.">
+    <div class="defs">
+      <div class="defs__row">
+        <span class="defs__key">Measurements</span>
+        <span class="defs__value">Queue time is local pacing. Settlement time includes network, relay, machine, response assembly, or time until a timeout or disconnect; it does not isolate model time or screen paint.
+          {report().longTasksSupported ? " Browser long tasks show main-thread blocks of at least 50 ms." : " Browser long tasks are unreported here."}</span>
+      </div>
+      <div class="defs__row">
+        <label class="defs__key" for="latency-report">Report</label>
+        <span class="defs__value">
+          <span class="field__hint">{report().samples.length === 0 ? "No samples yet." : `Latest ${report().samples.length} samples (up to 60).`} Cleared on machine switch, sign-out, or reload. Clearing this tab does not delete saved machine samples.</span>
+          <textarea ref={field} id="latency-report" class="textarea latency-settings__report" aria-label="Web latency report" readOnly value={text()} rows={8} />
+          <button type="button" class="button button--secondary button--small" aria-label="Copy latency report" onClick={copy}>Copy report</button>
+          <button type="button" class="button button--ghost button--small" aria-label="Clear latency report" disabled={report().samples.length === 0}
+            onClick={() => { remote.store.latency.clear(); setReport(remote.store.latency.snapshot()); setCopyStatus("Cleared this tab; saved machine samples remain.") }}>Clear this tab</button>
+          <span class="field__hint" role="status" aria-live="polite">{copyStatus()}</span>
+        </span>
+      </div>
+      <div class="defs__row">
+        <span class="defs__key">Machine save</span>
+        <span class="defs__value" role="status">{({ idle: "Waiting for samples.", saving: "Saving on this machine…", saved: "Latest batch saved on this machine.", waiting: "Waiting for this machine to reconnect.", unsupported: "Update YCoding on this machine to save Web latency.", unknown: "Last save was not confirmed; it will not be replayed.", failed: "Machine save failed; inspect this tab's report." } as const)[remote.state().latencySync]}</span>
+      </div>
+      <div class="defs__row">
+        <span class="defs__key">Saved on machine</span>
+        <span class="defs__value">
+          <button type="button" class="button button--secondary button--small" aria-label="Read saved latency"
+            disabled={remote.state().transport.kind !== "open" || saved().status === "loading"}
+            onClick={() => void readSaved()}>Read saved report</button>
+          <span class="field__hint" role="status" aria-live="polite">{({ idle: "Read this machine's recent samples when connected.", loading: "Reading saved samples…", ready: saved().data.length === 0 ? "No saved samples on this machine." : `${saved().data.length} saved samples on this page.`, unavailable: "Reconnect to read this machine's samples.", unsupported: "Update YCoding on this machine to read saved samples.", unknown: "Could not confirm this read; retry when connected.", failed: "Saved samples could not be read; try again." } as const)[saved().status]}</span>
+          <Show when={saved().status === "ready" || saved().data.length > 0}>
+            <textarea class="textarea latency-settings__report" aria-label="Machine latency report" readOnly value={savedText()} rows={8} />
+            <Show when={saved().next}>{(next) => <button type="button" class="button button--secondary button--small" aria-label="Load older latency" onClick={() => void readSaved(next())}>Load older</button>}</Show>
+          </Show>
+        </span>
+      </div>
+    </div>
   </Section>
 }
 

@@ -25,5 +25,6 @@ export const migrations = (
     import("./migration/20260929044715_session-active"),
     import("./migration/20261002020321_drop-legacy-account-share"),
     import("./migration/20261004094144_shell-ledger"),
+    import("./migration/20261004154315_web-latency"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

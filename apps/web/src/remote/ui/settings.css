@@ -3,6 +3,13 @@
   flex-basis: 100%;
 }
 
+.latency-settings__report {
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-xs);
+  min-block-size: 144px;
+  max-block-size: 280px;
+}
+
 .machine-awake__status[data-tone="danger"] {
   color: var(--yc-danger);
 }

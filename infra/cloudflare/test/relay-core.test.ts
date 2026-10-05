@@ -538,6 +538,19 @@ describe("relay core: request admission", () => {
     expect(h.requestsTo("agent-1")[0]).toMatchObject({ operation: "session.prompt", sessionID: "ses_other" })
   })
 
+  test("forwards owned machine latency without storing samples in relay D1", async () => {
+    const h = harness()
+    await attachBoth(h)
+    h.reset()
+    const sample = { kind: "request", at: "2026-10-04T12:00:00.000Z", operation: "session.list", outcome: "ok", queueMs: 2, settlementMs: 8, totalMs: 10 }
+    await h.relay.handleClientMessage("client-1", request("latency_1", "machine.latency.append", undefined, { samples: [sample] }))
+    expect(h.requestsTo("agent-1")).toMatchObject([{ operation: "machine.latency.append", input: { samples: [sample] } }])
+    expect(h.database.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%latency%'").all()).toEqual([])
+    h.setClientAuthority({ ok: false, reason: "Browser session is not authorized" })
+    await h.relay.handleClientMessage("client-1", request("latency_2", "machine.latency.list"))
+    expect(h.requestsTo("agent-1")).toHaveLength(1)
+  })
+
   test("reports malformed frames with the client id and closes frames without one", async () => {
     const h = harness()
     await attachBoth(h)

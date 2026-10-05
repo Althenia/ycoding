@@ -831,6 +831,13 @@ export default {
           \`start_seq\` integer DEFAULT -1 NOT NULL
         );
       `)
+      yield* tx.run(`
+        CREATE TABLE \`web_latency\` (
+          \`id\` integer PRIMARY KEY AUTOINCREMENT,
+          \`received_at\` integer NOT NULL,
+          \`sample\` text NOT NULL
+        );
+      `)
       yield* tx.run(`CREATE UNIQUE INDEX \`event_aggregate_seq_idx\` ON \`event\` (\`aggregate_id\`,\`seq\`);`)
       yield* tx.run(`CREATE INDEX \`event_aggregate_type_seq_idx\` ON \`event\` (\`aggregate_id\`,\`type\`,\`seq\`);`)
       yield* tx.run(
@@ -979,6 +986,7 @@ export default {
         `CREATE INDEX \`session_task_parent_state_updated_idx\` ON \`session_task\` (\`parent_id\`,\`state\`,\`time_updated\`);`,
       )
       yield* tx.run(`CREATE INDEX \`session_todo_session_idx\` ON \`session_todo\` (\`session_id\`);`)
+      yield* tx.run(`CREATE INDEX \`web_latency_received_at_idx\` ON \`web_latency\` (\`received_at\`);`)
     })
   },
 } satisfies Omit<DatabaseMigration.Migration, "id">

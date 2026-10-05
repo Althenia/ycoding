@@ -103,6 +103,88 @@ test("aborting a request still queued removes it without sending and resolves ca
   } finally { f.transport.close() }
 })
 
+test("reports paced queue time separately from the completed request round trip without retaining payloads", async () => {
+  const timings: unknown[] = []
+  const f = fixture({ handlers: { onRequestTiming: (sample) => timings.push(sample) } })
+  try {
+    await fillWindow(f, RemoteLimits.maxClientRequestsPerWindow - 3)
+    timings.length = 0
+    f.advance(25)
+    const outcome = f.transport.request("session.list", { input: { search: "private query" }, timeoutMs: 0 })
+    f.advance(RemoteLimits.clientRateWindowMs - 25)
+    const frame = f.sockets[0]!.frames().at(-1)!
+    f.advance(17)
+    f.sockets[0]!.message({ type: "response", id: frame.id, ok: true, value: { private: "response" } })
+    expect(await outcome).toEqual({ status: "ok", value: { private: "response" } })
+    expect(timings).toEqual([{ operation: "session.list", outcome: "ok", queueMs: 9_975, settlementMs: 17, totalMs: 9_992 }])
+    expect(JSON.stringify(timings)).not.toMatch(/private|query|response"/)
+  } finally { f.transport.close() }
+})
+
+test("records a queued cancellation without inventing response time or sending a request", async () => {
+  const timings: unknown[] = []
+  const f = fixture({ handlers: { onRequestTiming: (sample) => timings.push(sample) } })
+  try {
+    await fillWindow(f, RemoteLimits.maxClientRequestsPerWindow - 3)
+    timings.length = 0
+    const controller = new AbortController()
+    const outcome = f.transport.request("session.list", { timeoutMs: 0, signal: controller.signal })
+    f.advance(7)
+    controller.abort()
+    expect(await outcome).toEqual({ status: "unavailable", reason: "cancelled" })
+    expect(timings).toEqual([{ operation: "session.list", outcome: "unavailable", reason: "cancelled", queueMs: 7, totalMs: 7 }])
+    f.advance(RemoteLimits.clientRateWindowMs)
+    expect(timings).toHaveLength(1)
+  } finally { f.transport.close() }
+})
+
+test("records sent timeout once and a rejected preflight with no wire time", async () => {
+  const timings: unknown[] = []
+  const f = fixture({ handlers: { onRequestTiming: (sample) => timings.push(sample) } })
+  try {
+    const outcome = f.transport.request("session.snapshot", { timeoutMs: 35 })
+    f.advance(35)
+    expect((await outcome).status).toBe("unknown")
+    expect(timings).toEqual([{ operation: "session.snapshot", outcome: "unknown", queueMs: 0, settlementMs: 35, totalMs: 35 }])
+    f.sockets[0]!.message({ type: "response", id: f.sockets[0]!.frames()[0]!.id, ok: true, value: "late" })
+    expect(timings).toHaveLength(1)
+    f.transport.close()
+    expect((await f.transport.request("session.list")).status).toBe("unavailable")
+    expect(timings.at(-1)).toEqual({ operation: "session.list", outcome: "unavailable", reason: "not-connected", queueMs: 0, totalMs: 0 })
+  } finally { f.transport.close() }
+})
+
+test("keeps sent and unsent close outcomes distinct in the timing record", async () => {
+  const timings: unknown[] = []
+  const f = fixture({ handlers: { onRequestTiming: (sample) => timings.push(sample) } })
+  try {
+    const sent = f.transport.request("session.status", { timeoutMs: 0 })
+    await fillWindow(f, RemoteLimits.maxClientRequestsPerWindow - 4)
+    timings.length = 0
+    const queued = f.transport.request("session.list", { timeoutMs: 0 })
+    f.advance(9)
+    f.sockets[0]!.dispatchEvent(Object.assign(new Event("close"), { code: 1006, reason: "" }))
+    expect((await sent).status).toBe("unknown")
+    expect(await queued).toEqual({ status: "unavailable", reason: "not-connected" })
+    expect(timings).toEqual([
+      { operation: "session.status", outcome: "unknown", queueMs: 0, settlementMs: 9, totalMs: 9 },
+      { operation: "session.list", outcome: "unavailable", reason: "not-connected", queueMs: 9, totalMs: 9 },
+    ])
+  } finally { f.transport.close() }
+})
+
+test("a failed local timing observer cannot change a request outcome", async () => {
+  const f = fixture({ handlers: { onRequestTiming: () => { throw new Error("observer failed") } } })
+  try {
+    const result = f.transport.request("session.list", { timeoutMs: 0 })
+    const id = f.sockets[0]!.frames()[0]!.id
+    f.sockets[0]!.message({ type: "response", id, ok: true, value: { data: [] } })
+    expect(await result).toEqual({ status: "ok", value: { data: [] } })
+    f.transport.close()
+    expect(await f.transport.request("session.list")).toEqual({ status: "unavailable", reason: "not-connected" })
+  } finally { f.transport.close() }
+})
+
 test("aborting a sent request sends a paced cancel, resolves cancelled, and drops the late response", async () => {
   const f = fixture()
   try {

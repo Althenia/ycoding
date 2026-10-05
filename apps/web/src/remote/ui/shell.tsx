@@ -43,6 +43,7 @@ import { UsagePage } from "./usage"
 import {
   AccountSettings,
   AppSettings,
+  LatencySettings,
   AppearanceSettings,
   DeviceSettings,
   MachineSettings,
@@ -1603,6 +1604,7 @@ function SettingsPage(props: { readonly office: OfficeSettingsStore; readonly ph
           <AccountSettings />
           <DeviceSettings />
           <AppSettings />
+          <LatencySettings />
           <AppearanceSettings />
           <Show when={!props.phoneLayout}><OfficeSettings office={props.office} /></Show>
           <NotificationSettings />
