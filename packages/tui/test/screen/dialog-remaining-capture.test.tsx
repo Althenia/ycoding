@@ -109,6 +109,23 @@ const states = [
   { name: "debug", settle: "Renderer stats", evidence: "Console", view: () => <DialogDebug /> },
 ] as const
 
+test("the variant dialog renders only Grok's four offered effort IDs", async () => {
+  const app = await testRender(
+    () => <DialogProviders><DialogVariant variants={["low", "medium", "high", "xhigh"]} current="high" /></DialogProviders>,
+    { width: 100, height: 30 },
+  )
+  app.renderer.start()
+  try {
+    await app.waitForFrame((frame) => frame.includes("Select variant") && frame.includes("xhigh"))
+    const frame = app.captureCharFrame()
+    for (const effort of ["low", "medium", "high", "xhigh"]) expect(frame).toContain(effort)
+    expect(frame).not.toContain("500k")
+    expect(frame).not.toContain("Extra High")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("the Connect integration menu opens the custom endpoint dialog", async () => {
   let opened = false
   function Connect() {

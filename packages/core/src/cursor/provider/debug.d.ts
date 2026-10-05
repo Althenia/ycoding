@@ -17,9 +17,5 @@ export declare function ensureSecureDebugLog(filePath: string, options?: {
  * Returns true when a truncate happened. Exported for tests.
  */
 export declare function truncateDebugLogIfOversized(filePath: string, maxBytes?: number): boolean;
+export declare function safeTraceEvent(msg: string): string;
 export declare function trace(msg: string): void;
-/**
- * Compact path-advertising summary for RequestContext troubleshooting.
- * Safe: no tokens / file contents — only workspace vs metadata roots.
- */
-export declare function traceRequestContextPaths(label: string, requestContext: Record<string, unknown> | undefined): void;

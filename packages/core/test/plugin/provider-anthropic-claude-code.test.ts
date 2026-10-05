@@ -402,7 +402,7 @@ describe("Claude Code request translation", () => {
       "effort-2025-11-24",
       "custom-feature",
     ])
-    expect(headers.get("user-agent")).toBe("claude-cli/2.1.280 (external, sdk-cli)")
+    expect(headers.get("user-agent")).toBe("claude-cli/2.1.289 (external, sdk-cli)")
   })
 
   test("derives Claude Code session affinity from the stable incoming Session ID", async () => {
@@ -439,7 +439,7 @@ describe("Claude Code request translation", () => {
     expect(sent).toEqual(["ses_first", "ses_second", "ses_first"])
   })
 
-  test("uses Claude Code 2.1.220 in the default billing signature", () => {
+  test("uses Claude Code 2.1.289 in the default billing signature", () => {
     const transformed = JSON.parse(
       requiredString(
         transformClaudeCodeBody(
@@ -453,7 +453,7 @@ describe("Claude Code request translation", () => {
     )
 
     expect(transformed.system[0].text).toMatch(
-      /^x-anthropic-billing-header: cc_version=2\.1\.280\.[0-9a-f]{3}; cc_entrypoint=sdk-cli;$/,
+      /^x-anthropic-billing-header: cc_version=2\.1\.289\.[0-9a-f]{3}; cc_entrypoint=sdk-cli;$/,
     )
     expect(transformed.system[0].text).not.toContain("cch=")
   })

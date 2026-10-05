@@ -1,7 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { homedir } from "node:os";
-import { opencodeGlobalConfigDirs, opencodeProjectConfigDirs } from "./paths.js";
+import { isProjectDiscoveryDisabled, ycodingGlobalConfigDirs, ycodingProjectConfigDirs } from "./paths.js";
 async function exists(p) {
     try {
         await stat(p);
@@ -13,12 +13,11 @@ async function exists(p) {
 }
 function parseFrontmatter(raw) {
     if (!raw.startsWith("---"))
-        return { body: raw };
+        return {};
     const end = raw.indexOf("\n---", 3);
     if (end < 0)
-        return { body: raw };
+        return {};
     const fm = raw.slice(3, end).trim();
-    const body = raw.slice(end + 4).replace(/^\n/, "");
     let name;
     let description;
     for (const line of fm.split("\n")) {
@@ -35,18 +34,17 @@ function parseFrontmatter(raw) {
         if (key === "description")
             description = val;
     }
-    return { name, description, body };
+    return { name, description };
 }
 async function loadSkillFile(file) {
     try {
         const raw = await readFile(file, "utf-8");
-        const { name, description, body } = parseFrontmatter(raw);
+        const { name, description } = parseFrontmatter(raw);
         const dirName = path.basename(path.dirname(file));
         return {
             fullPath: path.resolve(file),
             name: name || dirName,
             description: description || "",
-            content: body.slice(0, 20_000),
         };
     }
     catch {
@@ -89,22 +87,24 @@ async function walkAncestorsFor(dir, rel, stop, out) {
     }
 }
 /**
- * Discover skills the way OpenCode does: `.opencode/skills`, global opencode,
- * plus `.claude/skills` and `.agents/skills` (project + home).
+ * Discover YCoding skills along with supported `.claude/skills` and
+ * `.agents/skills` sources.
  */
 export async function collectSkills(workspaceRoot, worktree) {
     const out = new Map();
     const home = homedir();
-    for (const projectDir of opencodeProjectConfigDirs(workspaceRoot)) {
+    for (const projectDir of ycodingProjectConfigDirs(workspaceRoot)) {
         const relative = path.relative(workspaceRoot, projectDir);
         await walkAncestorsFor(workspaceRoot, path.join(relative, "skills"), worktree, out);
     }
-    for (const globalDir of opencodeGlobalConfigDirs()) {
+    for (const globalDir of ycodingGlobalConfigDirs()) {
         await scanSkillsRoot(path.join(globalDir, "skills"), out);
     }
-    await walkAncestorsFor(workspaceRoot, path.join(".claude", "skills"), worktree, out);
+    if (!isProjectDiscoveryDisabled()) {
+        await walkAncestorsFor(workspaceRoot, path.join(".claude", "skills"), worktree, out);
+        await walkAncestorsFor(workspaceRoot, path.join(".agents", "skills"), worktree, out);
+    }
     await scanSkillsRoot(path.join(home, ".claude", "skills"), out);
-    await walkAncestorsFor(workspaceRoot, path.join(".agents", "skills"), worktree, out);
     await scanSkillsRoot(path.join(home, ".agents", "skills"), out);
     return [...out.values()];
 }

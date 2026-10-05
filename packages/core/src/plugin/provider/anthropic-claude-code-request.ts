@@ -8,7 +8,7 @@ type FetchInput = Parameters<typeof fetch>[0]
 type FetchInit = NonNullable<Parameters<typeof fetch>[1]>
 type FetchBody = FetchInit["body"]
 
-const defaultVersion = "2.1.280"
+const defaultVersion = "2.1.289"
 const systemIdentity = "You are Claude Code, Anthropic's official CLI for Claude."
 const billingPrefix = "x-anthropic-billing-header"
 const toolPrefix = "mcp_"

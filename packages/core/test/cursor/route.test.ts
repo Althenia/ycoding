@@ -22,7 +22,7 @@ const client = LLMClient.layer.pipe(
   ),
 )
 
-const [opus, opusLong] = CursorModels.fromCursor([
+const [opus, opusFast, opusLong] = CursorModels.fromCursor([
   {
     id: "claude-opus-4-8",
     displayName: "Opus 4.8",
@@ -112,7 +112,7 @@ const oauth = Credential.OAuth.make({
 it.effect("sends the selected Cursor variant tuple and credential to the provider package", () =>
   Effect.gen(function* () {
     const observed = { apiKeys: [] as unknown[], models: [] as string[] }
-    const prepared = yield* prepare(yield* resolve(opus, "Opus 4.8 High Fast", oauth, observed))
+    const prepared = yield* prepare(yield* resolve(opusFast, "high", oauth, observed))
 
     expect(observed).toEqual({ apiKeys: ["access-jwt"], models: ["claude-opus-4-8"] })
     expect(prepared.body.providerOptions).toEqual({
@@ -143,6 +143,21 @@ it.effect("leaves the base Cursor model without parameters when no variant is se
   }),
 )
 
+it.effect("sends a single non-effort tuple as the base model setting without a variant", () =>
+  Effect.gen(function* () {
+    const composer = CursorModels.fromCursor([{ id: "composer-2.5", variants: [{
+      key: "standard", displayName: "Composer 2.5", parameterValues: [{ id: "fast", value: "false" }],
+      isDefaultNonMax: true, isDefaultMax: false,
+    }] }])[0]
+    const observed = { apiKeys: [] as unknown[], models: [] as string[] }
+    const prepared = yield* prepare(yield* resolve(composer, undefined, oauth, observed))
+
+    expect(composer.variants).toEqual([])
+    expect(observed.models).toEqual(["composer-2.5"])
+    expect(prepared.body.providerOptions).toEqual({ cursor: { cursorVariantParameters: [{ id: "fast", value: "false" }] } })
+  }),
+)
+
 it.effect("sends the long-context default tuple for the -1m entry under the real Cursor model id", () =>
   Effect.gen(function* () {
     const observed = { apiKeys: [] as unknown[], models: [] as string[] }
@@ -157,11 +172,30 @@ it.effect("sends the long-context default tuple for the -1m entry under the real
   }),
 )
 
+it.effect("sends a 500k Cursor model's selected effort with its complete context tuple", () =>
+  Effect.gen(function* () {
+    const grok = CursorModels.fromCursor([{ id: "grok-4.7", displayName: "Grok 4.7", maxContext: 256_000,
+      variants: [
+        { key: "high", displayName: "Grok 4.7 High", parameterValues: [{ id: "effort", value: "high" }, { id: "context", value: "256k" }], isDefaultNonMax: true, isDefaultMax: false },
+        { key: "xhigh-500k", displayName: "Grok 4.7 Extra High 500k", parameterValues: [{ id: "effort", value: "xhigh" }, { id: "context", value: "500k" }], isDefaultNonMax: false, isDefaultMax: true },
+      ] }]).find((item) => item.id === CatalogModel.ID.make("grok-4.7-500k"))!
+    const observed = { apiKeys: [] as unknown[], models: [] as string[] }
+    const prepared = yield* prepare(yield* resolve(grok, "xhigh", oauth, observed))
+    expect(observed.models).toEqual(["grok-4.7"])
+    expect(prepared.body.providerOptions).toEqual({ cursor: { cursorVariantParameters: [
+      { id: "effort", value: "xhigh" }, { id: "context", value: "500k" },
+    ] } })
+    expect(grok.limit.context).toBe(500_000)
+  }),
+)
+
 it.effect("rejects a Cursor variant that the catalog entry does not advertise", () =>
   Effect.gen(function* () {
     const error = yield* SessionRunnerModel.withVariant(opusLong, CatalogModel.VariantID.make("Opus 4.8 High")).pipe(
       Effect.flip,
     )
     expect(error._tag).toBe("SessionRunnerModel.VariantUnavailableError")
+    const formerLabel = yield* SessionRunnerModel.withVariant(opus, CatalogModel.VariantID.make("Opus 4.8 High")).pipe(Effect.flip)
+    expect(formerLabel._tag).toBe("SessionRunnerModel.VariantUnavailableError")
   }),
 )

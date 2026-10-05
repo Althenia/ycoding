@@ -8,7 +8,7 @@
  * strand users on Cursor-specific paths or frontmatter.
  *
  * Location mirrors OpenCode Session.plan shape, but the project-config segment
- * comes from {@link hostPlansDir} / {@link opencodeProjectConfigDirs}
+ * comes from {@link hostPlansDir} / {@link ycodingProjectConfigDirs}
  * (the active host's project config dir via the path bridge), never a
  * hardcoded OpenCode-only directory name.
  *

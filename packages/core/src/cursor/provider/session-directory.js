@@ -1,20 +1,5 @@
 /**
- * Session-scoped workspace directory for the OpenCode 2.0 plugin.
- *
- * The classic plugin learns the project directory from `input.directory`,
- * supplied once per invocation by the 1.x host. OpenCode 2.0 runs a single
- * daemon across many projects, so `process.cwd()` captured at sdk-creation
- * time is wrong for any session but the one open when the daemon started.
- *
- * The 2.0 runtime names a session directory in two places:
- * - request header `x-opencode-directory` (per-request; preferred in the LM)
- * - `ctx.session.get()` → flat `info.directory`, or legacy
- *   `info.location.directory`, reachable from `session.hook("context")`
- *
- * This module records the session-get value by id so the language model can
- * fall back when the header is absent, same mechanism as `compaction-marker.ts`.
- *
- * Bounded so a long-lived server cannot accumulate ids for dead sessions.
+ * Session-scoped workspace directory, bounded for long-lived servers.
  */
 import path from "node:path";
 const MAX_TRACKED_SESSIONS = 256;
@@ -39,13 +24,13 @@ export function clearSessionDirectories() {
     sessionDirectories.clear();
 }
 /**
- * Active session workspace directory from OpenCode 2.0 request headers.
+ * Active session workspace directory from YCoding request headers.
  * Values may be URI-encoded.
  */
-export function opencodeDirectoryHeader(headers) {
+export function ycodingDirectoryHeader(headers) {
     if (!headers)
         return undefined;
-    const raw = headers["x-opencode-directory"] ?? headers["X-Opencode-Directory"];
+    const raw = headers["x-ycoding-directory"] ?? headers["X-Ycoding-Directory"];
     if (typeof raw !== "string" || raw.trim().length === 0)
         return undefined;
     const trimmed = raw.trim();
@@ -61,7 +46,7 @@ export function opencodeDirectoryHeader(headers) {
  * Prefer the per-request header, then the session mark, then static options/cwd.
  */
 export function resolveSessionWorkspaceRoot(input) {
-    return path.resolve(opencodeDirectoryHeader(input.headers) ??
+    return path.resolve(ycodingDirectoryHeader(input.headers) ??
         getSessionDirectory(input.sessionKey) ??
         (input.workspaceRoot || input.cwd || process.cwd()));
 }

@@ -1,7 +1,8 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { opencodeConfigFileNames, opencodeGlobalConfigDirs, opencodeProjectConfigDirs, resolveHomeRelative } from "./paths.js";
+import { parse } from "jsonc-parser";
+import { isProjectDiscoveryDisabled, ycodingConfigFileNames, ycodingGlobalConfigDirs, ycodingProjectConfigDirs, resolveHomeRelative } from "./paths.js";
 async function exists(file) {
     try {
         await stat(file);
@@ -12,20 +13,23 @@ async function exists(file) {
     }
 }
 async function readJsonConfig(dir) {
-    for (const name of opencodeConfigFileNames()) {
+    let config = {};
+    for (const name of ycodingConfigFileNames()) {
         const file = path.join(dir, name);
         if (!(await exists(file)))
             continue;
         try {
             const raw = await readFile(file, "utf-8");
-            const stripped = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-            return JSON.parse(stripped);
+            const errors = [];
+            const parsed = parse(raw, errors, { allowTrailingComma: true });
+            if (errors.length === 0 && parsed && typeof parsed === "object" && !Array.isArray(parsed))
+                config = mergeConfig(config, parsed);
         }
         catch {
-            return {};
+            continue;
         }
     }
-    return {};
+    return config;
 }
 export async function findGitWorktree(start) {
     let dir = path.resolve(start);
@@ -130,11 +134,6 @@ async function expandGlob(pattern, workspaceRoot) {
     await walk(startDir, 0);
     return out;
 }
-/** Same truthy rule as OpenCode's Flag.OPENCODE_DISABLE_PROJECT_CONFIG. */
-export function isProjectConfigDisabled() {
-    const value = process.env.OPENCODE_DISABLE_PROJECT_CONFIG?.toLowerCase();
-    return value === "true" || value === "1";
-}
 /** Fetch a remote instruction with one deadline covering headers and body. */
 export async function fetchRemoteInstruction(url, timeoutMs = 5000) {
     const ctrl = new AbortController();
@@ -159,26 +158,25 @@ function mergeConfig(base, overlay) {
         instructions: [...(base.instructions ?? []), ...(overlay.instructions ?? [])],
         plugin: [...new Set([...(base.plugin ?? []), ...(overlay.plugin ?? [])])],
         plugins: [...new Set([...(base.plugins ?? []), ...(overlay.plugins ?? [])])],
-        mcp: { ...(base.mcp ?? {}), ...(overlay.mcp ?? {}) },
+        mcp: {
+            ...base.mcp,
+            ...overlay.mcp,
+            servers: { ...base.mcp?.servers, ...overlay.mcp?.servers },
+        },
         permission: overlay.permission ?? base.permission,
     };
 }
 export async function loadMergedConfig(workspaceRoot) {
-    const globalConfig = await readJsonConfig(opencodeGlobalConfigDirs()[0] ?? "");
-    if (isProjectConfigDisabled())
-        return mergeConfig({}, globalConfig);
-    // The bridge supplies native project config roots for an unchanged plugin:
-    // The active host's project config directories are supplied by the path bridge; OpenCode defaults to .opencode.
-    // Later roots have higher precedence, matching the host's native ordering.
-    let projectConfig = await readJsonConfig(workspaceRoot);
-    for (const configDir of opencodeProjectConfigDirs(workspaceRoot)) {
+    const globalConfig = await readJsonConfig(ycodingGlobalConfigDirs()[0] ?? "");
+    let projectConfig = {};
+    for (const configDir of ycodingProjectConfigDirs(workspaceRoot)) {
+        projectConfig = mergeConfig(projectConfig, await readJsonConfig(path.dirname(configDir)));
+    }
+    for (const configDir of ycodingProjectConfigDirs(workspaceRoot)) {
         projectConfig = mergeConfig(projectConfig, await readJsonConfig(configDir));
     }
     return mergeConfig(globalConfig, projectConfig);
 }
-/**
- * Collect OpenCode instruction files.
- */
 export async function collectRules(workspaceRoot) {
     const worktree = await findGitWorktree(workspaceRoot);
     const rules = [];
@@ -196,9 +194,7 @@ export async function collectRules(workspaceRoot) {
         seen.add(resolved);
         rules.push(rule);
     };
-    // Match OpenCode: OPENCODE_DISABLE_PROJECT_CONFIG skips project AGENTS/CLAUDE/CONTEXT
-    // discovery and project opencode.json (see loadMergedConfig).
-    if (!isProjectConfigDisabled()) {
+    if (!isProjectDiscoveryDisabled()) {
         for (const name of ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"]) {
             const hit = await findUp(name, workspaceRoot, worktree);
             if (hit) {
@@ -207,7 +203,7 @@ export async function collectRules(workspaceRoot) {
             }
         }
     }
-    for (const globalDir of opencodeGlobalConfigDirs()) {
+    for (const globalDir of ycodingGlobalConfigDirs()) {
         await add(path.join(globalDir, "AGENTS.md"));
     }
     await add(path.join(homedir(), ".claude", "CLAUDE.md"));

@@ -10,10 +10,7 @@ export declare const DYNAMIC_REQUEST_CONTEXT_KEYS: readonly ["tools", "agent_ski
 export type DynamicRequestContextKey = typeof DYNAMIC_REQUEST_CONTEXT_KEYS[number];
 /**
  * Full RequestContext payload for live UMA + exec #10 reply.
- * Sourced from OpenCode discovery (and .claude/.agents skill fallbacks).
- * Honors `instructions` globs the same way OpenCode does. The provider never
- * looks in Cursor's own directories; a `.cursor/` path is read only when the
- * user's own OpenCode config lists it, exactly as the host would read it.
+ * Sourced from YCoding configuration and supported skill roots.
  */
 export declare function buildRequestContext(input: BuildRequestContextInput): Promise<Record<string, unknown>>;
 /** Rediscover only capability/plugin sections that may change during a chat. */

@@ -3,7 +3,7 @@ import { Portal } from "solid-js/web"
 import { Icon } from "../../ui/icon"
 import type { ModelOption } from "../catalog"
 import type { ModelRefView } from "../projection"
-import { effortLevel, modelSelection, orderedVariants, pairedFastModel, switchFastModel, visibleModels } from "./composer-logic"
+import { effortLevel, modelSelection, orderedModelOptions, orderedVariants, pairedFastModel, switchFastModel } from "./composer-logic"
 
 /** Fixed sparkle field: positions are stable so the fill reveals the same sky as it grows. */
 const sparkles = [
@@ -13,7 +13,7 @@ const sparkles = [
   { x: 76, y: 26, delay: 1.4, size: 2 }, { x: 83, y: 64, delay: 0.5, size: 2.5 }, { x: 91, y: 38, delay: 1.8, size: 1.5 },
 ] as const
 
-export function ModelControl(props: { readonly models: readonly ModelOption[]; readonly selected?: ModelRefView; readonly disabled?: boolean; readonly pending?: boolean; readonly rememberedVariant?: (model: ModelOption) => string | undefined; readonly onChange: (model: ModelRefView) => void }) {
+export function ModelControl(props: { readonly models: readonly ModelOption[]; readonly selected?: ModelRefView; readonly recent?: readonly ModelRefView[]; readonly disabled?: boolean; readonly pending?: boolean; readonly rememberedVariant?: (model: ModelOption) => string | undefined; readonly onChange: (model: ModelRefView) => void }) {
   const [open, setOpen] = createSignal(false)
   const [listing, setListing] = createSignal(false)
   const [query, setQuery] = createSignal("")
@@ -35,7 +35,9 @@ export function ModelControl(props: { readonly models: readonly ModelOption[]; r
   const level = () => selection().blocked || selected()?.variant === undefined ? "unselected" : effortLevel(selected()?.variant)
   const glow = () => selected()?.variant === undefined ? 0 : (drag()?.fraction ?? (selectedIndex() + 1) / stops().length)
   const effortLabel = () => selection().blocked ? `Unavailable: ${selected()?.variant ?? selected()?.id}` : selected()?.variant ?? "Model settings"
-  const models = () => visibleModels(props.models).filter((item) => `${item.name} ${item.id} ${item.providerName ?? item.providerID}`.toLowerCase().includes(query().toLowerCase())).sort((left, right) => left.providerID.localeCompare(right.providerID))
+  const models = () => orderedModelOptions(props.models, props.recent ?? [], selected()).filter((item) => `${item.name} ${item.id} ${item.providerName ?? item.providerID}`.toLowerCase().includes(query().toLowerCase()))
+  const isRecent = (item: ModelOption) => props.recent?.some((model) => model.providerID === item.providerID && model.id === item.id) ?? false
+  const recentCount = () => models().filter(isRecent).length
   let trigger: HTMLButtonElement | undefined
   let surface: HTMLDivElement | undefined
   let search: HTMLInputElement | undefined
@@ -129,7 +131,7 @@ export function ModelControl(props: { readonly models: readonly ModelOption[]; r
             <div class="model-control__labels"><For each={stops()}>{(variant) => <span>{variant}</span>}</For></div>
           </div></Show>
         </Show>
-        <Show when={listing()}><input ref={search} class="mini-picker__search" type="search" aria-label="Search models" placeholder="Search models…" value={query()} onInput={(event) => { setQuery(event.currentTarget.value); setActive(0) }} /><div class="mini-picker__list" role="listbox" aria-label="Models"><For each={models()}>{(item, index) => <><Show when={index() === 0 || models()[index() - 1]?.providerID !== item.providerID}><div class="mini-picker__group model-control__provider" role="presentation">{item.providerName ?? item.providerID}</div></Show><button type="button" role="option" aria-selected={displayOption()?.providerID === item.providerID && displayOption()?.id === item.id} class="mini-picker__option model-control__model" classList={{ "mini-picker__option--active": active() === index() }} onPointerEnter={() => setActive(index())} onClick={() => chooseModel(item)}>{item.name}<small>{item.id}</small></button></>}</For><Show when={!models().length}><p class="mini-picker__empty">No matches</p></Show></div></Show>
+        <Show when={listing()}><input ref={search} class="mini-picker__search" type="search" aria-label="Search models" placeholder="Search models…" value={query()} onInput={(event) => { setQuery(event.currentTarget.value); setActive(0) }} /><div class="mini-picker__list" role="listbox" aria-label="Models"><For each={models()}>{(item, index) => <><Show when={index() === 0 || index() === recentCount() || !isRecent(item) && !isRecent(models()[index() - 1]!) && models()[index() - 1]?.providerID !== item.providerID}><div class="mini-picker__group model-control__provider" role="presentation">{isRecent(item) ? "Recent" : item.providerName ?? item.providerID}</div></Show><button type="button" role="option" aria-label={isRecent(item) ? `${item.name} · ${item.providerName ?? item.providerID} · ${item.id}` : undefined} aria-selected={displayOption()?.providerID === item.providerID && displayOption()?.id === item.id} class="mini-picker__option model-control__model" classList={{ "mini-picker__option--active": active() === index() }} onPointerEnter={() => setActive(index())} onClick={() => chooseModel(item)}>{item.name}<small>{isRecent(item) ? `${item.providerName ?? item.providerID} · ` : ""}{item.id}</small></button></>}</For><Show when={!models().length}><p class="mini-picker__empty">No matches</p></Show></div></Show>
       </div>
     </Portal></Show>
   </div>

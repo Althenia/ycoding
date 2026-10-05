@@ -35,6 +35,26 @@ export function visibleModels(models: readonly ModelOption[]): ModelOption[] {
   return models.filter((item) => !item.id.endsWith("-fast") || !models.some((base) => base.providerID === item.providerID && base.id === item.id.slice(0, -5)))
 }
 
+export function orderedModelOptions(models: readonly ModelOption[], recent: readonly ModelRefView[], selected: ModelRefView | undefined) {
+  const available = visibleModels(models)
+  const seenRecent = new Set<string>()
+  const recentOptions = recent.flatMap((model) => {
+    const option = available.find((item) => item.providerID === model.providerID && item.id === model.id)
+    const key = option ? JSON.stringify([option.providerID, option.id]) : ""
+    if (!option || seenRecent.has(key)) return []
+    seenRecent.add(key)
+    return [option]
+  })
+  const recentKeys = new Set(recentOptions.map((item) => JSON.stringify([item.providerID, item.id])))
+  const remaining = available.filter((item) => !recentKeys.has(JSON.stringify([item.providerID, item.id])))
+  const providers = [...new Set(remaining.map((item) => item.providerID))].sort((left, right) => {
+    if (left === selected?.providerID) return right === selected.providerID ? 0 : -1
+    if (right === selected?.providerID) return 1
+    return left.localeCompare(right)
+  })
+  return [...recentOptions, ...providers.flatMap((provider) => remaining.filter((item) => item.providerID === provider))]
+}
+
 export function pairedFastModel(models: readonly ModelOption[], selected: ModelRefView | undefined) {
   const current = models.find((item) => item.providerID === selected?.providerID && item.id === selected.id)
   if (!current) return undefined

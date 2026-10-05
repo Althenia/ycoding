@@ -1,5 +1,6 @@
 import type { CursorContinuationOptions } from "./session.js";
 import type { HostToolDialect } from "./protocol/tools.js";
+import type { createCursorLanguageModel } from "./language-model.js";
 export type CursorRetryOptions = {
     /** Total attempts including the initial request. Default: 3. */
     maxAttempts?: number;
@@ -36,4 +37,6 @@ export type CreateCursorOptions = {
     /** Fallback host dialect when schemas are omitted or ambiguous. Default: OpenCode 1.x. */
     defaultDialect?: HostToolDialect;
 };
-export declare function createCursor(options: CreateCursorOptions): import("./plugin-core.js").CursorSdk;
+export declare function createCursor(options: CreateCursorOptions): {
+    languageModel(modelId: string): ReturnType<typeof createCursorLanguageModel>;
+};

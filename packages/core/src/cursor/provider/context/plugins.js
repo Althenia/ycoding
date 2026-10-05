@@ -1,6 +1,6 @@
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
-import { opencodeGlobalConfigDirs, opencodeProjectConfigDirs } from "./paths.js";
+import { ycodingGlobalConfigDirs, ycodingProjectConfigDirs } from "./paths.js";
 async function listLocalPlugins(dir) {
     try {
         await stat(dir);
@@ -25,30 +25,36 @@ async function listLocalPlugins(dir) {
     }
     return out;
 }
-/** OpenCode plugins from config + local plugin directories (metadata only). */
 export async function collectPlugins(workspaceRoot, config) {
     const out = [];
     const seen = new Set();
-    for (const id of [...(config.plugin ?? []), ...(config.plugins ?? [])]) {
+    for (const entry of Array.isArray(config.plugins) ? config.plugins : []) {
+        const id = typeof entry === "string" ? entry : entry?.package;
+        if (typeof id !== "string" || id.startsWith("-"))
+            continue;
         if (!id || seen.has(id))
             continue;
         seen.add(id);
         out.push({ id, source: "npm" });
     }
-    for (const configDir of opencodeProjectConfigDirs(workspaceRoot)) {
-        for (const p of await listLocalPlugins(path.join(configDir, "plugins"))) {
-            if (seen.has(p.id))
-                continue;
-            seen.add(p.id);
-            out.push(p);
+    for (const configDir of ycodingProjectConfigDirs(workspaceRoot)) {
+        for (const dir of ["plugin", "plugins"]) {
+            for (const p of await listLocalPlugins(path.join(configDir, dir))) {
+                if (seen.has(p.id))
+                    continue;
+                seen.add(p.id);
+                out.push(p);
+            }
         }
     }
-    for (const configDir of opencodeGlobalConfigDirs()) {
-        for (const p of await listLocalPlugins(path.join(configDir, "plugins"))) {
-            if (seen.has(p.id))
-                continue;
-            seen.add(p.id);
-            out.push(p);
+    for (const configDir of ycodingGlobalConfigDirs()) {
+        for (const dir of ["plugin", "plugins"]) {
+            for (const p of await listLocalPlugins(path.join(configDir, dir))) {
+                if (seen.has(p.id))
+                    continue;
+                seen.add(p.id);
+                out.push(p);
+            }
         }
     }
     return out;

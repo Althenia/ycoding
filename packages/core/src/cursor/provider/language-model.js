@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { bidiRunStream, CursorRunInterruptedError, normalizeAgentRunOrigin, } from "./transport/connect.js";
-import { trace, traceRequestContextPaths } from "./debug.js";
+import { trace } from "./debug.js";
 import { buildRunRequest, buildHeartbeat } from "./protocol/request.js";
 import { decodeFramePayload } from "./protocol/framing.js";
 import { debugWalkTurnEnded, decodeMessage, encodeMessage } from "./protocol/messages.js";
@@ -34,7 +34,7 @@ import { readCache, cacheFilePath, resolveVariantParameters, resolveVariantMaxMo
 import { getOrBuildRequestContext } from "./context/frozen.js";
 import { admitContextEpoch, appendMidConversationMessage, resetContextEpochsForTests, } from "./context/epoch.js";
 import { workspaceRootFromRequestContext } from "./context/env.js";
-import { ensureOpencodeProjectDir, opencodeGlobalCacheDir, setHostCacheDirOverride, } from "./context/paths.js";
+import { ensureCursorProjectDir, cursorCacheDir, setHostCacheDirOverride, } from "./context/paths.js";
 import { resolveAgentUrl } from "./agent-url.js";
 import { CURSOR_API_HOST, CURSOR_COMPACTION_OPTION, CURSOR_HISTORY_REWRITE_OPTION, CURSOR_HOST_AGENT_OPTION, } from "./shared.js";
 import { isCompactionSession } from "./compaction-marker.js";
@@ -457,7 +457,7 @@ export function createCursorLanguageModel(modelId, providerId, options) {
         setHostCacheDirOverride(options.cacheDir);
     // Start loading and pruning restart state as soon as the provider is built.
     // startSession awaits this same per-cache-root initialization before binding.
-    void initializeConversationPersistence(opencodeGlobalCacheDir()).catch((error) => {
+    void initializeConversationPersistence(cursorCacheDir()).catch((error) => {
         trace(`conversation persistence: startup load failed: ${String(error)}`);
     });
     return {
@@ -515,7 +515,7 @@ async function doStreamImpl(modelId, options, callOptions) {
         session = deliverContinuationResults(session, trailingToolResults);
     }
     if (!session) {
-        const sessionKey = opencodeSessionKey(callOptions);
+        const sessionKey = ycodingSessionKey(callOptions);
         if (!session && trailingToolResults.length > 0) {
             // True continuation (prompt ends with tool results) but the held-open Run
             // is gone (or its write path just failed). Rebase the complete OpenCode
@@ -746,8 +746,8 @@ async function startSession(modelId, token, callOptions, options, startOptions) 
     const continuationPolicy = resolveContinuationPolicy(options.continuation);
     const prompt = callOptions.prompt;
     const incomingTools = extractTools(callOptions);
-    const sessionKey = opencodeSessionKey(callOptions);
-    const cacheDir = opencodeGlobalCacheDir();
+    const sessionKey = ycodingSessionKey(callOptions);
+    const cacheDir = cursorCacheDir();
     if (sessionKey) {
         const restored = await hydrateConversationState(cacheDir, sessionKey).catch((error) => {
             trace(`conversation persistence: restore failed sessionKey=${sessionKey}: ${String(error)}`);
@@ -798,11 +798,8 @@ async function startSession(modelId, token, callOptions, options, startOptions) 
     let resumeRecovery = recovery?.kind === "resume" ? recovery : undefined;
     let resuming = !!resumeRecovery;
     const lifecycle = !allowTools && !isCompaction && !recovery;
-    // v1 sets `options.workspaceRoot` correctly per invocation (`input.directory`,
-    // one plugin instance per project). OpenCode 2.0 runs one daemon across many
-    // projects, so its static option is only a last-resort fallback. Prefer the
-    // per-request `x-opencode-directory` header, then the session mark recorded
-    // from `session.hook("context")` via `getSessionDirectory`.
+    // Prefer the per-request YCoding directory when present. The plugin's
+    // Location-scoped workspace root supplies the ordinary fallback.
     const workspaceRoot = resolveSessionWorkspaceRoot({
         sessionKey,
         headers: callOptions.headers,
@@ -1459,7 +1456,7 @@ export async function drainSessionUntilTurnEnded(session, opts) {
             if (iu?.turn_ended) {
                 trace(`fresh turn drain: turn_ended raw wire fields: ${debugWalkTurnEnded(payload)}`);
                 if (session.openCodeSessionId) {
-                    await persistConversationState(session.cacheDir ?? opencodeGlobalCacheDir(), {
+                    await persistConversationState(session.cacheDir ?? cursorCacheDir(), {
                         sessionKey: session.openCodeSessionId,
                         conversationId: session.conversationId,
                         requestContext: session.requestContext,
@@ -1864,7 +1861,7 @@ export function deliverContinuationResults(session, trailingToolResults) {
     return session;
 }
 async function loadAvailableModels() {
-    const cacheDir = opencodeGlobalCacheDir();
+    const cacheDir = cursorCacheDir();
     try {
         const filePath = cacheFilePath(cacheDir);
         let mtime = 0;
@@ -2533,7 +2530,7 @@ export async function pump(session, controller, ids, abortSignal) {
                 trace(`turn_ended raw wire fields: ${debugWalkTurnEnded(payload)}`);
                 const turnEnded = iu.turn_ended;
                 if (session.openCodeSessionId) {
-                    await persistConversationState(session.cacheDir ?? opencodeGlobalCacheDir(), {
+                    await persistConversationState(session.cacheDir ?? cursorCacheDir(), {
                         sessionKey: session.openCodeSessionId,
                         conversationId: session.conversationId,
                         requestContext: session.requestContext,
@@ -2701,7 +2698,6 @@ export async function pump(session, controller, ids, abortSignal) {
                             trace(`exec request_context hooks_additional_context: ${hooks}`);
                     }
                     try {
-                        traceRequestContextPaths(`exec request_context reply id=${esmId}`, session.requestContext);
                         await writeWithBackpressure(session.stream, buildRequestContextResult(esmId, session.requestContext), `request-context reply id=${esmId}`);
                         trace(`exec request_context: replied`);
                     }
@@ -2854,7 +2850,7 @@ export async function pump(session, controller, ids, abortSignal) {
                                 continue;
                             }
                             const workspaceRoot = workspaceRootFromRequestContext(session.requestContext);
-                            const projectDir = ensureOpencodeProjectDir(workspaceRoot);
+                            const projectDir = ensureCursorProjectDir(workspaceRoot);
                             const target = remapCursorImageWritePath(binaryWrite.path, {
                                 workspaceRoot,
                                 projectDir,
@@ -3574,13 +3570,12 @@ function appendSeedHistory(out, role, content) {
     }
     out.push({ role, content });
 }
-/** OpenCode session id header, if present. */
-export function opencodeSessionKey(callOptions) {
+export function ycodingSessionKey(callOptions) {
     const h = callOptions.headers ?? {};
-    const raw = h["x-session-id"] ??
+    const raw = h["x-ycoding-session"] ??
+        h["x-session-id"] ??
         h["X-Session-Id"] ??
-        h["x-session-affinity"] ??
-        h["x-opencode-session"];
+        h["x-session-affinity"];
     if (typeof raw === "string" && raw.trim().length > 0)
         return raw.trim();
     return undefined;
@@ -3591,7 +3586,7 @@ export function opencodeSessionKey(callOptions) {
  * sticky for the OpenCode session. Falls back to a random UUID with no header.
  */
 export function resolveConversationId(callOptions) {
-    return bindConversationId(opencodeSessionKey(callOptions)).conversationId;
+    return bindConversationId(ycodingSessionKey(callOptions)).conversationId;
 }
 export { sessionIdToUuid } from "./protocol/conversation-bind.js";
 function extractTools(callOptions) {

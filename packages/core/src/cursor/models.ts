@@ -2,7 +2,7 @@ export * as CursorModels from "./models"
 
 import { Money } from "@ycoding-ai/schema/money"
 import type { ModelInfo, ModelParameterValue, ModelVariant } from "./provider/models"
-import { getCursorModelCost, hasCursorFastPricing } from "./provider/pricing"
+import { getCursorModelCost } from "./provider/pricing"
 import { CatalogModel } from "../model"
 import { Provider } from "../provider"
 
@@ -10,8 +10,7 @@ export const providerID = Provider.ID.make("cursor")
 export const packageName = "cursor-opencode-provider"
 export const variantParametersKey = "cursorVariantParameters"
 
-type Tier = "base" | "long"
-type Group = { tier: Tier; fast: boolean; variants: ModelVariant[]; suffix: string }
+type Group = { context?: number; fast: boolean; variants: ModelVariant[]; suffix: string }
 
 export function fromCursor(models: readonly ModelInfo[]): CatalogModel.Info[] {
   const ambiguous = thinkingSuffixNames(models)
@@ -20,7 +19,7 @@ export function fromCursor(models: readonly ModelInfo[]): CatalogModel.Info[] {
     const thinking = !!model.supportsThinking && ambiguous.has(label(model.displayName ?? model.id))
     const groups = tierGroups(model)
     if (groups.length === 0)
-      return [info(model, CatalogModel.ID.make(model.id), { tier: "base", fast: false, variants: [], suffix: "" }, thinking)]
+      return [info(model, CatalogModel.ID.make(model.id), { fast: false, variants: [], suffix: "" }, thinking)]
     const primary = Math.max(
       groups.findIndex((group) => group.suffix === ""),
       0,
@@ -33,7 +32,9 @@ export function fromCursor(models: readonly ModelInfo[]): CatalogModel.Info[] {
 
 function info(model: ModelInfo, id: CatalogModel.ID, group: Group, thinking: boolean): CatalogModel.Info {
   const images = model.supportsImages ?? false
-  const defaults = id === model.id && group.tier === "base" && !group.fast ? undefined : defaultVariant(group)
+  const offeredVariants = variants(model, group.variants)
+  const defaults = id === model.id && group.context === undefined && !group.fast && offeredVariants.length > 0
+    ? undefined : defaultVariant(group)
   return CatalogModel.Info.make({
     ...CatalogModel.Info.empty(providerID, id),
     modelID: CatalogModel.ID.make(model.id),
@@ -42,7 +43,7 @@ function info(model: ModelInfo, id: CatalogModel.ID, group: Group, thinking: boo
       label(model.displayName ?? model.id),
       ...(thinking ? ["Thinking"] : []),
       ...(group.fast ? ["Fast"] : []),
-      ...(group.tier === "long" ? ["1M"] : []),
+      ...(group.context === undefined ? [] : [contextLabel(group.context)]),
     ].join(" "),
     package: Provider.aisdk(packageName),
     ...(defaults ? { settings: { [variantParametersKey]: parameters(defaults.parameterValues) } } : {}),
@@ -51,14 +52,14 @@ function info(model: ModelInfo, id: CatalogModel.ID, group: Group, thinking: boo
       input: images ? ["text", "image"] : ["text"],
       output: ["text"],
     },
-    variants: variants(model, group.variants),
+    variants: offeredVariants,
     cost: costs(
-      getCursorModelCost(group.fast ? `${model.id}-fast` : group.tier === "long" ? `${model.id}-1m` : model.id),
+      getCursorModelCost(group.fast ? `${model.id}-fast` : group.context === 1_000_000 ? `${model.id}-1m` : model.id),
     ),
-    limit:
-      group.tier === "long"
-        ? { context: model.maxContextForMaxMode ?? 1_000_000, output: 128_000 }
-        : { context: model.maxContext ?? (model.id === "default" ? 256_000 : 200_000), output: 32_000 },
+    limit: {
+      context: group.context ?? model.maxContext ?? (model.id === "default" ? 256_000 : 200_000),
+      output: group.context === 1_000_000 ? 128_000 : 32_000,
+    },
   })
 }
 
@@ -81,9 +82,14 @@ function costs(cost: ReturnType<typeof getCursorModelCost>): CatalogModel.Info["
 }
 
 function tierGroups(model: ModelInfo): Group[] {
-  const splitFast = hasCursorFastPricing(model.id)
-  return (["base", "long"] as const).flatMap((tier) => {
-    const tiered = model.variants.filter((variant) => isLongContext(variant) === (tier === "long"))
+  const splitFast = model.variants.some(isFast)
+  const baseContext = model.maxContext ?? (model.id === "default" ? 256_000 : 200_000)
+  const contexts = [...new Set(model.variants.flatMap((variant) => {
+    const context = variantContext(variant, baseContext)
+    return context === undefined ? [] : [context]
+  }))]
+  return ([undefined, ...contexts] as const).flatMap((context) => {
+    const tiered = model.variants.filter((variant) => variantContext(variant, baseContext) === context)
     const speeds = splitFast
       ? [
           { fast: false, variants: tiered.filter((variant) => !isFast(variant)) },
@@ -92,25 +98,28 @@ function tierGroups(model: ModelInfo): Group[] {
       : [{ fast: false, variants: tiered }]
     return speeds
       .filter((speed) => speed.variants.length > 0)
-      .map((speed) => ({ tier, ...speed, suffix: `${tier === "long" ? "-1m" : ""}${speed.fast ? "-fast" : ""}` }))
+      .map((speed) => ({ context, ...speed, suffix: `${context === undefined ? "" : `-${contextLabel(context).toLowerCase()}`}${speed.fast ? "-fast" : ""}` }))
   })
 }
 
 function defaultVariant(group: Group) {
   return (
-    group.variants.find((variant) => (group.tier === "long" ? variant.isDefaultMax : variant.isDefaultNonMax)) ??
+    group.variants.find((variant) => (group.context === undefined ? variant.isDefaultNonMax : variant.isDefaultMax)) ??
     group.variants[0]
   )
 }
 
 function variants(model: ModelInfo, input: readonly ModelVariant[]): CatalogModel.Info["variants"] {
+  if (input.length === 1 && !input[0]?.parameterValues.some((value) => value.id === "effort")) return []
   const base = label(model.displayName ?? model.id)
   const used = new Set<string>()
   return input.map((variant) => {
+    const effort = variant.parameterValues.find((value) => value.id === "effort")?.value
     const sanitized = label(variant.displayName || variant.key || "default")
     const tagged = `${sanitized}${dimensions(variant.parameterValues)}`
     const first = sanitized === base && !used.has(sanitized) ? `${base}${dimensions(variant.parameterValues)}` : undefined
-    const candidate = first ?? (used.has(sanitized) ? tagged : sanitized)
+    const candidate = effort && ["low", "medium", "high", "xhigh"].includes(effort)
+      ? effort : first ?? (used.has(sanitized) ? tagged : sanitized)
     const id = used.has(candidate)
       ? (Array.from({ length: used.size + 1 }, (_, index) => `${tagged} ${index + 2}`).find((item) => !used.has(item)) ??
         tagged)
@@ -154,8 +163,8 @@ function uniqueID(used: Set<string>, modelID: string, suffix: string) {
     ...Array.from({ length: used.size + 1 }, (_, index) => {
       const n = index + 2
       if (suffix === "-fast") return `${modelID}-fast-${n}`
-      if (suffix === "-1m-fast") return `${modelID}-1m-${n}-fast`
-      return `${modelID}-1m-${n}`
+      if (suffix.endsWith("-fast")) return `${modelID}${suffix.slice(0, -5)}-${n}-fast`
+      return `${modelID}${suffix}-${n}`
     }),
   ]
   const id = candidates.find((candidate) => !used.has(candidate)) ?? `${modelID}${suffix}`
@@ -173,16 +182,22 @@ function label(value: string) {
   )
 }
 
-function isLongContext(variant: ModelVariant) {
-  return variant.parameterValues.some((value) => value.id === "context" && contextTokens(value.value) === 1_000_000)
-}
-
 function isFast(variant: ModelVariant) {
   return variant.parameterValues.some((value) => value.id === "fast" && value.value === "true")
 }
 
 function contextTokens(value: string) {
   const match = /^(\d+(?:\.\d+)?)\s*([km])$/i.exec(value.trim())
-  if (match) return Number(match[1]) * (match[2].toLowerCase() === "k" ? 1_000 : 1_000_000)
-  return Number(value.trim())
+  const tokens = match ? Number(match[1]) * (match[2].toLowerCase() === "k" ? 1_000 : 1_000_000) : Number(value.trim())
+  return Number.isSafeInteger(tokens) && tokens > 0 ? tokens : undefined
+}
+
+function variantContext(variant: ModelVariant, baseContext: number) {
+  const value = variant.parameterValues.find((parameter) => parameter.id === "context")?.value
+  const context = value === undefined ? undefined : contextTokens(value)
+  return context === baseContext ? undefined : context
+}
+
+function contextLabel(tokens: number) {
+  return tokens % 1_000_000 === 0 ? `${tokens / 1_000_000}M` : tokens % 1_000 === 0 ? `${tokens / 1_000}k` : String(tokens)
 }

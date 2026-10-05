@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { autocompleteBound, modelSelection, optionsForTrigger, applyMention, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, orderedVariants, visibleModels, pairedFastModel, switchFastModel, effortLevel, needsCatalogRead } from "./composer-logic"
+import { autocompleteBound, modelSelection, optionsForTrigger, applyMention, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, orderedVariants, visibleModels, orderedModelOptions, pairedFastModel, switchFastModel, effortLevel, needsCatalogRead } from "./composer-logic"
 import type { CatalogView, ModelOption } from "../catalog"
 
 const models: ModelOption[] = [
@@ -37,6 +37,27 @@ test("paired fast models hide from the picker and switch model identity without 
   expect(switchFastModel(models, { providerID: "anthropic", id: "claude-opus-5-5-fast", variant: "medium" })).toEqual({ providerID: "anthropic", id: "claude-opus-5-5" })
   expect(pairedFastModel(models, { providerID: "zai", id: "glm-fast-latest" })).toBeUndefined()
   expect(switchFastModel(models, { providerID: "openai", id: "gpt-6-lite" })).toBeUndefined()
+})
+
+test("model rows show available recents once before the selected provider and stable remaining provider groups", () => {
+  const catalog = [
+    { providerID: "zai", id: "zai-a", name: "Zai A", variants: [] },
+    { providerID: "openai", id: "gpt-a", name: "GPT A", variants: [] },
+    { providerID: "anthropic", id: "claude-a", name: "Claude A", variants: [] },
+    { providerID: "openai", id: "gpt-b", name: "GPT B", variants: [] },
+    { providerID: "openai", id: "gpt-b-fast", name: "GPT B Fast", variants: [] },
+  ] satisfies ModelOption[]
+  expect(orderedModelOptions(catalog, [
+    { providerID: "zai", id: "zai-a" },
+    { providerID: "openai", id: "gpt-b" },
+    { providerID: "openai", id: "gpt-b" },
+    { providerID: "missing", id: "gone" },
+  ], { providerID: "openai", id: "gpt-a" }).map((item) => item.id)).toEqual([
+    "zai-a", "gpt-b", "gpt-a", "claude-a",
+  ])
+  expect(orderedModelOptions(catalog, [], { providerID: "missing", id: "gone" }).map((item) => item.id)).toEqual([
+    "claude-a", "gpt-a", "gpt-b", "zai-a",
+  ])
 })
 
 test("effort levels map known variants exactly and unknown variants to one deterministic fallback", () => {

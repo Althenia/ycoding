@@ -174,8 +174,8 @@ export declare function extractPromptHistory(prompt: LanguageModelV3CallOptions[
     preserveTrailingUser?: boolean;
     toolResults?: "omit" | "all" | "trailing";
 }): SeedHistoryMessage[];
-/** OpenCode session id header, if present. */
-export declare function opencodeSessionKey(callOptions: LanguageModelV3CallOptions): string | undefined;
+/** YCoding session id header, if present. */
+export declare function ycodingSessionKey(callOptions: LanguageModelV3CallOptions): string | undefined;
 /**
  * Map OpenCode's session id header to the active Cursor conversation_id.
  * Compaction resets remint via bindConversationId; otherwise the binding is

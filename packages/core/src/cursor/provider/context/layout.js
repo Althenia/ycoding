@@ -33,7 +33,7 @@ async function walk(dir, depth, maxDepth, maxEntries) {
     for (const name of names) {
         if (count >= maxEntries)
             break;
-        if (name.startsWith(".") && name !== ".opencode" && name !== ".claude" && name !== ".agents")
+        if (name.startsWith(".") && name !== ".ycoding" && name !== ".claude" && name !== ".agents")
             continue;
         if (SKIP.has(name))
             continue;

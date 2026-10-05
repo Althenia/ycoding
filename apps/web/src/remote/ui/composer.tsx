@@ -4,7 +4,7 @@ import { createDebouncer, createThrottler } from "@tanstack/solid-pacer"
 import { Icon } from "../../ui/icon"
 import { catalogKey, type CatalogTarget, type CatalogView, type FileOption } from "../catalog"
 import { useRemote } from "../context"
-import { defaultComposerModel, readPreferredModel, writePreferredModel } from "../preferences"
+import { defaultComposerModel, readPreferredModel, readRecentModels, rememberRecentModel, writePreferredModel } from "../preferences"
 import { contextWindowDisplay, generationSpeedDisplay } from "../projection"
 import type { ModelRefView } from "../projection"
 import { applyMention, autocompleteBound, modelSelection, needsCatalogRead, optionsForTrigger, pairedFastModel, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, type MentionPart } from "./composer-logic"
@@ -31,6 +31,7 @@ export function MiniComposer(props: {
   const remote = useRemote()
   const [agent, setAgent] = createSignal<string>()
   const [model, setModel] = createSignal<ModelRefView>()
+  const [recentModels, setRecentModels] = createSignal(readRecentModels())
   const rememberedVariants = new Map<string, string>()
   const [delivery, setDelivery] = createSignal<"steer" | "queue">("steer")
   const [attachments, setAttachments] = createSignal<readonly ComposerAttachment[]>([])
@@ -84,6 +85,7 @@ export function MiniComposer(props: {
     if (chosen.variant === undefined) rememberedVariants.delete(JSON.stringify([chosen.providerID, chosen.id]))
     setModel(chosen)
     writePreferredModel(undefined, chosen)
+    setRecentModels(rememberRecentModel(undefined, chosen))
   }
   const activeView = () => {
     const sessionID = props.target && "sessionID" in props.target ? props.target.sessionID : undefined
@@ -332,7 +334,7 @@ export function MiniComposer(props: {
         }}>
           <div class="mini-picker__heading"><strong>Agent and model</strong><button type="button" aria-label="Close agent and model picker" onClick={closeMobile}><Icon name="close" /></button></div>
           <Show when={contextWindow()}>{(value) => <div class="composer__context-summary"><strong>Context window</strong><div class="composer__context-bar" aria-hidden="true"><span class="composer__context-bar-fill" style={{ width: `${Math.min(100, value().fraction * 100)}%` }} /></div><span>{contextLabel()}</span><span>{value().tokens}</span></div>}</Show>
-          <div class="composer__selection-options"><ComposerPicker label="Agent" icon="user" placeholder="Default agent" value={selectedAgent()} pending={agentPending()} options={primaryAgents().map((item) => ({ value: item.id, label: item.name, detail: item.description }))} disabled={props.disabled || catalog()?.status !== "ready"} onChange={setAgent} /><ModelControl models={catalog()?.models ?? []} selected={selectedModel()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready" || sessionTarget() && current() === undefined} rememberedVariant={rememberedVariant} onChange={chooseModel} /></div>
+          <div class="composer__selection-options"><ComposerPicker label="Agent" icon="user" placeholder="Default agent" value={selectedAgent()} pending={agentPending()} options={primaryAgents().map((item) => ({ value: item.id, label: item.name, detail: item.description }))} disabled={props.disabled || catalog()?.status !== "ready"} onChange={setAgent} /><ModelControl models={catalog()?.models ?? []} selected={selectedModel()} recent={recentModels()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready" || sessionTarget() && current() === undefined} rememberedVariant={rememberedVariant} onChange={chooseModel} /></div>
         </section>
       </Portal></Show>
     </Portal></Show>
@@ -365,7 +367,7 @@ export function MiniComposer(props: {
       <div class="composer__controls">
         <ComposerPicker label="Agent" icon="user" placeholder="Default agent" value={selectedAgent()} pending={agentPending()} options={primaryAgents().map((item) => ({ value: item.id, label: item.name, detail: item.description }))} disabled={props.disabled || catalog()?.status !== "ready"} onChange={setAgent} />
         <Show when={contextWindow()}><div class="composer__context"><button ref={contextTrigger} type="button" class="composer__context-trigger" aria-label={contextAccessible()} aria-expanded={contextOpen() && !contextLeaving()} onMouseEnter={() => { if (window.matchMedia("(hover: hover)").matches) showContext() }} onMouseLeave={queueContextClose} onFocus={showContext} onBlur={() => { if (!contextPinned()) queueContextClose() }} onClick={() => { if (contextPinned()) closeContext(); else { setContextPinned(true); showContext() } }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeContext() } }}>{ring()}</button><Show when={contextOpen()}><div class="composer__context-popover" classList={{ "composer__context-popover--leaving": contextLeaving() }} role="tooltip" aria-hidden={contextLeaving()} inert={contextLeaving()} onMouseEnter={contextClose.cancel} onMouseLeave={queueContextClose} onAnimationEnd={finishContext} onAnimationCancel={finishContext}><strong>Context window</strong><span>{contextLabel()}</span><span>{contextWindow()?.tokens}</span></div></Show></div></Show>
-        <ModelControl models={catalog()?.models ?? []} selected={selectedModel()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready" || sessionTarget() && current() === undefined} rememberedVariant={rememberedVariant} onChange={chooseModel} />
+        <ModelControl models={catalog()?.models ?? []} selected={selectedModel()} recent={recentModels()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready" || sessionTarget() && current() === undefined} rememberedVariant={rememberedVariant} onChange={chooseModel} />
         <Show when={props.showStatus}><ComposerStatus /></Show>
         <Show when={speed()}>{(value) => <span class="composer__speed" title="Latest generation speed">{value().label}<Show when={value().trend}><span class="composer__speed-trend" aria-hidden="true"> {value().trend}</span></Show></span>}</Show>
         <span class="composer__spacer" />

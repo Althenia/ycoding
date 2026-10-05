@@ -19,12 +19,14 @@ beforeAll(async () => {
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
 const models = [
-  { providerID: "openai", id: "model-a", name: "Model A", variants: ["low", "high", "max"] },
-  { providerID: "openai", id: "model-a-fast", name: "Model A Fast", variants: ["medium", "high"] },
-  { providerID: "openai", id: "model-b", name: "Model B", variants: ["low", "high"] },
-  { providerID: "openai", id: "model-c", name: "Model C", variants: ["medium", "high"] },
-  { providerID: "openai", id: "model-d", name: "Model D", variants: ["default", "none"] },
-  { providerID: "openai", id: "model-plain", name: "Model Plain", variants: [] },
+  { providerID: "anthropic", providerName: "Anthropic", id: "claude-1", name: "Claude 1", variants: ["low", "high"] },
+  { providerID: "anthropic", providerName: "Anthropic", id: "claude-2", name: "Claude 2", variants: ["low", "high"] },
+  { providerID: "openai", providerName: "OpenAI", id: "model-a", name: "Model A", variants: ["low", "high", "max"] },
+  { providerID: "openai", providerName: "OpenAI", id: "model-a-fast", name: "Model A Fast", variants: ["medium", "high"] },
+  { providerID: "openai", providerName: "OpenAI", id: "model-b", name: "Model B", variants: ["low", "high"] },
+  { providerID: "openai", providerName: "OpenAI", id: "model-c", name: "Model C", variants: ["medium", "high"] },
+  { providerID: "openai", providerName: "OpenAI", id: "model-d", name: "Model D", variants: ["default", "none"] },
+  { providerID: "openai", providerName: "OpenAI", id: "model-plain", name: "Model Plain", variants: [] },
 ]
 type Page = Awaited<ReturnType<NonNullable<typeof browser>["openPage"]>>
 async function wait(page: Page, expression: string) {
@@ -36,13 +38,14 @@ async function wait(page: Page, expression: string) {
 }
 async function harness(initial: ModelRefView | null = { providerID: "openai", id: "model-a", variant: "max" }, preferred?: ModelRefView) {
   let current: ModelRefView | undefined = initial ?? undefined
+  let catalogModels = models
   let refused = false
   const session = () => ({ id: "ses_a", title: "Model replay", agent: "god", model: current, time: { created: 1, updated: 2 } })
   const relay = await startRelayDouble({
     advertisedSessions: ["ses_a"],
     snapshot: () => ({ session: session(), messages: [], watermark: { type: "log.synced", aggregateID: "ses_a", seq: 0 } }),
     handler: (request) => {
-      if (request.operation === "session.catalog" || request.operation === "workspace.catalog") return { ok: true, value: { defaultModel: { providerID: "openai", id: "model-a" }, agents: [{ id: "god", name: "God", mode: "primary" }], models, commands: [], skills: [], references: [], resources: [] } }
+      if (request.operation === "session.catalog" || request.operation === "workspace.catalog") return { ok: true, value: { defaultModel: { providerID: "openai", id: "model-a" }, agents: [{ id: "god", name: "God", mode: "primary" }], models: catalogModels, commands: [], skills: [], references: [], resources: [] } }
       if (request.operation === "session.list") return { ok: true, value: { data: [session()], cursor: {} } }
       if (request.operation === "session.get") return { ok: true, value: { data: session() } }
       if (request.operation !== "session.switchModel") return "default"
@@ -55,18 +58,23 @@ async function harness(initial: ModelRefView | null = { providerID: "openai", id
     },
   })
   const page = await browser!.openPage()
-  if (preferred) await page.injectOnNewDocument(`localStorage.setItem('ycoding.remote.preferred-model',${JSON.stringify(JSON.stringify(preferred))})`)
+  const storageSession = crypto.randomUUID()
+  await page.injectOnNewDocument(`if(localStorage.getItem('__modelReplayStorageSession')!==${JSON.stringify(storageSession)}){localStorage.removeItem('ycoding.remote.recent-models');localStorage.removeItem('ycoding.remote.preferred-model');localStorage.setItem('__modelReplayStorageSession',${JSON.stringify(storageSession)})}${preferred ? `localStorage.setItem('ycoding.remote.preferred-model',${JSON.stringify(JSON.stringify(preferred))})` : ""}`)
   await page.navigate(`http://127.0.0.1:${port}/verify/model-replay-fixture.html?relay=${encodeURIComponent(relay.wsURL("dev_1"))}`)
   await wait(page, `window.modelReplayStore?.state().transport.kind === 'open' && window.modelReplayStore.state().sessions.length > 0`)
   await page.evaluate(`window.modelReplayStore.selectSession('ses_a')`)
   await wait(page, `document.querySelector('.model-control__trigger')?.disabled === false`)
-  return { page, relay, current: () => current, refuse: () => { refused = true }, external: (model: ModelRefView) => { current = model; relay.pushEvent("ses_a", { type: "session.model.selected", data: { sessionID: "ses_a", model } }) }, close: async () => { await page.close(); await relay.stop() } }
+  return { page, relay, current: () => current, refuse: () => { refused = true }, setCatalogModels: (next: typeof models) => { catalogModels = next }, external: (model: ModelRefView) => { current = model; relay.pushEvent("ses_a", { type: "session.model.selected", data: { sessionID: "ses_a", model } }) }, close: async () => { await page.close(); await relay.stop() } }
 }
 async function choose(page: Page, name: string) {
   await page.evaluate(`document.querySelector('.model-control__trigger').click()`)
   await page.evaluate(`document.querySelector('.model-control__switch').click()`)
   await page.evaluate(`[...document.querySelectorAll('.model-control__model')].find(option=>option.textContent.startsWith(${JSON.stringify(name)})).click()`)
   await page.evaluate(`document.querySelector('[aria-label="Close model picker"]').click()`)
+}
+async function openModelList(page: Page) {
+  await page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+  await page.evaluate(`document.querySelector('.model-control__switch').click()`)
 }
 async function send(page: Page, text: string) {
   await page.evaluate(`(() => { const field=document.querySelector('.mini-composer__mount textarea'); field.value=${JSON.stringify(text)}; field.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('[aria-label="Send prompt"]').click(); })()`)
@@ -238,5 +246,78 @@ test("an existing Session without a model uses the catalog default identity, not
     await wait(h.page, `document.querySelector('.model-control__trigger')?.disabled === false`)
     expect(await h.page.evaluate<string>(`document.querySelector('.model-control__name').textContent`)).toBe("Model B")
     expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("high")
+  } finally { await h.close() }
+})
+
+test("model choices persist as recent-first rows, keep provider groups stable, and never alter selection from display order", async () => {
+  const h = await harness()
+  try {
+    await choose(h.page, "Model B")
+    await choose(h.page, "Claude 1")
+    expect(h.current()).toEqual({ providerID: "openai", id: "model-a", variant: "max" })
+    await openModelList(h.page)
+    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__model')].map(node=>node.childNodes[0].textContent.trim())`)).toEqual([
+      "Claude 1", "Model B", "Claude 2", "Model A", "Model C", "Model D", "Model Plain",
+    ])
+    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__provider')].map(node=>node.textContent.trim())`)).toEqual([
+      "Recent", "Anthropic", "OpenAI",
+    ])
+    await h.page.evaluate(`document.querySelector('.mini-picker__search').value='Model'; document.querySelector('.mini-picker__search').dispatchEvent(new Event('input',{bubbles:true}))`)
+    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__model')].map(node=>node.childNodes[0].textContent.trim())`)).toEqual([
+      "Model B", "Model A", "Model C", "Model D", "Model Plain",
+    ])
+    await h.page.evaluate(`document.querySelector('.mini-picker__search').focus()`)
+    await h.page.pressKey("ArrowDown", "ArrowDown", 35)
+    expect(await h.page.evaluate<string>(`document.querySelector('.mini-picker__option--active')?.childNodes[0].textContent.trim()`)).toBe("Model A")
+    expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(0)
+    await h.page.evaluate(`document.querySelector('[aria-label="Close model picker"]').click()`)
+    await h.page.navigate(`http://127.0.0.1:${port}/verify/model-replay-fixture.html?relay=${encodeURIComponent(h.relay.wsURL("dev_1"))}`)
+    await wait(h.page, `window.modelReplayStore?.state().transport.kind === 'open' && window.modelReplayStore.state().sessions.length > 0`)
+    await h.page.evaluate(`window.modelReplayStore.selectSession('ses_a')`)
+    await wait(h.page, `document.querySelector('.model-control__trigger')?.disabled === false`)
+    await openModelList(h.page)
+    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__model')].map(node=>node.childNodes[0].textContent.trim())`)).toEqual([
+      "Claude 1", "Model B", "Model A", "Model C", "Model D", "Model Plain", "Claude 2",
+    ])
+    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__provider')].map(node=>node.textContent.trim())`)).toEqual([
+      "Recent", "OpenAI", "Anthropic",
+    ])
+    expect(await h.page.evaluate<unknown>(`window.modelReplayStore.state().selectedSessionInfo.model`)).toEqual({ providerID: "openai", id: "model-a", variant: "max" })
+    expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(0)
+    await h.page.evaluate(`document.querySelector('[aria-label="Close model picker"]').click()`)
+    h.setCatalogModels(models.filter((item) => item.id !== "model-b" && item.id !== "claude-1"))
+    await h.page.evaluate(`window.modelReplayStore.loadCatalog({sessionID:'ses_a'}, {refresh:true})`)
+    await wait(h.page, `window.modelReplayStore.state().catalogs['session:ses_a']?.models.length === 6`)
+    await openModelList(h.page)
+    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__model')].map(node=>node.childNodes[0].textContent.trim())`)).toEqual([
+      "Model A", "Model C", "Model D", "Model Plain", "Claude 2",
+    ])
+    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__provider')].map(node=>node.textContent.trim())`)).toEqual([
+      "OpenAI", "Anthropic",
+    ])
+    await h.page.evaluate(`document.querySelector('.mini-picker__search').value='Model'; document.querySelector('.mini-picker__search').dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('.mini-picker__search').focus()`)
+    await wait(h.page, `document.querySelectorAll('.model-control__model').length === 4`)
+    await h.page.pressKey("ArrowDown", "ArrowDown", 35)
+    expect(await h.page.evaluate<string>(`document.querySelector('.mini-picker__option--active')?.childNodes[0].textContent.trim()`)).toBe("Model C")
+    await h.page.pressKey("Enter", "Enter", 35)
+    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__name').textContent`)).toBe("Model C")
+    expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(0)
+  } finally { await h.close() }
+})
+
+test("recent models with matching names identify their providers", async () => {
+  const h = await harness()
+  try {
+    h.setCatalogModels([...models, { providerID: "cursor", providerName: "Cursor", id: "model-b", name: "Model B", variants: ["high"] }])
+    await h.page.evaluate(`localStorage.setItem('ycoding.remote.recent-models', JSON.stringify([{providerID:'cursor',id:'model-b'},{providerID:'openai',id:'model-b'}]))`)
+    await h.page.navigate(`http://127.0.0.1:${port}/verify/model-replay-fixture.html?relay=${encodeURIComponent(h.relay.wsURL("dev_1"))}`)
+    await wait(h.page, `window.modelReplayStore?.state().transport.kind === 'open' && window.modelReplayStore.state().sessions.length > 0`)
+    await h.page.evaluate(`window.modelReplayStore.selectSession('ses_a')`)
+    await wait(h.page, `document.querySelector('.model-control__trigger')?.disabled === false`)
+    await openModelList(h.page)
+    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__model')].slice(0,2).map(row=>row.querySelector('small')?.textContent.trim())`))
+      .toEqual(["Cursor · model-b", "OpenAI · model-b"])
+    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__model')].slice(0,2).map(row=>row.getAttribute('aria-label'))`))
+      .toEqual(["Model B · Cursor · model-b", "Model B · OpenAI · model-b"])
   } finally { await h.close() }
 })

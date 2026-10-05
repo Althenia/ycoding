@@ -4,8 +4,8 @@ import path from "node:path";
 import { encodeMessage } from "./messages.js";
 import { encodeJsonAsValue, decodeStructEntriesToJson, readAllFields } from "./struct.js";
 import { buildEnv } from "../context/env.js";
-import { ensureOpencodeProjectDir } from "../context/paths.js";
-import { trace, traceRequestContextPaths } from "../debug.js";
+import { ensureCursorProjectDir } from "../context/paths.js";
+import { trace } from "../debug.js";
 import { cursorExecVariantByRequestName, FORCE_BACKGROUND_STATUS_ERROR, } from "./exec-variants.js";
 import { APPLY_PATCH_TOOL, buildAddFilePatch, buildUpdateFilePatch, planSubstringEdit, } from "./apply-patch.js";
 import { BACKGROUND_SHELL_MARKER, buildBackgroundShellCommand, } from "../shell-timeout.js";
@@ -276,7 +276,7 @@ export function buildLiveRequestContext(tools, providerIdentifier = "opencode", 
         tools: flat,
         mcp_file_system_options: {
             enabled: true,
-            workspace_project_dir: ensureOpencodeProjectDir(cwd),
+            workspace_project_dir: ensureCursorProjectDir(cwd),
             mcp_descriptors: nested,
         },
         mcp_meta_tool_options: {
@@ -291,7 +291,6 @@ export function buildLiveRequestContext(tools, providerIdentifier = "opencode", 
         mcp_file_system_info_complete: true,
         git_status_info_complete: true,
     };
-    traceRequestContextPaths("buildLiveRequestContext", ctx);
     return ctx;
 }
 // ── Cursor exec-variant → opencode tool name ──
@@ -550,9 +549,7 @@ export function resolveCursorSubagentType(subagentType, catalog) {
         if (available.has(candidate))
             return candidate;
     }
-    if (catalog?.complete)
-        return undefined;
-    return candidates[0];
+    return undefined;
 }
 /**
  * Cursor's native Task/subagent protocol uses Cursor-owned subtype names while
@@ -3154,7 +3151,6 @@ export function detectExecVariantField(agentServerPayload) {
  * Encode exec #10 request_context_result from a prebuilt RequestContext payload.
  */
 export function buildRequestContextResult(execId, requestContext) {
-    traceRequestContextPaths(`buildRequestContextResult id=${execId}`, requestContext);
     return encodeMessage("AgentClientMessage", {
         exec_client_message: {
             id: execId,

@@ -77,10 +77,46 @@ const byID = (models: ReturnType<typeof CursorModels.fromCursor>) =>
   new Map(models.map((model) => [String(model.id), model]))
 
 describe("CursorModels.fromCursor", () => {
+  test("presents Grok context sizes as models with four effort choices each", () => {
+    const efforts = ["low", "medium", "high", "xhigh"] as const
+    const models = byID(CursorModels.fromCursor([{
+      id: "grok-4.7", displayName: "Grok 4.7", maxContext: 256_000, maxContextForMaxMode: 500_000,
+      variants: efforts.flatMap((effort) => [
+        { key: effort, displayName: `Grok 4.7 ${effort === "xhigh" ? "Extra High" : effort}`,
+          parameterValues: [{ id: "effort", value: effort }, { id: "context", value: "256k" }],
+          isDefaultNonMax: effort === "high", isDefaultMax: false },
+        { key: `${effort}-500k`, displayName: `Grok 4.7 ${effort} 500k`,
+          parameterValues: [{ id: "effort", value: effort }, { id: "context", value: "500k" }],
+          isDefaultNonMax: false, isDefaultMax: effort === "high" },
+      ]),
+    }]))
+
+    expect([...models.keys()]).toEqual(["grok-4.7", "grok-4.7-500k"])
+    expect(models.get("grok-4.7")).toMatchObject({ name: "Grok 4.7", limit: { context: 256_000 }, modelID: "grok-4.7" })
+    expect(models.get("grok-4.7-500k")).toMatchObject({ name: "Grok 4.7 500k", limit: { context: 500_000 }, modelID: "grok-4.7",
+      settings: { cursorVariantParameters: [{ id: "effort", value: "high" }, { id: "context", value: "500k" }] } })
+    expect(models.get("grok-4.7-500k")?.cost.length).toBeGreaterThan(0)
+    for (const [id, context] of [["grok-4.7", "256k"], ["grok-4.7-500k", "500k"]] as const)
+      expect(models.get(id)?.variants).toEqual(efforts.map((effort) => ({ id: CatalogModel.VariantID.make(effort),
+        settings: { cursorVariantParameters: [{ id: "effort", value: effort }, { id: "context", value: context }] } })))
+  })
+
+  test("keeps an advertised 500k model identity when a generated context entry collides", () => {
+    const models = CursorModels.fromCursor([
+      { id: "grok-4.7-500k", variants: [] },
+      { id: "grok-4.7", maxContext: 256_000, variants: [
+        { key: "high", displayName: "Grok 4.7 High", parameterValues: [{ id: "effort", value: "high" }, { id: "context", value: "256k" }], isDefaultNonMax: true, isDefaultMax: false },
+        { key: "high-500k", displayName: "Grok 4.7 High 500k", parameterValues: [{ id: "effort", value: "high" }, { id: "context", value: "500k" }], isDefaultNonMax: false, isDefaultMax: true },
+      ] },
+    ])
+    expect(models.map((model) => model.id)).toEqual(["grok-4.7-500k", "grok-4.7", "grok-4.7-500k-2"].map((id) => CatalogModel.ID.make(id)))
+    expect(models[2]?.modelID).toBe(CatalogModel.ID.make("grok-4.7"))
+  })
+
   test("splits long-context variants into a -1m entry with exact parameter tuples", () => {
     const models = byID(CursorModels.fromCursor([opus]))
 
-    expect([...models.keys()]).toEqual(["claude-opus-4-8", "claude-opus-4-8-1m"])
+    expect([...models.keys()]).toEqual(["claude-opus-4-8", "claude-opus-4-8-fast", "claude-opus-4-8-1m"])
     const base = models.get("claude-opus-4-8")
     expect(base).toMatchObject({
       modelID: "claude-opus-4-8",
@@ -95,26 +131,23 @@ describe("CursorModels.fromCursor", () => {
     expect(base?.settings).toBeUndefined()
     expect(base?.variants).toEqual([
       {
-        id: CatalogModel.VariantID.make("Opus 4.8 High"),
+        id: CatalogModel.VariantID.make("high"),
         settings: {
           cursorVariantParameters: [
             { id: "effort", value: "high" },
-            { id: "context", value: "300k" },
-          ],
-        },
-      },
-      {
-        id: CatalogModel.VariantID.make("Opus 4.8 High Fast"),
-        settings: {
-          cursorVariantParameters: [
-            { id: "effort", value: "high" },
-            { id: "fast", value: "true" },
             { id: "context", value: "300k" },
           ],
         },
       },
     ])
     expect(base?.cost.length).toBeGreaterThan(0)
+
+    expect(models.get("claude-opus-4-8-fast")).toMatchObject({
+      name: "Opus 4.8 Fast", modelID: "claude-opus-4-8", cost: [],
+      variants: [{ id: "high", settings: { cursorVariantParameters: [
+        { id: "effort", value: "high" }, { id: "fast", value: "true" }, { id: "context", value: "300k" },
+      ] } }],
+    })
 
     expect(models.get("claude-opus-4-8-1m")).toMatchObject({
       modelID: "claude-opus-4-8",
@@ -128,7 +161,7 @@ describe("CursorModels.fromCursor", () => {
       },
       variants: [
         {
-          id: "Opus 4.8 1M High",
+          id: "high",
           settings: {
             cursorVariantParameters: [
               { id: "effort", value: "high" },
@@ -144,13 +177,13 @@ describe("CursorModels.fromCursor", () => {
     const models = byID(CursorModels.fromCursor([composer]))
 
     expect([...models.keys()]).toEqual(["composer-2.5", "composer-2.5-fast"])
-    expect(models.get("composer-2.5")?.variants.map((variant) => variant.id)).toEqual([CatalogModel.VariantID.make("Composer 2.5 default")])
-    expect(models.get("composer-2.5")?.settings).toBeUndefined()
+    expect(models.get("composer-2.5")?.variants).toEqual([])
+    expect(models.get("composer-2.5")?.settings).toEqual({ cursorVariantParameters: [{ id: "fast", value: "false" }] })
     expect(models.get("composer-2.5-fast")).toMatchObject({
       modelID: "composer-2.5",
       name: "Composer 2.5 Fast",
       settings: { cursorVariantParameters: [{ id: "fast", value: "true" }] },
-      variants: [{ id: "Composer 2.5 Fast", settings: { cursorVariantParameters: [{ id: "fast", value: "true" }] } }],
+      variants: [],
     })
     expect(models.get("composer-2.5-fast")?.cost).toEqual([rate(3, 15, 0.5)])
     expect(models.get("composer-2.5")?.cost).toEqual([rate(0.5, 2.5, 0.2)])

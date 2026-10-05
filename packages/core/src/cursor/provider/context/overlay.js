@@ -48,9 +48,8 @@ function skillId(skill) {
 }
 function toWire(hold) {
     return {
-        skills: hold.skills.map(({ full_path, content, description }) => ({
+        skills: hold.skills.map(({ full_path, description }) => ({
             full_path,
-            content,
             description,
         })),
         subagents: hold.subagents,

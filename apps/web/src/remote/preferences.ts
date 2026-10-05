@@ -5,6 +5,7 @@ import type { CatalogView } from "./catalog"
 import type { ModelRefView } from "./projection"
 
 const PREFERRED_MODEL_KEY = "ycoding.remote.preferred-model"
+const RECENT_MODELS_KEY = "ycoding.remote.recent-models"
 const REMEMBERED_MACHINE_KEY = "ycoding.remote.machine"
 
 export function readRememberedMachine(storage: StorageLike | null | undefined = browserStorage()): string | undefined {
@@ -26,6 +27,32 @@ export function readPreferredModel(storage: StorageLike | null | undefined = bro
 
 export function writePreferredModel(storage: StorageLike | null | undefined = browserStorage(), model: ModelRefView): boolean {
   return writeStored(storage, PREFERRED_MODEL_KEY, JSON.stringify(model))
+}
+
+export function readRecentModels(storage: StorageLike | null | undefined = browserStorage()): ModelRefView[] {
+  return readStored(storage, RECENT_MODELS_KEY, (raw) => {
+    try {
+      const value: unknown = JSON.parse(raw)
+      if (!Array.isArray(value)) return []
+      const seen = new Set<string>()
+      return value.flatMap((item) => {
+        if (typeof item !== "object" || item === null || !("providerID" in item) || !("id" in item)) return []
+        if (typeof item.providerID !== "string" || !item.providerID || typeof item.id !== "string" || !item.id) return []
+        const key = JSON.stringify([item.providerID, item.id])
+        if (seen.has(key)) return []
+        seen.add(key)
+        return [{ providerID: item.providerID, id: item.id }]
+      }).slice(0, 10)
+    } catch {
+      return []
+    }
+  }) ?? []
+}
+
+export function rememberRecentModel(storage: StorageLike | null | undefined = browserStorage(), model: ModelRefView): ModelRefView[] {
+  const recent = [{ providerID: model.providerID, id: model.id }, ...readRecentModels(storage).filter((item) => item.providerID !== model.providerID || item.id !== model.id)].slice(0, 10)
+  writeStored(storage, RECENT_MODELS_KEY, JSON.stringify(recent))
+  return recent
 }
 
 export function defaultComposerModel(catalog: CatalogView | undefined, preferred: ModelRefView | undefined): ModelRefView | undefined {

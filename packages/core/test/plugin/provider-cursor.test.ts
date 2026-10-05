@@ -19,7 +19,6 @@ import {
   generatePkceChallenge,
   generatePkceParams,
   pollForTokens,
-  refreshAccessToken,
 } from "../../src/cursor/provider/auth"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
@@ -27,13 +26,17 @@ import { PluginTestLayer } from "./fixture"
 const it = testEffect(PluginTestLayer)
 
 const bearerInputs: string[] = []
+const refreshInputs: string[] = []
 void mock.module("../../src/cursor/provider/auth", () => ({
   buildLoginUrl,
   decodeJwtExpiryMs,
   generatePkceChallenge,
   generatePkceParams,
   pollForTokens,
-  refreshAccessToken,
+  refreshAccessToken: async (token: string) => {
+    refreshInputs.push(token)
+    return { accessToken: jwt({ exp: 1_950_000_000 }), refreshToken: "rotated" }
+  },
   resolveBearerToken: async (input: { apiKey: string }) => {
     bearerInputs.push(input.apiKey)
     return "bearer"
@@ -291,6 +294,20 @@ describe("CursorPlugin", () => {
         expires: 1_900_000_000_000,
       })
       expect(oauthCredential({ accessToken: "opaque", refreshToken: "refresh" }).expires).toBe(0)
+    }),
+  )
+
+  it.effect("refreshes the stored Cursor OAuth credential and persists the rotated refresh token", () =>
+    Effect.gen(function* () {
+      refreshInputs.length = 0
+      const credential = yield* oauth.refresh(Credential.OAuth.make({
+        type: "oauth", methodID: Integration.MethodID.make("browser"),
+        access: jwt({ exp: 1_900_000_000 }), refresh: "old-refresh", expires: 1_900_000_000_000,
+      }))
+      expect(refreshInputs).toEqual(["old-refresh"])
+      expect(credential).toMatchObject({
+        access: jwt({ exp: 1_950_000_000 }), refresh: "rotated", expires: 1_950_000_000_000,
+      })
     }),
   )
 })

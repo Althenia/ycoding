@@ -11,7 +11,6 @@ export type OpencodeJson = {
 };
 export declare function findGitWorktree(start: string): Promise<string>;
 /** Same truthy rule as OpenCode's Flag.OPENCODE_DISABLE_PROJECT_CONFIG. */
-export declare function isProjectConfigDisabled(): boolean;
 /** Fetch a remote instruction with one deadline covering headers and body. */
 export declare function fetchRemoteInstruction(url: string, timeoutMs?: number): Promise<string | undefined>;
 export declare function loadMergedConfig(workspaceRoot: string): Promise<OpencodeJson>;

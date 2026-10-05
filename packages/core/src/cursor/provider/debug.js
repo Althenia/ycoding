@@ -56,13 +56,12 @@ export function ensureSecureDebugLog(filePath, options = {}) {
     }
     fs.chmodSync(filePath, 0o600);
 }
-function announceLogPath(filePath) {
+function announceLogPath() {
     if (_announcedLogPath)
         return;
     _announcedLogPath = true;
     try {
-        // Visible in the OpenCode / terminal session so operators know where to look.
-        console.error(`[cursor-provider] CURSOR_PROVIDER_DEBUG logging to ${filePath}`);
+        console.error("[cursor-provider] CURSOR_PROVIDER_DEBUG enabled");
     }
     catch {
         /* ignore */
@@ -82,10 +81,13 @@ export function truncateDebugLogIfOversized(filePath, maxBytes = DEBUG_LOG_MAX_B
     if (size < maxBytes)
         return false;
     fs.writeFileSync(filePath, debugBannerLine() +
-        `[${new Date().toISOString()}] debug: size-cap truncate file=${filePath} ` +
+        `[${new Date().toISOString()}] debug: size-cap truncate ` +
         `wasBytes=${size} maxBytes=${maxBytes}\n`, { mode: 0o600 });
     fs.chmodSync(filePath, 0o600);
     return true;
+}
+export function safeTraceEvent(msg) {
+    return /^([A-Za-z][A-Za-z0-9 _-]{0,60}):(?:\s|$)/.exec(msg)?.[1] ?? "provider event";
 }
 export function trace(msg) {
     if (!DEBUG_ENABLED)
@@ -108,38 +110,15 @@ export function trace(msg) {
                 fs.writeFileSync(_debugFile, banner, { mode: 0o600 });
             }
             _traceInitialized = true;
-            announceLogPath(_debugFile);
-            fs.appendFileSync(_debugFile, `[${new Date().toISOString()}] debug: enabled file=${_debugFile} ` +
-                `xdg_cache_home=${process.env.XDG_CACHE_HOME ?? "(unset)"} ` +
-                `cwd=${process.cwd()}` +
+            announceLogPath();
+            fs.appendFileSync(_debugFile, `[${new Date().toISOString()}] debug: enabled` +
                 (preexisting ? " reinit=append" : "") +
                 `\n`);
         }
         truncateDebugLogIfOversized(_debugFile);
-        fs.appendFileSync(_debugFile, `[${new Date().toISOString()}] ${msg}\n`);
+        fs.appendFileSync(_debugFile, `[${new Date().toISOString()}] ${safeTraceEvent(msg)}\n`);
     }
     catch {
         /* ignore */
     }
-}
-/**
- * Compact path-advertising summary for RequestContext troubleshooting.
- * Safe: no tokens / file contents — only workspace vs metadata roots.
- */
-export function traceRequestContextPaths(label, requestContext) {
-    if (!DEBUG_ENABLED)
-        return;
-    const env = requestContext?.env && typeof requestContext.env === "object"
-        ? requestContext.env
-        : undefined;
-    const mcp = requestContext?.mcp_file_system_options &&
-        typeof requestContext.mcp_file_system_options === "object"
-        ? requestContext.mcp_file_system_options
-        : undefined;
-    trace(`${label}: workspace_paths=${JSON.stringify(env?.workspace_paths ?? null)} ` +
-        `process_working_directory=${JSON.stringify(env?.process_working_directory ?? null)} ` +
-        `project_folder=${JSON.stringify(env?.project_folder ?? null)} ` +
-        `terminals_folder=${JSON.stringify(env?.terminals_folder ?? null)} ` +
-        `agent_transcripts_folder=${JSON.stringify(env?.agent_transcripts_folder ?? null)} ` +
-        `workspace_project_dir=${JSON.stringify(mcp?.workspace_project_dir ?? null)}`);
 }

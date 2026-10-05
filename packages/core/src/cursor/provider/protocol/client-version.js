@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { FALLBACK_CLIENT_VERSION, MODEL_CACHE_TTL_MS, VERSION_CACHE_FILE, } from "../shared.js";
-import { opencodeGlobalCacheDir } from "../context/paths.js";
+import { cursorCacheDir } from "../context/paths.js";
 import { withAbortDeadline } from "../deadline.js";
 const INSTALL_URL = "https://cursor.com/install";
 const REMOTE_TIMEOUT_MS = 5_000;
@@ -72,7 +72,7 @@ export function extractVersionFromInstaller(script) {
     return match && BUILD_RE.test(match[1]) ? match[1] : undefined;
 }
 function versionCachePath() {
-    return path.join(opencodeGlobalCacheDir(), VERSION_CACHE_FILE);
+    return path.join(cursorCacheDir(), VERSION_CACHE_FILE);
 }
 function readVersionCache() {
     const file = versionCachePath();

@@ -13,6 +13,8 @@ import {
   writeNotificationPreferences,
   readPreferredModel,
   writePreferredModel,
+  readRecentModels,
+  rememberRecentModel,
   defaultComposerModel,
 } from "./preferences"
 import type { CatalogView } from "./catalog"
@@ -55,6 +57,31 @@ test("new sessions use a valid remembered model and variant, otherwise the catal
   expect(writePreferredModel(target, { providerID: "openai", id: "gpt", variant: "medium" })).toBe(true)
   expect(defaultComposerModel(catalog, readPreferredModel(target))).toEqual({ providerID: "openai", id: "gpt", variant: "medium" })
   expect(defaultComposerModel(catalog, { providerID: "other", id: "unknown" })).toEqual(catalog.defaultModel)
+})
+
+test("recent model identities are bounded, deduplicated, and persisted across reads", () => {
+  const target = storage()
+  for (let index = 0; index < 12; index++) rememberRecentModel(target, { providerID: "provider", id: `model-${index}` })
+  expect(rememberRecentModel(target, { providerID: "provider", id: "model-5", variant: "high" })).toEqual([
+    { providerID: "provider", id: "model-5" },
+    { providerID: "provider", id: "model-11" },
+    { providerID: "provider", id: "model-10" },
+    { providerID: "provider", id: "model-9" },
+    { providerID: "provider", id: "model-8" },
+    { providerID: "provider", id: "model-7" },
+    { providerID: "provider", id: "model-6" },
+    { providerID: "provider", id: "model-4" },
+    { providerID: "provider", id: "model-3" },
+    { providerID: "provider", id: "model-2" },
+  ])
+  expect(readRecentModels(target)).toEqual(rememberRecentModel(target, { providerID: "provider", id: "model-5" }))
+  const malformed = storage({ "ycoding.remote.recent-models": JSON.stringify([
+    { providerID: "openai", id: "gpt" }, null, { providerID: "", id: "bad" }, { providerID: "openai", id: "gpt" },
+  ]) })
+  expect(readRecentModels(malformed)).toEqual([
+    { providerID: "openai", id: "gpt" },
+  ])
+  expect(readRecentModels(storage({ "ycoding.remote.recent-models": "{broken" }))).toEqual([])
 })
 
 describe("normalizeNotificationPreferences", () => {

@@ -24,10 +24,14 @@ export const RELEASES: readonly ReleaseEntry[] = [
   {
     version: "0.9.1",
     date: "2026-10-05",
-    title: "Machine-local Web latency diagnostics",
-    tags: ["Added"],
+    title: "Cursor models and machine-local Web diagnostics",
+    tags: ["Added", "Changed"],
     changes: [
       { tag: "Added", text: "Inspect and copy anonymous Web latency timings in Settings, including local queue time, remote settlement time, and supported browser long tasks. While connected, bounded batches are saved in the selected machine's local SQLite for seven-day readout; the hosted relay does not store them. Update YCoding on the connected machine to enable saved reports; an older machine keeps the tab-local report and shows an unsupported state." },
+      { tag: "Changed", text: "Cursor's request context follows YCoding project and global configuration for rules and available skills, and advertises only permitted subagents. Existing Cursor credentials and model execution remain available." },
+      { tag: "Changed", text: "Choose Cursor context sizes as separate models, including 500k and 1M when offered, with low, medium, high, and xhigh effort choices. A saved variant label that Cursor no longer offers needs a fresh selection." },
+      { tag: "Changed", text: "Choose models on the web from recent valid choices first, then the selected model's provider and remaining providers. Recents stay in this browser and do not change a Session's selected model." },
+      { tag: "Changed", text: "Identify Claude Code subscription requests as CLI version 2.1.289 by default; an explicit version override still applies." },
     ],
   },
   {
