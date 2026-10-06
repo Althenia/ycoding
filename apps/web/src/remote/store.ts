@@ -489,7 +489,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   let subscribedSessionID: string | undefined
   let sealed: { readonly sessionID: string; readonly parts: Set<string>; readonly covered: Set<string> } | undefined
   let hydration: HydrationWindow | undefined
-  let pendingRead: { readonly sessionID: string; readonly token: number; readonly promoted: Set<string> } | undefined
+  let pendingRead: { readonly sessionID: string; readonly token: number; readonly promoted: Set<string>; readonly retained: Set<string> } | undefined
   let resyncRead: Promise<void> | undefined
   let resyncTarget: { readonly owner: RemoteTransport; readonly sessionID: string; readonly token: number } | undefined
   let resyncAgain = false
@@ -907,6 +907,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const eventData = typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "data") : undefined
       if (type === "session.input.admitted" || type === "session.input.promoted") {
         const inputID = eventData && typeof eventData === "object" ? Reflect.get(eventData, "inputID") : undefined
+        if (type === "session.input.admitted" && typeof inputID === "string" && pendingRead?.sessionID === item.sessionID) pendingRead.retained.add(inputID)
         if (typeof inputID === "string" && confirmSend(inputID))
           setState({ mutations: container.state.mutations.filter((mutation) => mutation.id !== inputID),
             mutationToasts: container.state.mutationToasts?.filter((toast) => toast.id !== inputID) })
@@ -1491,7 +1492,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
 
   const loadPendingInputs = async (owner: RemoteTransport, sessionID: string, token: number) => {
-    const read = { sessionID, token, promoted: new Set<string>() }
+    const read = { sessionID, token, promoted: new Set<string>(), retained: new Set(container.state.mutations
+      .filter((mutation) => mutation.sessionID === sessionID && (mutation.kind === "prompt" || mutation.kind === "command"))
+      .map((mutation) => mutation.id)) }
     pendingRead = read
     try {
       const outcome = await owner.request("session.pending.list", { sessionID })
@@ -1504,7 +1507,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       }
       const pending = outcome.status === "ok" ? readPendingInputs(outcome.value, sessionID) : undefined
       if (pending === undefined) return
-      const retained = new Set(container.state.mutations.filter((mutation) => mutation.sessionID === sessionID && (mutation.kind === "prompt" || mutation.kind === "command")).map((mutation) => mutation.id))
+      const retained = new Set([...read.retained, ...container.state.mutations.filter((mutation) => mutation.sessionID === sessionID && (mutation.kind === "prompt" || mutation.kind === "command")).map((mutation) => mutation.id)])
       const confirmed = new Set([...pending.map((entry) => entry.id),
         ...container.state.view.messages.flatMap((message) => message.kind === "user" && message.state !== "pending" || message.kind === "synthetic" && !message.pending ? [message.id] : [])])
       const resolved = container.state.mutations.filter((mutation) => (mutation.kind === "prompt" || mutation.kind === "command") && mutation.sessionID === sessionID && confirmed.has(mutation.id) &&
@@ -2377,6 +2380,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       uploadsReady: input.files === undefined,
     }
     sends.set(mutation.id, progress)
+    if ((mutation.kind === "prompt" || mutation.kind === "command") && pendingRead?.sessionID === mutation.sessionID) pendingRead.retained.add(mutation.id)
     setState({
       mutations: [...container.state.mutations, mutation],
       ...(mutation.kind !== "prompt" && mutation.kind !== "command" ? {} : { view: { ...view, messages: [...view.messages, {

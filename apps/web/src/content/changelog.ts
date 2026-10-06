@@ -22,6 +22,15 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.9.2",
+    date: "2026-10-06",
+    title: "Keep submitted prompts visible",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Keep submitted Web prompts and commands visible when an older pending-input refresh arrives after the send acknowledgement. Admission and promotion update the same bubble without duplicating or resending the input, and the composer keeps focus." },
+    ],
+  },
+  {
     version: "0.9.1",
     date: "2026-10-05",
     title: "Cursor models and machine-local Web diagnostics",

@@ -26,6 +26,81 @@ async function harness(handler: RelayRequestHandler, now?: () => number, determi
 }
 
 describe("remote Session nonblocking sends", () => {
+  for (const kind of ["prompt", "command"] as const) test(`keeps an acknowledged ${kind} visible when an earlier pending read settles empty`, async () => {
+    const pending = gate()
+    let hold = false
+    const context = await harness((request) => request.operation === "session.pending.list" && hold ? pending.promise : "default")
+    try {
+      const before = context.relay.requests.filter((request) => request.operation === "session.pending.list").length
+      hold = true
+      const selection = context.store.selectSession("ses_a")
+      await waitFor(() => context.relay.requests.filter((request) => request.operation === "session.pending.list").length > before)
+      expect(await (kind === "prompt"
+        ? context.store.sendPrompt({ text: "Keep this prompt", delivery: "steer" })
+        : context.store.runCommand({ command: "build", arguments: "--fast", delivery: "queue" }))).toBe(true)
+      const id = context.store.state().mutations[0]!.id
+      const text = kind === "prompt" ? "Keep this prompt" : "/build --fast"
+      expect(context.store.state().view?.messages.find((message) => message.id === id)).toMatchObject({ text, state: "pending" })
+      await waitFor(() => context.store.state().mutations.length === 0)
+      pending.resolve({ ok: true, value: { data: [] } })
+      await selection
+      expect(context.store.state().view?.messages.find((message) => message.id === id)).toMatchObject({ text, state: "pending" })
+      context.relay.pushEvent("ses_a", { type: "session.input.admitted", durable: { aggregateID: "ses_a", seq: 1, version: 1 }, data: {
+        inputID: id, input: { type: "user", delivery: kind === "prompt" ? "steer" : "queue", data: { text } },
+      } })
+      context.relay.pushEvent("ses_a", { type: "session.input.promoted", durable: { aggregateID: "ses_a", seq: 2, version: 1 }, data: { inputID: id } })
+      await waitFor(() => context.store.state().view?.messages.find((message) => message.id === id)?.kind === "user" && context.store.state().view?.watermark === 2)
+      expect(context.store.state().view?.messages.filter((message) => message.id === id)).toEqual([expect.objectContaining({ text, state: "promoted" })])
+      expect(context.relay.requests.filter((request) => request.operation === `session.${kind}`)).toHaveLength(1)
+    } finally { pending.resolve("default"); await context.stop() }
+  })
+
+  test("keeps a send already in flight when a pending read starts and its acknowledgement arrives first", async () => {
+    const pending = gate()
+    const admission = gate()
+    let hold = false
+    const context = await harness((request) => request.operation === "session.pending.list" && hold ? pending.promise
+      : request.operation === "session.prompt" ? admission.promise : "default")
+    try {
+      expect(await context.store.sendPrompt({ text: "Already sending", delivery: "steer" })).toBe(true)
+      const id = context.store.state().mutations[0]!.id
+      await waitFor(() => context.relay.requests.some((request) => request.operation === "session.prompt"))
+      hold = true
+      const before = context.relay.requests.filter((request) => request.operation === "session.pending.list").length
+      const reload = context.store.reloadMessages()
+      await waitFor(() => context.relay.requests.filter((request) => request.operation === "session.pending.list").length > before)
+      admission.resolve("default")
+      await waitFor(() => context.store.state().mutations.length === 0)
+      pending.resolve({ ok: true, value: { data: [] } })
+      await reload
+      expect(context.store.state().view?.messages.find((message) => message.id === id)).toMatchObject({ text: "Already sending", state: "pending" })
+    } finally { pending.resolve("default"); admission.resolve("default"); await context.stop() }
+  })
+
+  test("keeps a live admission over an older pending read while removing pending rows already absent at read start", async () => {
+    const pending = gate()
+    let hold = false
+    const context = await harness((request) => request.operation === "session.pending.list" && hold ? pending.promise : "default")
+    try {
+      context.relay.pushEvent("ses_a", { type: "session.input.admitted", durable: { aggregateID: "ses_a", seq: 1, version: 1 }, data: {
+        inputID: "msg_old_pending", input: { type: "user", delivery: "steer", data: { text: "Earlier pending input" } },
+      } })
+      await waitFor(() => context.store.state().view?.watermark === 1)
+      hold = true
+      const before = context.relay.requests.filter((request) => request.operation === "session.pending.list").length
+      const reload = context.store.reloadMessages()
+      await waitFor(() => context.relay.requests.filter((request) => request.operation === "session.pending.list").length > before)
+      context.relay.pushEvent("ses_a", { type: "session.input.admitted", durable: { aggregateID: "ses_a", seq: 2, version: 1 }, data: {
+        inputID: "msg_live_pending", input: { type: "user", delivery: "queue", data: { text: "New live input" } },
+      } })
+      await waitFor(() => context.store.state().view?.watermark === 2)
+      pending.resolve({ ok: true, value: { data: [] } })
+      await reload
+      expect(context.store.state().view?.messages.some((message) => message.id === "msg_old_pending")).toBe(false)
+      expect(context.store.state().view?.messages.find((message) => message.id === "msg_live_pending")).toMatchObject({ text: "New live input", state: "pending", delivery: "queue" })
+    } finally { pending.resolve("default"); await context.stop() }
+  })
+
   test("queued prompt skills travel in one admission without early skill activation or a separate wake", async () => {
     const response = gate()
     const context = await harness((request) => request.operation === "session.prompt" ? response.promise : "default")
