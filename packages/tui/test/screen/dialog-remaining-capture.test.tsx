@@ -8,7 +8,7 @@ import { DialogAgent } from "../../src/component/dialog-agent"
 import { DialogConfig } from "../../src/component/dialog-config"
 import { DialogCustomEndpoint } from "../../src/component/dialog-custom-endpoint"
 import { DialogDebug } from "../../src/component/dialog-debug"
-import { DialogIntegration, DialogIntegrationMethods } from "../../src/component/dialog-integration"
+import { beginOAuth, DialogIntegration, DialogIntegrationMethods } from "../../src/component/dialog-integration"
 import { DialogMcp } from "../../src/component/dialog-mcp"
 import { DialogModel } from "../../src/component/dialog-model"
 import { DialogMoveSession } from "../../src/component/dialog-move-session"
@@ -22,7 +22,7 @@ import { DialogVariant } from "../../src/component/dialog-variant"
 import { PromptStashProvider } from "../../src/prompt/stash"
 import { ArgsProvider } from "../../src/context/args"
 import { ClientProvider } from "../../src/context/client"
-import { ClipboardProvider } from "../../src/context/clipboard"
+import { ClipboardProvider, type ClipboardService } from "../../src/context/clipboard"
 import { DataProvider, useData } from "../../src/context/data"
 import { Keymap } from "../../src/context/keymap"
 import { LocalProvider } from "../../src/context/local"
@@ -52,6 +52,7 @@ const renders = path.resolve(import.meta.dir, "../../../../.aphrodite/renders")
 const state = "/tmp/ycoding/dialog-remaining-capture"
 const sessionID = "ses_dialog_capture"
 const location = { directory, project: { id: "proj_test", directory: worktree } }
+const oauthCancelled: string[] = []
 const viewports = [
   { width: 189, height: 69 },
   { width: 220, height: 69 },
@@ -123,6 +124,45 @@ test("the variant dialog renders only Grok's four offered effort IDs", async () 
     expect(frame).not.toContain("Extra High")
   } finally {
     app.renderer.destroy()
+  }
+})
+
+test("OAuth authorization details remain visible in a short, narrow terminal", async () => {
+  oauthCancelled.length = 0
+  function OAuthFixture() {
+    const dialog = useDialog()
+    onMount(() => void beginOAuth(integrations[2], { id: "github", type: "oauth", label: "Login with GitHub Copilot" }, dialog))
+    return null
+  }
+
+  for (const viewport of [{ width: 40, height: 12 }, { width: 120, height: 12 }]) {
+    let copied: string | undefined
+    const app = await testRender(() => <DialogProviders clipboard={{ write: async (value) => { copied = value } }}><OAuthFixture /></DialogProviders>, { ...viewport, kittyKeyboard: true })
+    app.renderer.start()
+    try {
+      await app.waitForFrame((frame) => frame.includes("Waiting for authorization"))
+      const rows = app.captureCharFrame().replace(/\n$/, "").split("\n")
+      expect(rows).toHaveLength(viewport.height)
+      expect(rows.join("\n")).toContain("Login with GitHub Copilot")
+      expect(rows.join("\n")).toContain("auth.example.test")
+      expect(rows.join("\n")).toContain("client_id=synthetic-")
+      expect(rows.join("\n")).toContain("client&scope=profile")
+      expect(rows.join("\n")).toContain("TEST-ONLY")
+      expect(rows.join("\n")).toContain("Waiting for authorization")
+      expect(rows.join("\n")).toContain("copy")
+      const titleRow = rows.findIndex((row) => row.includes("Login with GitHub Copilot"))
+      expect(titleRow).toBeLessThanOrEqual(2)
+      expect(rows[titleRow]).toContain("esc")
+      for (const row of rows) expect(row.length).toBeLessThanOrEqual(viewport.width)
+      app.mockInput.pressKey("c")
+      await app.waitForFrame(() => copied === "TEST-ONLY")
+      expect(copied).toBe("TEST-ONLY")
+      app.mockInput.pressEscape()
+      await app.waitForFrame((frame) => !frame.includes("Login with GitHub Copilot"))
+      await app.waitForFrame(() => oauthCancelled.includes("attempt_layout"))
+    } finally {
+      app.renderer.destroy()
+    }
   }
 })
 
@@ -205,12 +245,12 @@ test("captures concrete remaining dialog fixtures at canonical terminal dimensio
   }
 }, 120_000)
 
-function DialogProviders(props: { children: JSX.Element }) {
+function DialogProviders(props: { children: JSX.Element; clipboard?: ClipboardService }) {
   const events = createEventStream()
   const transport = createFetch(route, events)
   return (
     <TestTuiContexts paths={{ state }}>
-      <ClipboardProvider>
+      <ClipboardProvider value={props.clipboard}>
         <ArgsProvider>
           <ConfigProvider config={createTuiResolvedConfig({ session: { thinking: "show" } })}>
             <Keymap.Provider>
@@ -289,7 +329,15 @@ function expectAt(rows: string[], row: number, column: number, text: string) {
   expect(rows[row]?.slice(column, column + text.length)).toBe(text)
 }
 
-function route(url: URL) {
+function route(url: URL, request: Request) {
+  if (url.pathname === "/api/integration/github-copilot/connect/oauth")
+    return json({ location, data: { attemptID: "attempt_layout", url: "https://auth.example.test/authorize?client_id=synthetic-client&scope=profile", instructions: "Enter code: TEST-ONLY", mode: "auto", time: { created: 1, expires: 2 } } })
+  if (url.pathname === "/api/integration/github-copilot/connect/oauth/attempt_layout" && request.method === "GET")
+    return json({ location, data: { status: "pending", time: { created: 1, expires: 2 } } })
+  if (url.pathname === "/api/integration/github-copilot/connect/oauth/attempt_layout" && request.method === "DELETE") {
+    oauthCancelled.push("attempt_layout")
+    return new Response(null, { status: 204 })
+  }
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: sessions, cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })

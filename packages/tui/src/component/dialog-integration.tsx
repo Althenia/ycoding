@@ -654,6 +654,7 @@ function OAuthCode(props: {
 function OAuthView(props: { title: string; url?: string; instructions?: string; message: string; copy?: boolean }) {
   const dialog = useDialog()
   const { theme } = useTheme().contextual("elevated")
+  onMount(() => dialog.setCentered(true))
   return (
     <box paddingLeft={2} paddingRight={2} gap={1} paddingBottom={1}>
       <box flexDirection="row" justifyContent="space-between">
